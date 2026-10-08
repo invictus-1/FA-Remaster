@@ -20,15 +20,19 @@ Milestone 1 (boot) works:
 - **Blueprints:** runs the game's blueprint loader with a set of 17 mods. The output matches the
   original game's log line for line: 1366 units, 791 projectiles, and every warning in the same order.
 
-Milestone 2 (sim start-up) is in progress and runs headless on a replay:
+Milestone 2 (sim start-up) is done and runs headless on a replay:
 - **Map:** reads `.scmap` files (heightfield, terrain types, water, props).
 - **Sim start-up** in the original's order: `simInit.lua`, `SetupSession`, all armies and their
   AI brains, map props, `BeginSession`, then ticks with script threads (M28 analyses the map
   and builds its navmesh).
+- **Blueprints as the sim sees them:** engine defaults, derived fields (footprints, inertia,
+  motion values, mesh file names), field types, sound objects and all 3010 categories.
+- **Skeletons** from the meshes: bone names, parents and rest poses.
 - **Checked against the original** with an oracle probe (same replay in both engines): thread
-  timing, entity ids, terrain heights and types, rotation math and blueprint defaults match.
+  timing, entity ids, terrain heights and types, rotation math, bones, categories and the full
+  blueprints of the sampled units match. 600 ticks run with no script errors.
 
-Next: finish M2 (blueprint derived fields, unit skeletons), then movement, combat and economy.
+Next: M3, movement (unit motion, pathfinding, commands), then combat and economy.
 See [docs/architecture.md](docs/architecture.md) for where things are in the source.
 
 ## Build

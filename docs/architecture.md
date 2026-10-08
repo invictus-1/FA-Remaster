@@ -6,7 +6,7 @@ matters, how the original engine behaves.
 ## Program flow (today: a headless sim)
 
 ```
-app/main.cpp            command line: --init, --rules, --check-lua, --sim <replay>, --ticks N
+app/main.cpp            command line: --init, --rules, --check-lua, --sim <replay>, --ticks N, --sim-lua <file>
   core/                 files: host paths, zip archives, the virtual file system (VFS)
   script/               Lua states (GPG dialect) and the engine functions every state has
   sim/Sim::LoadRules    rules state runs /lua/ruleinit.lua (blueprint loading)
@@ -30,7 +30,10 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/script_object.*` | Engine objects in Lua (`_c_object`), the `moho` class tables, logged stubs |
 | `src/sim/binding_names.inc` | Generated: every engine function name the scripts can call (tools/gen_binding_names.py) |
 | `src/sim/blueprints.*` | Blueprints copied into the sim; entity categories (`categories.TECH1`, ...) |
-| `src/sim/bp_reflect.cpp`, `bp_defaults.inc` | The sim's view of blueprints: engine defaults, sounds, bit sets (from the oracle probe) |
+| `src/sim/bp_reflect.cpp`, `bp_defaults.inc` | The sim's view of blueprints: engine defaults (generated from the oracle probe), field types (enums, booleans), sounds, bit sets |
+| `src/sim/bp_defaults_extra.inc` | Hand-kept engine defaults the generator cannot see (constructor values, always-present lists) |
+| `src/sim/bp_derived.cpp` | Fields the engine works out itself: footprints (named footprints), inertia, skirts, motion and air values, mesh LOD file names |
+| `src/sim/skeleton.*` | Bones of a mesh (.scm): names, parents, rest poses; cached per file |
 | `src/sim/entities.cpp` | Units, weapons, props, projectiles, platoons: creation order and their methods |
 | `src/sim/effects.cpp` | Emitters, beams, decals, manipulators: objects without visuals yet |
 | `src/sim/terrain.*` | `.scmap` reader: heightfield, terrain types, water, map props |
@@ -46,6 +49,8 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
   (lab overlay, `Oracle-Probe.bat`) and in moho64 on the same replay and logs `PROBE ...` facts:
   blueprint contents, entity ids, positions, thread timing, terrain, math. Diffing the two
   outputs (`tools/compare_probe_bps.py`, `tools/gen_bp_defaults.py`) replaces guesswork.
+- **Debugging:** `--sim-lua <file>` runs a Lua file in the sim state after the ticks (dump anything the
+  scripts can see; output goes to the log).
 - **Reference reading:** names and call order in the original executable are read with Ghidra and
   a disassembler; nothing from it is copied.
 
