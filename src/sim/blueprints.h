@@ -87,5 +87,8 @@ void PushSound(lua_State* L, int t);
 uint64_t* PushCategory(lua_State* L);
 const uint64_t* ToCategory(lua_State* L, int idx);
 bool CategoryHas(const uint64_t* bits, int entityIndex);
+// Number of 64-bit words in a category set; parse an expression ("TECH1 LAND", "A + B", ...).
+int CategoryWordCount();
+bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out);
 
 }  // namespace moho

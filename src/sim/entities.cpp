@@ -16,6 +16,7 @@
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/build.h"
 #include "sim/sim.h"
 #include "sim/skeleton.h"
 #include "sim/terrain.h"
@@ -286,26 +287,22 @@ int l_GetMaxHealth(lua_State* L) {
   lua_pushnumber(L, E(L)->maxHealth);
   return 1;
 }
-int l_SetHealth(lua_State* L) {  // SetHealth(instigator, health)
+int l_SetHealth(lua_State* L) {  // SetHealth(instigator, health) = AdjustHealth by the difference
   Entity* e = E(L);
-  e->health = std::min(e->maxHealth, static_cast<float>(luaL_checknumber(L, 3)));
+  EntityAdjustHealth(L, e, ToObject<Entity>(L, 2), static_cast<float>(luaL_checknumber(L, 3)) - e->health);
   return 0;
 }
-int l_SetMaxHealth(lua_State* L) {
-  Entity* e = E(L);
-  e->maxHealth = static_cast<float>(luaL_checknumber(L, 2));
-  if (e->health > e->maxHealth) e->health = e->maxHealth;
+int l_SetMaxHealth(lua_State* L) {  // only the maximum (the original does not clamp the health)
+  E(L)->maxHealth = static_cast<float>(luaL_checknumber(L, 2));
   return 0;
 }
 int l_AdjustHealth(lua_State* L) {  // AdjustHealth(instigator, delta)
   Entity* e = E(L);
-  e->health = std::clamp(e->health + static_cast<float>(luaL_checknumber(L, 3)), 0.0f, e->maxHealth);
+  EntityAdjustHealth(L, e, ToObject<Entity>(L, 2), static_cast<float>(luaL_checknumber(L, 3)));
   return 0;
 }
 int l_GetFractionComplete(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  E(L);
-  lua_pushnumber(L, u ? u->fractionComplete : 1);
+  lua_pushnumber(L, E(L)->fractionComplete);
   return 1;
 }
 int l_BeenDestroyed(lua_State* L) {
@@ -462,7 +459,7 @@ int l_SetUnitState(lua_State* L) {
   return 0;
 }
 int l_IsBeingBuilt(lua_State* L) {
-  lua_pushboolean(L, U(L)->fractionComplete < 1);
+  lua_pushboolean(L, U(L)->beingBuilt);
   return 1;
 }
 
@@ -500,7 +497,6 @@ const Attr kAttrs[] = {
     {"Unit", "SetFuelRatio", "GetFuelRatio", 1, -1},
     {"Unit", "SetFuelUseTime", "GetFuelUseTime", 1, 0},
     {"Unit", "SetWorkProgress", "GetWorkProgress", 1, 0},
-    {"Unit", "SetPaused", "IsPaused", 2, 0},
     {"Unit", "SetOverchargePaused", "IsOverchargePaused", 2, 0},
     {"Unit", "SetStunned", "IsStunned", 2, 0},
     {"Unit", "SetIsValidTarget", "IsValidTarget", 2, 1},
@@ -695,6 +691,28 @@ int l_brain_GetCurrentUnits(lua_State* L) {
 }
 
 }  // namespace
+
+Vec3 EntityBonePosition(const Entity* e, int bone) { return BonePosition(e, bone); }
+
+// ---- health ----------------------------------------------------------------------------------
+
+void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float amount) {
+  if (amount == 0.0f) return;
+  float h = e->health + amount;
+  if (e->maxHealth <= h) h = e->maxHealth;
+  if (h < 0.0f) h = 0.0f;
+  if (h == e->health) return;
+  // Entity::SetHealth: OnHealthChanged(new, old) with both rounded down to quarters of the maximum
+  float inv = 1.0f / e->maxHealth;
+  float qNew = std::floor(inv * h * 4.0f) * 0.25f;
+  float qOld = std::floor(inv * e->health * 4.0f) * 0.25f;
+  e->health = h;
+  if (qNew != qOld && e->HasLuaObject()) {
+    lua_pushnumber(L, qNew);
+    lua_pushnumber(L, qOld);
+    S(L)->CallMethod(L, e, "OnHealthChanged", 2);
+  }
+}
 
 // ---- per-object script values ---------------------------------------------------------------
 
@@ -1012,7 +1030,8 @@ std::string StartingLayer(lua_State* L, int bpIdx, const TerrainMap* map, const 
 }
 }  // namespace
 
-Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete) {
+Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
+                      Unit* builder) {
   lua_checkstack(L, 40);
   int top = lua_gettop(L);
   auto owned = std::make_unique<Unit>();
@@ -1025,6 +1044,11 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->position = pos;
   u->orientation = q;
   u->fractionComplete = complete ? 1.0f : 0.0f;
+  u->beingBuilt = !complete;
+  if (!complete) u->unitStates.insert("BeingBuilt");
+  u->builderId = builder ? builder->id : 0;
+  u->lastMaterializeTick = tick_;
+  UnitEconomyInit(L, u);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
   {
     float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
@@ -1039,7 +1063,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   PushPath(L, bpIdx, "Defense", "MaxHealth");
   if (lua_isnumber(L, -1)) u->maxHealth = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 1);
-  u->health = complete ? u->maxHealth : 0;
+  u->health = complete ? u->maxHealth : 1;  // a new construction starts at 1 (FAF's OnStartBuild tests it)
   PushPath(L, bpIdx, "General", "CapCost");
   if (lua_isnumber(L, -1)) u->capCost = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 1);
@@ -1060,6 +1084,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   owned_.push_back(std::move(owned));
   entities_[u->id] = u;
   AddUnitToLists(u);
+  OccupyStructure(*this, u);
   if (army && army->pool) army->pool->units.push_back(u);
 
   CallMethod(L, u, "OnPreCreate", 0);
@@ -1146,7 +1171,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   lua_settop(L, obj);
   InitializeArmor(L, u);
   CallMethod(L, u, "OnCreate", 0);
-  lua_pushnil(L);  // builder
+  if (complete) UnitFinishedBuilding(*this, L, u);  // adjacency with what it touches
+  else if (army) army->stats["Units_BeingBuilt"] += 1;
+  PushObject(L, builder);
   lua_pushstring(L, u->layer.c_str());
   CallMethod(L, u, complete ? "OnStopBeingBuilt" : "OnStartBeingBuilt", 2);
   lua_settop(L, top);

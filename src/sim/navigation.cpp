@@ -13,7 +13,10 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
   w_ = map.width();
   h_ = map.height();
   cells_.assign(static_cast<size_t>(w_) * h_, 0);
+  blocked_.assign(static_cast<size_t>(w_) * h_, 0);
   const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
+  sizeX = sx;
+  sizeZ = sz;
   const float water = map.hasWater ? map.waterElevation : -10000.0f;
   for (int z = 0; z < h_; ++z) {
     for (int x = 0; x < w_; ++x) {
@@ -49,6 +52,47 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
   }
 }
 
+void PathGrid::Block(int x0, int z0, int x1, int z1, int delta) {
+  // origins o with [o, o+size) overlapping [x0, x1)
+  int ox0 = std::max(0, x0 - sizeX + 1), oz0 = std::max(0, z0 - sizeZ + 1);
+  int ox1 = std::min(w_ - 1, x1 - 1), oz1 = std::min(h_ - 1, z1 - 1);
+  for (int z = oz0; z <= oz1; ++z)
+    for (int x = ox0; x <= ox1; ++x) {
+      uint16_t& b = blocked_[static_cast<size_t>(z) * w_ + x];
+      b = static_cast<uint16_t>(b + delta);
+    }
+}
+
+void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1) {
+  if (!map_ || x1 <= x0 || z1 <= z0) return;
+  structures_.push_back({entity, x0, z0, x1, z1});
+  for (auto& [k, g] : grids_) g->Block(x0, z0, x1, z1, +1);
+  if (occ_.empty()) occ_.assign(static_cast<size_t>(map_->width()) * map_->height(), 0);
+  for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
+    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x) ++occ_[static_cast<size_t>(z) * map_->width() + x];
+}
+
+void Navigation::RemoveStructure(uint32_t entity) {
+  for (size_t i = 0; i < structures_.size(); ++i) {
+    if (structures_[i].entity != entity) continue;
+    OccupiedRect r = structures_[i];
+    structures_.erase(structures_.begin() + static_cast<long>(i));
+    for (auto& [k, g] : grids_) g->Block(r.x0, r.z0, r.x1, r.z1, -1);
+    for (int z = std::max(0, r.z0); z < std::min(map_->height(), r.z1); ++z)
+      for (int x = std::max(0, r.x0); x < std::min(map_->width(), r.x1); ++x)
+        --occ_[static_cast<size_t>(z) * map_->width() + x];
+    return;
+  }
+}
+
+bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1) const {
+  if (occ_.empty() || !map_) return false;
+  for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
+    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x)
+      if (occ_[static_cast<size_t>(z) * map_->width() + x]) return true;
+  return false;
+}
+
 const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   if (!map_) return nullptr;
   std::string key = fp.name;
@@ -56,12 +100,15 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
   auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data());
+  for (const auto& st : structures_) g->Block(st.x0, st.z0, st.x1, st.z1, +1);
   const PathGrid* r = g.get();
   grids_[key] = std::move(g);
   return r;
 }
 
-bool Navigation::LineOfSight(const PathGrid& g, int x0, int z0, int x1, int z1) const {
+namespace {
+template <class P>
+bool LineOfSightP(const P& pass, int x0, int z0, int x1, int z1) {
   // every cell the segment between the two cell centres touches must be passable
   int dx = std::abs(x1 - x0), dz = std::abs(z1 - z0);
   int sx = x0 < x1 ? 1 : -1, sz = z0 < z1 ? 1 : -1;
@@ -71,7 +118,7 @@ bool Navigation::LineOfSight(const PathGrid& g, int x0, int z0, int x1, int z1) 
   dx *= 2;
   dz *= 2;
   for (; n > 0; --n) {
-    if (!g.Passable(x, z)) return false;
+    if (!pass(x, z)) return false;
     if (err > 0) {
       x += sx;
       err -= dz;
@@ -79,7 +126,7 @@ bool Navigation::LineOfSight(const PathGrid& g, int x0, int z0, int x1, int z1) 
       z += sz;
       err += dx;
     } else {  // exactly through a corner: both neighbours must be free
-      if (!g.Passable(x + sx, z) || !g.Passable(x, z + sz)) return false;
+      if (!pass(x + sx, z) || !pass(x, z + sz)) return false;
       x += sx;
       z += sz;
       err += dx - dz;
@@ -88,6 +135,8 @@ bool Navigation::LineOfSight(const PathGrid& g, int x0, int z0, int x1, int z1) 
   }
   return true;
 }
+
+}  // namespace
 
 bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out) {
   out->clear();
@@ -101,6 +150,23 @@ bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3
     out->push_back(to);
     return true;
   }
+  // A unit standing inside a structure (a factory's product, a unit a structure was built over)
+  // may move through that structure's cells to get out.
+  std::vector<OccupiedRect> escape;
+  {
+    int ox = static_cast<int>(std::nearbyint(from.x - hx)), oz = static_cast<int>(std::nearbyint(from.z - hz));
+    if (g->Blocked(ox, oz))
+      for (const auto& r : structures_)
+        if (r.x0 < ox + g->sizeX && ox < r.x1 && r.z0 < oz + g->sizeZ && oz < r.z1) escape.push_back(r);
+  }
+  auto pass = [&](int x, int z) -> bool {
+    if (g->Passable(x, z)) return true;
+    if (escape.empty() || !g->Caps(x, z)) return false;
+    int n = 0;
+    for (const auto& r : escape)
+      if (r.x0 < x + g->sizeX && x < r.x1 && r.z0 < z + g->sizeZ && z < r.z1) ++n;
+    return n == g->Blocked(x, z);
+  };
   ++searches;
   lastWork = 1;
   int sx, sz, gx, gz;
@@ -116,13 +182,13 @@ bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3
     return true;
   }
   // A goal that cannot be stood on: the nearest cell that can (rings around it).
-  if (!g->Passable(gx, gz)) {
+  if (!pass(gx, gz)) {
     bool found = false;
     for (int r = 1; r <= 32 && !found; ++r)
       for (int dz = -r; dz <= r && !found; ++dz)
         for (int dx = -r; dx <= r; ++dx) {
           if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
-          if (g->Passable(gx + dx, gz + dz)) {
+          if (pass(gx + dx, gz + dz)) {
             gx += dx;
             gz += dz;
             found = true;
@@ -132,7 +198,7 @@ bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3
     if (!found) return false;
   }
   lastWork = static_cast<uint64_t>(std::max(std::abs(gx - sx), std::abs(gz - sz))) + 1;
-  if (LineOfSight(*g, sx, sz, gx, gz)) {
+  if (LineOfSightP(pass, sx, sz, gx, gz)) {
     out->push_back({gx + hx, to.y, gz + hz});
     return true;
   }
@@ -181,8 +247,8 @@ bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3
     int x = static_cast<int>(i % W), z = static_cast<int>(i / W);
     for (int k = 0; k < 8; ++k) {
       int nx = x + DX[k], nz = z + DZ[k];
-      if (!g->Passable(nx, nz)) continue;
-      if (k >= 4 && (!g->Passable(nx, z) || !g->Passable(x, nz))) continue;
+      if (!pass(nx, nz)) continue;
+      if (k >= 4 && (!pass(nx, z) || !pass(x, nz))) continue;
       size_t j = idx(nx, nz);
       if (closed[j]) continue;
       float c = gcost[i] + (k >= 4 ? 1.41421356f : 1.0f);
@@ -209,7 +275,7 @@ bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3
     int ax = static_cast<int>(cells[anchor] % W), az = static_cast<int>(cells[anchor] / W);
     for (size_t k = cells.size() - 1; k > anchor + 1; --k) {
       int bx = static_cast<int>(cells[k] % W), bz = static_cast<int>(cells[k] / W);
-      if (LineOfSight(*g, ax, az, bx, bz)) {
+      if (LineOfSightP(pass, ax, az, bx, bz)) {
         far = k;
         break;
       }

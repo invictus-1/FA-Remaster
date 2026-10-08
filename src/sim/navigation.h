@@ -33,18 +33,33 @@ class PathGrid {
   PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blockingTypes);
   int width() const { return w_; }
   int height() const { return h_; }
-  // Can the footprint's origin cell be (x, z)?
+  // Can the footprint's origin cell be (x, z)? (terrain, and no structure in the way)
   bool Passable(int x, int z) const {
-    return x >= 0 && z >= 0 && x < w_ && z < h_ && cells_[static_cast<size_t>(z) * w_ + x] != 0;
+    if (x < 0 || z < 0 || x >= w_ || z >= h_) return false;
+    size_t i = static_cast<size_t>(z) * w_ + x;
+    return cells_[i] != 0 && blocked_[i] == 0;
   }
-  // Layers usable at (x, z): OCCUPY_MobileCheck's result.
+  // Layers the terrain allows at (x, z): OCCUPY_MobileCheck's result (structures not counted).
   uint8_t Caps(int x, int z) const {
     return (x >= 0 && z >= 0 && x < w_ && z < h_) ? cells_[static_cast<size_t>(z) * w_ + x] : 0;
   }
+  uint16_t Blocked(int x, int z) const {
+    return (x >= 0 && z >= 0 && x < w_ && z < h_) ? blocked_[static_cast<size_t>(z) * w_ + x] : 0;
+  }
+  // A structure covering cells [x0, x1) x [z0, z1) blocks every origin whose footprint overlaps it.
+  void Block(int x0, int z0, int x1, int z1, int delta);
+  int sizeX = 1, sizeZ = 1;
 
  private:
   int w_ = 0, h_ = 0;
   std::vector<uint8_t> cells_;
+  std::vector<uint16_t> blocked_;
+};
+
+// A structure's cells (footprint rect) in the occupancy grid.
+struct OccupiedRect {
+  uint32_t entity = 0;
+  int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
 };
 
 class Navigation {
@@ -54,9 +69,16 @@ class Navigation {
     if (code >= 0 && code < 256) blocking_[code] = blocking;
   }
   const PathGrid* Grid(const NamedFootprint& fp);
+  bool IsBlockingType(int code) const { return code >= 0 && code < 256 && blocking_[code]; }
   // Waypoints from `from` to `to` (world positions; the footprint's centre). The last waypoint is
   // `to`, or the nearest reachable cell to it. Returns false when no path exists at all.
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);
+  // Structures: their footprints block movement (and building) until they are gone.
+  void AddStructure(uint32_t entity, int x0, int z0, int x1, int z1);
+  void RemoveStructure(uint32_t entity);
+  const std::vector<OccupiedRect>& Structures() const { return structures_; }
+  // Is any structure cell inside [x0, x1) x [z0, z1)?
+  bool AnyStructureIn(int x0, int z0, int x1, int z1) const;
   // Work of the last search (cells walked or expanded) and totals for the profiler.
   uint64_t lastWork = 0, searches = 0, expanded = 0;
 
@@ -64,7 +86,8 @@ class Navigation {
   const TerrainMap* map_;
   std::array<bool, 256> blocking_;
   std::map<std::string, std::unique_ptr<PathGrid>> grids_;
-  bool LineOfSight(const PathGrid& g, int x0, int z0, int x1, int z1) const;
+  std::vector<OccupiedRect> structures_;
+  std::vector<uint16_t> occ_;  // structure cells (count), map cells
 };
 
 }  // namespace moho

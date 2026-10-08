@@ -32,6 +32,7 @@ class Entity : public ScriptObject {
   const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)
   float meshScale = 1;                 // Display.UniformScale: model units -> world
   float health = 0, maxHealth = 0;
+  float fractionComplete = 1;  // units under construction; props being reclaimed
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
 };

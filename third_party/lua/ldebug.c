@@ -562,7 +562,14 @@ static void addinfo (lua_State *L, const char *msg) {
 }
 
 
+extern void (*lua_gpg_resume_error_hook)(lua_State *L, int status);
+int luaD_gpg_outermost (lua_State *L);
+
 void luaG_errormsg (lua_State *L) {
+  /* GPG/moho64: an error that will end a script thread: let the host take its traceback now
+     (after the unwind the frames' saved pcs point into dead C frames). */
+  if (L->errfunc == 0 && lua_gpg_resume_error_hook && luaD_gpg_outermost(L))
+    lua_gpg_resume_error_hook(L, LUA_ERRRUN);
   if (L->errfunc != 0) {  /* is there an error handling function? */
     StkId errfunc = restorestack(L, L->errfunc);
     if (!ttisfunction(errfunc)) luaD_throw(L, LUA_ERRERR);

@@ -52,6 +52,7 @@ struct UnitCommand {
   float formationSpeed = 0;
   int count = 1;
   int luaRef = -2;        // LUA_NOREF: the table handed to Lua (IsCommandDone)
+  int scriptRef = -2;     // IssueScript: the command data table (TaskName, ...)
   std::set<Unit*> units;  // units that still have it queued
 };
 

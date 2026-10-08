@@ -9,6 +9,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/build.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
@@ -85,6 +86,10 @@ void SetMoving(Unit* u, bool on) {
 
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
+  if (u->task) {
+    EndBuildTask(*Sim::From(u->luaState()), u, *u->task, true);
+    u->task = nullptr;
+  }
   if (u->commands.empty()) return;
   u->motion.speedCap = 0;
   u->commands.front()->units.erase(u);
@@ -129,6 +134,15 @@ void StartHead(Sim& sim, Unit* u) {
       SetMoving(u, false);
       continue;
     }
+    if (SiloCommand(sim, u, c)) {
+      PopHead(u);
+      continue;
+    }
+    if (BuildTask* bt = StartBuildTask(sim, u, c)) {
+      u->task = bt;
+      u->headState = kRunning;
+      return;
+    }
     bool mobile = u->motion.bp && u->motion.bp->mobile() && !u->immobile;
     if ((MoveLike(c.type) || ApproachLike(c.type)) && mobile) {
       SetMoving(u, true);
@@ -144,6 +158,10 @@ void StartHead(Sim& sim, Unit* u) {
       return;
     }
     // Not carried out yet: finish it at once so the scripts see an idle unit.
+    static std::map<int, int> notDone;
+    if (getenv("MOHO64_DEBUG_TASKS") && (++notDone[static_cast<int>(c.type)] % 100) == 1)
+      Logf(LogLevel::Debug, "moho64: command %s not carried out (x%d)", kCommandNames[static_cast<int>(c.type)],
+           notDone[static_cast<int>(c.type)]);
     static std::set<int> logged;
     if (logged.insert(static_cast<int>(c.type)).second)
       Logf(LogLevel::Debug, "moho64: command %s is not carried out yet (finished at once)",
@@ -156,6 +174,10 @@ void StartHead(Sim& sim, Unit* u) {
 }  // namespace
 
 void ForgetUnitCommands(Unit* u) {
+  if (u->task) {
+    EndBuildTask(*Sim::From(u->luaState()), u, *u->task, false);
+    u->task = nullptr;
+  }
   for (auto& c : u->commands) c->units.erase(u);
   u->commands.clear();
   u->headState = kNotStarted;
@@ -171,6 +193,15 @@ void CommandsBeforeMotion(Sim& sim) {
     if (u->commands.empty()) continue;
     int& st = u->headState;
     if (st == kNotStarted) StartHead(sim, u);
+    if (u->task && st == kRunning) {
+      int r = TickBuildTask(sim, u, *u->task);
+      if (r != kTaskRunning) {
+        u->task = nullptr;
+        PopHead(u);
+        StartHead(sim, u);
+      }
+      continue;
+    }
     // keep "drive through" up to date when moves were queued behind the current one
     if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type))
       u->motion.passThrough = NextIsMove(u);
@@ -278,6 +309,13 @@ void PushCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
   lua_rawset(L, -3);
 }
 
+// Commands a factory passes on to what it builds (its rally point, patrols, ...).
+bool FactoryCommand(CommandType t) {
+  return MoveLike(t) || t == CommandType::Attack || t == CommandType::FormAttack || t == CommandType::Guard ||
+         t == CommandType::Ferry;
+}
+bool IsFactory(const Unit* u) { return u->bpData && u->bpData->structure && u->bpData->hasBuilder; }
+
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type) {
   auto c = std::make_shared<UnitCommand>();
   Sim* sim = S(L);
@@ -285,6 +323,10 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
   c->type = type;
   sim->commandsById[c->id] = c;
   for (Unit* u : units) {
+    if (IsFactory(u) && FactoryCommand(type)) {
+      u->factoryCommands.push_back(c);
+      continue;
+    }
     u->commands.push_back(c);
     c->units.insert(u);
   }
@@ -329,7 +371,10 @@ void PlaceFormation(lua_State* L, UnitCommand& c, const std::vector<Unit*>& unit
   const float scale = static_cast<float>(largest + 2);
   float sn = dmath::Sin(c.heading), cs = dmath::Cos(c.heading);
   // forward = (sin h, cos h), right = (cos h, -sin h)
-  std::set<Unit*> free(units.begin(), units.end());
+  // candidates in entity-id order (ties go to the lowest id: the same on every machine)
+  std::vector<Unit*> free(units.begin(), units.end());
+  std::sort(free.begin(), free.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  free.erase(std::unique(free.begin(), free.end()), free.end());
   float slowest = 1e30f;
   for (int i = 1; !free.empty(); ++i) {
     lua_rawgeti(L, slotsIdx, i);
@@ -359,7 +404,7 @@ void PlaceFormation(lua_State* L, UnitCommand& c, const std::vector<Unit*>& unit
     }
     if (best) {
       c.slots[best] = p;
-      free.erase(best);
+      free.erase(std::find(free.begin(), free.end(), best));
       if (best->motion.bp) slowest = std::min(slowest, best->motion.bp->maxSpeed);
     }
     lua_settop(L, slotsIdx);
@@ -410,6 +455,18 @@ int l_IssueOther(lua_State* L) {
         c->hasPos = true;
       }
     }
+  }
+  PushCommand(L, c);
+  return 1;
+}
+
+// IssueScript(units, { TaskName = ..., ... }): a script task (/lua/sim/tasks/<TaskName>.lua)
+int l_IssueScript(lua_State* L) {
+  auto units = UnitsArg(L, 1);
+  auto c = Issue(L, units, CommandType::Script);
+  if (lua_istable(L, 2)) {
+    lua_pushvalue(L, 2);
+    c->scriptRef = luaL_ref(L, LUA_REGISTRYINDEX);
   }
   PushCommand(L, c);
   return 1;
@@ -786,7 +843,7 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueBuildAllMobile", l_IssueBuildMobile);
   SetGlobal(L, "IssueBuildFactory", l_IssueOther<CommandType::BuildFactory>);
   SetGlobal(L, "IssueUpgrade", l_IssueOther<CommandType::Upgrade>);
-  SetGlobal(L, "IssueScript", l_IssueOther<CommandType::Script>);
+  SetGlobal(L, "IssueScript", l_IssueScript);
   SetGlobal(L, "IssueSiloBuildTactical", l_IssueOther<CommandType::BuildSiloTactical>);
   SetGlobal(L, "IssueSiloBuildNuke", l_IssueOther<CommandType::BuildSiloNuke>);
   SetGlobal(L, "IssueTransportLoad", l_IssueOther<CommandType::TransportLoadUnits>);

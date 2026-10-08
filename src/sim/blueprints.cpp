@@ -213,6 +213,13 @@ bool ParseExpr(lua_State* L, const char*& p, std::vector<uint64_t>& out) {
   }
 }
 
+}  // namespace
+int CategoryWordCount() { return g_words; }
+bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
+  const char* p = expr;
+  return ParseExpr(L, p, out) && !*p;
+}
+namespace {
 int l_ParseEntityCategory(lua_State* L) {
   const char* s = luaL_checkstring(L, 1);
   const char* p = s;

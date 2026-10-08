@@ -4,6 +4,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/script_object.h"
 
 extern "C" {
 extern void (*lua_gpg_resume_error_hook)(lua_State* L, int status);
@@ -77,11 +78,21 @@ int l_ResumeThread(lua_State* L) {
   return 0;
 }
 
-// WaitFor(event): wait until an engine event (economy event, script task, effect) is done.
-// TODO(M4): real events; until they exist, wait one tick.
+// WaitFor(event): wait until an engine event (economy event, ...) is signalled. Objects that are
+// not events yet (manipulators, effects: no animation in the headless sim) end the wait at the
+// next tick.
 int l_WaitFor(lua_State* L) {
   ThreadScheduler* s = ThreadScheduler::From(L);
   if (!s || s->Current() != L) return luaL_error(L, "WaitFor: not called from a thread");
+  ScriptObject* o = GetObject(L, 1);
+  if (o && o->EventState() == 1) return 0;
+  if (o && o->EventState() == 0) {
+    lua_pushvalue(L, 1);
+    s->WaitCurrentOn(luaL_ref(L, LUA_REGISTRYINDEX));
+    lua_settop(L, 0);
+    lua_pushnumber(L, 2);
+    return lua_yield(L, 1);
+  }
   lua_settop(L, 0);
   lua_pushnumber(L, 2);  // = WaitTicks(2): resume next tick
   return lua_yield(L, 1);
@@ -125,6 +136,25 @@ void ThreadScheduler::PushCurrent(lua_State* L) {
 void ThreadScheduler::Release(Thread& t) {
   if (t.ref != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.ref);
   t.ref = LUA_NOREF;
+  if (t.waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.waitRef);
+  t.waitRef = LUA_NOREF;
+}
+
+void ThreadScheduler::WaitCurrentOn(int ref) {
+  if (!current_) return;
+  if (current_->waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, current_->waitRef);
+  current_->waitRef = ref;
+}
+
+bool ThreadScheduler::StillWaiting(Thread& t) {
+  if (t.waitRef == LUA_NOREF) return false;
+  lua_rawgeti(L_, LUA_REGISTRYINDEX, t.waitRef);
+  ScriptObject* o = GetObject(L_, -1);
+  lua_pop(L_, 1);
+  if (o && o->EventState() == 0) return true;
+  luaL_unref(L_, LUA_REGISTRYINDEX, t.waitRef);
+  t.waitRef = LUA_NOREF;
+  return false;
 }
 
 bool ThreadScheduler::Kill(lua_State* co) {
@@ -152,9 +182,12 @@ void ThreadScheduler::Step(Thread& t) {
   current_ = &t;
   int nargs = t.started ? 0 : t.pendingArgs;
   t.started = true;
+  g_threadError.clear();
   int rc = lua_resume(t.co, nargs);
   current_ = prev;
   if (rc != 0) {
+    if (g_threadError.empty())  // an error that did not pass luaG_errormsg (memory, ...)
+      g_threadError = lua_isstring(t.co, -1) ? lua_tostring(t.co, -1) : "(error object is not a string)";
     for (size_t a = 0, b; a <= g_threadError.size(); a = b + 1) {
       b = g_threadError.find('\n', a);
       if (b == std::string::npos) b = g_threadError.size();
@@ -191,7 +224,10 @@ void ThreadScheduler::RunTick(uint32_t tick) {
   // Threads forked during this pass are appended and run in the same pass.
   for (auto it = threads_.begin(); it != threads_.end();) {
     Thread& t = *it;
-    if (!t.dead && !t.suspended && t.wakeTick <= tick) Step(t);
+    if (!t.dead && !t.suspended && t.wakeTick <= tick) {
+      if (StillWaiting(t)) t.wakeTick = tick + 1;
+      else Step(t);
+    }
     if (t.dead) {
       Release(t);
       it = threads_.erase(it);

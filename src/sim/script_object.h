@@ -29,6 +29,8 @@ class ScriptObject {
  public:
   virtual ~ScriptObject();
   uint32_t typeBits = 0;  // ScriptTypeBit of the object's class and its bases
+  // Engine events scripts can WaitFor: -1 not an event, 0 pending, 1 signalled.
+  virtual int EventState() const { return -1; }
 
   // The object's Lua table (registry reference), set by BindObject.
   lua_State* luaState() const { return L_; }

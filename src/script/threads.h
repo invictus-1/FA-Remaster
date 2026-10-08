@@ -24,6 +24,8 @@ class ThreadScheduler {
   bool Kill(lua_State* co);              // returns true if co was a scheduler thread
   bool Resume(lua_State* co);            // wake a suspended thread
   void SuspendCurrent() { if (current_) current_->suspended = true; }
+  // WaitFor: the running thread waits until the event (registry ref) is signalled.
+  void WaitCurrentOn(int ref);
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
   size_t Count() const { return threads_.size(); }
@@ -39,6 +41,7 @@ class ThreadScheduler {
     bool started = false;
     bool suspended = false;
     bool dead = false;
+    int waitRef = LUA_NOREF;  // WaitFor(event)
   };
   lua_State* L_;
   std::list<Thread> threads_;
@@ -46,6 +49,7 @@ class ThreadScheduler {
   uint32_t tick_ = 0;
 
   void Step(Thread& t);
+  bool StillWaiting(Thread& t);
   void Release(Thread& t);
 };
 

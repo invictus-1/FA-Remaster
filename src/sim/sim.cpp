@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "sim/build.h"
 
 #include <algorithm>
 #include <chrono>
@@ -320,35 +321,6 @@ int l_brain_IsDefeated(lua_State* L) {
   return 1;
 }
 
-// Economy type argument: "MASS" / "ENERGY" (any case)
-bool IsMass(lua_State* L, int idx) {
-  const char* t = luaL_checkstring(L, idx);
-  return (t[0] | 0x20) == 'm';
-}
-int l_brain_GetEconomyStored(lua_State* L) {
-  Army* a = Brain(L)->army;
-  lua_pushnumber(L, IsMass(L, 2) ? a->massStored : a->energyStored);
-  return 1;
-}
-int l_brain_GetEconomyStoredRatio(lua_State* L) {
-  Army* a = Brain(L)->army;
-  bool m = IsMass(L, 2);
-  float max = m ? a->massMax : a->energyMax;
-  lua_pushnumber(L, max > 0 ? (m ? a->massStored : a->energyStored) / max : 0);
-  return 1;
-}
-int l_brain_EconomyZero(lua_State* L) {  // income, requested, usage, trend: no economy yet (M4)
-  Brain(L);
-  lua_pushnumber(L, 0);
-  return 1;
-}
-int l_SetArmyEconomy(lua_State* L) {  // SetArmyEconomy(army, mass, energy)
-  Army* a = S(L)->GetArmy(L, 1);
-  if (!a) return luaL_error(L, "Invalid army");
-  a->massStored = static_cast<float>(luaL_checknumber(L, 2));
-  a->energyStored = static_cast<float>(luaL_checknumber(L, 3));
-  return 0;
-}
 // GetArmyStat(name, default) -> { Value = ... }
 int l_brain_GetArmyStat(lua_State* L) {
   Army* a = Brain(L)->army;
@@ -378,11 +350,6 @@ int l_brain_GetBlueprintStat(lua_State* L) {
 }  // namespace
 
 void RegisterSimBindings(lua_State* L) {
-  SetGlobal(L, "SetArmyEconomy", l_SetArmyEconomy);
-  SetMethod(L, "CAiBrain", "GetEconomyStored", l_brain_GetEconomyStored);
-  SetMethod(L, "CAiBrain", "GetEconomyStoredRatio", l_brain_GetEconomyStoredRatio);
-  for (const char* m : {"GetEconomyIncome", "GetEconomyRequested", "GetEconomyUsage", "GetEconomyTrend"})
-    SetMethod(L, "CAiBrain", m, l_brain_EconomyZero);
   SetMethod(L, "CAiBrain", "GetArmyStat", l_brain_GetArmyStat);
   SetMethod(L, "CAiBrain", "SetArmyStat", l_brain_SetArmyStat);
   SetMethod(L, "CAiBrain", "AddArmyStat", l_brain_AddArmyStat);
@@ -539,6 +506,8 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterEntityBindings(L);
   RegisterCommandBindings(L);
   RegisterEffectBindings(L);
+  RegisterEconomyBindings(L);
+  RegisterBuildBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -732,8 +701,12 @@ void Sim::ProcessDestroyQueue() {
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
     if (e->kind == Entity::Kind::Unit) {
-      ForgetUnitCommands(static_cast<Unit*>(e));
-      RemoveUnitFromLists(static_cast<Unit*>(e));
+      Unit* u = static_cast<Unit*>(e);
+      AdjacencyLost(*this, L, u);
+      ForgetUnitCommands(u);
+      UnitEconomyRelease(u);
+      ReleaseStructure(*this, u);
+      RemoveUnitFromLists(u);
     }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
     if (e->army && e->army->pool) {
@@ -796,10 +769,23 @@ void Sim::RemoveUnitFromLists(Unit* u) {
 // end (and queued moves continue in the same beat), then the script threads run.
 void Sim::Tick() {
   ++tick_;
+  EconomyBeginBeat(*this);
   CommandsBeforeMotion(*this);
   CollisionTick(*this);
-  for (size_t i = 0; i < units_.size(); ++i)  // (motion may create or destroy nothing)
-    if (!units_[i]->destroyQueued) MotionTick(*this, units_[i]);
+  for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
+    Unit* u = units_[i];
+    if (u->destroyQueued) continue;
+    if (u->parentId) {  // attached (a factory's product): held at the parent's bone
+      Entity* p = FindEntity(u->parentId);
+      if (p && !p->destroyQueued) u->position = EntityBonePosition(p, u->parentBone);
+      u->motion.vel = {};
+    } else {
+      MotionTick(*this, u);
+    }
+  }
+  // the units' own beat: economy events, regeneration or decay, consumption and production
+  for (size_t i = 0; i < units_.size(); ++i)
+    if (!units_[i]->destroyQueued) UnitEconomyTick(*this, units_[i]);
   gridDirty_ = true;
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);

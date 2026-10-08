@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "sim/blueprints.h"
+#include "sim/economy.h"
 #include "sim/entity.h"
 #include "sim/replay.h"
 #include "sim/skeleton.h"
@@ -47,14 +48,19 @@ class Army {
   float startX = 0, startZ = 0;
   bool hasStart = false;
   uint32_t serial = 0;          // entity ids of this army
-  // Economy (TODO(M4): production/consumption; until then stored values are what scripts set)
-  float massStored = 0, energyStored = 0, massMax = 0, energyMax = 0;
+  ArmyEconomy econ;  // sim/economy.cpp
+  std::vector<uint64_t> buildRestricted;  // AddBuildRestriction(army, category)
   std::map<std::string, float> stats;  // army statistics (GetArmyStat)
   float unitCap = 1000;
   float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
   std::vector<Unit*> units;   // the army's live units, by entity id
+};
+
+// A resource deposit (CreateResourceDeposit): cells [x0, x1) x [z0, z1); type 1 mass, 2 hydrocarbon.
+struct ResourceDeposit {
+  int x0 = 0, z0 = 0, x1 = 0, z1 = 0, type = 0;
 };
 
 class AiBrain : public ScriptObject {
@@ -88,7 +94,8 @@ class Sim {
   float Random();  // [0, 1)
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
-  Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete);
+  Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
+                   Unit* builder = nullptr);
   class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Entity* launcher, Vec3 pos, Vec3 dir);
   Prop* CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale);
   // _c_CreateEntity / _c_CreateShield: bind a script-made table to a new engine entity.
@@ -130,6 +137,7 @@ class Sim {
   // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
   Navigation& navigation();
   std::deque<Unit*> pathQueue;
+  std::vector<ResourceDeposit> deposits;
   std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;
   uint32_t nextCommandId = 1;
   // Keep an engine object alive for the session (objects scripts may still hold).

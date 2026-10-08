@@ -353,6 +353,11 @@ static void resume (lua_State *L, void *ud) {
    host can record a traceback of the failing thread (the message is at the top). */
 void (*lua_gpg_resume_error_hook)(lua_State *L, int status) = NULL;
 
+/* GPG/moho64: is the innermost protected call the coroutine's resume (no pcall in between)? */
+int luaD_gpg_outermost (lua_State *L) {
+  return L->errorJmp != NULL && L->errorJmp->previous == NULL && L != G(L)->mainthread;
+}
+
 LUA_API int lua_resume (lua_State *L, int nargs) {
   int status;
   lu_byte old_allowhooks;
@@ -361,7 +366,7 @@ LUA_API int lua_resume (lua_State *L, int nargs) {
   lua_assert(L->errfunc == 0 && L->nCcalls == 0);
   status = luaD_rawrunprotected(L, resume, &nargs);
   if (status != 0) {  /* error? */
-    if (lua_gpg_resume_error_hook) lua_gpg_resume_error_hook(L, status);
+    /* (the traceback was taken in luaG_errormsg, while the stack was still intact) */
     L->ci = L->base_ci;  /* go back to initial level */
     L->base = L->ci->base;
     L->nCcalls = 0;
