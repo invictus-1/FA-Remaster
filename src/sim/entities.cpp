@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 
+#include "core/dmath.h"
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
@@ -78,9 +79,9 @@ Vec3 CheckVec(lua_State* L, int idx) {
 }
 
 Quat FromEuler(float pitch, float yaw, float roll) {  // radians; yaw about Y
-  float cy = std::cos(yaw * 0.5f), sy = std::sin(yaw * 0.5f);
-  float cp = std::cos(pitch * 0.5f), sp = std::sin(pitch * 0.5f);
-  float cr = std::cos(roll * 0.5f), sr = std::sin(roll * 0.5f);
+  float cy = dmath::Cos(yaw * 0.5f), sy = dmath::Sin(yaw * 0.5f);
+  float cp = dmath::Cos(pitch * 0.5f), sp = dmath::Sin(pitch * 0.5f);
+  float cr = dmath::Cos(roll * 0.5f), sr = dmath::Sin(roll * 0.5f);
   Quat q;
   q.w = cy * cp * cr + sy * sp * sr;
   q.x = cy * sp * cr + sy * cp * sr;
@@ -89,7 +90,7 @@ Quat FromEuler(float pitch, float yaw, float roll) {  // radians; yaw about Y
   return q;
 }
 
-float Heading(const Quat& q) { return std::atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x)); }
+float Heading(const Quat& q) { return dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x)); }
 
 const BlueprintInfo* CheckBlueprint(lua_State* L, int idx) {
   const char* id = luaL_checkstring(L, idx);
@@ -1033,9 +1034,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->fractionComplete = complete ? 1.0f : 0.0f;
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
   {
-    float h = std::atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
-    u->motion.fx = std::sin(h);
-    u->motion.fz = std::cos(h);
+    float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
+    u->motion.fx = dmath::Sin(h);
+    u->motion.fz = dmath::Cos(h);
     u->motion.bx = u->motion.fx;
     u->motion.bz = u->motion.fz;
   }

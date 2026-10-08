@@ -80,6 +80,9 @@ struct UnitMotion {
   int state = 7;
   bool reverse = false;   // backing up to a close target behind it
   bool newSegment = true; // choose the state from scratch at the next step
+  // Collision avoidance (see CollisionTick): stopping for a unit ahead, at twice the brake.
+  bool yielding = false;
+  uint32_t yieldTarget = 0;  // the unit it stopped for
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
 };
@@ -94,6 +97,14 @@ void MotionTick(Sim& sim, Unit* u);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// Units see each other coming (before motion): a driving unit that would run into a unit ahead
+// of it within the next 20 ticks stops (twice its brake) and drives on once the way is clear;
+// a unit that drives into an idle one pushes it aside.
+// The original (CAiSteeringImpl::CheckCollisions 0x5d3740, ResolvePossibleCollision 0x596f30,
+// CUnitMotion::AddImpulse 0x6b8ac0) compares the two units' spline nodes every 3 ticks with
+// boxes (SizeX+SizeZ)/4 wide stretched by the stopping distance. TODO(M3b): read it fully; this
+// is an approximation fitted to the probe's 3-bot group.
+void CollisionTick(Sim& sim);
 // Place a unit on the ground/water at its current position (SnapToGround / SnapToWater).
 void SnapUnit(const Sim& sim, Unit* u);
 

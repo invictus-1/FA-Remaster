@@ -1,4 +1,5 @@
 // Unit motion (see motion.h for what the original does and how it was checked).
+#include "core/dmath.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 
@@ -6,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 
 #include "core/log.h"
 #include "sim/sim.h"
@@ -53,7 +55,7 @@ float SinApprox(float a) { return ((a * a * 0.00761000020429492f - 0.16605000197
 bool RotateToward(float& x, float& z, float tx, float tz, float maxAngle) {
   if (maxAngle > 3.1415927410125732f) maxAngle = 3.1415927410125732f;
   float lc = std::sqrt(x * x + z * z), lt = std::sqrt(tx * tx + tz * tz);
-  float c = std::cos(maxAngle);
+  float c = dmath::Cos(maxAngle);
   float lp = lc * lt;
   if (lp == 0.0f) return true;
   if (c * lp <= x * tx + z * tz) {
@@ -152,10 +154,10 @@ void UpdateLayer(Sim& sim, Unit* u) {
 }  // namespace
 
 Quat YawQuat(float fx, float fz) {
-  float h = std::atan2(fx, fz);
+  float h = dmath::Atan2(fx, fz);
   Quat q;
-  q.y = std::sin(h * 0.5f);
-  q.w = std::cos(h * 0.5f);
+  q.y = dmath::Sin(h * 0.5f);
+  q.w = dmath::Cos(h * 0.5f);
   return q;
 }
 
@@ -409,7 +411,8 @@ bool DriveStep(Sim& sim, Unit* u) {
   m.vel.x -= lx;
   m.vel.z -= lz;
   float target = 0;
-  bool braking = s == 1 || s == 3 || s == 4 || s == 6;
+  bool braking = s == 1 || s == 3 || s == 4 || s == 6 || m.yielding;
+  if (m.yielding) brake *= 2;
   if (!braking) {
     target = std::min(limit, (s == 5 || s == 2) ? maxR : maxF);
     if (mode == 0) {
@@ -569,6 +572,91 @@ bool AirStep(Sim& sim, Unit* u) {
 
 }  // namespace
 
+namespace {
+float Radius(const MotionBlueprint& b) { return (b.sizeX + b.sizeZ) * 0.25f; }
+bool Driving(const Unit* u) { return u->motion.hasGoal; }
+}  // namespace
+
+void CollisionTick(Sim& sim) {
+  // uniform grid of land/naval units (8x8 world-unit cells)
+  constexpr float kCell = 8.0f;
+  std::unordered_map<int64_t, std::vector<Unit*>> grid;
+  std::vector<Unit*> movers;
+  auto key = [](int x, int z) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(z); };
+  for (auto& [id, e] : sim.entities()) {
+    if (e->kind != Entity::Kind::Unit || e->destroyQueued || e->dead) continue;
+    Unit* u = static_cast<Unit*>(e);
+    if (!u->motion.bp || u->motion.bp->motionType == kMotionAir) continue;
+    if (u->fractionComplete < 1.0f) continue;
+    grid[key(static_cast<int>(std::floor(u->position.x / kCell)), static_cast<int>(std::floor(u->position.z / kCell)))]
+        .push_back(u);
+    if (u->motion.bp->mobile() && Driving(u)) movers.push_back(u);
+  }
+  for (Unit* u : movers) {
+    UnitMotion& m = u->motion;
+    if (sim.tick() < m.driveTick) continue;
+    const MotionBlueprint& b = *m.bp;
+    float ru = Radius(b);
+    float vx = m.vel.x, vz = m.vel.z;
+    float sp = std::sqrt(vx * vx + vz * vz);
+    if (sp <= 0.0f) continue;
+    float fwx = vx / sp, fwz = vz / sp;
+    float reach = ru + sp * 20.0f + 4.0f;
+    int x0 = static_cast<int>(std::floor((u->position.x - reach) / kCell));
+    int x1 = static_cast<int>(std::floor((u->position.x + reach) / kCell));
+    int z0 = static_cast<int>(std::floor((u->position.z - reach) / kCell));
+    int z1 = static_cast<int>(std::floor((u->position.z + reach) / kCell));
+    Unit* hit = nullptr;
+    int hitT = 1 << 30;
+    bool push = false;
+    for (int gx = x0; gx <= x1; ++gx)
+      for (int gz = z0; gz <= z1; ++gz) {
+        auto it = grid.find(key(gx, gz));
+        if (it == grid.end()) continue;
+        for (Unit* o : it->second) {
+          if (o == u) continue;
+          const UnitMotion& n = o->motion;
+          float ro = n.bp ? Radius(*n.bp) : 0.5f;
+          float rr = (ru + ro) * (ru + ro);
+          float dx = o->position.x - u->position.x, dz = o->position.z - u->position.z;
+          // only units ahead of it
+          if (dx * fwx + dz * fwz <= 0.0f) continue;
+          bool oMoving = Driving(o);
+          float ovx = oMoving ? n.vel.x : 0, ovz = oMoving ? n.vel.z : 0;
+          for (int t = 0; t <= 18; t += 3) {
+            float px = dx + (ovx - vx) * t, pz = dz + (ovz - vz) * t;
+            if (px * px + pz * pz < rr) {
+              bool idle = !oMoving && o->commands.empty() && n.bp && n.bp->mobile();
+              if (t < hitT) {
+                hitT = t;
+                hit = o;
+                push = idle;
+              }
+              break;
+            }
+          }
+        }
+      }
+    if (!hit) continue;
+    if (push) {
+      // close enough to touch: the idle unit is shoved along (AddImpulse: v = v/2 + impulse)
+      float dx = hit->position.x - u->position.x, dz = hit->position.z - u->position.z;
+      float d = std::sqrt(dx * dx + dz * dz);
+      float ro = hit->motion.bp ? Radius(*hit->motion.bp) : 0.5f;
+      if (d < ru + ro + sp && d > 0.0f) {
+        UnitMotion& n = hit->motion;
+        n.vel.x = n.vel.x * 0.5f + dx / d * sp;
+        n.vel.z = n.vel.z * 0.5f + dz / d * sp;
+      }
+      continue;
+    }
+    if (!m.yielding && m.state == 7) {
+      m.yielding = true;
+      m.yieldTarget = hit->id;
+    }
+  }
+}
+
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (!m.bp || !m.bp->mobile() || u->dead) {
@@ -595,6 +683,12 @@ void MotionTick(Sim& sim, Unit* u) {
         moved = Coast(u);  // waiting for the path: keeps rolling and slows down
       } else {
         moved = DriveStep(sim, u);
+        if (m.yielding && m.vel.x * m.vel.x + m.vel.z * m.vel.z <= kStopSq) {
+          m.vel = {};
+          m.yielding = false;
+          m.newSegment = true;
+          m.driveTick = sim.tick() + 2;  // stands for a tick, then drives on
+        }
         if (moved) {
           int cx, cz;
           GoalCell(b, u->position.x, u->position.z, &cx, &cz);

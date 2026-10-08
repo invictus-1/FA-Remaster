@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "core/dmath.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -368,9 +369,9 @@ void PushQuat4(lua_State* L, float x, float y, float z, float w) {
 // the last bit (oracle probe 2026-10-08).
 int l_EulerToQuaternion(lua_State* L) {
   float roll = luaL_checknumber(L, 1), pitch = luaL_checknumber(L, 2), yaw = luaL_checknumber(L, 3);
-  float cy = std::cos(yaw * 0.5f), sy = std::sin(yaw * 0.5f);
-  float cp = std::cos(pitch * 0.5f), sp = std::sin(pitch * 0.5f);
-  float cr = std::cos(roll * 0.5f), sr = std::sin(roll * 0.5f);
+  float cy = dmath::Cos(yaw * 0.5f), sy = dmath::Sin(yaw * 0.5f);
+  float cp = dmath::Cos(pitch * 0.5f), sp = dmath::Sin(pitch * 0.5f);
+  float cr = dmath::Cos(roll * 0.5f), sr = dmath::Sin(roll * 0.5f);
   // qy * qp * qr with qy=(0,sy,0,cy), qp=(sp,0,0,cp), qr=(0,0,sr,cr)
   float x = cy * sp * cr + sy * cp * sr;
   float y = sy * cp * cr - cy * sp * sr;
@@ -389,10 +390,10 @@ int l_OrientFromDir(lua_State* L) {
     PushQuat4(L, 0, 0, 0, 1);
     return 1;
   }
-  float heading = std::atan2(x, z);
+  float heading = dmath::Atan2(x, z);
   float pitch = -std::asin(y / len);
-  float ch = std::cos(heading * 0.5f), sh = std::sin(heading * 0.5f);
-  float cp = std::cos(pitch * 0.5f), sp = std::sin(pitch * 0.5f);
+  float ch = dmath::Cos(heading * 0.5f), sh = dmath::Sin(heading * 0.5f);
+  float cp = dmath::Cos(pitch * 0.5f), sp = dmath::Sin(pitch * 0.5f);
   // probe: equal to the original within 1 ulp; + 0.0f turns -0 into 0 as the original prints it
   PushQuat4(L, ch * sp + 0.0f, sh * cp + 0.0f, -sh * sp + 0.0f, ch * cp);
   return 1;

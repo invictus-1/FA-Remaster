@@ -759,6 +759,7 @@ void Sim::ProcessDestroyQueue() {
 void Sim::Tick() {
   ++tick_;
   CommandsBeforeMotion(*this);
+  CollisionTick(*this);
   for (auto& [id, e] : entities_)
     if (e->kind == Entity::Kind::Unit && !e->destroyQueued) MotionTick(*this, static_cast<Unit*>(e));
   CommandsAfterMotion(*this);
