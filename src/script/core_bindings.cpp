@@ -25,6 +25,7 @@ std::string JoinArgs(lua_State* L) {
     lua_pushvalue(L, i);
     lua_call(L, 1, 1);
     const char* s = lua_tostring(L, -1);
+    if (i > 1) out += '\t';  // the original separates arguments with tabs, like print
     if (s) out += s;
     lua_pop(L, 1);
   }

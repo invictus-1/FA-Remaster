@@ -946,3 +946,22 @@ LUA_API void lua_setdefaultmetatable (lua_State *L, int type) {
   L->top--;
   lua_unlock(L);
 }
+
+
+/* GPG/LuaPlus: debug.allocatedsize(v) - bytes allocated for a value, as the original reports
+   them for a 32-bit build (table header 40 bytes, 8 per array slot, 20 per hash node; the
+   shared empty node is not counted). Used by repr() in log output. */
+LUA_API size_t lua_gpg_allocatedsize (lua_State *L, int idx) {
+  StkId o = luaA_index(L, idx);
+  switch (ttype(o)) {
+    case LUA_TTABLE: {
+      Table *h = hvalue(o);
+      size_t n = 40 + 8 * (size_t)h->sizearray;
+      if (h->node != G(L)->dummynode) n += 20 * ((size_t)1 << h->lsizenode);
+      return n;
+    }
+    case LUA_TSTRING: return 16 + tsvalue(o)->tsv.len + 1;
+    case LUA_TUSERDATA: return 16 + uvalue(o)->uv.len;
+    default: return 0;
+  }
+}

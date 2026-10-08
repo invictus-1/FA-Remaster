@@ -9,7 +9,7 @@ for f in third_party/lua/*.c third_party/zlib/adler32.c third_party/zlib/crc32.c
   o=$OUT/obj/$(basename $f .c).o
   [ "$o" -nt "$f" ] || $CC -O2 -w -Ithird_party/lua -Ithird_party/zlib -c "$f" -o "$o"
 done
-for f in src/core/*.cpp src/script/*.cpp src/app/main.cpp; do
+for f in src/core/*.cpp src/script/*.cpp src/sim/*.cpp src/app/main.cpp; do
   o=$OUT/obj/$(basename $f .cpp).o
   $CXX -std=c++20 -O2 -Isrc -Ithird_party/lua -Ithird_party/zlib -c "$f" -o "$o"
 done

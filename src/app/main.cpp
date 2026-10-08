@@ -4,6 +4,7 @@
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -20,6 +21,8 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
+#include "sim/script_object.h"
+#include "sim/sim.h"
 
 using namespace moho;
 
@@ -33,6 +36,8 @@ struct Options {
   bool checkLua = false;
   bool rules = false;
   bool quiet = false;
+  std::string replay;   // --sim <replay>: start that session headless
+  int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
 };
 
@@ -147,54 +152,6 @@ int CheckLua(Vfs& vfs) {
   return bad;
 }
 
-// Build __active_mods the way the game's mod manager does: each selected mod's mod_info.lua
-// run in an environment of defaults, `location` = its folder.
-void SetActiveMods(ScriptState& st, const std::vector<std::string>& uids) {
-  lua_State* L = st.L();
-  Vfs* vfs = st.vfs();
-  std::map<std::string, int> refByUid;  // uid -> stack index
-  lua_newtable(L);                      // __active_mods
-  int modsIdx = lua_gettop(L);
-  std::map<std::string, std::string> fileByUid;
-  for (const auto& file : vfs->FindFiles("/mods", "*mod_info.lua")) {
-    std::string location = file.substr(0, file.rfind('/'));
-    std::string code =
-        "return function(file, location)\n"
-        "local env = { location = location, name = file, description = '', author = '', copyright = '',\n"
-        "  exclusive = false, selectable = true, hookdir = '/hook', shadowdir = '/shadow', uid = file }\n"
-        "doscript(file, env)\n"
-        "env.location = location\n"
-        "return env\n"
-        "end\n";
-    lua_pushcfunction(L, ScriptTraceback);
-    int eh = lua_gettop(L);
-    if (luaL_loadbuffer(L, code.data(), code.size(), "=modinfo") != 0) {
-      LogScriptError(lua_tostring(L, -1));
-      lua_settop(L, modsIdx);
-      continue;
-    }
-    lua_call(L, 0, 1);  // -> the loader function
-    lua_pushstring(L, file.c_str());
-    lua_pushstring(L, location.c_str());
-    if (lua_pcall(L, 2, 1, eh) != 0) {
-      LogScriptError(std::string("Problem loading ") + file + ":\n" + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "?"));
-      lua_settop(L, modsIdx);
-      continue;
-    }
-    lua_getfield(L, -1, "uid");
-    std::string uid = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-    lua_pop(L, 1);
-    for (size_t i = 0; i < uids.size(); ++i) {
-      if (uids[i] == uid) {
-        lua_pushvalue(L, -1);
-        lua_rawseti(L, modsIdx, static_cast<int>(i) + 1);
-      }
-    }
-    lua_settop(L, modsIdx);
-  }
-  lua_setglobal(L, "__active_mods");
-}
-
 int RunRules(Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
   ScriptState st(ScriptState::Kind::Rules, &vfs);
   st.SetHookDirs(hookDirs);
@@ -205,6 +162,28 @@ int RunRules(Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vect
   std::string summary;
   for (auto& [k, v] : counts) summary += " " + k + "=" + std::to_string(v);
   Logf(LogLevel::Info, "moho64: rules state %s; registered:%s", ok ? "ok" : "FAILED", summary.c_str());
+  return ok ? 0 : 1;
+}
+
+int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
+  auto data = hostfs::ReadFile(o.replay);
+  if (!data) {
+    Logf(LogLevel::Error, "cannot read replay %s", o.replay.c_str());
+    return 1;
+  }
+  std::string err;
+  auto header = ReadReplayHeader(*data, &err);
+  if (!header) {
+    Logf(LogLevel::Error, "%s", err.c_str());
+    return 1;
+  }
+  Sim sim(&vfs, hookDirs, uids);
+  if (!sim.LoadRules()) return 1;
+  bool ok = sim.Start(*header);
+  Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
+  for (int i = 0; ok && i < o.ticks; ++i) sim.Tick();
+  if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", o.ticks);
+  ReportStubCalls();
   return ok ? 0 : 1;
 }
 
@@ -234,6 +213,8 @@ int main(int argc, char** argv) {
     else if (a == "--rules") o.rules = true;
     else if (a == "--quiet") o.quiet = true;
     else if (a == "--exec") o.exec.push_back(next());
+    else if (a == "--sim") o.replay = next();
+    else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
       return 2;
@@ -267,5 +248,6 @@ int main(int argc, char** argv) {
   }
   if (o.checkLua) CheckLua(vfs);  // informational: some mods ship broken files
   if (o.rules) rc |= RunRules(vfs, hookDirs, uids);
+  if (!o.replay.empty()) rc |= RunSim(o, vfs, hookDirs, uids);
   return rc;
 }

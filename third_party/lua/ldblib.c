@@ -275,7 +275,15 @@ static int errorfb (lua_State *L) {
 }
 
 
+LUA_API size_t lua_gpg_allocatedsize (lua_State *L, int idx);
+static int db_allocatedsize (lua_State *L) {
+  luaL_checkany(L, 1);
+  lua_pushnumber(L, (lua_Number)lua_gpg_allocatedsize(L, 1));
+  return 1;
+}
+
 static const luaL_reg dblib[] = {
+  {"allocatedsize", db_allocatedsize},
   {"getlocal", getlocal},
   {"getinfo", getinfo},
   {"gethook", gethook},

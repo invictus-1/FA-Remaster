@@ -143,7 +143,9 @@ int LoadScriptWithHooks(lua_State* L, const std::string& name) {
       return LUA_ERRFILE;
     }
     source += *data;
-    source += '\n';
+    // Parts are joined as they are; a newline is added only where a file lacks one (so line
+    // numbers in the hooked chunk match the original's).
+    if (!data->empty() && data->back() != '\n') source += '\n';
   }
   std::string chunk = vfs->ChunkName(name);
   return luaL_loadbuffer(L, source.data(), source.size(), chunk.c_str());

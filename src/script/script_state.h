@@ -59,4 +59,7 @@ int LoadScriptWithHooks(lua_State* L, const std::string& vpath);
 
 void RegisterCoreBindings(ScriptState& state);
 
+// Set __active_mods from the selected mod uids (in that order), as the mod manager does.
+void SetActiveMods(ScriptState& st, const std::vector<std::string>& uids);
+
 }  // namespace moho

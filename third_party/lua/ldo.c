@@ -349,6 +349,10 @@ static void resume (lua_State *L, void *ud) {
 }
 
 
+/* GPG/moho64: called when a coroutine raises an error, before its stack is unwound, so the
+   host can record a traceback of the failing thread (the message is at the top). */
+void (*lua_gpg_resume_error_hook)(lua_State *L, int status) = NULL;
+
 LUA_API int lua_resume (lua_State *L, int nargs) {
   int status;
   lu_byte old_allowhooks;
@@ -357,6 +361,7 @@ LUA_API int lua_resume (lua_State *L, int nargs) {
   lua_assert(L->errfunc == 0 && L->nCcalls == 0);
   status = luaD_rawrunprotected(L, resume, &nargs);
   if (status != 0) {  /* error? */
+    if (lua_gpg_resume_error_hook) lua_gpg_resume_error_hook(L, status);
     L->ci = L->base_ci;  /* go back to initial level */
     L->base = L->ci->base;
     L->nCcalls = 0;
