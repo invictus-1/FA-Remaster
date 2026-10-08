@@ -55,6 +55,7 @@ ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
   lua_pushlightuserdata(L_, const_cast<char*>(&kStateKey));
   lua_pushlightuserdata(L_, this);
   lua_rawset(L_, LUA_REGISTRYINDEX);
+  lua_setextra(L_, 0, this);
   RegisterCoreBindings(*this);
 }
 
@@ -62,13 +63,7 @@ ScriptState::~ScriptState() {
   if (L_) lua_close(L_);
 }
 
-ScriptState* ScriptState::From(lua_State* L) {
-  lua_pushlightuserdata(L, const_cast<char*>(&kStateKey));
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  auto* s = static_cast<ScriptState*>(lua_touserdata(L, -1));
-  lua_pop(L, 1);
-  return s;
-}
+ScriptState* ScriptState::From(lua_State* L) { return static_cast<ScriptState*>(lua_getextra(L, 0)); }
 
 int ScriptTraceback(lua_State* L) {
   // msg -> msg .. "\n" .. debug.traceback()

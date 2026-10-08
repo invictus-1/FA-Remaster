@@ -5,6 +5,7 @@
 // The table's class comes from the global `moho` table (moho.unit_methods, ...), or from a Lua
 // class built on top of it (units use their blueprint's script class).
 #pragma once
+#include <cstdint>
 #include <string>
 #include <typeinfo>
 
@@ -12,9 +13,22 @@
 
 namespace moho {
 
+// Fast type tests for the engine classes scripts use most (CheckObject/ToObject without
+// dynamic_cast); other classes fall back to dynamic_cast.
+enum ScriptTypeBit : uint32_t {
+  kTypeEntity = 1u << 0, kTypeUnit = 1u << 1, kTypeProp = 1u << 2, kTypeProjectile = 1u << 3,
+  kTypeShield = 1u << 4, kTypeWeapon = 1u << 5, kTypeBrain = 1u << 6, kTypePlatoon = 1u << 7,
+  kTypeNavigator = 1u << 8,
+};
+template <class T>
+struct ScriptTypeOf {
+  static constexpr uint32_t bit = 0;
+};
+
 class ScriptObject {
  public:
   virtual ~ScriptObject();
+  uint32_t typeBits = 0;  // ScriptTypeBit of the object's class and its bases
 
   // The object's Lua table (registry reference), set by BindObject.
   lua_State* luaState() const { return L_; }
@@ -48,13 +62,17 @@ ScriptObject* CheckAnyObject(lua_State* L, int idx);
 template <class T>
 T* CheckObject(lua_State* L, int idx) {
   ScriptObject* o = CheckAnyObject(L, idx);
-  T* t = dynamic_cast<T*>(o);
+  T* t;
+  if constexpr (ScriptTypeOf<T>::bit != 0) t = (o->typeBits & ScriptTypeOf<T>::bit) ? static_cast<T*>(o) : nullptr;
+  else t = dynamic_cast<T*>(o);
   if (!t) luaL_error(L, "Incorrect type of game object.  (Did you call with '.' instead of ':'?)");
   return t;
 }
 template <class T>
 T* ToObject(lua_State* L, int idx) {
-  return dynamic_cast<T*>(GetObject(L, idx));
+  ScriptObject* o = GetObject(L, idx);
+  if constexpr (ScriptTypeOf<T>::bit != 0) return (o && (o->typeBits & ScriptTypeOf<T>::bit)) ? static_cast<T*>(o) : nullptr;
+  else return dynamic_cast<T*>(o);
 }
 
 // Create the `moho` table with a class table for every engine class of the sim (methods are

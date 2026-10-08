@@ -128,6 +128,9 @@ typedef struct global_State {
   ** its own __index chain) and yields nil instead of raising an error; assigning stores into
   ** it unless its metatable forbids that. */
   TObject defmeta[NUM_TAGS+1];
+  /* moho64: host pointers (lua_getextra/lua_setextra) and the interned "_c_object" key */
+  void *extra[4];
+  TString *cobjkey;
 } global_State;
 
 

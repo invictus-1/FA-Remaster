@@ -164,9 +164,10 @@ void ForgetUnitCommands(Unit* u) {
 }
 
 void CommandsBeforeMotion(Sim& sim) {
-  for (auto& [id, e] : sim.entities()) {
-    Unit* u = dynamic_cast<Unit*>(e);
-    if (!u || !IsAlive(u)) continue;
+  const auto& all = sim.units();
+  for (size_t i = 0; i < all.size(); ++i) {  // (scripts run from here may add units at the end)
+    Unit* u = all[i];
+    if (!IsAlive(u)) continue;
     if (u->commands.empty()) continue;
     int& st = u->headState;
     if (st == kNotStarted) StartHead(sim, u);
@@ -198,9 +199,10 @@ void CommandsBeforeMotion(Sim& sim) {
 }
 
 void CommandsAfterMotion(Sim& sim) {
-  for (auto& [id, e] : sim.entities()) {
-    Unit* u = dynamic_cast<Unit*>(e);
-    if (!u || !IsAlive(u) || u->commands.empty()) continue;
+  const auto& all = sim.units();
+  for (size_t i = 0; i < all.size(); ++i) {
+    Unit* u = all[i];
+    if (!IsAlive(u) || u->commands.empty()) continue;
     if (u->headState != kRunning) continue;
     UnitMotion& m = u->motion;
     if (!m.arrived && !m.failed) continue;
@@ -723,8 +725,8 @@ int l_GetUnitsInRect(lua_State* L) {
   RectArgs(L, r);
   float x0 = std::min(r[0], r[2]), x1 = std::max(r[0], r[2]), z0 = std::min(r[1], r[3]), z1 = std::max(r[1], r[3]);
   int n = 0;
-  for (auto& [id, e] : S(L)->entities()) {
-    if (e->kind != Entity::Kind::Unit || e->destroyQueued || e->dead) continue;
+  for (Unit* e : S(L)->units()) {
+    if (e->destroyQueued || e->dead) continue;
     if (e->position.x < x0 || e->position.x > x1 || e->position.z < z0 || e->position.z > z1) continue;
     if (n == 0) lua_newtable(L);
     PushObject(L, e);
@@ -745,9 +747,8 @@ int l_GetUnitsAroundPoint(lua_State* L) {
   Sim* sim = S(L);
   lua_newtable(L);
   int n = 0;
-  for (auto& [id, e] : sim->entities()) {
-    Unit* u = dynamic_cast<Unit*>(e);
-    if (!u || u->destroyQueued || u->dead) continue;
+  for (Unit* u : sim->units()) {
+    if (u->destroyQueued || u->dead) continue;
     float dx = u->position.x - p.x, dz = u->position.z - p.z;
     if (dx * dx + dz * dz > r * r) continue;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))

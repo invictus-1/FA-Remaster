@@ -52,12 +52,16 @@ class Army {
   float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
+  std::vector<Unit*> units;   // the army's live units, by entity id
 };
 
 class AiBrain : public ScriptObject {
  public:
+  AiBrain() { typeBits |= kTypeBrain; }
   Army* army = nullptr;
 };
+
+template <> struct ScriptTypeOf<AiBrain> { static constexpr uint32_t bit = kTypeBrain; };
 
 class Sim {
  public:
@@ -91,6 +95,8 @@ class Sim {
   Entity* FindEntity(uint32_t id) const;
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
+  // Live units of all armies, by entity id (kept up to date on creation and destruction).
+  const std::vector<Unit*>& units() const { return units_; }
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
@@ -128,6 +134,9 @@ class Sim {
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;
+  std::vector<Unit*> units_;
+  void AddUnitToLists(Unit* u);
+  void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
   void ProcessDestroyQueue();

@@ -112,7 +112,7 @@ void BindObject(lua_State* L, int idx, ScriptObject* obj) {
   *box = obj;
   luaL_getmetatable(L, kBoxMeta);
   lua_setmetatable(L, -2);
-  lua_pushstring(L, "_c_object");
+  lua_pushcobjectkey(L);
   lua_insert(L, -2);
   lua_rawset(L, idx);
   lua_pushvalue(L, idx);
@@ -147,8 +147,7 @@ void CreateObject(lua_State* L, ScriptObject* obj, const char* cppClass) {
 
 ScriptObject* GetObject(lua_State* L, int idx) {
   if (!lua_istable(L, idx)) return nullptr;
-  lua_pushstring(L, "_c_object");
-  lua_rawget(L, idx < 0 && idx > LUA_REGISTRYINDEX ? idx - 1 : idx);
+  lua_rawgetcobject(L, idx);
   void** box = static_cast<void**>(lua_touserdata(L, -1));
   lua_pop(L, 1);
   return box ? static_cast<ScriptObject*>(*box) : nullptr;
@@ -156,8 +155,7 @@ ScriptObject* GetObject(lua_State* L, int idx) {
 
 ScriptObject* CheckAnyObject(lua_State* L, int idx) {
   if (!lua_istable(L, idx)) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
-  lua_pushstring(L, "_c_object");
-  lua_rawget(L, idx < 0 && idx > LUA_REGISTRYINDEX ? idx - 1 : idx);
+  lua_rawgetcobject(L, idx);
   void** box = static_cast<void**>(lua_touserdata(L, -1));
   lua_pop(L, 1);
   if (!box) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");

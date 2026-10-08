@@ -500,6 +500,31 @@ LUA_API void lua_rawget (lua_State *L, int idx) {
 }
 
 
+LUA_API void *lua_getextra (lua_State *L, int i) {
+  return G(L)->extra[i];
+}
+
+LUA_API void lua_setextra (lua_State *L, int i, void *p) {
+  G(L)->extra[i] = p;
+}
+
+LUA_API void lua_rawgetcobject (lua_State *L, int idx) {
+  StkId t;
+  lua_lock(L);
+  t = luaA_index(L, idx);
+  api_check(L, ttistable(t));
+  setobj2s(L->top, luaH_getstr(hvalue(t), G(L)->cobjkey));
+  api_incr_top(L);
+  lua_unlock(L);
+}
+
+LUA_API void lua_pushcobjectkey (lua_State *L) {
+  lua_lock(L);
+  setsvalue2s(L->top, G(L)->cobjkey);
+  api_incr_top(L);
+  lua_unlock(L);
+}
+
 LUA_API void lua_rawgeti (lua_State *L, int idx, int n) {
   StkId o;
   lua_lock(L);

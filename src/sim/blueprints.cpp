@@ -329,13 +329,7 @@ void SimBlueprints::StartRecording(ScriptState& rules) {
   };
 }
 
-SimBlueprints* SimBlueprints::From(lua_State* L) {
-  lua_pushlightuserdata(L, const_cast<char*>(&kBpsKey));
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  auto* b = static_cast<SimBlueprints*>(lua_touserdata(L, -1));
-  lua_pop(L, 1);
-  return b;
-}
+SimBlueprints* SimBlueprints::From(lua_State* L) { return static_cast<SimBlueprints*>(lua_getextra(L, 2)); }
 
 const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   auto it = byId_.find(Lower(id));
@@ -396,6 +390,7 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   lua_pushlightuserdata(sim, const_cast<char*>(&kBpsKey));
   lua_pushlightuserdata(sim, this);
   lua_rawset(sim, LUA_REGISTRYINDEX);
+  lua_setextra(sim, 2, this);
 
   lua_pushstring(rules, kRecordKey);
   lua_rawget(rules, LUA_REGISTRYINDEX);

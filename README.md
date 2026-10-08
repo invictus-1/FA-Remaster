@@ -32,7 +32,17 @@ Milestone 2 (sim start-up) is done and runs headless on a replay:
   timing, entity ids, terrain heights and types, rotation math, bones, categories and the full
   blueprints of the sampled units match. 600 ticks run with no script errors.
 
-Next: M3, movement (unit motion, pathfinding, commands), then combat and economy.
+Milestone 3 (movement) works for ground and naval units:
+- **Unit motion** rebuilt from the original's steering: acceleration, braking, turning, reversing
+  to turn around, turning on the spot, terrain following. Checked tick by tick against the
+  original on 17 test units: single land units match within 0.01 world units on every tick.
+- **Commands:** move orders and the command queue (Issue*, stop, queued moves driven through),
+  formation moves, the path-search queue, the navigator.
+- **Pathfinding** over the map's passability (slope, water depth, blocking terrain).
+- **Units avoid each other** (an approximation of the original for now).
+- Still rough: aircraft flight, very long paths (the original returns them in parts).
+
+Next: combat and economy (M4).
 See [docs/architecture.md](docs/architecture.md) for where things are in the source.
 
 ## Build

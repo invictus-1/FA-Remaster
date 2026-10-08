@@ -437,13 +437,7 @@ Sim::~Sim() {
 
 lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }
 
-Sim* Sim::From(lua_State* L) {
-  lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  auto* s = static_cast<Sim*>(lua_touserdata(L, -1));
-  lua_pop(L, 1);
-  return s;
-}
+Sim* Sim::From(lua_State* L) { return static_cast<Sim*>(lua_getextra(L, 1)); }
 
 float Sim::Random() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng_); }
 
@@ -537,6 +531,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
+  lua_setextra(L, 1, this);
   threads_ = std::make_unique<ThreadScheduler>(L);
   RegisterSimClasses(L);
   RegisterThreadBindings(L, threads_.get());
@@ -736,7 +731,10 @@ void Sim::ProcessDestroyQueue() {
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
-    if (e->kind == Entity::Kind::Unit) ForgetUnitCommands(static_cast<Unit*>(e));
+    if (e->kind == Entity::Kind::Unit) {
+      ForgetUnitCommands(static_cast<Unit*>(e));
+      RemoveUnitFromLists(static_cast<Unit*>(e));
+    }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
     if (e->army && e->army->pool) {
       auto& v = e->army->pool->units;
@@ -754,14 +752,34 @@ void Sim::ProcessDestroyQueue() {
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.
+namespace {
+void InsertById(std::vector<Unit*>& v, Unit* u) {
+  auto it = std::lower_bound(v.begin(), v.end(), u, [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  v.insert(it, u);
+}
+void EraseById(std::vector<Unit*>& v, Unit* u) {
+  auto it = std::lower_bound(v.begin(), v.end(), u, [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  if (it != v.end() && *it == u) v.erase(it);
+}
+}  // namespace
+
+void Sim::AddUnitToLists(Unit* u) {
+  InsertById(units_, u);
+  if (u->army) InsertById(u->army->units, u);
+}
+void Sim::RemoveUnitFromLists(Unit* u) {
+  EraseById(units_, u);
+  if (u->army) EraseById(u->army->units, u);
+}
+
 // Order inside a beat (from the oracle probe): unit commands start, units move, finished moves
 // end (and queued moves continue in the same beat), then the script threads run.
 void Sim::Tick() {
   ++tick_;
   CommandsBeforeMotion(*this);
   CollisionTick(*this);
-  for (auto& [id, e] : entities_)
-    if (e->kind == Entity::Kind::Unit && !e->destroyQueued) MotionTick(*this, static_cast<Unit*>(e));
+  for (size_t i = 0; i < units_.size(); ++i)  // (motion may create or destroy nothing)
+    if (!units_[i]->destroyQueued) MotionTick(*this, units_[i]);
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
   ProcessDestroyQueue();

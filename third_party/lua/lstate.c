@@ -125,6 +125,9 @@ static void f_luaopen (lua_State *L, void *ud) {
       if (t != LUA_TTABLE && t != LUA_TUSERDATA) sethvalue(&g->defmeta[t], luaH_new(L, 0, 0));
   }
   luaS_fix(luaS_newliteral(L, MEMERRMSG));
+  g->extra[0] = g->extra[1] = g->extra[2] = g->extra[3] = NULL;
+  g->cobjkey = luaS_newliteral(L, "_c_object");
+  luaS_fix(g->cobjkey);
   g->GCthreshold = 4*G(L)->nblocks;
 }
 

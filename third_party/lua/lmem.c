@@ -24,6 +24,12 @@
 ** 0, x) allocates a new block (ANSI C assures that). (`os' is the old
 ** block size; some allocators may use that.)
 */
+#ifdef MOHO64_MIMALLOC
+#include <mimalloc.h>
+#define l_realloc(b,os,s)	mi_realloc(b,s)
+#define l_free(b,os)	mi_free(b)
+#endif
+
 #ifndef l_realloc
 #define l_realloc(b,os,s)	realloc(b,s)
 #endif

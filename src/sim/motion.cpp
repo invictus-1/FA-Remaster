@@ -583,9 +583,8 @@ void CollisionTick(Sim& sim) {
   std::unordered_map<int64_t, std::vector<Unit*>> grid;
   std::vector<Unit*> movers;
   auto key = [](int x, int z) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(z); };
-  for (auto& [id, e] : sim.entities()) {
-    if (e->kind != Entity::Kind::Unit || e->destroyQueued || e->dead) continue;
-    Unit* u = static_cast<Unit*>(e);
+  for (Unit* u : sim.units()) {
+    if (u->destroyQueued || u->dead) continue;
     if (!u->motion.bp || u->motion.bp->motionType == kMotionAir) continue;
     if (u->fractionComplete < 1.0f) continue;
     grid[key(static_cast<int>(std::floor(u->position.x / kCell)), static_cast<int>(std::floor(u->position.z / kCell)))]

@@ -170,6 +170,12 @@ LUA_API void  lua_pushlightuserdata (lua_State *L, void *p);
 LUA_API void  lua_gettable (lua_State *L, int idx);
 LUA_API void  lua_rawget (lua_State *L, int idx);
 LUA_API void  lua_rawgeti (lua_State *L, int idx, int n);
+/* moho64 extensions: per-state host pointers (O(1), no registry lookup) and a raw get of the
+** table field "_c_object" with the pre-interned key (engine objects' handles). */
+LUA_API void *lua_getextra (lua_State *L, int i);
+LUA_API void  lua_setextra (lua_State *L, int i, void *p);
+LUA_API void  lua_rawgetcobject (lua_State *L, int idx);
+LUA_API void  lua_pushcobjectkey (lua_State *L);
 LUA_API void  lua_newtable (lua_State *L);
 LUA_API void *lua_newuserdata (lua_State *L, size_t sz);
 LUA_API int   lua_getmetatable (lua_State *L, int objindex);

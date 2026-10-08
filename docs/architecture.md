@@ -12,7 +12,9 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
   sim/Sim::LoadRules    rules state runs /lua/ruleinit.lua (blueprint loading)
   sim/Sim::Start        map -> sim Lua state -> simInit.lua -> ScenarioInfo -> SetupSession
                         -> armies + brains (OnCreateArmyBrain) -> map props -> BeginSession
-  sim/Sim::Tick         tick counter, script threads, destroy queue
+  sim/Sim::Tick         tick counter; unit commands start (commands.cpp); units see each other
+                        (CollisionTick); units move (MotionTick); finished moves end; script
+                        threads; destroy queue
 ```
 
 ## Directories
@@ -38,6 +40,11 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/effects.cpp` | Emitters, beams, decals, manipulators: objects without visuals yet |
 | `src/sim/terrain.*` | `.scmap` reader: heightfield, terrain types, water, map props |
 | `src/sim/replay.*` | Replay header: session setup (map, mods, options, armies, seed) |
+| `src/sim/motion.*` | Unit motion: the original's spline steering (states, turn/accel/brake limits), coasting, ground snap, collision avoidance (approximation), air (placeholder) |
+| `src/sim/navigation.*` | Where a footprint can stand (OCCUPY_MobileCheck) and path search (A* + smoothing) |
+| `src/sim/commands.*` | Command queues, Issue*, path search queue, formations, navigator object, GetUnitsInRect / GetUnitsAroundPoint |
+| `src/core/dmath.h` | Deterministic sin/cos/atan2 (same bits on every platform) |
+| `third_party/mimalloc` | Allocator for the Lua heap (MIT) |
 | `third_party/lua` | Lua 5.0 changed to the game's dialect (docs/lua-dialect.md) |
 | `tools/` | Generators and checkers (see below) |
 
@@ -53,6 +60,19 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
   scripts can see; output goes to the log).
 - **Reference reading:** names and call order in the original executable are read with Ghidra and
   a disassembler; nothing from it is copied.
+
+- **Movement:** `tools/compare_motion.py <original log> <moho64 log>` compares the probe's 17 test
+  units tick by tick (start/end ticks, final positions, position and heading errors); `--tag` prints
+  one unit side by side.
+
+## Speed
+
+- Engine objects are found from Lua in O(1): `lua_getextra` (host pointers in the Lua global state)
+  and `lua_rawgetcobject` (pre-interned `_c_object` key) instead of registry lookups.
+- `CheckObject`/`ToObject` test a type bit (`ScriptTypeOf<T>`) instead of `dynamic_cast` for the
+  common classes.
+- The sim keeps live units in id order (`Sim::units()`, `Army::units`): per-tick loops and unit
+  queries never walk the map's props.
 
 ## Conventions
 

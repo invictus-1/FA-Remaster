@@ -188,7 +188,7 @@ int l_GetEntityById(lua_State* L) { return PushNew(L, EntityFromId(L, 1)); }
 
 int l_GetUnitById(lua_State* L) {
   Entity* e = EntityFromId(L, 1);
-  return PushNew(L, dynamic_cast<Unit*>(e));
+  return PushNew(L, e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr);
 }
 
 int l_GetUnitBlueprintByName(lua_State* L) {
@@ -685,9 +685,9 @@ int l_brain_GetListOfUnits(lua_State* L) {
   const uint64_t* cat = ToCategory(L, 2);
   lua_newtable(L);
   int n = 0;
-  for (auto& [id, e] : S(L)->entities()) {
-    Unit* u = dynamic_cast<Unit*>(e);
-    if (!u || u->army != b->army || u->dead || u->destroyQueued) continue;
+  if (!b->army) return 1;
+  for (Unit* u : b->army->units) {
+    if (u->dead || u->destroyQueued) continue;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       continue;
     PushObject(L, u);
@@ -1066,6 +1066,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   int obj = lua_gettop(L);
   owned_.push_back(std::move(owned));
   entities_[u->id] = u;
+  AddUnitToLists(u);
   if (army && army->pool) army->pool->units.push_back(u);
 
   CallMethod(L, u, "OnPreCreate", 0);

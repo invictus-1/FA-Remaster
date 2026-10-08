@@ -58,10 +58,13 @@ struct UnitCommand {
 // Lua's view of a unit's navigator (Unit:GetNavigator()).
 class NavigatorObject : public ScriptObject {
  public:
+  NavigatorObject() { typeBits |= kTypeNavigator; }
   Unit* unit = nullptr;
   bool speedThroughGoal = false;
   bool ignoreFormation = false;
 };
+
+template <> struct ScriptTypeOf<NavigatorObject> { static constexpr uint32_t bit = kTypeNavigator; };
 
 // Run the head command of every unit (before motion), and finish arrived moves (after motion).
 void CommandsBeforeMotion(Sim& sim);

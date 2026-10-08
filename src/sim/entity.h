@@ -20,6 +20,7 @@ struct Quat {  // x, y, z, w
 
 class Entity : public ScriptObject {
  public:
+  Entity() { typeBits |= kTypeEntity; }
   enum class Kind { Entity, Unit, Prop, Projectile, Shield, Blip, Beam };
   Kind kind = Kind::Entity;
   uint32_t id = 0;
@@ -33,6 +34,11 @@ class Entity : public ScriptObject {
   float health = 0, maxHealth = 0;
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
+};
+
+template <>
+struct ScriptTypeOf<Entity> {
+  static constexpr uint32_t bit = kTypeEntity;
 };
 
 }  // namespace moho
