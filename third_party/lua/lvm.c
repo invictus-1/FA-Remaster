@@ -53,12 +53,29 @@ const TObject *luaV_tonumber (const TObject *obj, TObject *n) {
 }
 
 
+/* moho64: integral numbers below 1e14 print as plain integers under "%.14g" - format those
+** directly (sprintf of a float is slow and scripts build many keys like x..'_'..z). */
+static void number2str (char *s, lua_Number n) {
+  if (n == (lua_Number)(long long)n && n < 1e14 && n > -1e14 && !(n == 0 && signbit(n))) {
+    long long v = (long long)n;
+    char tmp[24];
+    int len = 0, neg = v < 0;
+    unsigned long long u = neg ? (unsigned long long)(-v) : (unsigned long long)v;
+    do { tmp[len++] = (char)('0' + (int)(u % 10)); u /= 10; } while (u);
+    if (neg) *s++ = '-';
+    while (len) *s++ = tmp[--len];
+    *s = '\0';
+    return;
+  }
+  lua_number2str(s, n);
+}
+
 int luaV_tostring (lua_State *L, StkId obj) {
   if (!ttisnumber(obj))
     return 0;
   else {
     char s[32];  /* 16 digits, sign, point and \0  (+ some extra...) */
-    lua_number2str(s, nvalue(obj));
+    number2str(s, nvalue(obj));
     setsvalue2s(obj, luaS_new(L, s));
     return 1;
   }
@@ -555,7 +572,20 @@ StkId luaV_execute (lua_State *L) {
         StkId rb = RB(i);
         TObject *rc = RKC(i);
         if (ttistable(rb)) {
-          const TObject *v = luaH_get(hvalue(rb), rc);
+          /* moho64: array slots and string keys without going through luaH_get */
+          Table *h = hvalue(rb);
+          const TObject *v;
+          if (ttisnumber(rc)) {
+            int k = (int)nvalue(rc);
+            if (cast(lua_Number, k) == nvalue(rc) && (unsigned int)(k - 1) < (unsigned int)h->sizearray)
+              v = &h->array[k - 1];
+            else
+              v = luaH_get(h, rc);
+          }
+          else if (ttisstring(rc))
+            v = luaH_getstr(h, tsvalue(rc));
+          else
+            v = luaH_get(h, rc);
           if (!ttisnil(v)) { setobj2s(ra, v); }
           else
             setobj2s(XRA(i), luaV_index(L, rb, rc, 0));
@@ -575,7 +605,26 @@ StkId luaV_execute (lua_State *L) {
         vmbreak;
       }
       vmcase(OP_SETTABLE) {
-        luaV_settable(L, ra, RKB(i), RKC(i));
+        /* moho64: existing array slots and string keys set directly (a nil slot of a table
+        ** with a metatable still goes through luaV_settable for __newindex) */
+        TObject *rb = RKB(i);
+        if (ttistable(ra)) {
+          Table *h = hvalue(ra);
+          TObject *slot = NULL;
+          if (ttisnumber(rb)) {
+            int k = (int)nvalue(rb);
+            if (cast(lua_Number, k) == nvalue(rb) && (unsigned int)(k - 1) < (unsigned int)h->sizearray)
+              slot = &h->array[k - 1];
+          }
+          else if (ttisstring(rb))
+            slot = cast(TObject *, luaH_getstr(h, tsvalue(rb)));
+          if (slot && slot != &luaO_nilobject && (!ttisnil(slot) || h->metatable == NULL)) {
+            h->flags = 0;
+            setobj2t(slot, RKC(i));
+            vmbreak;
+          }
+        }
+        luaV_settable(L, ra, rb, RKC(i));
         vmbreak;
       }
       vmcase(OP_NEWTABLE) {
