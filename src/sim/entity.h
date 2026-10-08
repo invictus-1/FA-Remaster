@@ -9,6 +9,7 @@ namespace moho {
 
 struct BlueprintInfo;
 class Army;
+class Skeleton;
 
 struct Vec3 {
   float x = 0, y = 0, z = 0;
@@ -27,6 +28,8 @@ class Entity : public ScriptObject {
   Vec3 position;
   Quat orientation;
   float scale[3] = {1, 1, 1};
+  const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)
+  float meshScale = 1;                 // Display.UniformScale: model units -> world
   float health = 0, maxHealth = 0;
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue

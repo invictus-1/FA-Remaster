@@ -26,7 +26,7 @@ add_library(mohocore STATIC
   src/script/script_state.cpp src/script/core_bindings.cpp src/script/mods.cpp
   src/script/threads.cpp src/sim/script_object.cpp src/sim/blueprints.cpp src/sim/replay.cpp
   src/sim/terrain.cpp src/sim/sim.cpp src/sim/entities.cpp src/sim/effects.cpp src/sim/bp_reflect.cpp
-  src/sim/bp_derived.cpp)
+  src/sim/bp_derived.cpp src/sim/skeleton.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
 

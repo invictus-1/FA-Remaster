@@ -16,6 +16,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/sim.h"
+#include "sim/skeleton.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 
@@ -232,15 +233,19 @@ int l_GetAIBrain(lua_State* L) {
   Entity* e = E(L);
   return PushNew(L, e->army ? e->army->brain : nullptr);
 }
-int l_GetPosition(lua_State* L) {
-  PushVec(L, E(L)->position);
+Vec3 BonePosition(const Entity* e, int bone);
+int ResolveBone(lua_State* L, Entity* e, int arg);
+int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world position
+  Entity* e = E(L);
+  PushVec(L, lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2)));
   return 1;
 }
 int l_GetPositionXYZ(lua_State* L) {
   Entity* e = E(L);
-  lua_pushnumber(L, e->position.x);
-  lua_pushnumber(L, e->position.y);
-  lua_pushnumber(L, e->position.z);
+  Vec3 p = lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2));
+  lua_pushnumber(L, p.x);
+  lua_pushnumber(L, p.y);
+  lua_pushnumber(L, p.z);
   return 3;
 }
 int l_GetOrientation(lua_State* L) {
@@ -352,22 +357,80 @@ int l_SetScale(lua_State* L) {
   e->scale[2] = static_cast<float>(luaL_optnumber(L, 4, s));
   return 0;
 }
+// ---- bones ------------------------------------------------------------------------------------
+// Bone 0 is the root; an entity without a mesh has just that one. -1 means the entity itself.
+
+int BoneCount(const Entity* e) { return e->skeleton ? e->skeleton->Count() : 1; }
+
+// CAniActor::ResolveBoneIndex: a bone argument is an index (-2 .. count-1), a name, or nil (-1);
+// anything else is a script error.
+int ResolveBone(lua_State* L, Entity* e, int arg) {
+  int ty = lua_type(L, arg);
+  if (ty == LUA_TNUMBER) {
+    int i = static_cast<int>(lua_tonumber(L, arg));
+    if (i < -2 || i >= BoneCount(e)) luaL_error(L, "Arg %d: invalid bone index (%d)", arg, i);
+    return i;
+  }
+  if (ty == LUA_TSTRING) {
+    const char* name = lua_tostring(L, arg);
+    int i = e->skeleton ? e->skeleton->Find(name) : -1;
+    if (i < 0) luaL_error(L, "Arg %d: unit has no bone \"%s\".", arg, name);
+    return i;
+  }
+  if (ty == LUA_TNIL || ty == LUA_TNONE) return -1;
+  luaL_error(L, "Arg %d: invalid bone identifier; must be string, integer, or nil", arg);
+  return -1;
+}
+
+// World transform of a bone at rest (TODO(M3): animation poses).
+Vec3 BonePosition(const Entity* e, int bone) {
+  if (bone < 0 || !e->skeleton) return e->position;
+  const Bone& b = e->skeleton->bones()[bone];
+  Vec3 m{b.modelPos.x * e->meshScale * e->scale[0], b.modelPos.y * e->meshScale * e->scale[1],
+         b.modelPos.z * e->meshScale * e->scale[2]};
+  Vec3 r = QuatRotate(e->orientation, m);
+  return {e->position.x + r.x, e->position.y + r.y, e->position.z + r.z};
+}
+Quat BoneOrientation(const Entity* e, int bone) {
+  if (bone < 0 || !e->skeleton) return e->orientation;
+  return QuatMul(e->orientation, e->skeleton->bones()[bone].modelRot);
+}
+
 int l_GetBoneCount(lua_State* L) {
-  E(L);
-  lua_pushnumber(L, 1);  // TODO(M3): skeleton from the mesh; bone 0 is the root
+  lua_pushnumber(L, BoneCount(E(L)));
   return 1;
 }
-int l_IsValidBone(lua_State* L) {
-  E(L);
-  // TODO(M3): check against the mesh skeleton. Until meshes load: bone 0 only (probe: 0 true,
-  // -1 / unknown names / out of range false).
-  lua_pushboolean(L, lua_type(L, 2) == LUA_TNUMBER && lua_tonumber(L, 2) == 0);
+int l_IsValidBone(lua_State* L) {  // index 0 .. count-1 or a bone name (probe: -1 and unknown names false)
+  Entity* e = E(L);
+  bool ok = false;
+  if (lua_type(L, 2) == LUA_TNUMBER) {
+    double v = lua_tonumber(L, 2);
+    ok = v >= 0 && v < BoneCount(e);
+  } else if (lua_type(L, 2) == LUA_TSTRING) {
+    ok = e->skeleton && e->skeleton->Find(lua_tostring(L, 2)) >= 0;
+  }
+  lua_pushboolean(L, ok);
   return 1;
 }
 int l_GetBoneName(lua_State* L) {
-  E(L);
-  lua_pushstring(L, "root");
+  Entity* e = E(L);
+  int i = static_cast<int>(luaL_checknumber(L, 2));
+  if (i < 0 || i >= BoneCount(e)) {
+    lua_pushnil(L);
+  } else if (e->skeleton) {
+    lua_pushstring(L, e->skeleton->bones()[i].name.c_str());
+  } else {
+    lua_pushstring(L, "root");
+  }
   return 1;
+}
+int l_GetBoneDirection(lua_State* L) {  // the bone's forward (+z) axis in the world
+  Entity* e = E(L);
+  Vec3 d = QuatRotate(BoneOrientation(e, ResolveBone(L, e, 2)), Vec3{0, 0, 1});
+  lua_pushnumber(L, d.x);
+  lua_pushnumber(L, d.y);
+  lua_pushnumber(L, d.z);
+  return 3;
 }
 
 // ---- Unit ----------------------------------------------------------------------------------
@@ -512,7 +575,8 @@ int l_CreateProjectile(lua_State* L) {
 int l_CreateProjectileAtBone(lua_State* L) {  // (bp, bone)
   Entity* e = E(L);
   const BlueprintInfo* bp = CheckBlueprint(L, 2);
-  return PushNew(L, S(L)->CreateProjectile(L, *bp, e, e->position, Vec3{}));
+  int bone = ResolveBone(L, e, 3);
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, e, BonePosition(e, bone), Vec3{}));
 }
 int l_weapon_CreateProjectile(lua_State* L) {  // weapon:CreateProjectile(muzzleBone)
   UnitWeapon* w = CheckObject<UnitWeapon>(L, 1);
@@ -525,7 +589,8 @@ int l_weapon_CreateProjectile(lua_State* L) {  // weapon:CreateProjectile(muzzle
     lua_pushnil(L);
     return 1;
   }
-  return PushNew(L, S(L)->CreateProjectile(L, *bp, w->unit, w->unit->position, Vec3{}));
+  int bone = ResolveBone(L, w->unit, 2);
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, w->unit, BonePosition(w->unit, bone), Vec3{}));
 }
 int l_proj_GetLauncher(lua_State* L) { return PushNew(L, CheckObject<Projectile>(L, 1)->launcher); }
 int l_proj_CreateChildProjectile(lua_State* L) {
@@ -716,6 +781,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "Entity", "GetBoneCount", l_GetBoneCount);
   SetMethod(L, "Entity", "IsValidBone", l_IsValidBone);
   SetMethod(L, "Entity", "GetBoneName", l_GetBoneName);
+  SetMethod(L, "Entity", "GetBoneDirection", l_GetBoneDirection);
 
   SetMethod(L, "Unit", "GetUnitId", l_GetUnitId);
   SetMethod(L, "Unit", "GetCurrentLayer", l_GetCurrentLayer);
@@ -783,6 +849,36 @@ bool Sim::PushImport(lua_State* L, const std::string& module) {
   }
   lua_remove(L, top + 1);
   return true;
+}
+
+void Sim::AttachSkeleton(lua_State* L, Entity* e) {
+  int top = lua_gettop(L);
+  bps_.PushTable(L, *e->blueprint);
+  lua_pushstring(L, "Display");
+  lua_gettable(L, -2);
+  if (lua_istable(L, -1)) {
+    int display = lua_gettop(L);
+    lua_pushstring(L, "UniformScale");
+    lua_gettable(L, display);
+    if (lua_isnumber(L, -1)) e->meshScale = static_cast<float>(lua_tonumber(L, -1));
+    lua_pushstring(L, "MeshBlueprint");
+    lua_gettable(L, display);
+    const BlueprintInfo* mesh = lua_isstring(L, -1) ? bps_.Find(lua_tostring(L, -1)) : nullptr;
+    if (mesh) {
+      bps_.PushTable(L, *mesh);
+      lua_pushstring(L, "LODs");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        if (lua_istable(L, -1)) {
+          lua_pushstring(L, "MeshName");
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1) && lua_strlen(L, -1)) e->skeleton = skeletons_->Get(lua_tostring(L, -1));
+        }
+      }
+    }
+  }
+  lua_settop(L, top);
 }
 
 // Unit::InitializeArmor: the unit's Defense.ArmorType names a row of /lua/armordefinition.lua
@@ -928,6 +1024,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->kind = Entity::Kind::Unit;
   u->blueprint = &bp;
   u->army = army;
+  AttachSkeleton(L, u);
   u->id = (static_cast<uint32_t>(army ? army->index - 1 : 0xff) << 20) | (army ? army->serial : propSerial_)++;
   u->position = pos;
   u->orientation = q;
@@ -1056,6 +1153,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Entity*
   Projectile* p = owned.get();
   p->kind = Entity::Kind::Projectile;
   p->blueprint = &bp;
+  AttachSkeleton(L, p);
   p->launcher = launcher;
   p->army = launcher ? launcher->army : nullptr;
   p->id = (static_cast<uint32_t>(p->army ? p->army->index - 1 : 0xff) << 20) | (p->army ? p->army->serial : propSerial_)++;  // TODO: projectile id space
@@ -1092,6 +1190,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   Prop* p = owned.get();
   p->kind = Entity::Kind::Prop;
   p->blueprint = &bp;
+  AttachSkeleton(L, p);
   p->id = (2u << 28) | (0xffu << 20) | propSerial_++;  // probe: props are 0x2FFxxxxx
   p->position = pos;
   p->orientation = q;

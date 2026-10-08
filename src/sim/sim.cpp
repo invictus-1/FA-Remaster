@@ -414,7 +414,8 @@ void RegisterSimBindings(lua_State* L) {
 // ---- Sim -----------------------------------------------------------------------------------
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
-    : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)) {}
+    : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)),
+      skeletons_(std::make_unique<SkeletonCache>(vfs)) {}
 
 Sim::~Sim() {
   owned_.clear();  // unbind every engine object while the Lua state still exists

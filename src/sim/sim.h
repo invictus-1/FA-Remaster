@@ -14,6 +14,7 @@
 #include "sim/blueprints.h"
 #include "sim/entity.h"
 #include "sim/replay.h"
+#include "sim/skeleton.h"
 
 namespace moho {
 
@@ -120,6 +121,9 @@ class Sim {
   void PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* defModule, const char* defClass);
   bool PushImport(lua_State* L, const std::string& module);  // import(module) -> table, or false (logged)
   void InitializeArmor(lua_State* L, Unit* u);
+  // The entity's skeleton: Display.MeshBlueprint -> that mesh blueprint's first LOD MeshName.
+  void AttachSkeleton(lua_State* L, Entity* e);
+  std::unique_ptr<SkeletonCache> skeletons_;
   bool armorLoaded_ = false;
   std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 
