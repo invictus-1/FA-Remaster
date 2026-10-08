@@ -3,6 +3,7 @@
 //
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -180,11 +181,18 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   }
   Sim sim(&vfs, hookDirs, uids);
   sim.sessionMods = header->mods;
+  auto t0 = std::chrono::steady_clock::now();
   if (!sim.LoadRules()) return 1;
+  auto t1 = std::chrono::steady_clock::now();
   bool ok = sim.Start(*header);
+  auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
   for (int i = 0; ok && i < o.ticks; ++i) sim.Tick();
+  auto t3 = std::chrono::steady_clock::now();
   if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", o.ticks);
+  auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+  Logf(LogLevel::Info, "moho64: timing: rules %.2f s, sim start-up %.2f s, %d ticks %.2f s (%.2f ms/tick)",
+       secs(t0, t1), secs(t1, t2), o.ticks, secs(t2, t3), o.ticks ? secs(t2, t3) * 1000.0 / o.ticks : 0.0);
   if (ok && !o.simLua.empty()) {
     if (auto code = hostfs::ReadFile(o.simLua)) sim.RunString(*code, "@" + o.simLua);
     else Logf(LogLevel::Error, "cannot read %s", o.simLua.c_str());
