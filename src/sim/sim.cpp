@@ -276,6 +276,12 @@ int l_GetArmyUnitCap(lua_State* L) {
   lua_pushnumber(L, a->unitCap);
   return 1;
 }
+int l_GetArmyUnitCostTotal(lua_State* L) {  // the army's units counted against the cap (General.CapCost)
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  lua_pushnumber(L, a->unitCost);
+  return 1;
+}
 int l_SetArmyUnitCap(lua_State* L) {
   Army* a = S(L)->GetArmy(L, 1);
   if (!a) return luaL_error(L, "Invalid army");
@@ -404,6 +410,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "ShouldCreateInitialArmyUnits", l_ShouldCreateInitialArmyUnits);
   SetGlobal(L, "InitializeArmyAI", l_InitializeArmyAI);
   SetGlobal(L, "GetArmyUnitCap", l_GetArmyUnitCap);
+  SetGlobal(L, "GetArmyUnitCostTotal", l_GetArmyUnitCostTotal);
   SetGlobal(L, "SetArmyUnitCap", l_SetArmyUnitCap);
   SetGlobal(L, "SetIgnoreArmyUnitCap", l_SetIgnoreArmyUnitCap);
   SetMethod(L, "CAiBrain", "GetArmyIndex", l_brain_GetArmyIndex);
@@ -715,12 +722,17 @@ void Sim::QueueDestroy(Entity* e) {
 
 // Entities destroyed by script: OnDestroy, then they leave the world (FA exe Entity::Destroy queues,
 // Entity::OnDestroy runs the script callback later).
+// The original (Sim::AdvanceBeat) drains the queue calling each entity's OnDestroy; the engine
+// objects are deleted only afterwards, so an OnDestroy can still use an entity destroyed earlier in
+// the same pass (a shield's OnDestroy calls Owner:SetShieldRatio after its unit's OnDestroy).
 void Sim::ProcessDestroyQueue() {
   lua_State* L = state_->L();
+  std::vector<Entity*> done;
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
+    if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
     if (e->army && e->army->pool) {
       auto& v = e->army->pool->units;
       v.erase(std::remove(v.begin(), v.end(), static_cast<Unit*>(nullptr)), v.end());
@@ -730,9 +742,10 @@ void Sim::ProcessDestroyQueue() {
           break;
         }
     }
-    e->UnbindLua();
+    done.push_back(e);
   }
   destroyQueue_.clear();
+  for (Entity* e : done) e->UnbindLua();
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.

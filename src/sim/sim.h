@@ -46,6 +46,7 @@ class Army {
   float massStored = 0, energyStored = 0, massMax = 0, energyMax = 0;
   std::map<std::string, float> stats;  // army statistics (GetArmyStat)
   float unitCap = 1000;
+  float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
 };

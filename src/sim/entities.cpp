@@ -1036,6 +1036,10 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (lua_isnumber(L, -1)) u->maxHealth = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 1);
   u->health = complete ? u->maxHealth : 0;
+  PushPath(L, bpIdx, "General", "CapCost");
+  if (lua_isnumber(L, -1)) u->capCost = static_cast<float>(lua_tonumber(L, -1));
+  lua_pop(L, 1);
+  if (army) army->unitCost += u->capCost;
 
   // Script object: an instance of the blueprint's class (UnitFactory __call).
   PushScriptClass(L, bp, "/lua/sim/unit.lua", "Unit");
