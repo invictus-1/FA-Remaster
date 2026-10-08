@@ -5,6 +5,7 @@
 // and their brains are created (OnCreateArmyBrain), then BeginSession().
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <random>
@@ -26,6 +27,8 @@ class TerrainMap;
 class Unit;
 class Prop;
 class Platoon;
+class Navigation;
+struct UnitCommand;
 
 class Army {
  public:
@@ -99,6 +102,17 @@ class Sim {
 
   static Sim* From(lua_State* L);
 
+  // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
+  Navigation& navigation();
+  std::deque<Unit*> pathQueue;
+  std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;
+  uint32_t nextCommandId = 1;
+  // Keep an engine object alive for the session (objects scripts may still hold).
+  ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
+    owned_.push_back(std::move(o));
+    return owned_.back().get();
+  }
+
  private:
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
@@ -107,6 +121,7 @@ class Sim {
   std::unique_ptr<ScriptState> state_;
   std::unique_ptr<ThreadScheduler> threads_;
   std::unique_ptr<TerrainMap> map_;
+  std::unique_ptr<Navigation> nav_;
   SimBlueprints bps_;
   std::vector<std::unique_ptr<Army>> armies_;
   std::mt19937 rng_;

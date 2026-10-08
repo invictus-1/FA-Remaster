@@ -269,4 +269,93 @@ function P.Threads()
     out('fork-after', GetGameTick())
 end
 
+-- 5) M3 movement scenarios: test units of NEUTRAL_CIVILIAN (no AI, no replay commands) in the
+-- quiet west area (x 110-330, z 720-840: flat land, a pond, a hill). Spawned at tick 20, orders at
+-- tick 40, every unit logged every tick until tick 450:
+-- "PROBE mv <tick> <tag> x y z qx qy qz qw vx vy vz layer moving ncmd"
+P.MOTION = {
+    -- tag, bp, x, z, heading, orders: {'move', x, z} | {'stop', tick} | {'form', x, z} ; group = several units
+    { 'tank_straight', 'uel0201', 215, 755, 1.5708, { {'move', 300, 755}, {'move', 310, 740} } },
+    { 'tank_turn', 'uel0201', 240, 770, 0, { {'move', 215, 770} } },
+    { 'bot', 'url0107', 230, 785, 0, { {'move', 290, 795} } },
+    { 'titan', 'uel0303', 250, 800, 0, { {'move', 320, 800} } },
+    { 'pond_path', 'uel0201', 212, 745, 0, { {'move', 128, 745} } },
+    { 'hover', 'ual0201', 212, 760, 0, { {'move', 120, 760} } },
+    { 'frigate', 'ues0103', 165, 732, 0, { {'move', 195, 740} } },
+    { 'air', 'uea0101', 260, 820, 0, { {'move', 330, 760}, {'move', 260, 820} } },
+    { 'slope', 'uel0201', 110, 790, 0, { {'move', 110, 840} } },
+    { 'stop', 'uel0201', 220, 720, 1.5708, { {'move', 320, 720}, {'stop', 70} } },
+    { 'engineer', 'uel0105', 330, 780, 0, { {'move', 330, 730} } },
+    { 'form', 'uel0201', 230, 812, 1.5708, { {'form', 300, 815} }, 3 },
+    { 'group', 'url0106', 222, 830, 1.5708, { {'move', 290, 830} }, 3 },
+}
+function P.Motion()
+    local army = nil
+    for i, name in ListArmies() do if name == 'NEUTRAL_CIVILIAN' then army = i end end
+    if not army then out('motion no NEUTRAL_CIVILIAN') return end
+    local list = {}
+    for _, t in P.MOTION do
+        local n = t[7] or 1
+        local grp = {}
+        for k = 1, n do
+            local x, z = t[3], t[4] + (k - 1) * 4
+            local y = GetSurfaceHeight(x, z)
+            local ok, u = pcall(CreateUnitHPR, t[2], army, x, y, z, 0, t[5], 0)
+            if ok and u then
+                local tag = n > 1 and (t[1] .. k) or t[1]
+                table.insert(list, { tag = tag, u = u })
+                table.insert(grp, u)
+                local ph = u:GetBlueprint().Physics or {}
+                out('mvspawn', GetGameTick(), tag, t[2], u:GetEntityId(), 'MaxSpeed=' .. fmt(ph.MaxSpeed), 'Acc=' .. fmt(ph.MaxAcceleration),
+                    'Brake=' .. fmt(ph.MaxBrake), 'TurnRate=' .. fmt(ph.TurnRate), 'TurnRadius=' .. fmt(ph.TurnRadius),
+                    'Motion=' .. tostring(ph.MotionType), 'Elev=' .. fmt(ph.Elevation))
+            else
+                out('mvspawn-failed', t[1], tostring(u))
+            end
+        end
+        t.units = grp
+    end
+    local function log(tick)
+        for _, e in list do
+            local u = e.u
+            if u and not u.Dead then
+                local p = u:GetPosition()
+                local o = u:GetOrientation()
+                local vx, vy, vz = u:GetVelocity()
+                local q = u:GetCommandQueue() or {}
+                out('mv', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), fmt(o[1]), fmt(o[2]), fmt(o[3]), fmt(o[4]),
+                    fmt(vx), fmt(vy), fmt(vz), tostring(u:GetCurrentLayer()), u:IsUnitState('Moving') and 1 or 0, table.getn(q))
+            end
+        end
+    end
+    while GetGameTick() < 450 do
+        local tick = GetGameTick()
+        if tick == 40 then
+          local okO, eO = pcall(function()
+            for _, t in P.MOTION do
+                if t.units and table.getn(t.units) > 0 then
+                    for _, o in t[6] do
+                        if o[1] == 'move' then
+                            IssueMove(t.units, { o[2], GetSurfaceHeight(o[2], o[3]), o[3] })
+                        elseif o[1] == 'form' then
+                            IssueFormMove(t.units, { o[2], GetSurfaceHeight(o[2], o[3]), o[3] }, 'AttackFormation', 0)
+                        end
+                    end
+                end
+            end
+          end)
+            out('mvorders', tick, tostring(okO), tostring(eO))
+        end
+        for _, t in P.MOTION do
+            for _, o in t[6] do
+                if o[1] == 'stop' and o[2] == tick and t.units then out('mvstop', tick, t[1], tostring(pcall(IssueStop, t.units))) end
+            end
+        end
+        local ok, e = pcall(log, tick)
+        if not ok then out('mv-error', tick, tostring(e)) end
+        WaitTicks(1)
+    end
+    out('motion done')
+end
+
 moho64_probe = P

@@ -1,16 +1,21 @@
 // Units, weapons, props and platoons: the engine objects that scripts create and drive.
 #pragma once
+#include <deque>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "sim/entity.h"
+#include "sim/motion.h"
 
 namespace moho {
 
 class Unit;
 class Platoon;
+struct UnitCommand;
+class NavigatorObject;
 
 class UnitWeapon : public ScriptObject {
  public:
@@ -30,6 +35,11 @@ class Unit : public Entity {
   float capCost = 1;  // General.CapCost: what the unit counts against its army's unit cap
   std::string armorType;  // Defense.ArmorType (multipliers: Sim armour types; used by damage, M4)
   Platoon* platoon = nullptr;
+  UnitMotion motion;
+  std::deque<std::shared_ptr<UnitCommand>> commands;  // the command queue (sim/commands.cpp)
+  NavigatorObject* navigator = nullptr;               // Lua's GetNavigator() object (owned by the sim)
+  bool immobile = false;
+  int headState = 0;  // progress of the head command (sim/commands.cpp)
 };
 
 class Prop : public Entity {};

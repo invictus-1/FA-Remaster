@@ -17,20 +17,24 @@ class ScriptState;
 
 enum class BpKind { Unit, Projectile, Prop, Mesh, Emitter, TrailEmitter, Beam, Other };
 
-struct BlueprintInfo {
-  BpKind kind;
-  std::string id;      // BlueprintId as registered (units: lower case id)
-  int ordinal = 0;     // 0-based registration order over all blueprint kinds kept in the sim
-  int entityIndex = -1;  // bit index in categories (units, props, projectiles)
-  int ref = LUA_NOREF;   // the blueprint table in the sim state
-};
-
 // A named footprint (SpecFootprints in /lua/footprints.lua), also the engine's SFootprint.
 struct NamedFootprint {
   std::string name;
   uint8_t sizeX = 0, sizeZ = 0, caps = 0, flags = 0;
   float maxSlope = 0, minWaterDepth = 0, maxWaterDepth = 0;
 };
+
+struct BlueprintInfo {
+  BpKind kind;
+  std::string id;      // BlueprintId as registered (units: lower case id)
+  int ordinal = 0;     // 0-based registration order over all blueprint kinds kept in the sim
+  int entityIndex = -1;  // bit index in categories (units, props, projectiles)
+  int ref = LUA_NOREF;   // the blueprint table in the sim state
+  // Units: the footprint the engine uses (the nearest named footprint; set by DeriveBlueprint).
+  mutable bool hasFootprint = false;
+  mutable NamedFootprint footprint;
+};
+
 
 class SimBlueprints {
  public:

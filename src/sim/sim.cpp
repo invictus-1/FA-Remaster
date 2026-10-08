@@ -10,6 +10,9 @@
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "script/threads.h"
+#include "sim/commands.h"
+#include "sim/motion.h"
+#include "sim/navigation.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 
@@ -539,6 +542,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterThreadBindings(L, threads_.get());
   RegisterSimBindings(L);
   RegisterEntityBindings(L);
+  RegisterCommandBindings(L);
   RegisterEffectBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
@@ -732,6 +736,7 @@ void Sim::ProcessDestroyQueue() {
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
+    if (e->kind == Entity::Kind::Unit) ForgetUnitCommands(static_cast<Unit*>(e));
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
     if (e->army && e->army->pool) {
       auto& v = e->army->pool->units;
@@ -749,10 +754,40 @@ void Sim::ProcessDestroyQueue() {
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.
+// Order inside a beat (from the oracle probe): unit commands start, units move, finished moves
+// end (and queued moves continue in the same beat), then the script threads run.
 void Sim::Tick() {
   ++tick_;
+  CommandsBeforeMotion(*this);
+  for (auto& [id, e] : entities_)
+    if (e->kind == Entity::Kind::Unit && !e->destroyQueued) MotionTick(*this, static_cast<Unit*>(e));
+  CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
   ProcessDestroyQueue();
+}
+
+Navigation& Sim::navigation() {
+  if (!nav_) {
+    nav_ = std::make_unique<Navigation>(map_.get());
+    // blocking terrain types (TerrainTypes.lua: Blocking = true)
+    lua_State* L = state_->L();
+    int top = lua_gettop(L);
+    PushTerrainTypes(L);
+    if (lua_istable(L, -1)) {
+      lua_pushnil(L);
+      while (lua_next(L, -2) != 0) {
+        if (lua_isnumber(L, -2) && lua_istable(L, -1)) {
+          lua_pushstring(L, "Blocking");
+          lua_rawget(L, -2);
+          if (lua_toboolean(L, -1)) nav_->SetBlockingTerrainType(static_cast<int>(lua_tonumber(L, -3)), true);
+          lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+      }
+    }
+    lua_settop(L, top);
+  }
+  return *nav_;
 }
 
 }  // namespace moho

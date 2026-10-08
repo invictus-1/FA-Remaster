@@ -266,8 +266,10 @@ int l_GetHeading(lua_State* L) {
   lua_pushnumber(L, Heading(E(L)->orientation));
   return 1;
 }
-int l_SetPosition(lua_State* L) {
-  E(L)->position = CheckVec(L, 2);
+int l_SetPosition(lua_State* L) {  // SetPosition(vector, immediate): a warp
+  Entity* e = E(L);
+  e->position = CheckVec(L, 2);
+  if (e->kind == Entity::Kind::Unit) static_cast<Unit*>(e)->motion.needSnap = true;
   return 0;
 }
 int l_SetOrientation(lua_State* L) {
@@ -1029,6 +1031,14 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->position = pos;
   u->orientation = q;
   u->fractionComplete = complete ? 1.0f : 0.0f;
+  u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
+  {
+    float h = std::atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
+    u->motion.fx = std::sin(h);
+    u->motion.fz = std::cos(h);
+    u->motion.bx = u->motion.fx;
+    u->motion.bz = u->motion.fz;
+  }
   bps_.PushTable(L, bp);
   int bpIdx = lua_gettop(L);
   u->maxHealth = 1;
