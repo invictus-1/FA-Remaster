@@ -57,13 +57,7 @@ void PushPath(lua_State* L, int t, const char* a, const char* b = nullptr) {
   }
 }
 
-void PushVec(lua_State* L, const Vec3& v) {
-  lua_getglobal(L, "Vector");
-  lua_pushnumber(L, v.x);
-  lua_pushnumber(L, v.y);
-  lua_pushnumber(L, v.z);
-  lua_call(L, 3, 1);
-}
+void PushVec(lua_State* L, const Vec3& v) { PushVector(L, v.x, v.y, v.z); }
 
 Vec3 CheckVec(lua_State* L, int idx) {
   luaL_checktype(L, idx, LUA_TTABLE);
@@ -251,11 +245,7 @@ int l_GetPositionXYZ(lua_State* L) {
 }
 int l_GetOrientation(lua_State* L) {
   const Quat& q = E(L)->orientation;
-  lua_getglobal(L, "Vector");  // quaternion = {x,y,z,w} with the vector metatable
-  lua_pushnumber(L, 0);
-  lua_pushnumber(L, 0);
-  lua_pushnumber(L, 0);
-  lua_call(L, 3, 1);
+  PushVector(L, 0, 0, 0);  // quaternion = {x,y,z,w} with the vector metatable
   float v[4] = {q.x, q.y, q.z, q.w};
   for (int i = 0; i < 4; ++i) {
     lua_pushnumber(L, v[i]);

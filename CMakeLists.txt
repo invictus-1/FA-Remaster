@@ -9,6 +9,18 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Floating point: no FMA contraction or fast-math anywhere - the sim must give the same bits on
+# every compiler and CPU (replays, multiplayer).
+if(NOT MSVC)
+  add_compile_options(-ffp-contract=off -fno-fast-math)
+endif()
+
+# Link-time optimisation (the Lua VM's table and call functions get inlined across files).
+option(MOHO64_LTO "Link-time optimisation" OFF)
+if(MOHO64_LTO)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+
 # mimalloc (MIT, microsoft/mimalloc v2.1.7): the Lua heap's allocator - scripts allocate a lot
 # of small tables and strings, and mimalloc is much faster at that than the C runtime's malloc.
 option(MOHO64_MIMALLOC "Use mimalloc for the Lua heap" ON)

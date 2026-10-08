@@ -12,6 +12,7 @@
 #include "script/script_state.h"
 
 namespace moho {
+void PushVector(lua_State* L, float x, float y, float z);
 namespace {
 
 Vfs* GetVfs(lua_State* L) { return ScriptState::From(L)->vfs(); }
@@ -219,19 +220,6 @@ int l_MATH_Lerp(lua_State* L) {
 
 // --- vectors: tables {x, y, z} sharing a metatable that maps .x/.y/.z to [1]/[2]/[3] ---
 const char* kVectorMeta = "moho.Vector";
-
-void PushVector(lua_State* L, float x, float y, float z) {
-  lua_newtable(L);
-  lua_pushnumber(L, x);
-  lua_rawseti(L, -2, 1);
-  lua_pushnumber(L, y);
-  lua_rawseti(L, -2, 2);
-  lua_pushnumber(L, z);
-  lua_rawseti(L, -2, 3);
-  lua_pushstring(L, kVectorMeta);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  lua_setmetatable(L, -2);
-}
 
 float VecComp(lua_State* L, int idx, int k) {
   lua_rawgeti(L, idx, k);
@@ -492,6 +480,30 @@ void Reg(lua_State* L, const char* name, lua_CFunction f) {
 }
 
 }  // namespace
+
+// The vector metatable as a registry reference (an array slot: no string hashing per vector).
+static int VectorMetaRef(lua_State* L) {
+  ScriptState* st = ScriptState::From(L);
+  if (st && st->vectorMetaRef != LUA_NOREF) return st->vectorMetaRef;
+  lua_pushstring(L, kVectorMeta);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  if (st) st->vectorMetaRef = ref;
+  return ref;
+}
+
+void PushVector(lua_State* L, float x, float y, float z) {
+  lua_newtablesized(L, 3, 0);
+  lua_pushnumber(L, x);
+  lua_rawseti(L, -2, 1);
+  lua_pushnumber(L, y);
+  lua_rawseti(L, -2, 2);
+  lua_pushnumber(L, z);
+  lua_rawseti(L, -2, 3);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, VectorMetaRef(L));
+  lua_setmetatable(L, -2);
+}
+
 
 void RegisterCoreBindings(ScriptState& state) {
   lua_State* L = state.L();

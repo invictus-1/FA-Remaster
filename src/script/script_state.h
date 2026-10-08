@@ -12,8 +12,12 @@ namespace moho {
 
 class Vfs;
 
+// A Vector ({x, y, z} with the vector metatable): core_bindings.cpp.
+void PushVector(lua_State* L, float x, float y, float z);
+
 class ScriptState {
  public:
+  int vectorMetaRef = -2;  // LUA_NOREF until first use (core_bindings.cpp)
   enum class Kind { Init, Rules, Sim, User };
 
   ScriptState(Kind kind, Vfs* vfs);

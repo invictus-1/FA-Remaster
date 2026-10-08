@@ -517,24 +517,7 @@ int l_GetVelocity(lua_State* L) {
   return 3;
 }
 
-void PushVector(lua_State* L, const Vec3& v) {
-  lua_getglobal(L, "Vector");
-  if (lua_isfunction(L, -1)) {
-    lua_pushnumber(L, v.x);
-    lua_pushnumber(L, v.y);
-    lua_pushnumber(L, v.z);
-    lua_call(L, 3, 1);
-    return;
-  }
-  lua_pop(L, 1);
-  lua_newtable(L);
-  lua_pushnumber(L, v.x);
-  lua_rawseti(L, -2, 1);
-  lua_pushnumber(L, v.y);
-  lua_rawseti(L, -2, 2);
-  lua_pushnumber(L, v.z);
-  lua_rawseti(L, -2, 3);
-}
+void PushVector(lua_State* L, const Vec3& v) { moho::PushVector(L, v.x, v.y, v.z); }
 
 int l_GetCurrentMoveLocation(lua_State* L) {
   Unit* u = U(L);

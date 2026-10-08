@@ -545,6 +545,16 @@ LUA_API void lua_newtable (lua_State *L) {
 }
 
 
+/* moho64: a new table with room for narray array items and 2^lnhash hash items */
+LUA_API void lua_newtablesized (lua_State *L, int narray, int lnhash) {
+  lua_lock(L);
+  luaC_checkGC(L);
+  sethvalue(L->top, luaH_new(L, narray, lnhash));
+  api_incr_top(L);
+  lua_unlock(L);
+}
+
+
 LUA_API int lua_getmetatable (lua_State *L, int objindex) {
   const TObject *obj;
   Table *mt = NULL;

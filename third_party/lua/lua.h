@@ -176,6 +176,7 @@ LUA_API void *lua_getextra (lua_State *L, int i);
 LUA_API void  lua_setextra (lua_State *L, int i, void *p);
 LUA_API void  lua_rawgetcobject (lua_State *L, int idx);
 LUA_API void  lua_pushcobjectkey (lua_State *L);
+LUA_API void  lua_newtablesized (lua_State *L, int narray, int lnhash);
 LUA_API void  lua_newtable (lua_State *L);
 LUA_API void *lua_newuserdata (lua_State *L, size_t sz);
 LUA_API int   lua_getmetatable (lua_State *L, int objindex);
