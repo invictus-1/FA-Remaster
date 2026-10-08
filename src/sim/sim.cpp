@@ -1,7 +1,9 @@
 #include "sim/sim.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "core/log.h"
@@ -89,6 +91,92 @@ int l_GetTerrainHeight(lua_State* L) {
   return 1;
 }
 
+// Terrain types: /lua/TerrainTypes.lua's TerrainTypes list, by TypeCode (loaded on first use).
+const char kTerrainKey = 0;
+void PushTerrainTypes(lua_State* L) {
+  lua_pushlightuserdata(L, const_cast<char*>(&kTerrainKey));
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_istable(L, -1)) return;
+  lua_pop(L, 1);
+  lua_newtable(L);  // code -> entry
+  int byCode = lua_gettop(L);
+  lua_newtable(L);  // env with access to globals
+  int env = lua_gettop(L);
+  lua_newtable(L);
+  lua_pushstring(L, "__index");
+  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  lua_rawset(L, -3);
+  lua_setmetatable(L, env);
+  lua_getglobal(L, "doscript");
+  lua_pushstring(L, "/lua/TerrainTypes.lua");
+  lua_pushvalue(L, env);
+  if (lua_pcall(L, 2, 0, 0) != 0) {
+    LogScriptError(lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pushstring(L, "TerrainTypes");
+  lua_rawget(L, env);
+  if (lua_istable(L, -1))
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, -1, i);
+      if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      lua_pushstring(L, "TypeCode");
+      lua_rawget(L, -2);
+      int code = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : -1;
+      lua_pop(L, 1);
+      lua_pushstring(L, "Name");
+      lua_rawget(L, -2);
+      bool isDefault = lua_isstring(L, -1) && !std::strcmp(lua_tostring(L, -1), "Default");
+      lua_pop(L, 1);
+      if (isDefault) {
+        lua_pushstring(L, "Default");
+        lua_pushvalue(L, -2);
+        lua_rawset(L, byCode);
+      }
+      if (code >= 0) lua_rawseti(L, byCode, code);
+      else lua_pop(L, 1);
+    }
+  lua_settop(L, byCode);
+  lua_pushlightuserdata(L, const_cast<char*>(&kTerrainKey));
+  lua_pushvalue(L, byCode);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+}
+
+// Push the terrain type entry at map cell (x, z); (-1, -1) and unknown codes give 'Default'.
+void PushTerrainTypeAt(lua_State* L, float x, float z) {
+  PushTerrainTypes(L);
+  const TerrainMap* m = S(L)->map();
+  int code = -1;
+  if (m && x >= 0 && z >= 0) code = m->TerrainType(static_cast<int>(x), static_cast<int>(z));
+  lua_rawgeti(L, -1, code);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    lua_pushstring(L, "Default");
+    lua_rawget(L, -2);
+  }
+  lua_remove(L, -2);
+}
+
+int l_GetTerrainType(lua_State* L) {
+  PushTerrainTypeAt(L, static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)));
+  return 1;
+}
+
+int l_GetTerrainTypeOffset(lua_State* L) {
+  PushTerrainTypeAt(L, static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)));
+  float off = 0;
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "HeightOffset");
+    lua_rawget(L, -2);
+    if (lua_isnumber(L, -1)) off = static_cast<float>(lua_tonumber(L, -1));
+  }
+  lua_pushnumber(L, off);
+  return 1;
+}
+
 int l_GetSurfaceHeight(lua_State* L) {
   const TerrainMap* m = S(L)->map();
   lua_pushnumber(L, m ? m->SurfaceHeight(luaL_checknumber(L, 1), luaL_checknumber(L, 2)) : 0);
@@ -171,6 +259,36 @@ int l_SetArmyPlans(lua_State* L) {
   return 0;
 }
 
+// InitializeArmyAI(army): the brain's own set-up (CAiBrain::Initialize in the original) -
+// brain:OnCreateHuman(planName) or brain:OnCreateAI(planName); planName "None" if unset.
+// FAF's OnCreateArmyBrain calls this after choosing the brain's class.
+int l_InitializeArmyAI(lua_State* L) {
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  lua_pushstring(L, a->plans.empty() ? "None" : a->plans.c_str());
+  S(L)->CallMethod(L, a->brain, a->human ? "OnCreateHuman" : "OnCreateAI", 1);
+  return 0;
+}
+
+int l_GetArmyUnitCap(lua_State* L) {
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  lua_pushnumber(L, a->unitCap);
+  return 1;
+}
+int l_SetArmyUnitCap(lua_State* L) {
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  a->unitCap = static_cast<float>(luaL_checknumber(L, 2));
+  return 0;
+}
+int l_SetIgnoreArmyUnitCap(lua_State* L) {
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  a->ignoreUnitCap = lua_toboolean(L, 2);
+  return 0;
+}
+
 int l_ShouldCreateInitialArmyUnits(lua_State* L) {
   lua_pushboolean(L, 1);  // a new session (not a loaded save)
   return 1;
@@ -193,9 +311,73 @@ int l_brain_IsDefeated(lua_State* L) {
   return 1;
 }
 
+// Economy type argument: "MASS" / "ENERGY" (any case)
+bool IsMass(lua_State* L, int idx) {
+  const char* t = luaL_checkstring(L, idx);
+  return (t[0] | 0x20) == 'm';
+}
+int l_brain_GetEconomyStored(lua_State* L) {
+  Army* a = Brain(L)->army;
+  lua_pushnumber(L, IsMass(L, 2) ? a->massStored : a->energyStored);
+  return 1;
+}
+int l_brain_GetEconomyStoredRatio(lua_State* L) {
+  Army* a = Brain(L)->army;
+  bool m = IsMass(L, 2);
+  float max = m ? a->massMax : a->energyMax;
+  lua_pushnumber(L, max > 0 ? (m ? a->massStored : a->energyStored) / max : 0);
+  return 1;
+}
+int l_brain_EconomyZero(lua_State* L) {  // income, requested, usage, trend: no economy yet (M4)
+  Brain(L);
+  lua_pushnumber(L, 0);
+  return 1;
+}
+int l_SetArmyEconomy(lua_State* L) {  // SetArmyEconomy(army, mass, energy)
+  Army* a = S(L)->GetArmy(L, 1);
+  if (!a) return luaL_error(L, "Invalid army");
+  a->massStored = static_cast<float>(luaL_checknumber(L, 2));
+  a->energyStored = static_cast<float>(luaL_checknumber(L, 3));
+  return 0;
+}
+// GetArmyStat(name, default) -> { Value = ... }
+int l_brain_GetArmyStat(lua_State* L) {
+  Army* a = Brain(L)->army;
+  std::string name = luaL_checkstring(L, 2);
+  auto it = a->stats.find(name);
+  float v = it != a->stats.end() ? it->second : static_cast<float>(luaL_optnumber(L, 3, 0));
+  lua_newtable(L);
+  lua_pushstring(L, "Value");
+  lua_pushnumber(L, v);
+  lua_rawset(L, -3);
+  return 1;
+}
+int l_brain_SetArmyStat(lua_State* L) {
+  Brain(L)->army->stats[luaL_checkstring(L, 2)] = static_cast<float>(luaL_checknumber(L, 3));
+  return 0;
+}
+int l_brain_AddArmyStat(lua_State* L) {
+  Brain(L)->army->stats[luaL_checkstring(L, 2)] += static_cast<float>(luaL_checknumber(L, 3));
+  return 0;
+}
+int l_brain_GetBlueprintStat(lua_State* L) {
+  Brain(L);
+  lua_pushnumber(L, 0);  // TODO(M4): per-blueprint army stats
+  return 1;
+}
+
 }  // namespace
 
 void RegisterSimBindings(lua_State* L) {
+  SetGlobal(L, "SetArmyEconomy", l_SetArmyEconomy);
+  SetMethod(L, "CAiBrain", "GetEconomyStored", l_brain_GetEconomyStored);
+  SetMethod(L, "CAiBrain", "GetEconomyStoredRatio", l_brain_GetEconomyStoredRatio);
+  for (const char* m : {"GetEconomyIncome", "GetEconomyRequested", "GetEconomyUsage", "GetEconomyTrend"})
+    SetMethod(L, "CAiBrain", m, l_brain_EconomyZero);
+  SetMethod(L, "CAiBrain", "GetArmyStat", l_brain_GetArmyStat);
+  SetMethod(L, "CAiBrain", "SetArmyStat", l_brain_SetArmyStat);
+  SetMethod(L, "CAiBrain", "AddArmyStat", l_brain_AddArmyStat);
+  SetMethod(L, "CAiBrain", "GetBlueprintStat", l_brain_GetBlueprintStat);
   SetGlobal(L, "ListArmies", l_ListArmies);
   SetGlobal(L, "GetArmyBrain", l_GetArmyBrain);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
@@ -208,6 +390,8 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "GetMapSize", l_GetMapSize);
   SetGlobal(L, "GetTerrainHeight", l_GetTerrainHeight);
   SetGlobal(L, "GetSurfaceHeight", l_GetSurfaceHeight);
+  SetGlobal(L, "GetTerrainType", l_GetTerrainType);
+  SetGlobal(L, "GetTerrainTypeOffset", l_GetTerrainTypeOffset);
   SetGlobal(L, "CheatsEnabled", l_CheatsEnabled);
   SetGlobal(L, "IsGameOver", l_IsGameOver);
   SetGlobal(L, "Random", l_Random);
@@ -218,6 +402,10 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "SetAllianceOneWay", l_SetAllianceOneWay);
   SetGlobal(L, "SetArmyPlans", l_SetArmyPlans);
   SetGlobal(L, "ShouldCreateInitialArmyUnits", l_ShouldCreateInitialArmyUnits);
+  SetGlobal(L, "InitializeArmyAI", l_InitializeArmyAI);
+  SetGlobal(L, "GetArmyUnitCap", l_GetArmyUnitCap);
+  SetGlobal(L, "SetArmyUnitCap", l_SetArmyUnitCap);
+  SetGlobal(L, "SetIgnoreArmyUnitCap", l_SetIgnoreArmyUnitCap);
   SetMethod(L, "CAiBrain", "GetArmyIndex", l_brain_GetArmyIndex);
   SetMethod(L, "CAiBrain", "GetFactionIndex", l_brain_GetFactionIndex);
   SetMethod(L, "CAiBrain", "IsDefeated", l_brain_IsDefeated);
@@ -354,8 +542,8 @@ bool Sim::Start(const ReplayHeader& replay) {
   lap("SetupSession");
   if (!CreateArmies(replay)) return false;
   lap("CreateArmies");
+  CreateMapProps();  // Prop::PROP_Create in the original, then the count is logged
   Logf(LogLevel::Warning, " NUM PROPS = %zu", map_->props.size());
-  CreateMapProps();
   lap("map props");
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
@@ -364,11 +552,9 @@ bool Sim::Start(const ReplayHeader& replay) {
 
 bool Sim::CreateArmies(const ReplayHeader& replay) {
   lua_State* L = state_->L();
-  // Armies of the session that the map's save file defines (Scenario.Armies), in session order.
-  lua_getglobal(L, "Scenario");
-  lua_pushstring(L, "Armies");
-  lua_gettable(L, -2);
-  int saveArmies = lua_gettop(L);
+  // Armies of the session, in session order.
+  int saveArmies = lua_gettop(L) + 1;
+  lua_pushnil(L);
   lua_getglobal(L, "ScenarioInfo");
   lua_pushstring(L, "ArmySetup");
   lua_gettable(L, -2);
@@ -380,11 +566,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     lua_rawget(L, opts);
     std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
-    lua_pushstring(L, name.c_str());
-    lua_gettable(L, saveArmies);
-    bool inSave = lua_istable(L, -1);
-    lua_pop(L, 2);
-    if (!inSave) continue;
+    lua_pop(L, 1);  // every army of the session exists, also those the map's save lacks (probe: ARMY_9)
     auto army = std::make_unique<Army>();
     army->index = static_cast<int>(armies_.size()) + 1;
     army->name = name;
@@ -410,8 +592,20 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     armies_.push_back(std::move(army));
   }
   lua_settop(L, saveArmies - 1);
+  float cap = 1000;  // the lobby's unit cap (ScenarioInfo.Options.UnitCap)
+  lua_getglobal(L, "ScenarioInfo");
+  lua_pushstring(L, "Options");
+  lua_gettable(L, -2);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "UnitCap");
+    lua_gettable(L, -2);
+    if (lua_isstring(L, -1)) cap = static_cast<float>(std::atof(lua_tostring(L, -1)));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 2);
   for (auto& a : armies_) {
     a->alliance.assign(armies_.size(), 0);
+    a->unitCap = cap;
   }
 
   // Brains: an instance of /lua/aibrain.lua's AIBrain bound to the engine brain.
@@ -438,18 +632,6 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     owned_.emplace_back(brain);
     lua_settop(L, top);
     a->pool = CreatePlatoon(L, a.get(), "ArmyPool", "");
-    // The brain's own set-up runs first (it sets BrainType, which OnCreateArmyBrain hooks read).
-    PushObject(L, brain);
-    int b = lua_gettop(L);
-    lua_pushcfunction(L, ScriptTraceback);
-    lua_pushstring(L, a->human ? "OnCreateHuman" : "OnCreateAI");
-    lua_gettable(L, b);
-    if (lua_isfunction(L, -1)) {
-      lua_pushvalue(L, b);
-      lua_pushstring(L, a->plans.c_str());
-      if (lua_pcall(L, 2, 0, b + 1) != 0) LogScriptError(lua_tostring(L, -1));
-    }
-    lua_settop(L, top);
     lua_pushnumber(L, a->index);
     PushObject(L, brain);
     lua_pushstring(L, a->name.c_str());
@@ -466,7 +648,7 @@ void Sim::CreateMapProps() {
   for (const auto& mp : map_->props) {
     const BlueprintInfo* bp = bps_.Find(mp.blueprint);
     if (!bp) {
-      ++missing;
+      if (++missing <= 5) Logf(LogLevel::Debug, "moho64: map prop blueprint not found: %s", mp.blueprint.c_str());
       continue;
     }
     // rotation rows are the prop's x, y, z axes -> quaternion
@@ -492,9 +674,39 @@ void Sim::CreateMapProps() {
   if (missing) Logf(LogLevel::Debug, "moho64: %d map props have no blueprint", missing);
 }
 
+void Sim::QueueDestroy(Entity* e) {
+  if (e->destroyQueued) return;
+  e->destroyQueued = true;
+  destroyQueue_.push_back(e);
+}
+
+// Entities destroyed by script: OnDestroy, then they leave the world (FA exe Entity::Destroy queues,
+// Entity::OnDestroy runs the script callback later).
+void Sim::ProcessDestroyQueue() {
+  lua_State* L = state_->L();
+  for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
+    Entity* e = destroyQueue_[i];
+    CallMethod(L, e, "OnDestroy", 0);
+    entities_.erase(e->id);
+    if (e->army && e->army->pool) {
+      auto& v = e->army->pool->units;
+      v.erase(std::remove(v.begin(), v.end(), static_cast<Unit*>(nullptr)), v.end());
+      for (size_t k = 0; k < v.size(); ++k)
+        if (static_cast<Entity*>(v[k]) == e) {
+          v.erase(v.begin() + static_cast<long>(k));
+          break;
+        }
+    }
+    e->UnbindLua();
+  }
+  destroyQueue_.clear();
+}
+
+// One beat: the tick counter advances, then the script threads due at that tick run.
 void Sim::Tick() {
-  threads_->RunTick(tick_);
   ++tick_;
+  threads_->RunTick(tick_);
+  ProcessDestroyQueue();
 }
 
 }  // namespace moho

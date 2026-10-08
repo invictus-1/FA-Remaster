@@ -119,7 +119,7 @@ int l_Warp(lua_State* L) {  // Warp(entity, location, [orientation])
 const char* kChainClasses[] = {"IEffect", "IAniManipulator", "CAimManipulator", "CAnimationManipulator",
                                "CRotateManipulator", "CSlideManipulator", "CBuilderArmManipulator",
                                "CCollisionManipulator", "CFootPlantManipulator", "CStorageManipulator",
-                               "CThrustManipulator", "CSlaveManipulator", "CBoneEntityManipulator"};
+                               "CThrustManipulator", "CSlaveManipulator", "CBoneEntityManipulator", "Projectile"};
 
 }  // namespace
 

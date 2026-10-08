@@ -374,6 +374,7 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
         }
       lua_pop(sim, 1);
     }
+    if (reflect) ReflectBlueprint(sim, -1, info);
     info.ref = luaL_ref(sim, LUA_REGISTRYINDEX);
     if (!id.empty()) byId_.emplace(Lower(id), all_.size());
     all_.push_back(std::move(info));

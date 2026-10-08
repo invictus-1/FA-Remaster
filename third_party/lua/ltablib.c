@@ -115,7 +115,7 @@ static int str_concat (lua_State *L) {
   luaL_buffinit(L, &b);
   for (; i <= n; i++) {
     lua_rawgeti(L, 1, i);
-    luaL_argcheck(L, lua_isstring(L, -1), 1, "table contains non-strings");
+    luaL_argcheck(L, lua_type(L, -1) == LUA_TSTRING  /* GPG: numbers are rejected */, 1, "table contains non-strings");
     luaL_addvalue(&b);
     if (i != n)
       luaL_addlstring(&b, sep, lsep);

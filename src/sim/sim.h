@@ -41,6 +41,11 @@ class Army {
   float startX = 0, startZ = 0;
   bool hasStart = false;
   uint32_t serial = 0;          // entity ids of this army
+  // Economy (TODO(M4): production/consumption; until then stored values are what scripts set)
+  float massStored = 0, energyStored = 0, massMax = 0, energyMax = 0;
+  std::map<std::string, float> stats;  // army statistics (GetArmyStat)
+  float unitCap = 1000;
+  bool ignoreUnitCap = false;
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
 };
 
@@ -71,9 +76,13 @@ class Sim {
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete);
+  class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Entity* launcher, Vec3 pos, Vec3 dir);
   Prop* CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale);
+  // _c_CreateEntity / _c_CreateShield: bind a script-made table to a new engine entity.
+  Entity* AdoptScriptEntity(lua_State* L, int tableIdx, int specIdx, bool shield);
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
   Entity* FindEntity(uint32_t id) const;
+  void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
@@ -98,6 +107,8 @@ class Sim {
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;
   uint32_t propSerial_ = 0;
+  std::vector<Entity*> destroyQueue_;
+  void ProcessDestroyQueue();
 
   // Push the script class for a blueprint: bp.ScriptModule/ScriptClass, else
   // <dir>/<name>_script.lua's TypeClass, else the default module's class.

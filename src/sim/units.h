@@ -32,6 +32,15 @@ class Unit : public Entity {
 
 class Prop : public Entity {};
 
+class ShieldEntity : public Entity {};
+
+class Projectile : public Entity {
+ public:
+  Entity* launcher = nullptr;
+  Vec3 velocity;
+  std::string layer = "None";
+};
+
 class Platoon : public ScriptObject {
  public:
   Army* army = nullptr;

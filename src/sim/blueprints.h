@@ -26,6 +26,9 @@ struct BlueprintInfo {
 
 class SimBlueprints {
  public:
+  // false: keep the script tables as they are (to regenerate defaults with tools/gen_bp_defaults.py)
+  static inline bool reflect = true;
+
   // In the rules state: keep every registered blueprint (call before running RuleInit).
   static void StartRecording(ScriptState& rules);
 
@@ -51,6 +54,8 @@ class SimBlueprints {
 };
 
 void RegisterCategoryBindings(lua_State* L, SimBlueprints* bps);
+// The sim's view of a blueprint (engine defaults, sounds, bit sets...): see sim/bp_reflect.cpp.
+void ReflectBlueprint(lua_State* L, int t, const BlueprintInfo& bp);
 
 // Entity category value: push a new category set (all bits clear) and get its words.
 uint64_t* PushCategory(lua_State* L);

@@ -245,7 +245,11 @@ int l_GetPositionXYZ(lua_State* L) {
 }
 int l_GetOrientation(lua_State* L) {
   const Quat& q = E(L)->orientation;
-  lua_newtable(L);
+  lua_getglobal(L, "Vector");  // quaternion = {x,y,z,w} with the vector metatable
+  lua_pushnumber(L, 0);
+  lua_pushnumber(L, 0);
+  lua_pushnumber(L, 0);
+  lua_call(L, 3, 1);
   float v[4] = {q.x, q.y, q.z, q.w};
   for (int i = 0; i < 4; ++i) {
     lua_pushnumber(L, v[i]);
@@ -304,7 +308,35 @@ int l_GetFractionComplete(lua_State* L) {
   return 1;
 }
 int l_BeenDestroyed(lua_State* L) {
-  lua_pushboolean(L, GetObject(L, 1) == nullptr);
+  ScriptObject* o = GetObject(L, 1);
+  Entity* e = dynamic_cast<Entity*>(o);
+  lua_pushboolean(L, o == nullptr || (e && e->destroyQueued));
+  return 1;
+}
+int l_Destroy(lua_State* L) {
+  if (Entity* e = ToObject<Entity>(L, 1)) S(L)->QueueDestroy(e);
+  if (getenv("MOHO64_DEBUG_DESTROY")) Logf(LogLevel::Debug, "moho64: Destroy %p", (void*)ToObject<Entity>(L, 1));
+  return 0;
+}
+// GetReclaimablesInRect(rect) -> props (and wrecks) inside; TODO(M3): spatial index
+int l_GetReclaimablesInRect(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  float r[4];
+  const char* k[4] = {"x0", "y0", "x1", "y1"};
+  for (int i = 0; i < 4; ++i) {
+    lua_pushstring(L, k[i]);
+    lua_gettable(L, 1);
+    r[i] = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_newtable(L);
+  int n = 0;
+  for (auto& [id, e] : S(L)->entities()) {
+    if (e->kind != Entity::Kind::Prop || e->destroyQueued) continue;
+    if (e->position.x < r[0] || e->position.x > r[2] || e->position.z < r[1] || e->position.z > r[3]) continue;
+    PushObject(L, e);
+    lua_rawseti(L, -2, ++n);
+  }
   return 1;
 }
 int l_GetScale(lua_State* L) {
@@ -327,8 +359,9 @@ int l_GetBoneCount(lua_State* L) {
 }
 int l_IsValidBone(lua_State* L) {
   E(L);
-  // TODO(M3): check against the mesh skeleton. Until meshes load, accept the root and names.
-  lua_pushboolean(L, lua_isnumber(L, 2) ? lua_tonumber(L, 2) <= 0 : lua_isstring(L, 2));
+  // TODO(M3): check against the mesh skeleton. Until meshes load: bone 0 only (probe: 0 true,
+  // -1 / unknown names / out of range false).
+  lua_pushboolean(L, lua_type(L, 2) == LUA_TNUMBER && lua_tonumber(L, 2) == 0);
   return 1;
 }
 int l_GetBoneName(lua_State* L) {
@@ -464,6 +497,61 @@ int l_SetStat(lua_State* L) {
   return 1;
 }
 
+// Entity:CreateProjectile(bp, ox, oy, oz, dx, dy, dz): offset and direction in the entity's frame
+// TODO(M4): rotate offset/direction by the entity's orientation; bone positions (M3).
+int l_CreateProjectile(lua_State* L) {
+  Entity* e = E(L);
+  const BlueprintInfo* bp = CheckBlueprint(L, 2);
+  Vec3 o{static_cast<float>(luaL_optnumber(L, 3, 0)), static_cast<float>(luaL_optnumber(L, 4, 0)),
+         static_cast<float>(luaL_optnumber(L, 5, 0))};
+  Vec3 d{static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 7, 0)),
+         static_cast<float>(luaL_optnumber(L, 8, 0))};
+  Vec3 p{e->position.x + o.x, e->position.y + o.y, e->position.z + o.z};
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, e, p, d));
+}
+int l_CreateProjectileAtBone(lua_State* L) {  // (bp, bone)
+  Entity* e = E(L);
+  const BlueprintInfo* bp = CheckBlueprint(L, 2);
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, e, e->position, Vec3{}));
+}
+int l_weapon_CreateProjectile(lua_State* L) {  // weapon:CreateProjectile(muzzleBone)
+  UnitWeapon* w = CheckObject<UnitWeapon>(L, 1);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, w->bpRef);
+  lua_pushstring(L, "ProjectileId");
+  lua_gettable(L, -2);
+  const BlueprintInfo* bp = lua_isstring(L, -1) ? S(L)->blueprints().Find(lua_tostring(L, -1)) : nullptr;
+  lua_pop(L, 2);
+  if (!bp) {
+    lua_pushnil(L);
+    return 1;
+  }
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, w->unit, w->unit->position, Vec3{}));
+}
+int l_proj_GetLauncher(lua_State* L) { return PushNew(L, CheckObject<Projectile>(L, 1)->launcher); }
+int l_proj_CreateChildProjectile(lua_State* L) {
+  Projectile* p = CheckObject<Projectile>(L, 1);
+  const BlueprintInfo* bp = CheckBlueprint(L, 2);
+  return PushNew(L, S(L)->CreateProjectile(L, *bp, p->launcher, p->position, p->velocity));
+}
+int l_proj_GetVelocity(lua_State* L) {
+  Projectile* p = CheckObject<Projectile>(L, 1);
+  lua_pushnumber(L, p->velocity.x);
+  lua_pushnumber(L, p->velocity.y);
+  lua_pushnumber(L, p->velocity.z);
+  return 3;
+}
+
+int l_c_CreateEntity(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  S(L)->AdoptScriptEntity(L, 1, 2, false);
+  return 0;
+}
+int l_c_CreateShield(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  S(L)->AdoptScriptEntity(L, 1, 2, true);
+  return 0;
+}
+
 // ---- UnitWeapon -----------------------------------------------------------------------------
 
 int l_weapon_GetBlueprint(lua_State* L) {
@@ -531,7 +619,7 @@ int l_brain_GetListOfUnits(lua_State* L) {
   int n = 0;
   for (auto& [id, e] : S(L)->entities()) {
     Unit* u = dynamic_cast<Unit*>(e);
-    if (!u || u->army != b->army || u->dead) continue;
+    if (!u || u->army != b->army || u->dead || u->destroyQueued) continue;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       continue;
     PushObject(L, u);
@@ -621,6 +709,8 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "Entity", "AdjustHealth", l_AdjustHealth);
   SetMethod(L, "Entity", "GetFractionComplete", l_GetFractionComplete);
   SetMethod(L, "Entity", "BeenDestroyed", l_BeenDestroyed);
+  SetMethod(L, "Entity", "Destroy", l_Destroy);
+  SetGlobal(L, "GetReclaimablesInRect", l_GetReclaimablesInRect);
   SetMethod(L, "Entity", "GetScale", l_GetScale);
   SetMethod(L, "Entity", "SetScale", l_SetScale);
   SetMethod(L, "Entity", "GetBoneCount", l_GetBoneCount);
@@ -653,6 +743,15 @@ void RegisterEntityBindings(lua_State* L) {
     }
     lua_pop(L, 1);
   }
+  SetMethod(L, "Entity", "CreateProjectile", l_CreateProjectile);
+  SetMethod(L, "Entity", "CreateProjectileAtBone", l_CreateProjectileAtBone);
+  SetMethod(L, "UnitWeapon", "CreateProjectile", l_weapon_CreateProjectile);
+  SetMethod(L, "Projectile", "GetLauncher", l_proj_GetLauncher);
+  SetMethod(L, "Projectile", "CreateChildProjectile", l_proj_CreateChildProjectile);
+  SetMethod(L, "Projectile", "GetVelocity", l_proj_GetVelocity);
+  SetGlobal(L, "IsProjectile", l_IsKind<Projectile>);
+  SetGlobal(L, "_c_CreateEntity", l_c_CreateEntity);
+  SetGlobal(L, "_c_CreateShield", l_c_CreateShield);
   SetMethod(L, "UnitWeapon", "GetBlueprint", l_weapon_GetBlueprint);
   SetMethod(L, "UnitWeapon", "BeenDestroyed", l_BeenDestroyed);
 
@@ -778,7 +877,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->kind = Entity::Kind::Unit;
   u->blueprint = &bp;
   u->army = army;
-  u->id = (static_cast<uint32_t>(army ? army->index - 1 : 0xff) << 20) | ++(army ? army->serial : propSerial_);
+  u->id = (static_cast<uint32_t>(army ? army->index - 1 : 0xff) << 20) | (army ? army->serial : propSerial_)++;
   u->position = pos;
   u->orientation = q;
   u->fractionComplete = complete ? 1.0f : 0.0f;
@@ -812,13 +911,12 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   lua_pushstring(L, "None");
   CallMethod(L, u, "OnLayerChange", 2);
 
-  // Weapons: one per bp.Weapon entry; class from the unit class's Weapons[label].
+  // Weapons: one per bp.Weapon entry; class from unit:GetWeaponClass(label) (FA exe
+  // UnitWeapon::CreateInstance), falling back to /lua/sim/Weapon.lua's Weapon.
   PushPath(L, bpIdx, "Weapon");
   int wlist = lua_gettop(L);
   if (lua_istable(L, wlist)) {
-    lua_pushstring(L, "Weapons");
-    lua_gettable(L, obj);
-    int wclasses = lua_gettop(L);
+    int wclasses = 0;  // unused
     for (int i = 1;; ++i) {
       lua_rawgeti(L, wlist, i);
       if (!lua_istable(L, -1)) {
@@ -838,15 +936,34 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
       w->label = label;
       lua_pushvalue(L, wbp);
       w->bpRef = luaL_ref(L, LUA_REGISTRYINDEX);
-      lua_pushnil(L);
-      if (lua_istable(L, wclasses)) {
-        lua_pop(L, 1);
+      (void)wclasses;
+      lua_pushcfunction(L, ScriptTraceback);
+      lua_pushstring(L, "GetWeaponClass");
+      lua_gettable(L, obj);
+      if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, obj);
         lua_pushstring(L, label.c_str());
-        lua_gettable(L, wclasses);
+        if (lua_pcall(L, 2, 1, -4) != 0) {
+          LogScriptError(lua_tostring(L, -1));
+          lua_pop(L, 1);
+          lua_pushnil(L);
+        }
+      }
+      lua_remove(L, -2);  // handler
+      if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        Logf(LogLevel::Info, "%s:GetWeaponClass(\"%s\") returned nil, falling back to Weapon", bp.id.c_str(),
+             label.c_str());
+        if (PushImport(L, "/lua/sim/Weapon.lua")) {
+          lua_pushstring(L, "Weapon");
+          lua_gettable(L, -2);
+          lua_remove(L, -2);
+        } else {
+          lua_pushnil(L);
+        }
       }
       int wcls = lua_gettop(L);
       if (!lua_istable(L, wcls)) {
-        Logf(LogLevel::Warning, "Weapon '%s' of unit %s has no script class.", label.c_str(), bp.id.c_str());
         lua_pop(L, 1);
         PushClassTable(L, "UnitWeapon");
         lua_newtable(L);
@@ -878,6 +995,44 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   return u;
 }
 
+// Projectile constructor order (FA exe 0x69afe0): OnPreCreate, OnLayerChange(layer, 'None'),
+// OnCreate(inWater).
+Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Entity* launcher, Vec3 pos, Vec3 dir) {
+  lua_checkstack(L, 20);
+  int top = lua_gettop(L);
+  auto owned = std::make_unique<Projectile>();
+  Projectile* p = owned.get();
+  p->kind = Entity::Kind::Projectile;
+  p->blueprint = &bp;
+  p->launcher = launcher;
+  p->army = launcher ? launcher->army : nullptr;
+  p->id = (static_cast<uint32_t>(p->army ? p->army->index - 1 : 0xff) << 20) | (p->army ? p->army->serial : propSerial_)++;  // TODO: projectile id space
+  p->position = pos;
+  p->velocity = dir;
+  bool inWater = map_ && map_->hasWater && pos.y < map_->waterElevation;
+  p->layer = inWater ? "Water" : "Air";
+  PushScriptClass(L, bp, "/lua/sim/projectile.lua", "Projectile");
+  int cls = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_pushvalue(L, cls);
+  if (lua_pcall(L, 0, 1, cls + 1) != 0 || !lua_istable(L, -1)) {
+    LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "projectile script class did not create an object");
+    lua_settop(L, top);
+    return nullptr;
+  }
+  BindObject(L, -1, p);
+  owned_.push_back(std::move(owned));
+  entities_[p->id] = p;
+  lua_settop(L, top);
+  CallMethod(L, p, "OnPreCreate", 0);
+  lua_pushstring(L, p->layer.c_str());
+  lua_pushstring(L, "None");
+  CallMethod(L, p, "OnLayerChange", 2);
+  lua_pushboolean(L, inWater);
+  CallMethod(L, p, "OnCreate", 1);
+  return p;
+}
+
 Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale) {
   lua_checkstack(L, 20);
   int top = lua_gettop(L);
@@ -885,7 +1040,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   Prop* p = owned.get();
   p->kind = Entity::Kind::Prop;
   p->blueprint = &bp;
-  p->id = (0xffu << 20) + ++propSerial_;
+  p->id = (2u << 28) | (0xffu << 20) | propSerial_++;  // probe: props are 0x2FFxxxxx
   p->position = pos;
   p->orientation = q;
   p->scale[0] = scale.x;
@@ -911,6 +1066,28 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   lua_settop(L, top);
   CallMethod(L, p, "OnCreate", 0);
   return p;
+}
+
+Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
+  if (t < 0) t = lua_gettop(L) + t + 1;
+  std::unique_ptr<Entity> owned = shield ? std::make_unique<ShieldEntity>() : std::make_unique<Entity>();
+  Entity* e = owned.get();
+  e->kind = shield ? Entity::Kind::Shield : Entity::Kind::Entity;
+  if (lua_istable(L, spec)) {
+    lua_pushstring(L, "Owner");
+    lua_gettable(L, spec);
+    if (Entity* owner = ToObject<Entity>(L, -1)) {
+      e->army = owner->army;
+      e->position = owner->position;
+      e->orientation = owner->orientation;
+    }
+    lua_pop(L, 1);
+  }
+  e->id = (static_cast<uint32_t>(e->army ? e->army->index - 1 : 0xff) << 20) | (e->army ? e->army->serial : propSerial_)++;
+  BindObject(L, t, e);
+  owned_.push_back(std::move(owned));
+  entities_[e->id] = e;
+  return e;
 }
 
 Platoon* Sim::CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan) {

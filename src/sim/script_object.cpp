@@ -205,6 +205,11 @@ void RegisterSimClasses(lua_State* L) {
   for (const auto& b : kBindings) {
     if (*b.cls || std::strcmp(b.set, "sim") != 0) continue;
     lua_pushstring(L, b.name);
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    bool exists = !lua_isnil(L, -1);  // core functions (print, ...) are already there
+    lua_pop(L, 1);
+    if (exists) continue;
+    lua_pushstring(L, b.name);
     PushStub(L, b.name);
     lua_rawset(L, LUA_GLOBALSINDEX);
   }

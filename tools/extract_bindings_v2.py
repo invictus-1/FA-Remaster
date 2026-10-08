@@ -1,5 +1,9 @@
-import pefile, capstone, struct, re, json, collections
-pe=pefile.PE('FA.exe',fast_load=True); IB=pe.OPTIONAL_HEADER.ImageBase; d=pe.__data__
+"""Extract the Lua binding table from the original ForgedAlliance.exe (reference reading only).
+v2 also finds initializers where the name and doc share one string (v1 missed 47 bindings, e.g.
+all Issue* commands). Merges into an existing bindings JSON.
+usage: extract_bindings_v2.py ForgedAlliance.exe bindings.json"""
+import pefile, capstone, struct, re, json, collections, sys
+pe=pefile.PE(sys.argv[1],fast_load=True); IB=pe.OPTIONAL_HEADER.ImageBase; d=pe.__data__
 md=capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
 HEADS={0xf5a124:'sim',0xf59690:'user',0xf59680:'core',0xf596c8:'init'}
 def cstr(v):
@@ -31,9 +35,9 @@ for h in HEADS:
         name=cstr(f.get(4,0)) if f.get(4) else None
         if not name: continue
         out[B]=dict(set=HEADS[h], obj=hex(B), name=name, state=cstr(f.get(8,0)) if f.get(8) else None, func=hex(f.get(0x14,0)), cls=hex(f.get(0x18,0)))
-old=json.load(open('/home/claude/lab/engine-ref/bindings.json'))
+old=json.load(open(sys.argv[2]))
 oldobjs={int(x['obj'],16) for x in old}
 new=[v for k,v in out.items() if k not in oldobjs]
 print(len(out),'found;',len(new),'new'); print(collections.Counter((x['set'],x['state']) for x in new))
 print(sorted(x['name'] for x in new if x['set']=='sim'))
-json.dump(list(out.values()), open('bindings2.json','w'), indent=0)
+json.dump(list(out.values()), open(sys.argv[2] + '.v2.json','w'), indent=0)

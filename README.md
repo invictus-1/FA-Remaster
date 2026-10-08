@@ -20,16 +20,26 @@ Milestone 1 (boot) works:
 - **Blueprints:** runs the game's blueprint loader with a set of 17 mods. The output matches the
   original game's log line for line: 1366 units, 791 projectiles, and every warning in the same order.
 
-Next: map loading and sim start-up (milestone 2), then movement, then combat and economy.
+Milestone 2 (sim start-up) is in progress and runs headless on a replay:
+- **Map:** reads `.scmap` files (heightfield, terrain types, water, props).
+- **Sim start-up** in the original's order: `simInit.lua`, `SetupSession`, all armies and their
+  AI brains, map props, `BeginSession`, then ticks with script threads (M28 analyses the map
+  and builds its navmesh).
+- **Checked against the original** with an oracle probe (same replay in both engines): thread
+  timing, entity ids, terrain heights and types, rotation math and blueprint defaults match.
+
+Next: finish M2 (blueprint derived fields, unit skeletons), then movement, combat and economy.
+See [docs/architecture.md](docs/architecture.md) for where things are in the source.
 
 ## Build
 - CMake: `cmake -B build -G Ninja && cmake --build build`
 - Without CMake: `./build.sh`
 - Windows x64 from Linux: zig `cc` / `c++` with `-target x86_64-windows-gnu`. See `CMakeLists.txt`.
 
-## Run (milestone 1)
+## Run
 ```
 moho64 --init <path to the game's init .lua> [--mods uids.txt] --rules --check-lua --log out.log
+moho64 --init <init .lua> --mods uids.txt --sim <replay.SCFAReplay> --ticks 600 --log sim.log
 ```
 - `--rules` runs the game's blueprint loader.
 - `--check-lua` compiles every script the game can see.
@@ -39,7 +49,8 @@ moho64 --init <path to the game's init .lua> [--mods uids.txt] --rules --check-l
 - `third_party/lua`: Lua 5.0 (MIT), modified to match the game's dialect.
 - `third_party/zlib`: zlib inflate.
 - `src/core`: log, host files, zip, virtual file system.
-- `src/script`: Lua states and engine functions.
+- `src/script`: Lua states, engine functions, script threads.
+- `src/sim`: the simulation (start-up, armies, units, blueprints, map).
 - `src/app`: command-line host.
 - `tests`: dialect tests.
 

@@ -29,6 +29,7 @@ class Entity : public ScriptObject {
   float scale[3] = {1, 1, 1};
   float health = 0, maxHealth = 0;
   bool dead = false;
+  bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
 };
 
 }  // namespace moho

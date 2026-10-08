@@ -215,6 +215,7 @@ int main(int argc, char** argv) {
     else if (a == "--exec") o.exec.push_back(next());
     else if (a == "--sim") o.replay = next();
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
+    else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
       return 2;

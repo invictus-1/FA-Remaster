@@ -82,7 +82,9 @@ int l_ResumeThread(lua_State* L) {
 int l_WaitFor(lua_State* L) {
   ThreadScheduler* s = ThreadScheduler::From(L);
   if (!s || s->Current() != L) return luaL_error(L, "WaitFor: not called from a thread");
-  return lua_yield(L, 0);
+  lua_settop(L, 0);
+  lua_pushnumber(L, 2);  // = WaitTicks(2): resume next tick
+  return lua_yield(L, 1);
 }
 
 }  // namespace
@@ -111,7 +113,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   t.co = co;
   t.ref = ref;
   t.pendingArgs = nargs;
-  t.wakeTick = tick_;
+  t.wakeTick = tick_ + 1;  // a new thread first runs on the next tick (probe: forked at 0, runs at 1)
   threads_.push_back(t);
 }
 
@@ -138,7 +140,7 @@ bool ThreadScheduler::Resume(lua_State* co) {
   for (auto& t : threads_)
     if (t.co == co && t.suspended) {
       t.suspended = false;
-      t.wakeTick = tick_;
+      t.wakeTick = tick_ + 1;
       return true;
     }
   return false;
@@ -170,8 +172,15 @@ void ThreadScheduler::Step(Thread& t) {
     lua_settop(t.co, 0);
     return;
   }
-  int wait = 1;
-  if (lua_gettop(t.co) >= 1 && lua_isnumber(t.co, 1)) wait = static_cast<int>(lua_tonumber(t.co, 1));
+  // coroutine.yield(n) / WaitTicks(n): resume n-1 ticks later, at least the next tick (the
+  // original: WaitTicks(1) +1, WaitTicks(5) +4, WaitSeconds(1) = WaitTicks(11) +10).
+  // yield() without a number suspends the thread for good.
+  if (lua_gettop(t.co) < 1 || !lua_isnumber(t.co, 1)) {
+    lua_settop(t.co, 0);
+    t.suspended = true;
+    return;
+  }
+  int wait = static_cast<int>(lua_tonumber(t.co, 1)) - 1;
   if (wait < 1) wait = 1;
   lua_settop(t.co, 0);
   t.wakeTick = tick_ + static_cast<uint32_t>(wait);
