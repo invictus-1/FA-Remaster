@@ -23,7 +23,7 @@ namespace {
 struct BpDefault {
   BpKind kind;
   const char* path;
-  int type;  // 1 number, 2 string, 3 boolean
+  int type;  // 1 number, 2 string, 3 boolean, 4 table (an engine list/set: always there, maybe empty)
   double num;
   const char* str;
   bool b;
@@ -31,47 +31,111 @@ struct BpDefault {
 #define N(x) 1, static_cast<double>(x), nullptr, false
 #define S(x) 2, 0.0, x, false
 #define B(x) 3, 0.0, nullptr, x
+#define T() 4, 0.0, nullptr, false
 const BpDefault kDefaults[] = {
 #include "sim/bp_defaults.inc"
+#include "sim/bp_defaults_extra.inc"
 };
 #undef N
 #undef S
 #undef B
+#undef T
 
 void PushDefault(lua_State* L, const BpDefault& d) {
   if (d.type == 1) lua_pushnumber(L, static_cast<lua_Number>(d.num));
   else if (d.type == 2) lua_pushstring(L, d.str);
+  else if (d.type == 4) lua_newtable(L);
   else lua_pushboolean(L, d.b);
+}
+
+// Engine enums: a value is matched without regard to case and stored by its proper name.
+const char* const kEnums[] = {
+    "RULEUMT_None", "RULEUMT_Land", "RULEUMT_Air", "RULEUMT_Water", "RULEUMT_Biped", "RULEUMT_SurfacingSub",
+    "RULEUMT_Amphibious", "RULEUMT_Hover", "RULEUMT_AmphibiousFloating", "RULEUMT_Special",
+    "RULEUBR_None", "RULEUBR_Bridge", "RULEUBR_OnMassDeposit", "RULEUBR_OnHydrocarbonDeposit",
+    "RULEUBA_None", "RULEUBA_LowArc", "RULEUBA_HighArc",
+    "RULEWTT_Unit", "RULEWTT_Projectile", "RULEWTT_Prop",
+    "UWRC_Undefined", "UWRC_DirectFire", "UWRC_IndirectFire", "UWRC_AntiAir", "UWRC_AntiNavy", "UWRC_Countermeasure"};
+
+bool SameNoCase(const char* a, const char* b) {
+  for (; *a && *b; ++a, ++b)
+    if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b))) return false;
+  return *a == *b;
+}
+
+// The enum a default value belongs to: its prefix ("RULEUBA_"), or "" when it is a plain string.
+std::string EnumPrefix(const char* v) {
+  for (const char* e : kEnums)
+    if (!std::strcmp(e, v)) return std::string(v, std::strchr(v, '_') + 1);
+  return "";
+}
+
+// The value at the top of the stack as the engine would store it in a field of the default's
+// type: numbers from numeric strings, booleans from numbers and "true"/"false", enum names in
+// their proper case. Pushes the replacement and returns true, or returns false to keep the value.
+// A value the field cannot hold leaves the engine default.
+bool CoerceValue(lua_State* L, const BpDefault& d) {
+  int ty = lua_type(L, -1);
+  if (d.type == 1) {
+    if (ty == LUA_TNUMBER) return false;
+    if (ty == LUA_TSTRING) lua_pushnumber(L, static_cast<lua_Number>(std::atof(lua_tostring(L, -1))));
+    else PushDefault(L, d);
+    return true;
+  }
+  if (d.type == 3) {
+    if (ty == LUA_TBOOLEAN) return false;
+    if (ty == LUA_TNUMBER) lua_pushboolean(L, lua_tonumber(L, -1) != 0);
+    else if (ty == LUA_TSTRING) lua_pushboolean(L, SameNoCase(lua_tostring(L, -1), "true"));
+    else PushDefault(L, d);
+    return true;
+  }
+  if (d.type == 2) {
+    if (ty != LUA_TSTRING) {
+      if (ty == LUA_TNUMBER) lua_pushstring(L, lua_tostring(L, -1));
+      else PushDefault(L, d);
+      return true;
+    }
+    std::string prefix = EnumPrefix(d.str);
+    if (prefix.empty()) return false;
+    const char* v = lua_tostring(L, -1);
+    for (const char* e : kEnums)
+      if (!std::strncmp(e, prefix.c_str(), prefix.size()) && SameNoCase(e, v)) {
+        if (!std::strcmp(e, v)) return false;
+        lua_pushstring(L, e);
+        return true;
+      }
+    PushDefault(L, d);  // not a value of the enum
+    return true;
+  }
+  return false;
 }
 
 // Apply one default below the table at `t` following path segments [i..].
 void ApplyPath(lua_State* L, int t, const std::vector<std::string>& seg, size_t i, const BpDefault& d) {
-  lua_checkstack(L, 6);
-  if (seg[i] == "[]") {
-    for (int k = 1;; ++k) {
-      lua_rawgeti(L, t, k);
-      if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        return;
-      }
-      if (i + 1 < seg.size()) ApplyPath(L, lua_gettop(L), seg, i + 1, d);
+  lua_checkstack(L, 8);
+  if (seg[i] == "[]") {  // every element of the list (as pairs() sees them: holes included)
+    lua_pushnil(L);
+    while (lua_next(L, t)) {
+      if (lua_type(L, -2) == LUA_TNUMBER && lua_istable(L, -1) && i + 1 < seg.size())
+        ApplyPath(L, lua_gettop(L), seg, i + 1, d);
       lua_pop(L, 1);
     }
+    return;
   }
   lua_pushstring(L, seg[i].c_str());
   lua_rawget(L, t);
   if (i + 1 == seg.size()) {
     bool missing = lua_isnil(L, -1);
-    // a numeric engine field given as a string ("2.5") is stored as a number
-    bool coerce = d.type == 1 && lua_type(L, -1) == LUA_TSTRING;
-    double num = coerce ? std::atof(lua_tostring(L, -1)) : 0;
-    lua_pop(L, 1);
-    if (coerce) {
-      lua_pushstring(L, seg[i].c_str());
-      lua_pushnumber(L, static_cast<lua_Number>(num));
-      lua_rawset(L, t);
+    if (!missing && d.type != 4) {
+      if (CoerceValue(L, d)) {
+        lua_pushstring(L, seg[i].c_str());
+        lua_insert(L, -2);
+        lua_rawset(L, t);
+      }
+      lua_pop(L, 1);
       return;
     }
+    lua_pop(L, 1);
     if (missing) {
       lua_pushstring(L, seg[i].c_str());
       PushDefault(L, d);
@@ -126,6 +190,8 @@ std::string Field(lua_State* L, int t, const char* k) {
   return s;
 }
 
+}  // namespace
+
 void PushSound(lua_State* L, int t) {
   if (t < 0) t = lua_gettop(L) + t + 1;
   SoundParams sp{Field(L, t, "Bank"), Field(L, t, "Cue"), Field(L, t, "LodCutoff")};
@@ -135,6 +201,8 @@ void PushSound(lua_State* L, int t) {
   PushClassTable(L, "Sound");
   lua_setmetatable(L, -2);
 }
+
+namespace {
 
 // Replace every table value of t[key] (a sound table set) by sound handles.
 void ConvertSounds(lua_State* L, int t, const char* key) {
@@ -239,15 +307,96 @@ void DefaultString(lua_State* L, int t, const char* key, const char* v) {
 
 }  // namespace
 
+namespace {
+
+// Fields the engine derives (sim/bp_derived.cpp): part of the engine structure like the defaults.
+const char* const kDerivedUnitFields[] = {
+    "InertiaTensorX", "InertiaTensorY", "InertiaTensorZ", "Footprint.SizeX", "Footprint.SizeZ",
+    "Footprint.OccupancyCaps", "Footprint.Flags", "Footprint.MaxSlope", "Footprint.MinWaterDepth",
+    "AltFootprint.SizeX", "AltFootprint.SizeZ", "AltFootprint.OccupancyCaps", "AltFootprint.Flags",
+    "AltFootprint.MaxSlope", "AltFootprint.MinWaterDepth", "Physics.SkirtOffsetX", "Physics.SkirtOffsetZ",
+    "Physics.SkirtSizeX", "Physics.SkirtSizeZ", "Physics.BackUpDistance", "Physics.CatchUpAcc",
+    "Physics.MaxSpeedReverse", "Physics.AttackElevation", "Air.CanFly", "Air.MaxAirspeed", "Air.MinAirspeed",
+    "Air.StartTurnDistance"};
+
+void CarryPath(lua_State* L, int to, int from, const std::vector<std::string>& seg) {
+  int top = lua_gettop(L);
+  // the value in `from`
+  lua_pushvalue(L, from);
+  for (const auto& s : seg) {
+    if (s == "[]" || !lua_istable(L, -1)) {
+      lua_settop(L, top);
+      return;
+    }
+    lua_pushstring(L, s.c_str());
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+  }
+  if (lua_isnil(L, -1)) {
+    lua_settop(L, top);
+    return;
+  }
+  int value = lua_gettop(L);
+  // the place in `to` (tables made as needed)
+  lua_pushvalue(L, to);
+  for (size_t i = 0; i + 1 < seg.size(); ++i) {
+    lua_pushstring(L, seg[i].c_str());
+    lua_rawget(L, -2);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+      lua_pushstring(L, seg[i].c_str());
+      lua_pushvalue(L, -2);
+      lua_rawset(L, -4);
+    }
+    if (!lua_istable(L, -1)) {
+      lua_settop(L, top);
+      return;
+    }
+    lua_remove(L, -2);
+  }
+  lua_pushstring(L, seg.back().c_str());
+  lua_rawget(L, -2);
+  bool missing = lua_isnil(L, -1);
+  lua_pop(L, 1);
+  if (missing) {
+    lua_pushstring(L, seg.back().c_str());
+    lua_pushvalue(L, value);
+    lua_rawset(L, -3);
+  }
+  lua_settop(L, top);
+}
+
+}  // namespace
+
+void CarryOverEngineFields(lua_State* L, int to, int from, BpKind kind) {
+  if (to < 0) to = lua_gettop(L) + to + 1;
+  if (from < 0) from = lua_gettop(L) + from + 1;
+  lua_checkstack(L, 20);
+  auto& paths = SplitPaths();
+  for (size_t i = 0; i < sizeof kDefaults / sizeof kDefaults[0]; ++i)
+    if (kDefaults[i].kind == kind) CarryPath(L, to, from, paths[i]);
+  if (kind == BpKind::Unit)
+    for (const char* f : kDerivedUnitFields) {
+      std::vector<std::string> seg;
+      std::string p = f;
+      size_t dot = p.find('.');
+      if (dot == std::string::npos) seg = {p};
+      else seg = {p.substr(0, dot), p.substr(dot + 1)};
+      CarryPath(L, to, from, seg);
+    }
+}
+
 // Turn the copied script blueprint at `t` into the sim's view of it (see the file comment).
-void ReflectBlueprint(lua_State* L, int t, const BlueprintInfo& bp) {
+void ReflectBlueprint(lua_State* L, int t, const BlueprintInfo& bp, const SimBlueprints& bps) {
   if (t < 0) t = lua_gettop(L) + t + 1;
   lua_checkstack(L, 20);
   SetNumber(L, t, "BlueprintOrdinal", bp.ordinal);
   auto& paths = SplitPaths();
   for (size_t i = 0; i < sizeof kDefaults / sizeof kDefaults[0]; ++i)
     if (kDefaults[i].kind == bp.kind) ApplyPath(L, t, paths[i], 0, kDefaults[i]);
-  if (bp.kind != BpKind::Prop) DefaultString(L, t, "Description", "");
+  DefaultString(L, t, "Description", "");
+  DeriveBlueprint(L, t, bp, bps);
   if (bp.kind == BpKind::Unit) {
     if (PushField(L, t, "General")) {  // absent bit sets are written as "0"
       DefaultString(L, lua_gettop(L), "CommandCaps", "0");
@@ -265,14 +414,18 @@ void ReflectBlueprint(lua_State* L, int t, const BlueprintInfo& bp) {
       lua_rawget(L, -2);
       bool has = !lua_isnil(L, -1);
       lua_pop(L, 1);
-      if (!has) {
+      if (!has) {  // the unit id, which the engine keeps in lower case
+        std::string icon = bp.id;
+        for (auto& c : icon) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         lua_pushstring(L, "IconName");
-        lua_pushstring(L, bp.id.c_str());
+        lua_pushstring(L, icon.c_str());
         lua_rawset(L, -3);
       }
     }
     lua_pop(L, 1);
     if (PushField(L, t, "General")) {
+      for (const char* k : {"UpgradesTo", "UpgradesFrom", "UpgradesFromBase"})  // unit ids
+        Lowercase(L, lua_gettop(L), k);
       ConvertBits(L, lua_gettop(L), "CommandCaps", kCommandCaps, kCommandCaps, 24);
       ConvertBits(L, lua_gettop(L), "ToggleCaps", kToggleCaps, kToggleCaps, 9);
       lua_pop(L, 1);

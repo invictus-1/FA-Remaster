@@ -38,6 +38,7 @@ struct Options {
   bool quiet = false;
   std::string replay;   // --sim <replay>: start that session headless
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
+  std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
 };
 
@@ -178,11 +179,16 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
     return 1;
   }
   Sim sim(&vfs, hookDirs, uids);
+  sim.sessionMods = header->mods;
   if (!sim.LoadRules()) return 1;
   bool ok = sim.Start(*header);
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
   for (int i = 0; ok && i < o.ticks; ++i) sim.Tick();
   if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", o.ticks);
+  if (ok && !o.simLua.empty()) {
+    if (auto code = hostfs::ReadFile(o.simLua)) sim.RunString(*code, "@" + o.simLua);
+    else Logf(LogLevel::Error, "cannot read %s", o.simLua.c_str());
+  }
   ReportStubCalls();
   return ok ? 0 : 1;
 }
@@ -215,6 +221,7 @@ int main(int argc, char** argv) {
     else if (a == "--exec") o.exec.push_back(next());
     else if (a == "--sim") o.replay = next();
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
+    else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());

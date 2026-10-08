@@ -27,6 +27,7 @@ class Unit : public Entity {
   std::vector<UnitWeapon*> weapons;
   std::set<std::string> unitStates;
   float fractionComplete = 1;
+  std::string armorType;  // Defense.ArmorType (multipliers: Sim armour types; used by damage, M4)
   Platoon* platoon = nullptr;
 };
 

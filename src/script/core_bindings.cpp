@@ -410,6 +410,34 @@ int l_ReturnFirstArg(lua_State* L) {
   return 1;
 }
 
+// Sound { Bank =, Cue =, LodCutoff = }: a sound parameters object. Blueprints are read in the rules
+// state as plain tables; the table is remembered (registry "moho64.sounds", weak keys) so the copy
+// of the blueprints in the sim becomes a sound object there (see sim/blueprints.cpp).
+int l_Sound(lua_State* L) {
+  lua_settop(L, 1);
+  if (lua_istable(L, 1)) {
+    lua_pushstring(L, "moho64.sounds");
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+      lua_newtable(L);  // metatable: weak keys
+      lua_pushstring(L, "__mode");
+      lua_pushstring(L, "k");
+      lua_rawset(L, -3);
+      lua_setmetatable(L, -2);
+      lua_pushstring(L, "moho64.sounds");
+      lua_pushvalue(L, -2);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+    }
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+  }
+  return 1;
+}
+
 int l_EnumColorNames(lua_State* L) {
   lua_newtable(L);
   return 1;
@@ -518,7 +546,7 @@ void RegisterCoreBindings(ScriptState& state) {
   Reg(L, "EndLoggingStats", l_Noop);
   Reg(L, "IsDestroyed", l_IsDestroyed);
   Reg(L, "EnumColorNames", l_EnumColorNames);
-  Reg(L, "Sound", l_ReturnFirstArg);
+  Reg(L, "Sound", l_Sound);
   Reg(L, "RPCSound", l_ReturnFirstArg);
   Reg(L, "BlueprintLoaderUpdateProgress", l_BlueprintLoaderUpdateProgress);
   Reg(L, "RegisterUnitBlueprint", l_RegisterBlueprint<kUnit>);

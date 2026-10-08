@@ -65,6 +65,8 @@ class Sim {
   bool Start(const ReplayHeader& replay);
   // Advance one tick (runs the script threads that are due).
   void Tick();
+  // Run Lua source in the sim state (debugging aid: --sim-lua).
+  bool RunString(const std::string& code, const std::string& chunkName);
 
   lua_State* L() const;
   uint32_t tick() const { return tick_; }
@@ -88,6 +90,9 @@ class Sim {
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
   int focusArmy = -1;  // 0-based, -1 = observer/replay
+  // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
+  // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
+  std::string sessionMods;
   bool cheats = false;
 
   static Sim* From(lua_State* L);
@@ -114,8 +119,12 @@ class Sim {
   // <dir>/<name>_script.lua's TypeClass, else the default module's class.
   void PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* defModule, const char* defClass);
   bool PushImport(lua_State* L, const std::string& module);  // import(module) -> table, or false (logged)
+  void InitializeArmor(lua_State* L, Unit* u);
+  bool armorLoaded_ = false;
+  std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 
   bool CallGlobal(const char* fn, int nargs);  // args pushed; logs errors
+  void SetModsGlobal(ScriptState& st);
   bool CreateArmies(const ReplayHeader& replay);
   void CreateMapProps();
 };

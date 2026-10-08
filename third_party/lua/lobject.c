@@ -106,6 +106,17 @@ int luaO_rawequalObj (const TObject *t1, const TObject *t2) {
 /* GPG: the original links MSVC 2005's printf, which writes three exponent digits. */
 void luaO_msvcexp (char *buff) {
   char *e = buff;
+  /* GPG: MSVC spells infinity and NaN as 1.#INF, 1.#QNAN and -1.#IND (the x87 default NaN) */
+  char *s = strstr(buff, "inf");
+  if (!s) s = strstr(buff, "nan");
+  if (s) {
+    int neg = s > buff && s[-1] == '-';
+    const char *w = s[0] == 'i' ? "1.#INF" : (neg ? "1.#IND" : "1.#QNAN");
+    size_t tail = strlen(s + 3), wl = strlen(w);
+    memmove(s + wl, s + 3, tail + 1);
+    memcpy(s, w, wl);
+    return;
+  }
   while (*e && *e != 'e' && *e != 'E') e++;
   if (*e && (e[1] == '+' || e[1] == '-')) {
     char *d = e + 2;

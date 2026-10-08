@@ -785,6 +785,57 @@ bool Sim::PushImport(lua_State* L, const std::string& module) {
   return true;
 }
 
+// Unit::InitializeArmor: the unit's Defense.ArmorType names a row of /lua/armordefinition.lua
+// ({ 'Name', 'DamageType multiplier', ... }); the module is imported on first use.
+void Sim::InitializeArmor(lua_State* L, Unit* u) {
+  int top = lua_gettop(L);
+  if (!armorLoaded_) {
+    armorLoaded_ = true;
+    if (!PushImport(L, "/lua/armordefinition.lua")) {
+      Logf(LogLevel::Warning, "can't load the armordefinition module -- no armor for you.");
+    } else {
+      lua_pushstring(L, "armordefinition");
+      lua_gettable(L, -2);
+      if (!lua_istable(L, -1)) {
+        Logf(LogLevel::Warning, "The armor module didn't define any armors.  Hmm Odd?");
+      } else {
+        int defs = lua_gettop(L);
+        for (int i = 1;; ++i) {
+          lua_rawgeti(L, defs, i);
+          if (!lua_istable(L, -1)) break;
+          lua_rawgeti(L, -1, 1);
+          std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+          lua_pop(L, 1);
+          auto& mults = armorTypes_[name];
+          for (int k = 2;; ++k) {
+            lua_rawgeti(L, -1, k);
+            if (!lua_isstring(L, -1)) {
+              lua_pop(L, 1);
+              break;
+            }
+            std::string entry = lua_tostring(L, -1);  // "DamageType 0.5"
+            size_t sp = entry.find(' ');
+            if (sp != std::string::npos)
+              mults[entry.substr(0, sp)] = static_cast<float>(std::atof(entry.c_str() + sp + 1));
+            lua_pop(L, 1);
+          }
+          lua_pop(L, 1);
+        }
+      }
+    }
+    lua_settop(L, top);
+  }
+  bps_.PushTable(L, *u->blueprint);
+  lua_pushstring(L, "Defense");
+  lua_gettable(L, -2);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "ArmorType");
+    lua_gettable(L, -2);
+    if (lua_isstring(L, -1)) u->armorType = lua_tostring(L, -1);
+  }
+  lua_settop(L, top);
+}
+
 void Sim::PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* defModule, const char* defClass) {
   int top = lua_gettop(L);
   bps_.PushTable(L, bp);
@@ -987,6 +1038,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     }
   }
   lua_settop(L, obj);
+  InitializeArmor(L, u);
   CallMethod(L, u, "OnCreate", 0);
   lua_pushnil(L);  // builder
   lua_pushstring(L, u->layer.c_str());

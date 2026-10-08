@@ -453,8 +453,39 @@ bool Sim::LoadRules() {
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
   rules_->SetHookDirs(hookDirs_);
   SimBlueprints::StartRecording(*rules_);
-  SetActiveMods(*rules_, modUids_);
+  SetModsGlobal(*rules_);
   return rules_->DoScript("/lua/ruleinit.lua");
+}
+
+bool Sim::RunString(const std::string& code, const std::string& chunkName) {
+  return state_->DoString(code, chunkName);
+}
+
+void Sim::SetModsGlobal(ScriptState& st) {
+  lua_State* L = st.L();
+  int top = lua_gettop(L);
+  if (sessionMods.empty() || !PushSerializedLua(L, sessionMods) || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    SetActiveMods(st, modUids_);
+    return;
+  }
+  // The mounted mods (hook folders) come from the uid list: say so if it differs from the session.
+  std::vector<std::string> uids;
+  for (int i = 1;; ++i) {
+    lua_rawgeti(L, -1, i);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      break;
+    }
+    lua_pushstring(L, "uid");
+    lua_rawget(L, -2);
+    uids.push_back(lua_isstring(L, -1) ? lua_tostring(L, -1) : "");
+    lua_pop(L, 2);
+  }
+  if (uids != modUids_)
+    Logf(LogLevel::Warning, "moho64: the session's %zu mods differ from the %zu mounted mods", uids.size(),
+         modUids_.size());
+  lua_setglobal(L, "__active_mods");
 }
 
 bool Sim::CallGlobal(const char* fn, int nargs) {
@@ -501,10 +532,11 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterSimBindings(L);
   RegisterEntityBindings(L);
   RegisterEffectBindings(L);
-  SetActiveMods(*state_, modUids_);
+  SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
   lua_setglobal(L, "__language");
+  bps_.fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
   bps_.CopyToSim(rules_->L(), L);
   RegisterCategoryBindings(L, &bps_);
   rules_.reset();  // the rules state is done

@@ -39,6 +39,7 @@ struct Copier {
   lua_State* from;
   lua_State* to;
   int seen;  // index of a table in `to`: lightuserdata(source table) -> copy
+  int sounds = 0;  // index in `from` of the tables made by Sound{} (0: none)
   int dropped = 0;
 
   void Copy(int idx) {
@@ -63,6 +64,32 @@ struct Copier {
     lua_rawget(to, seen);
     if (!lua_isnil(to, -1)) return;
     lua_pop(to, 1);
+    bool sound = false;
+    if (sounds) {
+      lua_pushvalue(from, idx);
+      lua_rawget(from, sounds);
+      sound = lua_toboolean(from, -1);
+      lua_pop(from, 1);
+    }
+    if (sound) {  // Sound{...} -> a sound object
+      lua_newtable(to);
+      for (const char* k : {"Bank", "Cue", "LodCutoff"}) {
+        lua_pushstring(from, k);
+        lua_rawget(from, idx);
+        if (lua_isstring(from, -1)) {
+          lua_pushstring(to, k);
+          lua_pushstring(to, lua_tostring(from, -1));
+          lua_rawset(to, -3);
+        }
+        lua_pop(from, 1);
+      }
+      PushSound(to, -1);
+      lua_remove(to, -2);
+      lua_pushlightuserdata(to, const_cast<void*>(key));
+      lua_pushvalue(to, -2);
+      lua_rawset(to, seen);
+      return;
+    }
     lua_newtable(to);
     lua_pushlightuserdata(to, const_cast<void*>(key));
     lua_pushvalue(to, -2);
@@ -264,6 +291,7 @@ int l_EntityCategoryEmpty(lua_State* L) {
   return 1;
 }
 
+
 }  // namespace
 
 uint64_t* PushCategory(lua_State* L) { return NewCat(L); }
@@ -314,6 +342,56 @@ const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   return it == byId_.end() ? nullptr : &all_[it->second];
 }
 
+// SpecFootprints { {Name=, SizeX=, SizeZ=, Caps=, MinWaterDepth=, MaxWaterDepth=, MaxSlope=, Flags=}, ... }:
+// kept in order; a repeated name is ignored with a warning (as the original).
+void SimBlueprints::ReadFootprints(lua_State* L, int list) {
+  int n = static_cast<int>(luaL_getn(L, list));
+  for (int i = 1; i <= n; ++i) {
+    lua_rawgeti(L, list, i);
+    lua_rawgeti(L, -1, 1);
+    bool isFootprints = lua_isstring(L, -1) && !std::strcmp(lua_tostring(L, -1), "Footprints");
+    lua_pop(L, 1);
+    if (isFootprints) {
+      lua_rawgeti(L, -1, 2);
+      int specs = lua_gettop(L);
+      for (int k = 1;; ++k) {
+        lua_rawgeti(L, specs, k);
+        if (!lua_istable(L, -1)) {
+          lua_pop(L, 1);
+          break;
+        }
+        auto num = [&](const char* key, double def) {
+          lua_pushstring(L, key);
+          lua_rawget(L, -2);
+          double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : def;
+          lua_pop(L, 1);
+          return v;
+        };
+        NamedFootprint f;
+        lua_pushstring(L, "Name");
+        lua_rawget(L, -2);
+        f.name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        f.sizeX = static_cast<uint8_t>(static_cast<int>(num("SizeX", 0)));
+        f.sizeZ = static_cast<uint8_t>(static_cast<int>(num("SizeZ", 0)));
+        f.caps = static_cast<uint8_t>(static_cast<int>(num("Caps", 0)));
+        f.minWaterDepth = static_cast<float>(num("MinWaterDepth", 0));
+        f.maxWaterDepth = static_cast<float>(num("MaxWaterDepth", 0));
+        f.maxSlope = static_cast<float>(num("MaxSlope", 0));
+        f.flags = static_cast<uint8_t>(static_cast<int>(num("Flags", 0)));
+        bool seen = false;
+        for (const auto& o : footprints_) seen |= o.name == f.name;
+        if (seen) Logf(LogLevel::Warning, "Ignoring duplicate footprint spec %s", f.name.c_str());
+        else footprints_.push_back(f);
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  Logf(LogLevel::Debug, "moho64: %zu named footprints", footprints_.size());
+}
+
 void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   lua_pushlightuserdata(sim, const_cast<char*>(&kBpsKey));
   lua_pushlightuserdata(sim, this);
@@ -325,10 +403,16 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   int n = static_cast<int>(luaL_getn(rules, list));
   lua_newtable(sim);  // seen
   Copier cp{rules, sim, lua_gettop(sim)};
+  lua_pushstring(rules, "moho64.sounds");
+  lua_rawget(rules, LUA_REGISTRYINDEX);
+  if (lua_istable(rules, -1)) cp.sounds = lua_gettop(rules);
+  else lua_pop(rules, 1);
   lua_pushstring(sim, "__blueprints");
   lua_newtable(sim);
   int bpt = lua_gettop(sim);
   all_.reserve(n);
+  ReadFootprints(rules, list);
+  int duplicates = 0;
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(rules, list, i);
     lua_rawgeti(rules, -1, 1);
@@ -345,21 +429,40 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
     lua_pop(rules, 1);
     cp.Copy(-1);  // -> sim
     lua_pop(rules, 2);
-    BlueprintInfo info;
-    info.kind = kind;
-    info.id = id;
-    info.ordinal = static_cast<int>(all_.size()) + 1;
+    // A blueprint registered again under the same id replaces the earlier one and keeps its
+    // ordinal (the original looks the id up and re-initialises the existing blueprint).
+    auto dup = id.empty() ? byId_.end() : byId_.find(Lower(id));
+    if (dup != byId_.end() && all_[dup->second].kind != kind) dup = byId_.end();
+    BlueprintInfo fresh;
+    BlueprintInfo& info = dup != byId_.end() ? all_[dup->second] : fresh;
+    if (dup == byId_.end()) {
+      info.kind = kind;
+      info.id = id;
+      info.ordinal = static_cast<int>(all_.size());  // 0-based: AssignNextOrdinal is the count so far
+    } else {
+      // The same engine blueprint is re-read from the new table: engine fields the new table
+      // leaves out keep their earlier values (also values derived the first time).
+      lua_rawgeti(sim, LUA_REGISTRYINDEX, info.ref);  // the earlier table
+      if (reflect) CarryOverEngineFields(sim, lua_gettop(sim) - 1, lua_gettop(sim), kind);
+      lua_pop(sim, 1);
+      luaL_unref(sim, LUA_REGISTRYINDEX, info.ref);
+      ++duplicates;
+      Logf(LogLevel::Debug, "moho64: blueprint %s registered again as %s", info.id.c_str(), id.c_str());
+      info.id = id;
+    }
     lua_pushvalue(sim, -1);
     lua_rawseti(sim, bpt, info.ordinal);
-    if (!id.empty()) {
+    if (!id.empty()) {  // under the id as now given: an earlier spelling ("FAB4401") keeps the old table
       lua_pushstring(sim, id.c_str());
       lua_pushvalue(sim, -2);
       lua_rawset(sim, bpt);
     }
     // categories
     if (kind != BpKind::Mesh) {
-      info.entityIndex = static_cast<int>(entities_.size());
-      entities_.push_back(nullptr);  // fixed up below
+      if (info.entityIndex < 0) {
+        info.entityIndex = static_cast<int>(entities_.size());
+        entities_.push_back(nullptr);  // fixed up below
+      }
       lua_pushstring(sim, "Categories");
       lua_rawget(sim, -2);
       if (lua_istable(sim, -1))
@@ -374,14 +477,16 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
         }
       lua_pop(sim, 1);
     }
-    if (reflect) ReflectBlueprint(sim, -1, info);
+    if (reflect) ReflectBlueprint(sim, -1, info, *this);
     info.ref = luaL_ref(sim, LUA_REGISTRYINDEX);
-    if (!id.empty()) byId_.emplace(Lower(id), all_.size());
-    all_.push_back(std::move(info));
+    if (dup == byId_.end()) {
+      if (!id.empty()) byId_.emplace(Lower(id), all_.size());
+      all_.push_back(std::move(info));
+    }
   }
   lua_rawset(sim, LUA_GLOBALSINDEX);  // __blueprints
   lua_pop(sim, 1);                    // seen
-  lua_pop(rules, 1);
+  lua_settop(rules, list - 1);        // the record list (and the sound set)
   for (const auto& bp : all_)
     if (bp.entityIndex >= 0) entities_[bp.entityIndex] = &bp;
   g_words = std::max(1, (EntityCount() + 63) / 64);
@@ -397,6 +502,7 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end()), v.end());
   }
+  if (duplicates) Logf(LogLevel::Debug, "moho64: %d blueprints registered again under the same id", duplicates);
   if (cp.dropped) Logf(LogLevel::Debug, "moho64: %d non-data blueprint values not copied to the sim", cp.dropped);
   Logf(LogLevel::Debug, "moho64: sim blueprints: %zu (%d entity), %zu categories", all_.size(), EntityCount(),
        categories_.size());

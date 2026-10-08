@@ -24,7 +24,8 @@ raw, orig = load(sys.argv[1]), load(sys.argv[2])
 KIND = {'unit': 'Unit', 'proj': 'Projectile', 'prop': 'Prop', 'mesh': 'Mesh'}
 SKIP = re.compile(r'\.(BlueprintOrdinal|IconName|AlbedoName|NormalsName|SpecularName|MeshName|LookupName|SecondaryName|'
                   r'InertiaTensor.|SkirtSize.|SkirtOffset.|CommandCaps|ToggleCaps|BuildOnLayerCaps|ProjectileId|Description)$|'
-                  r'\.Audio\.|\.Footprint\.|\.AltFootprint\.|^[a-z]+\.Mod\.')
+                  r'\.Audio\.|\.Footprint\.|\.AltFootprint\.|^[a-z]+\.Mod\.|'
+                  r'^(unit|proj|prop)\.Display\.Mesh\.')  # an entity's Display.Mesh is its mesh blueprint (kind Mesh)
 out, unsure = [], []
 for p, (n_o, nd_o, h_o) in sorted(orig.items()):
     kind = KIND.get(p.split('.')[0])
