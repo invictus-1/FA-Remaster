@@ -44,5 +44,6 @@ moho64 --init <path to the game's init .lua> [--mods uids.txt] --rules --check-l
 - `tests`: dialect tests.
 
 ## Legal
+MIT licensed (see `LICENSE`): use it, change it, build on it.
 This is an independent reimplementation. It contains no code or data from the original game.
 Supreme Commander is a trademark of its owners. Third-party licences are in `third_party/`.
