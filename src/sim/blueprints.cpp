@@ -463,6 +463,8 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
         info.entityIndex = static_cast<int>(entities_.size());
         entities_.push_back(nullptr);  // fixed up below
       }
+      // every entity blueprint id (as registered) is a category of its own
+      if (!id.empty()) categories_[id].push_back(info.entityIndex);
       lua_pushstring(sim, "Categories");
       lua_rawget(sim, -2);
       if (lua_istable(sim, -1))
@@ -494,7 +496,6 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   for (const auto& bp : all_) {
     if (bp.kind == BpKind::Unit) {
       categories_["ALLUNITS"].push_back(bp.entityIndex);
-      categories_[bp.id].push_back(bp.entityIndex);  // every unit id names a category of itself
     }
     if (bp.kind == BpKind::Projectile) categories_["ALLPROJECTILES"].push_back(bp.entityIndex);
   }
