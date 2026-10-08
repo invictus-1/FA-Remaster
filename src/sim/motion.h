@@ -67,6 +67,7 @@ struct UnitMotion {
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
   float speedMult = 1, accMult = 1, turnMult = 1;
+  float speedCap = 0;  // > 0: top speed (MaxSpeed units) while moving in formation
 
   // Steering: the waypoints of the current move (the last one is the goal).
   std::vector<Vec3> path;

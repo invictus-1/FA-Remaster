@@ -337,7 +337,7 @@ float TurnSpeedLimit(const MotionBlueprint& b, float maxF, float turnRadius, flo
 bool DriveStep(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
-  float maxF = b.maxSpeed * m.speedMult * 0.1f;
+  float maxF = (m.speedCap > 0 ? std::min(b.maxSpeed, m.speedCap) : b.maxSpeed) * m.speedMult * 0.1f;
   float maxR = b.maxSpeedReverse * m.speedMult * 0.1f;
   float acc = b.maxAccel * m.accMult * 0.01f;
   float brake = (b.maxBrake != 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;

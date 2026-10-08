@@ -5,7 +5,9 @@
 #include <cmath>
 #include <map>
 
+#include "core/dmath.h"
 #include "core/log.h"
+#include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
@@ -66,7 +68,11 @@ constexpr uint64_t kPathWorkPerTick = 1000;
 
 bool IsAlive(const Unit* u) { return u && !u->dead && !u->destroyQueued; }
 
-Vec3 TargetPos(Sim& sim, const UnitCommand& c) {
+Vec3 TargetPos(Sim& sim, const UnitCommand& c, Unit* u = nullptr) {
+  if (u) {
+    auto it = c.slots.find(u);
+    if (it != c.slots.end()) return it->second;
+  }
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) return e->position;
   return c.pos;
@@ -80,6 +86,7 @@ void SetMoving(Unit* u, bool on) {
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
   if (u->commands.empty()) return;
+  u->motion.speedCap = 0;
   u->commands.front()->units.erase(u);
   u->commands.pop_front();
   u->headState = kNotStarted;
@@ -91,7 +98,8 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
   UnitCommand& c = *u->commands.front();
   const MotionBlueprint& b = *u->motion.bp;
-  Vec3 goal = TargetPos(sim, c);
+  Vec3 goal = TargetPos(sim, c, u);
+  u->motion.speedCap = c.slots.count(u) ? c.formationSpeed : 0;
   std::vector<Vec3> path;
   bool ok = true;
   if (b.motionType == kMotionAir) {
@@ -281,6 +289,84 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
   return c;
 }
 
+// Formation slots from the formation script (/lua/formations.lua: <name>(units) returns
+// { x, z, filter category, row, ... } per slot, x to the right, z forward, in unit-size steps).
+// Each slot takes the nearest unassigned unit its filter allows. TODO(M3b): the original's
+// CFormationInstance (slot assignment order, travel formation, catch-up speeds).
+void PlaceFormation(lua_State* L, UnitCommand& c, const std::vector<Unit*>& units) {
+  if (units.size() < 2 || c.formation.empty() || c.formation == "NoFormation") return;
+  int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/formations.lua");
+  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    return;
+  }
+  lua_pushstring(L, c.formation.c_str());
+  lua_gettable(L, -2);
+  if (!lua_isfunction(L, -1)) {
+    lua_settop(L, top);
+    return;
+  }
+  lua_newtable(L);
+  int n = 0;
+  for (Unit* u : units) {
+    PushObject(L, u);
+    lua_rawseti(L, -2, ++n);
+  }
+  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+    if (lua_isstring(L, -1)) LogScriptError(lua_tostring(L, -1));
+    lua_settop(L, top);
+    return;
+  }
+  int slotsIdx = lua_gettop(L);
+  // a formation unit is (largest footprint + 2) world units (formations' categorizeUnits.lua)
+  int largest = 1;
+  for (Unit* u : units)
+    if (u->motion.bp) largest = std::max<int>(largest, std::max(u->motion.bp->footprint.sizeX, u->motion.bp->footprint.sizeZ));
+  const float scale = static_cast<float>(largest + 2);
+  float sn = dmath::Sin(c.heading), cs = dmath::Cos(c.heading);
+  // forward = (sin h, cos h), right = (cos h, -sin h)
+  std::set<Unit*> free(units.begin(), units.end());
+  float slowest = 1e30f;
+  for (int i = 1; !free.empty(); ++i) {
+    lua_rawgeti(L, slotsIdx, i);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      break;
+    }
+    int sl = lua_gettop(L);
+    lua_rawgeti(L, sl, 1);
+    float sx = static_cast<float>(lua_tonumber(L, -1)) * scale;
+    lua_rawgeti(L, sl, 2);
+    float sz = static_cast<float>(lua_tonumber(L, -1)) * scale;
+    lua_rawgeti(L, sl, 3);
+    const uint64_t* filter = ToCategory(L, -1);
+    Vec3 p{c.pos.x + sx * cs + sz * sn, c.pos.y, c.pos.z - sx * sn + sz * cs};
+    Unit* best = nullptr;
+    float bestD = 1e30f;
+    for (Unit* u : free) {
+      if (filter && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(filter, u->blueprint->entityIndex)))
+        continue;
+      float dx = u->position.x - p.x, dz = u->position.z - p.z;
+      float d = dx * dx + dz * dz;
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    if (best) {
+      c.slots[best] = p;
+      free.erase(best);
+      if (best->motion.bp) slowest = std::min(slowest, best->motion.bp->maxSpeed);
+    }
+    lua_settop(L, slotsIdx);
+  }
+  c.formationSpeed = slowest < 1e29f ? slowest : 0;
+  if (getenv("MOHO64_DEBUG_FORM")) for (auto& [u, p] : c.slots) Logf(LogLevel::Debug, "form slot %u %.2f %.2f", u->id, p.x, p.z);
+  lua_settop(L, top);
+}
+
 // Issue<Type>(units, position or entity target)
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
@@ -297,6 +383,7 @@ int l_IssueTarget(lua_State* L) {
       T == CommandType::FormAggressiveMove) {
     if (lua_isstring(L, 3)) c->formation = lua_tostring(L, 3);
     c->heading = static_cast<float>(lua_tonumber(L, 4));
+    if (c->hasPos) PlaceFormation(L, *c, units);
   }
   PushCommand(L, c);
   return 1;
@@ -383,7 +470,7 @@ int l_GetCommandQueue(lua_State* L) {
     lua_pushstring(L, "commandType");
     lua_pushnumber(L, static_cast<int>(c->type));
     lua_rawset(L, -3);
-    Vec3 p = TargetPos(*sim, *c);
+    Vec3 p = TargetPos(*sim, *c, u);
     if (c->hasPos || c->targetId) {
       lua_pushstring(L, "x");
       lua_pushnumber(L, p.x);
@@ -450,7 +537,7 @@ void PushVector(lua_State* L, const Vec3& v) {
 int l_GetCurrentMoveLocation(lua_State* L) {
   Unit* u = U(L);
   if (!u->commands.empty() && (MoveLike(u->commands.front()->type) || ApproachLike(u->commands.front()->type))) {
-    PushVector(L, TargetPos(*S(L), *u->commands.front()));
+    PushVector(L, TargetPos(*S(L), *u->commands.front(), u));
   } else {
     PushVector(L, u->position);
   }

@@ -12,6 +12,7 @@
 // - GetCommandQueue lists { commandType = EUnitCommandType, x, y, z, target, targetId, blueprintId }
 //   (FAF's binary patch); commandType numbers are /lua/sim/commands/shared.lua's.
 #pragma once
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -45,6 +46,10 @@ struct UnitCommand {
   std::string blueprintId;
   std::string formation;
   float heading = 0;
+  // Formation moves: each unit's place (the formation's slot, centred on the goal and turned to
+  // the heading) and the speed the formation keeps (its slowest unit's).
+  std::map<Unit*, Vec3> slots;
+  float formationSpeed = 0;
   int count = 1;
   int luaRef = -2;        // LUA_NOREF: the table handed to Lua (IsCommandDone)
   std::set<Unit*> units;  // units that still have it queued
