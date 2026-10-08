@@ -707,15 +707,21 @@ int l_GetUnitsInRect(lua_State* L) {
   float r[4];
   RectArgs(L, r);
   float x0 = std::min(r[0], r[2]), x1 = std::max(r[0], r[2]), z0 = std::min(r[1], r[3]), z1 = std::max(r[1], r[3]);
+  std::vector<Unit*> found;
+  S(L)->ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) {
+    if (!u->dead) found.push_back(u);
+  });
+  if (found.empty()) {
+    lua_pushnil(L);
+    return 1;
+  }
+  std::sort(found.begin(), found.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
+  lua_newtablesized(L, static_cast<int>(found.size()), 0);
   int n = 0;
-  for (Unit* e : S(L)->units()) {
-    if (e->destroyQueued || e->dead) continue;
-    if (e->position.x < x0 || e->position.x > x1 || e->position.z < z0 || e->position.z > z1) continue;
-    if (n == 0) lua_newtable(L);
-    PushObject(L, e);
+  for (Unit* u : found) {
+    PushObject(L, u);
     lua_rawseti(L, -2, ++n);
   }
-  if (n == 0) lua_pushnil(L);
   return 1;
 }
 
@@ -728,22 +734,27 @@ int l_GetUnitsAroundPoint(lua_State* L) {
   float r = static_cast<float>(luaL_checknumber(L, 4));
   std::string alliance = lua_isstring(L, 5) ? lua_tostring(L, 5) : "";
   Sim* sim = S(L);
-  lua_newtable(L);
-  int n = 0;
-  for (Unit* u : sim->units()) {
-    if (u->destroyQueued || u->dead) continue;
+  std::vector<Unit*> found;
+  sim->ForUnitsInRect(p.x - r, p.z - r, p.x + r, p.z + r, [&](Unit* u) {
+    if (u->dead) return;
     float dx = u->position.x - p.x, dz = u->position.z - p.z;
-    if (dx * dx + dz * dz > r * r) continue;
+    if (dx * dx + dz * dz > r * r) return;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
-      continue;
+      return;
     if (!alliance.empty() && b->army && u->army) {
       int rel = 1;
       if (u->army == b->army) rel = 2;
       else if (u->army->index - 1 < static_cast<int>(b->army->alliance.size())) rel = b->army->alliance[u->army->index - 1];
-      if (alliance == "Ally" && rel != 2) continue;
-      if (alliance == "Enemy" && rel != 0) continue;
-      if (alliance == "Neutral" && rel != 1) continue;
+      if (alliance == "Ally" && rel != 2) return;
+      if (alliance == "Enemy" && rel != 0) return;
+      if (alliance == "Neutral" && rel != 1) return;
     }
+    found.push_back(u);
+  });
+  std::sort(found.begin(), found.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
+  lua_newtablesized(L, static_cast<int>(found.size()), 0);
+  int n = 0;
+  for (Unit* u : found) {
     PushObject(L, u);
     lua_rawseti(L, -2, ++n);
   }

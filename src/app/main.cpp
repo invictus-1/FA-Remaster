@@ -4,6 +4,9 @@
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 #include <chrono>
+#ifdef MOHO64_CALLGRIND
+#include <valgrind/callgrind.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -187,7 +190,13 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   bool ok = sim.Start(*header);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
+#ifdef MOHO64_CALLGRIND
+  CALLGRIND_START_INSTRUMENTATION;  // profile build: only the ticks are measured
+#endif
   for (int i = 0; ok && i < o.ticks; ++i) sim.Tick();
+#ifdef MOHO64_CALLGRIND
+  CALLGRIND_STOP_INSTRUMENTATION;
+#endif
   auto t3 = std::chrono::steady_clock::now();
   if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", o.ticks);
   auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };

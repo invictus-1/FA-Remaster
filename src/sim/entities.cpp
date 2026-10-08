@@ -260,7 +260,10 @@ int l_GetHeading(lua_State* L) {
 int l_SetPosition(lua_State* L) {  // SetPosition(vector, immediate): a warp
   Entity* e = E(L);
   e->position = CheckVec(L, 2);
-  if (e->kind == Entity::Kind::Unit) static_cast<Unit*>(e)->motion.needSnap = true;
+  if (e->kind == Entity::Kind::Unit) {
+    static_cast<Unit*>(e)->motion.needSnap = true;
+    S(L)->MarkUnitsMoved();
+  }
   return 0;
 }
 int l_SetOrientation(lua_State* L) {

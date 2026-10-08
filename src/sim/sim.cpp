@@ -763,11 +763,31 @@ void EraseById(std::vector<Unit*>& v, Unit* u) {
 }
 }  // namespace
 
+void Sim::RebuildUnitGrid() {
+  int w = map_ ? (map_->width() + 15) / 16 + 1 : 64, h = map_ ? (map_->height() + 15) / 16 + 1 : 64;
+  if (w != gridW_ || h != gridH_) {
+    gridW_ = w;
+    gridH_ = h;
+    grid_.assign(static_cast<size_t>(w) * h, {});
+  } else {
+    for (auto& c : grid_) c.clear();
+  }
+  for (Unit* u : units_) {
+    if (u->destroyQueued) continue;
+    int cx = std::clamp(static_cast<int>(u->position.x) >> 4, 0, gridW_ - 1);
+    int cz = std::clamp(static_cast<int>(u->position.z) >> 4, 0, gridH_ - 1);
+    grid_[static_cast<size_t>(cz) * gridW_ + cx].push_back(u);
+  }
+  gridDirty_ = false;
+}
+
 void Sim::AddUnitToLists(Unit* u) {
+  gridDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
+  gridDirty_ = true;
   EraseById(units_, u);
   if (u->army) EraseById(u->army->units, u);
 }
@@ -780,6 +800,7 @@ void Sim::Tick() {
   CollisionTick(*this);
   for (size_t i = 0; i < units_.size(); ++i)  // (motion may create or destroy nothing)
     if (!units_[i]->destroyQueued) MotionTick(*this, units_[i]);
+  gridDirty_ = true;
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
   ProcessDestroyQueue();

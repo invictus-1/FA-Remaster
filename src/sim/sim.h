@@ -4,6 +4,7 @@
 // simInit.lua runs, ScenarioInfo is filled from the session, SetupSession() runs, the armies
 // and their brains are created (OnCreateArmyBrain), then BeginSession().
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -16,6 +17,7 @@
 #include "sim/entity.h"
 #include "sim/replay.h"
 #include "sim/skeleton.h"
+#include "sim/units.h"
 
 namespace moho {
 
@@ -97,6 +99,23 @@ class Sim {
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
+  // Units within [x0,x1] x [z0,z1] by position (a 16-unit grid rebuilt when units moved, were
+  // created or destroyed); calls f(unit) in id order within each cell row-major - callers that
+  // need id order sort.
+  template <class F>
+  void ForUnitsInRect(float x0, float z0, float x1, float z1, F&& f) {
+    if (gridDirty_) RebuildUnitGrid();
+    int cx0 = std::max(0, static_cast<int>(x0) >> 4), cz0 = std::max(0, static_cast<int>(z0) >> 4);
+    int cx1 = std::min(gridW_ - 1, static_cast<int>(x1) >> 4), cz1 = std::min(gridH_ - 1, static_cast<int>(z1) >> 4);
+    if (x1 < 0 || z1 < 0) return;
+    for (int cz = cz0; cz <= cz1; ++cz)
+      for (int cx = cx0; cx <= cx1; ++cx)
+        for (Unit* u : grid_[static_cast<size_t>(cz) * gridW_ + cx]) {
+          const Vec3& p = u->position;
+          if (p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1) f(u);
+        }
+  }
+  void MarkUnitsMoved() { gridDirty_ = true; }
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
@@ -135,6 +154,10 @@ class Sim {
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;
   std::vector<Unit*> units_;
+  std::vector<std::vector<Unit*>> grid_;
+  int gridW_ = 0, gridH_ = 0;
+  bool gridDirty_ = true;
+  void RebuildUnitGrid();
   void AddUnitToLists(Unit* u);
   void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;
