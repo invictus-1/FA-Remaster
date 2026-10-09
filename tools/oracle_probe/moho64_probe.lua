@@ -959,4 +959,88 @@ function P.Ferry()
     out('ferry done')
 end
 
+-- 8) air staging and fuel (v11, runs beside the ferry phase): bomber b1 is spawned BEFORE the
+-- platform, b2 after it (dispatch order vs the platform's own copy of the command); both are
+-- damaged and low on fuel and sent onto the platform with IssueTransportLoad; b2 has a Move queued
+-- after. A third bomber b3 just flies (fuel burn). Logged every tick for 700 ticks.
+-- "PROBE st <tick> <tag> x y z layer ncmd fuel health states"  /  "PROBE stcb <tick> <tag> <callback> ..."
+P.STAGING = {
+    plat = { 'ueb5202', 170, 822 },
+    b = { { 'b1', 'uea0103', 150, 790 }, { 'b2', 'uea0103', 156, 786 }, { 'b3', 'uea0103', 140, 780 } },
+    b2after = { 200, 760 }, b3move = { 300, 840 },
+}
+function P.Staging()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('st no army') return end
+    while GetGameTick() < 1830 do WaitTicks(1) end
+    local S = P.STAGING
+    local units, byEntity = {}, {}
+    local function tagOf(e) return e and byEntity[e] or '-' end
+    local function spawn(tag, bp, x, z)
+        local ok, u = pcall(CreateUnitHPR, bp, a1, x, GetSurfaceHeight(x, z), z, 0, 0, 0)
+        if not (ok and u) then out('stspawn-failed', tag, tostring(u)) return end
+        out('stspawn', GetGameTick(), tag, bp, u:GetEntityId())
+        pcall(function() u:SetCanTakeDamage(false) end)
+        pcall(function() u:SetDoNotTarget(true) end)
+        table.insert(units, { tag = tag, u = u })
+        byEntity[u] = tag
+        for _, name in { 'OnStartRefueling', 'OnGotFuel', 'OnRunOutOfFuel' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, a, b) out('stcb', GetGameTick(), tag, nm) return f(self, a, b) end end
+        end
+        for _, name in { 'OnTransportAttach', 'OnTransportDetach' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, bone, a) out('stcb', GetGameTick(), tag, nm, tostring(bone), tagOf(a)) return f(self, bone, a) end end
+        end
+        local ol = u.OnLayerChange
+        if ol then u.OnLayerChange = function(self, new, old) out('stlayer', GetGameTick(), tag, tostring(new), tostring(old)) return ol(self, new, old) end end
+        return u
+    end
+    local b1 = spawn(S.b[1][1], S.b[1][2], S.b[1][3], S.b[1][4])
+    local plat = spawn('plat', S.plat[1], S.plat[2], S.plat[3])
+    local b2 = spawn(S.b[2][1], S.b[2][2], S.b[2][3], S.b[2][4])
+    local b3 = spawn(S.b[3][1], S.b[3][2], S.b[3][3], S.b[3][4])
+    if not (b1 and plat and b2 and b3) then return end
+    WaitTicks(3)
+    local okO, eO = pcall(function()
+        for _, b in { b1, b2 } do
+            b:SetHealth(b, 120)
+            b:SetFuelRatio(0.3)
+        end
+        IssueTransportLoad({ b1 }, plat)
+        IssueTransportLoad({ b2 }, plat)
+        IssueMove({ b2 }, { S.b2after[1], GetSurfaceHeight(S.b2after[1], S.b2after[2]), S.b2after[2] })
+        IssueMove({ b3 }, { S.b3move[1], GetSurfaceHeight(S.b3move[1], S.b3move[2]), S.b3move[2] })
+    end)
+    out('storders', GetGameTick(), tostring(okO), tostring(eO))
+    local states = { 'Refueling', 'Attached', 'ForceSpeedThrough', 'Moving', 'TransportLoading', 'LandingOnPlatform' }
+    local function log(tick)
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('stdead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local st = {}
+                    for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                    local okf, fuel = pcall(function() return u:GetFuelRatio() end)
+                    out('st', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
+                        okf and fmt(fuel) or 'err', fmt(u:GetHealth()), table.concat(st, ','))
+                end
+            end
+        end
+    end
+    local stop = GetGameTick() + 700
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(log, t)
+        if not ok then out('st-error', t, tostring(e)) end
+        WaitTicks(1)
+    end
+    out('staging done')
+end
+
 moho64_probe = P

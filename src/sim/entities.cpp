@@ -1071,6 +1071,15 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (lua_isnumber(L, -1)) u->maxHealth = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 1);
   u->health = complete ? u->maxHealth : 1;  // a new construction starts at 1 (FAF's OnStartBuild tests it)
+  if (u->motion.bp->motionType != kMotionNone) {  // the motion ctor: fuel (fuel.md 1.1)
+    PushPath(L, bpIdx, "Physics", "FuelUseTime");
+    u->motion.fuelUseTime = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 0.0f;
+    lua_pop(L, 1);
+    PushPath(L, bpIdx, "Physics", "FuelRechargeRate");
+    u->motion.fuelRecharge = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 0.0f;
+    lua_pop(L, 1);
+    if (u->motion.fuelUseTime > 0) u->fuelRatio = 1.0f;
+  }
   PushPath(L, bpIdx, "General", "CapCost");
   if (lua_isnumber(L, -1)) u->capCost = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 1);

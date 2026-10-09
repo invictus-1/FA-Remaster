@@ -16,6 +16,7 @@
 
 #include "core/log.h"
 #include "sim/commands.h"
+#include "sim/economy.h"
 #include "sim/combat.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
@@ -1653,14 +1654,14 @@ void AirWarp(Sim& sim, Unit* u) {
   SetTarget(sim, u, u->position, Vec3{}, 0);
 }
 
-void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer) {
+void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool landingSpot) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
   // the goal cell's centre (SNavGoal of the command position; CellToWorld)
   const AirBp& b = *a.bp;
   a.pendingLayer = layer;
   a.pendingFacing = {};
-  if (layer == kLand && b.canFly) {  // a landing move: a free spot (NewMoveTask ctor step 4)
+  if (layer == kLand && b.canFly && landingSpot) {  // a landing move: a free spot (NewMoveTask ctor step 4)
     int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));
     goal = {cx + b.footprintX * 0.5f, goal.y, cz + b.footprintZ * 0.5f};
@@ -1674,6 +1675,10 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer) {
   u->motion.hasGoal = true;
   u->motion.arrived = false;
   (void)sim;
+}
+
+void AirSetLandHeight(Unit* u, float h) {
+  if (u->motion.air) A(u).landHeight = h;
 }
 
 void AirSetFacing(Unit* u, Vec3 dir) {
@@ -1813,7 +1818,153 @@ int l_RevertElevation(lua_State* L) {
 }
 }  // namespace
 
+// ---------------------------------------------------------------------------------------------
+// Fuel (fuel.md)
+
+namespace {
+struct PlatformBp {
+  float mult = 1, repair = 20, energy = 2, mass = 0.5f;
+};
+const PlatformBp& GetPlatformBp(Sim& sim, const BlueprintInfo& bp) {
+  static std::map<const BlueprintInfo*, PlatformBp> cache;
+  auto it = cache.find(&bp);
+  if (it != cache.end()) return it->second;
+  PlatformBp r;
+  lua_State* L = sim.L();
+  int top = lua_gettop(L);
+  sim.blueprints().PushTable(L, bp);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "AI");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      auto num = [&](const char* k, float def) {
+        lua_pushstring(L, k);
+        lua_rawget(L, -2);
+        float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+        lua_pop(L, 1);
+        return v;
+      };
+      r.mult = num("RefuelingMultiplier", 1);
+      r.repair = num("RefuelingRepairAmount", 20);
+      r.energy = num("RepairConsumeEnergy", 2);
+      r.mass = num("RepairConsumeMass", 0.5f);
+    }
+  }
+  lua_settop(L, top);
+  return cache.emplace(&bp, r).first->second;
+}
+void ClearRepairRequest(Unit* u) {
+  UnitMotion& m = u->motion;
+  if (m.repairRequest) m.repairRequest->live = false;
+  m.repairRequest.reset();
+  m.refuelFlag = false;
+}
+void FuelCallback(Sim& sim, Unit* u, const char* name) { sim.CallMethod(sim.L(), u, name, 0); }
+}  // namespace
+
+Unit* StagingPlatformOf(Sim& sim, const Unit* u) {
+  if (!u->transportedBy) return nullptr;
+  Entity* e = sim.FindEntity(u->transportedBy);
+  if (!e || e->kind != Entity::Kind::Unit || e->dead) return nullptr;
+  Unit* p = static_cast<Unit*>(e);
+  return p->transport && p->transport->isAirStaging ? p : nullptr;
+}
+
+void FuelTick(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  if (u->dead || !m.bp || !(m.fuelUseTime > 0)) return;
+  const float old = u->fuelRatio;
+  const int ve = m.air ? A(u).vertEvent : 1;
+  const bool grounded = ve == 1 || ve == 4;
+  float nv;
+  if (!grounded) {  // burn
+    if (m.refuelFlag) ClearRepairRequest(u);
+    nv = old - 1.0f / (m.fuelUseTime * 10.0f);
+    if (!(nv > 0)) nv = 0;
+    if (nv == 0 && old > 0) FuelCallback(sim, u, "OnRunOutOfFuel");
+  } else {  // refuel
+    Unit* P = StagingPlatformOf(sim, u);
+    float rate = (m.fuelRecharge / m.fuelUseTime) * 0.1f;
+    const bool damaged = u->health < u->maxHealth;
+    if (!P) {
+      rate = rate * 0.1f;
+    } else {
+      const PlatformBp& pb = GetPlatformBp(sim, *P->blueprint);
+      rate = pb.mult * rate;
+      if (!m.refuelFlag && old < 1.0f) {
+        m.refuelFlag = true;
+        FuelCallback(sim, u, "OnStartRefueling");
+      }
+      if (damaged && u->army) {
+        if (!m.repairRequest) {
+          m.refuelFlag = true;
+          m.repairReq[kEnergy] = pb.energy;
+          m.repairReq[kMass] = pb.mass;
+          m.repairRequest = u->army->econ.NewRequest();
+          m.repairRequest->requested[kEnergy] = pb.energy;
+          m.repairRequest->requested[kMass] = pb.mass;
+        } else if (m.repairRequest->granted[kEnergy] >= m.repairReq[kEnergy] &&
+                   m.repairRequest->granted[kMass] >= m.repairReq[kMass]) {
+          float got[2];
+          float all[2] = {m.repairRequest->granted[0], m.repairRequest->granted[1]};
+          m.repairRequest->Take(all, got);
+          EntityAdjustHealth(sim.L(), u, P, pb.repair * 0.1f);
+        }
+      }
+    }
+    if (m.refuelFlag && old > 0.99f && !(u->health < u->maxHealth)) ClearRepairRequest(u);
+    nv = rate + old;
+    if (nv > 1.0f) nv = 1.0f;
+    if (old == 0 && nv > 0) FuelCallback(sim, u, "OnGotFuel");
+  }
+  u->fuelRatio = nv;
+}
+
+void AirNotifyAttached(Sim& sim, Unit* u) {
+  if (!u->motion.air) return;
+  SetMotionState(sim, u, 1);
+  SetHorzEvent(sim, u, 3);
+  SetVertEvent(sim, u, 1);
+}
+void AirNotifyDetached(Sim& sim, Unit* u) {
+  if (!u->motion.air) return;
+  SetMotionState(sim, u, 0);
+}
+
+namespace {
+Unit* FuelUnit(lua_State* L, int nargs) {
+  if (lua_gettop(L) != nargs) luaL_error(L, "%s\n  expected %d args, but got %d", "fuel", nargs, lua_gettop(L));
+  Unit* u = CheckObject<Unit>(L, 1);
+  if (!u->motion.bp || u->motion.bp->motionType == kMotionNone) luaL_error(L, "Unit has not motion object");
+  return u;
+}
+int l_GetFuelRatio(lua_State* L) {
+  lua_pushnumber(L, FuelUnit(L, 1)->fuelRatio);
+  return 1;
+}
+int l_SetFuelRatio(lua_State* L) {
+  Unit* u = FuelUnit(L, 2);
+  if (lua_type(L, 2) != LUA_TNUMBER) luaL_typerror(L, 2, "number");
+  u->fuelRatio = static_cast<float>(lua_tonumber(L, 2));
+  return 0;
+}
+int l_GetFuelUseTime(lua_State* L) {
+  lua_pushnumber(L, FuelUnit(L, 1)->motion.fuelUseTime);
+  return 1;
+}
+int l_SetFuelUseTime(lua_State* L) {
+  Unit* u = FuelUnit(L, 2);
+  if (lua_type(L, 2) != LUA_TNUMBER) luaL_typerror(L, 2, "number");
+  u->motion.fuelUseTime = static_cast<float>(lua_tonumber(L, 2));
+  return 0;
+}
+}  // namespace
+
 void RegisterAirBindings(lua_State* L) {
+  SetMethod(L, "Unit", "GetFuelRatio", l_GetFuelRatio);
+  SetMethod(L, "Unit", "SetFuelRatio", l_SetFuelRatio);
+  SetMethod(L, "Unit", "GetFuelUseTime", l_GetFuelUseTime);
+  SetMethod(L, "Unit", "SetFuelUseTime", l_SetFuelUseTime);
   SetMethod(L, "Unit", "SetElevation", l_SetElevation);
   SetMethod(L, "Unit", "RevertElevation", l_RevertElevation);
 }

@@ -875,6 +875,7 @@ void Sim::Tick() {
     Unit* u = units_[i];
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
+    if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);

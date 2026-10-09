@@ -123,7 +123,9 @@ void AirMotionTick(Sim& sim, Unit* u);
 // The navigator's SetGoal: fly to the cell of `goal`; takes effect at `tick`. layer 1 (Land) is a
 // landing move (NewMoveTask with goal layer Land): the spot goes through PrepareMove and the
 // aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.
-void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0);
+void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0, bool landingSpot = true);
+// CUnitMotion+0x64: a fixed landing height (+inf: none), e.g. a staging platform's bone.
+void AirSetLandHeight(Unit* u, float h);
 // CUnitMotion::SetFacing: the heading wanted on arrival.
 void AirSetFacing(Unit* u, Vec3 dir);
 // CUnitMotion::SetTarget(p, zero, layer) right away (layer bits: 1 Land, 0x10 Air).
@@ -142,6 +144,14 @@ void AirAbort(Sim& sim, Unit* u);
 Vec3 PredictAhead(Sim& sim, Unit* u, float t);
 // Warp: re-sync the body and the terrain height.
 void AirWarp(Sim& sim, Unit* u);
+// CUnitMotion::ProcessFuelLevels 0x6b9940 (fuel.md 3): burn in the air, refuel on the ground or
+// docked on a staging platform (which also repairs, paid through an economy request).
+void FuelTick(Sim& sim, Unit* u);
+// The staging platform u is docked on (Unit::GetStagingPlatform 0x62ee00), or null.
+Unit* StagingPlatformOf(Sim& sim, const Unit* u);
+// CUnitMotion::NotifyAttached / NotifyDetached for aircraft: motion state, events.
+void AirNotifyAttached(Sim& sim, Unit* u);
+void AirNotifyDetached(Sim& sim, Unit* u);
 void RegisterAirBindings(lua_State* L);
 
 }  // namespace moho

@@ -73,6 +73,11 @@ struct UnitMotion {
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
   float speedMult = 1, accMult = 1, turnMult = 1;
+  // fuel (fuel.md): m+0x0c use time, Physics.FuelRechargeRate, the platform refuel/repair state
+  float fuelUseTime = 0, fuelRecharge = 0;
+  bool refuelFlag = false;
+  std::shared_ptr<struct EconRequest> repairRequest;
+  float repairReq[2] = {0, 0};  // energy, mass
   float speedCap = 0;  // > 0: top speed (MaxSpeed units) while moving in formation
 
   // Steering: the waypoints of the current move (the last one is the goal).
