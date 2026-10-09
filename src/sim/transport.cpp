@@ -887,7 +887,8 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           }
           LandingMove(sim, T, d.pickupPoint);
           AirSetFacing(T, O.pickupFacing);
-          d.moving = true;
+          d.moving = true;  // the move task sets Moving
+          SetState(T, "Moving", true);
           t.state = 2;
           return kTaskRunning;
         }
@@ -899,6 +900,7 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         if (d.moving) {
           if (T->motion.hasGoal) return kTaskRunning;
           d.moving = false;
+          SetState(T, "Moving", false);  // its dtor clears it
         }
         O.atPickup = true;
         t.state = 3;
@@ -969,13 +971,15 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
                sim.tick(), u->id, cx, cz, IsReadyForUnit(O, u) ? 1 : 0, O.pickupPos.x, O.pickupPos.z, u->position.x,
                u->position.z);
         TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, 0, cz + fp.sizeZ * 0.5f});
-        d.moving = true;
+        d.moving = true;  // the move task sets Moving
+        SetState(u, "Moving", true);
         return kTaskRunning;
       }
       case 2: {
         if (d.moving) {
           if (u->motion.hasGoal) return kTaskRunning;
           d.moving = false;
+          SetState(u, "Moving", false);  // its dtor clears it
         }
         if (!IsReadyForUnit(O, u)) return kTaskRunning;
         Vec3 p = GetAttachBonePosition(O, u);
@@ -1071,7 +1075,8 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           } else {
             TaskMoveToward(sim, T, d.goal);
           }
-          d.moving = true;
+          d.moving = true;  // the move task sets Moving
+          SetState(T, "Moving", true);
         }
         t.state = 3;
         return kTaskRunning;
@@ -1079,6 +1084,7 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         if (d.moving) {
           if (T->motion.hasGoal) return kTaskRunning;
           d.moving = false;
+          SetState(T, "Moving", false);  // its dtor clears it
         }
         if (O.isAirStaging) {  // launch (air_staging.md 3.2): everyone off, a queue-clearing Move
           std::vector<Unit*> D = TransportDetachAll(sim, O, false);
@@ -1168,6 +1174,7 @@ bool RunChild(Sim& sim, Unit* u, BuildTask& parent, TransportTaskData& d) {
   if (d.childMove) {
     if (u->motion.hasGoal) return true;
     d.childMove = false;
+    SetState(u, "Moving", false);  // its dtor clears it
   }
   return false;
 }
@@ -1224,7 +1231,8 @@ bool HasNextUnitToLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
 // cell(p) of the transport's footprint, as a world point (the move goals are 1x1 cell rects)
 void FlyTo(Sim& sim, Unit* T, TransportTaskData& d, Vec3 p, int layer) {
   AirSetGoal(sim, T, p, sim.tick() + 1, layer);
-  d.childMove = true;
+  d.childMove = true;  // the move task sets Moving
+  SetState(T, "Moving", true);
 }
 
 // CUnitFerryTask::TaskTick 0x60f400 (ctor A: a Ferry command; the guard paths are not carried out)
@@ -1361,7 +1369,8 @@ int TickWaitFerry(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
         GroundReserveRect(sim, u, r);
         TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f});
-        d.childMove = true;
+        d.childMove = true;  // the move task sets Moving
+        SetState(u, "Moving", true);
         t.state = 1;
         return kTaskRunning;
       }
@@ -1458,7 +1467,8 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         Vec3 facing = AttachFacing(O, u);
         if (!std::isfinite(bone.x) || !std::isfinite(bone.y) || !std::isfinite(bone.z)) return kTaskDone;
         AirSetGoal(sim, u, bone, sim.tick() + 1, 1, false);
-        d.childMove = true;
+        d.childMove = true;  // the move task sets Moving
+        SetState(u, "Moving", true);
         AirSetLandHeight(u, bone.y);
         AirSetFacing(u, facing);
         t.state = 2;
@@ -1481,7 +1491,8 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         if (u->fuelRatio > 0.99f && u->health == u->maxHealth) {
           TransportDetach(sim, O, u);
           AirSetGoal(sim, u, u->position, sim.tick() + 1, 0x10);
-          d.childMove = true;
+          d.childMove = true;  // the move task sets Moving
+          SetState(u, "Moving", true);
           t.state = 4;
         }
         t.waitUntil = sim.tick() + 9;
@@ -1563,7 +1574,9 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       if (bbp) {
         // CUnitCommand::CreateFerryBeacon 0x6e8720: the transport's army, the command target,
         // identity orientation, complete; no unit-cap check, occupies no ground
-        Unit* b = sim.CreateUnit(L, *bbp, u->army, CmdPos(sim, cmd), Quat{}, true);
+        Vec3 bpos = CmdPos(sim, cmd);
+        if (const TerrainMap* m = sim.map()) bpos.y = m->SurfaceHeight(bpos.x, bpos.z);  // probe v11: on the surface
+        Unit* b = sim.CreateUnit(L, *bbp, u->army, bpos, Quat{}, true);
         if (b) {
           cmd.beaconRef = EntityRef(b);
           d->beacon = cmd.beaconRef;
