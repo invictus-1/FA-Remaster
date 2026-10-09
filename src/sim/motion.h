@@ -30,6 +30,7 @@ class Sim;
 class Unit;
 class TerrainMap;
 struct AirMotion;
+struct LandNav;
 
 enum MotionType : int {
   kMotionNone = 0,
@@ -55,6 +56,9 @@ struct MotionBlueprint {
   float backUpDistance = 0;
   float sizeX = 1, sizeY = 1, sizeZ = 1;
   NamedFootprint footprint;
+  // the footprint's passability grid (cached; grids live as long as the sim's Navigation)
+  mutable const class PathGrid* grid = nullptr;
+  mutable const void* gridOwner = nullptr;
   bool mobile() const { return motionType != kMotionNone; }
 };
 // Read once per blueprint (the unit's blueprint table must be the reflected sim table).
@@ -90,8 +94,17 @@ struct UnitMotion {
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)
   std::shared_ptr<AirMotion> air;  // aircraft: the flight model's state (sim/air.cpp)
+  // Land navigator (sim/landnav.cpp): it decides the waypoint and when a move ends.
+  std::shared_ptr<LandNav> nav;
+  bool navDriven = false;    // the current move belongs to the navigator
+  bool hasWaypoint = false;  // the steering has a waypoint (else it coasts)
+  // CalcMoveCommon's hard rule: a step from a cell the footprint fits into one it does not is
+  // undone and the unit is pushed back a little; while pushed it coasts.
+  bool pushed = false, wasMoving = false;
 };
 
+// The passability grid of a motion blueprint's footprint (cached).
+const class PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b);
 // Goal cell of a footprint at a world position (round half to even, as the original).
 void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz);
 
@@ -102,6 +115,11 @@ void MotionTick(Sim& sim, Unit* u);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// Navigator interface (sim/landnav.cpp): a move starts (no waypoint yet: it coasts), the steering
+// gets a waypoint (through: drive through it, else brake to it), the move ended.
+void MotionNavBegin(Unit* u);
+void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through);
+void MotionNavDone(Unit* u, bool succeeded);
 // Units see each other coming (before motion): a driving unit that would run into a unit ahead
 // of it within the next 20 ticks stops (twice its brake) and drives on once the way is clear;
 // a unit that drives into an idle one pushes it aside.

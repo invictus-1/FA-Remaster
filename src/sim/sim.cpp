@@ -1,3 +1,4 @@
+#include "sim/landnav.h"
 #include "sim/sim.h"
 #include "sim/transport.h"
 #include "sim/air.h"
@@ -907,6 +908,7 @@ void Sim::Tick() {
   g_prof.Lap(5);
   WeaponsTick(*this);
   g_prof.Lap(8);
+  LandNavTickAll(*this);  // navigators (after the units moved) and the armies' path queues
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
   g_prof.Lap(9);

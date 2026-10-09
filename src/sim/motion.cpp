@@ -1,12 +1,15 @@
 // Unit motion (see motion.h for what the original does and how it was checked).
 #include "core/dmath.h"
 #include "sim/motion.h"
+#include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/air.h"
 #include "sim/transport.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <unordered_map>
@@ -269,28 +272,60 @@ void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passTh
     AirSetGoal(sim, u, path.back(), driveTick);
     return;
   }
-  m.path = path;
-  m.pathIndex = 0;
+  // land, hover and naval units: the navigator plans and steers (sim/landnav.cpp)
+  LandNavSetGoal(sim, u, path.back(), passThrough);
+}
+
+void MotionNavBegin(Unit* u) {
+  UnitMotion& m = u->motion;
   m.hasGoal = true;
   m.arrived = false;
   m.failed = false;
-  m.passThrough = passThrough;
-  m.driveTick = driveTick;
-  GoalCell(*m.bp, path.back().x, path.back().z, &m.goalCellX, &m.goalCellZ);
-  // goal point = the goal cell's centre
-  m.path.back().x = m.goalCellX + m.bp->footprint.sizeX * 0.5f;
-  m.path.back().z = m.goalCellZ + m.bp->footprint.sizeZ * 0.5f;
-  m.state = 7;
-  m.reverse = false;
-  m.newSegment = true;
+  m.navDriven = true;
+  m.hasWaypoint = false;
+  m.path.clear();
+  m.pathIndex = 0;
+}
+
+void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
+  UnitMotion& m = u->motion;
   (void)sim;
+  m.path.assign(1, p);
+  m.pathIndex = 0;
+  m.passThrough = through;
+  m.hasWaypoint = true;
+  m.driveTick = 0;
+  GoalCell(*m.bp, p.x, p.z, &m.goalCellX, &m.goalCellZ);
+  m.newSegment = true;
+}
+
+void MotionNavDone(Unit* u, bool succeeded) {
+  UnitMotion& m = u->motion;
+  m.hasGoal = false;
+  m.hasWaypoint = false;
+  m.navDriven = false;
+  m.path.clear();
+  if (succeeded) m.arrived = true;
+  else m.failed = true;
 }
 
 void MotionStop(Unit* u) {
   UnitMotion& m = u->motion;
   if (m.air) AirAbort(*Sim::From(u->luaState()), u);
+  if (m.nav) LandNavStop(*Sim::From(u->luaState()), u);
   m.hasGoal = false;
+  m.hasWaypoint = false;
+  m.navDriven = false;
   m.path.clear();
+}
+
+const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
+  Navigation* nav = &sim.navigation();
+  if (b.gridOwner != nav) {
+    b.grid = nav->Grid(b.footprint);
+    b.gridOwner = nav;
+  }
+  return b.grid;
 }
 
 namespace {
@@ -312,13 +347,30 @@ void UpdateBody(UnitMotion& m) {
   }
 }
 
-// Can the unit's footprint stand at world position (x, z)? (the spline's look-ahead check)
+// Can the unit's footprint stand at world position (x, z)? (Unit::WontFitAt 0x62aa90, negated:
+// inside the map, terrain and structures at the footprint-origin cell)
 bool StandableAt(Sim& sim, const MotionBlueprint& b, float x, float z) {
-  const PathGrid* g = sim.navigation().Grid(b.footprint);
+  const TerrainMap* map = sim.map();
+  if (map && (x < 0 || z < 0 || x > static_cast<float>(map->width()) || z > static_cast<float>(map->height())))
+    return false;
+  const PathGrid* g = FootprintGrid(sim, b);
   if (!g) return true;
   int cx, cz;
   GoalCell(b, x, z, &cx, &cz);
   return g->Passable(cx, cz);
+}
+
+// The spline's look-ahead point (CAiPathSpline::Generate 0x5b2ff0): the new point plus the step
+// set to the length max(SizeX, SizeZ) + stopping distance (the point itself when it did not move).
+bool LookAheadFits(Sim& sim, const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
+  float l = std::sqrt(sx * sx + sz * sz);
+  float x = p.x, z = p.z;
+  if (l > 0.0f) {
+    float k = (std::max(b.sizeX, b.sizeZ) + stopDist) / l;
+    x += sx * k;
+    z += sz * k;
+  }
+  return StandableAt(sim, b, x, z);
 }
 
 // CAiSteeringImpl / CAiPathSpline::SteeringParams + the speed a turn allows (FA exe 0x699760):
@@ -366,6 +418,12 @@ bool DriveStep(Sim& sim, Unit* u) {
   float speed = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
   float dotFG = m.fx * tx + m.fz * tz;
 
+  bool batchStart = m.newSegment;
+  if (m.state == 8) {  // the last batch ended: the next one continues in state 7, reverse off
+    m.state = 7;
+    m.reverse = false;
+    batchStart = true;
+  }
   if (m.newSegment) {  // choose how to start (Generate with a new path)
     m.newSegment = false;
     m.reverse = false;
@@ -384,7 +442,9 @@ bool DriveStep(Sim& sim, Unit* u) {
       }
     }
   }
-  if (m.state == 5 && dist < b.backUpDistance && dotFG < -0.5f) m.reverse = true;
+  // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5), not when
+  // the state machine enters state 5 within a batch (land_motion_blocking.md 2.1)
+  if (batchStart && m.state == 5 && dist < b.backUpDistance && dotFG < -0.5f) m.reverse = true;
   const int s = m.state;
   const bool backward = s == 5 || s == 6 || s == 2;
 
@@ -482,8 +542,8 @@ bool DriveStep(Sim& sim, Unit* u) {
       if (frac <= 0.0099999998f) m.state = (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) ? 7 : 5;
       break;
     case 5:
-      if (!StandableAt(sim, b, p.x + m.vel.x, p.z + m.vel.z)) m.state = 6;
-      else if (!m.reverse ? ndot >= 0.150000006f : stopDist >= ndist) m.state = 6;
+      if (!LookAheadFits(sim, b, p, m.vel.x, m.vel.z, stopDist)) m.state = 6;
+      else if (!m.reverse ? ndot > 0.150000006f : stopDist > ndist) m.state = 6;
       break;
     case 6:
       if (frac <= 0.0099999998f) m.state = m.reverse ? 8 : 7;
@@ -491,13 +551,17 @@ bool DriveStep(Sim& sim, Unit* u) {
     case 7:
       if (mode == 0 && ndist < stopDist) m.state = 3;
       if (ndot < 0.865999997f) {
-        if (!StandableAt(sim, b, p.x + m.vel.x, p.z + m.vel.z)) m.state = 4;
+        if (!LookAheadFits(sim, b, p, m.vel.x, m.vel.z, stopDist)) m.state = 4;
       }
       break;
     default:
       break;
   }
   if (m.state == 8) m.reverse = false;
+  static const long dbgId = getenv("MOHO64_DEBUG_MOTION") ? atol(getenv("MOHO64_DEBUG_MOTION")) : -1;
+  if (dbgId == static_cast<long>(u->id))
+    fprintf(stderr, "motion: tick %u state %d->%d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f tgt %.2f %.2f mode %d\n",
+            sim.tick(), s, m.state, m.reverse ? 1 : 0, p.x, p.z, m.vel.x, m.vel.z, m.fx, m.fz, tgt.x, tgt.z, mode);
   return true;
 }
 
@@ -545,6 +609,7 @@ void CollisionTick(Sim& sim) {
     if (u->destroyQueued || u->dead) continue;
     if (!u->motion.bp || u->motion.bp->motionType == kMotionAir) continue;
     if (u->fractionComplete < 1.0f) continue;
+    if (u->parentId || u->layer == "Air") continue;  // carried units (transport cargo) do not collide
     grid[key(static_cast<int>(std::floor(u->position.x / kCell)), static_cast<int>(std::floor(u->position.z / kCell)))]
         .push_back(u);
     if (u->motion.bp->mobile() && Driving(u)) movers.push_back(u);
@@ -635,7 +700,44 @@ void MotionTick(Sim& sim, Unit* u) {
     AirMotionTick(sim, u);
     return;
   } else {
-    if (m.hasGoal) {
+    const bool oldFits = StandableAt(sim, b, start.x, start.z);
+    bool coastPush = false;
+    if (m.pushed) {  // ProcessSplineMovement: the push decays, then the steering drives again
+      float v = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
+      if (v < b.maxSpeed * m.speedMult * 0.01f) {
+        m.pushed = false;
+        if (m.wasMoving) {
+          m.wasMoving = false;
+          LandNavPoke(u);
+          if (m.hasWaypoint) m.newSegment = true;
+        }
+      } else {
+        coastPush = true;
+      }
+    }
+    if (coastPush) {
+      moved = Coast(u);
+    } else if (m.hasGoal && m.navDriven) {
+      if (!m.hasWaypoint) {
+        moved = Coast(u);  // the navigator is thinking: keeps rolling and slows down
+      } else {
+        moved = DriveStep(sim, u);
+        if (m.yielding && m.vel.x * m.vel.x + m.vel.z * m.vel.z <= kStopSq) {
+          m.vel = {};
+          m.yielding = false;
+          m.newSegment = true;
+        }
+        if (moved) {
+          // the steering arrived at its waypoint (its spline ended in the waypoint's cell): it
+          // stops and the unit coasts until the navigator gives the next one
+          int cx, cz;
+          GoalCell(b, u->position.x, u->position.z, &cx, &cz);
+          if (cx == m.goalCellX && cz == m.goalCellZ && m.state == 8) m.hasWaypoint = false;
+        } else {
+          m.hasWaypoint = false;
+        }
+      }
+    } else if (m.hasGoal) {
       if (sim.tick() < m.driveTick) {
         moved = Coast(u);  // waiting for the path: keeps rolling and slows down
       } else {
@@ -666,6 +768,24 @@ void MotionTick(Sim& sim, Unit* u) {
       }
     } else {
       moved = Coast(u);
+    }
+    // CalcMoveCommon 0x6c1e20: from a cell the footprint fits into one it does not: undone, and
+    // pushed back by MaxSpeed/100 along the step (AddImpulse 0x6b8ac0)
+    if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {
+      float dx = start.x - u->position.x, dz = start.z - u->position.z;
+      u->position = start;
+      m.vel = {};
+      if (!m.pushed) {
+        float l = std::sqrt(dx * dx + dz * dz);
+        float imp = b.maxSpeed * m.speedMult * 0.010000001f;
+        if (l > 0) {
+          m.vel.x = dx / l * imp;
+          m.vel.z = dz / l * imp;
+        }
+        if (m.hasGoal && m.navDriven && m.hasWaypoint) m.wasMoving = true;
+        m.pushed = true;
+      }
+      moved = false;
     }
     if (moved || m.needSnap) {
       SnapUnit(sim, u);

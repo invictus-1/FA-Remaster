@@ -44,8 +44,10 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/replay.*` | Replay header: session setup (map, mods, options, armies, seed) |
 | `src/sim/motion.*` | Unit motion: the original's spline steering (states, turn/accel/brake limits), coasting, ground snap, collision avoidance (approximation) |
 | `src/sim/air.*` | Aircraft: the original's flight model (rigid body, force/torque controllers, winged/hover/circling orientation), air navigator (goal, arrival, speed-through), auto-landing, attack runs (air combat states), falling |
-| `src/sim/navigation.*` | Where a footprint can stand (OCCUPY_MobileCheck) and path search (A* + smoothing) |
-| `src/sim/commands.*` | Command queues, Issue*, path search queue, formations, navigator object, GetUnitsInRect / GetUnitsAroundPoint |
+| `src/sim/navigation.*` | Where a footprint can stand (OCCUPY_MobileCheck), structure occupancy, CanPathTo's plain A* |
+| `src/sim/hpath.*` | The original's hierarchical path search: 8/32-cell cluster maps per footprint, A* over cells and cluster jump edges, per-army search queue with a work budget |
+| `src/sim/landnav.*` | The land navigator: goal (free-spot spiral), first path, target advancing over the path (corridor test), continuation searches and splicing, retries, the stuck rule, terrain-blind starts |
+| `src/sim/commands.*` | Command queues, Issue*, formations, navigator object, GetUnitsInRect / GetUnitsAroundPoint |
 | `src/sim/economy.*` | Mass/energy: army economies, requests and their share-out, storage, economy events, unit consumption/production |
 | `src/sim/build.*` | Structure placement, build/upgrade/repair/assist/reclaim/guard tasks, factories, silos, adjacency |
 | `src/sim/combat.*` | Weapons (acquire, fire clock, CanFire), aim controllers and the per-tick pose, attack commands, intel and recon blips |

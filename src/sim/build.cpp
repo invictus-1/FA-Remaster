@@ -41,6 +41,7 @@
 #include "sim/commands.h"
 #include "sim/economy.h"
 #include "sim/motion.h"
+#include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -209,9 +210,16 @@ void OccupyStructure(Sim& sim, Unit* u) {
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(u->id, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+  LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
-  if (u->bpData && u->bpData->structure) sim.navigation().RemoveStructure(u->id);
+  if (!u->bpData || !u->bpData->structure) return;
+  for (const auto& r : sim.navigation().Structures())
+    if (r.entity == u->id) {
+      LandNavDirty(sim, r.x0, r.z0, r.x1, r.z1);
+      break;
+    }
+  sim.navigation().RemoveStructure(u->id);
 }
 
 // ---- build helper (CBuildTaskHelper) -----------------------------------------------------------
@@ -310,11 +318,7 @@ bool CanMove(const Unit* u) { return u->motion.bp && u->motion.bp->mobile() && !
 
 void MoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   std::vector<Vec3> path;
-  if (u->motion.bp->motionType == kMotionAir) path.push_back(goal);
-  else if (!sim.navigation().FindPath(u->motion.bp->footprint, u->position, goal, &path) || path.empty()) {
-    u->motion.failed = true;
-    return;
-  }
+  path.push_back(goal);  // land units: the navigator plans (sim/landnav.cpp)
   u->motion.failed = false;
   MotionSetGoal(sim, u, path, false, sim.tick() + 3);
   u->unitStates.insert("Moving");

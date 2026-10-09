@@ -51,6 +51,9 @@ struct AirBp {
   float inertia[3] = {1, 1, 1};
   float collisionOffset[3] = {0, 0, 0};
   int footprintX = 1, footprintZ = 1;
+  // the blueprint's own Footprint values PrepareMove keeps for a flyer (air_extra.md 3.1-3.2)
+  float fpMaxSlope = 0, fpMinWaterDepth = 0;
+  uint8_t fpFlags = 0;
   bool transportation = false, targetChaser = false, experimental = false;
 };
 

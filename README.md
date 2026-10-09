@@ -41,9 +41,11 @@ Milestone 3 (movement) works for ground and naval units:
   original on 17 test units: single land units match within 0.01 world units on every tick.
 - **Commands:** move orders and the command queue (Issue*, stop, queued moves driven through),
   formation moves, the path-search queue, the navigator.
-- **Pathfinding** over the map's passability (slope, water depth, blocking terrain).
+- **Pathfinding** the original's way: a hierarchical search over 8- and 32-cell clusters of the
+  map's passability (slope, water depth, blocking terrain, structures), and the land navigator
+  that follows the path in parts, searches again when the way is blocked and gives up like the
+  original. Units stopped by terrain are pushed back the original's way.
 - **Units avoid each other** (an approximation of the original for now).
-- Still rough: very long paths (the original returns them in parts).
 
 Milestone 4 (economy, building, combat) works; the AI (M28) plays a real game:
 - **Economy:** mass and energy income, storage, the original's share-out of resources between

@@ -325,6 +325,7 @@ function P.Motion()
                 local q = u:GetCommandQueue() or {}
                 out('mv', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), fmt(o[1]), fmt(o[2]), fmt(o[3]), fmt(o[4]),
                     fmt(vx), fmt(vy), fmt(vz), tostring(u:GetCurrentLayer()), u:IsUnitState('Moving') and 1 or 0, table.getn(q))
+                P.NavLine('mvnav', tick, e.tag, u)
             end
         end
     end
@@ -496,6 +497,21 @@ function P.Combat()
     out('combat done')
 end
 
+-- navigator state of a land unit (v5): current target, status, path flags (pcall'd: never break the game)
+function P.NavLine(kind, tick, tag, u)
+    local ok, err = pcall(function()
+        local nav = u:GetNavigator()
+        if not nav then return end
+        local t = nav:GetCurrentTargetPos()
+        local st = nav:GetStatus()
+        local f = ''
+        if u:IsUnitState('ProblemGettingToGoal') then f = f .. 'P' end
+        if u:IsUnitState('PathFinding') then f = f .. 'F' end
+        out(kind, tick, tag, fmt(t[1]), fmt(t[3]), tostring(st), f)
+    end)
+    if not ok then out(kind .. '-error', tick, tag, tostring(err)) end
+end
+
 -- 5) transports: a T1 air transport loads two tanks and an engineer, drops them, the cargo moves on
 P.TRANSPORT = {
     -- tag, bp, x, z, heading
@@ -566,6 +582,7 @@ function P.Transport()
                     if e.tag == 'tr' then extra = 'cargo=' .. table.getn(u:GetCargo()) end
                     out('tru', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
                         table.concat(st, ','), extra)
+                    if e.tag ~= 'tr' then P.NavLine('trnav', tick, e.tag, u) end
                 end
             end
         end

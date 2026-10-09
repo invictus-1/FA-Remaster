@@ -942,6 +942,10 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         if (!ok) return kTaskFailed;
         t.state = 2;
         const NamedFootprint& fp = Fp(u);
+        if (Dbg())
+          Logf(LogLevel::Info, "transport: tick %d call %u walk to cell (%d,%d) ready=%d pickup (%.3f,%.3f) from (%.3f,%.3f)",
+               sim.tick(), u->id, cx, cz, IsReadyForUnit(O, u) ? 1 : 0, O.pickupPos.x, O.pickupPos.z, u->position.x,
+               u->position.z);
         TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, 0, cz + fp.sizeZ * 0.5f});
         d.moving = true;
         return kTaskRunning;

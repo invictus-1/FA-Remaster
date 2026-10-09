@@ -7,9 +7,9 @@
 // under it is at most MaxWaterDepth and the largest height step between neighbouring vertices is
 // at most MaxSlope; water layers need at least MinWaterDepth everywhere under it.
 //
-// Searching: the original uses a hierarchical A* (gpgcore hastar). Ours is a plain A* over cells
-// with the original's octile heuristic, followed by line-of-sight smoothing into waypoints.
-// TODO(M3b): hierarchical search for long paths; structures in the occupancy grid (M4).
+// Searching: moves use the original's hierarchical search and land navigator (sim/hpath.cpp,
+// sim/landnav.cpp). FindPath below (a plain A* with line-of-sight smoothing) only answers
+// CanPathTo (TODO: the original's direct probe, pathfinding.md section 6).
 #pragma once
 #include <array>
 #include <cstdint>

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -547,24 +548,24 @@ bool IsWithin(Sim& sim, const Vec3& p, float m) {
   return 0 <= p.x - m && 0 <= p.z - m && p.x + m < W - 1 && p.z + m < H - 1;
 }
 
-bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps) {
-  if (!IsWithin(sim, w, static_cast<float>(S))) return false;
-  NamedFootprint fp;
-  fp.name = "__air_land_" + std::to_string(S) + "_" + std::to_string(caps);
-  fp.sizeX = fp.sizeZ = static_cast<uint8_t>(S);
-  fp.caps = static_cast<uint8_t>(caps);
-  const PathGrid* g = sim.navigation().Grid(fp);
-  int c = g ? g->Caps(cx, cz) : 0;
-  if (u->layer == "Water") c &= ~kSub;
-  if ((c & 3) && sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S)) c &= ~3;
-  if (!c) return false;
-  int r[4] = {cx, cz, cx + S, cz + S};
-  if (!CanReserve(sim, u, r)) return false;
+// COORDS_CanMoveAt 0x720f70 with strict = 1 (air_extra.md 3.6): no live, completed, non-air unit
+// other than u whose box touches [x0, x1] x [z0, z1]; carried units never block. A transport (u has
+// a transport object) ignores moving non-transport units, and all non-transport units while it is
+// TransportLoading; other transports always block (strict).
+bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) {
   bool blocked = false;
-  float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz), x1 = x0 + S, z1 = z0 + S;
+  const bool selfTransport = u->transport != nullptr;
+  const bool loading = selfTransport && State(u, "TransportLoading");
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* o) {
     if (blocked || o == u || o->dead || o->destroyQueued || o->fractionComplete < 1.0f) return;
-    if (o->layer == "Air" || o->parentId) return;
+    if (o->layer == "Air") return;
+    if (u->layer == "Sub" && o->layer != "Sub") return;
+    if (!o->transport || InCategory(sim, o, "PODSTAGINGPLATFORM")) {
+      const Vec3& v = o->motion.lastMove;
+      bool moving = v.x != 0.0f || v.y != 0.0f || v.z != 0.0f;
+      if (selfTransport && (moving || loading)) return;
+    }
+    if (o->parentId || State(o, "Attached")) return;
     const MotionBlueprint* ob = o->motion.bp;
     float hx = (ob ? ob->sizeX : 1) * 0.5f, hz = (ob ? ob->sizeZ : 1) * 0.5f;
     if (o->position.x + hx < x0 || o->position.x - hx > x1 || o->position.z + hz < z0 || o->position.z - hz > z1)
@@ -572,6 +573,33 @@ bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps
     blocked = true;
   });
   return !blocked;
+}
+
+// One PrepareMove candidate (air_extra.md 3.1): bounds, terrain for the modified footprint fp'
+// (S x S, Land (+Water), the blueprint's MaxSlope / MinWaterDepth, MaxWaterDepth 0), structures,
+// other units' o-grid reservations, blocking units.
+bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps) {
+  if (!IsWithin(sim, w, static_cast<float>(S))) return false;
+  const AirBp& b = *A(u).bp;
+  NamedFootprint fp;
+  fp.sizeX = fp.sizeZ = static_cast<uint8_t>(S);
+  fp.caps = static_cast<uint8_t>(caps);
+  fp.maxSlope = b.fpMaxSlope;
+  fp.minWaterDepth = b.fpMinWaterDepth;
+  fp.maxWaterDepth = 0;
+  fp.flags = b.fpFlags;
+  char key[96];
+  std::snprintf(key, sizeof key, "__air_land_%d_%d_%a_%a", S, caps, fp.maxSlope, fp.minWaterDepth);
+  fp.name = key;
+  const PathGrid* g = sim.navigation().Grid(fp);
+  int c = g ? g->Caps(cx, cz) : 0;
+  if (u->layer == "Water") c &= ~kSub;
+  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S)) c &= ~3;
+  if (!c) return false;
+  int r[4] = {cx, cz, cx + S, cz + S};
+  if (!CanReserve(sim, u, r)) return false;
+  float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
+  return NoBlockingUnits(sim, u, x0, z0, x0 + S, z0 + S);
 }
 
 // Unit::PrepareMove 0x62b780 (spacing 0, no exclusion rect)
@@ -1497,6 +1525,9 @@ const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp) {
   if (bp.hasFootprint) {
     b.footprintX = std::max<int>(1, bp.footprint.sizeX);
     b.footprintZ = std::max<int>(1, bp.footprint.sizeZ);
+    b.fpMaxSlope = bp.footprint.maxSlope;
+    b.fpMinWaterDepth = bp.footprint.minWaterDepth;
+    b.fpFlags = bp.footprint.flags;
   }
   b.transportation = BpInCategory(*sim, &bp, "TRANSPORTATION");
   b.targetChaser = BpInCategory(*sim, &bp, "TARGETCHASER");

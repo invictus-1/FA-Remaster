@@ -1,5 +1,6 @@
 // Unit commands and their Lua bindings (see commands.h).
 #include "sim/commands.h"
+#include "sim/landnav.h"
 #include "sim/combat.h"
 
 #include <algorithm>
@@ -109,11 +110,7 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   u->motion.speedCap = c.slots.count(u) ? c.formationSpeed : 0;
   std::vector<Vec3> path;
   bool ok = true;
-  if (b.motionType == kMotionAir) {
-    path.push_back(goal);
-  } else {
-    ok = sim.navigation().FindPath(b.footprint, u->position, goal, &path);
-  }
+  path.push_back(goal);  // land units: the navigator plans (sim/landnav.cpp)
   if (!ok || path.empty()) {
     u->motion.failed = true;
     u->headState = kRunning;
@@ -157,12 +154,8 @@ void StartHead(Sim& sim, Unit* u) {
       bool driving = u->motion.hasGoal || (u->motion.vel.x * u->motion.vel.x + u->motion.vel.z * u->motion.vel.z) > 1e-6f;
       u->motion.arrived = false;
       u->motion.failed = false;
-      if (driving || u->motion.bp->motionType == kMotionAir) {
-        RunPathSearch(sim, u, true);  // continuing a move, or flying: no search queue
-      } else {
-        u->headState = kWaitingPath;
-        sim.pathQueue.push_back(u);
-      }
+      (void)driving;
+      RunPathSearch(sim, u, true);  // land units queue their search in the navigator
       return;
     }
     // Not carried out yet: finish it at once so the scripts see an idle unit.
@@ -212,8 +205,10 @@ void CommandsBeforeMotion(Sim& sim) {
       continue;
     }
     // keep "drive through" up to date when moves were queued behind the current one
-    if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type))
-      u->motion.passThrough = NextIsMove(u);
+    if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
+      if (u->motion.navDriven) LandNavSetSpeedThrough(u, NextIsMove(u));
+      else u->motion.passThrough = NextIsMove(u);
+    }
     // aggressive moves and patrols stop to fight what they meet
     if (st == kRunning && !u->commands.empty()) {
       CommandType ct = u->commands.front()->type;
@@ -691,11 +686,8 @@ int l_nav_SetGoal(lua_State* L) {
   if (!PosArg(L, 2, &p) || !IsAlive(n->unit)) return 0;
   Unit* u = n->unit;
   if (!u->motion.bp || !u->motion.bp->mobile()) return 0;
-  std::vector<Vec3> path;
   Sim* sim = S(L);
-  if (u->motion.bp->motionType == kMotionAir) path.push_back(p);
-  else if (!sim->navigation().FindPath(u->motion.bp->footprint, u->position, p, &path)) return 0;
-  MotionSetGoal(*sim, u, path, n->speedThroughGoal, sim->tick() + 3);
+  MotionSetGoal(*sim, u, std::vector<Vec3>{p}, n->speedThroughGoal, sim->tick() + 3);
   return 0;
 }
 int l_nav_SetDestUnit(lua_State* L) {
@@ -713,19 +705,24 @@ int l_nav_AbortMove(lua_State* L) {
 }
 int l_nav_GetGoalPos(lua_State* L) {
   Unit* u = N(L)->unit;
-  PushVector(L, u->motion.hasGoal && !u->motion.path.empty() ? u->motion.path.back() : u->position);
+  Vec3 g;
+  if (u->motion.navDriven && LandNavGoal(u, &g)) PushVector(L, g);
+  else PushVector(L, u->motion.hasGoal && !u->motion.path.empty() ? u->motion.path.back() : u->position);
   return 1;
 }
 int l_nav_GetCurrentTargetPos(lua_State* L) {
   Unit* u = N(L)->unit;
   const UnitMotion& m = u->motion;
-  PushVector(L, m.hasGoal && m.pathIndex < m.path.size() ? m.path[m.pathIndex] : u->position);
+  Vec3 t;
+  if (m.navDriven) PushVector(L, LandNavTarget(u, &t) ? t : u->position);
+  else PushVector(L, m.hasGoal && m.pathIndex < m.path.size() ? m.path[m.pathIndex] : u->position);
   return 1;
 }
 int l_nav_GetStatus(lua_State* L) {
   Unit* u = N(L)->unit;
   int st = 0;  // Idle
-  if (u->motion.hasGoal) st = S(L)->tick() < u->motion.driveTick ? 1 : 2;  // Thinking / Steering
+  if (u->motion.navDriven) st = LandNavStatus(u);
+  else if (u->motion.hasGoal) st = S(L)->tick() < u->motion.driveTick ? 1 : 2;  // Thinking / Steering
   lua_pushnumber(L, st);
   return 1;
 }
