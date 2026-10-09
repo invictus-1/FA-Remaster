@@ -782,7 +782,7 @@ const UnitCommand* Current(const Unit* u) { return u->commands.empty() ? nullptr
 
 // The landing move of a transport (NewMoveTask with goal layer Land).
 void LandingMove(Sim& sim, Unit* t, Vec3 p) {
-  AirSetGoal(sim, t, p, sim.tick() + 1, 1 /*Land*/);
+  AirSetGoal(sim, t, p, sim.tick(), 1 /*Land*/);
 }
 
 enum { kLoad = 1, kCall = 2, kUnload = 3 };
@@ -1230,7 +1230,7 @@ bool HasNextUnitToLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
 
 // cell(p) of the transport's footprint, as a world point (the move goals are 1x1 cell rects)
 void FlyTo(Sim& sim, Unit* T, TransportTaskData& d, Vec3 p, int layer) {
-  AirSetGoal(sim, T, p, sim.tick() + 1, layer);
+  AirSetGoal(sim, T, p, sim.tick(), layer);
   d.childMove = true;  // the move task sets Moving
   SetState(T, "Moving", true);
 }
@@ -1459,14 +1459,14 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         }
         if (State(u, "Patrolling") || State(u, "Guarding")) return kTaskDone;
         SetState(u, "ForceSpeedThrough", true);
-        AirSetGoal(sim, u, P->position, sim.tick() + 1, 0);
+        AirSetGoal(sim, u, P->position, sim.tick(), 0);
         t.waitUntil = sim.tick() + 9;
         return kTaskRunning;
       case 1: {  // land on the bone at its height
         Vec3 bone = GetAttachBonePosition(O, u);
         Vec3 facing = AttachFacing(O, u);
         if (!std::isfinite(bone.x) || !std::isfinite(bone.y) || !std::isfinite(bone.z)) return kTaskDone;
-        AirSetGoal(sim, u, bone, sim.tick() + 1, 1, false);
+        AirSetGoal(sim, u, bone, sim.tick(), 1, false);
         d.childMove = true;  // the move task sets Moving
         SetState(u, "Moving", true);
         AirSetLandHeight(u, bone.y);
@@ -1490,7 +1490,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
       case 3:  // docked: wait for full fuel and health
         if (u->fuelRatio > 0.99f && u->health == u->maxHealth) {
           TransportDetach(sim, O, u);
-          AirSetGoal(sim, u, u->position, sim.tick() + 1, 0x10);
+          AirSetGoal(sim, u, u->position, sim.tick(), 0x10);
           d.childMove = true;  // the move task sets Moving
           SetState(u, "Moving", true);
           t.state = 4;
@@ -1506,12 +1506,12 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
           for (Unit* X : group)
             if (X && IsAirUnit(sim, X) && !InCat(sim, X, "AIRSTAGINGPLATFORM") && State(X, "Refueling")) {
               SetState(u, "ForceSpeedThrough", true);
-              AirSetGoal(sim, u, P->position, sim.tick() + 1, 0);
+              AirSetGoal(sim, u, P->position, sim.tick(), 0);
               t.waitUntil = sim.tick() + 9;
               return kTaskRunning;
             }
         }
-        AirSetGoal(sim, u, P->position, sim.tick() + 1, 0);
+        AirSetGoal(sim, u, P->position, sim.tick(), 0);
         return kTaskDone;
       }
       default:

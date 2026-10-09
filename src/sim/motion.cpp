@@ -307,6 +307,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   m.path.clear();
   if (succeeded) m.arrived = true;
   else m.failed = true;
+  Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
 }
 
 void MotionStop(Unit* u) {
@@ -759,6 +760,7 @@ void MotionTick(Sim& sim, Unit* u) {
             if (inCell || m.state == 8) {  // the goal cell, or stopped short of it
               m.hasGoal = false;
               m.arrived = true;
+              sim.ResumeCommandThread(u);
             }
           } else if (inCell || m.state == 8) {  // next waypoint
             ++m.pathIndex;

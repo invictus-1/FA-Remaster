@@ -808,26 +808,39 @@ void Sim::RebuildUnitGrid() {
 }
 
 static int g_unitsCreated = 0;
+const std::vector<Unit*>& Sim::CommandOrder() {
+  if (cmdOrderDirty_) {
+    cmdOrder_ = units_;
+    std::sort(cmdOrder_.begin(), cmdOrder_.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+    cmdOrderDirty_ = false;
+  }
+  return cmdOrder_;
+}
+void Sim::ResumeCommandThread(Unit* u) {
+  u->cmdSeq = ++cmdSeqNext_;
+  cmdOrderDirty_ = true;
+}
 void Sim::AddUnitToLists(Unit* u) {
   ++g_unitsCreated;
   gridDirty_ = true;
+  u->cmdSeq = ++cmdSeqNext_;
+  cmdOrderDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   gridDirty_ = true;
+  cmdOrderDirty_ = true;
   EraseById(units_, u);
   if (u->army) EraseById(u->army->units, u);
 }
 
-// Order inside a beat (from the oracle probe): unit commands start, units move, finished moves
-// end (and queued moves continue in the same beat), then the script threads run.
 namespace {
 // MOHO64_PROFILE=1: time spent per phase of the tick, logged every 1000 ticks.
 struct PhaseTimer {
-  static constexpr int kN = 10;
-  const char* names[kN] = {"economy", "cleanup+intel", "commands", "collision", "motion+aim", "anim+unitecon",
-                           "projectiles", "beams", "weapons", "threads+destroy"};
+  static constexpr int kN = 12;
+  const char* names[kN] = {"economy", "recon+cleanup", "commands", "collision", "motion+aim", "anim+unitecon",
+                           "projectiles", "beams", "weapons", "navigators+paths", "threads", "destroy"};
   double total[kN] = {};
   std::chrono::steady_clock::time_point t;
   bool on = getenv("MOHO64_PROFILE") != nullptr;
@@ -855,20 +868,27 @@ struct PhaseTimer {
 PhaseTimer g_prof;
 }  // namespace
 
-// Order (Sim::AdvanceBeat 0x749f40 and the entity/task stages): the armies' economy, killed
-// units' clean-up, command tasks, unit motion with each unit's aim controllers and own beat,
-// weapon tasks (acquire, fire), arrivals, script threads, then projectiles and beams (the
-// original moves them after its three task stages: a shot moves in the beat it is fired and an
-// impact found in beat N reaches OnImpact in beat N+1's move), intel, destruction.
+// Order (Sim::AdvanceBeat 0x749f40, engine-ref beat_order.md): the tick count, then per army the
+// economy, navigators and path queues and weapons; then the three task stages: command threads
+// (0x958, in thread order), Lua threads (0x944), entities (0x930: unit motion with each unit's
+// aim controllers and own beat, then projectiles and beams, so a shot moves in the beat it is
+// fired and an impact found in beat N reaches OnImpact in beat N+1's move); then recon, killed
+// units' clean-up, intel coordinates and the destroy queue. Lua at tick N sees the positions of
+// beat N-1's motion; callbacks raised during motion are labelled N.
 void Sim::Tick() {
   ++tick_;
   g_prof.Start();
+  // the armies' stage: economy, navigators and path queues, weapons (acquire, fire)
   EconomyBeginBeat(*this);
   g_prof.Lap(0);
-  KillCleanupTick(*this);
-  g_prof.Lap(1);
-  CommandsBeforeMotion(*this);
+  LandNavTickAll(*this);
+  g_prof.Lap(9);
+  WeaponsTick(*this);
+  g_prof.Lap(8);
+  CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
   g_prof.Lap(2);
+  threads_->RunTick(tick_);  // stage 0x944: Lua threads
+  g_prof.Lap(10);
   CollisionTick(*this);
   g_prof.Lap(3);
   for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
@@ -907,22 +927,18 @@ void Sim::Tick() {
   for (size_t i = 0; i < units_.size(); ++i)
     if (!units_[i]->destroyQueued) UnitEconomyTick(*this, units_[i]);
   g_prof.Lap(5);
-  WeaponsTick(*this);
-  g_prof.Lap(8);
-  LandNavTickAll(*this);  // navigators (after the units moved) and the armies' path queues
-  CommandsAfterMotion(*this);
-  threads_->RunTick(tick_);
-  g_prof.Lap(9);
   // Projectiles and beams move after every task stage (Sim::AdvanceBeat runs the three task
   // stages first), so a shot moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
   g_prof.Lap(6);
   BeamsTick(*this);
   g_prof.Lap(7);
-  ReconBeat(*this);           // army (tick % armies) updates its blips
+  ReconBeat(*this);  // army (tick % armies) updates its blips
+  KillCleanupTick(*this);
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);
   ProcessDestroyQueue();
+  g_prof.Lap(11);
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute

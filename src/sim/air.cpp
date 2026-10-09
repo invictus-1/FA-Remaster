@@ -1696,10 +1696,6 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
 bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) { return GroundPrepareMoveImpl(sim, u, pos, excl); }
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImpl(sim, u, r); }
 void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
-bool OgridReserved(Sim& sim, int x0, int z0, int x1, int z1) {
-  int r[4] = {x0, z0, x1, z1};
-  return AnyRes(sim, r);
-}
 
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   if (!u->motion.air) return false;
@@ -1747,7 +1743,7 @@ void AirMotionTick(Sim& sim, Unit* u) {
   if (!m.air) AirInit(sim, u);
   AirMotion& a = A(u);
   if (u->fractionComplete < 1.0f) return;
-  // the navigator's SetGoal (the command task that started this tick hands it over after motion)
+  // the navigator's SetGoal (steered from this beat's motion on)
   if (a.pending && sim.tick() >= a.pendingTick) {
     a.pending = false;
     a.goal = a.pendingGoal;
@@ -1805,6 +1801,7 @@ void AirMotionTick(Sim& sim, Unit* u) {
       a.steering = false;
       m.hasGoal = false;
       m.arrived = true;
+      sim.ResumeCommandThread(u);  // Succeeded wakes the move task (re-linked at the stage's new end)
     }
   }
 }

@@ -136,6 +136,11 @@ class Sim {
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
+  // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
+  // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
+  const std::vector<Unit*>& CommandOrder();
+  void ResumeCommandThread(Unit* u);
+  uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
   // Units within [x0,x1] x [z0,z1] by position (a 16-unit grid rebuilt when units moved, were
   // created or destroyed); calls f(unit) in id order within each cell row-major - callers that
   // need id order sort.
@@ -193,6 +198,9 @@ class Sim {
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;
   std::vector<Unit*> units_;
+  std::vector<Unit*> cmdOrder_;
+  uint64_t cmdSeqNext_ = 0;
+  bool cmdOrderDirty_ = true;
   std::vector<std::vector<Unit*>> grid_;
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;

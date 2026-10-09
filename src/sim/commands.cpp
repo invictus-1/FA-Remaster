@@ -117,7 +117,6 @@ bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->co
 void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
   UnitCommand& c = *u->commands.front();
-  const MotionBlueprint& b = *u->motion.bp;
   Vec3 goal = TargetPos(sim, c, u);
   u->motion.speedCap = c.slots.count(u) ? c.formationSpeed : 0;
   std::vector<Vec3> path;
@@ -128,8 +127,8 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
     u->headState = kRunning;
     return;
   }
-  // it drives 3 ticks after the search (air units: the next tick)
-  uint32_t drive = sim.tick() + (b.motionType == kMotionAir ? 1 : 3);
+  // air units steer in this beat's motion; land units' navigators plan from the next beat on
+  uint32_t drive = sim.tick();
   bool through = NextIsMove(u) && MoveLike(c.type);
   MotionSetGoal(sim, u, path, through, drive);
   u->headState = kRunning;
@@ -200,48 +199,95 @@ void ForgetUnitCommands(Unit* u) {
   q.erase(std::remove(q.begin(), q.end(), u), q.end());
 }
 
-void CommandsBeforeMotion(Sim& sim) {
-  const auto& all = sim.units();
-  for (size_t i = 0; i < all.size(); ++i) {  // (scripts run from here may add units at the end)
-    Unit* u = all[i];
-    if (!IsAlive(u)) continue;
-    if (u->commands.empty()) continue;
-    int& st = u->headState;
-    if (st == kNotStarted) StartHead(sim, u);
-    if (u->task && st == kRunning) {
-      int r = TickBuildTask(sim, u, *u->task);
-      if (r != kTaskRunning) {
-        u->task = nullptr;
-        PopHead(u);
-        StartHead(sim, u);
-      }
-      continue;
+namespace {
+// A finished move ends its command (the move task returns -1 and the dispatcher starts the next one).
+void ArrivalStep(Sim& sim, Unit* u) {
+  if (!IsAlive(u) || u->commands.empty()) return;
+  if (u->headState != kRunning) return;
+  UnitMotion& m = u->motion;
+  if (!m.arrived && !m.failed) return;
+  if (u->task) return;  // a task command (build, guard, attack, ...) handles its own moves
+  if (u->engageId) {  // arrived at the enemy it stopped for, not at the patrol point
+    m.arrived = m.failed = false;
+    return;
+  }
+  UnitCommand& c = *u->commands.front();
+  bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
+  std::shared_ptr<UnitCommand> keep = u->commands.front();
+  PopHead(u);
+  m.arrived = false;
+  if (patrol && !m.failed) {  // patrols cycle through their points
+    u->commands.push_back(keep);
+    keep->units.insert(u);
+  }
+  m.failed = false;
+  if (u->commands.empty()) {
+    SetMoving(u, false);
+    return;
+  }
+  StartHead(sim, u);
+}
+
+void CommandStep(Sim& sim, Unit* u) {
+  if (!IsAlive(u)) return;
+  if (u->commands.empty()) return;
+  int& st = u->headState;
+  if (st == kNotStarted) StartHead(sim, u);
+  if (u->task && st == kRunning) {
+    int r = TickBuildTask(sim, u, *u->task);
+    if (r != kTaskRunning) {
+      u->task = nullptr;
+      PopHead(u);
+      StartHead(sim, u);
     }
-    // keep "drive through" up to date when moves were queued behind the current one
-    if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
-      if (u->motion.navDriven) LandNavSetSpeedThrough(u, NextIsMove(u));
-      else u->motion.passThrough = NextIsMove(u);
+    return;
+  }
+  // keep "drive through" up to date when moves were queued behind the current one
+  if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
+    if (u->motion.navDriven) LandNavSetSpeedThrough(u, NextIsMove(u));
+    else u->motion.passThrough = NextIsMove(u);
+  }
+  // aggressive moves and patrols stop to fight what they meet
+  if (st == kRunning && !u->commands.empty()) {
+    CommandType ct = u->commands.front()->type;
+    if (ct == CommandType::AggressiveMove || ct == CommandType::FormAggressiveMove || ct == CommandType::Patrol ||
+        ct == CommandType::FormPatrol) {
+      PatrolEngageTick(sim, u, *u->commands.front());
+      if (u->headState == kNotStarted) StartHead(sim, u);
+      return;
     }
-    // aggressive moves and patrols stop to fight what they meet
-    if (st == kRunning && !u->commands.empty()) {
-      CommandType ct = u->commands.front()->type;
-      if (ct == CommandType::AggressiveMove || ct == CommandType::FormAggressiveMove || ct == CommandType::Patrol ||
-          ct == CommandType::FormPatrol) {
-        PatrolEngageTick(sim, u, *u->commands.front());
-        if (u->headState == kNotStarted) StartHead(sim, u);
-        continue;
-      }
+  }
+  // guards and attacks follow a moving target
+  if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {
+    UnitCommand& c = *u->commands.front();
+    Entity* t = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+    if (c.targetId && (!t || t->dead || t->destroyQueued)) {
+      PopHead(u);
+      MotionStop(u);
+      StartHead(sim, u);
     }
-    // guards and attacks follow a moving target
-    if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {
-      UnitCommand& c = *u->commands.front();
-      Entity* t = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
-      if (c.targetId && (!t || t->dead || t->destroyQueued)) {
-        PopHead(u);
-        MotionStop(u);
-        StartHead(sim, u);
-      }
-    }
+  }
+}
+}  // namespace
+
+// The command stage (sim+0x958): every unit's command thread in thread order (Sim::CommandOrder).
+// Threads created during the pass run in it, after every older thread.
+void CommandStage(Sim& sim) {
+  auto step = [&](Unit* u) {
+    ArrivalStep(sim, u);
+    CommandStep(sim, u);
+  };
+  std::vector<Unit*> order = sim.CommandOrder();
+  uint64_t hi = sim.CommandSeqHigh();
+  for (Unit* u : order) step(u);
+  for (;;) {
+    std::vector<Unit*> more;
+    for (Unit* u : sim.units())
+      if (u->cmdSeq > hi) more.push_back(u);
+    if (more.empty()) break;
+    std::sort(more.begin(), more.end(), [](const Unit* x, const Unit* y) { return x->cmdSeq < y->cmdSeq; });
+    hi = sim.CommandSeqHigh();
+    for (Unit* u : more) step(u);
   }
   // path searches, first come first served
   auto& q = sim.pathQueue;
@@ -253,37 +299,6 @@ void CommandsBeforeMotion(Sim& sim) {
     sim.navigation().lastWork = 0;
     RunPathSearch(sim, u, false);
     work += sim.navigation().lastWork;
-  }
-}
-
-void CommandsAfterMotion(Sim& sim) {
-  const auto& all = sim.units();
-  for (size_t i = 0; i < all.size(); ++i) {
-    Unit* u = all[i];
-    if (!IsAlive(u) || u->commands.empty()) continue;
-    if (u->headState != kRunning) continue;
-    UnitMotion& m = u->motion;
-    if (!m.arrived && !m.failed) continue;
-    if (u->task) continue;  // a task command (build, guard, attack, ...) handles its own moves
-    if (u->engageId) {  // arrived at the enemy it stopped for, not at the patrol point
-      m.arrived = m.failed = false;
-      continue;
-    }
-    UnitCommand& c = *u->commands.front();
-    bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
-    std::shared_ptr<UnitCommand> keep = u->commands.front();
-    PopHead(u);
-    m.arrived = false;
-    if (patrol && !m.failed) {  // patrols cycle through their points
-      u->commands.push_back(keep);
-      keep->units.insert(u);
-    }
-    m.failed = false;
-    if (u->commands.empty()) {
-      SetMoving(u, false);
-      continue;
-    }
-    StartHead(sim, u);
   }
 }
 
@@ -705,7 +720,7 @@ int l_nav_SetGoal(lua_State* L) {
   Unit* u = n->unit;
   if (!u->motion.bp || !u->motion.bp->mobile()) return 0;
   Sim* sim = S(L);
-  MotionSetGoal(*sim, u, std::vector<Vec3>{p}, n->speedThroughGoal, sim->tick() + 3);
+  MotionSetGoal(*sim, u, std::vector<Vec3>{p}, n->speedThroughGoal, sim->tick());
   return 0;
 }
 int l_nav_SetDestUnit(lua_State* L) {

@@ -1054,8 +1054,21 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
   if (heading) {
     target = dmath::Atan2(v.x, v.z) + c->headingOffset;
   } else {
+    // v' = Rx(center) * v, target = center - FastNegAsin(v'.y / |v'|). FastNegAsin is the
+    // Abramowitz-Stegun acos polynomial minus pi/2, used for negative arguments too (no reflection),
+    // so pitches below the arc centre carry its error (a 45-degree arc rests at 0.0508, not 0).
+    float sc = std::sin(center * 0.5f), cc = std::cos(center * 0.5f);
+    float s2 = 2 * sc * cc, c2 = cc * cc - sc * sc;
+    float y = v.y * c2 - v.z * s2;
     float l = Len(v);
-    target = l > 0 ? dmath::Asin(std::fmax(-1.0f, std::fmin(1.0f, v.y / l))) : 0;
+    if (l > 0) {
+      float t = std::fmax(-1.0f, std::fmin(1.0f, y / l));
+      float neg = std::sqrt(1.0f - t) * (1.5707288f - 0.2121144f * t + 0.0742610f * t * t - 0.0187293f * t * t * t) -
+                  1.5707964f;
+      target = center - neg;
+    } else {
+      target = center;
+    }
   }
   float delta;
   if (half >= 3.1405928f) {

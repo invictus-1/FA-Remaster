@@ -68,9 +68,8 @@ class NavigatorObject : public ScriptObject {
 
 template <> struct ScriptTypeOf<NavigatorObject> { static constexpr uint32_t bit = kTypeNavigator; };
 
-// Run the head command of every unit (before motion), and finish arrived moves (after motion).
-void CommandsBeforeMotion(Sim& sim);
-void CommandsAfterMotion(Sim& sim);
+// The command stage (0x958): per unit in thread order, end an arrived move, then run the head command.
+void CommandStage(Sim& sim);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
 void RegisterCommandBindings(lua_State* L);

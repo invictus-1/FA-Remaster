@@ -327,7 +327,7 @@ void MoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   std::vector<Vec3> path;
   path.push_back(goal);  // land units: the navigator plans (sim/landnav.cpp)
   u->motion.failed = false;
-  MotionSetGoal(sim, u, path, false, sim.tick() + 3);
+  MotionSetGoal(sim, u, path, false, sim.tick());
   u->unitStates.insert("Moving");
 }
 

@@ -669,10 +669,9 @@ void LandNavTickAll(Sim& sim) {
     Unit* u = all[i];
     LandNav* n = Nav(u);
     if (!n || !n->active || u->destroyQueued || u->dead) continue;
-    if (n->startedThisTick) {
+    if (n->startedThisTick) {  // (navigators run at the beat start, before the command stage)
       n->startedThisTick = false;
       n->prevPos = u->position;
-      continue;
     }
     Execute(sim, u, *n);
     if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
