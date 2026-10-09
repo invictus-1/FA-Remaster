@@ -138,6 +138,8 @@ bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]);
 // A ground unit's o-grid reservation (ReserveOgridRect / FreeOgridRect).
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
 void GroundFreeRect(Sim& sim, Unit* u);
+// Any o-grid reservation (landing rects, ground reservations) in [x0,x1) x [z0,z1)?
+bool OgridReserved(Sim& sim, int x0, int z0, int x1, int z1);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.

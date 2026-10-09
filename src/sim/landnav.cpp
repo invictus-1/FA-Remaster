@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/air.h"
 #include "sim/commands.h"
 
 #include <algorithm>
@@ -300,7 +301,9 @@ void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
     ResetPathState(sim, n);
     return;
   }
-  while (n.path.size() > 1 && (!Reach(sim, u, n.cur, n.path[0]) || !UnitClear(sim, u, n, n.path[0]) ||
+  // 0x5aecb1: Reach(path[0], path[0]) / UnitClear(path[0], path[0]): the point itself, not the way to it
+  while (n.path.size() > 1 && (!Fits(sim, u, n.path[0]) ||
+                               UnitInWay(sim, u, n.path[0], n.path[0], n.attackVariant ? 2 : 1) ||
                                Manhattan(n.path[0], n.cur) < 2))
     Pop(n, 1);
   n.fits = Fits(sim, u, n.cur) && UnitClearTo(sim, u, n, n.cur);
@@ -351,9 +354,9 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
     const PathCell& last = n.path.back();
     if (!InGoal(n, last)) {
       n.problem = true;
-      // the goal centre is appended when it is in reach (straight corridor) of the path's end
+      // the goal centre is appended when the footprint fits there (OnEvent 0x5aeeb0, pathfinding.md 4.4)
       PathCell c{(n.goal[0] + n.goal[2]) / 2, (n.goal[1] + n.goal[3]) / 2};
-      if (Reach(sim, u, last, c)) n.path.push_back(c);
+      if (Fits(sim, u, c)) n.path.push_back(c);
     }
     n.state = 5;
     n.wait = 0;
@@ -374,7 +377,8 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
     n.spliced = n.spliced < 0 ? k - 1 : n.spliced + k - 1;
   } else {
     if (!n.path.empty() && k < 3) {
-      if (!Reach(sim, u, n.cur, n.path[0]) || !UnitClear(sim, u, n, n.path[0])) {
+      // OnEvent 0x5af0e0: Reach(path[0], path[0]) = the footprint fits at path[0] (manhattan 0)
+      if (!Fits(sim, u, n.path[0]) || UnitInWay(sim, u, n.path[0], n.path[0], n.attackVariant ? 2 : 1)) {
         if (n.retries < 3) RetryRule(sim, u, n);
         else n.state = 1;
         return;

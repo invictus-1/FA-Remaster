@@ -1696,6 +1696,10 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
 bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) { return GroundPrepareMoveImpl(sim, u, pos, excl); }
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImpl(sim, u, r); }
 void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
+bool OgridReserved(Sim& sim, int x0, int z0, int x1, int z1) {
+  int r[4] = {x0, z0, x1, z1};
+  return AnyRes(sim, r);
+}
 
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   if (!u->motion.air) return false;
