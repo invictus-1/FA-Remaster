@@ -358,4 +358,142 @@ function P.Motion()
     out('motion done')
 end
 
+-- 6) M4 combat scenarios (probe v4): two otherwise idle civilian armies (ARMY_9 and NEUTRAL_CIVILIAN)
+-- are made enemies; small fights in the quiet west area after the motion probe (spawn tick 462,
+-- logged every tick until tick 900; the motion probe's units are removed first):
+-- "PROBE cb <tick> <tag> hp x y z target fireclock heading pitch"   (first weapon; '-' = none)
+-- "PROBE cbshot <tick> <tag> <weapon> <proj#> <projbp> x y z qx qy qz qw"
+-- "PROBE cbproj <tick> <proj#> x y z"  /  "PROBE cbimpact <tick> <proj#> <type> <target tag>"
+-- "PROBE cbdmg <tick> <tag> <amount> <type> <instigator tag>"  /  "PROBE cbdead <tick> <tag>"
+P.COMBAT = {
+    -- tag, bp, side (1 = ARMY_9, 2 = NEUTRAL_CIVILIAN), x, z, heading, order
+    { 'duel_tank', 'uel0201', 1, 236, 722, 1.5708 },
+    { 'duel_bot', 'url0107', 2, 252, 722, -1.5708 },
+    { 'arty', 'url0103', 1, 200, 765, 1.5708, { 'attack', 'arty_pgen' } },
+    { 'arty_pgen', 'ueb1101', 2, 226, 765, 0 },
+    { 'atk_tank', 'uel0201', 1, 250, 805, 1.5708, { 'attack', 'atk_target' } },
+    { 'atk_target', 'url0106', 2, 300, 805, -1.5708, { 'holdfire' } },
+    { 'pd', 'ueb2101', 2, 305, 735, 0 },
+    { 'pd_tank', 'uel0201', 1, 284, 735, 1.5708 },
+    { 'aa', 'ual0104', 2, 220, 835, 0 },
+    { 'aa_scout', 'uea0101', 1, 140, 835, 1.5708, { 'move', 330, 835 } },
+}
+function P.Combat()
+    local a1, a2
+    for i, name in ListArmies() do
+        if name == 'ARMY_9' then a1 = i end
+        if name == 'NEUTRAL_CIVILIAN' then a2 = i end
+    end
+    if not (a1 and a2) then out('combat no armies') return end
+    -- the motion probe's units (NEUTRAL_CIVILIAN) leave first
+    for _, t in P.MOTION do
+        for _, u in (t.units or {}) do
+            if not u:BeenDestroyed() then u:Destroy() end
+        end
+    end
+    WaitTicks(2)
+    out('cbsetup', GetGameTick(), tostring(pcall(SetAlliance, a1, a2, 'Enemy')), tostring(IsEnemy(a1, a2)))
+    local units, byEntity, projs, tick = {}, {}, {}, GetGameTick()
+    local function tagOf(e)
+        if not e then return '-' end
+        return byEntity[e] or ('?' .. tostring(e.GetEntityId and e:GetEntityId() or ''))
+    end
+    for _, tt in P.COMBAT do
+        local t = tt  -- (a body local: closures below keep their own)
+        local y = GetSurfaceHeight(t[4], t[5])
+        local ok, u = pcall(CreateUnitHPR, t[2], t[3] == 1 and a1 or a2, t[4], y, t[5], 0, t[6], 0)
+        if ok and u then
+            table.insert(units, { tag = t[1], u = u, t = t })
+            byEntity[u] = t[1]
+            t.unit = u
+            out('cbspawn', tick, t[1], t[2], u:GetEntityId(), u:GetWeaponCount())
+            local okd = pcall(function()
+                local orig = u.OnDamage
+                u.OnDamage = function(self, inst, amount, vec, typ)
+                    out('cbdmg', GetGameTick(), t[1], fmt(amount), tostring(typ), tagOf(inst and (inst.GetLauncher and inst:GetLauncher() or inst)))
+                    return orig(self, inst, amount, vec, typ)
+                end
+                for i = 1, u:GetWeaponCount() do
+                    local w = u:GetWeapon(i)
+                    local label = w.Label or ('w' .. i)
+                    local cp = w.CreateProjectileAtMuzzle
+                    if cp then
+                        w.CreateProjectileAtMuzzle = function(self, muzzle)
+                            local p = cp(self, muzzle)
+                            if p and not p:BeenDestroyed() then
+                                table.insert(projs, p)
+                                local n = table.getn(projs)
+                                local pos, o = p:GetPosition(), p:GetOrientation()
+                                out('cbshot', GetGameTick(), t[1], label, n, p:GetBlueprint().BlueprintId, fmt(pos[1]), fmt(pos[2]), fmt(pos[3]),
+                                    fmt(o[1]), fmt(o[2]), fmt(o[3]), fmt(o[4]))
+                                local oi = p.OnImpact
+                                p.OnImpact = function(self2, typ, ent)
+                                    out('cbimpact', GetGameTick(), n, tostring(typ), tagOf(ent))
+                                    return oi(self2, typ, ent)
+                                end
+                            end
+                            return p
+                        end
+                    end
+                end
+            end)
+            if not okd then out('cbwrap-failed', t[1]) end
+        else
+            out('cbspawn-failed', t[1], tostring(u))
+        end
+    end
+    WaitTicks(1)
+    local okO, eO = pcall(function()
+        for _, e in units do
+            local o = e.t[7]
+            if o and o[1] == 'attack' then
+                for _, f in units do if f.tag == o[2] then IssueAttack({ e.u }, f.u) end end
+            elseif o and o[1] == 'move' then
+                IssueMove({ e.u }, { o[2], GetSurfaceHeight(o[2], o[3]), o[3] })
+            elseif o and o[1] == 'holdfire' then
+                e.u:SetFireState(1)
+            end
+        end
+    end)
+    out('cborders', GetGameTick(), tostring(okO), tostring(eO))
+    local function log(tick)
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('cbdead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local tgt, clock, h, pi = '-', '-', '-', '-'
+                    if u:GetWeaponCount() > 0 then
+                        local w = u:GetWeapon(1)
+                        tgt = tagOf(w:GetCurrentTarget())
+                        clock = fmt(w:GetFireClockPct())
+                        local m = w.AimControl
+                        if m then
+                            local a, b = m:GetHeadingPitch()
+                            h, pi = fmt(a), fmt(b)
+                        end
+                    end
+                    out('cb', tick, e.tag, fmt(u:GetHealth()), fmt(p[1]), fmt(p[2]), fmt(p[3]), tgt, clock, h, pi)
+                end
+            end
+        end
+        for n, p in projs do
+            if p and not p:BeenDestroyed() then
+                local pos = p:GetPosition()
+                out('cbproj', tick, n, fmt(pos[1]), fmt(pos[2]), fmt(pos[3]))
+            end
+        end
+    end
+    while GetGameTick() < 900 do
+        local tick = GetGameTick()
+        local ok, e = pcall(log, tick)
+        if not ok then out('cb-error', tick, tostring(e)) end
+        WaitTicks(1)
+    end
+    out('combat done')
+end
+
 moho64_probe = P

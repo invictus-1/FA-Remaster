@@ -36,6 +36,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/economy.h"
 #include "sim/motion.h"
@@ -841,6 +842,9 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       break;
     case CommandType::Script:
       return StartScriptTask(sim, u, c);
+    case CommandType::Attack:
+    case CommandType::FormAttack:
+      return StartAttackTask(sim, u, c);
     case CommandType::Reclaim:
       if (!u->bpData || !u->bpData->hasBuilder || !c.targetId) return nullptr;
       t->order = "Reclaim";
@@ -849,7 +853,13 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::Guard:
     case CommandType::BuildAssist:
     case CommandType::AssistCommander:
-      if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
+      if (!u->bpData || !u->bpData->hasBuilder) {
+        if (c.type != CommandType::Guard || !c.targetId) return nullptr;
+        t->order = "Guard";  // fighters guard: stay close; the weapons engage by themselves
+        t->goalId = c.targetId;
+        u->unitStates.insert("Guarding");
+        break;
+      }
       t->order = "Repair";
       t->goalId = c.targetId;
       u->unitStates.insert(c.type == CommandType::AssistCommander ? "AssistingCommander" : "Guarding");
@@ -875,6 +885,8 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Guard:
     case CommandType::BuildAssist:
     case CommandType::AssistCommander: r = TickGuard(sim, L, u, t); break;
+    case CommandType::Attack:
+    case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
     default: break;
   }
   if (r != kTaskRunning) {
@@ -897,6 +909,11 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     t.UnbindLua();
     return;
   }
+  if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {
+    EndAttack(sim, u, t);
+    if (Alive(u)) StopMovingIfTask(u, t);
+    return;
+  }
   if (t.started && Alive(u)) StopBuild(sim, L, u, t, success);
   if (t.reclaimStarted && Alive(u)) {
     Entity* e = sim.FindEntity(t.goalId);
@@ -916,6 +933,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   u->guardedId = 0;
 }
+
+bool TaskCanMove(const Unit* u) { return CanMove(u); }
+void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
+void TaskStopMoving(Unit* u) { StopMoving(u); }
 
 void StopMovingIfTask(Unit* u, const BuildTask& t) {
   if (t.type == CommandType::BuildFactory || t.type == CommandType::Upgrade) return;

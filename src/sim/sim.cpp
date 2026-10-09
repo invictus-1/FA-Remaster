@@ -1,9 +1,12 @@
 #include "sim/sim.h"
+#include "sim/collision.h"
+#include "sim/combat.h"
 #include "sim/build.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -397,6 +400,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 Sim::~Sim() {
   owned_.clear();  // unbind every engine object while the Lua state still exists
   ReleaseEffectObjects();
+  ReleaseAnimators();
   armies_.clear();
   threads_.reset();
   state_.reset();
@@ -508,6 +512,9 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterEffectBindings(L);
   RegisterEconomyBindings(L);
   RegisterBuildBindings(L);
+  RegisterCollisionBindings(L);
+  RegisterCombatBindings(L);
+  RegisterAnimBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -700,8 +707,20 @@ void Sim::ProcessDestroyQueue() {
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
+    if (e->kind == Entity::Kind::Projectile) {
+      auto& v = projectiles;
+      v.erase(std::remove(v.begin(), v.end(), static_cast<Projectile*>(e)), v.end());
+    } else if (e->kind == Entity::Kind::Shield) {
+      shields.erase(std::remove(shields.begin(), shields.end(), static_cast<ShieldEntity*>(e)), shields.end());
+    } else if (e->kind == Entity::Kind::Beam) {
+      beams.erase(std::remove(beams.begin(), beams.end(), static_cast<CollisionBeam*>(e)), beams.end());
+    } else if (e->kind == Entity::Kind::Prop) {
+      props.erase(std::remove(props.begin(), props.end(), static_cast<Prop*>(e)), props.end());
+      propGridDirty_ = true;
+    }
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
+      ReleaseUnitCombat(*this, u);
       AdjacencyLost(*this, L, u);
       ForgetUnitCommands(u);
       UnitEconomyRelease(u);
@@ -767,14 +786,58 @@ void Sim::RemoveUnitFromLists(Unit* u) {
 
 // Order inside a beat (from the oracle probe): unit commands start, units move, finished moves
 // end (and queued moves continue in the same beat), then the script threads run.
+namespace {
+// MOHO64_PROFILE=1: time spent per phase of the tick, logged every 1000 ticks.
+struct PhaseTimer {
+  static constexpr int kN = 10;
+  const char* names[kN] = {"economy", "cleanup+intel", "commands", "collision", "motion+aim", "anim+unitecon",
+                           "projectiles", "beams", "weapons", "threads+destroy"};
+  double total[kN] = {};
+  std::chrono::steady_clock::time_point t;
+  bool on = getenv("MOHO64_PROFILE") != nullptr;
+  void Start() {
+    if (on) t = std::chrono::steady_clock::now();
+  }
+  void Lap(int i) {
+    if (!on) return;
+    auto n = std::chrono::steady_clock::now();
+    total[i] += std::chrono::duration<double, std::milli>(n - t).count();
+    t = n;
+  }
+  void Report(uint32_t tick) {
+    if (!on || tick % 1000 != 0) return;
+    std::string s;
+    char buf[64];
+    for (int i = 0; i < kN; ++i) {
+      std::snprintf(buf, sizeof buf, " %s %.2f", names[i], total[i] / 1000.0);
+      s += buf;
+      total[i] = 0;
+    }
+    Logf(LogLevel::Info, "moho64 profile tick %u (ms/tick):%s", tick, s.c_str());
+  }
+};
+PhaseTimer g_prof;
+}  // namespace
+
+// Order (Sim::AdvanceBeat 0x749f40 and the entity/task stages): the armies' economy, killed
+// units' clean-up, intel, command tasks, unit motion with each unit's aim controllers and own
+// beat, projectiles, beams, weapon tasks (acquire, fire), arrivals, script threads, destruction.
 void Sim::Tick() {
   ++tick_;
+  g_prof.Start();
   EconomyBeginBeat(*this);
+  g_prof.Lap(0);
+  KillCleanupTick(*this);
+  IntelTick(*this);
+  g_prof.Lap(1);
   CommandsBeforeMotion(*this);
+  g_prof.Lap(2);
   CollisionTick(*this);
+  g_prof.Lap(3);
   for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
     Unit* u = units_[i];
     if (u->destroyQueued) continue;
+    u->lastPosition = u->position;
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
       if (p && !p->destroyQueued) u->position = EntityBonePosition(p, u->parentBone);
@@ -782,14 +845,47 @@ void Sim::Tick() {
     } else {
       MotionTick(*this, u);
     }
+    if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
+        u->position.z != u->lastPosition.z)
+      u->lastMoveTick = tick_;
+    UnitAimTick(*this, u);
   }
+  g_prof.Lap(4);
+  AnimTick(*this);
+  gridDirty_ = true;
   // the units' own beat: economy events, regeneration or decay, consumption and production
   for (size_t i = 0; i < units_.size(); ++i)
     if (!units_[i]->destroyQueued) UnitEconomyTick(*this, units_[i]);
-  gridDirty_ = true;
+  g_prof.Lap(5);
+  ProjectilesTick(*this);
+  g_prof.Lap(6);
+  BeamsTick(*this);
+  g_prof.Lap(7);
+  WeaponsTick(*this);
+  g_prof.Lap(8);
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
   ProcessDestroyQueue();
+  g_prof.Lap(9);
+  g_prof.Report(tick_);
+}
+
+uint32_t Sim::ReserveId(Army* army, uint32_t family) {
+  uint32_t a = army ? static_cast<uint32_t>(army->index - 1) : 0xffu;
+  uint32_t key = (family << 8) | a;
+  return (((family << 8) | a) << 20) | familySerial_[key]++;
+}
+
+void Sim::RebuildPropGrid() {
+  if (gridW_ == 0) RebuildUnitGrid();
+  propGrid_.assign(static_cast<size_t>(gridW_) * gridH_, {});
+  for (Prop* p : props) {
+    if (p->destroyQueued) continue;
+    int cx = std::clamp(static_cast<int>(p->position.x) >> 4, 0, gridW_ - 1);
+    int cz = std::clamp(static_cast<int>(p->position.z) >> 4, 0, gridH_ - 1);
+    propGrid_[static_cast<size_t>(cz) * gridW_ + cx].push_back(p);
+  }
+  propGridDirty_ = false;
 }
 
 Navigation& Sim::navigation() {

@@ -1,0 +1,141 @@
+// Combat: unit weapons (target acquisition, aim controllers, the fire clock), projectiles,
+// collision beams, damage, killing, and the intel that decides what armies can target.
+//
+// The engine<->script contract (FA exe read 2026-10-08; specs in FINDINGS "Rebuild M4c"):
+// - Weapons pick targets themselves (CAcquireTargetTask, every TargetCheckInterval) from the
+//   enemies their army has a blip on, ranked by the script-set TargetPriorities; they call
+//   weapon:OnGotTarget() / OnLostTarget() when they get a target from none / lose it.
+// - Every tick a weapon whose fire clock ran out and that can fire (target in range, aim
+//   controller on target, not busy...) gets weapon:OnFire() and its clock restarts at
+//   round(10 / RateOfFire). Everything else about firing is script: the Lua weapon creates the
+//   projectiles (weapon:CreateProjectile(muzzle)) and plays the effects.
+// - Projectiles fly (gravity, thrust, homing, zig-zag), sweep their path against terrain, water
+//   and the collision primitives of units, shields and projectiles (asking the hit entity's
+//   OnCollisionCheck), and call OnImpact(type, entity) the tick after a hit. Scripts deal the
+//   damage (Damage / DamageArea / DamageRing -> target:OnDamage) and kill (Unit:Kill ->
+//   OnKilled); the dying unit is destroyed by its script later.
+#pragma once
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "script/lua.hpp"
+#include "sim/entity.h"
+#include "sim/script_object.h"
+
+namespace moho {
+
+class Sim;
+class Unit;
+class UnitWeapon;
+class Projectile;
+struct BlueprintInfo;
+struct BuildTask;
+struct UnitCommand;
+
+// Weapon blueprint values the engine reads (RUnitBlueprintWeapon), cached per blueprint table.
+struct WeaponBp {
+  std::string label;
+  int rangeCategory = 0;  // UWRC_*: 0 Undefined, 1 DirectFire, 2 IndirectFire, 3 AntiAir, 4 AntiNavy, 5 Countermeasure
+  bool prefersPrimaryWeaponTarget = false, stopOnPrimaryWeaponBusy = false, slavedToBody = false;
+  float slavedToBodyArcRange = 1;
+  bool autoInitiateAttackCommand = false;
+  float targetCheckInterval = 3;
+  bool alwaysRecheckTarget = true;
+  float minRadius = 0, maxRadius = 0, maximumBeamLength = 0, maxHeightDiff = 0, trackingRadius = 1;
+  float headingArcCenter = 0, headingArcRange = 180, firingTolerance = 0.01f, firingRandomness = 0;
+  float muzzleVelocity = 0, muzzleVelocityRandom = 0, muzzleVelocityReduceDistance = 0;
+  bool leadTarget = true;
+  float projectileLifetime = 0, projectileLifetimeUsesMultiplier = 0;
+  float damage = 0, damageRadius = 0;
+  std::string damageType = "Normal";
+  float rateOfFire = 1;
+  std::string projectileId;
+  int ballisticArc = 0;  // 0 None, 1 LowArc, 2 HighArc
+  std::string targetRestrictOnlyAllow, targetRestrictDisallow;
+  bool manualFire = false, nukeWeapon = false, overChargeWeapon = false, needPrep = false, countedProjectile = false;
+  bool ignoresAlly = true;
+  int targetType = 0;  // 0 Unit, 1 Projectile, 2 Prop
+  int attackGroundTries = 3;
+  bool aimsStraightOnDisable = false, turreted = false, yawOnlyOnTarget = false;
+  bool aboveWaterFireOnly = false, belowWaterFireOnly = false, aboveWaterTargetsOnly = false,
+       belowWaterTargetsOnly = false;
+  bool reTargetOnMiss = false, needToComputeBombDrop = false;
+  float bombDropThreshold = 1.5f;
+  bool useFiringSolutionInsteadOfAimBone = false, ignoreIfDisabled = false, cannotAttackGround = false;
+};
+const WeaponBp& GetWeaponBp(lua_State* L, int bpRef);
+
+// A weapon's (or projectile's) target (the original's CAiTarget).
+struct AiTarget {
+  int type = 0;  // 0 none, 1 entity, 2 ground
+  uint32_t entityId = 0;
+  Vec3 pos;      // ground target
+  int aimBone = -1;
+  bool mobile = false;
+  bool operator==(const AiTarget& o) const {
+    return type == o.type && entityId == o.entityId && (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
+  }
+};
+
+// CreateAimController(weapon, label, yawBone, pitchBone, muzzleBone) (CAimManipulator).
+class AimController : public ScriptObject {
+ public:
+  UnitWeapon* weapon = nullptr;
+  Unit* unit = nullptr;
+  std::string label;
+  int yawBone = -1, pitchBone = -1, muzzleBone = -1;
+  bool enabled = true;
+  float heading = 0, pitch = 0;           // current, radians, bone-relative
+  float hCenter = 0, hHalf = 3.14159265f, hSlew = 0.0628318f;
+  float pCenter = 15, pHalf = 30, pSlew = 0.0610865f;  // (sic: degrees until SetFiringArc)
+  bool onTarget = false, tracking = false, yawVertical = false;
+  int resetPoseTicks = 0, resetCountdown = 0;
+  float headingOffset = 0;
+  bool alive = true;
+  bool usesGravity = false, tracksTarget = false;
+  float projMaxSpeed = 0;
+  int EventState() const override { return onTarget ? 1 : 0; }
+};
+
+// Per-tick velocity of an entity (the last tick's displacement).
+Vec3 EntityVelocity(const Entity* e);
+// World transform of a bone in the current pose (rest pose plus this tick's aim rotations);
+// bone -1: the entity itself.
+void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot);
+// Whether the blueprint is in a named category (BENIGN, COMMAND, ...).
+bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name);
+
+// Called when a unit's weapon was created (after its OnCreate).
+void InitUnitWeapon(lua_State* L, UnitWeapon* w);
+// Per tick (see Sim::Tick for the order).
+void KillCleanupTick(Sim& sim);
+void IntelTick(Sim& sim);
+void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
+void ProjectilesTick(Sim& sim);
+void BeamsTick(Sim& sim);
+void WeaponsTick(Sim& sim);
+// A unit leaves the world.
+void ReleaseUnitCombat(Sim& sim, Unit* u);
+
+// Attack commands (CUnitAttackTargetTask), run as the unit's command task.
+BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c);
+int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
+void EndAttack(Sim& sim, Unit* u, BuildTask& t);
+// Aggressive moves and patrols look for enemies on the way (CUnitPatrolTask): an engaged target
+// (0: none) the move stops for.
+void PatrolEngageTick(Sim& sim, Unit* u, UnitCommand& c);
+// The command it was engaging for ended.
+void ClearEngagement(Sim& sim, Unit* u);
+
+// Unit::Kill (0x6a8090).
+void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::string& type, float ratio);
+
+void RegisterCombatBindings(lua_State* L);
+// Animation manipulators (sim/anim.cpp): timing only.
+void AnimTick(Sim& sim);
+void ReleaseAnimators();
+void RegisterAnimBindings(lua_State* L);
+
+}  // namespace moho

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "sim/combat.h"
 #include "sim/economy.h"
 #include "sim/entity.h"
 #include "sim/motion.h"
@@ -27,6 +28,34 @@ class UnitWeapon : public ScriptObject {
   std::string label;
   int bpRef = LUA_NOREF;  // the weapon's blueprint table (bp.Weapon[i])
   bool enabled = true;
+  // Combat state (sim/combat.cpp; the original's UnitWeapon, ctor 0x6d4310)
+  const WeaponBp* bp = nullptr;
+  const BlueprintInfo* projBp = nullptr;
+  // per-instance overrides (< 0: the blueprint's value; MaxHeightDiff starts at +inf)
+  float ovFiringTolerance = -1, ovRateOfFire = -1, ovMinRadius = -1, ovMaxRadius = -1;
+  float minR2 = 0, maxR2 = 0;
+  float ovMaxHeightDiff = 0;  // set to +inf at init
+  std::string ovDamageType;
+  float ovDamageRadius = -1, ovDamage = -1;
+  int aimBone = -1;
+  std::string fireControl = "Default";
+  AiTarget target;
+  bool onTarget = true;     // aim on-target flag (+0xf0)
+  bool canReach = true;     // has a firing solution (+0x174)
+  Vec3 solution;            // firing solution direction (+0x178), NaN = none
+  bool hasSolution = false;
+  std::vector<uint64_t> disallow, onlyAllow;  // category sets (empty: none)
+  int layerCaps = 0;
+  float firingRandomness = 0;
+  std::vector<std::vector<uint64_t>> priorities;
+  struct BlackEntry { uint32_t id; Vec3 pos; int counter; };
+  std::vector<BlackEntry> blacklist;
+  int missCount = 0, shots = 0;
+  int fireClock = 0;
+  uint32_t nextAcquire = 0;  // tick the acquire task runs next
+  int suppress = 0;
+  bool firstAcquire = true;
+  std::vector<class AimController*> aimControllers;
 };
 
 // Blueprint values the engine reads for units, cached per blueprint (sim/economy.cpp).
@@ -59,6 +88,7 @@ class Unit : public Entity {
   std::set<std::string> unitStates;
   float capCost = 1;  // General.CapCost: what the unit counts against its army's unit cap
   std::string armorType;  // Defense.ArmorType (multipliers: Sim armour types; used by damage, M4)
+  std::map<std::string, float> armorOverride;  // Unit:AlterArmor(type, mult)
   Platoon* platoon = nullptr;
   UnitMotion motion;
   std::deque<std::shared_ptr<UnitCommand>> commands;  // the command queue (sim/commands.cpp)
@@ -97,6 +127,27 @@ class Unit : public Entity {
   std::deque<std::shared_ptr<UnitCommand>> factoryCommands;
   uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
   int parentBone = -1, ownBone = -1;
+  // Combat (sim/combat.cpp)
+  const struct CombatBpData* combat = nullptr;
+  AiTarget desiredTarget;          // set by attack commands (the attacker's desired target)
+  int attackState = 0;             // the reporting weapon's state code (see TickAttack)
+  bool attackStateSignal = false;  // changed since the attack task last looked
+  int fireState = 0;               // 0 ReturnFire, 1 HoldFire, 2 HoldGround
+  bool stunned = false;
+  uint8_t recon[16] = {};          // per army index: Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10
+  // Intel by type (sim/combat.cpp kIntelNames: Vision, WaterVision, Radar, Sonar, Omni, ...).
+  float intelRadius[13] = {};
+  bool intelOn[13] = {};
+  bool killCleanup = false;        // killed: weapons and commands go at the next beat
+  bool combatGone = false;         // ... and they went
+  std::vector<AimController*> aimControllers;
+  std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach
+  uint32_t blipCacheTick = 0;
+  bool blipCacheValid = false;
+  Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
+  std::vector<class ReconBlip*> blips;  // per army index (Unit:GetBlip), made on demand
+  uint32_t engageId = 0;           // aggressive move / patrol: the enemy it stopped for
+  int engageCheck = 0;
 };
 
 class Prop : public Entity {
@@ -109,12 +160,57 @@ class ShieldEntity : public Entity {
   ShieldEntity() { typeBits |= kTypeShield; }
 };
 
+// ReconBlip (sim/combat.cpp): what one army knows of a unit.
+class ReconBlip : public Entity {
+ public:
+  Unit* source = nullptr;
+  int armyIndex = 0;  // 0-based army that holds it
+};
+
+// CollisionBeamEntity (sim/combat.cpp): a weapon's beam, attached to its unit's muzzle bone.
+class CollisionBeam : public Entity {
+ public:
+  UnitWeapon* weapon = nullptr;
+  int interval = 1;     // CollisionCheckInterval: checks every interval + 1 ticks
+  float length = 0;
+  bool enabled = true;
+  int counter = 0;
+};
+
 class Projectile : public Entity {
  public:
   Projectile() { typeBits |= kTypeProjectile; }
   Entity* launcher = nullptr;
-  Vec3 velocity;
+  Vec3 velocity;  // units per second
   std::string layer = "None";
+  // Motion (sim/projectile.cpp; the original's Projectile, ctor 0x69afe0)
+  Vec3 angVel, scaleVel;
+  Vec3 prevPos;
+  float velScale = 1;
+  float hitFraction = -1;
+  bool collideSurface = true, collideEntity = true, trackTarget = false, velocityAlign = true, stayUpright = false,
+       leadTarget = true, stayUnderwater = false, destroyOnWater = false;
+  float turnRate = 0, maxSpeed = 0, accel = 0;
+  Vec3 ballisticAccel;
+  float damage = 0, damageRadius = 0;
+  std::string damageType = "Normal";
+  AiTarget target;
+  Vec3 lastTargetPos;
+  bool homeLastPos = false;
+  Vec3 hitPos;
+  uint32_t hitEntity = 0;
+  uint32_t expireTick = 0;
+  bool underwater = false;
+  int bounceLimit = 0, bounces = 0;
+  bool bouncePending = false;
+  Vec3 bouncedVel;
+  float bounceDamp = 0.5f;
+  uint32_t nextZigZag = 0;
+  Vec3 zigOffset;
+  int impactType = 3;
+  float ovMaxZigZag = -1, ovZigZagFreq = -1, ovDetAbove = -1, ovDetBelow = -1;
+  bool ignoresAlly = true;
+  UnitWeapon* weapon = nullptr;  // created by (miss tracking)
 };
 
 class Platoon : public ScriptObject {

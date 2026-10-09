@@ -1,5 +1,6 @@
 // Unit commands and their Lua bindings (see commands.h).
 #include "sim/commands.h"
+#include "sim/combat.h"
 
 #include <algorithm>
 #include <cmath>
@@ -86,6 +87,7 @@ void SetMoving(Unit* u, bool on) {
 
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
+  if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
     EndBuildTask(*Sim::From(u->luaState()), u, *u->task, true);
     u->task = nullptr;
@@ -174,6 +176,7 @@ void StartHead(Sim& sim, Unit* u) {
 }  // namespace
 
 void ForgetUnitCommands(Unit* u) {
+  if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
     EndBuildTask(*Sim::From(u->luaState()), u, *u->task, false);
     u->task = nullptr;
@@ -205,6 +208,16 @@ void CommandsBeforeMotion(Sim& sim) {
     // keep "drive through" up to date when moves were queued behind the current one
     if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type))
       u->motion.passThrough = NextIsMove(u);
+    // aggressive moves and patrols stop to fight what they meet
+    if (st == kRunning && !u->commands.empty()) {
+      CommandType ct = u->commands.front()->type;
+      if (ct == CommandType::AggressiveMove || ct == CommandType::FormAggressiveMove || ct == CommandType::Patrol ||
+          ct == CommandType::FormPatrol) {
+        PatrolEngageTick(sim, u, *u->commands.front());
+        if (u->headState == kNotStarted) StartHead(sim, u);
+        continue;
+      }
+    }
     // guards and attacks follow a moving target
     if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {
       UnitCommand& c = *u->commands.front();
@@ -237,6 +250,10 @@ void CommandsAfterMotion(Sim& sim) {
     if (u->headState != kRunning) continue;
     UnitMotion& m = u->motion;
     if (!m.arrived && !m.failed) continue;
+    if (u->engageId) {  // arrived at the enemy it stopped for, not at the patrol point
+      m.arrived = m.failed = false;
+      continue;
+    }
     UnitCommand& c = *u->commands.front();
     bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
     std::shared_ptr<UnitCommand> keep = u->commands.front();

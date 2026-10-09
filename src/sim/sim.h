@@ -86,6 +86,7 @@ class Sim {
   bool RunString(const std::string& code, const std::string& chunkName);
 
   lua_State* L() const;
+  Vfs* vfs() const { return vfs_; }
   uint32_t tick() const { return tick_; }
   Army* GetArmy(lua_State* L, int idx);  // army by 1-based index or name
   const std::vector<std::unique_ptr<Army>>& armies() const { return armies_; }
@@ -96,7 +97,35 @@ class Sim {
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
                    Unit* builder = nullptr);
-  class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Entity* launcher, Vec3 pos, Vec3 dir);
+  // PROJ_Create (sim/projectile.cpp): runs OnPreCreate, OnLayerChange and OnCreate; nullptr when
+  // it destroyed itself (a homing projectile without a target).
+  class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* army, Entity* launcher, Vec3 pos,
+                                     Quat q, float damage, float damageRadius, const std::string& damageType,
+                                     const AiTarget& target, bool ignoresAlly);
+  std::vector<class Projectile*> projectiles;  // live projectiles, in creation order
+  std::vector<class ShieldEntity*> shields;    // shield entities (area damage pre-pass, collisions)
+  std::vector<class CollisionBeam*> beams;
+  std::vector<Prop*> props;
+  template <class F>
+  void ForPropsInRect(float x0, float z0, float x1, float z1, F&& f) {
+    if (propGridDirty_) RebuildPropGrid();
+    if (x1 < 0 || z1 < 0) return;
+    int cx0 = std::max(0, static_cast<int>(x0) >> 4), cz0 = std::max(0, static_cast<int>(z0) >> 4);
+    int cx1 = std::min(gridW_ - 1, static_cast<int>(x1) >> 4), cz1 = std::min(gridH_ - 1, static_cast<int>(z1) >> 4);
+    for (int cz = cz0; cz <= cz1; ++cz)
+      for (int cx = cx0; cx <= cx1; ++cx)
+        for (Prop* p : propGrid_[static_cast<size_t>(cz) * gridW_ + cx]) f(p);
+  }
+  void MarkPropsMoved() { propGridDirty_ = true; }
+  // Entity id for a new projectile / shield / beam of an army (separate id families).
+  uint32_t ReserveId(Army* army, uint32_t family);
+  // Register an engine-created entity (collision beams): owned by the sim, found by id.
+  void AddEntity(std::unique_ptr<Entity> e) {
+    entities_[e->id] = e.get();
+    owned_.push_back(std::move(e));
+  }
+  // The unit's armour multiplier for a damage type (armordefinition.lua, AlterArmor): 1 if none.
+  float ArmorMult(const Unit* u, const std::string& damageType) const;
   Prop* CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale);
   // _c_CreateEntity / _c_CreateShield: bind a script-made table to a new engine entity.
   Entity* AdoptScriptEntity(lua_State* L, int tableIdx, int specIdx, bool shield);
@@ -166,6 +195,10 @@ class Sim {
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;
   void RebuildUnitGrid();
+  std::vector<std::vector<Prop*>> propGrid_;
+  bool propGridDirty_ = true;
+  void RebuildPropGrid();
+  std::map<uint32_t, uint32_t> familySerial_;  // (family << 8 | army) -> next serial
   void AddUnitToLists(Unit* u);
   void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;

@@ -26,7 +26,6 @@ struct Factory {
 };
 const Factory kFactories[] = {
     {"CreateAimController", "CAimManipulator"},
-    {"CreateAnimator", "CAnimationManipulator"},
     {"CreateRotator", "CRotateManipulator"},
     {"CreateSlider", "CSlideManipulator"},
     {"CreateBuilderArmController", "CBuilderArmManipulator"},
@@ -72,6 +71,11 @@ int l_ChainStub(lua_State* L) {
   const char* name = lua_tostring(L, lua_upvalueindex(1));
   const char* m = std::strchr(name, ':');
   m = m ? m + 1 : name;
+  if (!std::strcmp(m, "GetHeadingPitch")) {
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    return 2;
+  }
   if (!std::strncmp(m, "Get", 3)) {
     lua_pushnumber(L, 0);
     return 1;

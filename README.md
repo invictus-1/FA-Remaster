@@ -1,7 +1,10 @@
-# moho64 (working name)
+# FA Remastered
 
-A new 64-bit engine for **Supreme Commander: Forged Alliance** that runs the game's own data,
-scripts and mods. You need your own copy of the game (Steam); no game files are included here.
+*An open-source 64-bit engine for Supreme Commander: Forged Alliance — bring your own game files.*
+
+FA Remastered is a new engine for **Supreme Commander: Forged Alliance** that runs the game's own
+data, scripts and mods. You need your own copy of the game (Steam); no game files are included
+here. (The executable is still called `moho64`, the project's working name.)
 
 Goals, in order:
 1. **Faithful in behaviour.** The real game files, Lua, mods and AI (e.g. M28) run unchanged, and
@@ -42,7 +45,19 @@ Milestone 3 (movement) works for ground and naval units:
 - **Units avoid each other** (an approximation of the original for now).
 - Still rough: aircraft flight, very long paths (the original returns them in parts).
 
-Next: combat and economy (M4).
+Milestone 4 (economy, building, combat) works; the AI (M28) plays a real game:
+- **Economy:** mass and energy income, storage, the original's share-out of resources between
+  consumers, economy events, adjacency.
+- **Building:** engineers, factories, upgrades, repair, assist, reclaim, silos, structure
+  placement rules and the build grid.
+- **Combat:** weapons pick targets the original's way (target priorities, layer caps, range),
+  aim controllers turn turrets at their real speeds, the fire clock, projectiles with gravity,
+  homing and zig-zag, collision with terrain, water, units and shields, beams, area damage with
+  armour and shield absorption, killing and death.
+- **Intel:** vision, radar, sonar and omni decide what each army can target; recon blips for scripts.
+- **Animations** run with their real durations (the sim waits for them as the original does).
+- Next: checking combat tick by tick against the original (oracle probe v4), aircraft flight.
+
 See [docs/architecture.md](docs/architecture.md) for where things are in the source.
 
 ## Build

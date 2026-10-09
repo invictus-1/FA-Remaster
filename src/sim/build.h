@@ -57,6 +57,10 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t);
 // The command goes away (cleared, unit destroyed, ...).
 void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 void StopMovingIfTask(Unit* u, const BuildTask& t);
+// Movement helpers for command tasks (sim/combat.cpp).
+bool TaskCanMove(const Unit* u);
+void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
+void TaskStopMoving(Unit* u);
 void InheritFactoryCommands(Sim& sim, Unit* factory, Unit* built);
 
 // Missile silos (CAiSiloBuildImpl): queued and automatic missile builds; a unit's beat.

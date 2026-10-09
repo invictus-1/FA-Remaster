@@ -59,7 +59,8 @@ add_library(mohocore STATIC
   src/script/threads.cpp src/sim/script_object.cpp src/sim/blueprints.cpp src/sim/replay.cpp
   src/sim/terrain.cpp src/sim/sim.cpp src/sim/entities.cpp src/sim/effects.cpp src/sim/bp_reflect.cpp
   src/sim/bp_derived.cpp src/sim/skeleton.cpp src/sim/motion.cpp src/sim/navigation.cpp
-  src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp)
+  src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
+  src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
 
