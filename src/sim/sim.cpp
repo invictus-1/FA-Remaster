@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "sim/air.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
 #include "sim/intel.h"
@@ -525,6 +526,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterCollisionBindings(L);
   RegisterCombatBindings(L);
   RegisterAnimBindings(L);
+  RegisterAirBindings(L);
   RegisterIntelBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
@@ -787,7 +789,9 @@ void Sim::RebuildUnitGrid() {
   gridDirty_ = false;
 }
 
+static int g_unitsCreated = 0;
 void Sim::AddUnitToLists(Unit* u) {
+  ++g_unitsCreated;
   gridDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
@@ -888,6 +892,21 @@ void Sim::Tick() {
   g_prof.Lap(1);
   ProcessDestroyQueue();
   g_prof.Report(tick_);
+  static const bool stats = getenv("MOHO64_STATS") != nullptr;
+  if (stats && tick_ % 600 == 0) {  // a quick health line per game minute
+    int n = 0, air = 0, flying = 0, dead = 0;
+    for (Unit* u : units_) {
+      if (u->destroyQueued) continue;
+      ++n;
+      if (u->dead) ++dead;
+      if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {
+        ++air;
+        if (u->layer == "Air") ++flying;
+      }
+    }
+    Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu", tick_,
+         n, air, flying, dead, g_unitsCreated, projectiles.size());
+  }
 }
 
 uint32_t Sim::ReserveId(Army* army, uint32_t family) {

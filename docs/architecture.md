@@ -42,7 +42,8 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/effects.cpp` | Emitters, beams, decals, manipulators: objects without visuals yet |
 | `src/sim/terrain.*` | `.scmap` reader: heightfield, terrain types, water, map props |
 | `src/sim/replay.*` | Replay header: session setup (map, mods, options, armies, seed) |
-| `src/sim/motion.*` | Unit motion: the original's spline steering (states, turn/accel/brake limits), coasting, ground snap, collision avoidance (approximation), air (placeholder) |
+| `src/sim/motion.*` | Unit motion: the original's spline steering (states, turn/accel/brake limits), coasting, ground snap, collision avoidance (approximation) |
+| `src/sim/air.*` | Aircraft: the original's flight model (rigid body, force/torque controllers, winged/hover/circling orientation), air navigator (goal, arrival, speed-through), auto-landing, attack runs (air combat states), falling |
 | `src/sim/navigation.*` | Where a footprint can stand (OCCUPY_MobileCheck) and path search (A* + smoothing) |
 | `src/sim/commands.*` | Command queues, Issue*, path search queue, formations, navigator object, GetUnitsInRect / GetUnitsAroundPoint |
 | `src/sim/economy.*` | Mass/energy: army economies, requests and their share-out, storage, economy events, unit consumption/production |

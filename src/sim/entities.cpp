@@ -20,6 +20,7 @@
 #include "sim/collision.h"
 #include "sim/intel.h"
 #include "sim/sim.h"
+#include "sim/air.h"
 #include "sim/skeleton.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -1014,6 +1015,12 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->lastMaterializeTick = tick_;
   UnitEconomyInit(L, u);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
+  if (u->motion.bp->motionType == kMotionAir && complete && !builder) {
+    // IUnit::CalcSpawnElevation: flyers appear at their flying height
+    u->position.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
+    u->lastPosition = u->position;
+  }
+  if (u->motion.bp->motionType == kMotionAir) AirInit(*this, u);
   CreateUnitIntel(*this, L, u);
   {
     float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
@@ -1071,6 +1078,15 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
         break;
       }
       int wbp = lua_gettop(L);
+      // Unit ctor (0x6a5fb6): DummyWeapon entries get no UnitWeapon (GetWeaponCount skips them)
+      lua_pushstring(L, "DummyWeapon");
+      lua_gettable(L, wbp);
+      bool dummy = lua_toboolean(L, -1) != 0;
+      lua_pop(L, 1);
+      if (dummy) {
+        lua_pop(L, 1);
+        continue;
+      }
       std::string label;
       lua_pushstring(L, "Label");
       lua_gettable(L, wbp);
@@ -1079,7 +1095,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
       auto wowned = std::make_unique<UnitWeapon>();
       UnitWeapon* w = wowned.get();
       w->unit = u;
-      w->index = i;
+      w->index = static_cast<int>(u->weapons.size()) + 1;
       w->label = label;
       lua_pushvalue(L, wbp);
       w->bpRef = luaL_ref(L, LUA_REGISTRYINDEX);

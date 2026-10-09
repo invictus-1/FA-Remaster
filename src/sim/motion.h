@@ -17,6 +17,7 @@
 //   and sinks by a quarter of the corners' height range).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,7 @@ namespace moho {
 class Sim;
 class Unit;
 class TerrainMap;
+struct AirMotion;
 
 enum MotionType : int {
   kMotionNone = 0,
@@ -86,6 +88,7 @@ struct UnitMotion {
   uint32_t yieldTarget = 0;  // the unit it stopped for
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
+  std::shared_ptr<AirMotion> air;  // aircraft: the flight model's state (sim/air.cpp)
 };
 
 // Goal cell of a footprint at a world position (round half to even, as the original).

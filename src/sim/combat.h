@@ -128,6 +128,8 @@ void PatrolEngageTick(Sim& sim, Unit* u, UnitCommand& c);
 // The command it was engaging for ended.
 void ClearEngagement(Sim& sim, Unit* u);
 
+// UnitWeapon::CanAttackTarget 0x6d5720.
+bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t);
 // Unit::Kill (0x6a8090).
 void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::string& type, float ratio);
 

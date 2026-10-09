@@ -1902,4 +1902,7 @@ void RegisterCombatBindings(lua_State* L) {
   RegisterProjectileBindings(L);
 }
 
+// For the flight model (sim/air.cpp).
+bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t) { return CanAttackTarget(sim, w, t); }
+
 }  // namespace moho

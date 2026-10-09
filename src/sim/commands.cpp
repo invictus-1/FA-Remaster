@@ -250,6 +250,7 @@ void CommandsAfterMotion(Sim& sim) {
     if (u->headState != kRunning) continue;
     UnitMotion& m = u->motion;
     if (!m.arrived && !m.failed) continue;
+    if (u->task) continue;  // a task command (build, guard, attack, ...) handles its own moves
     if (u->engageId) {  // arrived at the enemy it stopped for, not at the patrol point
       m.arrived = m.failed = false;
       continue;

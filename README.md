@@ -43,7 +43,7 @@ Milestone 3 (movement) works for ground and naval units:
   formation moves, the path-search queue, the navigator.
 - **Pathfinding** over the map's passability (slope, water depth, blocking terrain).
 - **Units avoid each other** (an approximation of the original for now).
-- Still rough: aircraft flight, very long paths (the original returns them in parts).
+- Still rough: very long paths (the original returns them in parts).
 
 Milestone 4 (economy, building, combat) works; the AI (M28) plays a real game:
 - **Economy:** mass and energy income, storage, the original's share-out of resources between
@@ -56,7 +56,20 @@ Milestone 4 (economy, building, combat) works; the AI (M28) plays a real game:
   armour and shield absorption, killing and death.
 - **Intel:** vision, radar, sonar and omni decide what each army can target; recon blips for scripts.
 - **Animations** run with their real durations (the sim waits for them as the original does).
-- Next: checking combat tick by tick against the original (oracle probe v4), aircraft flight.
+- Combat checked tick by tick against the original (oracle probe v4): targets, shots, hits,
+  damage and kills of the test scenarios happen on the same ticks.
+
+Aircraft fly the original's way:
+- **Flight model** rebuilt from the original: a rigid body (mass, inertia, gravity) steered by
+  the original's force and torque controllers: climb with the terrain ahead, bank into turns,
+  lift limited by the bank, slow down for tight turns, circle a goal. A scout's whole flight
+  (take-off, two legs, circling) matches the original to the last printed digit on every tick.
+- **Navigation:** straight-line flight to the goal cell, flying through waypoints of queued
+  moves, auto-landing when idle (free landing spots), taking off on the next order.
+- **Attack runs:** the original's air combat states (attack run, tail chase, random
+  manoeuvres, break-off, return to the map); gunships circle their target.
+- **Falling:** a dead aircraft spins and falls, and hits the ground or water (OnImpact).
+- Next: transports, carriers, the AI's destroyed-object errors, jamming.
 
 See [docs/architecture.md](docs/architecture.md) for where things are in the source.
 

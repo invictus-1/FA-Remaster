@@ -2,6 +2,7 @@
 #include "core/dmath.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/air.h"
 
 #include <algorithm>
 #include <cmath>
@@ -261,6 +262,12 @@ void SnapUnit(const Sim& sim, Unit* u) {
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick) {
   UnitMotion& m = u->motion;
   if (!m.bp || path.empty()) return;
+  if (m.bp->motionType == kMotionAir) {
+    m.passThrough = passThrough;
+    m.failed = false;
+    AirSetGoal(sim, u, path.back(), driveTick);
+    return;
+  }
   m.path = path;
   m.pathIndex = 0;
   m.hasGoal = true;
@@ -280,6 +287,7 @@ void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passTh
 
 void MotionStop(Unit* u) {
   UnitMotion& m = u->motion;
+  if (m.air) AirAbort(*Sim::From(u->luaState()), u);
   m.hasGoal = false;
   m.path.clear();
 }
@@ -519,57 +527,6 @@ bool Coast(Unit* u) {
   return true;
 }
 
-// Air units: a simple flight model until the original's (CUnitMotion::CalcMoveAir) is read.
-// TODO(M3b): lift, banking, circling and the exact climb profile.
-bool AirStep(Sim& sim, Unit* u) {
-  UnitMotion& m = u->motion;
-  const MotionBlueprint& b = *m.bp;
-  const TerrainMap* map = sim.map();
-  Vec3& p = u->position;
-  float ground = map ? map->SurfaceHeight(p.x, p.z) : 0;
-  float targetY = ground + b.elevation;
-  float maxF = b.maxSpeed * m.speedMult * 0.1f;
-  float acc = b.maxAccel * m.accMult * 0.01f;
-  float turn = b.turnRate * m.turnMult * kDegToRadTenth;
-  bool moved = false;
-  if (m.hasGoal && sim.tick() >= m.driveTick) {
-    const Vec3& tgt = m.path[m.pathIndex];
-    float dx = tgt.x - p.x, dz = tgt.z - p.z;
-    float dist = std::sqrt(dx * dx + dz * dz);
-    if (dist > 0) RotateToward(m.fx, m.fz, dx / dist, dz / dist, turn);
-    float fl = std::sqrt(m.fx * m.fx + m.fz * m.fz);
-    if (fl > 0) {
-      m.fx /= fl;
-      m.fz /= fl;
-    }
-    float sp = std::min(maxF, std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z) + acc);
-    m.vel.x = m.fx * sp;
-    m.vel.z = m.fz * sp;
-    moved = true;
-  } else if (m.vel.x * m.vel.x + m.vel.z * m.vel.z > kStopSq) {
-    // keep flying (circle): turn steadily
-    RotateToward(m.fx, m.fz, -m.fz, m.fx, turn * 0.5f);
-    float sp = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
-    m.vel.x = m.fx * sp;
-    m.vel.z = m.fz * sp;
-    moved = true;
-  }
-  float dy = targetY - p.y;
-  float vy = std::clamp(dy * 0.1f, -maxF * 0.5f, maxF * 0.5f);
-  if (std::fabs(dy) > 1e-3f) {
-    p.y += vy;
-    moved = true;
-  }
-  if (moved) {
-    p.x += m.vel.x;
-    p.z += m.vel.z;
-    m.bx = m.fx;
-    m.bz = m.fz;
-    u->orientation = YawQuat(m.fx, m.fz);
-  }
-  return moved;
-}
-
 }  // namespace
 
 namespace {
@@ -658,6 +615,10 @@ void CollisionTick(Sim& sim) {
 
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
+    AirMotionTick(sim, u);
+    return;
+  }
   if (!m.bp || !m.bp->mobile() || u->dead) {
     m.lastMove = {};
     return;
@@ -666,16 +627,8 @@ void MotionTick(Sim& sim, Unit* u) {
   const MotionBlueprint& b = *m.bp;
   bool moved = false;
   if (b.motionType == kMotionAir) {
-    moved = AirStep(sim, u);
-    if (m.hasGoal) {
-      const Vec3& g = m.path.back();
-      float dx = g.x - u->position.x, dz = g.z - u->position.z;
-      float r = std::max(2.0f, b.maxSpeed * 0.1f * 3);
-      if (dx * dx + dz * dz < r * r) {
-        m.hasGoal = false;
-        m.arrived = true;
-      }
-    }
+    AirMotionTick(sim, u);
+    return;
   } else {
     if (m.hasGoal) {
       if (sim.tick() < m.driveTick) {

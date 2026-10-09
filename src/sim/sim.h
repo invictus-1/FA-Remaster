@@ -93,6 +93,7 @@ class Sim {
   const SimBlueprints& blueprints() const { return bps_; }
   const TerrainMap* map() const { return map_.get(); }
   float Random();  // [0, 1)
+  uint32_t NextUInt32() { return rng_(); }  // the sim's Mersenne twister (CMersenneTwister::NextUInt32)
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
