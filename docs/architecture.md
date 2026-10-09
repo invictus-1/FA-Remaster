@@ -1,4 +1,4 @@
-# moho64 architecture: where things live
+# FA Remastered (moho64) architecture: where things live
 
 A map of the source tree. Each file starts with a short comment on what it does and, where it
 matters, how the original engine behaves.
@@ -12,9 +12,11 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
   sim/Sim::LoadRules    rules state runs /lua/ruleinit.lua (blueprint loading)
   sim/Sim::Start        map -> sim Lua state -> simInit.lua -> ScenarioInfo -> SetupSession
                         -> armies + brains (OnCreateArmyBrain) -> map props -> BeginSession
-  sim/Sim::Tick         tick counter; unit commands start (commands.cpp); units see each other
-                        (CollisionTick); units move (MotionTick); finished moves end; script
-                        threads; destroy queue
+  sim/Sim::Tick         economy share-out; killed units' clean-up; intel; command tasks
+                        (move, build, attack); units see each other (CollisionTick); units move
+                        (MotionTick) and aim (UnitAimTick); animators; units' own economy beat;
+                        projectiles; collision beams; weapons (fire, acquire); finished moves
+                        end; script threads; destroy queue
 ```
 
 ## Directories
@@ -43,6 +45,13 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/motion.*` | Unit motion: the original's spline steering (states, turn/accel/brake limits), coasting, ground snap, collision avoidance (approximation), air (placeholder) |
 | `src/sim/navigation.*` | Where a footprint can stand (OCCUPY_MobileCheck) and path search (A* + smoothing) |
 | `src/sim/commands.*` | Command queues, Issue*, path search queue, formations, navigator object, GetUnitsInRect / GetUnitsAroundPoint |
+| `src/sim/economy.*` | Mass/energy: army economies, requests and their share-out, storage, economy events, unit consumption/production |
+| `src/sim/build.*` | Structure placement, build/upgrade/repair/assist/reclaim/guard tasks, factories, silos, adjacency |
+| `src/sim/combat.*` | Weapons (acquire, fire clock, CanFire), aim controllers and the per-tick pose, attack commands, intel and recon blips |
+| `src/sim/projectile.cpp` | Projectile creation, launch, flight, collision sweep and impact |
+| `src/sim/damage.cpp` | Damage / DamageArea / DamageRing, killing, collision beams |
+| `src/sim/collision.*` | Collision primitives (box, sphere) and their tests |
+| `src/sim/anim.cpp` | Animation manipulators (timing from .sca headers) |
 | `src/core/dmath.h` | Deterministic sin/cos/atan2 (same bits on every platform) |
 | `third_party/mimalloc` | Allocator for the Lua heap (MIT) |
 | `third_party/lua` | Lua 5.0 changed to the game's dialect (docs/lua-dialect.md) |
@@ -61,6 +70,8 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 - **Reference reading:** names and call order in the original executable are read with Ghidra and
   a disassembler; nothing from it is copied.
 
+- **Combat:** `tools/compare_combat.py <original log> <moho64 log> [--tag unit]` compares the probe's
+  combat scenarios (targets, shots, launch transforms, damage, deaths, impacts).
 - **Movement:** `tools/compare_motion.py <original log> <moho64 log>` compares the probe's 17 test
   units tick by tick (start/end ticks, final positions, position and heading errors); `--tag` prints
   one unit side by side.
