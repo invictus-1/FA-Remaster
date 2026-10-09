@@ -1003,9 +1003,10 @@ void RegisterProjectileBindings(lua_State* L) {
       {"GetZigZagFrequency", l_GetZigZagFrequency},
   };
   for (const M& m : ms) SetMethod(L, "Projectile", m.n, m.f);
-  SetGlobal(L, "IsProjectile", [](lua_State* L) -> int {
-    ScriptObject* o = GetObject(L, 1);
-    lua_pushboolean(L, o && (o->typeBits & kTypeProjectile));
+  SetGlobal(L, "IsProjectile", [](lua_State* L) -> int {  // as IsUnit (entities.cpp l_IsKind)
+    ScriptObject* o = CheckAnyObject(L, 1);
+    if (o->typeBits & kTypeProjectile) lua_pushvalue(L, 1);
+    else lua_pushnil(L);
     return 1;
   });
 }

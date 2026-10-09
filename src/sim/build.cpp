@@ -1714,7 +1714,16 @@ int l_SetPaused(lua_State* L) {
   if (on != was) S(L)->CallMethod(L, u, on ? "OnPaused" : "OnUnpaused", 0);
   return 0;
 }
-int l_IsPaused(lua_State* L) {
+int l_IsPaused(lua_State* L) {  // exe 0x6c5f30: a destroyed unit is not paused (no error)
+  if (lua_istable(L, 1) && !GetObject(L, 1)) {
+    lua_rawgetcobject(L, 1);
+    bool handle = lua_touserdata(L, -1) != nullptr;
+    lua_pop(L, 1);
+    if (handle) {
+      lua_pushboolean(L, 0);
+      return 1;
+    }
+  }
   lua_pushboolean(L, CheckObject<Unit>(L, 1)->paused);
   return 1;
 }

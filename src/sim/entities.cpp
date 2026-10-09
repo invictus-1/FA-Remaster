@@ -200,9 +200,19 @@ int l_GetUnitBlueprintByName(lua_State* L) {
   return 1;
 }
 
+// IsEntity (exe 0x75e560): a live entity -> true, anything else false.
+int l_IsEntity(lua_State* L) {
+  lua_pushboolean(L, ToObject<Entity>(L, 1) != nullptr);
+  return 1;
+}
+// IsUnit / IsProp / IsProjectile (exe 0x75e6a0, 0x75e800, 0x75eac0): the argument must be a live
+// game object (else "Game object has been destroyed" / "Expected a game object"); returns the
+// object itself when it is of that kind, nil otherwise.
 template <class T>
 int l_IsKind(lua_State* L) {
-  lua_pushboolean(L, ToObject<T>(L, 1) != nullptr);
+  CheckAnyObject(L, 1);
+  if (ToObject<T>(L, 1)) lua_pushvalue(L, 1);
+  else lua_pushnil(L);
   return 1;
 }
 
@@ -220,9 +230,9 @@ int l_GetArmy(lua_State* L) {
   lua_pushnumber(L, e->army ? e->army->index : -1);
   return 1;
 }
-int l_GetBlueprint(lua_State* L) {
-  Entity* e = E(L);
-  if (!e->blueprint) {
+int l_GetBlueprint(lua_State* L) {  // exe 0x68afb0: nil for a destroyed entity or a non-entity
+  Entity* e = ToObject<Entity>(L, 1);
+  if (!e || !e->blueprint) {
     lua_pushnil(L);
     return 1;
   }
@@ -236,7 +246,12 @@ int l_GetAIBrain(lua_State* L) {
 Vec3 BonePosition(const Entity* e, int bone);
 int ResolveBone(lua_State* L, Entity* e, int arg);
 int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world position
-  Entity* e = E(L);
+  // exe 0x68fc90: a destroyed entity (or a non-entity) gives (0, 0, 0), no error (probe v9).
+  Entity* e = ToObject<Entity>(L, 1);
+  if (!e) {
+    PushVec(L, Vec3{0, 0, 0});
+    return 1;
+  }
   PushVec(L, lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2)));
   return 1;
 }
@@ -745,7 +760,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "GetEntityById", l_GetEntityById);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
   SetGlobal(L, "GetUnitBlueprintByName", l_GetUnitBlueprintByName);
-  SetGlobal(L, "IsEntity", l_IsKind<Entity>);
+  SetGlobal(L, "IsEntity", l_IsEntity);
   SetGlobal(L, "IsUnit", l_IsKind<Unit>);
   SetGlobal(L, "IsProp", l_IsKind<Prop>);
 

@@ -539,7 +539,12 @@ int l_IsCommandDone(lua_State* L) {
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
 
 int l_GetCommandQueue(lua_State* L) {
-  Unit* u = U(L);
+  // a destroyed unit: the original's own message (probe v9)
+  Unit* u = ToObject<Unit>(L, 1);
+  if (!u) {
+    if (lua_istable(L, 1)) luaL_error(L, "UnitScript:GetCommandQueue Passed in an invalid unit");
+    u = U(L);
+  }
   Sim* sim = S(L);
   lua_newtable(L);
   int n = 0;
