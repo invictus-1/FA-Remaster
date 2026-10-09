@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "sim/script_object.h"
 
 #include <cstring>
@@ -159,7 +160,17 @@ ScriptObject* CheckAnyObject(lua_State* L, int idx) {
   void** box = static_cast<void**>(lua_touserdata(L, -1));
   lua_pop(L, 1);
   if (!box) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
-  if (!*box) luaL_error(L, "Game object has been destroyed");
+  if (!*box) {
+    static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
+    if (dbg) {  // which object (sim.cpp tags destroyed units)
+      lua_pushstring(L, "_moho64_destroyed");
+      lua_rawget(L, idx);
+      const char* why = lua_tostring(L, -1);
+      if (why) luaL_error(L, "Game object has been destroyed (%s)", why);
+      lua_pop(L, 1);
+    }
+    luaL_error(L, "Game object has been destroyed");
+  }
   return static_cast<ScriptObject*>(*box);
 }
 

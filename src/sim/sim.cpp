@@ -756,7 +756,22 @@ void Sim::ProcessDestroyQueue() {
     done.push_back(e);
   }
   destroyQueue_.clear();
-  for (Entity* e : done) e->UnbindLua();
+  static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
+  for (Entity* e : done) {
+    if (dbg && e->kind == Entity::Kind::Unit && e->HasLuaObject()) {
+      Unit* u = static_cast<Unit*>(e);
+      char buf[160];
+      std::snprintf(buf, sizeof buf, "%s of army %d, destroyed tick %u, dead %d, complete %.2f, built tick %u",
+                    e->blueprint ? e->blueprint->id.c_str() : "?", e->army ? e->army->index : 0, tick_, e->dead ? 1 : 0,
+                    e->fractionComplete, u->lastMaterializeTick);
+      PushObject(L, e);
+      lua_pushstring(L, "_moho64_destroyed");
+      lua_pushstring(L, buf);
+      lua_rawset(L, -3);
+      lua_pop(L, 1);
+    }
+    e->UnbindLua();
+  }
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.

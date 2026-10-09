@@ -237,8 +237,9 @@ void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success
 }
 
 void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t) {
+  if (!target) return;
   if (t.started && t.targetId == EntityRef(target)) return;
-  if (t.started) StopBuild(sim, L, builder, t, false);
+  if (t.started) StopBuild(sim, L, builder, t, true);  // switching work: the old target is not failed
   t.targetId = EntityRef(target);
   builder->focusId = EntityRef(target);
   t.started = true;
@@ -506,7 +507,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       return kTaskRunning;
     case 4: {
       if (!InBuildRange(u, *target->blueprint, target->position)) {
-        StopBuild(sim, L, u, t, false);
+        StopBuild(sim, L, u, t, true);  // (the original never fails the repaired unit)
         u->unitStates.erase("Repairing");
         t.state = 0;
         return kTaskRunning;
@@ -914,7 +915,20 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (Alive(u)) StopMovingIfTask(u, t);
     return;
   }
-  if (t.started && Alive(u)) StopBuild(sim, L, u, t, success);
+  if (t.type == CommandType::BuildMobile) {
+    // CUnitMobileBuildTask dtor (0x5f6ac0): OnStopBuild(true) - the structure is left as it is -
+    // then the builder's OnFailedToBuild when the task did not finish (also before it started).
+    if (Alive(u)) {
+      if (t.started) StopBuild(sim, L, u, t, true);
+      if (!success) sim.CallMethod(L, u, "OnFailedToBuild", 0);
+    }
+  } else if (t.type == CommandType::Repair || t.type == CommandType::Guard || t.type == CommandType::BuildAssist ||
+             t.type == CommandType::AssistCommander) {
+    // the repair task's dtor (0x5f8e20): ClearWork, OnStopBuild(true); never a failure
+    if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
+  } else if (t.started && Alive(u)) {
+    StopBuild(sim, L, u, t, success);
+  }
   if (t.reclaimStarted && Alive(u)) {
     Entity* e = sim.FindEntity(t.goalId);
     PushObject(L, e && !e->destroyQueued ? e : nullptr);

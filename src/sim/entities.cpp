@@ -316,7 +316,25 @@ int l_BeenDestroyed(lua_State* L) {
 }
 int l_Destroy(lua_State* L) {
   if (Entity* e = ToObject<Entity>(L, 1)) S(L)->QueueDestroy(e);
-  if (getenv("MOHO64_DEBUG_DESTROY")) Logf(LogLevel::Debug, "moho64: Destroy %p", (void*)ToObject<Entity>(L, 1));
+  static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
+  if (dbg) {
+    Entity* e = ToObject<Entity>(L, 1);
+    if (e && e->kind == Entity::Kind::Unit && !e->dead) {  // who destroys a living unit
+      std::string tb;
+      lua_pushstring(L, "debug");
+      lua_gettable(L, LUA_GLOBALSINDEX);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "traceback");
+        lua_gettable(L, -2);
+        if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_isstring(L, -1)) tb = lua_tostring(L, -1);
+        lua_settop(L, lua_gettop(L) - 1);
+      }
+      lua_pop(L, 1);
+      Logf(LogLevel::Debug, "moho64: Destroy living %s (army %d, tick %u, complete %.2f)\n%s",
+           e->blueprint ? e->blueprint->id.c_str() : "?", e->army ? e->army->index : 0, S(L)->tick(),
+           e->fractionComplete, tb.c_str());
+    }
+  }
   return 0;
 }
 // GetReclaimablesInRect(rect) -> props (and wrecks) inside; TODO(M3): spatial index
