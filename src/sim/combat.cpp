@@ -18,6 +18,7 @@
 //   Projectiles launch along the muzzle bone as aimed, so the pose matters to the sim.
 // Intel (approximation, TODO(M4d): the original's recon grids): every tick each army's units
 // see enemies within their vision / radar / sonar / omni radii; allies share what they see.
+#include "core/dmath.h"
 #include "sim/combat.h"
 
 #include <algorithm>
@@ -509,7 +510,7 @@ Vec3 WeaponForward(const UnitWeapon* w) {
 }
 float UnitHeading(const Unit* u) {
   Vec3 f = Forward(u->orientation);
-  return std::atan2(f.x, f.z);
+  return dmath::Atan2(f.x, f.z);
 }
 
 // PickTargetPoint 0x6d5590: whether the weapon may target the entity at all.
@@ -549,7 +550,7 @@ int SolutionStatus(UnitWeapon* w, Vec3 pos, float* distSq) {
   if (std::fabs(pos.y - u->position.y) > MaxHeightDiff(w)) return 3;
   if (w->bp->headingArcRange < 180) {
     Vec3 o = WeaponPos(w);
-    float a = std::atan2(pos.x - o.x, pos.z - o.z);
+    float a = dmath::Atan2(pos.x - o.x, pos.z - o.z);
     float rel = WrapPi(a - UnitHeading(u) - w->bp->headingArcCenter * kDeg2Rad);
     if (std::fabs(rel) > w->bp->headingArcRange * kDeg2Rad) return 2;
   }
@@ -1051,10 +1052,10 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
   }
   float target;
   if (heading) {
-    target = std::atan2(v.x, v.z) + c->headingOffset;
+    target = dmath::Atan2(v.x, v.z) + c->headingOffset;
   } else {
     float l = Len(v);
-    target = l > 0 ? std::asin(std::fmax(-1.0f, std::fmin(1.0f, v.y / l))) : 0;
+    target = l > 0 ? dmath::Asin(std::fmax(-1.0f, std::fmin(1.0f, v.y / l))) : 0;
   }
   float delta;
   if (half >= 3.1405928f) {
@@ -1190,12 +1191,12 @@ Vec3 Aim(Sim& sim, AimController* c) {
     if (A <= 0) return Norm(Sub(tPos, Mpos));
     float disc = d * d - (dy + A) * A * 4;
     if (disc < 0) return NaNVec();
-    float high = -std::atan((std::sqrt(disc) + d) / (2 * A));
-    float low = -std::atan((d - std::sqrt(disc)) / (2 * A));
+    float high = -dmath::Atan((std::sqrt(disc) + d) / (2 * A));
+    float low = -dmath::Atan((d - std::sqrt(disc)) / (2 * A));
     float p = w->bp->ballisticArc == 2 ? high : low;
     Vec3 hz{tPos.x - Mpos.x, 0, tPos.z - Mpos.z};
     hz = Norm(hz);
-    return {hz.x * std::cos(p), -std::sin(p), hz.z * std::cos(p)};
+    return {hz.x * dmath::Cos(p), -dmath::Sin(p), hz.z * dmath::Cos(p)};
   }
   return Norm(Sub(tPos, Mpos));
 }
@@ -1288,7 +1289,7 @@ int l_CreateAimController(lua_State* L) {
   if (yaw >= 0) {
     Quat q = u->skeleton->bones()[static_cast<size_t>(yaw)].modelRot;
     Vec3 f = Forward(q);
-    c->hCenter = std::atan2(f.x, f.z) + (w->bp ? w->bp->headingArcCenter : 0) * kDeg2Rad;
+    c->hCenter = dmath::Atan2(f.x, f.z) + (w->bp ? w->bp->headingArcCenter : 0) * kDeg2Rad;
     c->hHalf = (w->bp ? w->bp->headingArcRange : 180) * kDeg2Rad;
     c->yawVertical = std::fabs(f.y) > 0.707f;
   }

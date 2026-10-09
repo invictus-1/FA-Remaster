@@ -18,6 +18,7 @@
 //   puts it at the hit point; OnImpact(type, entity) runs at the start of the next tick
 //   (Impact 0x69dec0), which never destroys it (the script does). Running out of lifetime is an
 //   'Air' (or 'Underwater') impact.
+#include "core/dmath.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -105,7 +106,7 @@ float Gauss(Sim& sim) {
     y = 2 * U(sim) - 1;
     s = x * x + y * y;
   } while (s >= 1 || s == 0);
-  float m = std::sqrt(-2 * std::log(s) / s);
+  float m = std::sqrt(-2 * dmath::Log(s) / s);
   cached = y * m;
   have = true;
   return x * m;

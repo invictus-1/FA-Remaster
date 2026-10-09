@@ -1,6 +1,7 @@
 // Vector and quaternion helpers for the combat code (y up; heading 0 faces +z; quaternions
 // stored x, y, z, w as in sim/entity.h).
 #pragma once
+#include "core/dmath.h"
 #include <cmath>
 #include <limits>
 
@@ -40,8 +41,8 @@ inline Vec3 Forward(const Quat& q) {  // local +z in the world
   return {2 * (q.x * q.z + q.w * q.y), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
 }
 inline Quat AxisAngle(Vec3 axis, float a) {
-  float s = std::sin(a * 0.5f);
-  return {axis.x * s, axis.y * s, axis.z * s, std::cos(a * 0.5f)};
+  float s = dmath::Sin(a * 0.5f);
+  return {axis.x * s, axis.y * s, axis.z * s, dmath::Cos(a * 0.5f)};
 }
 inline Quat QNorm(Quat q) {
   float l = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
@@ -53,8 +54,8 @@ inline Quat Orient(Vec3 dir) {
   float l = Len(dir);
   if (l <= 0) return Quat{};
   Vec3 f = Mul(dir, 1.0f / l);
-  float yaw = std::atan2(f.x, f.z);
-  float pitch = std::asin(std::fmax(-1.0f, std::fmin(1.0f, f.y)));
+  float yaw = dmath::Atan2(f.x, f.z);
+  float pitch = dmath::Asin(std::fmax(-1.0f, std::fmin(1.0f, f.y)));
   // rotation = yaw about +y, then pitch about local +x (negative pitch tips +z up)
   return QMul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, -pitch));
 }
@@ -64,7 +65,7 @@ inline Quat RotateToward(const Quat& q, Vec3 dir, float maxAngle) {
   Vec3 d = Norm(dir);
   if (Len2(d) <= 0) return q;
   float c = std::fmax(-1.0f, std::fmin(1.0f, Dot(f, d)));
-  float ang = std::acos(c);
+  float ang = dmath::Acos(c);
   if (ang <= 1e-6f) return q;
   Vec3 axis = Cross(f, d);
   if (Len2(axis) < 1e-12f) {  // opposite: any perpendicular axis

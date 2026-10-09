@@ -379,7 +379,7 @@ int l_OrientFromDir(lua_State* L) {
     return 1;
   }
   float heading = dmath::Atan2(x, z);
-  float pitch = -std::asin(y / len);
+  float pitch = -dmath::Asin(y / len);
   float ch = dmath::Cos(heading * 0.5f), sh = dmath::Sin(heading * 0.5f);
   float cp = dmath::Cos(pitch * 0.5f), sp = dmath::Sin(pitch * 0.5f);
   // probe: equal to the original within 1 ulp; + 0.0f turns -0 into 0 as the original prints it

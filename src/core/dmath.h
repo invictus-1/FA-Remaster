@@ -60,4 +60,27 @@ inline float Acos(float x) {
   return static_cast<float>(Atan2d(std::sqrt((1.0 - d) * (1.0 + d)), d));
 }
 
+inline float Asin(float x) {
+  double d = x < -1 ? -1.0 : (x > 1 ? 1.0 : x);
+  return static_cast<float>(Atan2d(d, std::sqrt((1.0 - d) * (1.0 + d))));
+}
+inline float Atan(float x) { return static_cast<float>(Atan2d(x, 1.0)); }
+// natural log (x > 0): x = m * 2^e with m in [sqrt(1/2), sqrt(2)), then 2*atanh((m-1)/(m+1))
+inline double Logd(double x) {
+  if (!(x > 0)) return x == 0 ? -HUGE_VAL : NAN;
+  int e;
+  double m = std::frexp(x, &e);  // [0.5, 1)
+  if (m < 0.70710678118654752440) {
+    m *= 2;
+    --e;
+  }
+  double t = (m - 1) / (m + 1), t2 = t * t, term = t, sum = t;
+  for (int n = 3; n <= 41; n += 2) {
+    term *= t2;
+    sum += term / n;
+  }
+  return 2 * sum + e * 0.69314718055994530942;
+}
+inline float Log(float x) { return static_cast<float>(Logd(x)); }
+
 }  // namespace moho::dmath
