@@ -604,4 +604,174 @@ function P.Transport()
     out('transport done')
 end
 
+-- 6) destroy timing (v7): when does a destroyed unit's script object stop working, when does
+-- OnDestroy run, and when does a thread forked from an engine callback first run? Tick D:
+-- 'd_thr' is destroyed from this thread, 'd_kill' is killed (death script destroys it later).
+-- Then a T1 mex on a free mass deposit upgrades (resources given, build rate 300); the old mex is
+-- destroyed by StructureUnit's UpgradingState OnStopBuild, and a thread forked from the new mex's
+-- OnStopBeingBuilt checks the old one at waits 0..3 (what M28's mex upgrade logic does).
+-- "PROBE ds <tick> <tag> <where> bd=<BeenDestroyed> dead=<.Dead> id=<ok|err> pos=<ok|err> brain=<ok|err>"
+-- "PROBE dscb <tick> <tag> <callback> [enter|exit]"  /  "PROBE dsfork <tick> <tag> wait=<n> ..."
+local function objState(u)
+    local function try(f)
+        local ok, e = pcall(f, u)
+        if ok then return 'ok' end
+        local m = tostring(e)
+        local _, _, tail = string.find(m, ':%d+: (.*)$')
+        m = string.gsub(string.sub(tail or m, 1, 40), ' ', '_')
+        return 'err(' .. m .. ')'
+    end
+    local okb, bd = pcall(function() return u:BeenDestroyed() end)
+    local bds = okb and tostring(bd) or 'err'
+    local okd, dead = pcall(function() return rawget(u, 'Dead') end)
+    return 'bd=' .. bds .. ' dead=' .. tostring(okd and dead) .. ' id=' .. try(function(x) return x:GetEntityId() end)
+        .. ' pos=' .. try(function(x) return x:GetPosition() end) .. ' brain=' .. try(function(x) return x:GetAIBrain() end)
+end
+P.objState = objState
+local dsSeq = 0
+local function ds(tag, where, u)
+    dsSeq = dsSeq + 1
+    out('ds', GetGameTick(), tag, where, 's' .. dsSeq, objState(u))
+end
+-- wrap a script callback on one unit, looking the class method up at call time (state machines
+-- swap the unit's metatable, so a captured function would be the wrong state's)
+local function hook(u, tag, name, before, after)
+    local function current(self)
+        local mt = getmetatable(self)
+        local f = mt and mt[name]
+        return f
+    end
+    rawset(u, name, function(self, a, b, c)
+        if before then
+            local ok, e = pcall(before, self, a, b, c)
+            if not ok then out('ds-hook-error', tag, name, tostring(e)) end
+        end
+        local f = current(self)
+        local r1, r2
+        if f then r1, r2 = f(self, a, b, c) end
+        if after then
+            local ok, e = pcall(after, self, a, b, c)
+            if not ok then out('ds-hook-error', tag, name, tostring(e)) end
+        end
+        return r1, r2
+    end)
+end
+function P.Destroy()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('ds no army') return end
+    local brain = ArmyBrains[a1]
+    local function spawn(tag, bp, x, z)
+        local ok, u = pcall(CreateUnitHPR, bp, a1, x, GetSurfaceHeight(x, z), z, 0, 0, 0)
+        if ok and u then out('dsspawn', GetGameTick(), tag, bp, u:GetEntityId()) return u end
+        out('dsspawn-failed', tag, tostring(u))
+    end
+    -- A) a unit destroyed from a thread, a unit killed
+    local thr = spawn('d_thr', 'uel0201', 250, 800)
+    local kill = spawn('d_kill', 'uel0201', 262, 800)
+    for _, e in { { 'd_thr', thr }, { 'd_kill', kill } } do
+        local tag = e[1]
+        if e[2] then
+            hook(e[2], tag, 'OnDestroy', function(self) out('dscb', GetGameTick(), tag, 'OnDestroy') end)
+            hook(e[2], tag, 'OnKilled', function(self) out('dscb', GetGameTick(), tag, 'OnKilled') end)
+        end
+    end
+    WaitTicks(2)
+    if thr then
+        ds('d_thr', 'before', thr)
+        thr:Destroy()
+        ds('d_thr', 'after-destroy', thr)
+        ForkThread(function()
+            out('dsfork', GetGameTick(), 'd_thr', 'first-run', objState(thr))
+            WaitTicks(1)
+            out('dsfork', GetGameTick(), 'd_thr', 'wait=1', objState(thr))
+        end)
+        ds('d_thr', 'after-fork', thr)
+    end
+    if kill then
+        ds('d_kill', 'before', kill)
+        local ok, e = pcall(function() kill:Kill() end)
+        if not ok then out('ds-error', 'kill', tostring(e)) end
+        ds('d_kill', 'after-kill', kill)
+    end
+    -- the killed unit: every change of state for up to 150 ticks
+    ForkThread(function()
+        local last, stop = nil, GetGameTick() + 150
+        while kill and GetGameTick() < stop do
+            local st = objState(kill)
+            if st ~= last then out('ds', GetGameTick(), 'd_kill', 'change', st) last = st end
+            WaitTicks(1)
+        end
+    end)
+    for i = 1, 4 do
+        WaitTicks(1)
+        if thr then ds('d_thr', 'tick+' .. i, thr) end
+    end
+    -- B) the mex upgrade
+    local mx, mz
+    local okm, markers = pcall(function() return import('/lua/sim/scenarioutilities.lua').GetMarkers() end)
+    if okm and markers then
+        local best
+        for _, name in keys(markers) do
+            local m = markers[name]
+            if m.type == 'Mass' and m.position then
+                local x, z = m.position[1], m.position[3]
+                local busy = GetUnitsInRect(Rect(x - 1, z - 1, x + 1, z + 1))
+                if not busy or table.getn(busy) == 0 then
+                    local d = (x - 230) * (x - 230) + (z - 780) * (z - 780)
+                    if not best or d < best then best, mx, mz = d, x, z end
+                end
+            end
+        end
+    else
+        out('ds markers-error', tostring(markers))
+    end
+    if not mx then out('ds no free mass deposit') return end
+    out('dsmex', GetGameTick(), fmt(mx), fmt(mz))
+    local old = spawn('m_old', 'ueb1103', mx, mz)
+    if not old then return end
+    local new
+    hook(old, 'm_old', 'OnStartBuild', function(self, u)
+        out('dscb', GetGameTick(), 'm_old', 'OnStartBuild', u and u:GetBlueprint().BlueprintId or '-')
+        if u and not new then
+            new = u
+            hook(u, 'm_new', 'OnStopBeingBuilt', function(self, builder)
+                ds('m_old', 'm_new.OnStopBeingBuilt-enter', old)
+                ForkThread(function()
+                    for w = 0, 3 do
+                        out('dsfork', GetGameTick(), 'm_old', 'wait=' .. w, objState(old))
+                        WaitTicks(1)
+                    end
+                end)
+            end, function(self) ds('m_old', 'm_new.OnStopBeingBuilt-exit', old) end)
+        end
+    end)
+    hook(old, 'm_old', 'OnStopBuild', function(self) ds('m_old', 'OnStopBuild-enter', old) end,
+        function(self) ds('m_old', 'OnStopBuild-exit', old) end)
+    hook(old, 'm_old', 'OnDestroy', function(self) ds('m_old', 'OnDestroy', old) end)
+    WaitTicks(2)
+    local okU, eU = pcall(function()
+        brain:GiveStorage('Mass', 20000)
+        brain:GiveStorage('Energy', 50000)
+        brain:GiveResource('Mass', 20000)
+        brain:GiveResource('Energy', 50000)
+        old:SetBuildRate(300)
+        IssueUpgrade({ old }, 'ueb1202')
+    end)
+    out('dsorders', GetGameTick(), tostring(okU), tostring(eU))
+    local stop, gone = GetGameTick() + 200, nil
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(function()
+            local fc = new and not new:BeenDestroyed() and new:GetFractionComplete() or -1
+            out('dsm', t, fmt(fc), objState(old))
+            if not gone and old:BeenDestroyed() then gone = t end
+        end)
+        if not ok then out('dsm-error', t, tostring(e)) end
+        if gone and t >= gone + 6 then break end
+        WaitTicks(1)
+    end
+    out('destroy done')
+end
+
 moho64_probe = P

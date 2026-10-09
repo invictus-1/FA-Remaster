@@ -11,6 +11,7 @@ if rawget(_G, 'moho64_probe') then
             while GetGameTick() < 460 do WaitTicks(1) end
             P.Combat()
             P.Transport()
+            P.Destroy() -- v7
         end)
     end)
     if not ok then LOG('PROBE error ' .. tostring(e)) end
