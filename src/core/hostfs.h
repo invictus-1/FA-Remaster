@@ -16,12 +16,12 @@ namespace moho::hostfs {
 
 // Map a Windows drive letter to a host directory (non-Windows hosts; ignored on Windows).
 void MapDrive(char drive, const std::string& hostRoot);
-// Map a Windows path prefix ("C:/Users/chris/Downloads/SupComLab") to a host directory.
+// Map a Windows path prefix ("C:/Users/Player/Downloads/SupComLab") to a host directory.
 // Longest matching prefix wins; checked before drive mappings (non-Windows hosts).
 void MapPrefix(const std::string& windowsPrefix, const std::string& hostDir);
 
 // The original engine's display form of a host path: lower case, backslashes, "." and ".."
-// collapsed, no trailing separator. Example: "c:\users\chris\downloads\supcomlab\gamedata".
+// collapsed, no trailing separator. Example: "c:\users\player\downloads\supcomlab\gamedata".
 std::string DisplayPath(std::string_view path);
 
 // Forward-slash form with "." and ".." collapsed, original letter case kept.
