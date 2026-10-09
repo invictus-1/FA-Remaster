@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/commands.h"
 
 #include <algorithm>
 #include <chrono>
@@ -98,19 +99,60 @@ bool Reach(Sim& sim, const Unit* u, const PathCell& a, const PathCell& b) {
   return Corridor(sim, u, a, b);
 }
 
-// Units that block a cell / a way (COGrid::UnitIsBlocked 0x721340, 0x7216d0 with the filter
-// 0x62eea0). APPROXIMATION: the original's priority rule between two moving units
-// (Unit::IsHigherPriorityThan) is not read; here only units standing still block.
+// Unit::IsHigherPriorityThan 0x6a8d80: does `a` have the right of way over `b`? (b then
+// does not block a). Not modelled: the two unnamed flags at unit+0x68a/+0x68b, formations
+// (same-formation slot order, leaders) and UnitMoreInLineToOther 0x62eac0 (ties go to the
+// lower entity id, the original's fallback).
+bool HigherPriority(const Unit* a, const Unit* b) {
+  auto st = [](const Unit* u, const char* s) { return u->unitStates.count(s) != 0; };
+  if (a->immobile || st(a, "Upgrading")) return true;
+  if (b->immobile || st(b, "Upgrading")) return false;
+  bool ai = (a->motion.bp->footprint.flags & 1) != 0, bi = (b->motion.bp->footprint.flags & 1) != 0;
+  if (ai && !bi) return true;
+  if (bi && !ai) return false;
+  auto landedFlyer = [](const Unit* u) { return u->motion.bp->motionType == kMotionAir && u->layer != "Air"; };
+  if (landedFlyer(a)) return true;
+  if (landedFlyer(b)) return false;
+  if (st(a, "WaitingForTransport") && !st(b, "WaitingForTransport")) return true;
+  if (a->guardedId && a->guardedId == b->id) return false;
+  if (b->guardedId && b->guardedId == a->id) return true;
+  bool am = st(a, "Moving"), bm = st(b, "Moving");
+  if (am && !bm) return false;
+  if (!am && bm) return true;
+  const NamedFootprint& fa = a->motion.bp->footprint;
+  const NamedFootprint& fb = b->motion.bp->footprint;
+  int sa = std::max(fa.sizeX, fa.sizeZ), sb = std::max(fb.sizeX, fb.sizeZ);
+  if (sa != sb) return sa > sb;
+  return a->id < b->id;
+}
+
+// The unit filter of the occupancy tests (0x62eea0): does `e` count as an obstacle for `self`?
+// flags 1: units that moved this tick never block; flags 2 (attacking): everyone blocks.
+// Unit::IsSameFormationLayerWith 0x6a8d40: neither attacking, both in the same formation (ours: the
+// same formation-move command at the head of both queues)
+bool SameFormation(const Unit* a, const Unit* b) {
+  if (a->unitStates.count("Attacking") || b->unitStates.count("Attacking")) return false;
+  if (a->commands.empty() || b->commands.empty()) return false;
+  const UnitCommand* c = a->commands.front().get();
+  return c == b->commands.front().get() && !c->slots.empty();
+}
+
 bool BlocksFor(const Unit* self, const Unit* e, int flags) {
-  if (!e || e == self || e->dead || e->destroyQueued || e->fractionComplete < 1.0f) return false;
+  if (!e || e == self || e->dead || e->destroyQueued) return false;
+  if (SameFormation(self, e)) return false;  // (the original orders mates by slot; not modelled)
   if (!e->motion.bp || !e->motion.bp->mobile()) return false;  // structures: occupancy
-  if (e->layer == "Air" || e->layer == "Sub") return false;
+  if (flags == 1 && (e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
+                     e->position.z != e->lastPosition.z))
+    return false;
   if (e->parentId || e->unitStates.count("Attached")) return false;
   if (e->layer != self->layer) return false;
+  if ((self->motion.bp->footprint.flags & 1) && !(e->motion.bp->footprint.flags & 1)) return false;
+  if (self->unitStates.count("WaitingForTransport") && e->unitStates.count("WaitingForTransport") &&
+      self->focusId == e->focusId)
+    return false;
   if (flags == 2) return true;
   if (!self->unitStates.count("WaitingForTransport") && e->unitStates.count("WaitingForTransport")) return true;
-  const Vec3& v = e->motion.lastMove;
-  return v.x == 0.0f && v.z == 0.0f && !e->motion.hasGoal;
+  return !HigherPriority(self, e);
 }
 
 }  // namespace
@@ -122,7 +164,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   float x0 = static_cast<float>(x), z0 = static_cast<float>(z), x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
-    if (blocked || !BlocksFor(u, e, flags)) return;
+    if (blocked || e->layer == "Air" || e->layer == "Sub" || !BlocksFor(u, e, flags)) return;
     const MotionBlueprint* b = e->motion.bp;
     float hx = b->sizeX * 0.5f, hz = b->sizeZ * 0.5f;
     if (e->position.x + hx < x0 || e->position.x - hx > x1 || e->position.z + hz < z0 || e->position.z - hz > z1) return;
@@ -143,7 +185,7 @@ bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flag
   bool blocked = false;
   sim.ForUnitsInRect(std::min(ax, bx) - hw - 4, std::min(az, bz) - hw - 4, std::max(ax, bx) + hw + 4,
                      std::max(az, bz) + hw + 4, [&](Unit* e) {
-                       if (blocked || !BlocksFor(u, e, flags)) return;
+                       if (blocked || e->layer == "Air" || e->layer == "Sub" || !BlocksFor(u, e, flags)) return;
                        float rx = e->position.x - ax, rz = e->position.z - az;
                        float along = rx * fx + rz * fz, side = std::fabs(-rx * fz + rz * fx);
                        float er = (e->motion.bp->sizeX + e->motion.bp->sizeZ) * 0.25f;

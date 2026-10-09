@@ -507,6 +507,13 @@ function P.NavLine(kind, tick, tag, u)
         local f = ''
         if u:IsUnitState('ProblemGettingToGoal') then f = f .. 'P' end
         if u:IsUnitState('PathFinding') then f = f .. 'F' end
+        -- v6: goal and path flags (the transport cargo only: what ends tank2's first walk)
+        if kind == 'trnav' then
+            local g = nav:GetGoalPos()
+            local ok1, good = pcall(function() return nav:HasGoodPath() end)
+            local ok2, at = pcall(function() return nav:AtGoal() end)
+            f = f .. ' goal=' .. fmt(g[1]) .. ',' .. fmt(g[3]) .. ' good=' .. tostring(ok1 and good) .. ' at=' .. tostring(ok2 and at)
+        end
         out(kind, tick, tag, fmt(t[1]), fmt(t[3]), tostring(st), f)
     end)
     if not ok then out(kind .. '-error', tick, tag, tostring(err)) end
