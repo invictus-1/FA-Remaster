@@ -28,6 +28,7 @@ struct BuildTask : public ScriptObject {
   uint32_t goalId = 0;    // the command's target (repair / guard)
   uint32_t targetId = 0;  // the unit being worked on (focus)
   bool started = false;   // OnStartBuild ran for targetId
+  bool completed = false; // the work finished (the task's done state: mobile 5, factory 4, upgrade 3)
   bool ended = false;
   float lastFraction = 0;
   // reclaim: the fraction taken per tick and the resources it yields per tick

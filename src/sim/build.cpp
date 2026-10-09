@@ -61,6 +61,12 @@ Unit* FindUnit(Sim& sim, uint32_t id) {
   Entity* e = sim.FindEntity(id);
   return e && e->kind == Entity::Kind::Unit && Alive(e) ? static_cast<Unit*>(e) : nullptr;
 }
+// A weak pointer's view: the unit until it is freed (dead and destroy-queued units included).
+Unit* FindUnitAny(Sim& sim, uint32_t id) {
+  if (!id) return nullptr;
+  Entity* e = sim.FindEntity(id);
+  return e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+}
 
 const NamedFootprint& Footprint(const BlueprintInfo& bp) {
   static NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
@@ -231,13 +237,13 @@ void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t)
 // OnStopBuild(success): the builder's OnStopBuild(target, order) (and on failure OnFailedToBuild /
 // the target's OnFailedToBeBuilt first); the builder loses its focus.
 void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success) {
-  Unit* target = FindUnit(sim, t.targetId);
+  Unit* target = FindUnitAny(sim, t.targetId);  // (the helper's weak pointer: non-null until freed)
   if (t.started && Alive(builder)) {
     if (!success) {
       sim.CallMethod(L, builder, "OnFailedToBuild", 0);
-      if (target) sim.CallMethod(L, target, "OnFailedToBeBuilt", 0);
+      if (target && target->HasLuaObject()) sim.CallMethod(L, target, "OnFailedToBeBuilt", 0);
     }
-    PushObject(L, target);
+    PushObject(L, target && !target->destroyQueued ? target : nullptr);
     lua_pushstring(L, t.order.c_str());
     sim.CallMethod(L, builder, "OnStopBuild", 2);
   }
@@ -404,6 +410,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
       target = FindUnit(sim, t.targetId);
       if (target) target->unitStates.erase("NoReclaim");
+      t.completed = true;
       return kTaskDone;
     }
   }
@@ -415,6 +422,7 @@ void SetUpInitialRally(Sim& sim, Unit* f);
 int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0: {
+      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (after a lost target: 10 ticks)
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
       if (u->busy) return kTaskRunning;
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
@@ -431,9 +439,11 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     case 1: {
       Unit* target = FindUnit(sim, t.targetId);
-      if (!target) {
+      if (!target) {  // CFactoryBuildTask state 1 (0x5fa981): fail, then build again after 10 ticks
         StopBuild(sim, L, u, t, false);
+        u->unitStates.erase("Building");
         t.state = 0;
+        t.waitUntil = sim.tick() + 10;
         return kTaskRunning;
       }
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
@@ -447,6 +457,7 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     case 3:
       if (u->busy) return kTaskRunning;  // roll-off: the scripts keep the factory busy
+      t.completed = true;
       return kTaskDone;
   }
   return kTaskFailed;
@@ -456,6 +467,7 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0: {
       if (!t.bp) return kTaskFailed;
+      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit)
       u->unitStates.insert("Upgrading");
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, u->orientation, false, u);
       if (!nu || !Alive(nu)) {
@@ -469,13 +481,16 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     case 1: {
       Unit* target = FindUnit(sim, t.targetId);
-      if (!target) {
+      if (!target) {  // CUnitUpgradeTask state 2 (0x5f8b2a): fail, then start over after 10 ticks
         StopBuild(sim, L, u, t, false);
-        u->unitStates.erase("Upgrading");
-        return kTaskFailed;
+        t.targetId = 0;
+        t.state = 0;
+        t.waitUntil = sim.tick() + 10;
+        return kTaskRunning;
       }
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
       u->unitStates.erase("Upgrading");
+      t.completed = true;
       return kTaskDone;
     }
   }
@@ -511,11 +526,16 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       t.state = 4;
       return kTaskRunning;
     case 4: {
-      if (!InBuildRange(u, *target->blueprint, target->position)) {
-        StopBuild(sim, L, u, t, true);  // (the original never fails the repaired unit)
-        u->unitStates.erase("Repairing");
-        t.state = 0;
-        return kTaskRunning;
+      {  // CUnitRepairTask state 4: the task ends once the target is 2 x MaxBuildDistance away
+        const UnitBpData& td = GetUnitBpData(u->luaState(), *target->blueprint);
+        float dx = u->position.x - target->position.x, dz = u->position.z - target->position.z;
+        const NamedFootprint& bf = Footprint(*u->blueprint);
+        float d = std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(bf.sizeX, bf.sizeZ)) -
+                  std::max(td.skirtSizeX, td.skirtSizeZ);
+        if (!target->unitStates.count("Attached") && d > u->bpData->maxBuildDistance * 2.0f) {
+          u->unitStates.erase("Repairing");
+          return kTaskFailed;  // (the dtor: OnStopBuild(true), never a failure for the target)
+        }
       }
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
       u->unitStates.erase("Repairing");
@@ -931,16 +951,39 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (Alive(u)) StopMovingIfTask(u, t);
     return;
   }
+  (void)success;  // build-like tasks end by their own state (the task dtors), not the caller's view
   if (t.type == CommandType::BuildMobile) {
     // CUnitMobileBuildTask dtor (0x5f6ac0): OnStopBuild(true) - the structure is left as it is -
     // then the builder's OnFailedToBuild when the task did not finish (also before it started).
     if (Alive(u)) {
       if (t.started) StopBuild(sim, L, u, t, true);
-      if (!success) sim.CallMethod(L, u, "OnFailedToBuild", 0);
+      if (!t.completed) sim.CallMethod(L, u, "OnFailedToBuild", 0);
+    }
+  } else if (t.type == CommandType::BuildFactory) {
+    // CFactoryBuildTask dtor (0x5fa010): OnStopBuild(true) when done, else OnStopBuild(false)
+    // (a cancelled product gets OnFailedToBeBuilt; the factory script destroys it)
+    if (t.started && Alive(u)) StopBuild(sim, L, u, t, t.completed);
+  } else if (t.type == CommandType::Upgrade) {
+    // CUnitUpgradeTask dtor (0x5f84c0): done -> OnStopBuild(true); otherwise the engine destroys the
+    // upgrade unit itself (its ground released, the builder's taken back), then OnStopBuild(false)
+    u->unitStates.erase("Upgrading");
+    if (t.completed) {
+      if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
+    } else {
+      Unit* target = FindUnit(sim, t.targetId);
+      if (target) {
+        ReleaseStructure(sim, target);
+        sim.QueueDestroy(target);
+        bool occupied = false;
+        for (const auto& r : sim.navigation().Structures()) occupied = occupied || r.entity == u->id;
+        if (!occupied && Alive(u)) OccupyStructure(sim, u);
+      }
+      if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
   } else if (t.type == CommandType::Repair || t.type == CommandType::Guard || t.type == CommandType::BuildAssist ||
              t.type == CommandType::AssistCommander) {
     // the repair task's dtor (0x5f8e20): ClearWork, OnStopBuild(true); never a failure
+    if (t.type == CommandType::Repair && Alive(u) && u->HasLuaObject()) sim.CallMethod(L, u, "ClearWork", 0);
     if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
   } else if (t.started && Alive(u)) {
     StopBuild(sim, L, u, t, success);
