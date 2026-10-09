@@ -828,4 +828,135 @@ function P.Destroy()
     out('destroy done')
 end
 
+-- 7) ferry (v10): a T1 transport gets a three-point ferry route (its own position = the beacon, a
+-- waypoint, the drop point) and a Move after it (should never run); two tanks are sent onto the
+-- beacon with a Move queued after; at the end the transport's queue is cleared (beacon lifetime).
+-- "PROBE fy <tick> <tag> x y z layer ncmd states"  (transport and tanks, every tick)
+-- "PROBE fybeacon <tick> <event> id bp x y z layer army fraction"  /  "PROBE fycb <tick> <tag> <callback>"
+P.FERRY = {
+    tr = { 'uea0107', 300, 735 },
+    tanks = { { 'f_tank1', 'uel0201', 320, 760 }, { 'f_tank2', 'uel0201', 324, 766 } },
+    way = { 270, 830 }, drop = { 238, 832 }, trAfter = { 330, 830 }, tankAfter = { 252, 812 },
+}
+function P.Ferry()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('fy no army') return end
+    local F = P.FERRY
+    while GetGameTick() < 1820 do WaitTicks(1) end   -- the same start in both engines
+    local function pos(xz) return { xz[1], GetSurfaceHeight(xz[1], xz[2]), xz[2] } end
+    local units, byEntity = {}, {}
+    local function tagOf(e) return e and byEntity[e] or '-' end
+    local function spawn(tag, bp, x, z)
+        local ok, u = pcall(CreateUnitHPR, bp, a1, x, GetSurfaceHeight(x, z), z, 0, 0, 0)
+        if not (ok and u) then out('fyspawn-failed', tag, tostring(u)) return end
+        out('fyspawn', GetGameTick(), tag, bp, u:GetEntityId())
+        -- the AI armies fight around here by now: keep the probe units out of it
+        pcall(function() u:SetCanTakeDamage(false) end)
+        pcall(function() u:SetDoNotTarget(true) end)
+        table.insert(units, { tag = tag, u = u })
+        byEntity[u] = tag
+        for _, name in { 'OnTransportAttach', 'OnTransportDetach' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, bone, a) out('fycb', GetGameTick(), tag, nm, tostring(bone), tagOf(a)) return f(self, bone, a) end end
+        end
+        for _, name in { 'OnStartTransportLoading', 'OnStopTransportLoading', 'OnTransportAborted', 'OnTransportOrdered',
+                         'OnStopTransportBeamUp', 'OnTransportFull', 'OnFerryPointSet', 'OnAssignedFocusEntity' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, a, b) out('fycb', GetGameTick(), tag, nm) return f(self, a, b) end end
+        end
+        local sb = u.OnStartTransportBeamUp
+        if sb then u.OnStartTransportBeamUp = function(self, tu, bone) out('fycb', GetGameTick(), tag, 'OnStartTransportBeamUp', tagOf(tu), tostring(bone)) return sb(self, tu, bone) end end
+        local ol = u.OnLayerChange
+        if ol then u.OnLayerChange = function(self, new, old) out('fylayer', GetGameTick(), tag, tostring(new), tostring(old)) return ol(self, new, old) end end
+        return u
+    end
+    local tr = spawn('f_tr', F.tr[1], F.tr[2], F.tr[3])
+    if not tr then return end
+    local tanks = {}
+    for _, t in F.tanks do
+        local u = spawn(t[1], t[2], t[3], t[4])
+        if u then table.insert(tanks, u) end
+    end
+    WaitTicks(2)
+    local okO, eO = pcall(function()
+        IssueFerry({ tr }, tr:GetPosition())
+        IssueFerry({ tr }, pos(F.way))
+        IssueFerry({ tr }, pos(F.drop))
+        IssueMove({ tr }, pos(F.trAfter))
+    end)
+    out('fyorders', GetGameTick(), tostring(okO), tostring(eO), table.getn(tr:GetCommandQueue()))
+    local beacon, lastB, tanksSent = nil, nil, false
+    local function beaconLine(ev, b)
+        local ok, e = pcall(function()
+            local p = b:GetPosition()
+            out('fybeacon', GetGameTick(), ev, b:GetEntityId(), b:GetBlueprint().BlueprintId, fmt(p[1]), fmt(p[2]), fmt(p[3]),
+                b:GetCurrentLayer(), b:GetArmy(), fmt(b:GetFractionComplete()))
+        end)
+        if not ok then out('fybeacon', GetGameTick(), ev, 'error', tostring(e)) end
+    end
+    local states = { 'Ferrying', 'WaitForFerry', 'ForceSpeedThrough', 'TransportLoading', 'TransportUnloading', 'WaitingForTransport',
+                     'Attached', 'Teleporting', 'Moving', 'HoldingPattern' }
+    local function log(tick)
+        local okb, b = pcall(function() return tr:GetTransportFerryBeacon() end)
+        if not okb then b = nil end
+        if b ~= lastB then
+            if b then beaconLine('set', b) else out('fybeacon', tick, 'none') end
+            lastB = b
+            if b then beacon = b end
+        end
+        if beacon then
+            local bd = beacon:BeenDestroyed()
+            if bd and not beacon.fyGone then beacon.fyGone = true out('fybeacon', tick, 'destroyed') end
+        end
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('fydead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local st = {}
+                    for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                    local extra = ''
+                    if e.tag == 'f_tr' then extra = 'cargo=' .. table.getn(u:GetCargo())
+                    else
+                        local fu = u:GetFocusUnit()
+                        extra = 'focus=' .. (fu and (fu == beacon and 'beacon' or tagOf(fu)) or '-')
+                    end
+                    out('fy', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
+                        table.concat(st, ','), extra)
+                end
+            end
+        end
+    end
+    local start = GetGameTick()
+    local stop = start + 1000
+    local cleared
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(log, t)
+        if not ok then out('fy-error', t, tostring(e)) end
+        -- the tanks are sent to the beacon 5 ticks after it appears
+        if beacon and not tanksSent and not beacon.fySeen then beacon.fySeen = t end
+        if beacon and not tanksSent and t >= beacon.fySeen + 5 then
+            tanksSent = true
+            local okT, eT = pcall(function()
+                IssueTransportLoad(tanks, beacon)
+                IssueMove(tanks, pos(F.tankAfter))
+            end)
+            out('fytanks', t, tostring(okT), tostring(eT))
+        end
+        -- 60 ticks after both tanks reached the far side and the transport is back home: clear it
+        if not cleared and t >= start + 940 then
+            cleared = t
+            local okC, eC = pcall(function() IssueClearCommands({ tr }) end)
+            out('fyclear', t, tostring(okC), tostring(eC))
+        end
+        WaitTicks(1)
+    end
+    out('ferry done')
+end
+
 moho64_probe = P

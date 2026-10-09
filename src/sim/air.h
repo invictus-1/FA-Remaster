@@ -130,6 +130,12 @@ void AirSetFacing(Unit* u, Vec3 dir);
 void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
 // Unit::PrepareMove: a free landing spot near *pos (false: none found).
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos);
+// Unit::PrepareMove for a ground unit (its own footprint): a free spot near *pos whose cell does
+// not overlap `excl` (x0, z0, x1, z1; empty = none). false: none found.
+bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]);
+// A ground unit's o-grid reservation (ReserveOgridRect / FreeOgridRect).
+void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
+void GroundFreeRect(Sim& sim, Unit* u);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.

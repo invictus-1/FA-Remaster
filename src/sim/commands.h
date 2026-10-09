@@ -54,6 +54,7 @@ struct UnitCommand {
   int luaRef = -2;        // LUA_NOREF: the table handed to Lua (IsCommandDone)
   int scriptRef = -2;     // IssueScript: the command data table (TaskName, ...)
   std::set<Unit*> units;  // units that still have it queued
+  uint32_t beaconRef = 0; // Ferry: the beacon created for it (CUnitCommand+0x158); dies with the command
 };
 
 // Lua's view of a unit's navigator (Unit:GetNavigator()).

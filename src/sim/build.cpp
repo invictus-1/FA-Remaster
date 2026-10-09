@@ -213,6 +213,7 @@ bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
 // A structure enters / leaves the occupancy grid.
 void OccupyStructure(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
+  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(u->id, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
@@ -871,6 +872,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::TransportLoadUnits:
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
+    case CommandType::Ferry:
       return StartTransportTask(sim, u, c);
     case CommandType::Attack:
     case CommandType::FormAttack:
@@ -914,7 +916,8 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
     case CommandType::TransportUnloadUnits:
-    case CommandType::TransportUnloadSpecificUnits: r = TickTransportTask(sim, u, t); break;
+    case CommandType::TransportUnloadSpecificUnits:
+    case CommandType::Ferry: r = TickTransportTask(sim, u, t); break;
     case CommandType::Guard:
     case CommandType::BuildAssist:
     case CommandType::AssistCommander: r = TickGuard(sim, L, u, t); break;

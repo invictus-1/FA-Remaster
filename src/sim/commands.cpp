@@ -86,6 +86,17 @@ void SetMoving(Unit* u, bool on) {
   else u->unitStates.erase("Moving");
 }
 
+// A unit drops a command: when no unit holds it any more the command object goes, and with it
+// the ferry beacon it created (CUnitCommand::DestroyInternal 0x6e8500).
+void ReleaseCommand(Unit* u, UnitCommand& c) {
+  c.units.erase(u);
+  if (!c.units.empty() || !c.beaconRef) return;
+  Sim& sim = *Sim::From(u->luaState());
+  if (Entity* b = sim.FindEntity(c.beaconRef))
+    if (!b->destroyQueued) sim.QueueDestroy(b);
+  c.beaconRef = 0;
+}
+
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
@@ -95,8 +106,9 @@ void PopHead(Unit* u) {
   }
   if (u->commands.empty()) return;
   u->motion.speedCap = 0;
-  u->commands.front()->units.erase(u);
+  auto head = u->commands.front();
   u->commands.pop_front();
+  ReleaseCommand(u, *head);
   u->headState = kNotStarted;
 }
 
@@ -180,8 +192,9 @@ void ForgetUnitCommands(Unit* u) {
     EndBuildTask(*Sim::From(u->luaState()), u, *u->task, false);
     u->task = nullptr;
   }
-  for (auto& c : u->commands) c->units.erase(u);
+  auto drop = std::move(u->commands);
   u->commands.clear();
+  for (auto& c : drop) ReleaseCommand(u, *c);
   u->headState = kNotStarted;
   auto& q = Sim::From(u->luaState())->pathQueue;
   q.erase(std::remove(q.begin(), q.end(), u), q.end());
@@ -863,7 +876,6 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueTactical", l_IssueTarget<CommandType::Tactical>);
   SetGlobal(L, "IssueTeleport", l_IssueTarget<CommandType::Teleport>);
   SetGlobal(L, "IssueOverCharge", l_IssueTarget<CommandType::OverCharge>);
-  SetGlobal(L, "IssueFerry", l_IssueTarget<CommandType::Ferry>);
   SetGlobal(L, "IssueBuildMobile", l_IssueBuildMobile);
   SetGlobal(L, "IssueBuildAllMobile", l_IssueBuildMobile);
   SetGlobal(L, "IssueBuildFactory", l_IssueOther<CommandType::BuildFactory>);

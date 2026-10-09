@@ -12,6 +12,7 @@ if rawget(_G, 'moho64_probe') then
             P.Combat()
             P.Transport()
             P.Destroy() -- v7
+            P.Ferry() -- v10
         end)
     end)
     if not ok then LOG('PROBE error ' .. tostring(e)) end

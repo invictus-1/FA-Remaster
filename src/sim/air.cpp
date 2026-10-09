@@ -642,6 +642,79 @@ bool PrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   }
 }
 
+// Unit::PrepareMove 0x62b780 for a ground unit: its own footprint (not squared), the exclusion
+// rect tested against the candidate's 1x1 cell, the unit's own o-grid reservation (Unit::ogridRect).
+namespace {
+bool GroundCanReserve(Sim& sim, Unit* u, const int* r) {
+  bool own = !RectEmpty(u->ogridRect);
+  if (own) FillRes(sim, u->ogridRect, 0);
+  bool blocked = AnyRes(sim, r);
+  if (own) FillRes(sim, u->ogridRect, 1);
+  return !blocked;
+}
+bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl) {
+  if (excl && excl[2] > excl[0] && excl[3] > excl[1] && cx < excl[2] && excl[0] < cx + 1 && cz < excl[3] &&
+      excl[1] < cz + 1)
+    return false;
+  int S = std::max(fp.sizeX, fp.sizeZ);
+  if (!IsWithin(sim, w, static_cast<float>(S))) return false;
+  const PathGrid* g = sim.navigation().Grid(fp);
+  int c = g ? g->Caps(cx, cz) : 0;
+  if (u->layer == "Water") c &= ~kSub;
+  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) c &= ~3;
+  if (!c) return false;
+  int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
+  if (!GroundCanReserve(sim, u, r)) return false;
+  float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
+  return NoBlockingUnits(sim, u, x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ);
+}
+}  // namespace
+
+bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) {
+  const NamedFootprint& fp = u->motion.bp->footprint;
+  int cx = static_cast<int>(std::nearbyint(pos->x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(pos->z - fp.sizeZ * 0.5f));
+  if (GroundSpotOk(sim, u, fp, cx, cz, *pos, excl)) return true;
+  int step = 2 * std::max(fp.sizeX, fp.sizeZ);
+  int tested = 0;
+  for (int r = 1;; ++r) {
+    bool found = false;
+    Vec3 best;
+    float bestD = kInf;
+    for (int i = -r; i <= r; ++i) {
+      int jStep = (i == -r || i == r) ? 1 : 2 * r;
+      for (int j = -r; j <= r; j += jStep) {
+        ++tested;
+        int x = cx + step * i, z = cz + step * j;
+        Vec3 w{x + fp.sizeX * 0.5f, 0.0f, z + fp.sizeZ * 0.5f};
+        if (GroundSpotOk(sim, u, fp, x, z, w, excl)) {
+          float dx = w.x - u->position.x, dy = w.y - u->position.y, dz = w.z - u->position.z;
+          float d = (dx * dx + dy * dy) + dz * dz;
+          if (d < bestD) {
+            bestD = d;
+            best = w;
+            found = true;
+          }
+        }
+      }
+    }
+    if (found) {
+      *pos = best;
+      return true;
+    }
+    if (tested > 899) return false;
+  }
+}
+void GroundFreeRectImpl(Sim& sim, Unit* u) {
+  if (!RectEmpty(u->ogridRect)) FillRes(sim, u->ogridRect, 0);
+  std::fill(u->ogridRect, u->ogridRect + 4, 0);
+}
+void GroundReserveRectImpl(Sim& sim, Unit* u, const int r[4]) {
+  GroundFreeRectImpl(sim, u);
+  std::copy(r, r + 4, u->ogridRect);
+  FillRes(sim, r, 1);
+}
+
 // CUnitMotion::SetTarget 0x6b85e0 (layer 0 keeps the landing layer)
 void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
   AirMotion& a = A(u);
@@ -1614,6 +1687,10 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
   if (!u->motion.air) return;
   SetTarget(sim, u, p, Vec3{}, layer);
 }
+
+bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) { return GroundPrepareMoveImpl(sim, u, pos, excl); }
+void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImpl(sim, u, r); }
+void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
 
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   if (!u->motion.air) return false;
