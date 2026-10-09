@@ -656,7 +656,7 @@ local function hook(u, tag, name, before, after)
         return r1, r2
     end)
 end
--- v8: which calls still work on a destroyed unit (the full error text is logged)
+-- v8/v9: which calls still work on a destroyed unit (the full error text is logged)
 -- "PROBE dsapi <tick> <tag> <when> <call> ok <value> | err <message>"
 P.DESTROY_API = {
     { 'GetPosition' }, { 'GetPositionXYZ' }, { 'GetOrientation' }, { 'GetHeading' }, { 'GetBlueprint' },
@@ -681,7 +681,12 @@ local function apiSweep(tag, when, u)
         if not f then
             out('dsapi', tick, tag, when, name, 'nomethod')
         else
-            local ok, r = pcall(f, u, c[2], c[3])
+            -- exactly the call's own arguments: the original checks the count first (v8 passed
+            -- two nils and got "expected 1 args, but got 3" from nearly every call)
+            local n, ok, r = table.getn(c) - 1
+            if n == 0 then ok, r = pcall(f, u)
+            elseif n == 1 then ok, r = pcall(f, u, c[2])
+            else ok, r = pcall(f, u, c[2], c[3]) end
             if ok then out('dsapi', tick, tag, when, name, 'ok', short(r))
             else out('dsapi', tick, tag, when, name, 'err', (string.gsub(tostring(r), '\n', ' | '))) end
         end
