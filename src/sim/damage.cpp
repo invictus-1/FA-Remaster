@@ -484,7 +484,7 @@ int l_beam_init(lua_State* L) {
     else if (lua_isstring(L, -1)) bone = w->unit->skeleton->Find(lua_tostring(L, -1));
   }
   lua_pop(L, 1);
-  b->attachParent = w->unit ? w->unit->id : 0;
+  b->attachParent = EntityRef(w->unit);
   b->attachBone = bone;
   return 0;
 }

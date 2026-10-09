@@ -1,6 +1,7 @@
 #include "sim/sim.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
+#include "sim/intel.h"
 #include "sim/build.h"
 
 #include <algorithm>
@@ -54,6 +55,14 @@ int l_GetFocusArmy(lua_State* L) {
 int l_ArmyIsCivilian(lua_State* L) {
   Army* a = S(L)->GetArmy(L, 1);
   lua_pushboolean(L, a && a->civilian);
+  return 1;
+}
+
+// The army's damage handicap (army +0x1e0 when its flag +0x1dc is set; 0 otherwise). Nothing in
+// the lobby sets one, so it is 0 (sim/damage.cpp applies none).
+int l_ArmyGetHandicap(lua_State* L) {
+  S(L)->GetArmy(L, 1);
+  lua_pushnumber(L, 0);
   return 1;
 }
 
@@ -361,6 +370,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "GetArmyBrain", l_GetArmyBrain);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
   SetGlobal(L, "ArmyIsCivilian", l_ArmyIsCivilian);
+  SetGlobal(L, "ArmyGetHandicap", l_ArmyGetHandicap);
   SetGlobal(L, "ArmyIsOutOfGame", l_ArmyIsOutOfGame);
   SetGlobal(L, "SetArmyOutOfGame", l_SetArmyOutOfGame);
   SetGlobal(L, "GetGameTick", l_GetGameTick);
@@ -515,6 +525,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterCollisionBindings(L);
   RegisterCombatBindings(L);
   RegisterAnimBindings(L);
+  RegisterIntelBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -623,6 +634,8 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     a->unitCap = cap;
   }
 
+  InitIntelGrids(*this, L);  // each army's recon DB (CArmyImpl ctor)
+
   // Brains: an instance of /lua/aibrain.lua's AIBrain bound to the engine brain.
   for (auto& a : armies_) {
     int top = lua_gettop(L);
@@ -707,6 +720,7 @@ void Sim::ProcessDestroyQueue() {
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->id);
+    ReleaseEntityIntel(*this, e);
     if (e->kind == Entity::Kind::Projectile) {
       auto& v = projectiles;
       v.erase(std::remove(v.begin(), v.end(), static_cast<Projectile*>(e)), v.end());
@@ -820,15 +834,16 @@ PhaseTimer g_prof;
 }  // namespace
 
 // Order (Sim::AdvanceBeat 0x749f40 and the entity/task stages): the armies' economy, killed
-// units' clean-up, intel, command tasks, unit motion with each unit's aim controllers and own
-// beat, projectiles, beams, weapon tasks (acquire, fire), arrivals, script threads, destruction.
+// units' clean-up, command tasks, unit motion with each unit's aim controllers and own beat,
+// weapon tasks (acquire, fire), arrivals, script threads, then projectiles and beams (the
+// original moves them after its three task stages: a shot moves in the beat it is fired and an
+// impact found in beat N reaches OnImpact in beat N+1's move), intel, destruction.
 void Sim::Tick() {
   ++tick_;
   g_prof.Start();
   EconomyBeginBeat(*this);
   g_prof.Lap(0);
   KillCleanupTick(*this);
-  IntelTick(*this);
   g_prof.Lap(1);
   CommandsBeforeMotion(*this);
   g_prof.Lap(2);
@@ -857,16 +872,21 @@ void Sim::Tick() {
   for (size_t i = 0; i < units_.size(); ++i)
     if (!units_[i]->destroyQueued) UnitEconomyTick(*this, units_[i]);
   g_prof.Lap(5);
-  ProjectilesTick(*this);
-  g_prof.Lap(6);
-  BeamsTick(*this);
-  g_prof.Lap(7);
   WeaponsTick(*this);
   g_prof.Lap(8);
   CommandsAfterMotion(*this);
   threads_->RunTick(tick_);
-  ProcessDestroyQueue();
   g_prof.Lap(9);
+  // Projectiles and beams move after every task stage (Sim::AdvanceBeat runs the three task
+  // stages first), so a shot moves in the beat it was fired, and Lua sees the move next beat.
+  ProjectilesTick(*this);
+  g_prof.Lap(6);
+  BeamsTick(*this);
+  g_prof.Lap(7);
+  ReconBeat(*this);           // army (tick % armies) updates its blips
+  AdvanceIntelCoords(*this);  // moved intel sources move their circles
+  g_prof.Lap(1);
+  ProcessDestroyQueue();
   g_prof.Report(tick_);
 }
 

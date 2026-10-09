@@ -437,7 +437,7 @@ int l_IssueTarget(lua_State* L) {
   auto units = UnitsArg(L, 1);
   auto c = Issue(L, units, T);
   if (Entity* e = ToObject<Entity>(L, 2)) {
-    c->targetId = e->id;
+    c->targetId = EntityRef(e);
     c->pos = e->position;
     c->hasPos = true;
   } else {
@@ -461,7 +461,7 @@ int l_IssueOther(lua_State* L) {
   for (int i = 2; i <= lua_gettop(L); ++i) {
     if (lua_type(L, i) == LUA_TSTRING && c->blueprintId.empty()) c->blueprintId = lua_tostring(L, i);
     else if (lua_type(L, i) == LUA_TNUMBER) c->count = static_cast<int>(lua_tonumber(L, i));
-    else if (Entity* e = ToObject<Entity>(L, i)) c->targetId = e->id;
+    else if (Entity* e = ToObject<Entity>(L, i)) c->targetId = EntityRef(e);
     else if (!c->hasPos && lua_istable(L, i)) {
       Vec3 p;
       lua_rawgeti(L, i, 1);
@@ -565,7 +565,7 @@ int l_GetCommandQueue(lua_State* L) {
         lua_rawset(L, -3);
       }
       lua_pushstring(L, "targetId");
-      lua_pushstring(L, std::to_string(c->targetId).c_str());
+      lua_pushstring(L, std::to_string(RefToId(c->targetId)).c_str());
       lua_rawset(L, -3);
     }
     if (!c->blueprintId.empty()) {

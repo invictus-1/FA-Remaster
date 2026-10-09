@@ -111,7 +111,6 @@ bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name);
 void InitUnitWeapon(lua_State* L, UnitWeapon* w);
 // Per tick (see Sim::Tick for the order).
 void KillCleanupTick(Sim& sim);
-void IntelTick(Sim& sim);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
 void ProjectilesTick(Sim& sim);
 void BeamsTick(Sim& sim);

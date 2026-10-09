@@ -18,6 +18,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/intel.h"
 #include "sim/sim.h"
 #include "sim/skeleton.h"
 #include "sim/terrain.h"
@@ -972,7 +973,7 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
 }
 
 Entity* Sim::FindEntity(uint32_t id) const {
-  auto it = entities_.find(id);
+  auto it = entities_.find(RefToId(id));
   return it == entities_.end() ? nullptr : it->second;
 }
 
@@ -1009,10 +1010,11 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->fractionComplete = complete ? 1.0f : 0.0f;
   u->beingBuilt = !complete;
   if (!complete) u->unitStates.insert("BeingBuilt");
-  u->builderId = builder ? builder->id : 0;
+  u->builderId = EntityRef(builder);
   u->lastMaterializeTick = tick_;
   UnitEconomyInit(L, u);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
+  CreateUnitIntel(*this, L, u);
   {
     float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
     u->motion.fx = dmath::Sin(h);

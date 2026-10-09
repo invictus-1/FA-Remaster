@@ -135,9 +135,6 @@ class Unit : public Entity {
   int fireState = 0;               // 0 ReturnFire, 1 HoldFire, 2 HoldGround
   bool stunned = false;
   uint8_t recon[16] = {};          // per army index: Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10
-  // Intel by type (sim/combat.cpp kIntelNames: Vision, WaterVision, Radar, Sonar, Omni, ...).
-  float intelRadius[13] = {};
-  bool intelOn[13] = {};
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went
   std::vector<AimController*> aimControllers;
@@ -145,7 +142,8 @@ class Unit : public Entity {
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
-  std::vector<class ReconBlip*> blips;  // per army index (Unit:GetBlip), made on demand
+  class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
+  bool everMobileChecked = false;
   uint32_t engageId = 0;           // aggressive move / patrol: the enemy it stopped for
   int engageCheck = 0;
 };
@@ -164,7 +162,7 @@ class ShieldEntity : public Entity {
 class ReconBlip : public Entity {
  public:
   Unit* source = nullptr;
-  int armyIndex = 0;  // 0-based army that holds it
+  bool mobile = false;
 };
 
 // CollisionBeamEntity (sim/combat.cpp): a weapon's beam, attached to its unit's muzzle bone.

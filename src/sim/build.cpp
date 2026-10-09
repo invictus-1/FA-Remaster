@@ -55,7 +55,7 @@ int RoundEven(float v) { return static_cast<int>(std::nearbyint(v)); }
 bool Alive(const Entity* e) { return e && !e->dead && !e->destroyQueued; }
 
 Unit* FindUnit(Sim& sim, uint32_t id) {
-  if (!id) return nullptr;
+  if (!id) return nullptr;  // 0: none (entity 0 is referred to as kEntityRef0)
   Entity* e = sim.FindEntity(id);
   return e && e->kind == Entity::Kind::Unit && Alive(e) ? static_cast<Unit*>(e) : nullptr;
 }
@@ -237,10 +237,10 @@ void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success
 }
 
 void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t) {
-  if (t.started && t.targetId == target->id) return;
+  if (t.started && t.targetId == EntityRef(target)) return;
   if (t.started) StopBuild(sim, L, builder, t, false);
-  t.targetId = target->id;
-  builder->focusId = target->id;
+  t.targetId = EntityRef(target);
+  builder->focusId = EntityRef(target);
   t.started = true;
   t.lastFraction = target->fractionComplete;
   PushObject(L, target);
@@ -527,7 +527,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     u->unitStates.erase("Repairing");
     return kTaskDone;
   }
-  u->guardedId = g->id;
+  u->guardedId = EntityRef(g);
   bool builder = u->bpData && u->bpData->hasBuilder;
   Unit* work = nullptr;
   if (builder) {
@@ -545,7 +545,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       return kTaskRunning;
     }
     StopMoving(u);
-    if (!t.started || t.targetId != work->id) {
+    if (!t.started || t.targetId != EntityRef(work)) {
       t.order = "Repair";
       SetFocus(sim, L, u, work, t);
       u->unitStates.insert("Repairing");
@@ -633,7 +633,7 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       t.reclaimPerTick[kEnergy] = energy * step;
       t.reclaimPerTick[kMass] = mass * step;
       u->unitStates.insert("Reclaiming");
-      u->focusId = e->id;
+      u->focusId = EntityRef(e);
       t.state = 1;
       [[fallthrough]];
     }
@@ -760,7 +760,7 @@ BuildTask* StartScriptTask(Sim& sim, Unit* u, const UnitCommand& c) {
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Script;
   t->scriptTask = true;
-  t->unitId = u->id;
+  t->unitId = EntityRef(u);
   t->order = name;
   BindObject(L, -1, t.get());
   BuildTask* r = t.get();
@@ -1145,7 +1145,7 @@ int l_GetFocusUnit(lua_State* L) {
 int l_SetFocusEntity(lua_State* L) {
   Unit* u = U(L);
   Entity* e = ToObject<Entity>(L, 2);
-  u->focusId = e ? e->id : 0;
+  u->focusId = EntityRef(e);
   return 0;
 }
 int l_ClearFocusEntity(lua_State* L) {
@@ -1171,7 +1171,7 @@ int l_GetGuards(lua_State* L) {
     if (!Alive(o) || o == u || o->commands.empty()) continue;
     const UnitCommand& c = *o->commands.front();
     if ((c.type == CommandType::Guard || c.type == CommandType::AssistCommander || c.type == CommandType::BuildAssist) &&
-        c.targetId == u->id) {
+        c.targetId == EntityRef(u)) {
       PushObject(L, o);
       lua_rawseti(L, -2, ++n);
     }
@@ -1204,7 +1204,7 @@ int l_AttachBoneTo(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 3);
   if (!u || !parent) return 0;
-  u->parentId = parent->id;
+  u->parentId = EntityRef(parent);
   u->ownBone = BoneIndex(L, u, 2);
   u->parentBone = BoneIndex(L, parent, 4);
   u->unitStates.insert("Attached");
@@ -1217,7 +1217,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 2);
   if (!u || !parent) return 0;
-  u->parentId = parent->id;
+  u->parentId = EntityRef(parent);
   u->ownBone = -1;
   u->parentBone = BoneIndex(L, parent, 3);
   u->unitStates.insert("Attached");
@@ -1242,7 +1242,7 @@ int l_DetachAll(lua_State* L) {  // entity:DetachAll(bone)
   if (!e) return 0;
   int bone = lua_isnoneornil(L, 2) ? -2 : BoneIndex(L, e, 2);
   for (Unit* o : S(L)->units())
-    if (o->parentId == e->id && (bone == -2 || o->parentBone == bone)) Detach(*S(L), o);
+    if (o->parentId == EntityRef(e) && (bone == -2 || o->parentBone == bone)) Detach(*S(L), o);
   return 0;
 }
 int l_GetParent(lua_State* L) {

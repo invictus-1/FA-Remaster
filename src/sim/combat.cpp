@@ -32,6 +32,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/intel.h"
 #include "sim/commands.h"
 #include "sim/luautil.h"
 #include "sim/motion.h"
@@ -403,14 +404,6 @@ struct CombatBpData {
   bool command = false, benign = false, structure = false;
 };
 
-const char* const kIntelNames[13] = {"Vision", "WaterVision", "Radar", "Sonar", "Omni", "RadarStealth", "SonarStealth",
-                                     "RadarStealthField", "SonarStealthField", "Cloak", "CloakField", "Jammer", "Spoof"};
-static int IntelIndex(const char* s) {
-  for (int i = 0; i < 13; ++i)
-    if (!std::strcmp(s, kIntelNames[i])) return i;
-  return -1;
-}
-
 static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
   static std::map<const BlueprintInfo*, CombatBpData> cache;
   auto it = cache.find(&bp);
@@ -683,7 +676,7 @@ static AiTarget EntityTarget(Entity* e) {
   AiTarget t;
   if (e) {
     t.type = 1;
-    t.entityId = e->id;
+    t.entityId = EntityRef(e);
   }
   return t;
 }
@@ -703,84 +696,7 @@ void InitUnitWeapon(lua_State* L, UnitWeapon* w) {
   if (!b.targetRestrictOnlyAllow.empty()) ParseCategory(L, b.targetRestrictOnlyAllow.c_str(), w->onlyAllow);
 }
 
-// ---- intel -----------------------------------------------------------------------------------------
-
-namespace {
-
-void InitUnitIntel(Unit* u) {
-  const CombatBpData& cb = CB(u);
-  for (int i = 0; i < 5; ++i) {
-    u->intelRadius[i] = cb.intel[i];
-    u->intelOn[i] = cb.intel[i] > 0;
-  }
-  u->intelOn[5] = cb.radarStealth;
-  u->intelOn[6] = cb.sonarStealth;
-  u->intelOn[9] = cb.cloak;
-}
-
-bool Underwater(const Sim& sim, const Unit* u) {
-  return u->layer == "Sub" || (u->layer == "Seabed" && u->position.y < WaterLevel(sim));
-}
-
-// Whether army index a has a blip on the unit (its recon flags; structures stay known once seen).
-bool HasBlip(const Unit* t, int a) {
-  uint8_t f = t->recon[a];
-  if (f & 0x0f) return true;
-  return (f & 0x10) && t->combat && t->combat->structure;
-}
-
-}  // namespace
-
-void IntelTick(Sim& sim) {
-  const auto& units = sim.units();
-  const auto& armies = sim.armies();
-  int na = std::min<int>(static_cast<int>(armies.size()), 16);
-  for (Unit* t : units) {
-    if (!t->combat) {
-      CB(t);
-      InitUnitIntel(t);
-    }
-    for (int a = 0; a < na; ++a) t->recon[a] &= 0x10;
-  }
-  for (Unit* s : units) {
-    if (!Alive(s) || s->beingBuilt || !s->army) continue;
-    int a = s->army->index - 1;
-    if (a < 0 || a >= na) continue;
-    float rmax = 0;
-    for (int i = 0; i < 5; ++i)
-      if (s->intelOn[i]) rmax = std::max(rmax, s->intelRadius[i]);
-    if (rmax <= 0) continue;
-    Vec3 p = s->position;
-    sim.ForUnitsInRect(p.x - rmax, p.z - rmax, p.x + rmax, p.z + rmax, [&](Unit* t) {
-      if (t->army == s->army || t->dead) return;
-      float d2 = Dist2XZ(p, t->position);
-      bool under = Underwater(sim, t);
-      uint8_t f = 0;
-      auto in = [&](int i) { return s->intelOn[i] && d2 <= s->intelRadius[i] * s->intelRadius[i]; };
-      if (!under && in(0)) f |= 0x18;
-      if (under && in(1)) f |= 0x18;
-      if (!under && in(2) && !t->intelOn[5]) f |= 1;
-      if ((under || t->layer == "Water") && in(3) && !t->intelOn[6]) f |= 2;
-      if (in(4)) f |= 4;
-      t->recon[a] |= f;
-    });
-  }
-  // allies share what they see
-  std::vector<uint8_t> tmp(static_cast<size_t>(na));
-  for (Unit* t : units) {
-    bool any = false;
-    for (int a = 0; a < na; ++a) any = any || (t->recon[a] & 0x0f);
-    if (!any) continue;
-    for (int a = 0; a < na; ++a) {
-      uint8_t f = t->recon[a];
-      for (int b = 0; b < na; ++b)
-        if (b != a && Relation(armies[static_cast<size_t>(a)].get(), armies[static_cast<size_t>(b)].get()) == 2)
-          f |= t->recon[b] & 0x1f;
-      tmp[static_cast<size_t>(a)] = f;
-    }
-    for (int a = 0; a < na; ++a) t->recon[a] = tmp[static_cast<size_t>(a)];
-  }
-}
+static bool HasBlip(const Unit* t, int a) { return ArmyHasBlip(t, a); }
 
 // ---- target acquisition ----------------------------------------------------------------------------
 
@@ -857,7 +773,7 @@ bool Blacklisted(const UnitWeapon* w, const Entity* e) {
 bool TargetExempt(const Unit* u, const Entity* e) {
   if (!e) return false;
   for (const auto& c : u->commands)
-    if ((c->type == CommandType::Reclaim || c->type == CommandType::Capture) && c->targetId == e->id) return true;
+    if ((c->type == CommandType::Reclaim || c->type == CommandType::Capture) && c->targetId == EntityRef(e)) return true;
   return false;
 }
 
@@ -1496,11 +1412,6 @@ void ReleaseUnitCombat(Sim& sim, Unit* u) {
     c->alive = false;
     c->UnbindLua();
   }
-  for (ReconBlip* b : u->blips)
-    if (b) {
-      b->source = nullptr;
-      b->UnbindLua();
-    }
   u->aimControllers.clear();
   u->combatGone = true;
 }
@@ -1551,8 +1462,13 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (!HasTarget(sim, target)) return kTaskDone;
   UnitWeapon* w = TargetWeapon(sim, u, target);
   if (!w) return kTaskDone;
-  if (!(u->desiredTarget == target)) SetDesiredTarget(sim, u, target);
-  if (!TaskCanMove(u)) return kTaskRunning;
+  // UpdateAttacker 0x5f3450: immobile units (and aircraft) take the target as their weapons'
+  // desired target at once; ground units only once a weapon has it in range (state 3 -> 4).
+  bool mobile = TaskCanMove(u);
+  if (!mobile || u->motion.bp->motionType == kMotionAir) {
+    if (!(u->desiredTarget == target)) SetDesiredTarget(sim, u, target);
+    if (!mobile) return kTaskRunning;
+  }
   Vec3 tp = TargetPos(sim, target, true);
   bool air = u->motion.bp->motionType == kMotionAir;
   if (air) {
@@ -1579,8 +1495,9 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     return kTaskRunning;
   }
-  bool inRange = WithinWeaponRange(sim, w, target) || u->attackState == 1;
+  bool inRange = WithinWeaponRange(sim, w, target);
   u->attackStateSignal = false;
+  if (inRange && !(u->desiredTarget == target)) SetDesiredTarget(sim, u, target);
   switch (t.state) {
     case 1:  // path toward the target
       if (inRange) {
@@ -1652,7 +1569,7 @@ void PatrolEngageTick(Sim& sim, Unit* u, UnitCommand& c) {
   const std::vector<Unit*>& list = BlipsInRange(sim, u, 5);
   Unit* best = FindBestEnemy(sim, w, list, scan, w->bp->turreted || w->bp->slavedToBody);
   if (!best || DistXZ(best->position, u->position) > scan) return;
-  u->engageId = best->id;
+  u->engageId = EntityRef(best);
   u->unitStates.insert("Attacking");
   SetDesiredTarget(sim, u, EntityTarget(best));
 }
@@ -1671,64 +1588,6 @@ void ClearEngagement(Sim& sim, Unit* u) {
 namespace {
 
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
-
-int IntelArg(lua_State* L, int idx) {
-  const char* s = luaL_checkstring(L, idx);
-  int i = IntelIndex(s);
-  if (i < 0) luaL_error(L, "Invalid intel type %s", s);
-  return i;
-}
-int l_InitIntel(lua_State* L) {  // InitIntel(army, type, radius)
-  Unit* u = ToObject<Unit>(L, 1);
-  if (!u) return 0;
-  int i = IntelArg(L, 3);
-  if (lua_isnumber(L, 4)) u->intelRadius[i] = static_cast<float>(lua_tonumber(L, 4));
-  return 0;
-}
-int l_EnableIntel(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  if (!u) return 0;
-  if (!u->combat) {
-    CB(u);
-    InitUnitIntel(u);
-  }
-  u->intelOn[IntelArg(L, 2)] = true;
-  return 0;
-}
-int l_DisableIntel(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  if (!u) return 0;
-  if (!u->combat) {
-    CB(u);
-    InitUnitIntel(u);
-  }
-  u->intelOn[IntelArg(L, 2)] = false;
-  return 0;
-}
-int l_IsIntelEnabled(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  if (u && !u->combat) {
-    CB(u);
-    InitUnitIntel(u);
-  }
-  lua_pushboolean(L, u && u->intelOn[IntelArg(L, 2)]);
-  return 1;
-}
-int l_SetIntelRadius(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  if (!u) return 0;
-  u->intelRadius[IntelArg(L, 2)] = static_cast<float>(luaL_checknumber(L, 3));
-  return 0;
-}
-int l_GetIntelRadius(lua_State* L) {
-  Unit* u = ToObject<Unit>(L, 1);
-  if (u && !u->combat) {
-    CB(u);
-    InitUnitIntel(u);
-  }
-  lua_pushnumber(L, u ? u->intelRadius[IntelArg(L, 2)] : 0);
-  return 1;
-}
 
 int l_GetTargetEntity(lua_State* L) {
   Unit* u = U(L);
@@ -1987,112 +1846,6 @@ int l_w_PlaySound(lua_State* L) {
 
 }  // namespace
 
-// ---- recon blips -----------------------------------------------------------------------------------
-
-namespace {
-
-uint8_t BlipFlags(Unit* u, int a) {
-  if (a < 0 || a >= 16) return 0;
-  Sim* sim = Sim::From(u->luaState());
-  const auto& armies = sim->armies();
-  if (u->army && static_cast<size_t>(a) < armies.size() && Relation(armies[static_cast<size_t>(a)].get(), u->army) == 2)
-    return 0x1f;  // own and allied units are known
-  return u->recon[a];
-}
-
-// Unit:GetBlip(armyIndex): the blip that army has of the unit, or nil.
-int l_GetBlip(lua_State* L) {
-  Unit* u = U(L);
-  int a = static_cast<int>(luaL_checknumber(L, 2)) - 1;
-  if (a < 0 || a >= 16 || u->destroyQueued) {
-    lua_pushnil(L);
-    return 1;
-  }
-  if (!u->combat) {
-    CB(u);
-    InitUnitIntel(u);
-  }
-  uint8_t f = BlipFlags(u, a);
-  bool has = (f & 0x0f) || ((f & 0x10) && CB(u).structure) || f == 0x1f;
-  if (!has) {
-    lua_pushnil(L);
-    return 1;
-  }
-  if (u->blips.size() < 16) u->blips.resize(16, nullptr);
-  ReconBlip*& b = u->blips[static_cast<size_t>(a)];
-  if (!b) {
-    auto o = std::make_unique<ReconBlip>();
-    o->kind = Entity::Kind::Blip;
-    o->source = u;
-    o->armyIndex = a;
-    o->id = u->id;
-    o->blueprint = u->blueprint;
-    o->army = u->army;
-    b = o.get();
-    CreateObject(L, b, "ReconBlip");
-    lua_pop(L, 1);
-    S(L)->Own(std::move(o));
-  }
-  b->position = u->position;
-  b->orientation = u->orientation;
-  b->health = u->health;
-  b->maxHealth = u->maxHealth;
-  PushObject(L, b);
-  return 1;
-}
-
-ReconBlip* RB(lua_State* L) { return CheckObject<ReconBlip>(L, 1); }
-uint8_t BlipArg(lua_State* L) {
-  ReconBlip* b = RB(L);
-  int a = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) - 1 : b->armyIndex;
-  if (!b->source || b->source->destroyQueued) return 0;
-  return BlipFlags(b->source, a);
-}
-int l_blip_IsSeenNow(lua_State* L) {
-  lua_pushboolean(L, (BlipArg(L) & 0x08) != 0);
-  return 1;
-}
-int l_blip_IsSeenEver(lua_State* L) {
-  lua_pushboolean(L, (BlipArg(L) & 0x10) != 0);
-  return 1;
-}
-int l_blip_IsOnRadar(lua_State* L) {
-  lua_pushboolean(L, (BlipArg(L) & 0x01) != 0);
-  return 1;
-}
-int l_blip_IsOnSonar(lua_State* L) {
-  lua_pushboolean(L, (BlipArg(L) & 0x02) != 0);
-  return 1;
-}
-int l_blip_IsOnOmni(lua_State* L) {
-  lua_pushboolean(L, (BlipArg(L) & 0x04) != 0);
-  return 1;
-}
-int l_blip_IsKnownFake(lua_State* L) {
-  RB(L);
-  lua_pushboolean(L, 0);
-  return 1;
-}
-int l_blip_IsMaybeDead(lua_State* L) {
-  ReconBlip* b = RB(L);
-  lua_pushboolean(L, !b->source || b->source->dead);
-  return 1;
-}
-int l_blip_GetSource(lua_State* L) {
-  ReconBlip* b = RB(L);
-  if (b->source && b->source->HasLuaObject()) PushObject(L, b->source);
-  else lua_pushnil(L);
-  return 1;
-}
-int l_blip_GetBlueprint(lua_State* L) {
-  ReconBlip* b = RB(L);
-  if (b->blueprint) S(L)->blueprints().PushTable(L, *b->blueprint);
-  else lua_pushnil(L);
-  return 1;
-}
-
-}  // namespace
-
 void RegisterDamageBindings(lua_State* L);
 void RegisterProjectileBindings(lua_State* L);
 
@@ -2108,24 +1861,8 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CAimManipulator", "Destroy", l_aim_Destroy);
   SetMethod(L, "CAimManipulator", "SetPrecedence", l_aim_SetPrecedence);
 
-  SetMethod(L, "Entity", "InitIntel", l_InitIntel);
-  SetMethod(L, "Entity", "EnableIntel", l_EnableIntel);
-  SetMethod(L, "Entity", "DisableIntel", l_DisableIntel);
-  SetMethod(L, "Entity", "IsIntelEnabled", l_IsIntelEnabled);
-  SetMethod(L, "Entity", "SetIntelRadius", l_SetIntelRadius);
-  SetMethod(L, "Entity", "GetIntelRadius", l_GetIntelRadius);
   SetMethod(L, "Entity", "ReachedMaxShooters", l_ReachedMaxShooters);
   SetMethod(L, "Unit", "GetTargetEntity", l_GetTargetEntity);
-  SetMethod(L, "Unit", "GetBlip", l_GetBlip);
-  SetMethod(L, "ReconBlip", "IsSeenNow", l_blip_IsSeenNow);
-  SetMethod(L, "ReconBlip", "IsSeenEver", l_blip_IsSeenEver);
-  SetMethod(L, "ReconBlip", "IsOnRadar", l_blip_IsOnRadar);
-  SetMethod(L, "ReconBlip", "IsOnSonar", l_blip_IsOnSonar);
-  SetMethod(L, "ReconBlip", "IsOnOmni", l_blip_IsOnOmni);
-  SetMethod(L, "ReconBlip", "IsKnownFake", l_blip_IsKnownFake);
-  SetMethod(L, "ReconBlip", "IsMaybeDead", l_blip_IsMaybeDead);
-  SetMethod(L, "ReconBlip", "GetSource", l_blip_GetSource);
-  SetMethod(L, "ReconBlip", "GetBlueprint", l_blip_GetBlueprint);
   SetMethod(L, "Unit", "SetFireState", l_SetFireState);
   SetMethod(L, "Unit", "GetFireState", l_GetFireState);
   SetMethod(L, "Unit", "ToggleFireState", l_ToggleFireState);

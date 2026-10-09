@@ -1,6 +1,7 @@
 // Entities: everything that exists in the world (units, props, projectiles, ...).
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@ namespace moho {
 struct BlueprintInfo;
 class Army;
 class Skeleton;
+struct EntityIntel;
 
 struct Vec3 {
   float x = 0, y = 0, z = 0;
@@ -53,7 +55,15 @@ class Entity : public ScriptObject {
   int attachBone = -1;
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)
   int shooters = 0;           // weapons targeting it (DesiredShooterCap)
+  std::shared_ptr<EntityIntel> intel;  // intel circles (sim/intel.cpp; InitIntel / unit blueprints)
 };
+
+// Entity ids start at 0 (army 1's first unit is entity 0), but the engine's fields that refer to
+// an entity use 0 for "none". They store EntityRef(e): the id, or kEntityRef0 for entity 0.
+// Sim::FindEntity accepts both; RefToId turns a stored reference back into the id.
+constexpr uint32_t kEntityRef0 = 0xffffffffu;
+inline uint32_t EntityRef(const Entity* e) { return e ? (e->id ? e->id : kEntityRef0) : 0; }
+inline uint32_t RefToId(uint32_t ref) { return ref == kEntityRef0 ? 0 : ref; }
 
 template <>
 struct ScriptTypeOf<Entity> {

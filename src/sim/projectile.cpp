@@ -424,7 +424,7 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         if (CallMethodBool(sim, L, target, "OnCollisionCheck", 1) == 1) {
           p->hitFraction = t;
           p->hitPos = p1;
-          p->hitEntity = target->id;
+          p->hitEntity = EntityRef(target);
           p->impactType = 5;
           return;
         }
@@ -461,7 +461,7 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         if (p->hitFraction < 0 || d < p->hitFraction * len) {
           PushObject(L, p);
           if (CallMethodBool(sim, L, e, "OnCollisionCheck", 1) == 1) {
-            record(d, hit, ImpactTypeOf(sim, e, p0), e->id);
+            record(d, hit, ImpactTypeOf(sim, e, p0), EntityRef(e));
           }
           if (p->destroyQueued) return;
         }
@@ -482,7 +482,7 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         if (CallMethodBool(sim, L, e, "OnCollisionCheck", 1) == 1) {
           p->hitFraction = 0;
           p->hitPos = p0;
-          p->hitEntity = e->id;
+          p->hitEntity = EntityRef(e);
           p->impactType = ImpactTypeOf(sim, e, p0);
           return;
         }
@@ -860,7 +860,7 @@ int l_SetNewTarget(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 2);
   p->target = AiTarget{};
   p->target.type = 1;
-  p->target.entityId = e->id;
+  p->target.entityId = EntityRef(e);
   return 0;
 }
 int l_SetNewTargetGround(lua_State* L) {

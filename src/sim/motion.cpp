@@ -651,7 +651,7 @@ void CollisionTick(Sim& sim) {
     }
     if (!m.yielding && m.state == 7) {
       m.yielding = true;
-      m.yieldTarget = hit->id;
+      m.yieldTarget = EntityRef(hit);
     }
   }
 }
