@@ -656,6 +656,47 @@ local function hook(u, tag, name, before, after)
         return r1, r2
     end)
 end
+-- v8: which calls still work on a destroyed unit (the full error text is logged)
+-- "PROBE dsapi <tick> <tag> <when> <call> ok <value> | err <message>"
+P.DESTROY_API = {
+    { 'GetPosition' }, { 'GetPositionXYZ' }, { 'GetOrientation' }, { 'GetHeading' }, { 'GetBlueprint' },
+    { 'GetEntityId' }, { 'GetArmy' }, { 'GetAIBrain' }, { 'GetHealth' }, { 'GetMaxHealth' }, { 'GetFractionComplete' },
+    { 'GetBoneCount' }, { 'GetScale' }, { 'GetCurrentLayer' }, { 'GetUnitId' }, { 'IsUnitState', 'Moving' },
+    { 'GetFocusUnit' }, { 'GetCommandQueue' }, { 'GetWorkProgress' }, { 'GetFuelRatio' }, { 'GetStat', 'KILLS', 0 },
+    { 'SetStat', 'KILLS', 0 }, { 'GetNavigator' }, { 'GetWeaponCount' }, { 'GetBuildRate' }, { 'GetVelocity' },
+    { 'IsValidBone', 0 }, { 'GetBoneName', 0 }, { 'GetCollisionExtents' }, { 'GetParent' }, { 'GetGuardedUnit' },
+    { 'IsPaused' }, { 'GetShieldRatio' }, { 'CanBuild', 'ueb0101' }, { 'GetEconomyBuildRate' }, { 'BeenDestroyed' },
+    { 'IsIdleState' }, { 'GetSkirtRect' }, { 'GetFootPrintSize' }, { 'GetResourceConsumed' },
+}
+local function short(v)
+    local t = type(v)
+    if t == 'number' or t == 'string' or t == 'boolean' or t == 'nil' then return fmt(v) end
+    return t
+end
+local function apiSweep(tag, when, u)
+    local tick = GetGameTick()
+    for _, c in P.DESTROY_API do
+        local name = c[1]
+        local f = u[name]
+        if not f then
+            out('dsapi', tick, tag, when, name, 'nomethod')
+        else
+            local ok, r = pcall(f, u, c[2], c[3])
+            if ok then out('dsapi', tick, tag, when, name, 'ok', short(r))
+            else out('dsapi', tick, tag, when, name, 'err', (string.gsub(tostring(r), '\n', ' | '))) end
+        end
+    end
+    for _, g in { 'IsDestroyed', 'IsUnit', 'IsEntity', 'IsProp', 'IsProjectile' } do
+        local f = rawget(_G, g)
+        if f then
+            local ok, r = pcall(f, u)
+            out('dsapi', tick, tag, when, g .. '()', ok and 'ok' or 'err', ok and short(r) or tostring(r))
+        end
+    end
+    local ok, r = pcall(EntityCategoryContains, categories.ALLUNITS, u)
+    out('dsapi', tick, tag, when, 'EntityCategoryContains()', ok and 'ok' or 'err', ok and short(r) or tostring(r))
+end
+P.apiSweep = apiSweep
 function P.Destroy()
     local a1
     for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
@@ -679,6 +720,7 @@ function P.Destroy()
     WaitTicks(2)
     if thr then
         ds('d_thr', 'before', thr)
+        apiSweep('d_thr', 'alive', thr)
         thr:Destroy()
         ds('d_thr', 'after-destroy', thr)
         ForkThread(function()
@@ -696,16 +738,23 @@ function P.Destroy()
     end
     -- the killed unit: every change of state for up to 150 ticks
     ForkThread(function()
-        local last, stop = nil, GetGameTick() + 150
+        local last, stop, swept = nil, GetGameTick() + 150, false
         while kill and GetGameTick() < stop do
             local st = objState(kill)
-            if st ~= last then out('ds', GetGameTick(), 'd_kill', 'change', st) last = st end
+            if st ~= last then
+                out('ds', GetGameTick(), 'd_kill', 'change', st)
+                if not swept and string.find(st, 'id=err', 1, true) then swept = true apiSweep('d_kill', 'gone', kill) end
+                last = st
+            end
             WaitTicks(1)
         end
     end)
     for i = 1, 4 do
         WaitTicks(1)
-        if thr then ds('d_thr', 'tick+' .. i, thr) end
+        if thr then
+            ds('d_thr', 'tick+' .. i, thr)
+            if i == 1 or i == 4 then apiSweep('d_thr', 'tick+' .. i, thr) end
+        end
     end
     -- B) the mex upgrade
     local mx, mz
