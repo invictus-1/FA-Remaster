@@ -230,7 +230,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   }
   BindObject(L, -1, p);
   owned_.push_back(std::move(owned));
-  entities_[p->id] = p;
+  RegisterEntity(p);
   projectiles.push_back(p);
   ++g_projectiles;
   lua_settop(L, top);

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <memory>
 #include <random>
 #include <string>
@@ -92,6 +93,7 @@ class Sim {
   const std::vector<std::unique_ptr<Army>>& armies() const { return armies_; }
   const SimBlueprints& blueprints() const { return bps_; }
   const TerrainMap* map() const { return map_.get(); }
+  TerrainMap* mutableMap() { return map_.get(); }
   float Random();  // [0, 1)
   uint32_t NextUInt32() { return rng_(); }  // the sim's Mersenne twister (CMersenneTwister::NextUInt32)
 
@@ -122,9 +124,22 @@ class Sim {
   uint32_t ReserveId(Army* army, uint32_t family);
   // Register an engine-created entity (collision beams): owned by the sim, found by id.
   void AddEntity(std::unique_ptr<Entity> e) {
-    entities_[e->id] = e.get();
+    RegisterEntity(e.get());
     owned_.push_back(std::move(e));
   }
+  // A new entity becomes findable: its handle (EntityRef) and its game id.
+  void RegisterEntity(Entity* e) {
+    e->handle = nextHandle_++;
+    entities_[e->handle] = e;
+    byId_[e->id] = e;
+  }
+  Entity* FindEntityById(uint32_t id) const {
+    auto it = byId_.find(id);
+    return it == byId_.end() ? nullptr : it->second;
+  }
+  // EntityDB::ReleaseId (the id is quarantined for 99 beats) and the per-beat IdPool::Update.
+  void ReleaseId(uint32_t id);
+  void UpdateIdPools();
   // The unit's armour multiplier for a damage type (armordefinition.lua, AlterArmor): 1 if none.
   float ArmorMult(const Unit* u, const std::string& damageType) const;
   Prop* CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale);
@@ -208,7 +223,17 @@ class Sim {
   std::vector<std::vector<Prop*>> propGrid_;
   bool propGridDirty_ = true;
   void RebuildPropGrid();
-  std::map<uint32_t, uint32_t> familySerial_;  // (family << 8 | army) -> next serial
+  // EntityDB id pools (ids_repair_placement.md 1), one per (family, army): the lowest free serial,
+  // released ids quarantined in a 100-slot ring for 99 beats.
+  struct IdPool {
+    uint32_t next = 0;
+    std::set<uint32_t> free;
+    std::vector<uint32_t> ring[100];
+    int head = 0, tail = 1;
+  };
+  std::map<uint32_t, IdPool> idPools_;  // key: id & 0xFFF00000
+  std::map<uint32_t, Entity*> byId_;
+  uint32_t nextHandle_ = 1;
   void AddUnitToLists(Unit* u);
   void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;

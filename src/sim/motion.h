@@ -55,6 +55,7 @@ struct MotionBlueprint {
   float rotateOnSpotThreshold = 0.5f;
   float backUpDistance = 0;
   float sizeX = 1, sizeY = 1, sizeZ = 1;
+  std::vector<float> raisedPlatforms;  // Physics.RaisedPlatforms: quads of (x, z, h) x 4 from the position
   NamedFootprint footprint;
   // the footprint's passability grid (cached; grids live as long as the sim's Navigation)
   mutable const class PathGrid* grid = nullptr;

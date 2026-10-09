@@ -270,6 +270,7 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   int t = lua_gettop(L);
   d.sizeX = GetNum(L, t, "SizeX", 1);
   d.sizeY = GetNum(L, t, "SizeY", 1);
+  d.collisionOffsetY = GetNum(L, t, "CollisionOffsetY", 0);
   d.sizeZ = GetNum(L, t, "SizeZ", 1);
   PushField(L, t, "Economy");
   int ec = lua_gettop(L);

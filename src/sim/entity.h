@@ -35,7 +35,8 @@ class Entity : public ScriptObject {
   Entity() { typeBits |= kTypeEntity; }
   enum class Kind { Entity, Unit, Prop, Projectile, Shield, Blip, Beam };
   Kind kind = Kind::Entity;
-  uint32_t id = 0;
+  uint32_t id = 0;      // the game's entity id (GetEntityId; reused after a 99-beat quarantine)
+  uint32_t handle = 0;  // the engine's own reference, never reused (EntityRef)
   const BlueprintInfo* blueprint = nullptr;
   Army* army = nullptr;
   Vec3 position;
@@ -58,12 +59,10 @@ class Entity : public ScriptObject {
   std::shared_ptr<EntityIntel> intel;  // intel circles (sim/intel.cpp; InitIntel / unit blueprints)
 };
 
-// Entity ids start at 0 (army 1's first unit is entity 0), but the engine's fields that refer to
-// an entity use 0 for "none". They store EntityRef(e): the id, or kEntityRef0 for entity 0.
-// Sim::FindEntity accepts both; RefToId turns a stored reference back into the id.
-constexpr uint32_t kEntityRef0 = 0xffffffffu;
-inline uint32_t EntityRef(const Entity* e) { return e ? (e->id ? e->id : kEntityRef0) : 0; }
-inline uint32_t RefToId(uint32_t ref) { return ref == kEntityRef0 ? 0 : ref; }
+// The engine's fields that refer to an entity store EntityRef(e): its handle, unique for the whole
+// game (the original keeps weak pointers; its entity ids are reused, so they cannot be references).
+// 0 means none. Sim::FindEntity takes a reference; Sim::FindEntityById takes a game id.
+inline uint32_t EntityRef(const Entity* e) { return e ? e->handle : 0; }
 
 template <>
 struct ScriptTypeOf<Entity> {

@@ -451,7 +451,15 @@ float MaxSpeed(Unit* u) {
 }
 
 // CUnitMotion::GetElevation 0x6bc8e0
-float GetElevationWanted(const AirMotion& a) { return a.elevationAttr + a.randElev; }
+// carrierEvent 1 (approaching a carrier, carriers.md 13.5): climb to the deck bone when it is above the
+// aircraft, otherwise a quarter of the elevation (no random term)
+float GetElevationWanted(const AirMotion& a, float unitY) {
+  if (a.carrierEvent == 1) {
+    if (!(a.landHeight == kInf) && a.landHeight > unitY) return a.landHeight - a.curTerrain;
+    return a.elevationAttr * 0.25f;
+  }
+  return a.elevationAttr + a.randElev;
+}
 
 // CUnitMotion::ShouldHoverInsteadOfLand 0x6bc820
 bool ShouldHover(Unit* u) {
@@ -759,8 +767,8 @@ struct Ctrl {
 };
 
 // CUnitMotion::CalcWingedLift 0x6bc950
-float WingedLift(const AirMotion& a, float desiredY, float upY) {
-  float base = a.elevationAttr + a.randElev;
+float WingedLift(const AirMotion& a, float unitY, float desiredY, float upY) {
+  float base = GetElevationWanted(a, unitY);
   float y = (upY - 0.5f) * a.bp->liftFactor;
   if (y > 0.0f) return (desiredY > y) ? y : desiredY;
   float half = base * 0.5f;
@@ -797,7 +805,7 @@ void WingedOrientation(Unit* u, const QuatW& tq, const Vec3& desired, const Vec3
       }
       dv = {dv.x * fac, dv.y * fac, dv.z * fac};
     }
-    dv.y = WingedLift(a, desired.y, upY);
+    dv.y = WingedLift(a, u->position.y, desired.y, upY);
   }
   float h = std::sqrt(dir.z * dir.z + dir.x * dir.x);
   Vec3 aim{};
@@ -1026,6 +1034,16 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   F.x = dv.x * b.kMove + nv.x * dampF;
   F.y = b.kLiftDamping * nv.y + dv.y * kLift;
   F.z = dv.z * b.kMove + nv.z * dampF;
+  if (a.carrierEvent == 2) {  // 0x6beb89: landing on a carrier, within 40 of the focus entity
+    if (const Entity* fe = u->focusId ? sim.FindEntity(u->focusId) : nullptr) {
+      float dz = u->position.z - fe->position.z, dx = u->position.x - fe->position.x;
+      if (std::sqrt(dz * dz + dx * dx) < 40.0f) {
+        F.x = (nv.x * 2.0f + dv.x) * b.kMove;
+        F.y = (nv.y * 1.25f + dv.y) * kLift;
+        F.z = (nv.z * 2.0f + dv.z) * b.kMove;
+      }
+    }
+  }
   Vec3 T;
   T.x = H.x * b.kTurnDamping + err.x * kTurn;
   T.y = H.y * b.kTurnDamping + err.y * kTurn;
@@ -1270,7 +1288,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     Vec3 facing;
     if (distH > b.startTurnDistance && a.carrierEvent != 2) {
       facing = d;
-      a.elevOffset = GetElevationWanted(a);
+      a.elevOffset = GetElevationWanted(a, u->position.y);
       SetState(u, "MovingUp", false);
       SetState(u, "MovingDown", false);
       if (State(u, "CannotFindPlaceToLand")) {
@@ -1323,9 +1341,9 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
         if (a.landHeight != kInf) a.elevOffset = a.landHeight - surface;
         else if (ShouldHover(u) || a.vertEvent == 4) a.elevOffset = b.transportHoverHeight;
         else if (distH < 0.5f || a.vertEvent == 1) a.elevOffset = 0;
-        else a.elevOffset = GetElevationWanted(a) * 0.5f;
+        else a.elevOffset = GetElevationWanted(a, u->position.y) * 0.5f;
       } else {
-        a.elevOffset = GetElevationWanted(a);
+        a.elevOffset = GetElevationWanted(a, u->position.y);
         SetState(u, "MovingUp", false);
       }
     }

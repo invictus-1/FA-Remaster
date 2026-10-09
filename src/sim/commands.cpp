@@ -235,9 +235,12 @@ void CommandStep(Sim& sim, Unit* u) {
   int& st = u->headState;
   if (st == kNotStarted) StartHead(sim, u);
   if (u->task && st == kRunning) {
-    BuildTask* task = u->task;
-    int r = TickBuildTask(sim, u, *task);
-    if (r != kTaskRunning) {
+    // a finished task is popped and the dispatcher starts the next command at once; a new task's
+    // first Execute is in the same pass (beat_order.md 2.6)
+    for (int guard = 0; guard < 8 && u->task && st == kRunning; ++guard) {
+      BuildTask* task = u->task;
+      int r = TickBuildTask(sim, u, *task);
+      if (r == kTaskRunning) break;
       u->task = nullptr;
       // a finished BuildFactory with a count builds again (CUnitCommand::DecreaseCount 0x6f16a0)
       if (r == kTaskDone && task->type == CommandType::BuildFactory && !u->commands.empty() &&
@@ -247,6 +250,7 @@ void CommandStep(Sim& sim, Unit* u) {
       } else {
         PopHead(u);
       }
+      if (!IsAlive(u) || u->commands.empty()) break;
       StartHead(sim, u);
     }
     return;
@@ -555,6 +559,23 @@ int l_IssueScript(lua_State* L) {
   return 1;
 }
 
+// IssueBuildFactory(factories, blueprintId, count): count separate BuildFactory commands
+// (ids_repair_placement.md 4: GetCommandQueue shows one entry per build).
+int l_IssueBuildFactory(lua_State* L) {
+  auto units = UnitsArg(L, 1);
+  const char* bp = luaL_checkstring(L, 2);
+  int n = std::max(1, static_cast<int>(luaL_optnumber(L, 3, 1)));
+  std::shared_ptr<UnitCommand> first;
+  for (int i = 0; i < n; ++i) {
+    auto c = Issue(L, units, CommandType::BuildFactory);
+    c->blueprintId = bp;
+    c->count = 1;
+    if (!first) first = c;
+  }
+  PushCommand(L, first);
+  return 1;
+}
+
 // IssueBuildMobile(units, position, blueprintId, table)
 int l_IssueBuildMobile(lua_State* L) {
   auto units = UnitsArg(L, 1);
@@ -636,7 +657,10 @@ int l_GetCommandQueue(lua_State* L) {
         lua_rawset(L, -3);
       }
       lua_pushstring(L, "targetId");
-      lua_pushstring(L, std::to_string(RefToId(c->targetId)).c_str());
+      {
+        Entity* te = S(L)->FindEntity(c->targetId);
+        lua_pushstring(L, std::to_string(te ? te->id : 0u).c_str());
+      }
       lua_rawset(L, -3);
     }
     if (!c->blueprintId.empty()) {
@@ -930,7 +954,7 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueOverCharge", l_IssueTarget<CommandType::OverCharge>);
   SetGlobal(L, "IssueBuildMobile", l_IssueBuildMobile);
   SetGlobal(L, "IssueBuildAllMobile", l_IssueBuildMobile);
-  SetGlobal(L, "IssueBuildFactory", l_IssueOther<CommandType::BuildFactory>);
+  SetGlobal(L, "IssueBuildFactory", l_IssueBuildFactory);
   SetGlobal(L, "IssueUpgrade", l_IssueOther<CommandType::Upgrade>);
   SetGlobal(L, "IssueScript", l_IssueScript);
   SetGlobal(L, "IssueSiloBuildTactical", l_IssueOther<CommandType::BuildSiloTactical>);

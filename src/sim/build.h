@@ -41,6 +41,10 @@ struct BuildTask : public ScriptObject {
   int count = 1, tries = 0;
   uint32_t waitUntil = 0;
   uint32_t inheritFrom = 0;  // CFactoryBuildTask+0x7c: a second factory whose rally queue is inherited too
+  // CUnitRepairTask (ids_repair_placement.md 2): workTarget +0x90, flags +0x98..+0x9b, its move child
+  uint32_t workId = 0;
+  bool noMove = false, silo = false, assist = false, inheritWork = false, moving = false;
+  bool child = false;  // a child task of the guard (or another task), not a command's own task
   std::shared_ptr<struct TransportTaskData> tdata;  // transport load / unload tasks (sim/transport.cpp)
   std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
 };

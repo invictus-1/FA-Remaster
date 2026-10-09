@@ -766,7 +766,7 @@ bool TerrainBlocked(Sim& sim, Unit* u, Vec3 target, int arc) {
 
 bool Blacklisted(const UnitWeapon* w, const Entity* e) {
   for (const auto& b : w->blacklist)
-    if (b.id == e->id) return true;
+    if (b.id == EntityRef(e)) return true;
   return false;
 }
 
@@ -1258,9 +1258,17 @@ void MoveManipulator(Sim& sim, AimController* c) {
 }  // namespace
 
 void UnitAimTick(Sim& sim, Unit* u) {
-  if (u->aimControllers.empty()) return;
+  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty()) return;
   if (!u->skeleton) return;
   u->poseRot.assign(static_cast<size_t>(u->skeleton->Count()), Quat{});
+  RotatorsTick(u);
+  for (BuilderArm* a : u->builderArms) {  // the arm's angles from this beat's MoveManipulator
+    if (!a->alive || !a->enabled) continue;
+    if (a->yawBone >= 0 && static_cast<size_t>(a->yawBone) < u->poseRot.size())
+      u->poseRot[static_cast<size_t>(a->yawBone)] = QMul(u->poseRot[static_cast<size_t>(a->yawBone)], AxisAngle({0, 1, 0}, a->heading));
+    if (a->pitchBone >= 0 && static_cast<size_t>(a->pitchBone) < u->poseRot.size())
+      u->poseRot[static_cast<size_t>(a->pitchBone)] = QMul(u->poseRot[static_cast<size_t>(a->pitchBone)], AxisAngle({1, 0, 0}, -a->pitch));
+  }
   for (size_t i = 0; i < u->aimControllers.size(); ++i) {
     AimController* c = u->aimControllers[i];
     if (c->alive) MoveManipulator(sim, c);
@@ -1890,8 +1898,319 @@ int l_w_PlaySound(lua_State* L) {
 void RegisterDamageBindings(lua_State* L);
 void RegisterProjectileBindings(lua_State* L);
 
+// ---- rotators (CRotateManipulator) ------------------------------------------------------------
+
+void RotatorsTick(Unit* u) {
+  auto& v = u->rotators;
+  v.erase(std::remove_if(v.begin(), v.end(), [](RotateManipulator* r) { return !r->alive; }), v.end());
+  for (RotateManipulator* r : v) {
+    if (r->accel != 0) {  // the speed approaches the target speed
+      float d = r->targetSpeed - r->speed, step = std::fabs(r->accel) * 0.1f;
+      r->speed = std::fabs(d) <= step ? r->targetSpeed : r->speed + std::copysign(step, d);
+    }
+    float step = std::fabs(r->speed) * 0.1f;
+    if (r->hasGoal) {
+      float d = r->goal - r->cur;
+      r->cur = std::fabs(d) <= step ? r->goal : r->cur + std::copysign(step, d);
+    } else {
+      r->cur += r->speed * 0.1f;
+      if (r->cur > 360.0f || r->cur < -360.0f) r->cur = std::fmod(r->cur, 360.0f);
+    }
+    if (!r->enabled || r->bone < 0 || static_cast<size_t>(r->bone) >= u->poseRot.size()) continue;
+    Vec3 ax{r->axis == 0 ? 1.0f : 0.0f, r->axis == 1 ? 1.0f : 0.0f, r->axis == 2 ? 1.0f : 0.0f};
+    Quat& q = u->poseRot[static_cast<size_t>(r->bone)];
+    q = QMul(q, AxisAngle(ax, r->cur * kDeg2Rad));
+  }
+}
+
+// ---- builder arms (CBuilderArmManipulator, builder_arm.md) -----------------------------------------
+
+namespace {
+
+// func_NormalizeAngle 0x62fb50
+float WrapAngle(float a) {
+  float r = static_cast<float>(std::fmod(static_cast<double>(a), 6.283185307179586));
+  if (r < -3.14159265f) r += 6.28318531f;
+  else if (r > 3.14159265f) r -= 6.28318531f;
+  return r;
+}
+
+// 0x50b710: acos approximation (not reflected for negative t)
+float AcosA(float t) {
+  return std::sqrt(1.0f - t) * (1.5707288f + t * (-0.2121144f + t * (0.0742610f + t * -0.0187293f)));
+}
+
+bool HasBuilderObject(const Unit* u) { return u->bpData && u->bpData->hasBuilder; }
+
+// Axis 0x636220. heading: writes a->heading; pitch: a->pitch. Returns bit 1 off target, bit 2 moving.
+int ArmAxis(BuilderArm* a, Vec3 dir, bool local, bool isHeading, float slew, const Quat& boneRot) {
+  Vec3 d = local ? dir : Rotate(Conj(boneRot), dir);
+  float center = isHeading ? a->hCenter : a->pCenter, half = isHeading ? a->hHalf : a->pHalf;
+  float* cur = isHeading ? &a->heading : &a->pitch;
+  float target;
+  if (isHeading) {
+    target = dmath::Atan2(d.x, d.z);
+  } else {
+    Vec3 e = Rotate(AxisAngle({1, 0, 0}, center), d);
+    float len = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+    target = center - (AcosA(len > 0 ? e.y / len : 0.0f) - 1.57079637f);
+  }
+  float delta;
+  if (half >= 3.14059281f) {
+    delta = WrapAngle(target - *cur);
+  } else {
+    float rel = std::clamp(WrapAngle(target - center), -half, half);
+    delta = rel + center - *cur;
+  }
+  float step = std::fabs(delta) > slew ? std::copysign(slew, delta) : delta;
+  *cur = WrapAngle(*cur + step);
+  int res = 0;
+  if (isHeading) {
+    if (std::fabs(delta) > 1e-5f) res |= 2;
+    if (std::fabs(WrapAngle(*cur - target)) > 0.261799395f) res |= 1;
+  }
+  return res;
+}
+
+// Step 0x635fe0: returns on target.
+bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
+  Unit* u = a->unit;
+  const int n = u->skeleton ? u->skeleton->Count() : 0;
+  if (static_cast<int>(u->poseRot.size()) != n) u->poseRot.assign(static_cast<size_t>(n), Quat{});
+  int r = 0;
+  if (a->yawBone >= 0 && a->yawBone < n) {
+    // the yaw bone's frame this tick, before this manipulator's own rotation
+    u->poseRot[static_cast<size_t>(a->yawBone)] = Quat{};
+    if (a->pitchBone >= 0 && a->pitchBone < n) u->poseRot[static_cast<size_t>(a->pitchBone)] = Quat{};
+    Vec3 p;
+    Quat q;
+    BoneWorld(u, a->yawBone, &p, &q);
+    r = ArmAxis(a, dir, local, true, a->hSlew * (slow ? 0.25f : 1.0f), q);
+    u->poseRot[static_cast<size_t>(a->yawBone)] = AxisAngle({0, 1, 0}, a->heading);
+  }
+  if (a->pitchBone >= 0 && a->pitchBone < n) {
+    Vec3 p;
+    Quat q;
+    BoneWorld(u, a->pitchBone, &p, &q);
+    r |= ArmAxis(a, dir, local, false, a->pSlew * (slow ? 0.25f : 1.0f), q);
+    u->poseRot[static_cast<size_t>(a->pitchBone)] = AxisAngle({1, 0, 0}, -a->pitch);
+  }
+  bool moving = (r & 2) != 0;
+  if (moving && !a->tracking) sim.CallMethod(sim.L(), u, "OnStartBuilderTracking", 0);
+  else if (!moving && a->tracking) sim.CallMethod(sim.L(), u, "OnStopBuilderTracking", 0);
+  a->tracking = moving;
+  return (r & 1) == 0;
+}
+
+}  // namespace
+
+void BuilderArmsTick(Sim& sim, Unit* u) {
+  auto& v = u->builderArms;
+  v.erase(std::remove_if(v.begin(), v.end(), [](BuilderArm* a) { return !a->alive; }), v.end());
+  if (v.empty() || !HasBuilderObject(u) || u->dead) return;
+  for (size_t i = 0; i < v.size(); ++i) {
+    BuilderArm* a = v[i];
+    if (!a->enabled || !a->alive) continue;
+    const Vec3 aim = u->armAim;
+    if (aim.x == 0 && aim.y == 0 && aim.z == 0 && !std::signbit(aim.x) && !std::signbit(aim.y) &&
+        !std::signbit(aim.z)) {  // (bitwise compare with the zero vector)
+      ArmStep(sim, a, {0, 0, 1}, true, true);
+      u->armReady = false;
+      a->onTarget = false;
+      continue;
+    }
+    // AimDir 0x6366f0: from the aim bone in last beat's pose
+    Vec3 p;
+    Quat q;
+    BoneWorld(u, a->aimBone, &p, &q);
+    Vec3 d = Sub(aim, p);
+    float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    d = len > 0 ? Mul(d, 1.0f / len) : Vec3{};
+    bool on = ArmStep(sim, a, d, false, false);
+    a->onTarget = on;
+    u->armReady = on;
+  }
+}
+
+void SetArmAimTarget(Sim& sim, Unit* u, Vec3 p) {
+  if (!HasBuilderObject(u)) return;
+  u->armAim = p;
+  if (p.x != 0 || p.y != 0 || p.z != 0 || std::signbit(p.x) || std::signbit(p.y) || std::signbit(p.z))
+    sim.CallMethod(sim.L(), u, "OnPrepareArmToBuild", 0);
+}
+
+namespace {
+BuilderArm* CheckArm(lua_State* L) { return CheckObject<BuilderArm>(L, 1); }
+// CreateBuilderArmController(unit, yawBone, [pitchBone], [aimBone]) 0x636880
+int l_CreateBuilderArmController(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  if (!u->skeleton) return luaL_error(L, "Unit has no skeleton.");
+  auto a = std::make_unique<BuilderArm>();
+  a->unit = u;
+  a->yawBone = ResolveBoneArg(L, u, 2);
+  a->pitchBone = ResolveBoneArg(L, u, 3);
+  int aim = ResolveBoneArg(L, u, 4);
+  a->aimBone = aim >= 0 ? aim : (a->pitchBone >= 0 ? a->pitchBone : a->yawBone);
+  if (a->yawBone >= 0 && a->yawBone < u->skeleton->Count()) {
+    const Quat& r = u->skeleton->bones()[static_cast<size_t>(a->yawBone)].localRot;
+    a->hCenter = dmath::Atan2(2 * (r.w * r.y + r.x * r.z), 1 - 2 * (r.x * r.x + r.y * r.y));
+  }
+  if (HasBuilderObject(u)) u->armReady = false;
+  BuilderArm* raw = a.get();
+  u->builderArms.push_back(raw);
+  CreateObject(L, raw, "CBuilderArmManipulator");
+  S(L)->Own(std::move(a));
+  return 1;
+}
+// SetAimingArc(minH, maxH, hSlew, minP, maxP, pSlew) 0x636a50: degrees -> rad, slews per tick
+int l_arm_SetAimingArc(lua_State* L) {
+  BuilderArm* a = CheckArm(L);
+  float v[6];
+  for (int i = 0; i < 6; ++i) v[i] = static_cast<float>(luaL_checknumber(L, i + 2)) * 0.0174532924f;
+  a->hCenter = WrapAngle((v[0] + v[1]) * 0.5f);
+  a->hHalf = std::fabs(v[1] - v[0]) * 0.5f;
+  a->hSlew = v[2] * 0.1f;
+  a->pCenter = WrapAngle((v[3] + v[4]) * 0.5f);
+  a->pHalf = std::fabs(v[4] - v[3]) * 0.5f;
+  a->pSlew = v[5] * 0.1f;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_arm_GetHeadingPitch(lua_State* L) {
+  BuilderArm* a = CheckArm(L);
+  lua_pushnumber(L, a->heading);
+  lua_pushnumber(L, a->pitch);
+  return 2;
+}
+int l_arm_SetHeadingPitch(lua_State* L) {
+  BuilderArm* a = CheckArm(L);
+  a->heading = static_cast<float>(luaL_checknumber(L, 2));
+  a->pitch = static_cast<float>(luaL_checknumber(L, 3));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_arm_Enable(lua_State* L) {
+  CheckArm(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_arm_Disable(lua_State* L) {
+  CheckArm(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_arm_SetPrecedence(lua_State* L) {
+  CheckArm(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_arm_Destroy(lua_State* L) {
+  BuilderArm* a = CheckArm(L);
+  a->alive = false;
+  a->UnbindLua();
+  return 0;
+}
+}  // namespace
+
+namespace {
+RotateManipulator* CheckRot(lua_State* L) { return CheckObject<RotateManipulator>(L, 1); }
+// CreateRotator(unit, bone, axis, [goal], [speed], [accel], [goalspeed])
+int l_CreateRotator(lua_State* L) {
+  Unit* u = ToObject<Unit>(L, 1);
+  auto r = std::make_unique<RotateManipulator>();
+  r->unit = u;
+  if (u) r->bone = ResolveBoneArg(L, u, 2);
+  const char* ax = luaL_optstring(L, 3, "y");
+  r->axis = (ax[0] == 'x' || ax[0] == 'X') ? 0 : (ax[0] == 'z' || ax[0] == 'Z') ? 2 : 1;
+  if (lua_isnumber(L, 4)) {
+    r->goal = static_cast<float>(lua_tonumber(L, 4));
+    r->hasGoal = true;
+  }
+  if (lua_isnumber(L, 5)) r->speed = r->targetSpeed = static_cast<float>(lua_tonumber(L, 5));
+  if (lua_isnumber(L, 6)) r->accel = static_cast<float>(lua_tonumber(L, 6));
+  if (lua_isnumber(L, 7)) r->targetSpeed = static_cast<float>(lua_tonumber(L, 7));
+  RotateManipulator* raw = r.get();
+  if (u) u->rotators.push_back(raw);
+  CreateObject(L, raw, "CRotateManipulator");
+  S(L)->Own(std::move(r));
+  return 1;
+}
+int l_rot_SetGoal(lua_State* L) {
+  RotateManipulator* r = CheckRot(L);
+  r->goal = static_cast<float>(luaL_checknumber(L, 2));
+  r->hasGoal = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_ClearGoal(lua_State* L) {
+  CheckRot(L)->hasGoal = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetSpeed(lua_State* L) {
+  RotateManipulator* r = CheckRot(L);
+  r->speed = r->targetSpeed = static_cast<float>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetTargetSpeed(lua_State* L) {
+  CheckRot(L)->targetSpeed = static_cast<float>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetAccel(lua_State* L) {
+  CheckRot(L)->accel = static_cast<float>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetCurrentAngle(lua_State* L) {
+  CheckRot(L)->cur = static_cast<float>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_GetCurrentAngle(lua_State* L) {
+  lua_pushnumber(L, CheckRot(L)->cur);
+  return 1;
+}
+int l_rot_Enable(lua_State* L) {
+  CheckRot(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_Disable(lua_State* L) {
+  CheckRot(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_Destroy(lua_State* L) {
+  RotateManipulator* r = CheckRot(L);
+  r->alive = false;
+  r->UnbindLua();
+  return 0;
+}
+}  // namespace
+
 void RegisterCombatBindings(lua_State* L) {
   SetGlobal(L, "CreateAimController", l_CreateAimController);
+  SetGlobal(L, "CreateRotator", l_CreateRotator);
+  SetGlobal(L, "CreateBuilderArmController", l_CreateBuilderArmController);
+  SetMethod(L, "CBuilderArmManipulator", "SetAimingArc", l_arm_SetAimingArc);
+  SetMethod(L, "CBuilderArmManipulator", "GetHeadingPitch", l_arm_GetHeadingPitch);
+  SetMethod(L, "CBuilderArmManipulator", "SetHeadingPitch", l_arm_SetHeadingPitch);
+  SetMethod(L, "CBuilderArmManipulator", "Enable", l_arm_Enable);
+  SetMethod(L, "CBuilderArmManipulator", "Disable", l_arm_Disable);
+  SetMethod(L, "CBuilderArmManipulator", "SetPrecedence", l_arm_SetPrecedence);
+  SetMethod(L, "CBuilderArmManipulator", "Destroy", l_arm_Destroy);
+  SetMethod(L, "CRotateManipulator", "SetGoal", l_rot_SetGoal);
+  SetMethod(L, "CRotateManipulator", "ClearGoal", l_rot_ClearGoal);
+  SetMethod(L, "CRotateManipulator", "SetSpeed", l_rot_SetSpeed);
+  SetMethod(L, "CRotateManipulator", "SetTargetSpeed", l_rot_SetTargetSpeed);
+  SetMethod(L, "CRotateManipulator", "SetAccel", l_rot_SetAccel);
+  SetMethod(L, "CRotateManipulator", "SetCurrentAngle", l_rot_SetCurrentAngle);
+  SetMethod(L, "CRotateManipulator", "GetCurrentAngle", l_rot_GetCurrentAngle);
+  SetMethod(L, "CRotateManipulator", "Enable", l_rot_Enable);
+  SetMethod(L, "CRotateManipulator", "Disable", l_rot_Disable);
+  SetMethod(L, "CRotateManipulator", "Destroy", l_rot_Destroy);
   SetMethod(L, "CAimManipulator", "SetFiringArc", l_aim_SetFiringArc);
   SetMethod(L, "CAimManipulator", "SetResetPoseTime", l_aim_SetResetPoseTime);
   SetMethod(L, "CAimManipulator", "OnTarget", l_aim_OnTarget);

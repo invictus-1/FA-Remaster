@@ -115,8 +115,8 @@ bool HigherPriority(const Unit* a, const Unit* b) {
   if (landedFlyer(a)) return true;
   if (landedFlyer(b)) return false;
   if (st(a, "WaitingForTransport") && !st(b, "WaitingForTransport")) return true;
-  if (a->guardedId && a->guardedId == b->id) return false;
-  if (b->guardedId && b->guardedId == a->id) return true;
+  if (a->guardedId && a->guardedId == EntityRef(b)) return false;
+  if (b->guardedId && b->guardedId == EntityRef(a)) return true;
   bool am = st(a, "Moving"), bm = st(b, "Moving");
   if (am && !bm) return false;
   if (!am && bm) return true;

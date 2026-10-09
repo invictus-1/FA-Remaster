@@ -170,6 +170,12 @@ float TerrainMap::HeightAt(int x, int z) const {
   return heights_[static_cast<size_t>(z) * (width_ + 1) + x] * heightScale_;
 }
 
+void TerrainMap::SetHeightAt(int x, int z, float h) {
+  if (x < 0 || z < 0 || x > width_ || z > height_) return;
+  float v = std::clamp(h / heightScale_, 0.0f, 65535.0f);
+  heights_[static_cast<size_t>(z) * (width_ + 1) + x] = static_cast<uint16_t>(static_cast<int>(v));
+}
+
 float TerrainMap::TerrainHeight(float x, float z) const {
   if (heights_.empty()) return 0;
   float fx = std::floor(x), fz = std::floor(z);

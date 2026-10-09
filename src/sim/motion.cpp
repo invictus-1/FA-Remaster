@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -201,6 +202,19 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
       m.standUpright = GetBool(L, p, "StandUpright");
       m.rotateBodyWhileMoving = GetBool(L, p, "RotateBodyWhileMoving");
       m.sinkLower = GetBool(L, p, "SinkLower");
+      lua_pushstring(L, "RaisedPlatforms");
+      lua_rawget(L, p);
+      if (lua_istable(L, -1))
+        for (int i = 1;; ++i) {
+          lua_rawgeti(L, -1, i);
+          if (!lua_isnumber(L, -1)) {
+            lua_pop(L, 1);
+            break;
+          }
+          m.raisedPlatforms.push_back(static_cast<float>(lua_tonumber(L, -1)));
+          lua_pop(L, 1);
+        }
+      lua_pop(L, 1);
     }
   }
   lua_settop(L, top);
@@ -217,7 +231,47 @@ void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz) {
 
 // CUnitMotion::SnapToGround (FA exe 0x6c1610) / SnapToWater: height and tilt from the terrain
 // under the four corners of the unit's size box.
-void SnapUnit(const Sim& sim, Unit* u) {
+// FindIntersectingRaisedPlatform 0x6c2f00: the nearest immobile unit with RaisedPlatforms whose box
+// meets the unit's (the original takes it from the unit's surface-collision list).
+const Unit* FindRaisedPlatform(Sim& sim, const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  float r = std::max(b.sizeX, b.sizeZ) * 0.5f;
+  const Unit* best = nullptr;
+  float bestD = std::numeric_limits<float>::infinity();
+  sim.ForUnitsInRect(u->position.x - 16, u->position.z - 16, u->position.x + 16, u->position.z + 16, [&](Unit* p) {
+    if (p == u || p->dead || !p->motion.bp || p->motion.bp->motionType != kMotionNone) return;
+    const MotionBlueprint& pb = *p->motion.bp;
+    if (pb.raisedPlatforms.size() < 12) return;
+    if (std::fabs(p->position.x - u->position.x) > pb.sizeX * 0.5f + r) return;
+    if (std::fabs(p->position.z - u->position.z) > pb.sizeZ * 0.5f + r) return;
+    float dx = p->position.x - u->position.x, dy = p->position.y - u->position.y, dz = p->position.z - u->position.z;
+    float d = dx * dx + dy * dy + dz * dz;
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  });
+  return best;
+}
+// 0x62af70: the first quad (unrotated, from the platform's position) holding p, bilinear in it
+float PlatformHeight(const Unit* P, float x, float z) {
+  if (P->dead) return 0;
+  const auto& q = P->motion.bp->raisedPlatforms;
+  float px = P->position.x, pz = P->position.z;
+  for (size_t i = 0; i + 12 <= q.size(); i += 12) {
+    float x0 = q[i] + px, z0 = q[i + 1] + pz, x3 = q[i + 9] + px, z3 = q[i + 10] + pz;
+    if (!(x0 <= x && x <= x3 && z0 <= z && z <= z3)) continue;
+    float u = (x - x0) / (q[i + 3] - q[i]);
+    float v = (z - z0) / (q[i + 7] - q[i + 1]);
+    float a = q[i + 2] + (q[i + 8] - q[i + 2]) * v;
+    float b = q[i + 5] + (q[i + 11] - q[i + 5]) * v;
+    return a + u * (b - a);
+  }
+  return 0;
+}
+
+void SnapUnit(const Sim& csim, Unit* u) {
+  Sim& sim = const_cast<Sim&>(csim);
   const TerrainMap* map = sim.map();
   if (!map || !u->motion.bp) return;
   const MotionBlueprint& b = *u->motion.bp;
@@ -232,10 +286,12 @@ void SnapUnit(const Sim& sim, Unit* u) {
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-hx, 0, hz}, {-hx, 0, -hz}, {hx, 0, -hz}};
   Vec3 c[4];
+  const Unit* plat = (hover || floating) ? nullptr : FindRaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {r.x + u->position.x, 0, r.z + u->position.z};
     c[i].y = (hover || floating) ? map->SurfaceHeight(c[i].x, c[i].z) : map->TerrainHeight(c[i].x, c[i].z);
+    if (plat) c[i].y += PlatformHeight(plat, c[i].x, c[i].z);
   }
   float y = (c[3].y + c[2].y + c[1].y + c[0].y) * 0.25f;
   Vec3 n{0, 1, 0};
@@ -248,9 +304,10 @@ void SnapUnit(const Sim& sim, Unit* u) {
     float d2x = C.x - A.x, d2y = C.y - A.y, d2z = C.z - A.z;
     n = {d1y * d2z - d1z * d2y, d1z * d2x - d1x * d2z, d1x * d2y - d1y * d2x};
   }
-  if (b.standUpright || b.sinkLower) {
-    float lo = std::min({c[0].y, c[1].y, c[2].y, c[3].y});
-    float hi = std::max({c[0].y, c[1].y, c[2].y, c[3].y});
+  if (b.standUpright || b.sinkLower) {  // the centre's terrain (no platform) joins the range
+    float t = map->TerrainHeight(u->position.x, u->position.z);
+    float lo = std::min({c[0].y, c[1].y, c[2].y, c[3].y, t});
+    float hi = std::max({c[0].y, c[1].y, c[2].y, c[3].y, t});
     y -= (hi - lo) * 0.25f;
   }
   if (hover) y += b.elevation;

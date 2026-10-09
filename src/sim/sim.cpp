@@ -724,7 +724,8 @@ void Sim::ProcessDestroyQueue() {
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
-    entities_.erase(e->id);
+    entities_.erase(e->handle);
+    byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);
     if (e->kind == Entity::Kind::Projectile) {
       auto& v = projectiles;
@@ -759,6 +760,8 @@ void Sim::ProcessDestroyQueue() {
     done.push_back(e);
   }
   destroyQueue_.clear();
+  for (Entity* e : done)
+    if (e->kind != Entity::Kind::Blip) ReleaseId(e->id);  // (~Entity in EntityDb::Purge)
   static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
   for (Entity* e : done) {
     if (dbg && e->kind == Entity::Kind::Unit && e->HasLuaObject()) {
@@ -897,9 +900,16 @@ void Sim::Tick() {
     u->lastPosition = u->position;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
+    if (!u->builderArms.empty()) BuilderArmsTick(*this, u);  // UpdateManipulators, before the motion
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
-      if (p && !p->destroyQueued) u->position = EntityBonePosition(p, u->parentBone);
+      if (p && !p->destroyQueued) {  // the child takes the bone's transform (Entity attach)
+        Vec3 bp;
+        Quat bq;
+        BoneWorld(p, u->parentBone, &bp, &bq);
+        u->position = bp;
+        u->orientation = bq;
+      }
       u->motion.vel = {};
     } else {
       MotionTick(*this, u);
@@ -939,6 +949,7 @@ void Sim::Tick() {
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);
   ProcessDestroyQueue();
+  UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
   g_prof.Lap(11);
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
@@ -958,10 +969,42 @@ void Sim::Tick() {
   }
 }
 
+// EntityDB::DoReserveId 0x684480: the lowest free serial, else a new one
 uint32_t Sim::ReserveId(Army* army, uint32_t family) {
   uint32_t a = army ? static_cast<uint32_t>(army->index - 1) : 0xffu;
-  uint32_t key = (family << 8) | a;
-  return (((family << 8) | a) << 20) | familySerial_[key]++;
+  uint32_t key = ((family << 8) | a) << 20;
+  IdPool& p = idPools_[key];
+  uint32_t s;
+  if (!p.free.empty()) {
+    s = *p.free.begin();
+    p.free.erase(p.free.begin());
+  } else {
+    s = p.next++;
+  }
+  return key | s;
+}
+// EntityDB::ReleaseId 0x684690: into the newest quarantine slot
+void Sim::ReleaseId(uint32_t id) {
+  auto it = idPools_.find(id & 0xFFF00000u);
+  if (it == idPools_.end()) return;
+  IdPool& p = it->second;
+  p.ring[(p.tail + 99) % 100].push_back(id & 0xFFFFFu);
+}
+// IdPool::Update 0x403a30, once per beat (EntityDb::Purge)
+void Sim::UpdateIdPools() {
+  for (auto& [key, p] : idPools_) {
+    if ((p.tail + 1) % 100 == p.head) {
+      for (uint32_t s : p.ring[p.head]) p.free.insert(s);
+      p.ring[p.head].clear();
+      while (p.next > 0 && p.free.count(p.next - 1)) {
+        p.free.erase(p.next - 1);
+        --p.next;
+      }
+      p.head = (p.head + 1) % 100;
+    }
+    p.ring[p.tail].clear();
+    p.tail = (p.tail + 1) % 100;
+  }
 }
 
 void Sim::RebuildPropGrid() {

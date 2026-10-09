@@ -65,7 +65,7 @@ struct UnitBpData {
   bool naturalProducer = false, needToFaceTargetToBuild = false;
   float maxBuildDistance = 0;
   float regenRate = 0, maxHealth = 1;
-  float sizeX = 1, sizeY = 1, sizeZ = 1;
+  float sizeX = 1, sizeY = 1, sizeZ = 1, collisionOffsetY = 0;
   std::vector<uint64_t> buildable;  // Economy.BuildableCategory (union of the expressions)
   std::string buildRestriction;     // Physics.BuildRestriction
   int buildOnLayerCaps = 1;         // Physics.BuildOnLayerCaps (layer bits)
@@ -148,6 +148,10 @@ class Unit : public Entity {
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went
   std::vector<AimController*> aimControllers;
+  std::vector<class RotateManipulator*> rotators;
+  std::vector<class BuilderArm*> builderArms;
+  Vec3 armAim;                     // CAiBuilderImpl +0xc: the build arm's aim target (zero: none)
+  bool armReady = true;            // CAiBuilderImpl +9: the arm is on target (no arm: always)
   std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;

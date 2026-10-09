@@ -26,6 +26,8 @@ class TerrainMap {
   int version() const { return version_; }
   // Raw height sample at grid point (x, z), clamped to the map.
   float HeightAt(int x, int z) const;
+  // CHeightField::SetElevationRect: one grid vertex, stored truncated to the height scale.
+  void SetHeightAt(int x, int z, float h);
   // Terrain elevation at a world position (bilinear between grid points).
   float TerrainHeight(float x, float z) const;
   // Terrain or water surface, whichever is higher.

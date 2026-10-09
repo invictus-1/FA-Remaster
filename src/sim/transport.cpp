@@ -92,6 +92,11 @@ void SetState(Unit* u, const char* s, bool on) {
   if (on) u->unitStates.insert(s);
   else u->unitStates.erase(s);
 }
+// the game id of a referenced entity (entity-id order); unknown refs sort last
+uint32_t IdOfRef(Sim& sim, uint32_t ref) {
+  Entity* e = sim.FindEntity(ref);
+  return e ? e->id : 0xffffffffu;
+}
 Unit* UnitRef(Sim& sim, uint32_t ref) {
   if (!ref) return nullptr;
   Entity* e = sim.FindEntity(ref);
@@ -433,7 +438,7 @@ void AddPickupUnits(Sim& sim, TransportObj& T, const std::vector<Unit*>& units, 
   T.pickupPos = {x, tu->position.y, z};
   T.pickup.clear();
   for (Unit* u : units) T.pickup.push_back(EntityRef(u));
-  std::sort(T.pickup.begin(), T.pickup.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+  std::sort(T.pickup.begin(), T.pickup.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
   T.atPickup = false;
 }
 
@@ -1905,7 +1910,7 @@ std::shared_ptr<TransportTaskData> NewRetrieve(Sim& sim, Unit* C, std::vector<ui
   auto cd = std::make_shared<TransportTaskData>();
   cd->kind = kCarrierRetrieve;
   cd->cargo = std::move(cargo);
-  std::sort(cd->cargo.begin(), cd->cargo.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+  std::sort(cd->cargo.begin(), cd->cargo.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
   Callback(sim, C, "OnStartTransportLoading");
   SetState(C, "TransportLoading", true);
   return cd;
@@ -1922,7 +1927,7 @@ int TickCarrierLaunch(Sim& sim, Unit* C, BuildTask& t, TransportTaskData& d) {
       case 0:
         if (d.specific && d.which.empty()) return kTaskDone;
         if (!d.specific) d.which = T.stored;
-        std::sort(d.which.begin(), d.which.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+        std::sort(d.which.begin(), d.which.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
         PushChild(sim, d, NewRetrieve(sim, C, {}), 0, "CarrierRetrieve");
         t.state = 1;
         return kTaskRunning;
@@ -2068,7 +2073,7 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       d->kind = kLoad;
       for (Unit* o : c.units)
         if (o != u && !o->transportedBy) d->cargo.push_back(EntityRef(o));
-      std::sort(d->cargo.begin(), d->cargo.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+      std::sort(d->cargo.begin(), d->cargo.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
       SetState(u, "TransportLoading", true);
       Callback(sim, u, "OnStartTransportLoading");
       t->order = "LoadUnits";

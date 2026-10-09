@@ -46,6 +46,7 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 #include "sim/air.h"
 #include <limits>
 #include <set>
@@ -60,7 +61,7 @@ int RoundEven(float v) { return static_cast<int>(std::nearbyint(v)); }
 bool Alive(const Entity* e) { return e && !e->dead && !e->destroyQueued; }
 
 Unit* FindUnit(Sim& sim, uint32_t id) {
-  if (!id) return nullptr;  // 0: none (entity 0 is referred to as kEntityRef0)
+  if (!id) return nullptr;  // 0: none
   Entity* e = sim.FindEntity(id);
   return e && e->kind == Entity::Kind::Unit && Alive(e) ? static_cast<Unit*>(e) : nullptr;
 }
@@ -219,17 +220,17 @@ void OccupyStructure(Sim& sim, Unit* u) {
   if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
-  sim.navigation().AddStructure(u->id, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+  sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure) return;
   for (const auto& r : sim.navigation().Structures())
-    if (r.entity == u->id) {
+    if (r.entity == EntityRef(u)) {
       LandNavDirty(sim, r.x0, r.z0, r.x1, r.z1);
       break;
     }
-  sim.navigation().RemoveStructure(u->id);
+  sim.navigation().RemoveStructure(EntityRef(u));
 }
 
 // ---- build helper (CBuildTaskHelper) -----------------------------------------------------------
@@ -260,7 +261,8 @@ void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t)
   if (t.started && t.targetId == EntityRef(target)) return;
   if (t.started) StopBuild(sim, L, builder, t, true);  // switching work: the old target is not failed
   t.targetId = EntityRef(target);
-  builder->focusId = EntityRef(target);
+  builder->focusId = EntityRef(target);  // Unit::SetFocusEntity, then OnAssignedFocusEntity (no args)
+  sim.CallMethod(L, builder, "OnAssignedFocusEntity", 0);
   t.started = true;
   t.lastFraction = target->fractionComplete;
   PushObject(L, target);
@@ -382,10 +384,16 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return kTaskRunning;
       }
       StopMoving(u);
+      {  // aim the build arm at the middle of the structure (0x5f78bf)
+        const UnitBpData& sd = GetUnitBpData(L, *t.bp);
+        SetArmAimTarget(sim, u, Vec3{t.site.x, t.site.y + sd.sizeY * 0.5f + sd.collisionOffsetY, t.site.z});
+      }
       u->unitStates.insert("Building");
       t.state = 3;  // (2: turning to face the site; NeedToFaceTargetToBuild units turn on the spot)
       return kTaskRunning;
     case 3: {
+      if (!u->armReady) return kTaskRunning;  // 0x5f7ba7: wait for the build arm
+      if (u->paused) return kTaskRunning;      // (return 10)
       if (sim.tick() < t.waitUntil) return kTaskRunning;
       if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {
         SetFocus(sim, L, u, ex, t);
@@ -506,53 +514,7 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskFailed;
 }
 
-// Repair / assist: work on a damaged or unfinished unit (CUnitRepairTask 0x5f9370).
-int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
-  Unit* target = FindUnit(sim, t.targetId ? t.targetId : t.goalId);
-  if (!target || target == u) return kTaskFailed;
-  if (!target->beingBuilt && target->health >= target->maxHealth && t.state < 3) return kTaskDone;
-  switch (t.state) {
-    case 0:
-      if (!InBuildRange(u, *target->blueprint, target->position)) {
-        if (!CanMove(u)) return kTaskFailed;
-        MoveToward(sim, u, target->position);
-        if (u->motion.failed) return kTaskFailed;
-      }
-      t.state = 1;
-      return kTaskRunning;
-    case 1:
-      if (!InBuildRange(u, *target->blueprint, target->position)) {
-        if (!CanMove(u) || u->motion.failed) return kTaskFailed;
-        if (!u->motion.hasGoal) MoveToward(sim, u, target->position);
-        return kTaskRunning;
-      }
-      StopMoving(u);
-      t.state = 3;
-      return kTaskRunning;
-    case 3:
-      SetFocus(sim, L, u, target, t);
-      u->unitStates.insert("Repairing");
-      t.state = 4;
-      return kTaskRunning;
-    case 4: {
-      {  // CUnitRepairTask state 4: the task ends once the target is 2 x MaxBuildDistance away
-        const UnitBpData& td = GetUnitBpData(u->luaState(), *target->blueprint);
-        float dx = u->position.x - target->position.x, dz = u->position.z - target->position.z;
-        const NamedFootprint& bf = Footprint(*u->blueprint);
-        float d = std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(bf.sizeX, bf.sizeZ)) -
-                  std::max(td.skirtSizeX, td.skirtSizeZ);
-        if (!target->unitStates.count("Attached") && d > u->bpData->maxBuildDistance * 2.0f) {
-          u->unitStates.erase("Repairing");
-          return kTaskFailed;  // (the dtor: OnStopBuild(true), never a failure for the target)
-        }
-      }
-      if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
-      u->unitStates.erase("Repairing");
-      return kTaskDone;
-    }
-  }
-  return kTaskFailed;
-}
+int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t);  // (below: CUnitRepairTask)
 
 // BuildAssist / AssistCommander (not CUnitGuardTask; the original's are not read yet): follow the
 // assisted unit; work on what it builds or repairs, or repair it.
@@ -947,6 +909,7 @@ BuildTask* NewChild(Sim& sim, CommandType type, const char* order) {
   auto t = std::make_unique<BuildTask>();
   t->type = type;
   t->order = order;
+  t->child = true;
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -1208,6 +1171,153 @@ Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
   return best;
 }
 
+// ---- CUnitRepairTask (ids_repair_placement.md 2) --------------------------------------------------
+
+// ctor 0x5f8c80
+void InitRepair(Sim& sim, Unit* B, BuildTask& t, Unit* target, bool silo) {
+  t.order = "Repair";
+  t.goalId = EntityRef(target);
+  t.silo = silo;
+  t.assist = B->unitStates.count("Guarding") || B->unitStates.count("AssistingCommander");
+  if (target && target->unitStates.count("Enhancing")) {
+    PushObject(sim.L(), target);
+    sim.CallMethod(sim.L(), B, "InheritWork", 1);
+    t.inheritWork = true;
+  }
+}
+
+// NothingToRepair 0x5f9230
+bool NothingToRepair(Sim& sim, Unit* t) {
+  if (!t) return true;
+  if (t->motion.fuelUseTime > 0 && t->fuelRatio < 1.0f) return false;
+  if (Cat(sim, t, "SHIELD"))
+    if (Entity* f = sim.FindEntity(t->focusId))
+      if (f->health < f->maxHealth) return false;
+  return true;
+}
+
+// gap(R): distance - the builder's footprint - R's skirt
+float RepairGap(const Unit* B, const Unit* R) {
+  float dx = B->position.x - R->position.x, dz = B->position.z - R->position.z;
+  const NamedFootprint& bf = Fp(B);
+  return std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(bf.sizeX, bf.sizeZ)) -
+         std::max(R->bpData->skirtSizeX, R->bpData->skirtSizeZ);
+}
+
+Unit* FactoryOf(Sim& sim, Unit* t) {  // a unit being built inside a factory: the factory
+  if (!t->beingBuilt) return nullptr;
+  Unit* c = FindUnit(sim, t->creatorId);
+  return c && Cat(sim, c, "FACTORY") ? c : nullptr;
+}
+
+// TaskTick 0x5f9370. "return 0" (go on in the same dispatch) is the loop; return 1 / 10 wait.
+int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.moving) {  // the move child: the task runs again when it ends
+    if (u->motion.hasGoal) return kTaskRunning;
+    t.moving = false;
+    u->unitStates.erase("Moving");
+  } else if (sim.tick() < t.waitUntil) {
+    return kTaskRunning;
+  }
+  const float mbd = u->bpData->maxBuildDistance;
+  for (int guard = 0; guard < 8; ++guard) {
+    Unit* tg = FindUnit(sim, t.goalId);
+    if (!tg || tg == u) return kTaskFailed;
+    if (tg->health == tg->maxHealth) {
+      if (!t.assist) {
+        if ((!tg->beingBuilt || tg->fractionComplete == 1.0f) && NothingToRepair(sim, tg)) return kTaskFailed;
+      } else if (t.state < 4 && !t.silo && !tg->unitStates.count("Upgrading") && NothingToRepair(sim, tg)) {
+        return kTaskFailed;
+      }
+    }
+    const bool flies = tg->motion.air && tg->motion.air->bp && tg->motion.air->bp->canFly;
+    if (!flies || tg->beingBuilt) {
+      if (Moved(tg)) return kTaskFailed;  // the target moved this tick
+    } else if (tg->layer == "Air") {
+      return kTaskFailed;
+    }
+    Unit* R = tg;
+    switch (t.state) {
+      case 0: {
+        if (t.assist) {
+          if (Unit* f = FactoryOf(sim, tg)) {
+            R = f;
+          } else if (tg->unitStates.count("Upgrading")) {
+            if (Unit* f2 = FindUnit(sim, tg->focusId)) {
+              t.goalId = EntityRef(f2);
+              tg = R = f2;
+            }
+          }
+        }
+        t.state = 1;
+        if (!t.noMove && CanMove(u) && (!UnitFitsAt(sim, u, u->position.x, u->position.z) || RepairGap(u, R) > mbd)) {
+          float excl[4];
+          SkirtRect(R, excl);
+          excl[0] -= 1.0f;
+          excl[1] -= 1.0f;
+          excl[2] += 1.0f;
+          excl[3] += 1.0f;
+          Vec3 a = R->position;
+          PrepareMoveFor(sim, u, &a, excl);
+          const NamedFootprint& fp = Fp(u);
+          int x0 = static_cast<int>(std::nearbyint(a.x - fp.sizeX * 0.5f));
+          int z0 = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
+          int rr[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
+          GroundReserveRect(sim, u, rr);
+          TaskMoveToward(sim, u, Vec3{x0 + fp.sizeX * 0.5f, a.y, z0 + fp.sizeZ * 0.5f});
+          u->unitStates.insert("Moving");
+          t.moving = true;
+          return kTaskRunning;
+        }
+        continue;
+      }
+      case 1: {
+        t.state = 2;
+        if (!t.noMove) {
+          GroundFreeRect(sim, u);
+          if (Unit* f = FactoryOf(sim, tg)) R = f;
+          if (RepairGap(u, R) > mbd) return kTaskFailed;  // could not get in range
+        }
+        StopMoving(u);
+        t.workId = t.goalId;
+        if (Unit* w = FindUnit(sim, t.workId)) SetArmAimTarget(sim, u, w->position);
+        [[fallthrough]];
+      }
+      case 2:
+        // NeedToFaceTargetToBuild: turn until dot(forward, toward R) > 0.95 (the turn itself: not yet)
+        t.state = 3;
+        continue;
+      case 3: {
+        if (!u->armReady) return kTaskRunning;
+        if (u->paused) {
+          t.waitUntil = sim.tick() + 9;
+          return kTaskRunning;
+        }
+        Unit* w = FindUnit(sim, t.workId);
+        if (!w) return kTaskFailed;
+        w->unitStates.insert("NoReclaim");
+        SetFocus(sim, L, u, w, t);
+        u->unitStates.insert("Repairing");
+        t.state = 4;
+        continue;
+      }
+      case 4: {
+        if (!tg->unitStates.count("Attached") && RepairGap(u, tg) > 2.0f * mbd) return kTaskFailed;
+        if (!UpdateWorkProgress(sim, L, u, t)) {
+          Unit* w = FindUnit(sim, t.workId);
+          if (!t.inheritWork || !w || w->unitStates.count("Enhancing")) return kTaskRunning;
+        }
+        t.state = 5;
+        t.completed = true;
+        return kTaskDone;
+      }
+      default:
+        return kTaskFailed;
+    }
+  }
+  return kTaskRunning;
+}
+
 // DispatchAssistOrCaptureTask 0x613a80 (capture: not carried out yet)
 BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
   bool shieldOn = ScriptBool(sim, c, "ShieldIsOn");
@@ -1220,7 +1330,7 @@ BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
       c->unitStates.count("SiloBuildingAmmo")) {
     if (!U->bpData || !U->bpData->hasBuilder) return nullptr;
     BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
-    t->goalId = EntityRef(c);
+    InitRepair(sim, U, *t, c, c->unitStates.count("SiloBuildingAmmo") != 0);
     return t;
   }
   return nullptr;
@@ -1448,7 +1558,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       break;
     case CommandType::Repair:
       if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
-      t->order = "Repair";
+      InitRepair(sim, u, *t, FindUnit(sim, c.targetId), false);
       t->goalId = c.targetId;
       break;
     case CommandType::Script:
@@ -1542,6 +1652,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     // CUnitMobileBuildTask dtor (0x5f6ac0): OnStopBuild(true) - the structure is left as it is -
     // then the builder's OnFailedToBuild when the task did not finish (also before it started).
     if (Alive(u)) {
+      SetArmAimTarget(sim, u, Vec3{});
       if (t.started) StopBuild(sim, L, u, t, true);
       if (!t.completed) sim.CallMethod(L, u, "OnFailedToBuild", 0);
     }
@@ -1561,15 +1672,29 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
         bool occupied = false;
-        for (const auto& r : sim.navigation().Structures()) occupied = occupied || r.entity == u->id;
+        for (const auto& r : sim.navigation().Structures()) occupied = occupied || r.entity == EntityRef(u);
         if (!occupied && Alive(u)) OccupyStructure(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
   } else if (t.type == CommandType::Repair || t.type == CommandType::Guard || t.type == CommandType::BuildAssist ||
              t.type == CommandType::AssistCommander) {
-    // the repair task's dtor (0x5f8e20): ClearWork, OnStopBuild(true); never a failure
-    if (t.type == CommandType::Repair && Alive(u) && u->HasLuaObject()) sim.CallMethod(L, u, "ClearWork", 0);
+    // the repair task's dtor (0x5f8e20): ClearWork, Repairing off, workProgress 0, the arm reset, the
+    // reserved cell (still moving), NoReclaim off, OnStopBuild(true); never a failure
+    if (t.type == CommandType::Repair) {
+      if (Alive(u) && u->HasLuaObject()) sim.CallMethod(L, u, "ClearWork", 0);
+      if (Alive(u)) {
+        u->unitStates.erase("Repairing");
+        u->workProgress = 0;
+        SetArmAimTarget(sim, u, Vec3{});
+        if (t.state == 1 && !t.noMove) GroundFreeRect(sim, u);
+        if (t.moving) {
+          t.moving = false;
+          StopMoving(u);
+        }
+      }
+      if (Unit* w = FindUnitAny(sim, t.workId)) w->unitStates.erase("NoReclaim");
+    }
     if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
   } else if (t.started && Alive(u)) {
     StopBuild(sim, L, u, t, success);
@@ -1585,12 +1710,15 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (t.type == CommandType::Reclaim && u->focusId == t.goalId) u->focusId = 0;
     u->unitStates.erase("Building");
     u->unitStates.erase("Repairing");
-    u->unitStates.erase("Guarding");
-    u->unitStates.erase("AssistingCommander");
+    if (!t.child && (t.type == CommandType::BuildAssist || t.type == CommandType::AssistCommander)) {
+      u->unitStates.erase("Guarding");  // (the legacy assist tasks; the guard's own dtor does this for it)
+      u->unitStates.erase("AssistingCommander");
+    }
     if (t.type != CommandType::BuildFactory) u->workProgress = 0;
     StopMovingIfTask(u, t);
   }
-  if (u->guardedId) SetGuardedUnit(sim, u, nullptr);
+  if (!t.child && (t.type == CommandType::BuildAssist || t.type == CommandType::AssistCommander) && u->guardedId)
+    SetGuardedUnit(sim, u, nullptr);
 }
 
 bool TaskCanMove(const Unit* u) { return CanMove(u); }
@@ -1720,6 +1848,7 @@ std::vector<Unit*> Guards(Sim& sim, const Unit* g) {
   std::vector<Unit*> out;
   for (uint32_t id : g->guarders)
     if (Unit* x = FindUnit(sim, id)) out.push_back(x);
+  std::sort(out.begin(), out.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   return out;
 }
 
@@ -1983,7 +2112,13 @@ int l_AttachBoneTo(lua_State* L) {
   u->parentBone = BoneIndex(L, parent, 4);
   u->unitStates.insert("Attached");
   if (u->motion.hasGoal) MotionStop(u);
-  u->position = EntityBonePosition(parent, u->parentBone);
+  {
+    Vec3 bp;
+    Quat bq;
+    BoneWorld(parent, u->parentBone, &bp, &bq);
+    u->position = bp;
+    u->orientation = bq;
+  }
   S(L)->MarkUnitsMoved();
   return 0;
 }
@@ -2005,6 +2140,14 @@ void Detach(Sim& sim, Unit* u) {
   u->parentId = 0;
   u->unitStates.erase("Attached");
   u->motion.needSnap = true;
+  {  // the motion's facing: the unit's heading now (CUnitMotion::NotifyDetached)
+    Vec3 f = vm::Forward(u->orientation);
+    float l = std::sqrt(f.x * f.x + f.z * f.z);
+    if (l > 1e-6f) {
+      u->motion.fx = u->motion.bx = f.x / l;
+      u->motion.fz = u->motion.bz = f.z / l;
+    }
+  }
   sim.MarkUnitsMoved();
 }
 int l_DetachFrom(lua_State* L) {

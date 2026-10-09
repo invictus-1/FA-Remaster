@@ -133,6 +133,32 @@ int l_CreateUnitHPR(lua_State* L) {
   return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true));
 }
 
+// FlattenMapRect(x, z, sizeX, sizeZ, elevation) 0x74b120: the grid vertices [x, x+sx] x [z, z+sz] take
+// the elevation (truncated to the height scale); structures standing there (Land / Seabed, no motion)
+// are warped to the new ground, moving units re-snap.
+int l_FlattenMapRect(lua_State* L) {
+  Sim& sim = *S(L);
+  TerrainMap* m = sim.mutableMap();
+  if (!m) return 0;
+  int x = static_cast<int>(luaL_checknumber(L, 1)), z = static_cast<int>(luaL_checknumber(L, 2));
+  int sx = static_cast<int>(luaL_checknumber(L, 3)), sz = static_cast<int>(luaL_checknumber(L, 4));
+  float h = static_cast<float>(luaL_checknumber(L, 5));
+  for (int j = z; j <= std::min(z + sz, m->height()); ++j)
+    for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  for (Unit* u : sim.units()) {
+    if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
+    if (u->position.x < x - 1 || u->position.x > x + sx + 1 || u->position.z < z - 1 || u->position.z > z + sz + 1) continue;
+    if (!u->motion.bp || u->motion.bp->motionType == kMotionNone) {
+      u->position.y = m->TerrainHeight(u->position.x, u->position.z);
+      u->lastPosition = u->position;
+    } else {
+      u->motion.needSnap = true;
+    }
+  }
+  sim.MarkUnitsMoved();
+  return 0;
+}
+
 // CreateInitialArmyUnit(army, bp): at the army's start position, on the surface.
 int l_CreateInitialArmyUnit(lua_State* L) {
   Army* a = CheckArmy(L, 1);
@@ -180,7 +206,7 @@ int l_GenerateArmyStart(lua_State* L) {
 
 Entity* EntityFromId(lua_State* L, int idx) {
   uint32_t id = static_cast<uint32_t>(std::strtoul(luaL_checkstring(L, idx), nullptr, 10));
-  return S(L)->FindEntity(id);
+  return S(L)->FindEntityById(id);
 }
 
 int l_GetEntityById(lua_State* L) { return PushNew(L, EntityFromId(L, 1)); }
@@ -758,6 +784,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "SetArmyStart", l_SetArmyStart);
   SetGlobal(L, "GenerateArmyStart", l_GenerateArmyStart);
   SetGlobal(L, "GetEntityById", l_GetEntityById);
+  SetGlobal(L, "FlattenMapRect", l_FlattenMapRect);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
   SetGlobal(L, "GetUnitBlueprintByName", l_GetUnitBlueprintByName);
   SetGlobal(L, "IsEntity", l_IsEntity);
@@ -1008,7 +1035,7 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
 }
 
 Entity* Sim::FindEntity(uint32_t id) const {
-  auto it = entities_.find(RefToId(id));
+  auto it = entities_.find(id);  // a handle (EntityRef)
   return it == entities_.end() ? nullptr : it->second;
 }
 
@@ -1037,7 +1064,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->blueprint = &bp;
   u->army = army;
   AttachSkeleton(L, u);
-  u->id = (static_cast<uint32_t>(army ? army->index - 1 : 0xff) << 20) | (army ? army->serial : propSerial_)++;
+  u->id = ReserveId(army, 0);  // EntityDB::DoReserveId: the lowest free serial of the army's unit pool
   u->position = pos;
   u->orientation = q;
   u->lastPosition = pos;
@@ -1098,7 +1125,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   BindObject(L, -1, u);
   int obj = lua_gettop(L);
   owned_.push_back(std::move(owned));
-  entities_[u->id] = u;
+  RegisterEntity(u);
   AddUnitToLists(u);
   OccupyStructure(*this, u);
   u->isFactoryBuilder = IsFactoryBuilder(*this, u);
@@ -1217,7 +1244,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   p->kind = Entity::Kind::Prop;
   p->blueprint = &bp;
   AttachSkeleton(L, p);
-  p->id = (2u << 28) | (0xffu << 20) | propSerial_++;  // probe: props are 0x2FFxxxxx
+  p->id = ReserveId(nullptr, 2);  // props: one pool, 0x2FFxxxxx
   p->position = pos;
   p->orientation = q;
   p->scale[0] = scale.x;
@@ -1242,7 +1269,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   }
   BindObject(L, -1, p);
   owned_.push_back(std::move(owned));
-  entities_[p->id] = p;
+  RegisterEntity(p);
   lua_settop(L, top);
   CallMethod(L, p, "OnCreate", 0);
   return p;
@@ -1266,7 +1293,7 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   e->id = ReserveId(e->army, shield ? 0x4 : 0x5);  // shields 0x4AAxxxxx, script entities 0x5AAxxxxx
   BindObject(L, t, e);
   owned_.push_back(std::move(owned));
-  entities_[e->id] = e;
+  RegisterEntity(e);
   if (shield) shields.push_back(static_cast<ShieldEntity*>(e));
   return e;
 }

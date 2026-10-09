@@ -99,6 +99,35 @@ class AimController : public ScriptObject {
   int EventState() const override { return onTarget ? 1 : 0; }
 };
 
+// CRotateManipulator (CreateRotator): turns one bone about a local axis toward a goal or at a speed;
+// applied to the pose every tick before the aim controllers.
+class RotateManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int bone = -1, axis = 1;  // 0 x, 1 y, 2 z
+  float cur = 0, goal = 0, speed = 0, targetSpeed = 0, accel = 0;  // degrees, degrees per second
+  bool hasGoal = false, enabled = true, alive = true;
+};
+void RotatorsTick(Unit* u);
+
+// CBuilderArmManipulator (CreateBuilderArmController, builder_arm.md): turns the yaw/pitch bones toward
+// the builder's aim target and reports the builder "on target" (Unit::armReady).
+class BuilderArm : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int yawBone = -1, pitchBone = -1, aimBone = -1;
+  float heading = 0, pitch = 0;                                  // +0x88 / +0x8c (rad)
+  float hCenter = 0, hHalf = 3.14159265f, hSlew = 0.0628318563f;  // +0x98..+0xa0
+  float pCenter = 15.0f, pHalf = 30.0f, pSlew = 0.0610865243f;    // +0xa4..+0xac
+  bool tracking = false, onTarget = false, enabled = true, alive = true;
+  int precedence = 0;
+  int EventState() const override { return onTarget ? 1 : 0; }
+};
+// MoveManipulator 0x636590 of each arm: runs in the unit's motion step, before its own motion.
+void BuilderArmsTick(Sim& sim, Unit* u);
+// CAiBuilderImpl::SetAimTarget 0x59f600: a non-zero target calls the unit's OnPrepareArmToBuild.
+void SetArmAimTarget(Sim& sim, Unit* u, Vec3 p);
+
 // Per-tick velocity of an entity (the last tick's displacement).
 Vec3 EntityVelocity(const Entity* e);
 // World transform of a bone in the current pose (rest pose plus this tick's aim rotations);
