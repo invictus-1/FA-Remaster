@@ -13,6 +13,8 @@ if rawget(_G, 'moho64_probe') then
             P.Transport()
             P.Destroy() -- v7
             ForkThread(P.Staging) -- v11 (beside the ferry)
+            ForkThread(P.Factory) -- v13
+            ForkThread(P.Carrier) -- v13
             P.Ferry() -- v10
         end)
     end)

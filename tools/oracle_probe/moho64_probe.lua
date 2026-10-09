@@ -1044,4 +1044,213 @@ function P.Staging()
     out('staging done')
 end
 
+-- 9) factory hand-off, guard/assist and a factory ferry (v13, beside the ferry phase): factory fac with
+-- rally queue [A, B], an engineer guarding it (assist), an air transport guarding it (factory ferry),
+-- two bots ordered with one BuildFactory count 2. Every product is tagged p1, p2, ... at OnStartBuild.
+-- "PROBE fc <tick> <tag> x y z layer ncmd states extra"  /  "PROBE fccb <tick> <tag> <callback> ..."
+P.FACTORY = {
+    fac = { 'ueb0101', 380, 740 }, eng = { 'uel0105', 368, 758 }, tr = { 'uea0107', 396, 760 },
+    A = { 350, 790 }, B = { 320, 815 }, build = 'uel0106',
+}
+function P.Factory()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('fc no army') return end
+    while GetGameTick() < 1840 do WaitTicks(1) end
+    local F = P.FACTORY
+    local function pos(xz) return { xz[1], GetSurfaceHeight(xz[1], xz[2]), xz[2] } end
+    local units, byEntity, nprod = {}, {}, 0
+    local function tagOf(e) return e and byEntity[e] or '-' end
+    local function track(tag, u)
+        table.insert(units, { tag = tag, u = u })
+        byEntity[u] = tag
+        pcall(function() u:SetCanTakeDamage(false) end)
+        pcall(function() u:SetDoNotTarget(true) end)
+        for _, name in { 'OnTransportAttach', 'OnTransportDetach' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, bone, a) out('fccb', GetGameTick(), tag, nm, tostring(bone), tagOf(a)) return f(self, bone, a) end end
+        end
+        for _, name in { 'OnStartTransportLoading', 'OnStopTransportLoading', 'OnTransportOrdered', 'OnFerryPointSet',
+                         'OnAssignedFocusEntity', 'OnStopTransportBeamUp', 'OnStopBeingBuilt', 'OnStartRepair', 'OnStopRepair' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, a, b) out('fccb', GetGameTick(), tag, nm, tagOf(a)) return f(self, a, b) end end
+        end
+        local sb = u.OnStartTransportBeamUp
+        if sb then u.OnStartTransportBeamUp = function(self, tu, bone) out('fccb', GetGameTick(), tag, 'OnStartTransportBeamUp', tagOf(tu)) return sb(self, tu, bone) end end
+        local ol = u.OnLayerChange
+        if ol then u.OnLayerChange = function(self, new, old) out('fclayer', GetGameTick(), tag, tostring(new), tostring(old)) return ol(self, new, old) end end
+    end
+    local function spawn(tag, bp, x, z)
+        local ok, u = pcall(CreateUnitHPR, bp, a1, x, GetSurfaceHeight(x, z), z, 0, 0, 0)
+        if not (ok and u) then out('fcspawn-failed', tag, tostring(u)) return end
+        out('fcspawn', GetGameTick(), tag, bp, u:GetEntityId())
+        track(tag, u)
+        return u
+    end
+    local fac = spawn('fac', F.fac[1], F.fac[2], F.fac[3])
+    local eng = spawn('eng', F.eng[1], F.eng[2], F.eng[3])
+    local tr = spawn('ftr', F.tr[1], F.tr[2], F.tr[3])
+    if not (fac and eng and tr) then return end
+    local sbo, ebo = fac.OnStartBuild, fac.OnStopBuild
+    fac.OnStartBuild = function(self, u, order)
+        if u and not byEntity[u] then
+            nprod = nprod + 1
+            local tag = 'p' .. nprod
+            out('fcspawn', GetGameTick(), tag, u:GetBlueprint().BlueprintId, u:GetEntityId())
+            track(tag, u)
+        end
+        out('fccb', GetGameTick(), 'fac', 'OnStartBuild', tagOf(u), tostring(order))
+        return sbo(self, u, order)
+    end
+    fac.OnStopBuild = function(self, u, order)
+        out('fccb', GetGameTick(), 'fac', 'OnStopBuild', tagOf(u), tostring(order))
+        return ebo(self, u, order)
+    end
+    local rp = fac:GetRallyPoint()
+    out('fcrally', GetGameTick(), 'initial', rp and fmt(rp[1]) or '-', rp and fmt(rp[3]) or '-')
+    WaitTicks(2)
+    local okO, eO = pcall(function()
+        IssueClearFactoryCommands({ fac })
+        IssueFactoryRallyPoint({ fac }, pos(F.A))
+        IssueFactoryRallyPoint({ fac }, pos(F.B))
+        IssueBuildFactory({ fac }, F.build, 2)
+        IssueGuard({ eng }, fac)
+        IssueGuard({ tr }, fac)
+    end)
+    local rp2 = fac:GetRallyPoint()
+    out('fcorders', GetGameTick(), tostring(okO), tostring(eO), rp2 and fmt(rp2[1]) or '-', rp2 and fmt(rp2[3]) or '-')
+    local states = { 'Building', 'Busy', 'BlockCommandQueue', 'Guarding', 'GuardBusy', 'Repairing', 'Ferrying', 'WaitForFerry',
+                     'TransportLoading', 'TransportUnloading', 'WaitingForTransport', 'Attached', 'Moving', 'ForceSpeedThrough' }
+    local function log(tick)
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('fcdead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local st = {}
+                    for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                    local fu = u:GetFocusUnit()
+                    local gu = u:GetGuardedUnit()
+                    local extra = 'focus=' .. tagOf(fu) .. ' guard=' .. tagOf(gu)
+                    if e.tag == 'fac' then
+                        extra = extra .. ' wp=' .. fmt(u:GetWorkProgress()) .. ' guards=' .. table.getn(u:GetGuards())
+                    elseif e.tag == 'ftr' then
+                        extra = extra .. ' cargo=' .. table.getn(u:GetCargo())
+                    else
+                        extra = extra .. ' frac=' .. fmt(u:GetFractionComplete())
+                    end
+                    out('fc', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
+                        table.concat(st, ','), extra)
+                end
+            end
+        end
+    end
+    local stop = GetGameTick() + 900
+    local brain = ArmyBrains[a1]
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(log, t)
+        if not ok then out('fc-error', t, tostring(e)) end
+        -- the civilian army has no economy: plenty of income every tick (also for the carrier phase)
+        pcall(function() brain:GiveResource('Mass', 5) brain:GiveResource('Energy', 100) end)
+        WaitTicks(1)
+    end
+    out('factory done')
+end
+
+-- 10) a carrier (v13, beside the ferry phase): two interceptors ordered onto a Keefer-class carrier in the
+-- pond, unloaded 300 ticks later. The carrier is placed on the deepest water point of a grid (same in
+-- both engines). "PROBE cr <tick> <tag> x y z layer ncmd fuel states extra"  /  "PROBE crcb ..."
+P.CARRIER = { bp = 'uas0303', f = { { 'cf1', 'uaa0102', 200, 690 }, { 'cf2', 'uaa0102', 206, 690 } }, unload = { 230, 700 } }
+function P.Carrier()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('cr no army') return end
+    while GetGameTick() < 1845 do WaitTicks(1) end
+    local C = P.CARRIER
+    local bx, bz, bd = nil, nil, 0
+    for x = 130, 200, 2 do
+        for z = 715, 765, 2 do
+            local d = GetSurfaceHeight(x, z) - GetTerrainHeight(x, z)
+            if d > bd then bx, bz, bd = x, z, d end
+        end
+    end
+    out('crwater', GetGameTick(), tostring(bx), tostring(bz), fmt(bd))
+    if not bx then return end
+    local units, byEntity = {}, {}
+    local function tagOf(e) return e and byEntity[e] or '-' end
+    local function spawn(tag, bp, x, z)
+        local ok, u = pcall(CreateUnitHPR, bp, a1, x, GetSurfaceHeight(x, z), z, 0, 0, 0)
+        if not (ok and u) then out('crspawn-failed', tag, tostring(u)) return end
+        out('crspawn', GetGameTick(), tag, bp, u:GetEntityId())
+        pcall(function() u:SetCanTakeDamage(false) end)
+        pcall(function() u:SetDoNotTarget(true) end)
+        table.insert(units, { tag = tag, u = u })
+        byEntity[u] = tag
+        for _, name in { 'OnAddToStorage', 'OnRemoveFromStorage' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, a, b) out('crcb', GetGameTick(), tag, nm, tagOf(a)) return f(self, a, b) end end
+        end
+        for _, name in { 'OnStartTransportLoading', 'OnStopTransportLoading', 'OnAssignedFocusEntity', 'OnTransportFull',
+                         'OnStartRefueling', 'OnGotFuel' } do
+            local f, nm = u[name], name
+            if f then u[nm] = function(self, a, b) out('crcb', GetGameTick(), tag, nm) return f(self, a, b) end end
+        end
+        local ol = u.OnLayerChange
+        if ol then u.OnLayerChange = function(self, new, old) out('crlayer', GetGameTick(), tag, tostring(new), tostring(old)) return ol(self, new, old) end end
+        return u
+    end
+    local k = spawn('k', C.bp, bx, bz)
+    local f1 = spawn(C.f[1][1], C.f[1][2], C.f[1][3], C.f[1][4])
+    local f2 = spawn(C.f[2][1], C.f[2][2], C.f[2][3], C.f[2][4])
+    if not (k and f1 and f2) then return end
+    WaitTicks(3)
+    local okO, eO = pcall(function()
+        f1:SetHealth(f1, 200)
+        f1:SetFuelRatio(0.4)
+        IssueTransportLoad({ f1, f2 }, k)
+    end)
+    out('crorders', GetGameTick(), tostring(okO), tostring(eO))
+    local states = { 'TransportLoading', 'TransportUnloading', 'Attached', 'Refueling', 'Moving', 'Guarding', 'MovingUp', 'MovingDown' }
+    local function log(tick)
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('crdead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local st = {}
+                    for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                    local okf, fuel = pcall(function() return u:GetFuelRatio() end)
+                    local extra = 'hp=' .. fmt(u:GetHealth())
+                    if e.tag == 'k' then
+                        extra = extra .. ' cargo=' .. table.getn(u:GetCargo()) .. ' room=' .. tostring(u:TransportHasAvailableStorage())
+                    end
+                    out('cr', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
+                        okf and fmt(fuel) or '-', table.concat(st, ','), extra)
+                end
+            end
+        end
+    end
+    local start = GetGameTick()
+    local stop, unloaded = start + 450, false
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(log, t)
+        if not ok then out('cr-error', t, tostring(e)) end
+        if not unloaded and t >= start + 300 then
+            unloaded = true
+            local okU, eU = pcall(function() IssueTransportUnload({ k }, { C.unload[1], GetSurfaceHeight(C.unload[1], C.unload[2]), C.unload[2] }) end)
+            out('crunload', t, tostring(okU), tostring(eU))
+        end
+        WaitTicks(1)
+    end
+    out('carrier done')
+end
+
 moho64_probe = P
