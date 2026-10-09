@@ -15,6 +15,7 @@
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/transport.h"
 #include "sim/units.h"
 
 namespace moho {
@@ -88,7 +89,7 @@ void SetMoving(Unit* u, bool on) {
 
 // A unit drops a command: when no unit holds it any more the command object goes, and with it
 // the ferry beacon it created (CUnitCommand::DestroyInternal 0x6e8500).
-void ReleaseCommand(Unit* u, UnitCommand& c) {
+void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
   c.units.erase(u);
   if (!c.units.empty() || !c.beaconRef) return;
   Sim& sim = *Sim::From(u->luaState());
@@ -108,7 +109,7 @@ void PopHead(Unit* u) {
   u->motion.speedCap = 0;
   auto head = u->commands.front();
   u->commands.pop_front();
-  ReleaseCommand(u, *head);
+  ReleaseCommandImpl(u, *head);
   u->headState = kNotStarted;
 }
 
@@ -137,7 +138,7 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
 void StartHead(Sim& sim, Unit* u) {
   // carried by a transport: nothing is dispatched until dropped; a dropped unit waits until it
   // landed (FAF makes it immobile while it falls; the original's move task would wait too)
-  if ((u->parentId && u->attachFull) || u->motion.ballistic) {
+  if ((u->parentId && u->attachFull) || u->unitStates.count("Attached") || u->motion.ballistic) {
     u->headState = kNotStarted;
     return;
   }
@@ -193,7 +194,7 @@ void ForgetUnitCommands(Unit* u) {
   }
   auto drop = std::move(u->commands);
   u->commands.clear();
-  for (auto& c : drop) ReleaseCommand(u, *c);
+  for (auto& c : drop) ReleaseCommandImpl(u, *c);
   u->headState = kNotStarted;
   auto& q = Sim::From(u->luaState())->pathQueue;
   q.erase(std::remove(q.begin(), q.end(), u), q.end());
@@ -234,10 +235,18 @@ void CommandStep(Sim& sim, Unit* u) {
   int& st = u->headState;
   if (st == kNotStarted) StartHead(sim, u);
   if (u->task && st == kRunning) {
-    int r = TickBuildTask(sim, u, *u->task);
+    BuildTask* task = u->task;
+    int r = TickBuildTask(sim, u, *task);
     if (r != kTaskRunning) {
       u->task = nullptr;
-      PopHead(u);
+      // a finished BuildFactory with a count builds again (CUnitCommand::DecreaseCount 0x6f16a0)
+      if (r == kTaskDone && task->type == CommandType::BuildFactory && !u->commands.empty() &&
+          u->commands.front()->type == CommandType::BuildFactory && u->commands.front()->count > 1) {
+        --u->commands.front()->count;
+        u->headState = kNotStarted;
+      } else {
+        PopHead(u);
+      }
       StartHead(sim, u);
     }
     return;
@@ -361,7 +370,6 @@ bool FactoryCommand(CommandType t) {
   return MoveLike(t) || t == CommandType::Attack || t == CommandType::FormAttack || t == CommandType::Guard ||
          t == CommandType::Ferry;
 }
-bool IsFactory(const Unit* u) { return u->bpData && u->bpData->structure && u->bpData->hasBuilder; }
 
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type) {
   auto c = std::make_shared<UnitCommand>();
@@ -370,10 +378,9 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
   c->type = type;
   sim->commandsById[c->id] = c;
   for (Unit* u : units) {
-    if (IsFactory(u) && FactoryCommand(type)) {
-      u->factoryCommands.push_back(c);
-      continue;
-    }
+    // FilterByCommandCap 0x6eecf0 drops immobile factories (their orders go to the rally queue only
+    // through IssueFactoryRallyPoint / IssueFactoryCommand, factory_handoff.md 3.2)
+    if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
     u->commands.push_back(c);
     c->units.insert(u);
   }
@@ -504,6 +511,35 @@ int l_IssueOther(lua_State* L) {
     }
   }
   PushCommand(L, c);
+  return 1;
+}
+
+// IssueFactoryAssist(factories, target) 0x6f3410: a Guard in the factories' own queues (append); this
+// is what links a factory to the factory it assists (its guard chain).
+int l_IssueFactoryAssist(lua_State* L) {
+  Sim& sim = *S(L);
+  Entity* e = ToObject<Entity>(L, 2);
+  std::shared_ptr<UnitCommand> c;
+  for (Unit* u : UnitsArg(L, 1)) {
+    if (!(UnitCommandCaps(L, *u->blueprint) & 0x8u) || !u->isFactoryBuilder || u->dead) continue;  // RULEUCC_Guard
+    if (!c) {
+      c = std::make_shared<UnitCommand>();
+      c->id = sim.nextCommandId++;
+      c->type = CommandType::Guard;
+      sim.commandsById[c->id] = c;
+      if (e) {
+        c->targetId = EntityRef(e);
+        c->pos = e->position;
+        c->hasPos = true;
+      } else {
+        c->hasPos = PosArg(L, 2, &c->pos);
+      }
+    }
+    u->commands.push_back(c);
+    c->units.insert(u);
+  }
+  if (c) PushCommand(L, c);
+  else lua_pushnil(L);
   return 1;
 }
 
@@ -876,6 +912,7 @@ int l_GetUnitsAroundPoint(lua_State* L) {
 
 void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueMove", l_IssueTarget<CommandType::Move>);
+  SetGlobal(L, "IssueFactoryAssist", l_IssueFactoryAssist);
   SetGlobal(L, "IssueFormMove", l_IssueTarget<CommandType::FormMove>);
   SetGlobal(L, "IssueAggressiveMove", l_IssueTarget<CommandType::AggressiveMove>);
   SetGlobal(L, "IssueFormAggressiveMove", l_IssueTarget<CommandType::FormAggressiveMove>);
@@ -943,5 +980,7 @@ void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
   if (c) PushCommand(L, c);
   else lua_pushnil(L);
 }
+
+void ReleaseCommand(Unit* u, UnitCommand& c) { ReleaseCommandImpl(u, c); }
 
 }  // namespace moho

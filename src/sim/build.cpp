@@ -46,6 +46,9 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/air.h"
+#include <limits>
+#include <set>
 
 namespace moho {
 namespace {
@@ -418,21 +421,25 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskFailed;
 }
 
-void SetUpInitialRally(Sim& sim, Unit* f);
-
+// CFactoryBuildTask::Execute 0x5fa790 (factory_handoff.md 1). Waits ("return r") are kept in waitUntil.
 int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (sim.tick() < t.waitUntil) return kTaskRunning;
+  auto wait = [&](int r) {
+    t.waitUntil = sim.tick() + static_cast<uint32_t>(r - 1);
+    return kTaskRunning;
+  };
   switch (t.state) {
     case 0: {
-      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (after a lost target: 10 ticks)
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
-      if (u->busy) return kTaskRunning;
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
       if (!UnderUnitCap(u->army, d)) {
         if (++t.tries > 10) return kTaskFailed;
-        return kTaskRunning;
+        return wait(1);
       }
+      if (u->paused) return wait(10);
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, u->orientation, false, u);
-      if (!nu || !Alive(nu)) return kTaskFailed;
+      if (!nu || !Alive(nu)) return wait(10);
+      nu->fireState = u->fireState;
       SetFocus(sim, L, u, nu, t);
       u->unitStates.insert("Building");
       t.state = 1;
@@ -440,24 +447,25 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     case 1: {
       Unit* target = FindUnit(sim, t.targetId);
-      if (!target) {  // CFactoryBuildTask state 1 (0x5fa981): fail, then build again after 10 ticks
+      if (!target) {  // helper not good: OnStopBuild(false), build again after 10 ticks
         StopBuild(sim, L, u, t, false);
         u->unitStates.erase("Building");
         t.state = 0;
-        t.waitUntil = sim.tick() + 10;
-        return kTaskRunning;
+        return wait(10);
       }
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
-      target = FindUnit(sim, t.targetId);
-      StopBuild(sim, L, u, t, true);
+      target = FindUnit(sim, t.targetId);  // (read before OnStopBuild clears the focus)
+      StopBuild(sim, L, u, t, true);       // Lua F:OnStopBuild(u): IssueMoveOffFactory, FinishBuildThread
       u->unitStates.erase("Building");
+      t.state = 2;
+      if (target) FactoryHandOff(sim, u, target, FindUnit(sim, t.inheritFrom));
+      // state 2 (same pass): no rebuild -> workProgress 0, state 3, return 1
       u->workProgress = 0;
-      if (target) InheritFactoryCommands(sim, u, target);
       t.state = 3;
-      return kTaskRunning;
+      return wait(1);
     }
     case 3:
-      if (u->busy) return kTaskRunning;  // roll-off: the scripts keep the factory busy
+      if (u->busy) return wait(10);  // the Lua roll-off keeps the factory Busy
       t.completed = true;
       return kTaskDone;
   }
@@ -546,15 +554,16 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskFailed;
 }
 
-// Guard / assist: follow the guarded unit; work on what it builds or repairs, or repair it.
-int TickGuard(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+// BuildAssist / AssistCommander (not CUnitGuardTask; the original's are not read yet): follow the
+// assisted unit; work on what it builds or repairs, or repair it.
+int TickAssistLegacy(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   Unit* g = FindUnit(sim, t.goalId);
   if (!g) {
     if (t.started) StopBuild(sim, L, u, t, true);
     u->unitStates.erase("Repairing");
     return kTaskDone;
   }
-  u->guardedId = EntityRef(g);
+  if (u->guardedId != EntityRef(g)) SetGuardedUnit(sim, u, g);
   bool builder = u->bpData && u->bpData->hasBuilder;
   Unit* work = nullptr;
   if (builder) {
@@ -844,6 +853,581 @@ int TickScriptTask(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 
 }  // namespace
 
+// ---- the guard task (CUnitGuardTask 0x6111e0 / 0x6141a0; engine-ref/specs/guard_task.md) ---------
+//
+// One task per Guard command. Every run (every 6 ticks; every tick for an engineer assisting a factory
+// or an engineer) it re-reads the guarded unit, ends when that unit is gone, and otherwise takes the
+// first of: refuel at a staging platform, ferry (a transport guarding a factory or a beacon), the
+// assisted factory's build orders (a factory guarding a factory), an enemy within GuardScanRadius,
+// the guarded builder's structure, what the guarded unit reclaims, something to repair or assist;
+// with nothing to do it keeps station. Work is done by child tasks (the guard waits for them).
+
+namespace combat {
+bool IsAlly(const Army* a, const Army* b);
+}
+
+struct GuardData {
+  bool hasUnit = false, factoryGuard = false, engAssistFactory = false, engAssistEngineer = false;
+  bool ferryFactory = false, ferryTarget = false, endWhenIdle = false;
+  uint32_t G = 0;                     // +0x7c
+  Vec3 pos;                           // +0x84
+  Vec3 anchor;                        // +0x90 (zero: none)
+  int goal[4] = {0, 0, 0, 0};         // +0x9c: the goal last handed to the navigator
+  bool goalSet = false;
+  std::weak_ptr<UnitCommand> cmd;     // +0x4c: the Guard command
+  std::weak_ptr<UnitCommand> ownCmd;  // +0x44: an own-queue factory command being built
+  BuildTask* child = nullptr;         // a pushed child task (its parent: the guard or the dispatcher)
+  bool childToGuard = false;          // the child's result lands in the guard (+0x2c)
+  uint32_t childFrom = 0;             // its first tick (the thread's wait counter)
+  bool childMove = false;             // state 0's move task (the thread is suspended until it ends)
+  int result = 0;                     // +0x2c: 1 success, 2 failure
+};
+
+namespace {
+
+bool IsZero(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+bool Cat(Sim& sim, const Unit* u, const char* c) { return u && BpInCategory(sim, u->blueprint, c); }
+bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
+bool Moved(const Unit* u) {
+  return u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
+         u->position.z != u->lastPosition.z;
+}
+const NamedFootprint& Fp(const Unit* u) { return Footprint(*u->blueprint); }
+
+// RUnitBlueprint::GetSkirtRect 0x51ec50 at (x, z)
+void SkirtRect(const Unit* B, float excl[4]) {
+  const NamedFootprint& bf = Fp(B);
+  float bx0 = static_cast<float>(static_cast<int>(std::nearbyint(B->position.x - bf.sizeX * 0.5f)));
+  float bz0 = static_cast<float>(static_cast<int>(std::nearbyint(B->position.z - bf.sizeZ * 0.5f)));
+  const UnitBpData& d = *B->bpData;
+  if (d.skirtSizeX == 0) {
+    excl[0] = bx0;
+    excl[2] = bx0 + bf.sizeX;
+  } else {
+    excl[0] = bx0 + d.skirtOffsetX;
+    excl[2] = excl[0] + d.skirtSizeX;
+  }
+  if (d.skirtSizeZ == 0) {
+    excl[1] = bz0;
+    excl[3] = bz0 + bf.sizeZ;
+  } else {
+    excl[1] = bz0 + d.skirtOffsetZ;
+    excl[3] = excl[1] + d.skirtSizeZ;
+  }
+}
+
+bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4]) {
+  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) return AirPrepareMove(sim, u, p);
+  return GroundPrepareMove(sim, u, p, excl);
+}
+
+// a Lua method returning a boolean (RunScript_Bool 0x5f48a0)
+bool ScriptBool(Sim& sim, Unit* u, const char* method) {
+  lua_State* L = sim.L();
+  if (!u->HasLuaObject()) return false;
+  int top = lua_gettop(L);
+  PushObject(L, u);
+  lua_pushstring(L, method);
+  lua_gettable(L, -2);
+  if (!lua_isfunction(L, -1)) {
+    lua_settop(L, top);
+    return false;
+  }
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_insert(L, -2);
+  lua_pushvalue(L, top + 1);
+  bool r = false;
+  if (lua_pcall(L, 1, 1, top + 2) == 0) r = lua_toboolean(L, -1) != 0;
+  else LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+  lua_settop(L, top);
+  return r;
+}
+
+BuildTask* NewChild(Sim& sim, CommandType type, const char* order) {
+  auto t = std::make_unique<BuildTask>();
+  t->type = type;
+  t->order = order;
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
+}
+
+int NavStatus(const Unit* u) {  // navigator GetStatus: 0 idle, 1 thinking, 2 steering
+  if (!u->motion.hasGoal) return 0;
+  if (u->motion.navDriven) return LandNavStatus(u);
+  return 2;
+}
+
+// GuardAbort 0x614170: GuardBusy, and the navigator's AbortMove
+void GuardAbort(Unit* u) {
+  u->unitStates.insert("GuardBusy");
+  if (u->motion.hasGoal) MotionStop(u);
+}
+
+// RefreshGuardedUnitFromTarget 0x611a40 (never clears anything)
+void Refresh(Sim& sim, Unit* U, GuardData& g, const UnitCommand& c) {
+  Unit* gu = c.targetId ? FindUnit(sim, c.targetId) : nullptr;
+  if (gu && (Mobile(gu) || !Cat(sim, U, "REBUILDER"))) {
+    g.hasUnit = true;
+    g.G = EntityRef(gu);
+    if (Cat(sim, U, "TRANSPORTATION")) {
+      if (Cat(sim, gu, "FACTORY") && gu->bpData && gu->bpData->hasBuilder && !Mobile(gu)) g.ferryFactory = true;
+      else if (Cat(sim, gu, "TRANSPORTATION") || Cat(sim, gu, "FERRYBEACON")) g.ferryTarget = true;
+    }
+    SetGuardedUnit(sim, U, gu);
+  }
+  g.pos = c.targetId ? (gu ? gu->position : c.pos) : c.pos;
+}
+
+// EnsureReservedGuardMoveAnchorPosition 0x611da0
+Vec3 EnsureAnchor(Sim& sim, Unit* U, GuardData& g) {
+  if (IsZero(g.anchor)) {
+    if (Unit* G = FindUnit(sim, g.G)) {
+      g.anchor = G->position;
+      float excl[4];
+      SkirtRect(G, excl);
+      PrepareMoveFor(sim, U, &g.anchor, excl);
+    }
+    const NamedFootprint& fp = Fp(U);
+    int x0 = static_cast<int>(std::nearbyint(g.anchor.x - fp.sizeX * 0.5f));
+    int z0 = static_cast<int>(std::nearbyint(g.anchor.z - fp.sizeZ * 0.5f));
+    int r[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
+    GroundReserveRect(sim, U, r);
+  }
+  return g.anchor;
+}
+
+// ResolveGuardReferencePosition 0x612220. The guard formation (G+0x520) is not carried out: a land
+// guard uses G's position instead of its formation slot.
+Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
+  Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
+  if (G) {
+    if (Cat(sim, U, "ENGINEER")) return EnsureAnchor(sim, U, g);
+    return G->position;  // (has a guard formation: air -> G's position; land -> its slot)
+  }
+  if (auto c = g.cmd.lock()) {
+    const NamedFootprint& fp = Fp(U);
+    int cx = static_cast<int>(std::nearbyint(c->pos.x - fp.sizeX * 0.5f));
+    int cz = static_cast<int>(std::nearbyint(c->pos.z - fp.sizeZ * 0.5f));
+    return Vec3{cx + fp.sizeX * 0.5f, c->pos.y, cz + fp.sizeZ * 0.5f};
+  }
+  return g.pos;
+}
+
+// UpdateGuardFollowMoveGoal 0x613c40: keep station (the navigator's goal; no move task)
+void Follow(Sim& sim, Unit* U, GuardData& g) {
+  if (!Mobile(U) || U->immobile) return;
+  Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
+  if (Cat(sim, U, "ENGINEER") && G) {
+    float dx, dz;
+    if (Moved(G) && !IsZero(g.anchor)) {
+      dx = g.anchor.x - G->position.x;
+      dz = g.anchor.z - G->position.z;
+    } else {
+      dx = U->position.x - G->position.x;
+      dz = U->position.z - G->position.z;
+    }
+    float d = std::sqrt(dx * dx + dz * dz);
+    double mbd = U->bpData ? U->bpData->maxBuildDistance : 0;
+    if (mbd + mbd > d) return;
+    if (!IsZero(g.anchor)) {
+      g.anchor = {};
+      GroundFreeRect(sim, U);
+    }
+  }
+  Vec3 ref = ReferencePos(sim, U, g);
+  float excl[4] = {0, 0, 0, 0};
+  if (G) SkirtRect(G, excl);
+  bool forced = false;
+  if (!(U->motion.bp->motionType == kMotionAir && Cat(sim, U, "EXPERIMENTAL"))) {
+    if (!PrepareMoveFor(sim, U, &ref, excl)) {
+      const TerrainMap* m = sim.map();
+      float w = m ? static_cast<float>(m->width()) : ref.x, h = m ? static_cast<float>(m->height()) : ref.z;
+      ref.x = std::min(std::max(ref.x, 0.0f), w);
+      ref.z = std::min(std::max(ref.z, 0.0f), h);
+      forced = true;
+    }
+  }
+  const NamedFootprint& fp = Fp(U);
+  int cx = static_cast<int>(std::nearbyint(ref.x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(ref.z - fp.sizeZ * 0.5f));
+  int goal[4] = {cx, cz, cx + 1, cz + 1};
+  int ux = static_cast<int>(std::nearbyint(U->position.x - fp.sizeX * 0.5f));
+  int uz = static_cast<int>(std::nearbyint(U->position.z - fp.sizeZ * 0.5f));
+  if (goal[0] <= ux && ux <= goal[2] && goal[1] <= uz && uz <= goal[3]) return;
+  int st = NavStatus(U);
+  if (st == 1) return;
+  if (!(G && Mobile(G)) && st != 0) return;
+  bool same = g.goalSet && std::equal(goal, goal + 4, g.goal);
+  if (same && !forced && st == 2) return;
+  Vec3 p{cx + fp.sizeX * 0.5f, ref.y, cz + fp.sizeZ * 0.5f};
+  MotionSetGoal(sim, U, std::vector<Vec3>{p}, U->motion.bp->motionType == kMotionAir, sim.tick());
+  std::copy(goal, goal + 4, g.goal);
+  g.goalSet = true;
+}
+
+// IsOutsideGuardReferenceRange 0x612480
+bool OutsideRange(Sim& sim, Unit* U, GuardData& g, float r) {
+  Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
+  float size = G ? static_cast<float>(std::max(Fp(G).sizeX, Fp(G).sizeZ)) : 1.0f;
+  Vec3 ref = ReferencePos(sim, U, g);
+  double dx = U->position.x - ref.x, dy = U->position.y - ref.y, dz = U->position.z - ref.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz) > size + r;
+}
+
+// ResolveGuardCommandSourceUnit 0x611cd0: a factory with work along U's guard chain
+Unit* CommandSourceUnit(Sim& sim, Unit* U) {
+  std::set<Unit*> visited;
+  Unit* u = U;
+  while (u && !visited.count(u)) {
+    int n = 0, total = 0;
+    for (auto& c : u->commands)
+      if (c && c->type == CommandType::BuildFactory) {
+        ++n;
+        total += c->count;
+      }
+    if ((u == U && n > 0) || n > 1 || total > 1) return u;
+    visited.insert(u);
+    u = FindUnit(sim, u->guardedId);
+  }
+  return U;
+}
+
+// TryDispatchFactoryOrUpgradeFromGuardQueues 0x6127f0 (a factory assisting a factory)
+BuildTask* FactoryWork(Sim& sim, Unit* U, GuardData& g, Unit* G) {
+  if (!G || U->unitStates.count("Building") || U->unitStates.count("Repairing")) return nullptr;
+  for (auto& c : U->commands) {
+    if (!c || (c->type != CommandType::BuildFactory && c->type != CommandType::Upgrade)) continue;
+    const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
+    if (!bp) continue;
+    g.ownCmd = c;
+    BuildTask* t = NewChild(sim, c->type, c->type == CommandType::Upgrade ? "Upgrade" : "FactoryBuild");
+    t->bp = bp;
+    return t;
+  }
+  const int n = static_cast<int>(G->commands.size());
+  for (int i = 0; i < n; ++i) {
+    auto c = G->commands[static_cast<size_t>(i)];
+    if (!c || c->type != CommandType::BuildFactory) continue;
+    if (i == 0 && c->count <= 1) continue;  // leave G's own head item to G (no repeat queues)
+    const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
+    if (!bp || !UnitCanBuild(U, *bp)) continue;
+    if (c->count > 1) {
+      --c->count;
+    } else {
+      G->commands.erase(G->commands.begin() + i);
+      ReleaseCommand(G, *c);
+    }
+    BuildTask* t = NewChild(sim, CommandType::BuildFactory, "FactoryBuild");
+    t->bp = bp;
+    t->inheritFrom = EntityRef(G);
+    return t;
+  }
+  return nullptr;
+}
+
+// TryResolveGuardBuildBlueprint 0x612bb0: the structure the root of G's guard chain is building
+const BlueprintInfo* GuardBuildBp(Sim& sim, Unit* U, GuardData& g, Vec3* site) {
+  if (!U->bpData || !U->bpData->hasBuilder || Cat(sim, U, "REBUILDER")) return nullptr;  // (rebuild lists: not yet)
+  Unit* R = FindUnit(sim, g.G);
+  if (!R) return nullptr;
+  std::set<Unit*> visited;
+  while (Unit* n = FindUnit(sim, R->guardedId)) {
+    if (visited.count(R)) return nullptr;
+    visited.insert(R);
+    R = n;
+  }
+  if (R->commands.empty() || !R->commands.front() || R->commands.front()->type != CommandType::BuildMobile) return nullptr;
+  const UnitCommand& c = *R->commands.front();
+  const BlueprintInfo* bp = sim.blueprints().Find(c.blueprintId);
+  if (!bp || !UnitCanBuild(U, *bp)) return nullptr;
+  const UnitBpData& bd = GetUnitBpData(sim.L(), *bp);
+  if (!bd.structure) return nullptr;  // structures only
+  const NamedFootprint& fp = Footprint(*bp);
+  int cx = static_cast<int>(std::nearbyint(c.pos.x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(c.pos.z - fp.sizeZ * 0.5f));
+  *site = Vec3{cx + fp.sizeX * 0.5f, c.pos.y, cz + fp.sizeZ * 0.5f};
+  return bp;
+}
+
+// SelectAssistOrCaptureCandidateUnit 0x613110
+Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
+  bool rebuilder = Cat(sim, U, "REBUILDER");
+  if (!rebuilder && !Cat(sim, U, "REPAIR")) return nullptr;
+  Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
+  if (g.hasUnit && G) {
+    if (Moved(G)) return nullptr;
+    bool shieldOn = ScriptBool(sim, G, "ShieldIsOn");
+    if (G->maxHealth > G->health) return G;
+    if (G->motion.fuelUseTime > 1.0f && 1.0f > G->fuelRatio) return G;
+    if (shieldOn && Cat(sim, G, "SHIELD"))
+      if (Entity* s = sim.FindEntity(G->focusId))
+        if (s->maxHealth > s->health) return G;
+    if (!G->paused && G->unitStates.count("Enhancing")) return G;
+    Entity* f = G->focusId ? sim.FindEntity(G->focusId) : nullptr;
+    if (f && !G->unitStates.count("Reclaiming")) {
+      if (f->kind != Entity::Kind::Unit) return nullptr;
+      Unit* fu = static_cast<Unit*>(f);
+      if (fu->army != U->army) return fu;
+      if (fu->maxHealth > fu->health) return fu;
+      if (fu->paused) return nullptr;
+      if (fu->unitStates.count("Enhancing")) return fu;
+      if (fu->unitStates.count("SiloBuildingAmmo")) return fu;
+      return nullptr;
+    }
+    if (G->paused) return nullptr;
+    return G->unitStates.count("SiloBuildingAmmo") ? G : nullptr;
+  }
+  if (g.engAssistFactory || g.engAssistEngineer) return nullptr;
+  float r = GuardScanRadiusOf(U);
+  Unit* best = nullptr;
+  float bestD2 = std::numeric_limits<float>::infinity();
+  for (Unit* u : sim.units()) {
+    if (!Alive(u) || u == U || !u->blueprint) continue;
+    float rad = static_cast<float>(std::max(Fp(u).sizeX, Fp(u).sizeZ)) * 0.5f;
+    float ex = u->position.x - g.pos.x, ey = u->position.y - g.pos.y, ez = u->position.z - g.pos.z;
+    if (std::sqrt(ex * ex + ey * ey + ez * ez) > r + rad) continue;  // (collision primitive vs sphere)
+    if (Moved(u) || u->layer == "Air") continue;
+    Unit* cand = nullptr;
+    if (rebuilder) continue;  // (rebuilders: guard-command positions, not carried out)
+    if (u->army != U->army && !combat::IsAlly(u->army, U->army)) continue;
+    if (u->beingBuilt || u->health < u->maxHealth) cand = u;
+    if (!cand) {
+      Entity* f = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
+      if (f && f->kind == Entity::Kind::Unit) cand = static_cast<Unit*>(f);
+      else if (u->unitStates.count("Enhancing") || u->unitStates.count("SiloBuildingAmmo")) cand = u;
+      else continue;
+    }
+    float dx = cand->position.x - U->position.x, dy = cand->position.y - U->position.y, dz = cand->position.z - U->position.z;
+    float d2 = dx * dx + dy * dy + dz * dz;
+    if (bestD2 > d2) {
+      best = cand;
+      bestD2 = d2;
+    }
+  }
+  return best;
+}
+
+// DispatchAssistOrCaptureTask 0x613a80 (capture: not carried out yet)
+BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
+  bool shieldOn = ScriptBool(sim, c, "ShieldIsOn");
+  bool ally = c->army == U->army || combat::IsAlly(U->army, c->army);
+  if (!ally) return nullptr;
+  bool shieldDamaged = false;
+  if (shieldOn && Cat(sim, c, "SHIELD"))
+    if (Entity* s = sim.FindEntity(c->focusId)) shieldDamaged = s->maxHealth > s->health;
+  if (c->maxHealth > c->health || c->unitStates.count("Enhancing") || shieldDamaged ||
+      c->unitStates.count("SiloBuildingAmmo")) {
+    if (!U->bpData || !U->bpData->hasBuilder) return nullptr;
+    BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
+    t->goalId = EntityRef(c);
+    return t;
+  }
+  return nullptr;
+}
+
+// ShouldAbortGuardForBuilderContext 0x612600
+bool ShouldAbort(Sim& sim, Unit* U, GuardData& g) {
+  if (!(Cat(sim, U, "ENGINEER") || Cat(sim, U, "POD")) || Cat(sim, U, "REBUILDER")) return false;
+  if (U->commands.size() >= 2 && U->commands[1]) return true;
+  Unit* G = FindUnit(sim, g.G);
+  if (g.endWhenIdle && G && G->commands.empty()) return true;
+  return false;
+}
+
+}  // namespace
+
+BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
+  if (!c.targetId && !c.hasPos) return nullptr;  // no target: Stop
+  if (c.targetId && !FindUnit(sim, c.targetId) && !c.hasPos) return nullptr;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::Guard;
+  t->order = "Guard";
+  t->goalId = c.targetId;
+  auto gd = std::make_shared<GuardData>();
+  GuardData& g = *gd;
+  u->unitStates.insert("Guarding");
+  if (!u->commands.empty()) g.cmd = u->commands.front();
+  Refresh(sim, u, g, c);
+  Unit* G = FindUnit(sim, g.G);
+  if (G && (G->beingBuilt || G->unitStates.count("Upgrading")) && !Cat(sim, G, "FACTORY") && !Cat(sim, G, "SHIELD") &&
+      !Cat(sim, G, "SILO") && !Mobile(G))
+    g.endWhenIdle = true;
+  t->state = 3;
+  if (!(g.ferryFactory || Cat(sim, u, "NOFORMATION"))) {
+    if (Cat(sim, u, "FACTORY") && !Mobile(u)) {
+      g.factoryGuard = true;
+    } else if (Cat(sim, u, "ENGINEER") && G) {
+      if (Cat(sim, G, "ENGINEER")) {
+        g.engAssistEngineer = true;
+      } else if (Cat(sim, G, "FACTORY")) {
+        g.engAssistFactory = true;
+        t->state = 0;
+      }
+    }
+  }
+  t->gdata = gd;
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
+}
+
+// CUnitGuardTask::TaskTick 0x6141a0
+int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
+  (void)L;
+  GuardData& g = *t.gdata;
+  bool resumed = false;
+  if (g.child) {  // the child runs; when it ends the guard runs again in the same tick
+    if (sim.tick() < g.childFrom) return kTaskRunning;
+    BuildTask* c = g.child;
+    int r = TickBuildTask(sim, U, *c);
+    if (r == kTaskRunning) return kTaskRunning;
+    if (g.childToGuard) g.result = r == kTaskDone ? 1 : 2;
+    g.child = nullptr;
+    resumed = true;
+  } else if (g.childMove) {
+    if (U->motion.hasGoal) return kTaskRunning;
+    g.childMove = false;
+    U->unitStates.erase("Moving");
+    resumed = true;
+  }
+  if (!resumed && sim.tick() < t.waitUntil) return kTaskRunning;
+  // (a) an own-queue factory command finished
+  if (auto c = g.ownCmd.lock()) {
+    if (g.result == 1) {
+      if (c->count > 1) {
+        --c->count;
+      } else {
+        auto it = std::find(U->commands.begin(), U->commands.end(), c);
+        if (it != U->commands.end()) {
+          U->commands.erase(it);
+          ReleaseCommand(U, *c);
+        }
+      }
+    }
+    g.ownCmd.reset();
+  }
+  g.result = 0;
+  // (b) a changed U+0x4e0 (upgrade hand-over)
+  if (g.G != U->guardedId) {
+    g.G = U->guardedId;
+    if (auto c = g.cmd.lock())
+      if (g.G) c->targetId = g.G;
+  }
+  U->unitStates.erase("GuardBusy");
+  // (c) validity
+  Unit* G = FindUnit(sim, g.G);
+  if (g.hasUnit) {
+    if (!G || G->dead || G->destroyQueued || (G->unitStates.count("Attached") && !G->beingBuilt)) return kTaskDone;
+  }
+  // (d)
+  Unit* src = g.factoryGuard ? CommandSourceUnit(sim, U) : G;
+  if (g.hasUnit && G) g.pos = G->position;
+  const float r = GuardScanRadiusOf(U);
+  BuildTask* child = nullptr;
+  bool toGuard = true;
+  switch (t.state) {
+    case 0: {  // an engineer assisting a factory walks next to it first
+      Vec3 a = EnsureAnchor(sim, U, g);
+      const NamedFootprint& fp = Fp(U);
+      int cx = static_cast<int>(std::nearbyint(a.x - fp.sizeX * 0.5f)), cz = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
+      TaskMoveToward(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
+      U->unitStates.insert("Moving");
+      g.childMove = true;
+      t.state = 1;
+      break;
+    }
+    case 1:  // the move ended
+      GroundFreeRect(sim, U);
+      t.state = 3;
+      break;
+    case 2:  // after a fight: come back first
+      if (OutsideRange(sim, U, g, r * 0.5f)) Follow(sim, U, g);
+      else t.state = 3;
+      break;
+    case 3: {
+      if (Unit* P = FindPlatform(sim, U)) {
+        GuardAbort(U);
+        child = MakeRefuelTask(sim, U, P);
+        toGuard = false;
+        break;
+      }
+      if (g.ferryFactory || (g.ferryTarget && G && Cat(sim, G, "FERRYBEACON"))) {
+        GuardAbort(U);
+        child = MakeGuardFerryTask(sim, U, G);
+        toGuard = false;
+        break;
+      }
+      if (g.factoryGuard) {
+        GuardAbort(U);
+        child = FactoryWork(sim, U, g, src);
+        break;
+      }
+      if (!g.engAssistFactory && !g.engAssistEngineer && !U->weapons.empty()) {
+        if (Unit* e = GuardBestEnemy(sim, U)) {
+          if (!IsZero(g.anchor)) {
+            g.anchor = {};
+            GroundFreeRect(sim, U);
+          }
+          GuardAbort(U);
+          child = MakeAttackTaskOn(sim, U, e);
+          t.state = 2;
+          break;
+        }
+      }
+      Vec3 site;
+      if (const BlueprintInfo* bp = GuardBuildBp(sim, U, g, &site)) {
+        g.anchor = {};
+        GuardAbort(U);
+        child = NewChild(sim, CommandType::BuildMobile, "MobileBuild");
+        child->bp = bp;
+        child->site = site;
+        break;
+      }
+      if (g.hasUnit && G && U->bpData && U->bpData->hasBuilder && Cat(sim, U, "RECLAIM") &&
+          G->unitStates.count("Reclaiming") && G->focusId) {
+        GuardAbort(U);
+        child = NewChild(sim, CommandType::Reclaim, "Reclaim");
+        child->goalId = G->focusId;
+        break;
+      }
+      if (Unit* c = AssistCandidate(sim, U, g)) {
+        GuardAbort(U);
+        child = AssistTask(sim, U, c);
+        break;
+      }
+      if (ShouldAbort(sim, U, g)) return kTaskDone;
+      Follow(sim, U, g);
+      break;
+    }
+  }
+  const int ret = (g.engAssistEngineer || g.engAssistFactory) && G ? 1 : 7;
+  const uint32_t next = sim.tick() + static_cast<uint32_t>(ret >= 2 ? ret - 1 : 1);
+  t.waitUntil = next;
+  if (child) {
+    g.child = child;
+    g.childToGuard = toGuard;
+    g.childFrom = next;
+  }
+  return kTaskRunning;
+}
+
+// CUnitGuardTask dtor 0x611850
+void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
+  GuardData& g = *t.gdata;
+  if (g.child) {
+    EndBuildTask(sim, U, *g.child, false);
+    g.child = nullptr;
+  }
+  if (!Alive(U)) return;
+  U->unitStates.erase("GuardBusy");
+  U->unitStates.erase("Guarding");
+  if (g.childMove) U->unitStates.erase("Moving");
+  SetGuardedUnit(sim, U, nullptr);
+  if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
+  if (U->motion.bp && Moved(U) && U->motion.hasGoal) MotionStop(U);
+}
+
 BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
   auto t = std::make_unique<BuildTask>();
   t->type = c.type;
@@ -883,15 +1467,10 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->goalId = c.targetId;
       break;
     case CommandType::Guard:
+      return StartGuardTask(sim, u, c);
     case CommandType::BuildAssist:
     case CommandType::AssistCommander:
-      if (!u->bpData || !u->bpData->hasBuilder) {
-        if (c.type != CommandType::Guard || !c.targetId) return nullptr;
-        t->order = "Guard";  // fighters guard: stay close; the weapons engage by themselves
-        t->goalId = c.targetId;
-        u->unitStates.insert("Guarding");
-        break;
-      }
+      if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
       t->order = "Repair";
       t->goalId = c.targetId;
       u->unitStates.insert(c.type == CommandType::AssistCommander ? "AssistingCommander" : "Guarding");
@@ -918,9 +1497,9 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
     case CommandType::Ferry: r = TickTransportTask(sim, u, t); break;
-    case CommandType::Guard:
+    case CommandType::Guard: r = t.gdata ? TickGuard(sim, L, u, t) : kTaskFailed; break;
     case CommandType::BuildAssist:
-    case CommandType::AssistCommander: r = TickGuard(sim, L, u, t); break;
+    case CommandType::AssistCommander: r = TickAssistLegacy(sim, L, u, t); break;
     case CommandType::Attack:
     case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
     default: break;
@@ -947,6 +1526,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.tdata) {
     EndTransportTask(sim, u, t, success);
+    return;
+  }
+  if (t.gdata) {
+    EndGuard(sim, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {
@@ -1007,7 +1590,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (t.type != CommandType::BuildFactory) u->workProgress = 0;
     StopMovingIfTask(u, t);
   }
-  u->guardedId = 0;
+  if (u->guardedId) SetGuardedUnit(sim, u, nullptr);
 }
 
 bool TaskCanMove(const Unit* u) { return CanMove(u); }
@@ -1022,41 +1605,157 @@ void StopMovingIfTask(Unit* u, const BuildTask& t) {
 
 // ---- factories -----------------------------------------------------------------------------------
 
-void InheritFactoryCommands(Sim& sim, Unit* factory, Unit* built) {
-  (void)sim;
-  for (auto& c : factory->factoryCommands) {
-    built->commands.push_back(c);
-    c->units.insert(built);
+// ---- the factory's rally queue (CAiBuilderImpl, factory_handoff.md 3) and the hand-off (1.3, 2) ----
+
+bool IsFactoryBuilder(Sim& sim, const Unit* u) {
+  return u->bpData && u->bpData->hasBuilder && BpInCategory(sim, u->blueprint, "FACTORY");
+}
+bool IsImmobileFactory(Sim& sim, const Unit* u) {
+  return BpInCategory(sim, u->blueprint, "FACTORY") && !(u->motion.bp && u->motion.bp->mobile());
+}
+void AddFactoryCommand(Unit* f, const std::shared_ptr<UnitCommand>& c) {  // vf+0x28 (append)
+  if (!c->units.insert(f).second) return;
+  f->factoryCommands.push_back(c);
+}
+void ClearFactoryCommandQueue(Unit* f) {  // vf+0x38: RemoveUnit from the back until empty
+  while (!f->factoryCommands.empty()) {
+    auto c = f->factoryCommands.back();
+    f->factoryCommands.pop_back();
+    ReleaseCommand(f, *c);
   }
+}
+// UNIT_IssueFactoryCommand 0x6f14d0: one command (flag +0x142) appended to every factory's rally queue.
+std::shared_ptr<UnitCommand> IssueFactoryCommand(Sim& sim, const std::vector<Unit*>& units, CommandType type,
+                                                 const Vec3& pos, uint32_t targetId, bool clear) {
+  std::shared_ptr<UnitCommand> c;
+  for (Unit* x : units) {
+    if (x->dead || x->transportedBy) continue;
+    if (!IsFactoryBuilder(sim, x)) continue;
+    if (!c) {
+      c = std::make_shared<UnitCommand>();
+      c->id = sim.nextCommandId++;
+      c->type = type;
+      c->pos = pos;
+      c->hasPos = true;
+      c->targetId = targetId;
+      c->factoryIssued = true;
+      sim.commandsById[c->id] = c;
+    }
+    if (clear) ClearFactoryCommandQueue(x);
+    AddFactoryCommand(x, c);
+  }
+  return c;
 }
 
 namespace {
-void SetUpInitialRally(Sim& sim, Unit* f) {
-  const UnitBpData& d = *f->bpData;
-  const Quat& q = f->orientation;
-  // the factory's x and z axes
-  float x = q.x, y = q.y, z = q.z, w = q.w;
-  Vec3 ax{1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)};
-  Vec3 az{2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)};
-  Vec3 p{f->position.x + ax.x * d.initialRallyX + az.x * d.initialRallyZ,
-         f->position.y + ax.y * d.initialRallyX + az.y * d.initialRallyZ,
-         f->position.z + ax.z * d.initialRallyX + az.z * d.initialRallyZ};
-  auto c = std::make_shared<UnitCommand>();
-  c->id = sim.nextCommandId++;
-  c->type = CommandType::Move;
-  c->pos = p;
-  c->hasPos = true;
-  sim.commandsById[c->id] = c;
-  f->factoryCommands.clear();
-  f->factoryCommands.push_back(c);
-  f->rallyPoint = p;
-  f->hasRallyPoint = true;
+Vec3 FactoryCmdPos(Sim& sim, const UnitCommand& c) {
+  if (c.targetId)
+    if (Entity* e = sim.FindEntity(c.targetId)) return e->position;
+  return c.pos;
+}
+// InheritQueuedCommandsTo 0x5fa340 / InheritCommandsTo 0x5fa550: the same command objects, appended;
+// TransportLoadUnits skipped for air and naval units; the ferry case drops the leading Moves.
+void InheritRally(Sim& sim, Unit* f, Unit* inheritFrom, Unit* u, bool ferry) {
+  if (!f->bpData || !f->bpData->hasBuilder || (f->motion.bp && f->motion.bp->mobile())) return;
+  std::vector<std::shared_ptr<UnitCommand>> L(f->factoryCommands.begin(), f->factoryCommands.end());
+  if (inheritFrom && Alive(inheritFrom) && inheritFrom->bpData && inheritFrom->bpData->hasBuilder)
+    L.insert(L.end(), inheritFrom->factoryCommands.begin(), inheritFrom->factoryCommands.end());
+  bool airNaval = BpInCategory(sim, u->blueprint, "AIR") || BpInCategory(sim, u->blueprint, "NAVAL");
+  bool leading = true;
+  for (auto& c : L) {
+    if (!c) continue;
+    if (c->type == CommandType::TransportLoadUnits && airNaval) continue;
+    if (ferry) {
+      if (c->type == CommandType::Move) {
+        if (leading) continue;  // the ferry flies these
+      } else {
+        leading = false;
+      }
+    }
+    if (!c->units.insert(u).second) continue;  // CUnitCommand::AddUnit: once per unit
+    u->commands.push_back(c);
+  }
 }
 }  // namespace
 
+// CFactoryBuildTask finish block 0x5fa9cb: the root of the factory's guard chain, a ferrying
+// transport among its guards (the first not Moving, else the first), then the unit's orders.
+void FactoryHandOff(Sim& sim, Unit* f, Unit* u, Unit* inheritFrom) {
+  Unit* R = f;
+  for (;;) {
+    Unit* g = FindUnit(sim, R->guardedId);
+    if (!g || g == f) break;
+    R = g;
+  }
+  Unit* chosen = nullptr;
+  for (Unit* X : Guards(sim, R)) {
+    if (!BpInCategory(sim, X->blueprint, "TRANSPORTATION") || !X->unitStates.count("Ferrying")) continue;
+    if (!chosen || !X->unitStates.count("Moving")) chosen = X;
+    if (!chosen->unitStates.count("Moving")) break;
+  }
+  if (chosen) {
+    IssueTransportLoadOne(sim, u, R);
+    InheritRally(sim, f, inheritFrom, u, true);
+  } else {
+    InheritRally(sim, f, inheritFrom, u, false);
+  }
+}
+
+void SetGuardedUnit(Sim& sim, Unit* u, Unit* g) {
+  if (Unit* old = FindUnitAny(sim, u->guardedId)) {
+    auto& v = old->guarders;
+    v.erase(std::remove(v.begin(), v.end(), EntityRef(u)), v.end());
+  }
+  u->guardedId = g ? EntityRef(g) : 0;
+  if (g) {
+    auto& v = g->guarders;
+    uint32_t id = EntityRef(u);
+    auto it = std::lower_bound(v.begin(), v.end(), id);
+    if (it == v.end() || *it != id) v.insert(it, id);
+  }
+}
+
+// The units guarding g (unit+0x4f8), ascending entity id.
+std::vector<Unit*> Guards(Sim& sim, const Unit* g) {
+  std::vector<Unit*> out;
+  for (uint32_t id : g->guarders)
+    if (Unit* x = FindUnit(sim, id)) out.push_back(x);
+  return out;
+}
+
+// SetUpInitialRally 0x59eef0: position + local X * InitialRallyX + local Z * InitialRallyZ.
+void SetUpInitialRally(Sim& sim, Unit* f) {
+  const UnitBpData& d = *f->bpData;
+  const Quat& q = f->orientation;
+  float x = q.x, y = q.y, z = q.z, w = q.w;
+  Vec3 ax{1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)};
+  Vec3 az{2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)};
+  Vec3 t{ax.x * d.initialRallyX, ax.y * d.initialRallyX, ax.z * d.initialRallyX};
+  Vec3 p{f->position.x + (az.x * d.initialRallyZ + t.x), f->position.y + (az.y * d.initialRallyZ + t.y),
+         f->position.z + (az.z * d.initialRallyZ + t.z)};
+  IssueFactoryCommand(sim, {f}, CommandType::Move, p, 0, true);
+}
+
+// ValidateFactoryCommandQueue 0x59f220 (end of every MotionTick): drop TransportLoadUnits whose
+// target is gone or not a beacon / transport / staging platform; an empty queue gets the initial rally.
+void ValidateFactoryCommandQueue(Sim& sim, Unit* f) {
+  for (size_t i = 0; i < f->factoryCommands.size();) {
+    auto c = f->factoryCommands[i];
+    if (c->type == CommandType::TransportLoadUnits) {
+      Unit* E = FindUnit(sim, c->targetId);
+      if (!E || !(BpInCategory(sim, E->blueprint, "FERRYBEACON") || BpInCategory(sim, E->blueprint, "TRANSPORTATION") ||
+                  BpInCategory(sim, E->blueprint, "AIRSTAGINGPLATFORM"))) {
+        f->factoryCommands.erase(f->factoryCommands.begin() + static_cast<long>(i));
+        ReleaseCommand(f, *c);
+        continue;
+      }
+    }
+    ++i;
+  }
+  if (f->factoryCommands.empty()) SetUpInitialRally(sim, f);
+}
+
 void UnitFinishedBuilding(Sim& sim, lua_State* L, Unit* u) {
-  // a factory gets its first rally point
-  if (u->bpData && u->bpData->structure && u->bpData->hasBuilder) SetUpInitialRally(sim, u);
   if (u->bpData && u->bpData->structure) AdjacencyGained(sim, L, u);
 }
 
@@ -1228,31 +1927,30 @@ int l_ClearFocusEntity(lua_State* L) {
   U(L)->focusId = 0;
   return 0;
 }
-int l_GetGuardedUnit(lua_State* L) {
+int l_GetGuardedUnit(lua_State* L) {  // 0x6cd380: unit+0x4e0
   Unit* u = U(L);
-  Unit* g = FindUnit(*S(L), u->guardedId);
-  if (!g && !u->commands.empty()) {
-    const UnitCommand& c = *u->commands.front();
-    if (c.type == CommandType::Guard || c.type == CommandType::AssistCommander || c.type == CommandType::BuildAssist)
-      g = FindUnit(*S(L), c.targetId);
-  }
-  PushObject(L, g);
+  PushObject(L, FindUnit(*S(L), u->guardedId));
   return 1;
 }
-int l_GetGuards(lua_State* L) {
+int l_GetGuards(lua_State* L) {  // 0x6cd4e0: unit+0x500, ascending entity id
   Unit* u = U(L);
   lua_newtable(L);
   int n = 0;
-  for (Unit* o : S(L)->units()) {
-    if (!Alive(o) || o == u || o->commands.empty()) continue;
-    const UnitCommand& c = *o->commands.front();
-    if ((c.type == CommandType::Guard || c.type == CommandType::AssistCommander || c.type == CommandType::BuildAssist) &&
-        c.targetId == EntityRef(u)) {
-      PushObject(L, o);
-      lua_rawseti(L, -2, ++n);
-    }
+  for (Unit* o : Guards(*S(L), u)) {
+    PushObject(L, o);
+    lua_rawseti(L, -2, ++n);
   }
   return 1;
+}
+// NotifyUpgrade(from, to) 0x6cce70: the upgrade takes over the old unit's guard links.
+int l_NotifyUpgrade(lua_State* L) {
+  Sim& sim = *S(L);
+  Unit* from = ToObject<Unit>(L, 1);
+  Unit* to = ToObject<Unit>(L, 2);
+  if (!from || !to) return 0;
+  SetGuardedUnit(sim, to, FindUnit(sim, from->guardedId));
+  for (Unit* g : Guards(sim, from)) SetGuardedUnit(sim, g, to);
+  return 0;
 }
 int l_SetBusy(lua_State* L) {
   Unit* u = U(L);
@@ -1345,28 +2043,28 @@ std::vector<Unit*> UnitList(lua_State* L, int idx) {
   }
   return out;
 }
-// IssueFactoryRallyPoint(factories, position)
+// IssueFactoryRallyPoint(factories, target) 0x6f22c0: a Move (entity or position) appended to the rally queues.
 int l_IssueFactoryRallyPoint(lua_State* L) {
-  auto units = UnitList(L, 1);
+  Sim& sim = *S(L);
+  std::vector<Unit*> units;
+  for (Unit* u : UnitList(L, 1))
+    if (UnitCommandCaps(L, *u->blueprint) & 0x1u) units.push_back(u);  // RULEUCC_Move
   Vec3 p;
-  if (!PosArg(L, 2, &p)) return 0;
-  Sim* sim = S(L);
-  auto c = std::make_shared<UnitCommand>();
-  c->id = sim->nextCommandId++;
-  c->type = CommandType::Move;
-  c->pos = p;
-  c->hasPos = true;
-  sim->commandsById[c->id] = c;
-  for (Unit* u : units) {
-    u->factoryCommands.clear();
-    u->factoryCommands.push_back(c);
-    u->rallyPoint = p;
-    u->hasRallyPoint = true;
+  uint32_t target = 0;
+  if (Entity* e = ToObject<Entity>(L, 2)) {
+    p = e->position;
+    target = EntityRef(e);
+  } else if (!PosArg(L, 2, &p)) {
+    return 0;
   }
-  return 0;
+  auto c = IssueFactoryCommand(sim, units, CommandType::Move, p, target, false);
+  if (!c) return 0;
+  PushUnitCommand(L, c);
+  return 1;
 }
-int l_IssueClearFactoryCommands(lua_State* L) {
-  for (Unit* u : UnitList(L, 1)) u->factoryCommands.clear();
+int l_IssueClearFactoryCommands(lua_State* L) {  // 0x6f2580 (the initial rally comes back next MotionTick)
+  for (Unit* u : UnitList(L, 1))
+    if (u->bpData && u->bpData->hasBuilder) ClearFactoryCommandQueue(u);
   return 0;
 }
 // IssueMoveOffFactory(units, position)
@@ -1381,20 +2079,20 @@ int l_IssueMoveOffFactory(lua_State* L) {
   c->pos = p;
   c->hasPos = true;
   sim->commandsById[c->id] = c;
+  c->factoryIssued = true;  // IssueMoveOffFactory 0x6f29d0 = IssueMove (append) + cmd+0x142
   for (Unit* u : units) {
-    u->commands.push_front(c);
-    c->units.insert(u);
-    u->headState = 0;
+    if (!c->units.insert(u).second) continue;
+    u->commands.push_back(c);
   }
   return 0;
 }
-int l_GetRallyPoint(lua_State* L) {
+int l_GetRallyPoint(lua_State* L) {  // 0x6d0650: the target of rally command 0, or nil
   Unit* u = U(L);
-  for (auto& c : u->factoryCommands)
-    if (c->hasPos) {
-      PushVector(L, c->pos.x, c->pos.y, c->pos.z);
-      return 1;
-    }
+  if (!u->factoryCommands.empty()) {
+    Vec3 p = FactoryCmdPos(*S(L), *u->factoryCommands.front());
+    PushVector(L, p.x, p.y, p.z);
+    return 1;
+  }
   lua_pushnil(L);
   return 1;
 }
@@ -1440,6 +2138,7 @@ void RegisterBuildBindings(lua_State* L) {
   SetMethod(L, "Unit", "ClearFocusEntity", l_ClearFocusEntity);
   SetMethod(L, "Unit", "GetGuardedUnit", l_GetGuardedUnit);
   SetMethod(L, "Unit", "GetGuards", l_GetGuards);
+  SetGlobal(L, "NotifyUpgrade", l_NotifyUpgrade);
   SetMethod(L, "Unit", "SetBusy", l_SetBusy);
   SetMethod(L, "Unit", "SetBlockCommandQueue", l_SetBlockCommandQueue);
   SetMethod(L, "Entity", "AttachBoneTo", l_AttachBoneTo);

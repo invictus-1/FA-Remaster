@@ -422,7 +422,7 @@ static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const Bluepri
   d.engageDistance = lu::Num(L, air, "EngageDistance", 0);
   d.predictAheadForBombDrop = lu::Num(L, air, "PredictAheadForBombDrop", 0);
   int ai = lu::Sub(L, t, "AI");
-  d.guardScanRadius = lu::Num(L, ai, "GuardScanRadius", 0);
+  d.guardScanRadius = lu::Num(L, ai, "GuardScanRadius", 25.0f);  // RUnitBlueprintAI ctor default
   d.guardReturnRadius = lu::Num(L, ai, "GuardReturnRadius", 0);
   d.attackAngle = lu::Num(L, ai, "AttackAngle", 0);
   d.needUnpack = lu::Bool(L, ai, "NeedUnpack");
@@ -722,7 +722,7 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   if (!u->commands.empty()) {
     CommandType t = u->commands.front()->type;
     if (t == CommandType::Patrol || t == CommandType::FormPatrol || t == CommandType::AggressiveMove ||
-        t == CommandType::FormAggressiveMove)
+        t == CommandType::FormAggressiveMove || t == CommandType::Guard)
       R = std::max(R, CB(u).guardScanRadius);
   }
   if (R <= 0 || !u->army) return u->blipCache;
@@ -1453,6 +1453,33 @@ bool WithinWeaponRange(Sim& sim, UnitWeapon* w, const AiTarget& t) {
 }
 
 }  // namespace
+
+// The guard task's enemy (GetBestEnemy 0x612af0): the primary weapon's best enemy among the unit's blips
+// within GuardScanRadius of the unit (score = distance; no angle).
+float GuardScanRadiusOf(Unit* u) { return CB(u).guardScanRadius; }
+Unit* GuardBestEnemy(Sim& sim, Unit* u) {
+  UnitWeapon* w = PrimaryWeapon(u);
+  if (!w || !w->bp) return nullptr;
+  float r = CB(u).guardScanRadius;
+  const std::vector<Unit*>& list = BlipsInRange(sim, u, 5);
+  Unit* best = FindBestEnemy(sim, w, list, r, false);
+  if (best && DistXZ(best->position, u->position) > r) return nullptr;
+  return best;
+}
+// new CUnitAttackTargetTask(target e) (the guard's child)
+BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
+  if (u->weapons.empty() || !e) return nullptr;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::Attack;
+  t->order = "Attack";
+  t->goalId = EntityRef(e);
+  t->site = e->position;
+  t->state = 1;
+  u->unitStates.insert("Attacking");
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
+}
 
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   if (u->weapons.empty()) return nullptr;

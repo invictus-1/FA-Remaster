@@ -55,6 +55,7 @@ struct UnitCommand {
   int scriptRef = -2;     // IssueScript: the command data table (TaskName, ...)
   std::set<Unit*> units;  // units that still have it queued
   uint32_t beaconRef = 0; // Ferry: the beacon created for it (CUnitCommand+0x158); dies with the command
+  bool factoryIssued = false;  // cmd+0x142: a factory (rally) command or MoveOffFactory
 };
 
 // Lua's view of a unit's navigator (Unit:GetNavigator()).
@@ -70,6 +71,8 @@ template <> struct ScriptTypeOf<NavigatorObject> { static constexpr uint32_t bit
 
 // The command stage (0x958): per unit in thread order, end an arrived move, then run the head command.
 void CommandStage(Sim& sim);
+// u no longer holds c (CUnitCommand::RemoveUnit; a Ferry command's beacon dies with its last holder).
+void ReleaseCommand(Unit* u, UnitCommand& c);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
 void RegisterCommandBindings(lua_State* L);

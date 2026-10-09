@@ -113,7 +113,10 @@ class Unit : public Entity {
   std::vector<EconomyEvent*> econEvents;
   // Building (sim/build.cpp)
   uint32_t focusId = 0;            // GetFocusUnit: what it builds, repairs, reclaims, ...
-  uint32_t guardedId = 0;
+  uint32_t guardedId = 0;               // unit+0x4e0 (SetGuardedUnit only)
+  std::vector<uint32_t> guarders;
+  bool isFactoryBuilder = false;
+  uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id
   std::vector<uint64_t> buildAllowed;  // per-unit build restrictions removed from "all"
   bool busy = false, blockCommandQueue = false, paused = false;
   int siloAmmo[2] = {0, 0};  // tactical, nuke missiles in store

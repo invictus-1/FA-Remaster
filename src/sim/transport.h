@@ -53,11 +53,20 @@ struct TransportObj {
   Vec3 pickupPos, pickupFacing;
   std::vector<uint32_t> pickup;  // entity refs, ascending id
   bool atPickup = false;
+  // internal storage (carriers, carriers.md 6): T+0x20 reserve index, +0x24 launch index, +0x28 stagger
+  int resIdx = 0, launchIdx = 0, stagger = 0, storageSlots = 0;
+  std::vector<uint32_t> stored, storageReserved;  // entity refs
 };
 
 // Unit creation: a transport object for units with the Transport command cap.
 void TransportCreate(Sim& sim, Unit* u);
 bool TransportHasCargo(const Unit* u);
+// The factory hand-off: append TransportLoadUnits(T) to u if the issue path accepts it.
+bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T);
+// Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
+BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
+BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
+Unit* FindPlatform(Sim& sim, Unit* plane);
 // Command caps of a unit's blueprint (RULEUCC_* bits).
 uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp);
 

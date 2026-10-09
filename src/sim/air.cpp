@@ -1654,6 +1654,18 @@ void AirWarp(Sim& sim, Unit* u) {
   SetTarget(sim, u, u->position, Vec3{}, 0);
 }
 
+void AirSetCarrierEvent(Unit* u, int e) {
+  if (u->motion.air) A(u).carrierEvent = e;
+}
+void AirSetImmediateVelocity(Sim& sim, Unit* u, Vec3 vel, Quat q) {
+  if (!u->motion.air) return;
+  AirMotion& a = A(u);
+  u->orientation = q;
+  BodySetTransform(a.body, Transform{ToW(q), u->position});
+  a.body.v = vel;
+  (void)sim;
+}
+
 void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool landingSpot) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);

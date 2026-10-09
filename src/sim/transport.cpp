@@ -58,11 +58,19 @@ struct TransportTaskData {
   int route = 0;                     // CUnitFerryTask+0x34: route index
   Vec3 home;                         // +0x3c: the beacon's position
   uint32_t beacon = 0;               // entity ref of the beacon (wait for ferry: the beacon or factory)
+  uint32_t P = 0, factory = 0;       // ctor B: +0x48 the guarded unit, +0x50 the factory whose rally queue is the route
+  bool followGuard = false;          // +0x38
   bool childMove = false;            // a pushed move task runs (ends when the motion has no goal)
   std::unique_ptr<BuildTask> child;  // a pushed load / unload / call-transport task
   uint32_t childFrom = 0;            // the child's first tick
   // refuel (CUnitRefuel): the platform is `transport`
   bool slotHeld = false;             // +0x38
+  // carriers (carriers.md): CarrierLand, CarrierRetrieve, CarrierLaunch
+  bool stored = false;               // CarrierLand +0x38 (success)
+  int stagger = 0;                   // +0x3c
+  float dy = 0;                      // +0x40
+  Vec3 bonePos, fwd, approach;       // +0x44, +0x50, +0x5c
+  bool isCarrier = false;            // CUnitRefuel+0x39: the platform is a carrier
 };
 
 namespace {
@@ -527,14 +535,23 @@ bool TransportDetach(Sim& sim, TransportObj& T, Unit* cu) {
 
 // TransportDetachAllUnits 0x5e73e0
 std::vector<Unit*> TransportDetachAll(Sim& sim, TransportObj& T, bool destroySome) {
-  std::vector<Unit*> out;
+  std::vector<Unit*> out, storedUnits;
   uint32_t ref = EntityRef(T.owner);
   for (Unit* u : sim.units()) {
     if (u->destroyQueued || u->parentId != ref || u->dead) continue;
+    if (std::find(T.stored.begin(), T.stored.end(), EntityRef(u)) != T.stored.end()) {
+      storedUnits.push_back(u);
+      continue;
+    }
     if (!destroySome && T.owner->layer == "Air" && !FootprintFitsHere(sim, u)) continue;
     out.push_back(u);
   }
   lua_State* L = sim.L();
+  // every stored unit: DestroyedOnTransport, then destroyed (no kill, no wreck)
+  for (Unit* u : storedUnits) {
+    sim.CallMethod(L, u, "DestroyedOnTransport", 0);
+    if (!u->destroyQueued) sim.QueueDestroy(u);
+  }
   for (Unit* u : out) {
     if (!destroySome) {
       TransportDetach(sim, T, u);
@@ -627,7 +644,11 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
   static const char* const names[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard",
                                       "RULEUCC_Patrol", "RULEUCC_RetaliateToggle", "RULEUCC_Repair",
                                       "RULEUCC_Capture", "RULEUCC_Transport", "RULEUCC_CallTransport",
-                                      "RULEUCC_Nuke", "RULEUCC_Tactical", "RULEUCC_Teleport", "RULEUCC_Ferry"};
+                                      "RULEUCC_Nuke", "RULEUCC_Tactical", "RULEUCC_Teleport", "RULEUCC_Ferry",
+                                      "RULEUCC_SiloBuildTactical", "RULEUCC_SiloBuildNuke", "RULEUCC_Sacrifice",
+                                      "RULEUCC_Pause", "RULEUCC_Overcharge", "RULEUCC_Dive", "RULEUCC_Reclaim",
+                                      "RULEUCC_SpecialAction", "RULEUCC_Dock", "RULEUCC_Script"};
+  constexpr int kNames = static_cast<int>(sizeof(names) / sizeof(names[0]));
   uint32_t v = 0;
   int top = lua_gettop(L);
   Sim::From(L)->blueprints().PushTable(L, bp);
@@ -642,14 +663,14 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
       } else if (lua_isstring(L, -1)) {
         std::string s = lua_tostring(L, -1);
         bool found = false;
-        for (int i = 0; i < 14; ++i)
+        for (int i = 0; i < kNames; ++i)
           if (s == names[i]) {
             v = 1u << i;
             found = true;
           }
         if (!found) v = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 10));
       } else if (lua_istable(L, -1)) {
-        for (int i = 0; i < 14; ++i) {
+        for (int i = 0; i < kNames; ++i) {
           lua_pushstring(L, names[i]);
           lua_rawget(L, -2);
           if (lua_toboolean(L, -1)) v |= 1u << i;
@@ -688,6 +709,7 @@ void TransportCreate(Sim& sim, Unit* u) {
       else if (has("AttachSpecial")) T->special.push_back(p);
     }
   }
+  T->storageSlots = TBp(u).storageSlots;
   u->transport = T;
 }
 
@@ -1185,11 +1207,12 @@ void EndChild(Sim& sim, Unit* u, TransportTaskData& d) {
   }
 }
 
-// FilterTransportableUnits 0x60e3a0: the army's land units waiting for this ferry's beacon.
-std::vector<Unit*> FilterTransportable(Sim& sim, Unit* T, uint32_t beacon) {
+// FilterTransportableUnits 0x60e3a0: the army's land units waiting for this ferry's beacon (or factory).
+std::vector<Unit*> FilterTransportable(Sim& sim, Unit* T, const TransportTaskData& d) {
   std::vector<Unit*> out;
   TransportObj& O = *T->transport;
   const bool canCommander = InCat(sim, T, "CANTRANSPORTCOMMANDER");
+  Unit* P = UnitRef(sim, d.P);
   for (Unit* u : sim.units()) {
     if (u->army != T->army || !u->blueprint || !InCat(sim, u, "LAND")) continue;
     if (u->dead || u->destroyQueued || u->beingBuilt) continue;
@@ -1199,11 +1222,61 @@ std::vector<Unit*> FilterTransportable(Sim& sim, Unit* T, uint32_t beacon) {
     if (!CanCarryUnit(sim, O, u) || !HasSpaceFor(sim, O, *u->blueprint)) continue;
     Unit* f = UnitRef(sim, u->focusId);
     if (!f) continue;
-    if (InCat(sim, f, "FERRYBEACON") && beacon && EntityRef(f) == beacon) out.push_back(u);
-    // (factory ferries, ctor B: not carried out yet)
+    if (InCat(sim, f, "FERRYBEACON") && d.beacon) {
+      if (EntityRef(f) == d.beacon) out.push_back(u);
+    } else if (InCat(sim, f, "FACTORY") && !d.beacon) {
+      if (EntityRef(f) != d.factory) continue;
+      // leave it to the ferry we guard while that one sits at the factory
+      if (d.followGuard && P && P->transport && HasSpaceFor(sim, *P->transport, *u->blueprint) && !State(P, "Moving"))
+        continue;
+      out.push_back(u);
+    }
   }
   std::sort(out.begin(), out.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
   return out;
+}
+
+// HasNewUnit 0x60e7e0 (factory ferries): the factory is building something that fits, or one of its
+// units is about to ask for this ferry (its next command is a TransportLoadUnits).
+bool HasNewUnit(Sim& sim, Unit* T, const TransportTaskData& d) {
+  Unit* F = UnitRef(sim, d.factory);
+  if (!F || !T->transport) return false;
+  if (const UnitCommand* c = Current(F)) {
+    if (c->type == CommandType::BuildFactory) {
+      const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
+      if (bp && HasSpaceFor(sim, *T->transport, *bp)) return true;
+    }
+  }
+  for (Unit* u : sim.units()) {
+    if (u->army != T->army || !InCat(sim, u, "LAND")) continue;
+    if (u->dead || u->destroyQueued || u->beingBuilt || State(u, "Attached")) continue;
+    if (u->creatorId != EntityRef(F) || !HasSpaceFor(sim, *T->transport, *u->blueprint)) continue;
+    if (u->commands.size() >= 2 && u->commands[1] && u->commands[1]->type == CommandType::TransportLoadUnits) return true;
+  }
+  return false;
+}
+
+// GetUnitCommands 0x60eb50: the route (the transport's queue; a factory ferry flies the factory's rally queue).
+std::vector<std::shared_ptr<UnitCommand>> FerryRoute(Sim& sim, Unit* T, const TransportTaskData& d) {
+  std::vector<std::shared_ptr<UnitCommand>> R(T->commands.begin(), T->commands.end());
+  if (Unit* F = UnitRef(sim, d.factory)) {
+    R.assign(F->factoryCommands.begin(), F->factoryCommands.end());
+  } else if (d.followGuard) {
+    Unit* P = UnitRef(sim, d.P);
+    if (d.beacon && P && EntityRef(P) == d.beacon) {
+      for (Unit* X : sim.units()) {
+        if (X->army != T->army || X->dead || X->destroyQueued || X->beingBuilt || !InCat(sim, X, "TRANSPORTATION")) continue;
+        if (!State(X, "Ferrying") || X->commands.empty()) continue;
+        if (CmdBeacon(sim, X->commands.front().get()) == UnitRef(sim, d.beacon)) {
+          R.assign(X->commands.begin(), X->commands.end());
+          break;
+        }
+      }
+    } else if (P) {
+      R.assign(P->commands.begin(), P->commands.end());
+    }
+  }
+  return R;
 }
 
 void PushLoad(Sim& sim, Unit* T, TransportTaskData& d, const std::vector<Unit*>& cargo) {
@@ -1217,13 +1290,14 @@ void PushLoad(Sim& sim, Unit* T, TransportTaskData& d, const std::vector<Unit*>&
 
 // HasNextUnitToLoad 0x60e9f0
 bool HasNextUnitToLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
-  std::vector<Unit*> S = FilterTransportable(sim, T, d.beacon);
+  std::vector<Unit*> S = FilterTransportable(sim, T, d);
   if (!S.empty()) {
     PushLoad(sim, T, d, S);
     return true;
   }
+  if (d.factory && HasNewUnit(sim, T, d)) return false;  // wait at the factory for a unit in production
   if (LoadedUnits(sim, T).empty()) return false;
-  d.route = 1;
+  d.route = d.factory ? 0 : 1;
   t.state = 1;
   return true;
 }
@@ -1235,13 +1309,22 @@ void FlyTo(Sim& sim, Unit* T, TransportTaskData& d, Vec3 p, int layer) {
   SetState(T, "Moving", true);
 }
 
-// CUnitFerryTask::TaskTick 0x60f400 (ctor A: a Ferry command; the guard paths are not carried out)
+// CUnitFerryTask::TaskTick 0x60f400 (ctor A: a Ferry command; ctor B: a transport guarding a factory
+// or a ferry beacon)
 int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
   if (RunChild(sim, T, t, d)) return kTaskRunning;
   if (t.waitUntil > sim.tick()) return kTaskRunning;
   Unit* B = UnitRef(sim, d.beacon);
-  if (!B || B->dead) return kTaskDone;
-  if (const UnitCommand* c = Current(T)) {  // the beacon follows the command's target
+  if (d.followGuard && !d.beacon) {
+    Unit* P = UnitRef(sim, d.P);
+    if (!P || P->dead || !State(P, "Ferrying")) return kTaskDone;
+  } else if (d.factory) {
+    Unit* F = UnitRef(sim, d.factory);
+    if (!F || F->dead) return kTaskDone;
+  } else if (!B || B->dead) {
+    return kTaskDone;
+  }
+  if (const UnitCommand* c = B ? Current(T) : nullptr) {  // the beacon follows the command's target
     Vec3 tp = CmdPos(sim, *c);
     float dx = tp.x - B->position.x, dz = tp.z - B->position.z;
     if (std::sqrt(dz * dz + dx * dx) > 1.0f) {
@@ -1252,7 +1335,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
     }
     d.home = B->position;
   }
-  const auto& R = T->commands;  // GetUnitCommands: the transport's own queue, current first
+  const auto R = FerryRoute(sim, T, d);  // GetUnitCommands
   const int n = static_cast<int>(R.size());
   for (int guard = 0; guard < 8; ++guard) {
     switch (t.state) {
@@ -1275,7 +1358,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           t.state = 2;
           return kTaskRunning;
         }
-        if (c1->type != CommandType::Ferry) {
+        if (c1->type != (d.factory ? CommandType::Move : CommandType::Ferry)) {
           t.state = 2;
           return kTaskRunning;
         }
@@ -1326,7 +1409,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           t.state = 0;
           return kTaskRunning;
         }
-        FlyTo(sim, T, d, d.home, FilterTransportable(sim, T, d.beacon).empty() ? 1 : 0);
+        FlyTo(sim, T, d, d.home, FilterTransportable(sim, T, d).empty() ? 1 : 0);
         t.state = 0;
         return kTaskRunning;
       }
@@ -1417,6 +1500,10 @@ void EndWaitFerry(Sim& sim, Unit* u, TransportTaskData& d) {
 // --- air staging: CUnitRefuel (air_staging.md 1) --------------------------------------------------
 
 enum { kRefuel = 6 };
+bool HasAvailableStorage(const TransportObj& T);
+void ResetReservation(TransportObj& T);
+void RemoveFromStorage(Sim& sim, TransportObj& T, Unit* u, Vec3* pos, Quat* q);
+void Launch(Sim& sim, Unit* u, const Vec3& pos, const Quat& q);
 const char* kCommandNamesExt(CommandType t) { static char b[16]; std::snprintf(b, sizeof b, "%d", static_cast<int>(t)); return b; }
 
 Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (transport_core 3.7)
@@ -1430,6 +1517,67 @@ Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (
   f = Rotate(O.owner->orientation, f);
   float l = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
   return l > 0 ? Vec3{f.x / l, f.y / l, f.z / l} : Vec3{};
+}
+
+// CUnitRefuel at a carrier (carriers.md 5): stored by a CarrierLand child, released when full
+int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* C) {
+  TransportObj& T = *C->transport;
+  for (int guard = 0; guard < 4; ++guard) {
+    switch (t.state) {
+      case 0:
+        if (HasAvailableStorage(T)) {
+          SetState(u, "ForceSpeedThrough", false);
+          auto cd = std::make_shared<TransportTaskData>();
+          cd->kind = 7;  // kCarrierLand
+          cd->transport = EntityRef(C);
+          SetState(u, "TransportLoading", true);
+          u->focusId = EntityRef(C);
+          Callback(sim, u, "OnAssignedFocusEntity");
+          PushChild(sim, d, cd, 0, "CarrierLand");
+          d.childFrom = sim.tick();  // return 0: the child runs now
+          t.state = 1;
+          d.slotHeld = true;
+          return RunChild(sim, u, t, d) ? kTaskRunning : kTaskRunning;
+        }
+        if (State(u, "Patrolling") || State(u, "Guarding")) return kTaskDone;
+        SetState(u, "ForceSpeedThrough", true);
+        AirSetGoal(sim, u, C->position, sim.tick(), 0);
+        t.waitUntil = sim.tick() + 9;
+        return kTaskRunning;
+      case 1:
+        if (!State(u, "Attached")) return kTaskDone;
+        if (u->fuelRatio > 0.99f && u->health == u->maxHealth) {
+          Vec3 pos;
+          Quat q;
+          RemoveFromStorage(sim, T, u, &pos, &q);
+          Launch(sim, u, pos, q);
+          t.state = 2;
+          return kTaskRunning;
+        }
+        t.waitUntil = sim.tick() + 9;
+        return kTaskRunning;
+      case 2: {
+        SetState(u, "Refueling", false);
+        if (State(u, "Patrolling") || State(u, "Guarding")) return kTaskDone;
+        if (const UnitCommand* cur = Current(u)) {
+          std::vector<Unit*> group(cur->units.begin(), cur->units.end());
+          std::sort(group.begin(), group.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
+          for (Unit* X : group)
+            if (X && IsAirUnit(sim, X) && !InCat(sim, X, "CARRIER") && State(X, "Refueling")) {
+              SetState(u, "ForceSpeedThrough", true);
+              AirSetGoal(sim, u, C->position, sim.tick(), 0);
+              t.waitUntil = sim.tick() + 9;
+              return kTaskRunning;
+            }
+        }
+        AirSetGoal(sim, u, C->position, sim.tick(), 0);
+        return kTaskDone;
+      }
+      default:
+        return kTaskDone;
+    }
+  }
+  return kTaskRunning;
 }
 
 int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
@@ -1447,6 +1595,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     if (u->parentId) TransportDetach(sim, O, u);
     return kTaskDone;
   }
+  if (d.isCarrier) return TickRefuelCarrier(sim, u, t, d, P);
   for (int guard = 0; guard < 4; ++guard) {
     switch (t.state) {
       case 0:  // a slot, or hold over the platform
@@ -1528,9 +1677,296 @@ void EndRefuel(Sim& sim, Unit* u, TransportTaskData& d) {
   if (d.slotHeld) {
     AirSetLandHeight(u, std::numeric_limits<float>::infinity());
     Unit* P = UnitRef(sim, d.transport);
-    if (P && !P->dead && P->transport && !InCat(sim, P, "CARRIER")) RemovePickupUnit(sim, *P->transport, u, true);
+    if (P && !P->dead && P->transport) {
+      if (!InCat(sim, P, "CARRIER")) RemovePickupUnit(sim, *P->transport, u, true);
+      else ResetReservation(*P->transport);
+    }
   }
   // (no detach: an aircraft whose refuel ends early stays docked, as in the original)
+}
+
+// --- carriers (carriers.md) -----------------------------------------------------------------------
+
+enum { kCarrierLand = 7, kCarrierRetrieve = 8, kCarrierLaunch = 9 };
+
+// CUnitMotion::SetNewTargetLayer 0x6b8920 (surfacing). Diving is not carried out yet: the layer changes at once.
+void SetNewTargetLayer(Sim& sim, Unit* u, const char* layer) { SetUnitLayer(sim, u, layer); }
+
+bool HasAvailableStorage(const TransportObj& T) {
+  return static_cast<int>(T.stored.size() + T.storageReserved.size()) < T.storageSlots;
+}
+void ResetReservation(TransportObj& T) { T.resIdx = T.launchIdx = T.stagger = 0; }  // the reserved set stays
+void ClearReservation(TransportObj& T, const Unit* u) {
+  auto& v = T.storageReserved;
+  v.erase(std::remove(v.begin(), v.end(), EntityRef(u)), v.end());
+}
+Vec3 ZAxis(const Quat& q) {  // (2(xz + wy), 2(yz - wx), 1 - 2(x^2 + y^2))
+  return {2 * (q.x * q.z + q.w * q.y), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
+}
+// TransportReserveStorage 0x5e7ec0: the next generic bone in turn; returns the stagger
+int ReserveStorage(TransportObj& T, Unit* u, Vec3* pos, Vec3* fwd, float* dy) {
+  T.storageReserved.push_back(EntityRef(u));
+  if (T.generic.empty()) {  // (the original divides by zero here)
+    *pos = T.owner->position;
+    *fwd = Forward(T.owner->orientation);
+    *dy = 0;
+    return T.stagger;
+  }
+  Vec3 p;
+  Quat q;
+  BoneWorldT(T.owner, T.generic[static_cast<size_t>(T.resIdx)].bone, &p, &q);
+  *pos = p;
+  *fwd = ZAxis(q);
+  *dy = p.y - T.owner->position.y;
+  int ret = T.stagger;
+  T.resIdx = (T.resIdx + 1) % static_cast<int>(T.generic.size());
+  if (T.resIdx == 0) T.stagger = (T.stagger + 3) % 50;
+  return ret;
+}
+// TransportAddToStorage 0x5e7be0: attached at the carrier's centre
+void AddToStorage(Sim& sim, TransportObj& T, Unit* u) {
+  lua_State* L = sim.L();
+  PushObject(L, T.owner);
+  sim.CallMethod(L, u, "OnAddToStorage", 1);
+  ClearReservation(T, u);
+  if (!u->parentId) AttachUnit(sim, u, T.owner, -1, -1);
+  u->transportedBy = EntityRef(T.owner);
+  if (std::find(T.stored.begin(), T.stored.end(), EntityRef(u)) == T.stored.end()) T.stored.push_back(EntityRef(u));
+  sim.anyAttached = true;
+}
+// TransportRemoveFromStorage 0x5e7cf0: the launch bone's world transform
+void RemoveFromStorage(Sim& sim, TransportObj& T, Unit* u, Vec3* pos, Quat* q) {
+  lua_State* L = sim.L();
+  PushObject(L, T.owner);
+  sim.CallMethod(L, u, "OnRemoveFromStorage", 1);
+  u->transportedBy = 0;
+  DetachUnitFrom(sim, u, false);
+  auto& v = T.stored;
+  v.erase(std::remove(v.begin(), v.end(), EntityRef(u)), v.end());
+  const auto& list = !T.launch.empty() ? T.launch : T.generic;
+  *pos = T.owner->position;
+  *q = T.owner->orientation;
+  if (list.empty()) return;
+  T.launchIdx = (T.launchIdx + 1) % static_cast<int>(list.size());
+  BoneWorldT(T.owner, list[static_cast<size_t>(T.launchIdx)].bone, pos, q);
+}
+// a launch / refuel release: snap to the bone, leave along its forward axis at full speed
+void Launch(Sim& sim, Unit* u, const Vec3& pos, const Quat& q) {
+  u->position = pos;
+  u->lastPosition = pos;
+  u->orientation = q;
+  Vec3 F = ZAxis(q);
+  float v = GetAirBp(sim.L(), *u->blueprint).maxAirspeed;
+  AirSetImmediateVelocity(sim, u, Vec3{F.x * v, F.y * v, F.z * v}, q);
+  sim.MarkUnitsMoved();
+}
+
+// goal cell of u's footprint at p, as a world point
+Vec3 CellPoint(const Unit* u, const Vec3& p) {
+  const NamedFootprint& fp = Fp(u);
+  int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f)), cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+  return Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+}
+
+// CUnitCarrierLand 0x6067a0: fly behind the reserved bone, then onto it, and be stored
+int TickCarrierLand(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (RunChild(sim, u, t, d)) return kTaskRunning;
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  Unit* C = UnitRef(sim, d.transport);
+  if (u->dead || !u->motion.bp || !C || C->dead || !C->transport) return kTaskFailed;
+  if (State(u, "Refueling")) {
+    if (!C->commands.empty() || State(C, "MovingUp") || State(C, "MovingDown")) return kTaskFailed;
+  } else if (t.state >= 1 && !State(C, "TransportLoading")) {
+    return kTaskFailed;
+  }
+  TransportObj& T = *C->transport;
+  for (int guard = 0; guard < 4; ++guard) {
+    switch (t.state) {
+      case 0: {
+        if (!HasAvailableStorage(T)) {
+          if (u->army && u->army->brain) sim.CallMethod(sim.L(), u->army->brain, "OnTransportFull", 0);
+          return kTaskFailed;
+        }
+        d.stagger = ReserveStorage(T, u, &d.bonePos, &d.fwd, &d.dy);
+        d.fwd.y = 0;
+        float l = std::sqrt(d.fwd.x * d.fwd.x + d.fwd.z * d.fwd.z);
+        d.fwd = l > 1e-6f ? Vec3{d.fwd.x / l, 0, d.fwd.z / l} : Vec3{};
+        float f = static_cast<float>(d.stagger) + 20.0f;
+        d.approach = {d.bonePos.x - d.fwd.x * f, d.bonePos.y - d.fwd.y * f, d.bonePos.z - d.fwd.z * f};
+        t.state = 1;
+        return kTaskRunning;
+      }
+      case 1:  // the approach move
+        AirSetGoal(sim, u, CellPoint(u, d.approach), sim.tick(), 0);
+        AirSetFacing(u, d.fwd);
+        AirSetCarrierEvent(u, 1);
+        AirSetLandHeight(u, d.bonePos.y);
+        d.childMove = true;
+        SetState(u, "Moving", true);
+        t.state = 2;
+        return kTaskRunning;
+      case 2:  // wait for a surfaced carrier; the bone's height only is refreshed
+        if (C->layer == "Sub" || C->layer == "Seabed") {
+          t.waitUntil = sim.tick() + 4;
+          return kTaskRunning;
+        }
+        d.bonePos.y = C->position.y + d.dy;
+        t.state = 3;
+        if (d.stagger >= 2) t.waitUntil = sim.tick() + static_cast<uint32_t>(d.stagger - 1);
+        return kTaskRunning;
+      case 3:  // the final landing move
+        AirSetGoal(sim, u, CellPoint(u, d.bonePos), sim.tick(), 1, false);
+        AirSetLandHeight(u, d.bonePos.y);
+        AirSetCarrierEvent(u, 2);
+        d.childMove = true;
+        SetState(u, "Moving", true);
+        t.state = 4;
+        return kTaskRunning;
+      case 4:
+        AirSetLandHeight(u, std::numeric_limits<float>::infinity());
+        AddToStorage(sim, T, u);
+        d.stored = true;
+        return kTaskDone;
+      default:
+        return kTaskRunning;
+    }
+  }
+  return kTaskRunning;
+}
+void EndCarrierLand(Sim& sim, Unit* u, TransportTaskData& d) {
+  EndChild(sim, u, d);
+  AirSetCarrierEvent(u, 0);
+  SetState(u, "TransportLoading", false);
+  if (u->focusId == d.transport) u->focusId = 0;
+  if (!d.stored) {
+    AirSetLandHeight(u, std::numeric_limits<float>::infinity());
+    Unit* C = UnitRef(sim, d.transport);
+    if (C && !C->dead && C->transport) ClearReservation(*C->transport, u);
+  }
+}
+
+// CUnitCarrierRetrieve 0x605ef0: stop (or surface), then wait until every aircraft has landed
+int TickCarrierRetrieve(Sim& sim, Unit* C, BuildTask& t, TransportTaskData& d) {
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  if (C->dead || !C->transport) return kTaskFailed;
+  if (t.state >= 2 && State(C, "MovingDown")) return kTaskFailed;
+  switch (t.state) {
+    case 0: {
+      const UnitCommand* cur = Current(C);
+      for (uint32_t r : d.cargo) {
+        Unit* x = UnitRef(sim, r);
+        if (x && !x->dead && !x->beingBuilt && !State(x, "Attached") && !x->destroyQueued && Current(x) != cur)
+          return kTaskRunning;
+      }
+      if (C->motion.bp && C->motion.bp->motionType == kMotionSurfacingSub && C->layer == "Sub") {
+        SetNewTargetLayer(sim, C, "Water");
+        t.state = 1;
+        return kTaskRunning;
+      }
+      if (C->motion.hasGoal) MotionStop(C);
+      t.state = 2;
+      return kTaskRunning;
+    }
+    case 1:
+      if (C->layer == "Water" || C->layer == "Air") {
+        ResetReservation(*C->transport);
+        t.state = 2;
+      }
+      return kTaskRunning;
+    case 2: {
+      std::vector<uint32_t> keep;
+      for (uint32_t r : d.cargo) {
+        Unit* x = UnitRef(sim, r);
+        if (!x || x->dead || !State(x, "TransportLoading") || x->focusId != EntityRef(C) || x == C) continue;
+        keep.push_back(r);
+      }
+      d.cargo = keep;
+      if (d.cargo.empty()) {
+        d.success = true;
+        return kTaskDone;
+      }
+      t.waitUntil = sim.tick() + 9;
+      return kTaskRunning;
+    }
+    default:
+      return kTaskRunning;
+  }
+}
+void EndCarrierRetrieve(Sim& sim, Unit* C, TransportTaskData& d) {
+  Callback(sim, C, "OnStopTransportLoading");
+  if (C->transport) ResetReservation(*C->transport);
+  SetState(C, "TransportLoading", false);
+  if (!d.success)
+    for (uint32_t r : d.cargo)
+      if (Unit* x = UnitRef(sim, r))
+        if (!x->dead && x->motion.hasGoal) MotionStop(x);
+}
+std::shared_ptr<TransportTaskData> NewRetrieve(Sim& sim, Unit* C, std::vector<uint32_t> cargo) {
+  auto cd = std::make_shared<TransportTaskData>();
+  cd->kind = kCarrierRetrieve;
+  cd->cargo = std::move(cargo);
+  std::sort(cd->cargo.begin(), cd->cargo.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+  Callback(sim, C, "OnStartTransportLoading");
+  SetState(C, "TransportLoading", true);
+  return cd;
+}
+
+// CUnitCarrierLaunch 0x607000: stop, give every launched unit a Guard of the point, launch one every 2 ticks
+int TickCarrierLaunch(Sim& sim, Unit* C, BuildTask& t, TransportTaskData& d) {
+  if (RunChild(sim, C, t, d)) return kTaskRunning;
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  if (C->dead || !C->transport) return kTaskFailed;
+  TransportObj& T = *C->transport;
+  for (int guard = 0; guard < 4; ++guard) {
+    switch (t.state) {
+      case 0:
+        if (d.specific && d.which.empty()) return kTaskDone;
+        if (!d.specific) d.which = T.stored;
+        std::sort(d.which.begin(), d.which.end(), [](uint32_t a, uint32_t b) { return RefToId(a) < RefToId(b); });
+        PushChild(sim, d, NewRetrieve(sim, C, {}), 0, "CarrierRetrieve");
+        t.state = 1;
+        return kTaskRunning;
+      case 1: {
+        const TerrainMap* m = sim.map();
+        Vec3 p = d.goal;
+        if (m) p.y = std::max(m->TerrainHeight(p.x, p.z), m->hasWater ? m->waterElevation : -1e30f);
+        auto c = NewCommand(sim, CommandType::Guard);
+        c->pos = p;
+        c->hasPos = true;
+        for (uint32_t r : d.which)
+          if (Unit* x = UnitRef(sim, r)) {
+            if (x->dead) continue;
+            ForgetUnitCommands(x);
+            Append(x, c);
+          }
+        t.state = 2;
+        ResetReservation(T);
+        continue;
+      }
+      case 2: {
+        if (d.which.empty()) {
+          t.state = 3;
+          t.waitUntil = sim.tick() + 2;
+          return kTaskRunning;
+        }
+        Unit* x = UnitRef(sim, d.which.front());
+        d.which.erase(d.which.begin());
+        if (x && !x->dead) {
+          Vec3 pos;
+          Quat q;
+          RemoveFromStorage(sim, T, x, &pos, &q);
+          Launch(sim, x, pos, q);
+        }
+        t.waitUntil = sim.tick() + 2;
+        return kTaskRunning;
+      }
+      case 3:
+        return kTaskDone;
+      default:
+        return kTaskRunning;
+    }
+  }
+  return kTaskRunning;
 }
 
 int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
@@ -1543,6 +1979,9 @@ int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
     case kFerry: return u->transport ? TickFerry(sim, u, t, d) : kTaskFailed;
     case kWaitFerry: return TickWaitFerry(sim, u, t, d);
     case kRefuel: return TickRefuel(sim, u, t, d);
+    case kCarrierLand: return TickCarrierLand(sim, u, t, d);
+    case kCarrierRetrieve: return u->transport ? TickCarrierRetrieve(sim, u, t, d) : kTaskFailed;
+    case kCarrierLaunch: return u->transport ? TickCarrierLaunch(sim, u, t, d) : kTaskFailed;
     default: return kTaskFailed;
   }
 }
@@ -1597,6 +2036,20 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       u->focusId = EntityRef(target);
       Callback(sim, u, "OnAssignedFocusEntity");
       t->order = "WaitForFerry";
+    } else if (target != u && InCat(sim, target, "CARRIER")) {  // IssueCarrierLandTask 0x606d80
+      if (target->dead || !target->transport) return nullptr;
+      d->kind = kCarrierLand;
+      d->transport = EntityRef(target);
+      SetState(u, "TransportLoading", true);
+      u->focusId = EntityRef(target);
+      Callback(sim, u, "OnAssignedFocusEntity");
+      t->order = "CarrierLand";
+    } else if (target == u && InCat(sim, u, "CARRIER") && u->transport) {  // CUnitCarrierRetrieve
+      std::vector<uint32_t> cargo;
+      for (Unit* o : c.units)
+        if (o != u) cargo.push_back(EntityRef(o));
+      d = NewRetrieve(sim, u, std::move(cargo));
+      t->order = "CarrierRetrieve";
     } else if (target != u && InCat(sim, target, "AIRSTAGINGPLATFORM") && !InCat(sim, target, "CARRIER")) {
       // IssueRefuelTask 0x622110: dock on the platform, refuel / repair, take off
       if (target->dead || target->beingBuilt || !target->transport || !target->transport->isAirStaging) return nullptr;
@@ -1620,6 +2073,19 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       Callback(sim, u, "OnStartTransportLoading");
       t->order = "LoadUnits";
     }
+  } else if ((c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) &&
+             u->transport && u->transport->isAirStaging && InCat(sim, u, "CARRIER")) {
+    if (LoadedUnits(sim, u).empty()) return nullptr;  // (refuelling aircraft do not count)
+    d->kind = kCarrierLaunch;
+    for (Unit* o : c.units)
+      if (o != u && Alive(o) && o->transportedBy) {
+        d->specific = true;
+        if (o->transportedBy == EntityRef(u)) d->which.push_back(EntityRef(o));
+      }
+    Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+    d->goal = CellPoint(u, p);
+    SetState(u, "TransportUnloading", true);
+    t->order = "CarrierLaunch";
   } else if (c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) {
     if (!u->transport || !TransportHasCargo(u)) return nullptr;
     if (u->transport->isAirStaging && LoadedUnits(sim, u).empty()) return nullptr;  // only refuelling aircraft
@@ -1657,6 +2123,9 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     case kFerry: EndFerry(sim, u, d); break;
     case kWaitFerry: EndWaitFerry(sim, u, d); break;
     case kRefuel: EndRefuel(sim, u, d); break;
+    case kCarrierLand: EndCarrierLand(sim, u, d); break;
+    case kCarrierRetrieve: EndCarrierRetrieve(sim, u, d); break;
+    case kCarrierLaunch: EndChild(sim, u, d); SetState(u, "TransportUnloading", false); break;
     default: break;
   }
 }
@@ -1683,10 +2152,18 @@ int l_TransportHasSpaceFor(lua_State* L) {
   lua_pushboolean(L, u->transport && t && t->blueprint && HasSpaceFor(*S(L), *u->transport, *t->blueprint));
   return 1;
 }
-int l_TransportHasAvailableStorage(lua_State* L) {
-  CheckObject<Unit>(L, 1);
-  lua_pushboolean(L, 0);  // internal storage (carriers): TODO
+int l_TransportHasAvailableStorage(lua_State* L) {  // 0x6d13a0
+  Unit* u = CheckObject<Unit>(L, 1);
+  lua_pushboolean(L, u->transport && HasAvailableStorage(*u->transport));
   return 1;
+}
+int l_AddUnitToStorage(lua_State* L) {  // 0x6cd9d0
+  Unit* u = CheckObject<Unit>(L, 1);
+  Unit* s = ToObject<Unit>(L, 2);
+  if (!s) return 0;
+  if (u->transport && HasAvailableStorage(*u->transport)) AddToStorage(*S(L), *u->transport, s);
+  else Logf(LogLevel::Warning, "No more room available in carrier for unit to be stored");
+  return 0;
 }
 int l_TransportDetachAllUnits(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
@@ -1732,6 +2209,32 @@ void Append(Unit* u, const std::shared_ptr<UnitCommand>& c) {
 }
 
 // IssueTransportLoad(units, transport) 0x6f7250
+// ValidateIssue 0x6ef9e0 for a TransportLoadUnits(T) on u, and the "same command already last" and
+// queue-length tests of the issue path.
+bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
+  if (u->dead || u->transportedBy || InCat(sim, u, "PODS")) return false;
+  if (T) {
+    if ((T != u && !(UnitCommandCaps(L, *u->blueprint) & kCapCallTransport)) || T->layer == "Seabed") return false;
+    bool special = InCat(sim, T, "FERRYBEACON") ||
+                   (InCat(sim, T, "FACTORY") && !InCat(sim, T, "AIRSTAGINGPLATFORM") && !InCat(sim, T, "TELEPORTATION"));
+    if (special) {  // a ferry beacon or a factory: any mobile non-transport unit may wait there
+      if (InCat(sim, T, "FERRYBEACON") && CmdBeacon(sim, Current(u)) == T) return false;
+      if (!(u->motion.bp && u->motion.bp->mobile()) || InCat(sim, u, "TRANSPORTATION")) return false;
+    } else {
+      if (T->dead || T->beingBuilt || !T->transport) return false;
+      if (T != u && !CanCarryUnit(sim, *T->transport, u)) {
+        sim.CallMethod(L, T, "OnTransportReject", 0);
+        return false;
+      }
+    }
+  }
+  if (!u->commands.empty() && u->commands.back()->type == CommandType::TransportLoadUnits &&
+      u->commands.back()->targetId == (T ? EntityRef(T) : 0u))
+    return false;  // the same command is already last
+  if (u->commands.size() >= 501) return false;
+  return true;
+}
+
 int l_IssueTransportLoad(lua_State* L) {
   Sim& sim = *S(L);
   if (lua_gettop(L) != 2) return luaL_error(L, "IssueTransportLoad: wrong number of arguments");
@@ -1746,27 +2249,7 @@ int l_IssueTransportLoad(lua_State* L) {
   if (T && std::find(set.begin(), set.end(), T) == set.end()) set.push_back(T);
   std::shared_ptr<UnitCommand> c;  // created with the first accepted unit
   for (Unit* u : set) {
-    // ValidateIssue 0x6ef9e0 (TransportLoadUnits)
-    if (u->dead || u->transportedBy || InCat(sim, u, "PODS")) continue;
-    if (T) {
-      if ((T != u && !(UnitCommandCaps(L, *u->blueprint) & kCapCallTransport)) || T->layer == "Seabed") continue;
-      bool special = InCat(sim, T, "FERRYBEACON") ||
-                     (InCat(sim, T, "FACTORY") && !InCat(sim, T, "AIRSTAGINGPLATFORM") && !InCat(sim, T, "TELEPORTATION"));
-      if (special) {  // a ferry beacon or a factory: any mobile non-transport unit may wait there
-        if (InCat(sim, T, "FERRYBEACON") && CmdBeacon(sim, Current(u)) == T) continue;
-        if (!(u->motion.bp && u->motion.bp->mobile()) || InCat(sim, u, "TRANSPORTATION")) continue;
-      } else {
-        if (T->dead || T->beingBuilt || !T->transport) continue;
-        if (T != u && !CanCarryUnit(sim, *T->transport, u)) {
-          sim.CallMethod(L, T, "OnTransportReject", 0);
-          continue;
-        }
-      }
-    }
-    if (!u->commands.empty() && u->commands.back()->type == CommandType::TransportLoadUnits &&
-        u->commands.back()->targetId == (T ? EntityRef(T) : 0u))
-      continue;  // the same command is already last
-    if (u->commands.size() >= 501) continue;
+    if (!ValidLoadIssue(sim, L, u, T)) continue;
     if (!c) {
       c = NewCommand(sim, CommandType::TransportLoadUnits);
       if (T) {
@@ -1873,6 +2356,7 @@ int l_IssueTransportUnloadSpecific(lua_State* L) { return IssueUnload(L, true); 
 void RegisterTransportBindings(lua_State* L) {
   g_L = L;
   SetMethod(L, "Unit", "GetCargo", l_GetCargo);
+  SetMethod(L, "Unit", "AddUnitToStorage", l_AddUnitToStorage);
   SetMethod(L, "Unit", "TransportHasSpaceFor", l_TransportHasSpaceFor);
   SetMethod(L, "Unit", "TransportHasAvailableStorage", l_TransportHasAvailableStorage);
   SetMethod(L, "Unit", "TransportDetachAllUnits", l_TransportDetachAllUnits);
@@ -1881,6 +2365,89 @@ void RegisterTransportBindings(lua_State* L) {
   lua_register(L, "IssueTransportLoad", l_IssueTransportLoad);
   lua_register(L, "IssueTransportUnload", l_IssueTransportUnload);
   lua_register(L, "IssueTransportUnloadSpecific", l_IssueTransportUnloadSpecific);
+}
+
+// The factory hand-off's TransportLoadUnits(R) for one finished unit (IssueCommandToUnits, append).
+bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T) {
+  lua_State* L = sim.L();
+  if (!ValidLoadIssue(sim, L, u, T)) return false;
+  auto c = NewCommand(sim, CommandType::TransportLoadUnits);
+  c->targetId = EntityRef(T);
+  c->pos = T->position;
+  c->hasPos = true;
+  Append(u, c);
+  return true;
+}
+
+// CUnitFerryTask ctor B 0x60dfc0 (from the guard task): T guards a factory or a ferry beacon.
+BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G) {
+  if (!T->transport || !G) return nullptr;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::Ferry;
+  t->order = "Ferry";
+  auto d = std::make_shared<TransportTaskData>();
+  d->kind = kFerry;
+  d->home = G->position;
+  d->P = EntityRef(G);
+  SetState(T, "Ferrying", true);
+  if (InCat(sim, G, "FACTORY") && G->bpData && G->bpData->hasBuilder && !(G->motion.bp && G->motion.bp->mobile())) {
+    d->factory = EntityRef(G);
+  } else if (State(G, "Ferrying")) {
+    d->followGuard = true;
+    Unit* X = G;
+    while (X && !InCat(sim, X, "FACTORY")) X = UnitRef(sim, X->guardedId);
+    d->factory = X ? EntityRef(X) : 0;
+  } else if (InCat(sim, G, "FERRYBEACON")) {
+    d->followGuard = true;
+    d->beacon = EntityRef(G);
+    d->home = G->position;
+  }
+  Callback(sim, T, "OnFerryPointSet");
+  t->state = 4;
+  t->tdata = d;
+  return static_cast<BuildTask*>(sim.Own(std::move(t)));
+}
+
+// IssueRefuelTask 0x622110 (from the guard task's FindPlatform).
+BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P) {
+  if (!P || P->dead || P->beingBuilt || !P->transport || !P->transport->isAirStaging) return nullptr;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::TransportLoadUnits;
+  t->order = "Refuel";
+  auto d = std::make_shared<TransportTaskData>();
+  d->kind = kRefuel;
+  d->transport = EntityRef(P);
+  d->isCarrier = InCat(sim, P, "CARRIER");
+  SetState(u, "Refueling", true);
+  t->tdata = d;
+  return static_cast<BuildTask*>(sim.Own(std::move(t)));
+}
+
+// Unit::FindPlatform 0x62f030 (fuel.md 5.1): an aircraft with the Dock cap that needs fuel (< 0.2) or
+// repair (< 75 %) goes to the first idle staging platform (entity-id order) whose scan radius reaches it.
+Unit* FindPlatform(Sim& sim, Unit* plane) {
+  if (!plane || plane->dead || !plane->motion.bp || plane->motion.bp->motionType != kMotionAir) return nullptr;
+  lua_State* L = sim.L();
+  if (!GetAirBp(L, *plane->blueprint).canFly) return nullptr;
+  if (plane->fuelRatio < 0) return nullptr;
+  if (!(UnitCommandCaps(L, *plane->blueprint) & 0x400000u)) return nullptr;  // RULEUCC_Dock
+  bool need = 0.2f > plane->fuelRatio || 0.75f > plane->health / plane->maxHealth;
+  if (!need) return nullptr;
+  std::vector<Unit*> ps;
+  for (Unit* P : sim.units())
+    if (P->army == plane->army && InCat(sim, P, "AIRSTAGINGPLATFORM")) ps.push_back(P);
+  std::sort(ps.begin(), ps.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
+  for (Unit* P : ps) {
+    if (P->dead || P->beingBuilt || P->destroyQueued || !P->transport) continue;
+    float dx = plane->position.x - P->position.x, dz = plane->position.z - P->position.z;
+    double d = std::sqrt(static_cast<double>(dx) * dx + static_cast<double>(dz) * dz);
+    if (d > BpNum(L, *P->blueprint, "AI", "StagingPlatformScanRadius", 300.0f)) continue;
+    if (!P->commands.empty()) continue;  // IsIdle
+    if (P->layer == "Seabed" || P->layer == "Sub") continue;
+    bool ok = !InCat(sim, P, "CARRIER") ? HasSpaceFor(sim, *P->transport, *plane->blueprint) : HasAvailableStorage(*P->transport);
+    if (ok) return P;
+  }
+  return nullptr;
 }
 
 }  // namespace moho

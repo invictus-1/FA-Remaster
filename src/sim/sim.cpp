@@ -908,6 +908,7 @@ void Sim::Tick() {
         u->position.z != u->lastPosition.z)
       u->lastMoveTick = tick_;
     UnitAimTick(*this, u);
+    if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
   }
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   if (anyAttached) {

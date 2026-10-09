@@ -120,6 +120,9 @@ void ReleaseUnitCombat(Sim& sim, Unit* u);
 
 // Attack commands (CUnitAttackTargetTask), run as the unit's command task.
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c);
+float GuardScanRadiusOf(Unit* u);
+Unit* GuardBestEnemy(Sim& sim, Unit* u);
+BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e);
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 void EndAttack(Sim& sim, Unit* u, BuildTask& t);
 // Aggressive moves and patrols look for enemies on the way (CUnitPatrolTask): an engaged target

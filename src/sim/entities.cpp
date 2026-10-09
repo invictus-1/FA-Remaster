@@ -1101,6 +1101,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   entities_[u->id] = u;
   AddUnitToLists(u);
   OccupyStructure(*this, u);
+  u->isFactoryBuilder = IsFactoryBuilder(*this, u);
+  if (builder) u->creatorId = EntityRef(builder);
+  if (u->isFactoryBuilder) SetUpInitialRally(*this, u);  // Unit ctor end (0x6a6413)
   if (army && army->pool) army->pool->units.push_back(u);
 
   CallMethod(L, u, "OnPreCreate", 0);

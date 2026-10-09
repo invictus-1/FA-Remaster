@@ -40,7 +40,9 @@ struct BuildTask : public ScriptObject {
   uint32_t nextTick = 0;
   int count = 1, tries = 0;
   uint32_t waitUntil = 0;
+  uint32_t inheritFrom = 0;  // CFactoryBuildTask+0x7c: a second factory whose rally queue is inherited too
   std::shared_ptr<struct TransportTaskData> tdata;  // transport load / unload tasks (sim/transport.cpp)
+  std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
 };
 
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);
@@ -64,7 +66,21 @@ void StopMovingIfTask(Unit* u, const BuildTask& t);
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
 void TaskStopMoving(Unit* u);
-void InheritFactoryCommands(Sim& sim, Unit* factory, Unit* built);
+
+// Factories (factory_handoff.md): the rally queue (Unit::factoryCommands, CAiBuilderImpl+0x24) and
+// what a finished unit gets.
+bool IsFactoryBuilder(Sim& sim, const Unit* u);   // a builder in category FACTORY (builder.IsFactory)
+bool IsImmobileFactory(Sim& sim, const Unit* u);
+void AddFactoryCommand(Unit* f, const std::shared_ptr<UnitCommand>& c);
+void ClearFactoryCommandQueue(Unit* f);
+std::shared_ptr<UnitCommand> IssueFactoryCommand(Sim& sim, const std::vector<Unit*>& units, CommandType type,
+                                                 const Vec3& pos, uint32_t targetId, bool clear);
+void SetUpInitialRally(Sim& sim, Unit* f);
+void ValidateFactoryCommandQueue(Sim& sim, Unit* f);
+void FactoryHandOff(Sim& sim, Unit* f, Unit* u, Unit* inheritFrom);
+// Guard links (Unit::SetGuardedUnit 0x6a76a0): u guards g (null: nothing); g's guarders set follows.
+void SetGuardedUnit(Sim& sim, Unit* u, Unit* g);
+std::vector<Unit*> Guards(Sim& sim, const Unit* g);
 
 // Missile silos (CAiSiloBuildImpl): queued and automatic missile builds; a unit's beat.
 void SiloTick(Sim& sim, Unit* u);

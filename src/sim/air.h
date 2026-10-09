@@ -152,6 +152,10 @@ Unit* StagingPlatformOf(Sim& sim, const Unit* u);
 // CUnitMotion::NotifyAttached / NotifyDetached for aircraft: motion state, events.
 void AirNotifyAttached(Sim& sim, Unit* u);
 void AirNotifyDetached(Sim& sim, Unit* u);
+// CUnitMotion+0x88 (EUnitMotionCarrierEvent: 0 none, 1 approach, 2 final landing).
+void AirSetCarrierEvent(Unit* u, int e);
+// CUnitMotion::SetImmediateVelocity 0x6b9460: the body's velocity and orientation (a carrier launch).
+void AirSetImmediateVelocity(Sim& sim, Unit* u, Vec3 vel, Quat q);
 void RegisterAirBindings(lua_State* L);
 
 }  // namespace moho
