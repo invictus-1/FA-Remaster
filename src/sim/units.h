@@ -126,6 +126,9 @@ class Unit : public Entity {
   // commands to a factory land here; a finished unit takes them over.
   std::deque<std::shared_ptr<UnitCommand>> factoryCommands;
   uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
+  bool attachFull = false;         // carried by a transport: full attach transform, parent's layer
+  std::shared_ptr<struct TransportObj> transport;  // transports (sim/transport.cpp)
+  uint32_t transportedBy = 0;      // the transport carrying it (entity ref)
   int parentBone = -1, ownBone = -1;
   // Combat (sim/combat.cpp)
   const struct CombatBpData* combat = nullptr;

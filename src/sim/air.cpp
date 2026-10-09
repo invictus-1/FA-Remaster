@@ -4,6 +4,7 @@
 // to the FA exe; the specs in engine-ref/specs/air_*.md give the details.
 #include "core/dmath.h"
 #include "sim/air.h"
+#include "sim/transport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -453,7 +454,7 @@ float GetElevationWanted(const AirMotion& a) { return a.elevationAttr + a.randEl
 // CUnitMotion::ShouldHoverInsteadOfLand 0x6bc820
 bool ShouldHover(Unit* u) {
   const AirBp& b = *A(u).bp;
-  return b.transportHoverHeight > 0 && State(u, "TransportLoading");
+  return b.transportHoverHeight > 0 && (State(u, "TransportLoading") || TransportHasCargo(u));
 }
 
 bool IsMoveLikeType(CommandType t) {
@@ -1548,11 +1549,19 @@ void AirWarp(Sim& sim, Unit* u) {
   SetTarget(sim, u, u->position, Vec3{}, 0);
 }
 
-void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick) {
+void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
   // the goal cell's centre (SNavGoal of the command position; CellToWorld)
   const AirBp& b = *a.bp;
+  a.pendingLayer = layer;
+  a.pendingFacing = {};
+  if (layer == kLand && b.canFly) {  // a landing move: a free spot (NewMoveTask ctor step 4)
+    int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
+    int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));
+    goal = {cx + b.footprintX * 0.5f, goal.y, cz + b.footprintZ * 0.5f};
+    PrepareMove(sim, u, &goal);
+  }
   int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));
   a.pending = true;
@@ -1561,6 +1570,23 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick) {
   u->motion.hasGoal = true;
   u->motion.arrived = false;
   (void)sim;
+}
+
+void AirSetFacing(Unit* u, Vec3 dir) {
+  if (!u->motion.air) return;
+  AirMotion& a = A(u);
+  a.facing = dir;
+  if (a.pending) a.pendingFacing = dir;
+}
+
+void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
+  if (!u->motion.air) return;
+  SetTarget(sim, u, p, Vec3{}, layer);
+}
+
+bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
+  if (!u->motion.air) return false;
+  return PrepareMove(sim, u, pos);
 }
 
 void AirAbort(Sim& sim, Unit* u) {
@@ -1609,7 +1635,7 @@ void AirMotionTick(Sim& sim, Unit* u) {
     a.pending = false;
     a.goal = a.pendingGoal;
     a.steering = true;
-    SetTarget(sim, u, a.goal, Vec3{}, kAir);
+    SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
   }
   UpdateSpeedThrough(u);
   Transform T{ToW(u->orientation), u->position};

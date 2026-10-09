@@ -496,4 +496,88 @@ function P.Combat()
     out('combat done')
 end
 
+-- 5) transports: a T1 air transport loads two tanks and an engineer, drops them, the cargo moves on
+P.TRANSPORT = {
+    -- tag, bp, x, z, heading
+    { 'tr', 'uea0107', 262, 745, 0 },
+    { 'c_tank1', 'uel0201', 236, 724, 1.5708 },
+    { 'c_tank2', 'uel0201', 240, 730, 1.5708 },
+    { 'c_eng', 'uel0105', 232, 732, 0 },
+}
+function P.Transport()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('tr no army') return end
+    for _, t in P.COMBAT do
+        local u = t.unit
+        if u and not u:BeenDestroyed() then u:Destroy() end
+    end
+    WaitTicks(2)
+    local units, byEntity, tr, cargo = {}, {}, nil, {}
+    local function tagOf(e) return e and byEntity[e] or '-' end
+    local tick = GetGameTick()
+    for _, t in P.TRANSPORT do
+        local y = GetSurfaceHeight(t[3], t[4])
+        local ok, u = pcall(CreateUnitHPR, t[2], a1, t[3], y, t[4], 0, t[5], 0)
+        if ok and u then
+            table.insert(units, { tag = t[1], u = u })
+            byEntity[u] = t[1]
+            if t[1] == 'tr' then tr = u else table.insert(cargo, u) end
+            out('trspawn', tick, t[1], t[2], u:GetEntityId())
+            local tag = t[1]
+            for _, name in { 'OnTransportAttach', 'OnTransportDetach' } do
+                local f, nm = u[name], name
+                if f then u[nm] = function(self, bone, a) out('trcb', GetGameTick(), tag, nm, tostring(bone), tagOf(a)) return f(self, bone, a) end end
+            end
+            for _, name in { 'OnStartTransportLoading', 'OnStopTransportLoading', 'OnTransportAborted', 'OnTransportOrdered',
+                             'OnStopTransportBeamUp', 'OnTransportFull' } do
+                local f, nm = u[name], name
+                if f then u[nm] = function(self, a, b) out('trcb', GetGameTick(), tag, nm) return f(self, a, b) end end
+            end
+            local sb = u.OnStartTransportBeamUp
+            if sb then u.OnStartTransportBeamUp = function(self, tu, bone) out('trcb', GetGameTick(), tag, 'OnStartTransportBeamUp', tagOf(tu), tostring(bone)) return sb(self, tu, bone) end end
+            local ol = u.OnLayerChange
+            if ol then u.OnLayerChange = function(self, new, old) out('trlayer', GetGameTick(), tag, tostring(new), tostring(old)) return ol(self, new, old) end end
+        else
+            out('trspawn-failed', t[1], tostring(u))
+        end
+    end
+    if not tr then return end
+    WaitTicks(1)
+    local okO, eO = pcall(function()
+        IssueTransportLoad(cargo, tr)
+        IssueTransportUnload({ tr }, { 226, GetSurfaceHeight(226, 770), 770 })
+        IssueMove(cargo, { 216, GetSurfaceHeight(216, 756), 756 })
+    end)
+    out('trorders', GetGameTick(), tostring(okO), tostring(eO))
+    local states = { 'Attached', 'TransportLoading', 'TransportUnloading', 'WaitingForTransport', 'Teleporting', 'HoldingPattern', 'Moving' }
+    local function log(tick)
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('trdead', tick, e.tag)
+                else
+                    local p = u:GetPosition()
+                    local st = {}
+                    for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                    local extra = ''
+                    if e.tag == 'tr' then extra = 'cargo=' .. table.getn(u:GetCargo()) end
+                    out('tru', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
+                        table.concat(st, ','), extra)
+                end
+            end
+        end
+    end
+    local stop = GetGameTick() + 700
+    while GetGameTick() < stop do
+        local t = GetGameTick()
+        local ok, e = pcall(log, t)
+        if not ok then out('tr-error', t, tostring(e)) end
+        WaitTicks(1)
+    end
+    out('transport done')
+end
+
 moho64_probe = P

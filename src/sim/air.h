@@ -104,6 +104,8 @@ struct AirMotion {
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;
   Vec3 pendingGoal;
+  int pendingLayer = 0;   // the goal's layer (0: Air; 1: a landing move)
+  Vec3 pendingFacing;     // SetFacing while a goal is pending
   Vec3 goal;
 };
 
@@ -115,8 +117,16 @@ void AirInit(Sim& sim, Unit* u);
 float AirSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z, float y);
 // One tick (CUnitMotion::MotionTick, air path, then the navigator's arrival test).
 void AirMotionTick(Sim& sim, Unit* u);
-// The navigator's SetGoal: fly to the cell of `goal`; takes effect at `tick`.
-void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick);
+// The navigator's SetGoal: fly to the cell of `goal`; takes effect at `tick`. layer 1 (Land) is a
+// landing move (NewMoveTask with goal layer Land): the spot goes through PrepareMove and the
+// aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.
+void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0);
+// CUnitMotion::SetFacing: the heading wanted on arrival.
+void AirSetFacing(Unit* u, Vec3 dir);
+// CUnitMotion::SetTarget(p, zero, layer) right away (layer bits: 1 Land, 0x10 Air).
+void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
+// Unit::PrepareMove: a free landing spot near *pos (false: none found).
+bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.

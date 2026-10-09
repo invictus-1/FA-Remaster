@@ -73,5 +73,7 @@ void CommandsAfterMotion(Sim& sim);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
 void RegisterCommandBindings(lua_State* L);
+// Lua's view of a command (the Issue* functions' result; nil for none).
+void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c);
 
 }  // namespace moho

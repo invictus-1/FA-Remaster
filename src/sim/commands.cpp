@@ -127,6 +127,12 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
 }
 
 void StartHead(Sim& sim, Unit* u) {
+  // carried by a transport: nothing is dispatched until dropped; a dropped unit waits until it
+  // landed (FAF makes it immobile while it falls; the original's move task would wait too)
+  if ((u->parentId && u->attachFull) || u->motion.ballistic) {
+    u->headState = kNotStarted;
+    return;
+  }
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
@@ -855,7 +861,6 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueTactical", l_IssueTarget<CommandType::Tactical>);
   SetGlobal(L, "IssueTeleport", l_IssueTarget<CommandType::Teleport>);
   SetGlobal(L, "IssueOverCharge", l_IssueTarget<CommandType::OverCharge>);
-  SetGlobal(L, "IssueTransportUnload", l_IssueTarget<CommandType::TransportUnloadUnits>);
   SetGlobal(L, "IssueFerry", l_IssueTarget<CommandType::Ferry>);
   SetGlobal(L, "IssueBuildMobile", l_IssueBuildMobile);
   SetGlobal(L, "IssueBuildAllMobile", l_IssueBuildMobile);
@@ -864,7 +869,6 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueScript", l_IssueScript);
   SetGlobal(L, "IssueSiloBuildTactical", l_IssueOther<CommandType::BuildSiloTactical>);
   SetGlobal(L, "IssueSiloBuildNuke", l_IssueOther<CommandType::BuildSiloNuke>);
-  SetGlobal(L, "IssueTransportLoad", l_IssueOther<CommandType::TransportLoadUnits>);
   SetGlobal(L, "IssueDive", l_IssueOther<CommandType::Dive>);
   SetGlobal(L, "IssueKillSelf", l_IssueOther<CommandType::KillSelf>);
   SetGlobal(L, "IssueDestroySelf", l_IssueOther<CommandType::DestroySelf>);
@@ -904,6 +908,11 @@ void RegisterCommandBindings(lua_State* L) {
   SetMethod(L, "CAiNavigatorImpl", "BroadcastResumeTaskEvent", l_nav_Nothing);
 
   SetMethod(L, "CAiBrain", "GetUnitsAroundPoint", l_GetUnitsAroundPoint);
+}
+
+void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
+  if (c) PushCommand(L, c);
+  else lua_pushnil(L);
 }
 
 }  // namespace moho

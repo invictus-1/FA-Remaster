@@ -1,5 +1,6 @@
 // Building: structure placement and the tasks behind build-like commands (see build.cpp).
 #pragma once
+#include <memory>
 #include <cstdint>
 #include <string>
 
@@ -38,6 +39,7 @@ struct BuildTask : public ScriptObject {
   uint32_t nextTick = 0;
   int count = 1, tries = 0;
   uint32_t waitUntil = 0;
+  std::shared_ptr<struct TransportTaskData> tdata;  // transport load / unload tasks (sim/transport.cpp)
 };
 
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);

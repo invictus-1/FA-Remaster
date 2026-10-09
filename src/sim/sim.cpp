@@ -1,4 +1,5 @@
 #include "sim/sim.h"
+#include "sim/transport.h"
 #include "sim/air.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
@@ -527,6 +528,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterCombatBindings(L);
   RegisterAnimBindings(L);
   RegisterAirBindings(L);
+  RegisterTransportBindings(L);
   RegisterIntelBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
@@ -872,6 +874,7 @@ void Sim::Tick() {
     Unit* u = units_[i];
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
+    if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
       if (p && !p->destroyQueued) u->position = EntityBonePosition(p, u->parentBone);
@@ -883,6 +886,17 @@ void Sim::Tick() {
         u->position.z != u->lastPosition.z)
       u->lastMoveTick = tick_;
     UnitAimTick(*this, u);
+  }
+  // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
+  if (anyAttached) {
+    AttachedUnitsTick(*this);
+    anyAttached = false;
+    for (size_t i = 0; i < units_.size(); ++i) {
+      Unit* u = units_[i];
+      if (u->destroyQueued || !u->transportedBy) continue;
+      anyAttached = true;
+      if (u->parentId && u->attachFull) UnitAimTick(*this, u);
+    }
   }
   g_prof.Lap(4);
   AnimTick(*this);

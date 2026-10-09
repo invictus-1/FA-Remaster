@@ -88,6 +88,7 @@ struct UnitMotion {
   uint32_t yieldTarget = 0;  // the unit it stopped for
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
+  bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)
   std::shared_ptr<AirMotion> air;  // aircraft: the flight model's state (sim/air.cpp)
 };
 

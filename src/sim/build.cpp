@@ -36,6 +36,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/transport.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/economy.h"
@@ -843,6 +844,10 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       break;
     case CommandType::Script:
       return StartScriptTask(sim, u, c);
+    case CommandType::TransportLoadUnits:
+    case CommandType::TransportUnloadUnits:
+    case CommandType::TransportUnloadSpecificUnits:
+      return StartTransportTask(sim, u, c);
     case CommandType::Attack:
     case CommandType::FormAttack:
       return StartAttackTask(sim, u, c);
@@ -883,6 +888,9 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Repair: r = TickRepair(sim, L, u, t); break;
     case CommandType::Reclaim: r = TickReclaim(sim, L, u, t); break;
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
+    case CommandType::TransportLoadUnits:
+    case CommandType::TransportUnloadUnits:
+    case CommandType::TransportUnloadSpecificUnits: r = TickTransportTask(sim, u, t); break;
     case CommandType::Guard:
     case CommandType::BuildAssist:
     case CommandType::AssistCommander: r = TickGuard(sim, L, u, t); break;
@@ -908,6 +916,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   if (t.scriptTask) {  // the task object's OnDestroy, then it is gone
     if (t.HasLuaObject()) sim.CallMethod(L, &t, "OnDestroy", 0);
     t.UnbindLua();
+    return;
+  }
+  if (t.tdata) {
+    EndTransportTask(sim, u, t, success);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {

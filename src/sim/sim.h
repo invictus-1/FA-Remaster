@@ -153,6 +153,7 @@ class Sim {
         }
   }
   void MarkUnitsMoved() { gridDirty_ = true; }
+  bool anyAttached = false;  // some unit rides a transport (sim/transport.cpp)
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);

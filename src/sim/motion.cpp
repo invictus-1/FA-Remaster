@@ -3,6 +3,7 @@
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/air.h"
+#include "sim/transport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -617,6 +618,10 @@ void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
     AirMotionTick(sim, u);
+    return;
+  }
+  if (m.ballistic) {  // dropped from a transport: falls (also when dead)
+    LandBallisticTick(sim, u);
     return;
   }
   if (!m.bp || !m.bp->mobile() || u->dead) {

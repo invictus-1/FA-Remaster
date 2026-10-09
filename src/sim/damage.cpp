@@ -26,6 +26,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/transport.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -272,9 +273,11 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
          u->blueprint ? u->blueprint->id.c_str() : "?", u->army ? u->army->index : 0, instigator ? instigator->id : 0,
          instigator && instigator->blueprint ? instigator->blueprint->id.c_str() : "-",
          instigator && instigator->army ? instigator->army->index : 0, type.c_str());
+  ratio = TransportOnKillBegin(sim, L, u, ratio);  // step 5: cargo leaves its transport
   if (u->beingBuilt && u->fractionComplete < 0.5f) ratio = 10.0f;
   sim.CallMethod(L, u, "SetDead", 0);
   u->dead = true;
+  TransportOnKillEnd(sim, L, u);  // steps 8 and 11: attach callbacks, a transport's cargo
   u->killCleanup = true;
   if (!u->beingBuilt) AdjacencyLost(sim, L, u);
   ForgetUnitCommands(u);

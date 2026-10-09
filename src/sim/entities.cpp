@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
+#include "sim/transport.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -1039,6 +1040,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     u->lastPosition = u->position;
   }
   if (u->motion.bp->motionType == kMotionAir) AirInit(*this, u);
+  TransportCreate(*this, u);
   CreateUnitIntel(*this, L, u);
   {
     float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
