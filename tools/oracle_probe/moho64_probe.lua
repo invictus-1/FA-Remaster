@@ -508,7 +508,7 @@ function P.NavLine(kind, tick, tag, u)
         if u:IsUnitState('ProblemGettingToGoal') then f = f .. 'P' end
         if u:IsUnitState('PathFinding') then f = f .. 'F' end
         -- v6: goal and path flags (the transport cargo only: what ends tank2's first walk)
-        if kind == 'trnav' then
+        if kind == 'trnav' or kind == 'fynav' then
             local g = nav:GetGoalPos()
             local ok1, good = pcall(function() return nav:HasGoodPath() end)
             local ok2, at = pcall(function() return nav:AtGoal() end)
@@ -927,6 +927,7 @@ function P.Ferry()
                     end
                     out('fy', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
                         table.concat(st, ','), extra)
+                    if e.tag ~= 'f_tr' then P.NavLine('fynav', tick, e.tag, u) end   -- v12: the cargo's navigator
                 end
             end
         end
