@@ -510,7 +510,15 @@ int l_brain_TakeResource(lua_State* L) {
 int l_brain_GiveStorage(lua_State* L) {
   ArmyEconomy& e = Brain(L)->army->econ;
   int r = ResourceArg(L, 2);
-  e.maxStorage[r] += static_cast<int64_t>(static_cast<float>(luaL_checknumber(L, 3)));
+  // FA exe 0x588460: the brain's storage is one (mass, energy) amount that each call replaces
+  // with the given type's amount and zero for the other (GiveStorage('Energy', x) after
+  // GiveStorage('Mass', y) leaves no mass storage).
+  float amount[2] = {0, 0};
+  amount[r] = static_cast<float>(luaL_checknumber(L, 3));
+  e.ChangeStorage(-1, e.brainStorage);
+  e.brainStorage[0] = amount[0];
+  e.brainStorage[1] = amount[1];
+  e.ChangeStorage(1, e.brainStorage);
   return 0;
 }
 int l_brain_SetResourceSharing(lua_State* L) {

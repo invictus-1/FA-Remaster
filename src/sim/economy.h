@@ -65,6 +65,7 @@ struct ArmyEconomy {
   float requested[2] = {0, 0};    // last beat's total requests (GetEconomyRequested)
   float usage[2] = {0, 0};        // last beat's grants (GetEconomyUsage)
   int64_t maxStorage[2] = {0, 0};
+  float brainStorage[2] = {0, 0};  // CAiBrain:GiveStorage's own storage (replaced by each call)
   bool sharing = false;
   float peak[2] = {0, 0};
   std::vector<std::shared_ptr<EconRequest>> requests;  // oldest first

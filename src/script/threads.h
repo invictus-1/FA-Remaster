@@ -15,7 +15,8 @@ class ThreadScheduler {
   ~ThreadScheduler();
 
   // Create a thread for the function at `caller` stack index `fn` with `nargs` arguments
-  // after it. Pushes the new coroutine on `caller`. It first runs on the next RunTick().
+  // after it. Pushes the new coroutine on `caller`. It first runs on the next RunTick(), or later
+  // in the current one when a running thread forks it.
   void Fork(lua_State* caller, int fn, int nargs);
 
   // Run every thread that is due at tick `tick`, including threads forked while running.

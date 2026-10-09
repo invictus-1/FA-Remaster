@@ -124,7 +124,11 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   t.co = co;
   t.ref = ref;
   t.pendingArgs = nargs;
-  t.wakeTick = tick_ + 1;  // a new thread first runs on the next tick (probe: forked at 0, runs at 1)
+  // A new thread runs in the next pass over the threads: a thread forked by a running thread runs
+  // later in the same pass, after the threads already due (probe v7: forked at 1603 from a thread,
+  // first runs at 1603 after its parent yields; the exe's CTaskThread joins the stage's list
+  // ahead of the pass position). Forked between passes (engine callbacks) it runs in the next pass.
+  t.wakeTick = current_ ? tick_ : tick_ + 1;
   threads_.push_back(t);
 }
 

@@ -432,8 +432,22 @@ int l_EnumColorNames(lua_State* L) {
   return 1;
 }
 
+// IsDestroyed(obj) (FA exe 0x4c7b10): true unless obj (or its _c_object) is the handle of a live
+// engine object. Nil, plain tables and other values count as destroyed.
 int l_IsDestroyed(lua_State* L) {
-  lua_pushboolean(L, lua_isnil(L, 1));
+  bool destroyed = true;
+  if (lua_istable(L, 1)) lua_rawgetcobject(L, 1);
+  else lua_pushvalue(L, 1);
+  if (lua_type(L, -1) == LUA_TUSERDATA && lua_getmetatable(L, -1)) {
+    luaL_getmetatable(L, "moho64.cobject");  // the handle's metatable (script_object.cpp)
+    if (lua_rawequal(L, -1, -2)) {
+      void** box = static_cast<void**>(lua_touserdata(L, -3));
+      destroyed = !box || !*box;
+    }
+    lua_pop(L, 2);
+  }
+  lua_pop(L, 1);
+  lua_pushboolean(L, destroyed);
   return 1;
 }
 
