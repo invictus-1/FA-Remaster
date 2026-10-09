@@ -813,6 +813,12 @@ function P.Destroy()
         IssueUpgrade({ old }, 'ueb1202')
     end)
     out('dsorders', GetGameTick(), tostring(okU), tostring(eU))
+    if DiskGetFileInfo('/moho64_regress_on') then  -- regression runs only: the original's m_old was killed at 1796
+        ForkThread(function()
+            while GetGameTick() < 1796 do WaitTicks(1) end
+            if not old.Dead and not old:BeenDestroyed() then old:Kill() end
+        end)
+    end
     local stop, gone = GetGameTick() + 200, nil
     while GetGameTick() < stop do
         local t = GetGameTick()
@@ -1134,7 +1140,14 @@ function P.Factory()
                     for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
                     local fu = u:GetFocusUnit()
                     local gu = u:GetGuardedUnit()
-                    local extra = 'focus=' .. tagOf(fu) .. ' guard=' .. tagOf(gu)
+                    local extra = 'focus=' .. tagOf(fu) .. ' guard=' .. tagOf(gu) ..
+                        ' hp=' .. fmt(u:GetHealth()) .. '/' .. fmt(u:GetMaxHealth())
+                    if e.tag == 'eng' then  -- (v14) the repair work and the build arm
+                        local arm = u.BuildArmManipulator
+                        local h = arm and arm:GetHeadingPitch() or nil
+                        extra = extra .. ' wp=' .. fmt(u:GetWorkProgress()) .. ' rc=' .. fmt(u:GetResourceConsumed()) ..
+                            ' arm=' .. (h and fmt(h) or '-') .. ' hd=' .. fmt(u:GetHeading())
+                    end
                     if e.tag == 'fac' then
                         extra = extra .. ' wp=' .. fmt(u:GetWorkProgress()) .. ' guards=' .. table.getn(u:GetGuards())
                     elseif e.tag == 'ftr' then
@@ -1148,12 +1161,41 @@ function P.Factory()
             end
         end
     end
+    -- (v15) what damages the factory: its OnDamage, and the other units near it
+    local od = fac.OnDamage
+    fac.OnDamage = function(self, inst, amount, vec, dtype)
+        local ib = inst and not inst:BeenDestroyed() and inst.GetBlueprint and inst:GetBlueprint()
+        out('fcdmg', GetGameTick(), ib and ib.BlueprintId or '-', inst and inst.GetArmy and not inst:BeenDestroyed() and inst:GetArmy() or '-',
+            fmt(amount or 0), tostring(dtype))
+        return od(self, inst, amount, vec, dtype)
+    end
+    local function near(tick)
+        local fp = fac:GetPosition()
+        local list = {}
+        for _, x in GetUnitsInRect(Rect(fp[1] - 40, fp[3] - 40, fp[1] + 40, fp[3] + 40)) or {} do
+            if not byEntity[x] and not x.Dead then
+                local xp = x:GetPosition()
+                local fl = ''
+                if x:IsUnitState('Reclaiming') then fl = fl .. 'R' end
+                if x:IsUnitState('Building') or x:IsUnitState('Repairing') then fl = fl .. 'B' end
+                if x:IsUnitState('Capturing') then fl = fl .. 'C' end
+                if x:GetFocusUnit() == fac then fl = fl .. 'F' end
+                table.insert(list, x:GetBlueprint().BlueprintId .. ':' .. x:GetArmy() .. ':' ..
+                    fmt(VDist2(xp[1], xp[3], fp[1], fp[3])) .. (fl ~= '' and (':' .. fl) or ''))
+            end
+        end
+        out('fcnear', tick, table.getn(list), table.concat(list, ' '))
+    end
     local stop = GetGameTick() + 900
     local brain = ArmyBrains[a1]
     while GetGameTick() < stop do
         local t = GetGameTick()
         local ok, e = pcall(log, t)
         if not ok then out('fc-error', t, tostring(e)) end
+        if math.mod(t, 10) == 0 or (t >= 1872 and t <= 1878) or (t >= 2030 and t <= 2036) or (t >= 2110 and t <= 2116) then
+            local ok2, e2 = pcall(near, t)
+            if not ok2 then out('fcnear-error', t, tostring(e2)) end
+        end
         -- the civilian army has no economy: plenty of income every tick (also for the carrier phase)
         pcall(function() brain:GiveResource('Mass', 5) brain:GiveResource('Energy', 100) end)
         WaitTicks(1)
