@@ -1171,8 +1171,6 @@ bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHove
 
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
-  if (getenv("MOHO64_DEBUG_PROPHIT") && sim.tick() < 3 && u->id == 9437226)
-    Logf(LogLevel::Info, "mt0 %u bp %d mob %d dead %d ball %d", sim.tick(), m.bp != nullptr, m.bp ? (int)m.bp->mobile() : -1, (int)u->dead, (int)m.ballistic);
   if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
     AirMotionTick(sim, u);
     return;
@@ -1199,8 +1197,6 @@ void MotionTick(Sim& sim, Unit* u) {
     return;
   } else {
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
-    if (getenv("MOHO64_DEBUG_PROPHIT") && sim.tick() < 3 && u->id == 9437226)
-      Logf(LogLevel::Info, "mt %u surf %d vel %.4f %.4f", sim.tick(), (int)m.surfaceNext, m.vel.x, m.vel.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {
       m.prevPosY = start.y;

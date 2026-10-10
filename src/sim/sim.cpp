@@ -989,6 +989,14 @@ const std::vector<Unit*>& Sim::CommandOrder() {
   }
   return cmdOrder_;
 }
+const std::vector<Unit*>& Sim::MotionOrder() {
+  if (motionOrderDirty_) {
+    motionOrder_ = units_;
+    std::sort(motionOrder_.begin(), motionOrder_.end(), [](const Unit* a, const Unit* b) { return a->entSeq < b->entSeq; });
+    motionOrderDirty_ = false;
+  }
+  return motionOrder_;
+}
 void Sim::ResumeCommandThread(Unit* u) {
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
@@ -998,12 +1006,15 @@ void Sim::AddUnitToLists(Unit* u) {
   gridDirty_ = true;
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
+  u->entSeq = ++entSeqNext_;
+  motionOrderDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   gridDirty_ = true;
   cmdOrderDirty_ = true;
+  motionOrderDirty_ = true;
   EraseById(units_, u);
   if (u->army) EraseById(u->army->units, u);
 }
@@ -1087,6 +1098,18 @@ void EvaluateStatTriggers(Sim& sim, Army& a) {
 void Sim::Tick() {
   ++tick_;
   g_prof.Start();
+  {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
+     // stream's counts match the oracle but its values do not from tick T on, the n that makes the probe's
+     // rngl hash at T match is how many engine draws we miss before T.
+    static const char* sh = getenv("MOHO64_DEBUG_RNGSHIFT");
+    if (sh) {
+      unsigned t = 0;
+      int n = 0;
+      if (sscanf(sh, "%u:%d", &t, &n) == 2 && t == tick_)
+        for (int i = 0; i < n; ++i) rng_();
+    }
+  }
+  LandNavBackground(*this);  // AdvanceBeat step 3: path tables' background build
   // the armies' stage: economy, navigators and path queues, weapons (acquire, fire)
   EconomyBeginBeat(*this);
   g_prof.Lap(0);
@@ -1100,10 +1123,9 @@ void Sim::Tick() {
   g_prof.Lap(10);
   SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
   g_prof.Lap(3);
-  for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
-    Unit* u = units_[i];
-    if (getenv("MOHO64_DEBUG_PROPHIT") && tick_ < 3 && u->id == 9437226)
-      Logf(LogLevel::Info, "loop %u dq %d par %u attach %d bb %d", tick_, (int)u->destroyQueued, u->parentId, (int)u->attachFull, (int)u->beingBuilt);
+  const std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: motion may create or destroy nothing)
+  for (size_t i = 0; i < motionOrder.size(); ++i) {
+    Unit* u = motionOrder[i];
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
@@ -1149,8 +1171,11 @@ void Sim::Tick() {
   AnimTick(*this);
   gridDirty_ = true;
   // the units' own beat: economy events, regeneration or decay, consumption and production
-  for (size_t i = 0; i < units_.size(); ++i)
-    if (!units_[i]->destroyQueued) UnitEconomyTick(*this, units_[i]);
+  {
+    const std::vector<Unit*> order = MotionOrder();  // (part of Unit::MotionTick in the original)
+    for (size_t i = 0; i < order.size(); ++i)
+      if (!order[i]->destroyQueued) UnitEconomyTick(*this, order[i]);
+  }
   g_prof.Lap(5);
   // Projectiles and beams move after every task stage (Sim::AdvanceBeat runs the three task
   // stages first), so a shot moves in the beat it was fired, and Lua sees the move next beat.

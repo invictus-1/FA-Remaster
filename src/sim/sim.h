@@ -182,6 +182,9 @@ class Sim {
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
+  // Stage sim+0x930 (Entity::TaskTick -> Unit::MotionTick): FIFO by creation, stable across beats
+  // (beat_order.md 2.6); entity ids are army-major, so this is not id order.
+  const std::vector<Unit*>& MotionOrder();
   void ResumeCommandThread(Unit* u);
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
   // Units within [x0,x1] x [z0,z1] by position (a 16-unit grid rebuilt when units moved, were
@@ -249,6 +252,9 @@ class Sim {
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;
+  std::vector<Unit*> motionOrder_;
+  uint64_t entSeqNext_ = 0;
+  bool motionOrderDirty_ = true;
   std::vector<std::vector<Unit*>> grid_;
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;

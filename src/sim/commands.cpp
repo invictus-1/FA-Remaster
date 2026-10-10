@@ -1,4 +1,5 @@
 // Unit commands and their Lua bindings (see commands.h).
+#include "sim/air.h"
 #include "sim/commands.h"
 #include "sim/entity_grid.h"
 #include "sim/formation.h"
@@ -209,6 +210,7 @@ void PatrolSetGoal(Sim& sim, Unit* u) {
   u->motion.arrived = u->motion.failed = false;
   MotionSetGoal(sim, u, path, NextIsMove(u), sim.tick());
   SetMoving(u, true);
+  AirSpeedThroughEvent(sim, u);  // the patrol's TaskTick
 }
 
 }  // namespace
@@ -221,6 +223,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->pdata->aggressive = c.type == CommandType::AggressiveMove;
   u->unitStates.insert("Patrolling");
   PatrolSearchBox(sim, u, *t->pdata);
+  AirSpeedThroughEvent(sim, u);  // the patrol task ctor
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -341,6 +344,7 @@ void StartHead(Sim& sim, Unit* u) {
       u->motion.failed = false;
       (void)driving;
       RunPathSearch(sim, u, true);  // land units queue their search in the navigator
+      if (MoveLike(c.type)) AirSpeedThroughEvent(sim, u);  // the move task ctor
       return;
     }
     // Not carried out yet: finish it at once so the scripts see an idle unit.
@@ -583,6 +587,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
     u->commands.push_back(c);
     c->units.insert(u);
+    AirSpeedThroughEvent(*sim, u);  // queue event 0
   }
   return c;
 }
@@ -679,6 +684,7 @@ int l_IssueFactoryAssist(lua_State* L) {
     }
     u->commands.push_back(c);
     c->units.insert(u);
+    AirSpeedThroughEvent(*S(L), u);  // queue event 0
   }
   if (c) PushCommand(L, c);
   else lua_pushnil(L);

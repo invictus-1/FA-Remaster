@@ -165,6 +165,7 @@ HPathTables& Tables(Sim& sim) {
   if (!m) {
     const TerrainMap* map = sim.map();
     m = std::make_unique<HPathTables>(&sim.navigation(), map ? map->width() : 0, map ? map->height() : 0);
+    m->CreateMaps(sim.blueprints().Footprints());
   }
   return *m;
 }
@@ -810,15 +811,21 @@ void LandNavTickAll(Sim& sim) {
       MotionNavDone(u, n->state == 0);
     }
   }
-  double t3 = prof ? NowS() : 0;
-  T.UpdateBackground(1000);
   if (prof) {
-    double t4 = NowS();
+    double t3 = NowS();
     g_navProf.exec += t1 - t0;
     g_navProf.work += t2 - t1;
     g_navProf.deliver += t3 - t2;
-    g_navProf.bg += t4 - t3;
   }
+}
+
+// Sim::AdvanceBeat step 3 (0x74a078), before the armies: PathTables::UpdateBackground with
+// path_BackgroundBudget (1000) when path_BackgroundUpdate is on (default).
+void LandNavBackground(Sim& sim) {
+  static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
+  double t0 = prof ? NowS() : 0;
+  Tables(sim).UpdateBackground(1000);
+  if (prof) g_navProf.bg += NowS() - t0;
 }
 
 bool LandNavTarget(const Unit* u, Vec3* out) {

@@ -481,19 +481,24 @@ bool IsMoveLikeType(CommandType t) {
   }
 }
 
-// Unit::UpdateSpeedThroughStatus 0x6ac940
-void UpdateSpeedThrough(Unit* u) {
-  AirMotion& a = A(u);
+// Unit::UpdateSpeedThroughStatus 0x6ac940 -> navigator.SetSpeedThroughGoal (air_nav.md 5). The exe calls it only on
+// events (a command added to the queue, move/patrol task ctors, the guard's re-goal and dtor, refuel ctor/dtor,
+// the landing branches below); the flag keeps its value in between. E.g. a build drone (NOFORMATION) gets its
+// Guard command (event: not yet Guarding -> false) and never re-goals, so it circles with speed-through off.
+void UpdateSpeedThrough(Sim& sim, Unit* u) {
+  if (!u->motion.bp || u->motion.bp->motionType != kMotionAir) return;
+  if (u->beingBuilt || u->dead || u->destroyQueued) return;
   bool v;
   if (State(u, "Refueling")) v = false;
   else if (State(u, "ForceSpeedThrough") || State(u, "CannotFindPlaceToLand")) v = true;
-  else if (State(u, "Guarding") && !State(u, "Ferrying") && !a.bp->experimental) v = true;
+  else if (State(u, "Guarding") && !State(u, "Ferrying") && !InCategory(sim, u, "EXPERIMENTAL")) v = true;
   else {
     const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
     const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
     v = cur && next && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
   }
-  a.fullSpeed = v;
+  u->motion.airSpeedThrough = v;
+  if (u->motion.air) A(u).fullSpeed = v;
 }
 
 // --------------------------------------------------------------------------------------------
@@ -919,8 +924,7 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
     int loT = EngineFloor(b.circlingFlightChangeFrequency * 10.0f);
     uint32_t r = sim.NextUInt32();
     a.combatTimer = static_cast<uint32_t>((static_cast<uint64_t>(r) * static_cast<uint32_t>(hiT - loT)) >> 32) +
-                    static_cast<uint32_t>(loT) + tick;
-  }
+                    static_cast<uint32_t>(loT) + tick;  }
   float cx = a.target.x, cz = a.target.z;
   float R = b.startTurnDistance * a.circleRatio;
   Entity* focus = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
@@ -1306,7 +1310,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       SetState(u, "MovingDown", false);
       if (State(u, "CannotFindPlaceToLand")) {
         SetState(u, "CannotFindPlaceToLand", false);
-        UpdateSpeedThrough(u);
+        UpdateSpeedThrough(sim, u);
       }
     } else {
       landing = a.landLayer != 0 && a.landLayer != kAir;
@@ -1316,7 +1320,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
         if (a.landHeight != kInf) {
           if (State(u, "CannotFindPlaceToLand")) {
             SetState(u, "CannotFindPlaceToLand", false);
-            UpdateSpeedThrough(u);
+            UpdateSpeedThrough(sim, u);
           }
           landing = true;
           a.landLayer = kLand;
@@ -1326,13 +1330,13 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
           if (!ok) {
             a.idleTick = sim.tick();
             SetState(u, "CannotFindPlaceToLand", true);
-            UpdateSpeedThrough(u);
+            UpdateSpeedThrough(sim, u);
           } else {
             a.target.x = spot.x;
             a.target.z = spot.z;
             if (State(u, "CannotFindPlaceToLand")) {
               SetState(u, "CannotFindPlaceToLand", false);
-              UpdateSpeedThrough(u);
+              UpdateSpeedThrough(sim, u);
             }
             int S = std::max(b.footprintX, b.footprintZ);
             int x0 = static_cast<int>(std::nearbyint(a.target.x - b.footprintX * 0.5f));
@@ -1690,7 +1694,10 @@ void AirWarp(Sim& sim, Unit* u) {
   if (map && map->hasWater) s = std::max(s, map->waterElevation);
   a.curTerrain = s;
   SetTarget(sim, u, u->position, Vec3{}, 0);
+  a.fullSpeed = u->motion.airSpeedThrough;
 }
+
+void AirSpeedThroughEvent(Sim& sim, Unit* u) { UpdateSpeedThrough(sim, u); }
 
 void AirSetCarrierEvent(Unit* u, int e) {
   if (u->motion.air) A(u).carrierEvent = e;
@@ -1762,6 +1769,7 @@ void AirAbort(Sim& sim, Unit* u) {
   Stop(sim, u, &p);
   a.steering = false;
   a.fullSpeed = false;
+  u->motion.airSpeedThrough = false;
   u->motion.hasGoal = false;
 }
 
@@ -1820,7 +1828,6 @@ void AirMotionTick(Sim& sim, Unit* u) {
       SetTarget(sim, u, a.goal, Vec3{}, 0);
     }
   }
-  UpdateSpeedThrough(u);
   Transform T{ToW(u->orientation), u->position};
   Vec3 start = u->position;
   bool idle = u->commands.empty();

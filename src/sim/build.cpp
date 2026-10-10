@@ -1298,6 +1298,7 @@ void Follow(Sim& sim, Unit* U, GuardData& g) {
   MotionSetGoal(sim, U, std::vector<Vec3>{p}, U->motion.bp->motionType == kMotionAir, sim.tick());
   std::copy(goal, goal + 4, g.goal);
   g.goalSet = true;
+  AirSpeedThroughEvent(sim, U);
 }
 
 // IsOutsideGuardReferenceRange 0x612480
@@ -1807,6 +1808,7 @@ void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
   SetGuardedUnit(sim, U, nullptr);
   if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
   if (U->motion.bp && Moved(U) && U->motion.hasGoal) MotionStop(U);
+  AirSpeedThroughEvent(sim, U);
 }
 
 BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
@@ -2085,6 +2087,7 @@ void InheritRally(Sim& sim, Unit* f, Unit* inheritFrom, Unit* u, bool ferry) {
     }
     if (!c->units.insert(u).second) continue;  // CUnitCommand::AddUnit: once per unit
     u->commands.push_back(c);
+    AirSpeedThroughEvent(sim, u);  // queue event 0
   }
 }
 }  // namespace
@@ -2511,6 +2514,7 @@ int l_IssueMoveOffFactory(lua_State* L) {
   for (Unit* u : units) {
     if (!c->units.insert(u).second) continue;
     u->commands.push_back(c);
+    AirSpeedThroughEvent(*S(L), u);  // queue event 0
   }
   return 0;
 }

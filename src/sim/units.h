@@ -135,6 +135,7 @@ class Unit : public Entity {
   std::shared_ptr<struct TransportObj> transport;  // transports (sim/transport.cpp)
   uint32_t transportedBy = 0;      // the transport carrying it (entity ref)
   uint64_t cmdSeq = 0;  // command-thread order (Sim::CommandOrder)
+  uint64_t entSeq = 0;  // creation order: the entity task thread's place in stage sim+0x930 (Sim::MotionOrder)
   float fuelRatio = -1;            // u+0x294 (fuel.md): -1 none; 1 at spawn for FuelUseTime > 0
   uint32_t ferryUnit = 0;          // GetFerryUnit (+0x4c8): the ferry assigned to pick it up
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)

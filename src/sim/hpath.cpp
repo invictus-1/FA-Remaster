@@ -62,10 +62,13 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
   std::string key = fp.name + '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' +
                     std::to_string(fp.caps) + '/' + std::to_string(fp.flags & 1);
   auto it = maps_.find(key);
-  if (it != maps_.end()) return *it->second;
+  if (it != maps_.end()) {
+    if (!it->second->grid) it->second->grid = nav_->Grid(it->second->fp);
+    return *it->second;
+  }
   auto m = std::make_unique<ClusterMap>();
-  NamedFootprint g = fp;
-  m->grid = nav_->Grid(g);
+  m->fp = fp;
+  m->grid = nav_->Grid(fp);
   m->sx = std::max<int>(1, fp.sizeX);
   m->sz = std::max<int>(1, fp.sizeZ);
   m->S = std::max(m->sx, m->sz);
@@ -76,7 +79,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
     size_t n = static_cast<size_t>(m->wc[L]) * m->hc[L];
     m->lv[L].assign(n, {});
     m->dirty[L].assign(n, 1);
-    m->fresh[L].assign(n, 1);
+    m->stale[L].assign(n, 0);
   }
   ClusterMap* r = m.get();
   mapOrder_.push_back(r);
@@ -84,8 +87,21 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
   return *r;
 }
 
+// PathTables::PathTables 0x76b8c0: a ClusterMap for every footprint of the rules' list (index = mIndex),
+// all clusters dirty. (Their occupancy grids are made when first needed.)
+void HPathTables::CreateMaps(const std::vector<NamedFootprint>& named) {
+  for (const NamedFootprint& fp : named) {
+    std::string key = fp.name + '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' +
+                      std::to_string(fp.caps) + '/' + std::to_string(fp.flags & 1);
+    if (maps_.count(key)) continue;
+    ClusterMap& m = Map(fp);
+    m.grid = nullptr;
+  }
+}
+
 void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
   for (ClusterMap* m : mapOrder_) {
+    m->bgDone = false;  // ClusterMap::DirtyRect 0x8e3620
     int a0 = x0 - 1, b0 = z0 - 1, a1 = x1 + m->sx + 1, b1 = z1 + m->sz + 1;
     for (int L = 1; L <= 2; ++L) {
       int s = kShift[L];
@@ -94,52 +110,87 @@ void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
       for (int cz = iz0; cz < iz1; ++cz)
         for (int cx = ix0; cx < ix1; ++cx) {
           size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
-          if (!m->fresh[L][i]) m->dirty[L][i] = 1;
+          m->dirty[L][i] = 1;
         }
     }
   }
 }
 
 void HPathTables::UpdateBackground(int budget) {
-  // PathTables::UpdateBackground 0x76bc10: a map's first pass builds all of it ("Update CellGroups
-  // completed"); clusters a search needed before that were built (and paid for) on demand.
-  // (inferred from the oracle probe's search timing, 2026-10-09)
-  for (ClusterMap* m : mapOrder_) m->fullBuilt = true;
+  // PathTables::UpdateBackground 0x76bc10 (Sim::AdvanceBeat, before the armies). Only the "/genpath" command
+  // line switch builds everything at once; a normal game builds the clusters here, path_BackgroundBudget
+  // (1000) per beat shared by the maps in order, or on demand from a search's budget.
+  // ClusterMap::UpdateBackground 0x8e3c00: while budget > 0, the next dirty top-level cluster from the
+  // saved word of the dirty bit array (0x8d8270: words scanned cyclically from the saved one, which is kept;
+  // a word holds 32 clusters of one column, word = (cz >> 5) * wc + cx, bit cz & 31, lowest bit first).
   for (ClusterMap* m : mapOrder_) {
-    size_t n = m->lv[2].size();
-    for (size_t k = 0; k < n && budget > 0; ++k) {
-      size_t i = (m->bgIter + k) % n;
-      if (!m->dirty[2][i] || m->fresh[2][i]) continue;
-      int cx = static_cast<int>(i % m->wc[2]), cz = static_cast<int>(i / m->wc[2]);
-      if (!Ready(*m, 2, cx, cz, &budget)) {
-        m->bgIter = i;
-        return;
+    if (m->bgDone) continue;
+    const int wc = m->wc[kTop], hc = m->hc[kTop];
+    const size_t nWords = static_cast<size_t>(wc) * ((hc + 31) >> 5);
+    while (budget > 0) {
+      if (m->bgWord >= nWords) m->bgWord = 0;
+      bool found = false;
+      int cx = 0, cz = 0;
+      for (size_t k = 0; k < nWords && !found; ++k) {
+        size_t w = (m->bgWord + k) % nWords;
+        int x = static_cast<int>(w % wc), zb = static_cast<int>(w / wc) << 5;
+        for (int b = 0; b < 32 && zb + b < hc; ++b)
+          if (m->dirty[kTop][static_cast<size_t>(zb + b) * wc + x]) {
+            found = true;
+            cx = x;
+            cz = zb + b;
+            m->bgWord = w;
+            break;
+          }
       }
+      if (!found) {
+        m->bgDone = true;
+        break;
+      }
+      Ready(*m, kTop, cx, cz, &budget, false);  // (budget accounting only; the data is made when read)
     }
+    if (budget <= 0) return;
   }
 }
 
-// WorkOnCluster 0x8e37d0. Clusters never built yet come from the setup's full build (free).
-bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget) {
+// WorkOnCluster 0x8e37d0. make = false (the background): pay and clear the dirty bit, make the data later.
+bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make) {
   if (cx < 0 || cz < 0 || cx >= m.wc[L] || cz >= m.hc[L]) return true;
   size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
-  if (!m.dirty[L][i]) return true;
-  bool free = m.fullBuilt && m.fresh[L][i] != 0;
-  if (!free && *budget <= 0) return false;
-  if (L == 1) {
-    Build1(m, cx, cz);
-  } else {
-    int unlimited = std::numeric_limits<int>::max() / 2;
-    int* b = free ? &unlimited : budget;
+  if (!m.dirty[L][i]) {
+    if (make && m.stale[L][i]) Make(m, L, cx, cz);
+    return true;
+  }
+  if (*budget <= 0) return false;
+  if (L == 2)
     for (int j = 0; j < 4; ++j)
       for (int k = 0; k < 4; ++k)
-        if (!Ready(m, 1, 4 * cx + k, 4 * cz + j, b)) return false;
-    Build2(m, cx, cz, b);
+        if (!Ready(m, 1, 4 * cx + k, 4 * cz + j, budget, make)) return false;
+  if (make) {
+    if (!m.grid) m.grid = nav_->Grid(m.fp);
+    if (L == 1) Build1(m, cx, cz);
+    else Build2(m, cx, cz, budget);
   }
-  if (!free) *budget -= 10;
+  *budget -= 10;
   m.dirty[L][i] = 0;
-  m.fresh[L][i] = 0;
+  m.stale[L][i] = make ? 0 : 1;
   return true;
+}
+
+// The data of a clean cluster the background paid for (Ready above).
+void HPathTables::Make(ClusterMap& m, int L, int cx, int cz) {
+  if (!m.grid) m.grid = nav_->Grid(m.fp);
+  if (L == 2)
+    for (int j = 0; j < 4; ++j)
+      for (int k = 0; k < 4; ++k) {
+        int sx = 4 * cx + k, sz = 4 * cz + j;
+        if (sx >= m.wc[1] || sz >= m.hc[1]) continue;
+        size_t si = static_cast<size_t>(sz) * m.wc[1] + sx;
+        if (m.stale[1][si] && !m.dirty[1][si]) Make(m, 1, sx, sz);
+      }
+  if (L == 1) Build1(m, cx, cz);
+  else Build2(m, cx, cz, nullptr);
+  m.stale[L][static_cast<size_t>(cz) * m.wc[L] + cx] = 0;
 }
 
 namespace {

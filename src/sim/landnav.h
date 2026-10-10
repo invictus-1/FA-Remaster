@@ -63,6 +63,8 @@ struct LandNav {
 
 // Start a move to world position `goal` (land units). speedThrough: drive through the goal.
 void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goal, bool speedThrough);
+// The path tables' background cluster build (beat start, before the armies).
+void LandNavBackground(Sim& sim);
 // The goal as a rect of cells [x0, x1) x [z0, z1) (a 1x1 goal moves to a free spot nearby).
 void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough);
 // The unit's move is aborted: the navigator forgets its goal (no event).

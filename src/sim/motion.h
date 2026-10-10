@@ -96,6 +96,7 @@ struct UnitMotion {
   size_t pathIndex = 0;
   bool hasGoal = false;
   bool passThrough = false;  // queued move follows: drive through the goal
+  bool airSpeedThrough = false;  // aircraft: navigator.SetSpeedThroughGoal (motion+0x8c), set only on events
   int goalCellX = 0, goalCellZ = 0;
   uint32_t driveTick = 0;  // first tick it drives (path search latency; it coasts until then)
   // Spline state (CAiPathSpline::Generate): 3 stopping, 4 slowing down to reconsider, 5 reversing

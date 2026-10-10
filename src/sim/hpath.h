@@ -66,9 +66,11 @@ struct PathTraveler {
 class HPathTables {
  public:
   explicit HPathTables(Navigation* nav, int mapW, int mapH) : nav_(nav), w_(mapW), h_(mapH) {}
+  // PathTables ctor 0x76b8c0: one cluster map per named footprint, in the footprint list's order.
+  void CreateMaps(const std::vector<NamedFootprint>& named);
   // Structures changed occupancy in cells [x0, x1) x [z0, z1): dirty the clusters around.
   void DirtyRect(int x0, int z0, int x1, int z1);
-  // Background rebuild of changed clusters (path_BackgroundBudget per beat).
+  // Background build of dirty clusters (path_BackgroundBudget per beat, shared by all maps in order).
   void UpdateBackground(int budget);
   // Queue a search (QueueSearch 0x5aa310; the traveler's fields are set by the caller).
   void Queue(PathTraveler* t);
@@ -91,10 +93,14 @@ class HPathTables {
     int sx = 1, sz = 1;
     int wc[3] = {0, 0, 0}, hc[3] = {0, 0, 0};
     std::vector<Cluster> lv[3];
-    std::vector<uint8_t> dirty[3];    // 1: needs a build
-    std::vector<uint8_t> fresh[3];    // never built yet: built for free (the setup's full build)
-    size_t bgIter = 0;
-    bool fullBuilt = false;  // the background's first pass built every cluster (free)
+    std::vector<uint8_t> dirty[3];    // 1: needs a build (every cluster starts dirty)
+    // 1: built as far as the budgets are concerned (the background paid for it) but its data is not made yet.
+    // A cluster's data depends only on the occupancy grid, and every occupancy change dirties it again, so
+    // making it when a search first reads it gives the same data as making it in the background.
+    std::vector<uint8_t> stale[3];
+    NamedFootprint fp;
+    size_t bgWord = 0;     // background iterator: word of the top level's dirty bit array (map+0x8c)
+    bool bgDone = false;   // nothing dirty left (map+0x88; DirtyRect clears it)
   };
 
  private:
@@ -121,7 +127,8 @@ class HPathTables {
   };
 
   ClusterMap& Map(const NamedFootprint& fp);
-  bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget);
+  bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
+  void Make(ClusterMap& m, int L, int cx, int cz);
   void Build1(ClusterMap& m, int cx, int cz);
   void Build2(ClusterMap& m, int cx, int cz, int* budget);
   void Begin(Search& s, PathTraveler* t);

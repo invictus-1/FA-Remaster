@@ -916,6 +916,7 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           AirSetFacing(T, O.pickupFacing);
           d.moving = true;  // the move task sets Moving
           SetState(T, "Moving", true);
+          AirSpeedThroughEvent(sim, T);
           t.state = 2;
           return kTaskRunning;
         }
@@ -1000,6 +1001,7 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
         TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, 0, cz + fp.sizeZ * 0.5f});
         d.moving = true;  // the move task sets Moving
         SetState(u, "Moving", true);
+        AirSpeedThroughEvent(sim, u);
         return kTaskRunning;
       }
       case 2: {
@@ -1104,6 +1106,7 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           }
           d.moving = true;  // the move task sets Moving
           SetState(T, "Moving", true);
+          AirSpeedThroughEvent(sim, T);
         }
         t.state = 3;
         return kTaskRunning;
@@ -1312,6 +1315,7 @@ void FlyTo(Sim& sim, Unit* T, TransportTaskData& d, Vec3 p, int layer) {
   AirSetGoal(sim, T, p, sim.tick(), layer);
   d.childMove = true;  // the move task sets Moving
   SetState(T, "Moving", true);
+  AirSpeedThroughEvent(sim, T);
 }
 
 // CUnitFerryTask::TaskTick 0x60f400 (ctor A: a Ferry command; ctor B: a transport guarding a factory
@@ -1459,6 +1463,7 @@ int TickWaitFerry(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f});
         d.childMove = true;  // the move task sets Moving
         SetState(u, "Moving", true);
+        AirSpeedThroughEvent(sim, u);
         t.state = 1;
         return kTaskRunning;
       }
@@ -1623,6 +1628,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         AirSetGoal(sim, u, bone, sim.tick(), 1, false);
         d.childMove = true;  // the move task sets Moving
         SetState(u, "Moving", true);
+        AirSpeedThroughEvent(sim, u);
         AirSetLandHeight(u, bone.y);
         AirSetFacing(u, facing);
         t.state = 2;
@@ -1647,6 +1653,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
           AirSetGoal(sim, u, u->position, sim.tick(), 0x10);
           d.childMove = true;  // the move task sets Moving
           SetState(u, "Moving", true);
+          AirSpeedThroughEvent(sim, u);
           t.state = 4;
         }
         t.waitUntil = sim.tick() + 9;
@@ -1679,6 +1686,7 @@ void EndRefuel(Sim& sim, Unit* u, TransportTaskData& d) {
   EndChild(sim, u, d);
   SetState(u, "ForceSpeedThrough", false);
   SetState(u, "Refueling", false);
+  AirSpeedThroughEvent(sim, u);  // refuel task dtor
   if (d.slotHeld) {
     AirSetLandHeight(u, std::numeric_limits<float>::infinity());
     Unit* P = UnitRef(sim, d.transport);
@@ -1808,6 +1816,7 @@ int TickCarrierLand(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         AirSetLandHeight(u, d.bonePos.y);
         d.childMove = true;
         SetState(u, "Moving", true);
+        AirSpeedThroughEvent(sim, u);  // the move task ctor
         t.state = 2;
         return kTaskRunning;
       case 2:  // wait for a surfaced carrier; the bone's height only is refreshed
@@ -1825,6 +1834,7 @@ int TickCarrierLand(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         AirSetCarrierEvent(u, 2);
         d.childMove = true;
         SetState(u, "Moving", true);
+        AirSpeedThroughEvent(sim, u);  // the move task ctor
         t.state = 4;
         return kTaskRunning;
       case 4:
@@ -2064,6 +2074,7 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       d->kind = kRefuel;
       d->transport = EntityRef(target);
       SetState(u, "Refueling", true);
+      AirSpeedThroughEvent(sim, u);  // refuel task ctor
       t->order = "Refuel";
     } else if (target != u) {  // cargo
       if (!target->transport || !IsAirUnit(sim, target)) return nullptr;  // TODO: land/naval transports, carriers
@@ -2214,6 +2225,7 @@ void Append(Unit* u, const std::shared_ptr<UnitCommand>& c) {
   if (u->commands.size() >= 501) return;
   u->commands.push_back(c);
   c->units.insert(u);
+  AirSpeedThroughEvent(*Sim::From(u->luaState()), u);  // queue event 0
 }
 
 // IssueTransportLoad(units, transport) 0x6f7250
@@ -2427,6 +2439,7 @@ BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P) {
   d->transport = EntityRef(P);
   d->isCarrier = InCat(sim, P, "CARRIER");
   SetState(u, "Refueling", true);
+  AirSpeedThroughEvent(sim, u);  // refuel task ctor
   t->tdata = d;
   return static_cast<BuildTask*>(sim.Own(std::move(t)));
 }

@@ -142,6 +142,8 @@ void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
 void GroundFreeRect(Sim& sim, Unit* u);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
+// Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
+void AirSpeedThroughEvent(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.
 Vec3 PredictAhead(Sim& sim, Unit* u, float t);
 // Warp: re-sync the body and the terrain height.
