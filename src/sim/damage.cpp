@@ -180,10 +180,11 @@ std::vector<Entity*> Gather(Sim& sim, Vec3 c, float r, float rInner, bool ring) 
     }
     out.push_back(e);
   };
-  // COGrid::ForAllEntitiesIterator 0x721fb0: the entity-grid cells covering the sphere's box, in grid order
-  // (units, then props, per cell); destroy-queued entities are still there until teardown
+  // COGrid::ForAllEntitiesIterator 0x721fb0 / the ring's 0x722560: the entity-grid cells covering the sphere's
+  // box (AABoxToRect 0x4fcbe0: floor / ceil), in grid order (units, then props, per cell); destroy-queued
+  // entities are still there until teardown
   std::vector<Entity*> cand;
-  sim.entityGrid().Gather(c.x - r, c.z - r, c.x + r, c.z + r, 3, &cand);
+  sim.entityGrid().GatherBox(c.x - r, c.z - r, c.x + r, c.z + r, 3, &cand);
   for (Entity* e : cand) test(e);
   for (Projectile* p : sim.projectiles)
     if (std::fabs(p->position.x - c.x) <= r + margin && std::fabs(p->position.z - c.z) <= r + margin) test(p);

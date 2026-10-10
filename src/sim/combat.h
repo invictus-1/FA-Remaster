@@ -123,8 +123,8 @@ class BuilderArm : public ScriptObject {
   int precedence = 0;
   int EventState() const override { return onTarget ? 1 : 0; }
 };
-// MoveManipulator 0x636590 of each arm: runs in the unit's motion step, before its own motion.
-void BuilderArmsTick(Sim& sim, Unit* u);
+// MoveManipulator 0x636590 of each arm: runs in Unit::MotionTick after the unit's own motion (UpdateManipulators 0x63aa80).
+void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorOri);  // after the unit's motion
 // CAiBuilderImpl::SetAimTarget 0x59f600: a non-zero target calls the unit's OnPrepareArmToBuild.
 void SetArmAimTarget(Sim& sim, Unit* u, Vec3 p);
 

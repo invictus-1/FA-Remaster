@@ -226,6 +226,17 @@ int l_Random(lua_State* L) {
   Sim* sim = S(L);
   int n = lua_gettop(L);
   if (n > 2) return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "Random", 0, 2, n);
+  if (sim->rngTrace_) {
+    lua_Debug ar;
+    if (lua_getstack(L, 1, &ar) && lua_getinfo(L, "Sl", &ar))
+      Logf(LogLevel::Info, "rnglua %u %s:%d n%d", sim->tick(), ar.short_src, ar.currentline, n);
+    if (getenv("MOHO64_DEBUG_RNGTB")) {
+      std::string tb;
+      for (int lv = 1; lv < 12 && lua_getstack(L, lv, &ar); ++lv)
+        if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+      Logf(LogLevel::Info, "rngtb %u%s", sim->tick(), tb.c_str());
+    }
+  }
   if (n == 0) {
     lua_pushnumber(L, sim->U01());
   } else if (n == 1) {
@@ -437,6 +448,12 @@ lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }
 
 Sim* Sim::From(lua_State* L) { return static_cast<Sim*>(lua_getextra(L, 1)); }
 
+extern "C" char __executable_start;
+__attribute__((noinline)) void Sim::RngTrace(uint32_t r) {
+  void* a = __builtin_return_address(0);
+  Logf(LogLevel::Info, "rngdbg %u %08x %lx", tick_, r, (unsigned long)((char*)a - &__executable_start));
+}
+
 float Sim::U01() { return static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-32); }
 double Sim::FRand(float lo, float hi) {
   uint32_t u = NextUInt32();
@@ -535,6 +552,7 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 bool Sim::Start(const ReplayHeader& replay) {
   rng_.seed(replay.seed);
   hasGauss_ = false;
+  rngTrace_ = getenv("MOHO64_DEBUG_RNG") != nullptr;
   cheats = replay.cheats;
 
   // Map
@@ -959,7 +977,7 @@ void Sim::Tick() {
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
-    if (!u->builderArms.empty()) BuilderArmsTick(*this, u);  // UpdateManipulators, before the motion
+    const Quat prevOri = u->orientation;
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
       if (p && !p->destroyQueued) {  // the child takes the bone's transform (Entity attach)
@@ -976,6 +994,9 @@ void Sim::Tick() {
     if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
         u->position.z != u->lastPosition.z)
       u->lastMoveTick = tick_;
+    // CAniActor::UpdateManipulators 0x63aa80, after CUnitMotion::MotionTick (0x6a908c before 0x6a90d5): the pose
+    // is built on the pending transform this motion just wrote; the aim bone is read from last beat's pose
+    if (!u->builderArms.empty()) BuilderArmsTick(*this, u, u->lastPosition, prevOri);
     UnitAimTick(*this, u);
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
   }

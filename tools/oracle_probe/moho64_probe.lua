@@ -1730,4 +1730,41 @@ function P.M28Zones()
     out('m28lz-hooked', GetGameTick())
 end
 
+-- 19) (v31) the sim random stream as Lua sees it, without drawing anything extra: the global Random is
+-- wrapped when this file loads (system/config.lua, before any module copies it into a local), and the values
+-- it hands out are summarised per tick. Ticks 0..130:
+-- "PROBE rngl <tick> <calls> <hash>"; ticks 30..70 also every value, 40 per line: "PROBE rngv <tick> <i> v v ..."
+function P.RandomWatch()
+    local R = rawget(_G, 'Random')
+    if not R or rawget(_G, 'moho64_random_raw') then return end
+    moho64_random_raw = R
+    local GT = GetGameTick
+    local cur, n, h, buf, bi = -1, 0, 0, {}, 0
+    local function flush()
+        if cur >= 0 and cur <= 130 and n > 0 then out('rngl', cur, n, h) end
+        if bi > 0 then out('rngv', cur, n - bi, table.concat(buf, ' ', 1, bi)) end
+        n, h, bi = 0, 0, 0
+    end
+    Random = function(...)
+        local v
+        local c = arg.n
+        if c == 0 then v = R() elseif c == 1 then v = R(arg[1]) elseif c == 2 then v = R(arg[1], arg[2])
+        else v = R(unpack(arg)) end
+        local okt, t = pcall(GT)
+        if okt and t ~= cur then flush() cur = t end
+        if cur >= 0 and cur <= 130 then
+            n = n + 1
+            local iv = math.floor(v * 1000 + 0.5)
+            h = math.mod(h * 31 + iv, 65521)
+            if cur >= 30 and cur <= 70 then
+                bi = bi + 1
+                buf[bi] = (c == 0) and string.format('%.6f', v) or tostring(v)
+                if bi >= 40 then out('rngv', cur, n - bi, table.concat(buf, ' ', 1, bi)) bi = 0 end
+            end
+        end
+        return v
+    end
+end
+P.RandomWatch()
+
 moho64_probe = P

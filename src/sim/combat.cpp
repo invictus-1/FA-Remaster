@@ -2196,8 +2196,8 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
       static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
       if (dbg >= 0 && static_cast<long>(u->id) == dbg && !local) {
         Vec3 d = Rotate(Conj(q), dir);
-        Logf(LogLevel::Info, "armdbg %u dir %.4f %.4f %.4f yawq %.4f %.4f %.4f %.4f unitq %.4f %.4f %.4f %.4f local %.4f %.4f %.4f tgt %.4f",
-             sim.tick(), dir.x, dir.y, dir.z, q.x, q.y, q.z, q.w, u->orientation.x, u->orientation.y, u->orientation.z,
+        Logf(LogLevel::Info, "armdbg %u cur %.4f c %.4f h %.4f s %.4f dir %.4f %.4f %.4f yawq %.4f %.4f %.4f %.4f unitq %.4f %.4f %.4f %.4f local %.4f %.4f %.4f tgt %.4f",
+             sim.tick(), a->heading, a->hCenter, a->hHalf, a->hSlew, dir.x, dir.y, dir.z, q.x, q.y, q.z, q.w, u->orientation.x, u->orientation.y, u->orientation.z,
              u->orientation.w, d.x, d.y, d.z, dmath::Atan2(d.x, d.z));
       }
     }
@@ -2220,7 +2220,7 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
 
 }  // namespace
 
-void BuilderArmsTick(Sim& sim, Unit* u) {
+void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorOri) {
   auto& v = u->builderArms;
   v.erase(std::remove_if(v.begin(), v.end(), [](BuilderArm* a) { return !a->alive; }), v.end());
   if (v.empty() || !HasBuilderObject(u) || u->dead) return;
@@ -2235,10 +2235,18 @@ void BuilderArmsTick(Sim& sim, Unit* u) {
       a->onTarget = false;
       continue;
     }
-    // AimDir 0x6366f0: from the aim bone in last beat's pose
+    // AimDir 0x6366f0: from the aim bone in last beat's pose (actor+8: last beat's transform and rotations)
     Vec3 p;
     Quat q;
-    BoneWorld(u, a->aimBone, &p, &q);
+    {
+      const Vec3 curPos = u->position;
+      const Quat curOri = u->orientation;
+      u->position = priorPos;
+      u->orientation = priorOri;
+      BoneWorld(u, a->aimBone, &p, &q);
+      u->position = curPos;
+      u->orientation = curOri;
+    }
     Vec3 d = Sub(aim, p);
     float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     d = len > 0 ? Mul(d, 1.0f / len) : Vec3{};

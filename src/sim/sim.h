@@ -97,7 +97,13 @@ class Sim {
   TerrainMap* mutableMap() { return map_.get(); }
   // The sim stream (Sim+0x904, CMersenneTwister; engine-ref sim_random.md): MT19937 seeded once with the
   // session seed. Every engine and sim-Lua draw comes from it, in the original's order.
-  uint32_t NextUInt32() { return rng_(); }
+  uint32_t NextUInt32() {
+    uint32_t r = rng_();
+    if (rngTrace_) RngTrace(r);
+    return r;
+  }
+  void RngTrace(uint32_t r);
+  bool rngTrace_ = false;
   float Random() { return U01(); }  // = U01
   float U01();                       // (double)u * 2^-32 rounded to float: [0, 1] (1 for u >= 0xFFFFFF80)
   double FRand(float lo, float hi);  // CRandomStream::FRand 0x51b5c0 (callers round)
