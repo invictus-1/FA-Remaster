@@ -941,8 +941,8 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
   u->motion.speedCap = (F && g) ? ms : 0.0f;
   static const long dbg = getenv("MOHO64_DEBUG_FORMU") ? atol(getenv("MOHO64_DEBUG_FORMU")) : -1;
   if (dbg >= 0 && static_cast<long>(u->id) == dbg)
-    Logf(LogLevel::Info, "formu %u F %p g %p slot %.3f %.3f leader %u cap %.4f mult %.4f mid %.4f pos %.3f %.3f follow %d",
-         sim.tick(), static_cast<void*>(F), static_cast<void*>(g), u->formSlot.x, u->formSlot.z, u->formLeader, ms, mult,
+    Logf(LogLevel::Info, "formu %u self %u F %p g %p slot %.3f %.3f leader %u cap %.4f mult %.4f mid %.4f pos %.3f %.3f follow %d",
+         sim.tick(), EntityRef(u), static_cast<void*>(F), static_cast<void*>(g), u->formSlot.x, u->formSlot.z, u->formLeader, ms, mult,
          g ? g->mid : -1.0f, u->position.x, u->position.z, LandNavFollowingSlot(u) ? 1 : 0);
 }
 

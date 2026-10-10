@@ -7,6 +7,7 @@
 #include "sim/navigation.h"
 #include "sim/air.h"
 #include "sim/transport.h"
+#include "sim/steering.h"
 
 #include <algorithm>
 #include <cmath>
@@ -181,6 +182,11 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
     m.sizeX = GetNum(L, t, "SizeX", 1);
     m.sizeY = GetNum(L, t, "SizeY", 1);
     m.sizeZ = GetNum(L, t, "SizeZ", 1);
+    m.averageDensity = GetNum(L, t, "AverageDensity", 1);
+    lua_pushstring(L, "Air");
+    lua_rawget(L, t);
+    if (lua_istable(L, -1)) m.canFly = GetBool(L, lua_gettop(L), "CanFly");
+    lua_pop(L, 1);
     lua_pushstring(L, "Physics");
     lua_rawget(L, t);
     int p = lua_gettop(L);
@@ -335,6 +341,18 @@ void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passTh
   LandNavSetGoal(sim, u, path.back(), passThrough);
 }
 
+// CAiSteeringImpl::Stop 0x5d35e0: the spline and the collision record go; the unit coasts.
+void SteeringStop(UnitMotion& m) {
+  m.spline.clear();
+  m.splineIdx = 0;
+  m.hasSpline = false;
+  m.pointNow = false;
+  m.colType = 0;
+  m.colUnit = 0;
+  m.colTick = 0xffffffffu;
+  m.sideStep = {};
+}
+
 void MotionNavBegin(Unit* u) {
   UnitMotion& m = u->motion;
   // a new goal while the steering drives: it keeps its waypoint until the navigator gives the next one
@@ -348,6 +366,7 @@ void MotionNavBegin(Unit* u) {
   m.hasWaypoint = false;
   m.path.clear();
   m.pathIndex = 0;
+  SteeringStop(m);
 }
 
 void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
@@ -359,7 +378,7 @@ void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
   m.hasWaypoint = true;
   m.driveTick = 0;
   GoalCell(*m.bp, p.x, p.z, &m.goalCellX, &m.goalCellZ);
-  m.newSegment = true;
+  m.newSegment = true;  // the steering takes it at its next tick (DriveToNextWaypoint)
 }
 
 void MotionNavDone(Unit* u, bool succeeded) {
@@ -368,6 +387,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   m.hasWaypoint = false;
   m.navDriven = false;
   m.path.clear();
+  SteeringStop(m);
   if (succeeded) m.arrived = true;
   else m.failed = true;
   Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
@@ -381,6 +401,7 @@ void MotionStop(Unit* u) {
   m.hasWaypoint = false;
   m.navDriven = false;
   m.path.clear();
+  SteeringStop(m);
 }
 
 const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
@@ -457,177 +478,388 @@ float TurnSpeedLimit(const MotionBlueprint& b, float maxF, float turnRadius, flo
   return turnRate * r * 0.5f;
 }
 
-// One spline step (CAiPathSpline::Generate's loop body, FA exe 0x5b2ff0) toward the current
-// waypoint. Returns false if the unit did not move.
-bool DriveStep(Sim& sim, Unit* u) {
-  UnitMotion& m = u->motion;
-  const MotionBlueprint& b = *m.bp;
-  float maxF = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.1f;  // u+0x594
-  float maxR = b.maxSpeedReverse * m.speedMult * 0.1f;
-  float acc = b.maxAccel * m.accMult * 0.01f;
-  float brake = (b.maxBrake != 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
-  float steer = (b.maxSteerForce != 0.0f ? b.maxSteerForce : b.maxAccel) * m.accMult * 0.01f;
-  float turnRadius = b.turnRadius != 0.0f ? b.turnRadius / m.turnMult : 1e30f;
-  float turnRate = b.turnRate * m.turnMult * kDegToRadTenth;
-  bool wideTurner = b.turnRate < b.turnRadius;  // turns wider than it can rotate: slows in turns
+// The spline generator's working state: one step at a time from a position, velocity and facing.
+struct Gen {
+  Vec3 p, vel;
+  float fx = 0, fz = 1, bx = 0, bz = 1;
+  int state = 7;
+  bool reverse = false;
+};
 
-  Vec3& p = u->position;
-  const Vec3& tgt = m.path[m.pathIndex];
-  bool last = m.pathIndex + 1 == m.path.size();
-  int mode = (last && !m.passThrough) ? 0 : 1;  // 0: stop at the target, 1: drive through
-  float dx = tgt.x - p.x, dz = tgt.z - p.z;
+struct StepParams {
+  float maxF, maxR, acc, brake, steer, turnRadius, turnRate;
+  bool wide;
+};
+
+// The limits a batch is generated with (read when the batch is made: u+0x594 is the formation cap).
+StepParams Params(const UnitMotion& m) {
+  const MotionBlueprint& b = *m.bp;
+  StepParams P;
+  P.maxF = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.1f;  // u+0x594
+  P.maxR = b.maxSpeedReverse * m.speedMult * 0.1f;
+  P.acc = b.maxAccel * m.accMult * 0.01f;
+  P.brake = (b.maxBrake != 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
+  P.steer = (b.maxSteerForce != 0.0f ? b.maxSteerForce : b.maxAccel) * m.accMult * 0.01f;
+  P.turnRadius = b.turnRadius != 0.0f ? b.turnRadius / m.turnMult : 1e30f;
+  P.turnRate = b.turnRate * m.turnMult * kDegToRadTenth;
+  P.wide = b.turnRate < b.turnRadius;  // turns wider than it can rotate: slows in turns
+  return P;
+}
+
+void GenBody(const MotionBlueprint& b, const UnitMotion& m, Gen& g) {
+  if (b.rotateBodyWhileMoving && b.turnFacingRate > 0) {
+    RotateToward(g.bx, g.bz, g.fx, g.fz, b.turnFacingRate * m.turnMult * kDegToRadTenth);
+    float l = std::sqrt(g.bx * g.bx + g.bz * g.bz);
+    if (l > 0) {
+      g.bx /= l;
+      g.bz /= l;
+    }
+  } else {
+    g.bx = g.fx;
+    g.bz = g.fz;
+  }
+}
+
+// How a fresh batch starts (Generate with a new path): the state from the speed, the facing and
+// where the target lies.
+void ChooseStart(const MotionBlueprint& b, const StepParams& P, Gen& g, float dotFG) {
+  g.reverse = false;
+  g.state = 7;
+  if (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) return;
+  float speed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
+  float speedFrac = b.maxSpeed > 0 ? speed * 10.0f / b.maxSpeed : 0;
+  bool forward = g.vel.x * g.fx + g.vel.z * g.fz >= 0.0f;
+  if (dotFG >= 0.0f || (speedFrac >= 0.5f && !P.wide)) {
+    if (forward) g.state = 7;
+    else if (dotFG >= 0.0f) g.state = 6;
+    else g.state = 5;
+  } else if (speedFrac > 0.0099999998f && forward) {
+    g.state = 4;
+  } else {
+    g.state = 5;
+  }
+}
+
+// One spline step (the loop body of CAiPathSpline::Generate 0x5b2ff0) toward tgt. Mode 0 stops at
+// the target, 1 drives through it, 2 (a side-step) drives through with twice the accelerations and
+// turn. False when the target is reached (no point).
+bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m, Gen& g, const Vec3& tgt, int mode) {
+  float dx = tgt.x - g.p.x, dz = tgt.z - g.p.z;
   float dist = std::sqrt(dx * dx + dz * dz);
   if (dist < 0.0010000000474974513f) return false;
   float tx = dx / dist, tz = dz / dist;
-  float speed = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
-  float dotFG = m.fx * tx + m.fz * tz;
-
-  bool batchStart = m.newSegment;
-  if (m.state == 8) {  // the last batch ended: the next one continues in state 7, reverse off
-    m.state = 7;
-    m.reverse = false;
-    batchStart = true;
-  }
-  if (m.newSegment) {  // choose how to start (Generate with a new path)
-    m.newSegment = false;
-    m.reverse = false;
-    m.state = 7;
-    if (!(b.maxSpeedReverse <= 0.0f || b.rotateOnSpot)) {
-      float speedFrac = b.maxSpeed > 0 ? speed * 10.0f / b.maxSpeed : 0;
-      bool forward = m.vel.x * m.fx + m.vel.z * m.fz >= 0.0f;
-      if (dotFG >= 0.0f || (speedFrac >= 0.5f && !wideTurner)) {
-        if (forward) m.state = 7;
-        else if (dotFG >= 0.0f) m.state = 6;
-        else m.state = 5;
-      } else if (speedFrac > 0.0099999998f && forward) {
-        m.state = 4;
-      } else {
-        m.state = 5;
-      }
-    }
-  }
-  // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5), not when
-  // the state machine enters state 5 within a batch (land_motion_blocking.md 2.1)
-  if (batchStart && m.state == 5 && dist < b.backUpDistance && dotFG < -0.5f) m.reverse = true;
-  const int s = m.state;
+  float speed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
+  const int s = g.state;
   const bool backward = s == 5 || s == 6 || s == 2;
-
-  // turn: at most max(speed / radius, turn rate)
-  float turn = turnRate;
-  if (speed / turnRadius >= turn) turn = speed / turnRadius;
-  float speedFrac0 = maxF > 0 ? speed / maxF : 0;
-  float limit = TurnSpeedLimit(b, maxF, turnRadius, turnRate, m.fx, m.fz, dx, dz, speedFrac0);
-  if (!m.reverse) {
-    RotateToward(m.fx, m.fz, tx, tz, turn);
-  } else {
-    float bx = -m.fx, bz = -m.fz;
-    RotateToward(bx, bz, tx, tz, turn);
-    m.fx = -bx;
-    m.fz = -bz;
+  float acc = P.acc, brake = P.brake;
+  float turn = P.turnRate;
+  if (speed / P.turnRadius >= turn) turn = speed / P.turnRadius;
+  if (mode == 2) {
+    acc *= 2;
+    brake *= 2;
+    turn *= 2;
   }
-  float mx = backward ? -m.fx : m.fx, mz = backward ? -m.fz : m.fz;
+  float speedFrac0 = P.maxF > 0 ? speed / P.maxF : 0;
+  float limit = TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, g.fx, g.fz, dx, dz, speedFrac0);
+  float dotFG = g.fx * tx + g.fz * tz;
+  if (!g.reverse) {
+    RotateToward(g.fx, g.fz, tx, tz, turn);
+  } else {
+    float bx = -g.fx, bz = -g.fz;
+    RotateToward(bx, bz, tx, tz, turn);
+    g.fx = -bx;
+    g.fz = -bz;
+  }
+  float mx = backward ? -g.fx : g.fx, mz = backward ? -g.fz : g.fz;
   float ml2 = mx * mx + mz * mz;
   // remove the sideways velocity (at most the steering force)
   float px = 0, pz = 0;
   if (ml2 > 0.0f) {
-    float k = (m.vel.x * mx + m.vel.z * mz) / ml2;
+    float k = (g.vel.x * mx + g.vel.z * mz) / ml2;
     px = k * mx;
     pz = k * mz;
   }
-  float lx = m.vel.x - px, lz = m.vel.z - pz;
+  float lx = g.vel.x - px, lz = g.vel.z - pz;
   float ll = lx * lx + lz * lz;
-  if (steer * steer < ll) {
-    float k = steer / std::sqrt(ll);
+  if (P.steer * P.steer < ll) {
+    float k = P.steer / std::sqrt(ll);
     lx *= k;
     lz *= k;
   }
-  m.vel.x -= lx;
-  m.vel.z -= lz;
+  g.vel.x -= lx;
+  g.vel.z -= lz;
   float target = 0;
-  bool braking = s == 1 || s == 3 || s == 4 || s == 6 || m.yielding;
-  if (m.yielding) brake *= 2;
+  bool braking = s == 1 || s == 3 || s == 4 || s == 6;
   if (!braking) {
-    target = std::min(limit, (s == 5 || s == 2) ? maxR : maxF);
+    target = std::min(limit, (s == 5 || s == 2) ? P.maxR : P.maxF);
     if (mode == 0) {
       float d = dist;
       if (brake < dist) d = std::sqrt(dist * brake + dist * brake);
       if (d <= target) target = d;
     }
-    if (wideTurner) target = (std::max(-0.5f, dotFG) + 1.0f) * 0.5f * target;
+    if (P.wide) target = (std::max(-0.5f, dotFG) + 1.0f) * 0.5f * target;
     if (target < 0.0010000000474974513f) braking = true;
   }
   if (braking) {  // keep the speed, ease the direction toward the move direction, brake
     target = 0;
-    float vl = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
+    float vl = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
     float sx = mx, sz = mz;
     if (ml2 != 0.0f) {
       float k = vl / std::sqrt(ml2);
       sx = mx * k;
       sz = mz * k;
     }
-    m.vel.x = sx * 0.200000003f + m.vel.x * 0.800000012f;
-    m.vel.z = sz * 0.200000003f + m.vel.z * 0.800000012f;
+    g.vel.x = sx * 0.200000003f + g.vel.x * 0.800000012f;
+    g.vel.z = sz * 0.200000003f + g.vel.z * 0.800000012f;
   }
-  float dvx = mx * target - m.vel.x, dvz = mz * target - m.vel.z;
-  float lim = (dvx * m.vel.x + dvz * m.vel.z > 0.0f) ? acc : brake;
+  float dvx = mx * target - g.vel.x, dvz = mz * target - g.vel.z;
+  float lim = (dvx * g.vel.x + dvz * g.vel.z > 0.0f) ? acc : brake;
   float dl = dvx * dvx + dvz * dvz;
   if (lim * lim < dl) {
     float k = lim / std::sqrt(dl);
     dvx *= k;
     dvz *= k;
   }
-  m.vel.x += dvx;
-  m.vel.z += dvz;
-  float cap = backward ? maxR : maxF;
-  float vl2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
+  g.vel.x += dvx;
+  g.vel.z += dvz;
+  float cap = backward ? P.maxR : P.maxF;
+  float vl2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
   if (cap * cap < vl2) {
     float k = cap / std::sqrt(vl2);
-    m.vel.x *= k;
-    m.vel.z *= k;
+    g.vel.x *= k;
+    g.vel.z *= k;
   }
-  p.x += m.vel.x;
-  p.z += m.vel.z;
-  UpdateBody(m);
+  g.p.x += g.vel.x;
+  g.p.z += g.vel.z;
+  GenBody(b, m, g);
+  return true;
+}
 
-  // state changes after the step
-  float nspeed = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
-  float frac = maxF > 0 ? nspeed / maxF : 0;
-  float ndx = tgt.x - p.x, ndz = tgt.z - p.z;
+// The state rules after a point (land_motion_blocking.md 2.2). True: the batch ends here without
+// saving a state (the continuation starts in state 7).
+bool StepRules(Sim& sim, const MotionBlueprint& b, const StepParams& P, Gen& g, const Vec3& tgt, int mode) {
+  float nspeed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
+  float frac = P.maxF > 0 ? nspeed / P.maxF : 0;
+  float ndx = tgt.x - g.p.x, ndz = tgt.z - g.p.z;
   float ndist = std::sqrt(ndx * ndx + ndz * ndz);
-  float ndot = ndist > 0 ? (m.fx * ndx + m.fz * ndz) / ndist : 1.0f;
+  float ndot = ndist > 0 ? (g.fx * ndx + g.fz * ndz) / ndist : 1.0f;
   float stopDist = 0;
   float a = std::max(b.maxAccel, b.maxBrake);
   if (a > 0.0f) stopDist = (nspeed * 10.0f * nspeed * 10.0f) / (a * 2.0f);
-  switch (s) {
+  switch (g.state) {
     case 3:
-      if (frac <= 0.0099999998f) m.state = 8;
+      if (frac <= 0.0099999998f) return true;
       break;
     case 4:
-      if (frac <= 0.0099999998f) m.state = (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) ? 7 : 5;
+      if (frac <= 0.0099999998f) g.state = (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) ? 7 : 5;
       break;
     case 5:
-      if (!LookAheadFits(sim, b, p, m.vel.x, m.vel.z, stopDist)) m.state = 6;
-      else if (!m.reverse ? ndot > 0.150000006f : stopDist > ndist) m.state = 6;
+      if (!LookAheadFits(sim, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 6;
+      else if (!g.reverse ? ndot > 0.150000006f : stopDist > ndist) g.state = 6;
       break;
     case 6:
-      if (frac <= 0.0099999998f) m.state = m.reverse ? 8 : 7;
+      if (frac <= 0.0099999998f) {
+        if (g.reverse) return true;
+        g.state = 7;
+      }
       break;
     case 7:
-      if (mode == 0 && ndist < stopDist) m.state = 3;
+      if (mode == 0 && ndist < stopDist) g.state = 3;
       if (ndot < 0.865999997f) {
-        if (!LookAheadFits(sim, b, p, m.vel.x, m.vel.z, stopDist)) m.state = 4;
+        if (!LookAheadFits(sim, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 4;
       }
       break;
     default:
       break;
   }
-  if (m.state == 8) m.reverse = false;
+  return false;
+}
+
+UnitMotion::SplinePoint PointOf(const Gen& g) {
+  UnitMotion::SplinePoint q;
+  q.pos = g.p;
+  q.vel = g.vel;
+  q.fx = g.fx;
+  q.fz = g.fz;
+  q.bx = g.bx;
+  q.bz = g.bz;
+  return q;
+}
+
+// Batch size: 20 points, 5 in a form formation, three times that for wide turners.
+int BatchSize(Sim& sim, Unit* u) {
+  int n = 20;
+  Formation* F = GetFormation(sim, u);
+  if (F && FormationIsForm(*F)) n = 5;
+  if (u->motion.bp->turnRadius > u->motion.bp->turnRate) n *= 3;
+  return n;
+}
+
+// CAiPathSpline::Generate 0x5b2ff0.
+void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
+  UnitMotion& m = u->motion;
+  const MotionBlueprint& b = *m.bp;
+  const bool cont = !fresh && m.hasSpline;
+  const UnitMotion::SplinePoint last = m.genLast;
+  m.spline.clear();
+  m.splineIdx = 0;
+  m.hasSpline = true;
+  m.splineMode = mode;
+  float ex = tgt.x - u->position.x, ez = tgt.z - u->position.z;
+  if (std::sqrt(ex * ex + ez * ez) < 0.0010000000474974513f) return;
+  StepParams P = Params(m);
+  Gen g;
+  if (cont) {
+    g.p = last.pos;
+    g.vel = last.vel;
+    g.fx = last.fx;
+    g.fz = last.fz;
+    g.bx = last.bx;
+    g.bz = last.bz;
+    g.state = m.savedState ? m.savedState : 7;
+    g.reverse = false;
+  } else {
+    g.p = u->position;
+    g.vel = m.vel;
+    g.fx = m.fx;
+    g.fz = m.fz;
+    g.bx = m.bx;
+    g.bz = m.bz;
+  }
+  float dx = tgt.x - g.p.x, dz = tgt.z - g.p.z;
+  float dist = std::sqrt(dx * dx + dz * dz);
+  float dotFG = dist > 0 ? (g.fx * dx + g.fz * dz) / dist : 1.0f;
+  if (!cont) ChooseStart(b, P, g, dotFG);
+  // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5)
+  if (g.state == 5 && dist < b.backUpDistance && dotFG < -0.5f) g.reverse = true;
+  const int N = BatchSize(sim, u);
+  const bool realAt = AtPosition(u, tgt);  // tested with the unit's real position
+  m.savedState = 0;
+  // spline+0x24c..0x264 hold the state before the last step: the batch is renewed while its last
+  // point is still unused, and the continuation recomputes that point
+  UnitMotion::SplinePoint before = PointOf(g);
+  static const long dbgPts = getenv("MOHO64_DEBUG_MOTION") ? atol(getenv("MOHO64_DEBUG_MOTION")) : -1;
+  if (dbgPts == static_cast<long>(u->id))
+    fprintf(stderr, "spline start: tick %u state %d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f cont %d\n", sim.tick(),
+            g.state, g.reverse ? 1 : 0, g.p.x, g.p.z, g.vel.x, g.vel.z, g.fx, g.fz, cont ? 1 : 0);
+  for (int n = 0;;) {
+    before = PointOf(g);
+    if (!StepMove(b, P, m, g, tgt, mode)) break;
+    g.p.y = u->position.y;
+    m.spline.push_back(PointOf(g));
+    ++n;
+    float rx = tgt.x - g.p.x, rz = tgt.z - g.p.z;
+    bool end = false;
+    if (n >= N || std::sqrt(rx * rx + rz * rz) < 0.0010000000474974513f) {
+      m.savedState = g.state;
+      end = true;
+    }
+    if (realAt) end = true;
+    const int s0 = g.state;
+    if (!end && StepRules(sim, b, P, g, tgt, mode)) end = true;
+    if (dbgPts == static_cast<long>(u->id))
+      fprintf(stderr, "  pt %d state %d->%d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f end %d\n", n, s0, g.state,
+              g.reverse ? 1 : 0, g.p.x, g.p.z, g.vel.x, g.vel.z, g.fx, g.fz, end ? 1 : 0);
+    if (end) break;
+  }
+  m.genLast = before;
+  m.genReverse = g.reverse;
   static const long dbgId = getenv("MOHO64_DEBUG_MOTION") ? atol(getenv("MOHO64_DEBUG_MOTION")) : -1;
   if (dbgId == static_cast<long>(u->id))
-    fprintf(stderr, "motion: tick %u state %d->%d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f tgt %.2f %.2f mode %d\n",
-            sim.tick(), s, m.state, m.reverse ? 1 : 0, p.x, p.z, m.vel.x, m.vel.z, m.fx, m.fz, tgt.x, tgt.z, mode);
-  return true;
+    fprintf(stderr, "spline: tick %u mode %d fresh %d n %zu tgt %.2f %.2f saved %d end %.4f %.4f\n", sim.tick(), mode,
+            fresh ? 1 : 0, m.spline.size(), tgt.x, tgt.z, m.savedState, g.p.x, g.p.z);
 }
+
+// CAiPathSpline::Update 0x5b26c0 (modes 3/4, outline): a stop sequence from the unit's position and
+// velocity, at twice the deceleration in mode 4, at least 6 points in mode 4.
+void BrakeSpline(Sim& sim, Unit* u, int mode) {
+  UnitMotion& m = u->motion;
+  StepParams P = Params(m);
+  m.spline.clear();
+  m.splineIdx = 0;
+  m.hasSpline = true;
+  m.splineMode = mode;
+  float acc = P.acc, brake = P.brake;
+  if (mode == 4) {
+    acc *= 2;
+    brake *= 2;
+  }
+  Gen g;
+  g.p = u->position;
+  g.vel = m.vel;
+  g.fx = m.fx;
+  g.fz = m.fz;
+  g.bx = m.bx;
+  g.bz = m.bz;
+  for (int n = 0; n < 400;) {
+    float dvx = -g.vel.x, dvz = -g.vel.z;
+    float lim = (dvx * g.fx + dvz * g.fz > 0.0f) ? acc : brake;
+    float dl = dvx * dvx + dvz * dvz;
+    if (lim * lim < dl) {
+      float k = lim / std::sqrt(dl);
+      dvx *= k;
+      dvz *= k;
+    }
+    g.vel.x += dvx;
+    g.vel.z += dvz;
+    float vl2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
+    float cap = std::max(P.maxF, P.maxR);
+    if (cap * cap < vl2) {
+      float k = cap / std::sqrt(vl2);
+      g.vel.x *= k;
+      g.vel.z *= k;
+    }
+    g.p.x += g.vel.x;
+    g.p.z += g.vel.z;
+    m.spline.push_back(PointOf(g));
+    ++n;
+    if (dvx * dvx + dvz * dvz <= 1e-6f && (mode == 3 || n > 5)) break;
+  }
+  m.savedState = 0;
+  m.genLast = m.spline.size() >= 2 ? m.spline[m.spline.size() - 2] : PointOf(g);
+  m.genReverse = false;
+  (void)sim;
+}
+
+}  // namespace
+
+void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode) {
+  UnitMotion& m = u->motion;
+  m.colType = 0;
+  m.colUnit = 0;
+  m.colTick = 0xffffffffu;
+  if (u->dead || u->destroyQueued || !m.bp) return;
+  if (mode == 3 || mode == 4) BrakeSpline(sim, u, mode);
+  else Generate(sim, u, tgt, mode, fresh);
+}
+
+bool AtPosition(const Unit* u, const Vec3& q) {
+  const MotionBlueprint& b = *u->motion.bp;
+  int ax, az, bx, bz;
+  GoalCell(b, u->position.x, u->position.z, &ax, &az);
+  GoalCell(b, q.x, q.z, &bx, &bz);
+  return ax == bx && az == bz;
+}
+
+void AddImpulse(Unit* u, const Vec3& imp) {
+  if (u->dead || u->destroyQueued || u->beingBuilt) return;
+  UnitMotion& m = u->motion;
+  if (!m.bp) return;
+  if (m.pointNow) m.wasMoving = true;  // "was moving when pushed"
+  m.vel.x = m.vel.x * 0.5f + imp.x;
+  m.vel.z = m.vel.z * 0.5f + imp.z;
+  float cap = (m.speedCap > 0 ? m.speedCap : m.bp->maxSpeed * m.speedMult) * 0.2f;  // u+0x594 * 0.2
+  float l2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
+  if (l2 > cap * cap && l2 > 0) {
+    float k = cap / std::sqrt(l2);
+    m.vel.x *= k;
+    m.vel.z *= k;
+  }
+  m.surfaceNext = true;
+  m.pushed = true;
+}
+
+namespace {
 
 // Without a goal: the unit coasts to a stop (CUnitMotion::CalcMoveCommon, no spline).
 bool Coast(Unit* u) {
@@ -657,91 +889,6 @@ bool Coast(Unit* u) {
 }
 
 }  // namespace
-
-namespace {
-float Radius(const MotionBlueprint& b) { return (b.sizeX + b.sizeZ) * 0.25f; }
-bool Driving(const Unit* u) { return u->motion.hasGoal; }
-}  // namespace
-
-void CollisionTick(Sim& sim) {
-  // uniform grid of land/naval units (8x8 world-unit cells)
-  constexpr float kCell = 8.0f;
-  std::unordered_map<int64_t, std::vector<Unit*>> grid;
-  std::vector<Unit*> movers;
-  auto key = [](int x, int z) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(z); };
-  for (Unit* u : sim.units()) {
-    if (u->destroyQueued || u->dead) continue;
-    if (!u->motion.bp || u->motion.bp->motionType == kMotionAir) continue;
-    if (u->fractionComplete < 1.0f) continue;
-    if (u->parentId || u->layer == "Air") continue;  // carried units (transport cargo) do not collide
-    grid[key(static_cast<int>(std::floor(u->position.x / kCell)), static_cast<int>(std::floor(u->position.z / kCell)))]
-        .push_back(u);
-    if (u->motion.bp->mobile() && Driving(u)) movers.push_back(u);
-  }
-  for (Unit* u : movers) {
-    UnitMotion& m = u->motion;
-    if (sim.tick() < m.driveTick) continue;
-    const MotionBlueprint& b = *m.bp;
-    float ru = Radius(b);
-    float vx = m.vel.x, vz = m.vel.z;
-    float sp = std::sqrt(vx * vx + vz * vz);
-    if (sp <= 0.0f) continue;
-    float fwx = vx / sp, fwz = vz / sp;
-    float reach = ru + sp * 20.0f + 4.0f;
-    int x0 = static_cast<int>(std::floor((u->position.x - reach) / kCell));
-    int x1 = static_cast<int>(std::floor((u->position.x + reach) / kCell));
-    int z0 = static_cast<int>(std::floor((u->position.z - reach) / kCell));
-    int z1 = static_cast<int>(std::floor((u->position.z + reach) / kCell));
-    Unit* hit = nullptr;
-    int hitT = 1 << 30;
-    bool push = false;
-    for (int gx = x0; gx <= x1; ++gx)
-      for (int gz = z0; gz <= z1; ++gz) {
-        auto it = grid.find(key(gx, gz));
-        if (it == grid.end()) continue;
-        for (Unit* o : it->second) {
-          if (o == u) continue;
-          const UnitMotion& n = o->motion;
-          float ro = n.bp ? Radius(*n.bp) : 0.5f;
-          float rr = (ru + ro) * (ru + ro);
-          float dx = o->position.x - u->position.x, dz = o->position.z - u->position.z;
-          // only units ahead of it
-          if (dx * fwx + dz * fwz <= 0.0f) continue;
-          bool oMoving = Driving(o);
-          float ovx = oMoving ? n.vel.x : 0, ovz = oMoving ? n.vel.z : 0;
-          for (int t = 0; t <= 18; t += 3) {
-            float px = dx + (ovx - vx) * t, pz = dz + (ovz - vz) * t;
-            if (px * px + pz * pz < rr) {
-              bool idle = !oMoving && o->commands.empty() && n.bp && n.bp->mobile();
-              if (t < hitT) {
-                hitT = t;
-                hit = o;
-                push = idle;
-              }
-              break;
-            }
-          }
-        }
-      }
-    if (!hit) continue;
-    if (push) {
-      // close enough to touch: the idle unit is shoved along (AddImpulse: v = v/2 + impulse)
-      float dx = hit->position.x - u->position.x, dz = hit->position.z - u->position.z;
-      float d = std::sqrt(dx * dx + dz * dz);
-      float ro = hit->motion.bp ? Radius(*hit->motion.bp) : 0.5f;
-      if (d < ru + ro + sp && d > 0.0f) {
-        UnitMotion& n = hit->motion;
-        n.vel.x = n.vel.x * 0.5f + dx / d * sp;
-        n.vel.z = n.vel.z * 0.5f + dz / d * sp;
-      }
-      continue;
-    }
-    if (!m.yielding && m.state == 7) {
-      m.yielding = true;
-      m.yieldTarget = EntityRef(hit);
-    }
-  }
-}
 
 namespace combat {
 bool HasTarget(Sim& sim, const AiTarget& t);
@@ -813,92 +960,37 @@ void MotionTick(Sim& sim, Unit* u) {
     return;
   } else {
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
-    bool coastPush = false;
-    if (m.pushed) {  // ProcessSplineMovement: the push decays, then the steering drives again
-      float v = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
-      if (v < b.maxSpeed * m.speedMult * 0.01f) {
-        m.pushed = false;
-        if (m.wasMoving) {
-          m.wasMoving = false;
-          LandNavPoke(u);
-          if (m.hasWaypoint) m.newSegment = true;
-        }
-      } else {
-        coastPush = true;
-      }
-    }
-    if (coastPush) {
-      moved = Coast(u);
-    } else if (m.hasGoal && m.navDriven) {
-      if (!m.hasWaypoint) {
-        moved = Coast(u);  // the navigator is thinking: keeps rolling and slows down
-      } else {
-        moved = DriveStep(sim, u);
-        if (m.yielding && m.vel.x * m.vel.x + m.vel.z * m.vel.z <= kStopSq) {
-          m.vel = {};
-          m.yielding = false;
-          m.newSegment = true;
-        }
-        if (moved) {
-          // the steering arrived at its waypoint (its spline ended in the waypoint's cell): it
-          // stops and the unit coasts until the navigator gives the next one
-          int cx, cz;
-          GoalCell(b, u->position.x, u->position.z, &cx, &cz);
-          if (cx == m.goalCellX && cz == m.goalCellZ && m.state == 8) m.hasWaypoint = false;
-        } else {
-          m.hasWaypoint = false;
-        }
-      }
-    } else if (m.hasGoal) {
-      if (sim.tick() < m.driveTick) {
-        moved = Coast(u);  // waiting for the path: keeps rolling and slows down
-      } else {
-        moved = DriveStep(sim, u);
-        if (m.yielding && m.vel.x * m.vel.x + m.vel.z * m.vel.z <= kStopSq) {
-          m.vel = {};
-          m.yielding = false;
-          m.newSegment = true;
-          m.driveTick = sim.tick() + 2;  // stands for a tick, then drives on
-        }
-        if (moved) {
-          int cx, cz;
-          GoalCell(b, u->position.x, u->position.z, &cx, &cz);
-          const Vec3& wp = m.path[m.pathIndex];
-          int wx, wz;
-          GoalCell(b, wp.x, wp.z, &wx, &wz);
-          bool inCell = cx == wx && cz == wz;
-          if (m.pathIndex + 1 == m.path.size()) {
-            if (inCell || m.state == 8) {  // the goal cell, or stopped short of it
-              m.hasGoal = false;
-              m.arrived = true;
-              sim.ResumeCommandThread(u);
-            }
-          } else if (inCell || m.state == 8) {  // next waypoint
-            ++m.pathIndex;
-            m.newSegment = true;
-          }
-        }
-      }
-    } else {
+    // MotionTick pre-step: contacts with other units (they push each other apart)
+    if (m.vel.x * m.vel.x + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
+    if (m.pointNow && !m.pushed) {
+      // CalcMoveCommon: the unit moves onto the spline point the steering handed out
+      const UnitMotion::SplinePoint& q = m.point;
+      if (q.bx != m.bx || q.bz != m.bz) m.needSnap = true;  // turning on the spot
+      u->position.x = q.pos.x;
+      u->position.z = q.pos.z;
+      m.vel = q.vel;
+      m.fx = q.fx;
+      m.fz = q.fz;
+      m.bx = q.bx;
+      m.bz = q.bz;
+      moved = u->position.x != start.x || u->position.z != start.z;
+    } else if (!m.hasGoal && !m.pushed) {
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       moved = Coast(u);
       if (turned) m.needSnap = true;
+    } else {
+      moved = Coast(u);  // pushed, or no spline point (the navigator is thinking): keeps rolling and slows down
     }
-    // CalcMoveCommon 0x6c1e20: from a cell the footprint fits into one it does not: undone, and
-    // pushed back by MaxSpeed/100 along the step (AddImpulse 0x6b8ac0)
     if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {
       float dx = start.x - u->position.x, dz = start.z - u->position.z;
       u->position = start;
       m.vel = {};
       if (!m.pushed) {
         float l = std::sqrt(dx * dx + dz * dz);
-        float imp = b.maxSpeed * m.speedMult * 0.010000001f;
-        if (l > 0) {
-          m.vel.x = dx / l * imp;
-          m.vel.z = dz / l * imp;
-        }
-        if (m.hasGoal && m.navDriven && m.hasWaypoint) m.wasMoving = true;
-        m.pushed = true;
+        float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594
+        Vec3 iv{};
+        if (l > 0) iv = {dx / l * imp, 0, dz / l * imp};
+        AddImpulse(u, iv);
       }
       moved = false;
     }
@@ -907,6 +999,7 @@ void MotionTick(Sim& sim, Unit* u) {
       m.needSnap = false;
     }
     if (moved) UpdateLayer(sim, u);
+    m.surfaceNext = false;  // (cleared after SnapToGround)
   }
   m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
 }

@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/steering.h"
 #include "sim/formation.h"
 #include "sim/air.h"
 #include "sim/commands.h"
@@ -101,59 +102,9 @@ bool Reach(Sim& sim, const Unit* u, const PathCell& a, const PathCell& b) {
   return Corridor(sim, u, a, b);
 }
 
-// Unit::IsHigherPriorityThan 0x6a8d80: does `a` have the right of way over `b`? (b then
-// does not block a). Not modelled: the two unnamed flags at unit+0x68a/+0x68b, formations
-// (same-formation slot order, leaders) and UnitMoreInLineToOther 0x62eac0 (ties go to the
-// lower entity id, the original's fallback).
-bool HigherPriority(const Unit* a, const Unit* b) {
-  auto st = [](const Unit* u, const char* s) { return u->unitStates.count(s) != 0; };
-  if (a->immobile || st(a, "Upgrading")) return true;
-  if (b->immobile || st(b, "Upgrading")) return false;
-  bool ai = (a->motion.bp->footprint.flags & 1) != 0, bi = (b->motion.bp->footprint.flags & 1) != 0;
-  if (ai && !bi) return true;
-  if (bi && !ai) return false;
-  auto landedFlyer = [](const Unit* u) { return u->motion.bp->motionType == kMotionAir && u->layer != "Air"; };
-  if (landedFlyer(a)) return true;
-  if (landedFlyer(b)) return false;
-  if (st(a, "WaitingForTransport") && !st(b, "WaitingForTransport")) return true;
-  if (a->guardedId && a->guardedId == EntityRef(b)) return false;
-  if (b->guardedId && b->guardedId == EntityRef(a)) return true;
-  bool am = st(a, "Moving"), bm = st(b, "Moving");
-  if (am && !bm) return false;
-  if (!am && bm) return true;
-  const NamedFootprint& fa = a->motion.bp->footprint;
-  const NamedFootprint& fb = b->motion.bp->footprint;
-  int sa = std::max(fa.sizeX, fa.sizeZ), sb = std::max(fb.sizeX, fb.sizeZ);
-  if (sa != sb) return sa > sb;
-  return a->id < b->id;
-}
-
 // The unit filter of the occupancy tests (0x62eea0): does `e` count as an obstacle for `self`?
 // flags 1: units that moved this tick never block; flags 2 (attacking): everyone blocks.
-// Unit::IsSameFormationLayerWith 0x6a8d40: neither attacking, both in the same formation (ours: the
-// same formation-move command at the head of both queues)
-bool SameFormation(const Unit* a, const Unit* b) {
-  if (a->unitStates.count("Attacking") || b->unitStates.count("Attacking")) return false;
-  return a->form && a->form == b->form;
-}
-
-bool BlocksFor(const Unit* self, const Unit* e, int flags) {
-  if (!e || e == self || e->dead || e->destroyQueued) return false;
-  if (SameFormation(self, e)) return false;  // (the original orders mates by slot; not modelled)
-  if (!e->motion.bp || !e->motion.bp->mobile()) return false;  // structures: occupancy
-  if (flags == 1 && (e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
-                     e->position.z != e->lastPosition.z))
-    return false;
-  if (e->parentId || e->unitStates.count("Attached")) return false;
-  if (e->layer != self->layer) return false;
-  if ((self->motion.bp->footprint.flags & 1) && !(e->motion.bp->footprint.flags & 1)) return false;
-  if (self->unitStates.count("WaitingForTransport") && e->unitStates.count("WaitingForTransport") &&
-      self->focusId == e->focusId)
-    return false;
-  if (flags == 2) return true;
-  if (!self->unitStates.count("WaitingForTransport") && e->unitStates.count("WaitingForTransport")) return true;
-  return !HigherPriority(self, e);
-}
+bool BlocksFor(const Unit* self, const Unit* e, int flags) { return !UnitIgnores(self, e, flags); }
 
 }  // namespace
 
@@ -535,6 +486,8 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
     n.targetChanged = true;
     n.following = true;
     n.lastFollow = p;
+    n.followPos = p;
+    n.followCell = s;
     n.state = 6;
     n.adjacent = Manhattan(n.cur, n.target) <= 1;
     if (n.path.size() > 1) n.path = {PathCell{n.goal[0], n.goal[1]}};
@@ -635,7 +588,9 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     bool f9e = n.thinking ? false : n.spliced < 0;
     bool through = inGoal ? n.speedThroughGoal : f9e;
     n.thinking = false;
-    MotionSetWaypoint(sim, u, WorldOf(sim, u, n.target), through);
+    // following a formation slot: the target position is the slot's own (not the cell centre)
+    Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z} : WorldOf(sim, u, n.target);
+    MotionSetWaypoint(sim, u, wp, through);
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u target (%d,%d) through %d cur (%d,%d) path %zu", sim.tick(), u->id,
            n.target.x, n.target.z, through ? 1 : 0, n.cur.x, n.cur.z, n.path.size());
@@ -827,6 +782,7 @@ bool LandNavTarget(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
   if (!n || !n->active || !n->hasTarget) return false;
   *out = {n->target.x + SX(u) * 0.5f, 0, n->target.z + SZ(u) * 0.5f};
+  if (n->following && n->target == n->followCell) *out = {n->followPos.x, 0, n->followPos.z};
   return true;
 }
 bool LandNavGoal(const Unit* u, Vec3* out) {

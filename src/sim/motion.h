@@ -55,6 +55,9 @@ struct MotionBlueprint {
   float rotateOnSpotThreshold = 0.5f;
   float backUpDistance = 0;
   float sizeX = 1, sizeY = 1, sizeZ = 1;
+  float averageDensity = 1;  // AverageDensity (mass = density x SizeX x SizeY x SizeZ)
+  bool canFly = false;       // Air.CanFly
+  mutable int8_t naval = -1, airCat = -1;  // in category NAVAL / AIR (u+0x68a / u+0x68b; -1: not looked up)
   std::vector<float> raisedPlatforms;  // Physics.RaisedPlatforms: quads of (x, z, h) x 4 from the position
   NamedFootprint footprint;
   // the footprint's passability grid (cached; grids live as long as the sim's Navigation)
@@ -93,9 +96,31 @@ struct UnitMotion {
   int state = 7;
   bool reverse = false;   // backing up to a close target behind it
   bool newSegment = true; // choose the state from scratch at the next step
-  // Collision avoidance (see CollisionTick): stopping for a unit ahead, at twice the brake.
-  bool yielding = false;
-  uint32_t yieldTarget = 0;  // the unit it stopped for
+  // CAiPathSpline: the steering generates its points in batches (sim/steering.cpp); each tick the
+  // steering hands the motion the next point and the motion moves the unit onto it.
+  struct SplinePoint {
+    Vec3 pos;              // xz (y: the unit's height when generated)
+    Vec3 vel;              // per tick
+    float fx, fz, bx, bz;  // steering and body facing after the step
+  };
+  std::vector<SplinePoint> spline;
+  size_t splineIdx = 0;    // the next point to hand out (spline+0x240)
+  bool hasSpline = false;
+  int splineMode = 0;      // Generate/Update mode of the batch (spline+0x248): 0 stop, 1 through, 2 side-step, 4 brake
+  int savedState = 0;      // spline+0x270: the state a continuation batch starts in (0: 7)
+  SplinePoint genLast{};   // the generator after the last point (continuation start)
+  bool genReverse = false;
+  Vec3 steerTarget;        // st+0x90: the current waypoint target
+  bool pointNow = false;   // a point was handed this tick (motion+4)
+  SplinePoint point{};
+  // SCollisionInfo (st+0x64): the unit it expects to meet, where, and when; type 0 none, 1 predicted,
+  // 2 side-step, 4 brake and wait, 5 brake for a side-stepper
+  int colType = 0;
+  uint32_t colUnit = 0;
+  Vec3 colPos;
+  uint32_t colTick = 0xffffffffu;
+  Vec3 sideStep;           // st+0x84
+  bool surfaceNext = false;  // m+0x90: process contacts next tick (set by AddImpulse)
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)
@@ -126,14 +151,9 @@ void MotionStop(Unit* u);
 void MotionNavBegin(Unit* u);
 void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through);
 void MotionNavDone(Unit* u, bool succeeded);
-// Units see each other coming (before motion): a driving unit that would run into a unit ahead
-// of it within the next 20 ticks stops (twice its brake) and drives on once the way is clear;
-// a unit that drives into an idle one pushes it aside.
-// The original (CAiSteeringImpl::CheckCollisions 0x5d3740, ResolvePossibleCollision 0x596f30,
-// CUnitMotion::AddImpulse 0x6b8ac0) compares the two units' spline nodes every 3 ticks with
-// boxes (SizeX+SizeZ)/4 wide stretched by the stopping distance. TODO(M3b): read it fully; this
-// is an approximation fitted to the probe's 3-bot group.
-void CollisionTick(Sim& sim);
+// The steering stage (CAiSteeringImpl::OnTick, before motion; sim/steering.cpp): new waypoints,
+// spline batches, push ends, predicted collisions and their reactions (engine-ref unit_collision.md).
+void SteeringTickAll(Sim& sim);
 // Place a unit on the ground/water at its current position (SnapToGround / SnapToWater).
 void SnapUnit(const Sim& sim, Unit* u);
 

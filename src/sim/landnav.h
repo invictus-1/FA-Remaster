@@ -56,6 +56,8 @@ struct LandNav {
   bool inFormation = false, waiting = false, following = false;
   uint32_t cachedLeader = 0;
   Vec3 lastFollow;
+  PathCell followCell;
+  Vec3 followPos;  // following: the slot position the target was taken from (the steering drives to it)
   uint32_t lastFail = 0;
 };
 

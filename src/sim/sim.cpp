@@ -893,7 +893,7 @@ void Sim::Tick() {
   g_prof.Lap(2);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   g_prof.Lap(10);
-  CollisionTick(*this);
+  SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
   g_prof.Lap(3);
   for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
     Unit* u = units_[i];
