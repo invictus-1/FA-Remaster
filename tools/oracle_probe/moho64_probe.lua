@@ -1429,6 +1429,18 @@ function P.Armies()
                     if ArmyIsCivilian(i) then return end
                     local cat = categories.COMMAND
                     if tick >= 340 then cat = categories.COMMAND + categories.ENGINEER end
+                    -- (v29) the commanders' build drones (POD) from tick 50: "PROBE pod <tick> <army> <id> x y z heading ncmd head states"
+                    if tick < 340 then
+                        for _, d in GetArmyBrain(i):GetListOfUnits(categories.POD, false) or {} do
+                            local p = d:GetPosition()
+                            local q = d:GetCommandQueue() or {}
+                            local h = '-'
+                            if q[1] then h = tostring(q[1].commandType) .. '@' .. fmt(q[1].x or 0) .. ',' .. fmt(q[1].z or 0) end
+                            local st = {}
+                            for _, s in states do if d:IsUnitState(s) then table.insert(st, s) end end
+                            out('pod', tick, i, d:GetEntityId(), fmt(p[1]), fmt(p[2]), fmt(p[3]), fmt(d:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                        end
+                    end
                     for _, u in GetArmyBrain(i):GetListOfUnits(cat, false) or {} do
                         local p = u:GetPosition()
                         local q = u:GetCommandQueue() or {}
@@ -1690,6 +1702,21 @@ function P.M28Orders()
         return orig(oUnit, tB, sBp, tM, iD, a6, a7, a8)
     end
     out('m28mb-hooked', GetGameTick())
+end
+
+-- 18) (v29) M28's land-zone schedule: each ManageSpecificLandZone call, ticks 300..420.
+-- "PROBE m28lz <tick> <team> <plateau> <zone>"
+function P.M28Zones()
+    while GetGameTick() < 10 do WaitTicks(1) end
+    local ok, M = pcall(import, '/mods/M28AI/lua/AI/M28Land.lua')
+    if not ok or not M or not M.ManageSpecificLandZone then out('m28lz-none') return end
+    local orig = M.ManageSpecificLandZone
+    M.ManageSpecificLandZone = function(aiBrain, iTeam, iPlateau, iLandZone)
+        local t = GetGameTick()
+        if t >= 300 and t < 420 then out('m28lz', t, tostring(iTeam), tostring(iPlateau), tostring(iLandZone)) end
+        return orig(aiBrain, iTeam, iPlateau, iLandZone)
+    end
+    out('m28lz-hooked', GetGameTick())
 end
 
 moho64_probe = P
