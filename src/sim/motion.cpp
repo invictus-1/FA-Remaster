@@ -337,10 +337,14 @@ void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passTh
 
 void MotionNavBegin(Unit* u) {
   UnitMotion& m = u->motion;
+  // a new goal while the steering drives: it keeps its waypoint until the navigator gives the next one
+  // (SetGoal resets the path navigator only)
+  bool keep = m.hasGoal && m.navDriven && m.hasWaypoint;
   m.hasGoal = true;
   m.arrived = false;
   m.failed = false;
   m.navDriven = true;
+  if (keep) return;
   m.hasWaypoint = false;
   m.path.clear();
   m.pathIndex = 0;

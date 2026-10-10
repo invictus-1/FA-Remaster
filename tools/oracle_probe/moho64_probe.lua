@@ -1357,8 +1357,17 @@ function P.Formation()
                         local p = u:GetPosition()
                         local st = {}
                         for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                        local q = u:GetCommandQueue() or {}
                         out('fm', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(),
-                            table.getn(u:GetCommandQueue()), fmt(u:GetHeading()), table.concat(st, ','))
+                            table.getn(q), fmt(u:GetHeading()), table.concat(st, ','))
+                        -- (v17) the command types while the queue changes
+                        local types = {}
+                        for _, c in q do table.insert(types, tostring(c.commandType)) end
+                        local key = table.concat(types, ',')
+                        if key ~= e.lastq then
+                            e.lastq = key
+                            out('fmq', tick, e.tag, key)
+                        end
                     end)
                     if not ok then out('fm-error', tick, e.tag, tostring(err)) end
                 end

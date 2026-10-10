@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 
 #include "core/dmath.h"
@@ -123,6 +124,8 @@ bool RunScript(lua_State* L, const std::string& name, const std::vector<Unit*>& 
     PushObject(L, units[i]);
     lua_rawseti(L, -2, static_cast<int>(i));
   }
+  // table.getn gives the unit count (FAF's scripts loop 0 .. getn-1): the size is set, not a field
+  luaL_setn(L, lua_gettop(L), static_cast<int>(units.size()));
   lua_pushcfunction(L, ScriptTraceback);
   lua_insert(L, -3);
   if (lua_pcall(L, 1, 1, -3) != 0) {
@@ -513,6 +516,22 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   if (!GL) return;
   bool st = GL->motion.passThrough;
   float R = std::max(static_cast<float>(F.largest) * 2.0f, g.speed * (st ? 0.67f : 0.25f));
+  static const bool dbg = getenv("MOHO64_DEBUG_ATGOAL") != nullptr;
+  if (dbg) {
+    std::string s;
+    for (auto& [id, n] : g.nodes) {
+      Unit* m = UnitOf(sim, n.ref);
+      if (!m) continue;
+      float px, pz;
+      AdjustedPosition(F, m, &g, &px, &pz);
+      Vec3 f = vm::Forward(m->orientation);
+      char b[160];
+      snprintf(b, sizeof b, " %u:d%.2f,dot%.3f", id, Dist2D(m->position.x, m->position.z, px, pz),
+               f.x * F.fwd.x + f.y * F.fwd.y + f.z * F.fwd.z);
+      s += b;
+    }
+    Logf(LogLevel::Info, "atgoal %u %s R %.2f st %d GL %u:%s", sim.tick(), F.script.c_str(), R, st ? 1 : 0, GL->id, s.c_str());
+  }
   for (auto& [id, n] : g.nodes) {
     Unit* m = UnitOf(sim, n.ref);
     if (!m) continue;
@@ -920,6 +939,11 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
   }
   float ms = mult * capped > base ? base : mult * capped;
   u->motion.speedCap = (F && g) ? ms : 0.0f;
+  static const long dbg = getenv("MOHO64_DEBUG_FORMU") ? atol(getenv("MOHO64_DEBUG_FORMU")) : -1;
+  if (dbg >= 0 && static_cast<long>(u->id) == dbg)
+    Logf(LogLevel::Info, "formu %u F %p g %p slot %.3f %.3f leader %u cap %.4f mult %.4f mid %.4f pos %.3f %.3f follow %d",
+         sim.tick(), static_cast<void*>(F), static_cast<void*>(g), u->formSlot.x, u->formSlot.z, u->formLeader, ms, mult,
+         g ? g->mid : -1.0f, u->position.x, u->position.z, LandNavFollowingSlot(u) ? 1 : 0);
 }
 
 }  // namespace moho
