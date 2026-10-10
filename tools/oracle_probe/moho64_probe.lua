@@ -1733,7 +1733,8 @@ end
 -- 19) (v31) the sim random stream as Lua sees it, without drawing anything extra: the global Random is
 -- wrapped when this file loads (system/config.lua, before any module copies it into a local), and the values
 -- it hands out are summarised per tick. Ticks 0..130:
--- "PROBE rngl <tick> <calls> <hash>"; ticks 30..70 also every value, 40 per line: "PROBE rngv <tick> <i> v v ..."
+-- "PROBE rngl <tick> <calls> <hash>"; ticks 0..70 also every value, 40 per line: "PROBE rngv <tick> <i> v v ..."
+-- (v32: math.random, which config.lua points at Random, goes through the wrapper as well)
 function P.RandomWatch()
     local R = rawget(_G, 'Random')
     if not R or rawget(_G, 'moho64_random_raw') then return end
@@ -1756,7 +1757,7 @@ function P.RandomWatch()
             n = n + 1
             local iv = math.floor(v * 1000 + 0.5)
             h = math.mod(h * 31 + iv, 65521)
-            if cur >= 30 and cur <= 70 then
+            if cur <= 70 then
                 bi = bi + 1
                 buf[bi] = (c == 0) and string.format('%.6f', v) or tostring(v)
                 if bi >= 40 then out('rngv', cur, n - bi, table.concat(buf, ' ', 1, bi)) bi = 0 end
@@ -1764,6 +1765,8 @@ function P.RandomWatch()
         end
         return v
     end
+    -- (v32) system/config.lua makes math.random the sim Random before this hook runs: route it through too
+    if rawget(_G, 'math') and math.random == R then math.random = Random end
 end
 P.RandomWatch()
 

@@ -229,7 +229,8 @@ int l_Random(lua_State* L) {
   if (sim->rngTrace_) {
     lua_Debug ar;
     if (lua_getstack(L, 1, &ar) && lua_getinfo(L, "Sl", &ar))
-      Logf(LogLevel::Info, "rnglua %u %s:%d n%d", sim->tick(), ar.short_src, ar.currentline, n);
+      Logf(LogLevel::Info, "rnglua %u %s:%d n%d %g %g", sim->tick(), ar.short_src, ar.currentline, n,
+           n >= 1 ? lua_tonumber(L, 1) : 0.0, n >= 2 ? lua_tonumber(L, 2) : 0.0);
     if (getenv("MOHO64_DEBUG_RNGTB")) {
       std::string tb;
       for (int lv = 1; lv < 12 && lua_getstack(L, lv, &ar); ++lv)
