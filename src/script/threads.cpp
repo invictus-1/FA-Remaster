@@ -217,9 +217,15 @@ void ThreadScheduler::Step(Thread& t) {
     t.suspended = true;
     return;
   }
-  int wait = static_cast<int>(lua_tonumber(t.co, 1)) - 1;
-  if (wait < 1) wait = 1;
+  double n = lua_tonumber(t.co, 1);
   lua_settop(t.co, 0);
+  if (n <= 0) {  // yield(0) / WaitTicks(0): the task runs again at once, in the same dispatch
+    t.wakeTick = tick_;
+    t.again = true;
+    return;
+  }
+  int wait = static_cast<int>(n) - 1;
+  if (wait < 1) wait = 1;
   t.wakeTick = tick_ + static_cast<uint32_t>(wait);
 }
 
@@ -229,8 +235,20 @@ void ThreadScheduler::RunTick(uint32_t tick) {
   for (auto it = threads_.begin(); it != threads_.end();) {
     Thread& t = *it;
     if (!t.dead && !t.suspended && t.wakeTick <= tick) {
-      if (StillWaiting(t)) t.wakeTick = tick + 1;
-      else Step(t);
+      if (StillWaiting(t)) {
+        t.wakeTick = tick + 1;
+      } else {
+        Step(t);
+        for (int n = 0; t.again && !t.dead && !t.suspended && n < 100000; ++n) {
+          t.again = false;
+          if (StillWaiting(t)) {
+            t.wakeTick = tick + 1;
+            break;
+          }
+          Step(t);
+        }
+        t.again = false;
+      }
     }
     if (t.dead) {
       Release(t);

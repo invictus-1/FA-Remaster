@@ -42,6 +42,7 @@ class ThreadScheduler {
     bool started = false;
     bool suspended = false;
     bool dead = false;
+    bool again = false;       // yielded 0: run again in this dispatch
     int waitRef = LUA_NOREF;  // WaitFor(event)
   };
   lua_State* L_;
