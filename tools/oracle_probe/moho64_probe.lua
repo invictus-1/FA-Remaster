@@ -1561,7 +1561,7 @@ function P.M28Sites()
     out('m28bl-hooked', GetGameTick())
 end
 
--- 15) (v24) props around each commander: GetReclaimablesInRect(start +- 12) at ticks 30 and 46, in the order
+-- 15) (v24; v26 adds the orientation x y z w and y) props around each commander: GetReclaimablesInRect(start +- 12) at ticks 30 and 46, in the order
 -- returned. "PROBE prd <tick> <army> <i> <bp short> x z ry" (ry: heading; units are listed too, bp id)
 function P.PropDump()
     local function dump(tick)
@@ -1578,8 +1578,9 @@ function P.PropDump()
                     id = string.gsub(id, '^.*/', '')
                     local p = e:GetPosition()
                     local h = e.GetHeading and e:GetHeading() or 0
+                    local q = e:GetOrientation()
                     out('prd', tick, i, k, id, string.format('%.3f', p[1]), string.format('%.3f', p[3]),
-                        string.format('%.3f', h))
+                        string.format('%.3f', h), string.format('%.4f %.4f %.4f %.4f %.3f', q[1], q[2], q[3], q[4], p[2]))
                 end
                 out('prdn', tick, i, k)
             end)

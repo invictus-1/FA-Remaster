@@ -30,6 +30,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/entity_grid.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/luautil.h"
@@ -161,10 +162,10 @@ float ShieldReduce(const std::vector<Absorb>& S_, Entity* e, float amount) {
 // Entities whose primitive meets the sphere (ring: and not the inner sphere).
 std::vector<Entity*> Gather(Sim& sim, Vec3 c, float r, float rInner, bool ring) {
   std::vector<Entity*> out;
-  const float margin = 10;
+  const float margin = 10;  // projectiles (not in our grid)
   auto test = [&](Entity* e) {
     WorldShape ws;
-    if (e->destroyQueued || !GetWorldShape(e, &ws)) return;
+    if (!GetWorldShape(e, &ws)) return;  // destroy-queued entities stay candidates until teardown (damage.md 1.6)
     if (ring) {
       if (SphereOverlap(ws, c, rInner) || !SphereOverlap(ws, c, r)) return;
     } else if (r > 3.0f) {
@@ -179,12 +180,11 @@ std::vector<Entity*> Gather(Sim& sim, Vec3 c, float r, float rInner, bool ring) 
     }
     out.push_back(e);
   };
-  std::vector<Unit*> units;
-  sim.ForUnitsInRect(c.x - r - margin, c.z - r - margin, c.x + r + margin, c.z + r + margin,
-                     [&](Unit* u) { units.push_back(u); });
-  std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
-  for (Unit* u : units) test(u);
-  sim.ForPropsInRect(c.x - r - margin, c.z - r - margin, c.x + r + margin, c.z + r + margin, [&](Prop* p) { test(p); });
+  // COGrid::ForAllEntitiesIterator 0x721fb0: the entity-grid cells covering the sphere's box, in grid order
+  // (units, then props, per cell); destroy-queued entities are still there until teardown
+  std::vector<Entity*> cand;
+  sim.entityGrid().Gather(c.x - r, c.z - r, c.x + r, c.z + r, 3, &cand);
+  for (Entity* e : cand) test(e);
   for (Projectile* p : sim.projectiles)
     if (std::fabs(p->position.x - c.x) <= r + margin && std::fabs(p->position.z - c.z) <= r + margin) test(p);
   for (ShieldEntity* sh : sim.shields) test(sh);
