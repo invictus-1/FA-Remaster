@@ -1513,4 +1513,52 @@ function P.BuildChecks()
     end
 end
 
+-- 14) (v23) M28's build-site choices (ticks < 400): wraps M28Engineer.GetBestBuildLocationForTarget (read-only;
+-- it calls the original unchanged) and logs its inputs and result, plus per candidate the engine reads its scoring
+-- uses: CanBuildStructureAt, reclaimables and mobile land units in the M28 rect (radius r).
+-- "PROBE m28bl <tick> <army> <bp> <engineer x z> <target x z> <ncand> <maxd> <result x z>"
+-- "PROBE m28c <tick> <army> <i> x z cbs nreclaim nmobile"   (first 150 candidates of each call)
+function P.M28Sites()
+    while GetGameTick() < 10 do WaitTicks(1) end  -- M28 has loaded its modules by then
+    local ok, M = pcall(import, '/mods/M28AI/lua/AI/M28Engineer.lua')
+    if not ok or not M or not M.GetBestBuildLocationForTarget then out('m28bl-none', tostring(M)) return end
+    local orig = M.GetBestBuildLocationForTarget
+    local function f3(v) return v and string.format('%.3f', v) or '-' end
+    M.GetBestBuildLocationForTarget = function(oEngineer, sBp, tTarget, tCands, iMaxD, ...)
+        local r = orig(oEngineer, sBp, tTarget, tCands, iMaxD, unpack(arg))
+        if GetGameTick() < 400 then
+            pcall(function()
+                local tick = GetGameTick()
+                local brain = oEngineer:GetAIBrain()
+                local army = brain:GetArmyIndex()
+                local ep = oEngineer:GetPosition()
+                local n = 0
+                for _ in (tCands or {}) do n = n + 1 end
+                out('m28bl', tick, army, sBp, f3(ep[1]), f3(ep[3]), f3(tTarget and tTarget[1]), f3(tTarget and tTarget[3]),
+                    n, f3(iMaxD), f3(r and r[1]), f3(r and r[3]))
+                local bbp = __blueprints[sBp]
+                local ebp = oEngineer:GetBlueprint()
+                local rad = math.min(math.max(bbp.Physics.SkirtSizeX or 0, bbp.Physics.SkirtSizeZ or 0) * 0.5,
+                    math.max(bbp.SizeX or 1, bbp.SizeZ or 1) * 0.5 + 0.5)
+                local rr = rad + math.max(ebp.SizeX or 1.2, ebp.SizeZ or 1.2) * 0.5 + 0.1
+                local i = 0
+                for k, c in (tCands or {}) do
+                    i = i + 1
+                    if i > 150 then break end
+                    local rect = Rect(c[1] - rr, c[3] - rr, c[1] + rr, c[3] + rr)
+                    local nrec, nmob = 0, 0
+                    for _, v in (GetReclaimablesInRect(rect) or {}) do nrec = nrec + 1 end
+                    for _, u in (GetUnitsInRect(rect) or {}) do
+                        if not u.Dead and EntityCategoryContains(categories.MOBILE * categories.LAND, u) then nmob = nmob + 1 end
+                    end
+                    out('m28c', tick, army, k, f3(c[1]), f3(c[3]),
+                        brain:CanBuildStructureAt(sBp, c) and 1 or 0, nrec, nmob)
+                end
+            end)
+        end
+        return r
+    end
+    out('m28bl-hooked', GetGameTick())
+end
+
 moho64_probe = P

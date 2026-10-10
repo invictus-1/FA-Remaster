@@ -109,11 +109,24 @@ int DepositType(const std::string& restriction) {
   return 0;
 }
 
+// CSimResources::AreaHasDeposit 0x546860: a deposit of the type, grown by 0.5 (mass) / 1.5 (hydro) on every
+// side, strictly overlaps the rect.
 bool DepositOverlaps(const Sim& sim, int type, float x0, float z0, float x1, float z1) {
+  float g = type == 1 ? 0.5f : 1.5f;
   for (const auto& d : sim.deposits)
-    if (d.type == type && x0 < static_cast<float>(d.x1) && static_cast<float>(d.x0) < x1 &&
-        z0 < static_cast<float>(d.z1) && static_cast<float>(d.z0) < z1)
+    if (d.type == type && x0 < static_cast<float>(d.x1) + g && static_cast<float>(d.x0) - g < x1 &&
+        z0 < static_cast<float>(d.z1) + g && static_cast<float>(d.z0) - g < z1)
       return true;
+  return false;
+}
+
+// CSimResources::DepositIsInArea 0x546650: the rect contains a deposit of the type, or one contains the rect.
+bool DepositInArea(const Sim& sim, int type, int x0, int z0, int x1, int z1) {
+  for (const auto& d : sim.deposits) {
+    if (d.type != type) continue;
+    if ((x0 <= d.x0 && d.x1 <= x1 && z0 <= d.z0 && d.z1 <= z1) || (d.x0 <= x0 && x1 <= d.x1 && d.z0 <= z0 && z1 <= d.z1))
+      return true;
+  }
   return false;
 }
 
@@ -122,12 +135,15 @@ int StructureLayers(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, floa
   const TerrainMap* map = sim.map();
   if (!map) return 0;
   FRect sk = SkirtRect(bp, d, x, z);
-  int x0 = static_cast<int>(std::floor(sk.x0)), z0 = static_cast<int>(std::floor(sk.z0));
-  int x1 = static_cast<int>(std::ceil(sk.x1)), z1 = static_cast<int>(std::ceil(sk.z1));
-  if (x0 < 0 || z0 < 0 || x1 > map->width() - 1 || z1 > map->height() - 1) return 0;
-  int caps = Footprint(bp).caps ? Footprint(bp).caps : d.buildOnLayerCaps;
-  // flatness: the skirt's vertices, or the ring just outside it (FlattenSkirt)
-  float lo = 1e30f, hi = -1e30f;
+  // OCCUPY_Check 0x5652e0 (engine-ref structure_placement.md): the skirt within the vertex bounds
+  if (std::floor(sk.x0) < 0 || std::floor(sk.z0) < 0 || std::ceil(sk.x1) > map->width() ||
+      std::ceil(sk.z1) > map->height())
+    return 0;
+  // the flatness samples: the skirt truncated to vertices
+  int x0 = static_cast<int>(sk.x0), z0 = static_cast<int>(sk.z0);
+  int x1 = static_cast<int>(sk.x1), z1 = static_cast<int>(sk.z1);
+  int caps = d.buildOnLayerCaps;  // Physics.BuildOnLayerCaps (bp+0x2f4)
+  float lo = std::numeric_limits<float>::max(), hi = -std::numeric_limits<float>::max();
   auto take = [&](int vx, int vz) {
     vx = std::clamp(vx, 0, map->width());
     vz = std::clamp(vz, 0, map->height());
@@ -135,10 +151,12 @@ int StructureLayers(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, floa
     lo = std::min(lo, h);
     hi = std::max(hi, h);
   };
-  if (!d.flattenSkirt) {
+  bool flat;
+  if (!d.flattenSkirt) {  // AreaFlatness 0x5651f0
     for (int vz = z0; vz <= z1; ++vz)
       for (int vx = x0; vx <= x1; ++vx) take(vx, vz);
-  } else {
+    flat = hi - lo <= d.maxGroundVariation;
+  } else {  // EdgeFlatness 0x564f80: the ring just outside, measured from the ceiling of its lowest point
     for (int vx = x0 - 1; vx <= x1 + 1; ++vx) {
       take(vx, z0 - 1);
       take(vx, z1 + 1);
@@ -147,25 +165,20 @@ int StructureLayers(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, floa
       take(x0 - 1, vz);
       take(x1 + 1, vz);
     }
+    float c = static_cast<float>(std::ceil(static_cast<double>(lo)));
+    flat = std::max(hi - c, c - lo) <= d.maxGroundVariation;
   }
-  if (hi - lo > d.maxGroundVariation) caps &= ~3;
+  if (!flat) caps &= ~3;
   float water = map->hasWater ? map->waterElevation : -10000.0f;
   if (water > lo) caps &= ~1;
   if (hi > water - Footprint(bp).minWaterDepth) caps &= ~0xe;
   if (!caps) return 0;
-  // blocking terrain types under the footprint
+  // deposits (no terrain-type test on this path): extractors need theirs; nothing else may come near one
   const NamedFootprint& fp = Footprint(bp);
   int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
-  Navigation& nav = sim.navigation();
-  for (int cz = oz; cz < oz + fp.sizeZ; ++cz)
-    for (int cx = ox; cx < ox + fp.sizeX; ++cx)
-      if (nav.IsBlockingType(map->TerrainType(cx, cz))) return 0;
-  // deposits: extractors need theirs; nothing else may touch one
   int dep = DepositType(d.buildRestriction);
   if (dep) {
-    if (!DepositOverlaps(sim, dep, static_cast<float>(ox), static_cast<float>(oz), static_cast<float>(ox + fp.sizeX),
-                         static_cast<float>(oz + fp.sizeZ)))
-      return 0;
+    if (!DepositInArea(sim, dep, ox, oz, ox + fp.sizeX, oz + fp.sizeZ)) return 0;
   } else if (d.buildRestriction.empty() || d.buildRestriction == "RULEUBR_None") {
     if (DepositOverlaps(sim, 1, sk.x0, sk.z0, sk.x1, sk.z1) || DepositOverlaps(sim, 2, sk.x0, sk.z0, sk.x1, sk.z1))
       return 0;

@@ -322,6 +322,13 @@ int l_SetOrientation(lua_State* L) {
     lua_pop(L, 1);
   }
   e->orientation = {v[0], v[1], v[2], v[3]};
+  if (e->kind == Entity::Kind::Unit) {  // the motion's facing follows (it re-derives the orientation when placed)
+    Unit* u = static_cast<Unit*>(e);
+    const Quat& q = e->orientation;
+    float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
+    u->motion.fx = u->motion.bx = dmath::Sin(h);
+    u->motion.fz = u->motion.bz = dmath::Cos(h);
+  }
   return 0;
 }
 int l_GetHealth(lua_State* L) {
