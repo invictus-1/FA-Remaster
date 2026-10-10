@@ -157,6 +157,7 @@ class Unit : public Entity {
   Vec3 formSlot;                     // u+0x59c
   float formRank = 0;                // u+0x598
   bool formAllAtGoal = false;        // u+0x590
+  std::shared_ptr<struct Formation> guardForm;  // G+0x520: the guard formation of its guards
   Vec3 armAim;                     // CAiBuilderImpl +0xc: the build arm's aim target (zero: none)
   bool armReady = true;            // CAiBuilderImpl +9: the arm is on target (no arm: always)
   std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach

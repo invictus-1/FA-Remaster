@@ -752,7 +752,7 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling")) return false;
   if (combat::HasTarget(sim, u->desiredTarget)) return false;  // (weapon facing has priority: not carried out)
   if (LandNavActive(u)) return false;                          // the navigator is not idle
-  Vec3 fv = u->form->fwd;
+  Vec3 fv = FormationVector(sim, u);
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
   float cx = m.bx, cz = -m.bz;          // current forward (x, -z)

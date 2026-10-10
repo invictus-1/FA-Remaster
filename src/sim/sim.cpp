@@ -901,6 +901,7 @@ void Sim::Tick() {
     u->lastPosition = u->position;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
+    if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
     if (!u->builderArms.empty()) BuilderArmsTick(*this, u);  // UpdateManipulators, before the motion
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone

@@ -104,6 +104,7 @@ struct AirMotion {
   float lastScale = 1;       // 1/scale of the last MoveTo (GetVelocity)
   // navigator (CAiNavigatorAir)
   bool steering = false;     // status 2
+  bool inFormation = false;  // navigator +0x88: follows its formation slot (air_nav 4.3)
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;
   Vec3 pendingGoal;

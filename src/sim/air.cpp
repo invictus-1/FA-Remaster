@@ -4,6 +4,9 @@
 // to the FA exe; the specs in engine-ref/specs/air_*.md give the details.
 #include "core/dmath.h"
 #include "sim/air.h"
+#include "sim/formation.h"
+#include "sim/landnav.h"
+#include "sim/commands.h"
 #include "sim/transport.h"
 
 #include <algorithm>
@@ -1342,9 +1345,16 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
           }
         }
       }
-      // desired facing
-      if (!IsZeroBits(a.facing)) facing = Normalized(a.facing);
-      else facing = fwdH;
+      // desired facing: the formation vector first
+      Vec3 fv = FormationVector(sim, u);
+      if (!IsZeroBits(fv)) {
+        a.facing = fv;
+        facing = fv;
+      } else if (!IsZeroBits(a.facing)) {
+        facing = Normalized(a.facing);
+      } else {
+        facing = fwdH;
+      }
       // target elevation offset
       if (landing) {
         SetState(u, "MovingDown", true);
@@ -1789,6 +1799,24 @@ void AirMotionTick(Sim& sim, Unit* u) {
     a.goal = a.pendingGoal;
     a.steering = true;
     SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
+    a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
+    if (!(u->navigator && u->navigator->ignoreFormation)) {
+      Formation* f = GetFormation(sim, u);
+      a.inFormation = f && FormationIsForm(*f);
+    }
+  }
+  // UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while the leader steers
+  if (a.steering && a.inFormation && !(u->navigator && u->navigator->ignoreFormation) && !State(u, "Ferrying")) {
+    Formation* f = GetFormation(sim, u);
+    Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
+    Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
+    if (f && L && L != u) {
+      bool good = L->motion.air ? A(L).steering : LandNavStatus(L) == 2;
+      if (good) SetTarget(sim, u, u->formSlot, Vec3{}, 0);
+    } else {
+      a.inFormation = false;
+      SetTarget(sim, u, a.goal, Vec3{}, 0);
+    }
   }
   UpdateSpeedThrough(u);
   Transform T{ToW(u->orientation), u->position};
@@ -1837,6 +1865,12 @@ void AirMotionTick(Sim& sim, Unit* u) {
     }
     bool layerOk = a.landLayer == 0 || LayerBits(u->layer) == a.landLayer;
     bool at = layerOk && (d <= r || a.vertEvent == 4 || (a.vertEvent == 1 && a.landHeight != kInf));
+    if (at && a.inFormation) {  // a follower only arrives when its slot (the motion target) is in the goal cell
+      const AirBp& ab = *a.bp;
+      auto cell = [&](float v, int s) { return static_cast<int>(std::nearbyint(v - s * 0.5f)); };
+      at = cell(a.target.x, ab.footprintX) == cell(a.goal.x, ab.footprintX) &&
+           cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
+    }
     if (at) {
       a.steering = false;
       m.hasGoal = false;

@@ -15,6 +15,7 @@ if rawget(_G, 'moho64_probe') then
             ForkThread(P.Staging) -- v11 (beside the ferry)
             ForkThread(P.Factory) -- v13
             ForkThread(P.Carrier) -- v13
+            ForkThread(P.Formation) -- v16
             P.Ferry() -- v10
         end)
     end)

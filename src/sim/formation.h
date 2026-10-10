@@ -90,6 +90,13 @@ void UpdateInfoCache(Sim& sim, Unit* u);
 // u's current formation (Unit::GetFormation), or null.
 Formation* GetFormation(Sim& sim, Unit* u);
 bool FormationIsForm(const Formation& f);
+// Unit::GetFormationVector 0x6a8c20: the formation's forward (an AIR unit following a non-air leader: the
+// leader's horizontal forward); zero when none.
+Vec3 FormationVector(Sim& sim, Unit* u);
+// Unit::UpdateGuardFormation 0x6aa7a0 (MotionTick, on the guarded unit): make its guard formation.
+void UpdateGuardFormation(Sim& sim, Unit* G);
+// SetGuardedUnit deletes the old and the new guarded unit's guard formation.
+void ReleaseGuardFormation(Unit* G);
 // GetPathDelay(u, 0): the think delay of a formation member, max(1, row x 10) (1 when not in one).
 int FormationPathDelay(Sim& sim, Unit* u);
 

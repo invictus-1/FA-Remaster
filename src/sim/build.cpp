@@ -36,6 +36,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/formation.h"
 #include "sim/transport.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
@@ -966,7 +967,8 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
   Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
   if (G) {
     if (Cat(sim, U, "ENGINEER")) return EnsureAnchor(sim, U, g);
-    return G->position;  // (has a guard formation: air -> G's position; land -> its slot)
+    if (G->guardForm) return Cat(sim, U, "AIR") ? G->position : U->formSlot;  // land: the formation slot
+    if (Mobile(G)) return U->position;  // (no formation yet)
   }
   if (auto c = g.cmd.lock()) {
     const NamedFootprint& fp = Fp(U);
@@ -1833,9 +1835,11 @@ void SetGuardedUnit(Sim& sim, Unit* u, Unit* g) {
   if (Unit* old = FindUnitAny(sim, u->guardedId)) {
     auto& v = old->guarders;
     v.erase(std::remove(v.begin(), v.end(), EntityRef(u)), v.end());
+    ReleaseGuardFormation(old);  // rebuilt at its next MotionTick
   }
   u->guardedId = g ? EntityRef(g) : 0;
   if (g) {
+    ReleaseGuardFormation(g);
     auto& v = g->guarders;
     uint32_t id = EntityRef(u);
     auto it = std::lower_bound(v.begin(), v.end(), id);

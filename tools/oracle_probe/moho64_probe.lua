@@ -1295,4 +1295,78 @@ function P.Carrier()
     out('carrier done')
 end
 
+-- 11) formations (v16, beside the ferry phase, from tick 1850): land guards following a moving tank (guard
+-- formation), an air group in formation, a land group with an air escort, and a mixed land group with a heading.
+-- "PROBE fm <tick> <tag> x y z layer ncmd heading states"
+P.FORMATION = {
+    { 'g_lead', 'uel0201', 230, 842 }, { 'g_1', 'uel0201', 226, 848 }, { 'g_2', 'uel0201', 230, 850 },
+    { 'g_3', 'uel0201', 234, 848 },
+    { 'a_1', 'uaa0102', 230, 872 }, { 'a_2', 'uaa0102', 234, 872 }, { 'a_3', 'uaa0102', 238, 872 },
+    { 'e_1', 'uel0201', 230, 896 }, { 'e_2', 'uel0201', 235, 896 }, { 'e_g', 'uea0203', 232, 900 },
+    { 'm_t1', 'uel0201', 228, 922 }, { 'm_t2', 'uel0201', 233, 922 }, { 'm_b1', 'uel0106', 228, 927 },
+    { 'm_b2', 'uel0106', 233, 927 }, { 'm_a', 'uel0103', 238, 924 },
+}
+function P.Formation()
+    local a1
+    for i, name in ListArmies() do if name == 'ARMY_9' then a1 = i end end
+    if not a1 then out('fm no army') return end
+    while GetGameTick() < 1850 do WaitTicks(1) end
+    local units, byTag = {}, {}
+    local function pos(x, z) return { x, GetSurfaceHeight(x, z), z } end
+    out('fmterrain', GetGameTick(), fmt(GetTerrainHeight(230, 842)), fmt(GetTerrainHeight(300, 842)),
+        fmt(GetTerrainHeight(320, 872)), fmt(GetTerrainHeight(300, 896)), fmt(GetTerrainHeight(300, 922)))
+    for _, t in P.FORMATION do
+        local ok, u = pcall(CreateUnitHPR, t[2], a1, t[3], GetSurfaceHeight(t[3], t[4]), t[4], 0, 1.5708, 0)
+        if ok and u then
+            out('fmspawn', GetGameTick(), t[1], t[2], u:GetEntityId())
+            pcall(function() u:SetCanTakeDamage(false) end)
+            pcall(function() u:SetDoNotTarget(true) end)
+            table.insert(units, { tag = t[1], u = u })
+            byTag[t[1]] = u
+        else
+            out('fmspawn-failed', t[1], tostring(u))
+        end
+    end
+    local function grp(prefix)
+        local g = {}
+        for _, e in units do if string.sub(e.tag, 1, string.len(prefix)) == prefix then table.insert(g, e.u) end end
+        return g
+    end
+    WaitTicks(2)
+    local okO, eO = pcall(function()
+        IssueGuard({ byTag.g_1, byTag.g_2, byTag.g_3 }, byTag.g_lead)
+        IssueFormMove(grp('a_'), pos(320, 872), 'AttackFormation', 0)
+        IssueFormMove(grp('e_'), pos(300, 896), 'GrowthFormation', 0)
+        IssueFormMove(grp('m_'), pos(300, 922), 'GrowthFormation', 90)
+    end)
+    out('fmorders', GetGameTick(), tostring(okO), tostring(eO))
+    WaitTicks(4)
+    pcall(function() IssueMove({ byTag.g_lead }, pos(300, 842)) end)
+    local states = { 'Moving', 'Guarding', 'GuardBusy', 'MovingUp', 'MovingDown' }
+    local stop = GetGameTick() + 600
+    while GetGameTick() < stop do
+        local tick = GetGameTick()
+        for _, e in units do
+            local u = e.u
+            if not e.dead then
+                if u.Dead or u:BeenDestroyed() then
+                    e.dead = true
+                    out('fmdead', tick, e.tag)
+                else
+                    local ok, err = pcall(function()
+                        local p = u:GetPosition()
+                        local st = {}
+                        for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                        out('fm', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(),
+                            table.getn(u:GetCommandQueue()), fmt(u:GetHeading()), table.concat(st, ','))
+                    end)
+                    if not ok then out('fm-error', tick, e.tag, tostring(err)) end
+                end
+            end
+        end
+        WaitTicks(1)
+    end
+    out('formation done')
+end
+
 moho64_probe = P

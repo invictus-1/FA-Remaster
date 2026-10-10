@@ -671,7 +671,87 @@ std::vector<std::weak_ptr<Formation>>& Registry(Sim& sim) {
   return m[&sim];
 }
 
+// CAiFormationDBImpl::NewFormation 0x59c120 (+ SetScale)
+std::shared_ptr<Formation> NewFormation(Sim& sim, const std::vector<Unit*>& units, const std::string& name, float cx,
+                                        float cz, float qw, float qx, float qy, float qz, int type, float scale) {
+  auto F = std::make_shared<Formation>();
+  F->sim = &sim;
+  F->type = type;
+  F->script = name;
+  for (Unit* x : units) F->units.push_back(EntityRef(x));
+  F->cx = cx;
+  F->cz = cz;
+  F->qw = qw;
+  F->qx = qx;
+  F->qy = qy;
+  F->qz = qz;
+  if (!QuatZero(*F) && F->type != 2)
+    F->fwd = {2 * (F->qw * F->qy + F->qx * F->qz), 2 * (F->qy * F->qz - F->qw * F->qx),
+              1 - 2 * (F->qx * F->qx + F->qy * F->qy)};
+  F->scale = scale;
+  Rebuild(*F);
+  Registry(sim).push_back(F);
+  return F;
+}
+
+// AI.GuardFormationName (ubp+0x470, default "GuardFormation")
+const std::string& GuardFormationName(Sim& sim, const Unit* g) {
+  static std::map<const BlueprintInfo*, std::string> cache;
+  auto it = cache.find(g->blueprint);
+  if (it != cache.end()) return it->second;
+  std::string name = "GuardFormation";
+  lua_State* L = sim.L();
+  int top = lua_gettop(L);
+  sim.blueprints().PushTable(L, *g->blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "AI");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "GuardFormationName");
+      lua_rawget(L, -2);
+      if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
+    }
+  }
+  lua_settop(L, top);
+  return cache.emplace(g->blueprint, name).first->second;
+}
+
 }  // namespace
+
+Vec3 FormationVector(Sim& sim, Unit* u) {
+  if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling") || !u->form) return {};
+  if (IsAirUnit(u) && u->formLeader) {
+    Unit* L = UnitOf(sim, u->formLeader);
+    if (L && !IsAirUnit(L)) {
+      Vec3 f = vm::Forward(L->orientation);
+      float l = std::sqrt(f.x * f.x + f.z * f.z);
+      return l > 0 ? Vec3{f.x / l, 0, f.z / l} : Vec3{};
+    }
+  }
+  if (FormationIsForm(*u->form)) return u->form->fwd;
+  return {};
+}
+
+void UpdateGuardFormation(Sim& sim, Unit* G) {
+  if (G->guardForm || G->guarders.empty()) return;
+  const std::string& name = GuardFormationName(sim, G);
+  if (name.empty()) return;
+  std::vector<Unit*> guards;
+  for (uint32_t h : G->guarders)
+    if (Unit* x = UnitOf(sim, h)) guards.push_back(x);
+  std::sort(guards.begin(), guards.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  if (guards.empty()) return;
+  const Quat& q = G->orientation;
+  bool mob = Mobile(G);
+  G->guardForm = NewFormation(sim, guards, name, G->position.x, G->position.z, mob ? q.w : 0, mob ? q.x : 0,
+                              mob ? q.y : 0, mob ? q.z : 0, 15, 1.0f);
+}
+
+void ReleaseGuardFormation(Unit* G) {
+  if (!G || !G->guardForm) return;
+  G->guardForm->released = true;
+  G->guardForm.reset();
+}
 
 bool FormationIsForm(const Formation& f) {
   return f.type == 4 || f.type == 36 || f.type == 18 || f.type == 11 || f.type == 15;
@@ -717,27 +797,12 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   std::string name = ScriptName(sim.L(), c.formIndex, units);
   if (name.empty()) return;
-  auto F = std::make_shared<Formation>();
-  F->sim = &sim;
-  F->type = static_cast<int>(c.type);
-  F->script = name;
-  for (Unit* x : units) F->units.push_back(EntityRef(x));
   Vec3 pos = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) pos = e->position;
-  F->cx = pos.x;
-  F->cz = pos.z;
-  F->qw = c.formQw;
-  F->qx = c.formQx;
-  F->qy = c.formQy;
-  F->qz = c.formQz;
-  if (!QuatZero(*F) && F->type != 2)
-    F->fwd = {2 * (F->qw * F->qy + F->qx * F->qz), 2 * (F->qy * F->qz - F->qw * F->qx),
-              1 - 2 * (F->qx * F->qx + F->qy * F->qy)};
-  F->scale = c.formScale;
-  Rebuild(*F);
+  auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
+                        static_cast<int>(c.type), c.formScale);
   c.form = F;
-  Registry(sim).push_back(F);
   if (getenv("MOHO64_DEBUG_FORM"))
     for (int k = 0; k < 2; ++k)
       for (auto& g : F->groups[k])
@@ -782,8 +847,11 @@ bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
 }
 
 Formation* GetFormation(Sim& sim, Unit* u) {
-  (void)sim;
-  if (u->guardedId) return nullptr;  // (the guard formation G+0x520: not carried out yet)
+  if (u->guardedId) {  // the guarded unit's guard formation (G+0x520), not while GuardBusy
+    if (u->unitStates.count("GuardBusy")) return nullptr;
+    Unit* G = UnitOf(sim, u->guardedId);
+    return G && G->guardForm ? G->guardForm.get() : nullptr;
+  }
   if (u->commands.empty()) return nullptr;
   UnitCommand& c = *u->commands.front();
   if (c.form && Contains(*c.form, u, true)) return c.form.get();
