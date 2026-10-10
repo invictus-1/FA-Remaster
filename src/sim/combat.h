@@ -151,12 +151,18 @@ void ReleaseUnitCombat(Sim& sim, Unit* u);
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c);
 float GuardScanRadiusOf(Unit* u);
 Unit* GuardBestEnemy(Sim& sim, Unit* u);
+// The patrol's search box (an OBB in xz: centre, unit direction along the leg, half extents across / along).
+struct PatrolBox {
+  float cx = 0, cz = 0, dx = 0, dz = 1, side = 0, along = 0;
+};
+// CUnitPatrolTask::FindTarget 0x61b710: the primary weapon's best enemy among the cached blips that touch the
+// box, within GuardScanRadius.
+Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box);
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e);
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 void EndAttack(Sim& sim, Unit* u, BuildTask& t);
 // Aggressive moves and patrols look for enemies on the way (CUnitPatrolTask): an engaged target
 // (0: none) the move stops for.
-void PatrolEngageTick(Sim& sim, Unit* u, UnitCommand& c);
 // The command it was engaging for ended.
 void ClearEngagement(Sim& sim, Unit* u);
 

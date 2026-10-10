@@ -135,6 +135,156 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   u->headState = kRunning;
 }
 
+}  // namespace
+
+// ---- CUnitPatrolTask: Patrol 16, FormPatrol 18, AggressiveMove 35, FormAggressiveMove 36 ----------------
+// (engine-ref attack_move.md 2). Runs every 6 ticks; finds enemies in a box along its leg and pushes an
+// attack child; otherwise (re-)issues the navigator goal; ends when the unit is within ceil(speed) cells of
+// the goal cell (from the 4th run on).
+struct PatrolData {
+  bool goalIssued = false, atGoal = false, aggressive = false;
+  int ticks = 0;
+  PatrolBox box;
+  BuildTask* child = nullptr;
+  uint32_t childFrom = 0;
+};
+
+namespace {
+
+bool IsPatrolType(CommandType t) {
+  return t == CommandType::Patrol || t == CommandType::FormPatrol || t == CommandType::AggressiveMove ||
+         t == CommandType::FormAggressiveMove;
+}
+
+// RecomputePatrolSearchBox 0x61b2f0: the leg from the previous patrol point (or the unit) to the goal,
+// widened by GuardScanRadius
+void PatrolSearchBox(Sim& sim, Unit* u, PatrolData& p) {
+  if (u->commands.empty()) return;
+  const UnitCommand& cur = *u->commands.front();
+  const UnitCommand& last = *u->commands.back();
+  Vec3 E = TargetPos(sim, cur, u);
+  Vec3 S = u->position;
+  if (&last != &cur && (last.type == CommandType::Patrol || last.type == CommandType::FormPatrol))
+    S = TargetPos(sim, last, u);
+  float dx = E.x - S.x, dz = E.z - S.z, len = std::sqrt(dx * dx + dz * dz);
+  float r = GuardScanRadiusOf(u);
+  p.box.cx = (E.x + S.x) * 0.5f;
+  p.box.cz = (E.z + S.z) * 0.5f;
+  p.box.dx = len < 0.001f ? 0.0f : dx / len;
+  p.box.dz = len < 0.001f ? 1.0f : dz / len;
+  p.box.side = r;
+  p.box.along = len * 0.5f + r;
+}
+
+float UnitTopSpeed(const Unit* u) {  // u+0x594
+  const UnitMotion& m = u->motion;
+  if (m.speedCap > 0) return m.speedCap;
+  return m.bp ? m.bp->maxSpeed * m.speedMult : 0;
+}
+
+// AtPatrolGoal 0x61b610
+bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
+  if (u->commands.empty() || !u->motion.bp) return false;
+  const MotionBlueprint& b = *u->motion.bp;
+  Vec3 g = TargetPos(sim, *u->commands.front(), u);
+  int gx = static_cast<int>(std::nearbyint(g.x - b.footprint.sizeX * 0.5f));
+  int gz = static_cast<int>(std::nearbyint(g.z - b.footprint.sizeZ * 0.5f));
+  int x0 = gx, z0 = gz, x1 = gx + 1, z1 = gz + 1;
+  if (p.goalIssued) {
+    int m = static_cast<int>(std::ceil(UnitTopSpeed(u)));
+    x0 -= m;
+    z0 -= m;
+    x1 += m;
+    z1 += m;
+  }
+  int cx = static_cast<int>(std::nearbyint(u->position.x - b.footprint.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(u->position.z - b.footprint.sizeZ * 0.5f));
+  return x0 <= cx && cx <= x1 && z0 <= cz && cz <= z1;
+}
+
+void PatrolSetGoal(Sim& sim, Unit* u) {
+  if (u->commands.empty()) return;
+  std::vector<Vec3> path{TargetPos(sim, *u->commands.front(), u)};
+  u->motion.arrived = u->motion.failed = false;
+  MotionSetGoal(sim, u, path, NextIsMove(u), sim.tick());
+  SetMoving(u, true);
+}
+
+}  // namespace
+
+BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
+  auto t = std::make_unique<BuildTask>();
+  t->type = c.type;
+  t->order = "Patrol";
+  t->pdata = std::make_shared<PatrolData>();
+  t->pdata->aggressive = c.type == CommandType::AggressiveMove;
+  u->unitStates.insert("Patrolling");
+  PatrolSearchBox(sim, u, *t->pdata);
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
+}
+
+int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
+  PatrolData& p = *t.pdata;
+  if (p.child) {  // the child runs; when it ends the patrol runs again in the same tick
+    if (sim.tick() < p.childFrom) return kTaskRunning;
+    int r = TickBuildTask(sim, u, *p.child);
+    if (r == kTaskRunning) return kTaskRunning;
+    p.child = nullptr;
+  } else if (sim.tick() < t.waitUntil) {
+    return kTaskRunning;
+  }
+  const uint32_t next = sim.tick() + 6;  // return 7
+  if (!u->motion.bp || !u->motion.bp->mobile() || (p.goalIssued && p.atGoal)) return kTaskDone;
+  ++p.ticks;
+  // (b) enemies
+  if (Unit* e = PatrolFindTarget(sim, u, p.box)) {
+    u->leashPos = u->position;
+    if (BuildTask* c = MakeAttackTaskOn(sim, u, e)) {
+      p.child = c;
+      p.childFrom = next;
+      p.goalIssued = false;
+      t.waitUntil = next;
+      return kTaskRunning;
+    }
+  }
+  // (d) move / arrival
+  if (u->unitStates.count("NeedToTerminateTask")) return kTaskDone;
+  UnitCommand* c = u->commands.empty() ? nullptr : u->commands.front().get();
+  if (p.goalIssued && p.ticks > 3 && AtPatrolGoal(sim, u, p)) {
+    if (!c || !c->form) return kTaskDone;
+    if (u->formAllAtGoal || FormationGroupAtGoal(sim, *c, u)) return kTaskDone;
+    t.waitUntil = next;
+    return kTaskRunning;
+  }
+  if (!u->motion.hasGoal || !p.goalIssued) {
+    PatrolSetGoal(sim, u);
+    p.goalIssued = true;
+    p.atGoal = false;
+  }
+  t.waitUntil = next;
+  return kTaskRunning;
+}
+
+// CUnitPatrolTask dtor 0x61b140
+void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
+  PatrolData& p = *t.pdata;
+  if (p.child) {
+    EndBuildTask(sim, u, *p.child, false);
+    p.child = nullptr;
+  }
+  if (!IsAlive(u)) return;
+  u->navIgnoreFormation = false;
+  if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y || u->position.z != u->lastPosition.z)
+    MotionStop(u);  // AbortMove only when it moved this tick
+  u->unitStates.erase("NeedToTerminateTask");
+  u->unitStates.erase("Patrolling");
+  u->leashPos = {};
+}
+
+namespace {
+
 void StartHead(Sim& sim, Unit* u) {
   // carried by a transport: nothing is dispatched until dropped; a dropped unit waits until it
   // landed (FAF makes it immobile while it falls; the original's move task would wait too)
@@ -171,6 +321,11 @@ void StartHead(Sim& sim, Unit* u) {
         break;
       default:
         break;
+    }
+    if (IsPatrolType(c.type) && u->motion.bp && u->motion.bp->mobile() && !u->immobile) {
+      u->task = StartPatrolTask(sim, u, c);
+      u->headState = kRunning;
+      return;
     }
     if (BuildTask* bt = StartBuildTask(sim, u, c)) {
       u->task = bt;
@@ -269,6 +424,13 @@ void CommandStep(Sim& sim, Unit* u) {
           u->commands.front()->type == CommandType::BuildFactory && u->commands.front()->count > 1) {
         --u->commands.front()->count;
         u->headState = kNotStarted;
+      } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
+                 !u->commands.empty()) {
+        // a patrol point goes to the back of the queue (the loop); attack-moves are removed
+        std::shared_ptr<UnitCommand> keep = u->commands.front();
+        PopHead(u);
+        u->commands.push_back(keep);
+        keep->units.insert(u);
       } else {
         PopHead(u);
       }
@@ -291,16 +453,6 @@ void CommandStep(Sim& sim, Unit* u) {
   if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
     if (u->motion.navDriven) LandNavSetSpeedThrough(u, NextIsMove(u));
     else u->motion.passThrough = NextIsMove(u);
-  }
-  // aggressive moves and patrols stop to fight what they meet
-  if (st == kRunning && !u->commands.empty()) {
-    CommandType ct = u->commands.front()->type;
-    if (ct == CommandType::AggressiveMove || ct == CommandType::FormAggressiveMove || ct == CommandType::Patrol ||
-        ct == CommandType::FormPatrol) {
-      PatrolEngageTick(sim, u, *u->commands.front());
-      if (u->headState == kNotStarted) StartHead(sim, u);
-      return;
-    }
   }
   // guards and attacks follow a moving target
   if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {

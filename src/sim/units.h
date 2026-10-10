@@ -92,6 +92,8 @@ class Unit : public Entity {
   Platoon* platoon = nullptr;
   UnitMotion motion;
   std::deque<std::shared_ptr<UnitCommand>> commands;  // the command queue (sim/commands.cpp)
+  bool navIgnoreFormation = false;  // CAiNavigatorLand::IgnoreFormation (nav+0x60) set by the attack task
+  Vec3 leashPos;                    // u+0x4e8: where an engagement started (patrol) / the guard reference; zero: none
   NavigatorObject* navigator = nullptr;               // Lua's GetNavigator() object (owned by the sim)
   bool immobile = false;
   int headState = 0;  // progress of the head command (sim/commands.cpp)

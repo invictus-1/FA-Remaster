@@ -47,6 +47,8 @@ struct BuildTask : public ScriptObject {
   bool child = false;  // a child task of the guard (or another task), not a command's own task
   std::shared_ptr<struct TransportTaskData> tdata;  // transport load / unload tasks (sim/transport.cpp)
   std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
+  std::shared_ptr<struct AttackData> adata;         // the attack task (CUnitAttackTargetTask)
+  std::shared_ptr<struct PatrolData> pdata;         // the patrol / attack-move task (CUnitPatrolTask)
 };
 
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);

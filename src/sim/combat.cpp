@@ -33,6 +33,8 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/landnav.h"
+#include "sim/navigation.h"
 #include "sim/intel.h"
 #include "sim/commands.h"
 #include "sim/luautil.h"
@@ -423,7 +425,7 @@ static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const Bluepri
   d.predictAheadForBombDrop = lu::Num(L, air, "PredictAheadForBombDrop", 0);
   int ai = lu::Sub(L, t, "AI");
   d.guardScanRadius = lu::Num(L, ai, "GuardScanRadius", 25.0f);  // RUnitBlueprintAI ctor default
-  d.guardReturnRadius = lu::Num(L, ai, "GuardReturnRadius", 0);
+  d.guardReturnRadius = lu::Num(L, ai, "GuardReturnRadius", 50);
   d.attackAngle = lu::Num(L, ai, "AttackAngle", 0);
   d.needUnpack = lu::Bool(L, ai, "NeedUnpack");
   int tb = lu::Sub(L, ai, "TargetBones");
@@ -719,12 +721,9 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   u->blipCacheTick = sim.tick();
   u->blipCache.clear();
   float R = MaxWeaponRange(u);
-  if (!u->commands.empty()) {
-    CommandType t = u->commands.front()->type;
-    if (t == CommandType::Patrol || t == CommandType::FormPatrol || t == CommandType::AggressiveMove ||
-        t == CommandType::FormAggressiveMove || t == CommandType::Guard)
-      R = std::max(R, CB(u).guardScanRadius);
-  }
+  // FAF patch 0x128f426: wider while the head command's type has bit 0x10 or 0x20 (types 16..63)
+  if (!u->commands.empty() && (static_cast<int>(u->commands.front()->type) & 0x30) != 0)
+    R = std::max(R, CB(u).guardScanRadius);
   if (R <= 0 || !u->army) return u->blipCache;
   int a = u->army->index - 1;
   Vec3 p = u->position;
@@ -847,6 +846,19 @@ UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t) {
   return nullptr;
 }
 
+// LeashOrInvisible 0x5d8ad0 (the leash part): while Attacking, the unit is more than GuardReturnRadius (3D)
+// from its leash point - the guarded unit's position, else u+0x4e8 - when there is one
+bool LeashOrInvisible(Sim& sim, Unit* u) {
+  if (!u->unitStates.count("Attacking")) return false;
+  Vec3 leash = u->leashPos;
+  if (u->guardedId)
+    if (Entity* g = sim.FindEntity(u->guardedId)) leash = g->position;
+  if (leash.x == 0 && leash.y == 0 && leash.z == 0) return false;
+  float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
+  float r = CB(u).guardReturnRadius;
+  return dx * dx + dy * dy + dz * dz > r * r;
+}
+
 void ReportState(Unit* u, int code) {
   if (u->attackState != code) {
     u->attackState = code;
@@ -889,7 +901,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   int tc = dHas ? TargetStatus(sim, w, d) : 3;
   int code;
   if (!dHas) code = 4;
-  else if (TargetExempt(u, TargetEntity(sim, d))) code = 5;
+  else if (LeashOrInvisible(sim, u) || TargetExempt(u, TargetEntity(sim, d))) code = 5;
   else if (w->suppress != 0 || !w->canReach) code = 6;
   else if (tc == 0 && !CanAttackTarget(sim, w, d)) code = 3;
   else if (!cb.canFly && tc != 0) code = tc == 1 ? 7 : 2;
@@ -1463,18 +1475,270 @@ bool WithinWeaponRange(Sim& sim, UnitWeapon* w, const AiTarget& t) {
 }  // namespace
 
 // The guard task's enemy (GetBestEnemy 0x612af0): the primary weapon's best enemy among the unit's blips
-// within GuardScanRadius of the unit (score = distance; no angle).
+// within GuardScanRadius of the unit (score = distance; no angle). The blip cache is read as the weapons
+// last built it (not refreshed here).
 float GuardScanRadiusOf(Unit* u) { return CB(u).guardScanRadius; }
 Unit* GuardBestEnemy(Sim& sim, Unit* u) {
   UnitWeapon* w = PrimaryWeapon(u);
   if (!w || !w->bp) return nullptr;
   float r = CB(u).guardScanRadius;
-  const std::vector<Unit*>& list = BlipsInRange(sim, u, 5);
-  Unit* best = FindBestEnemy(sim, w, list, r, false);
+  Unit* best = FindBestEnemy(sim, w, u->blipCache, r, false);
   if (best && DistXZ(best->position, u->position) > r) return nullptr;
   return best;
 }
-// new CUnitAttackTargetTask(target e) (the guard's child)
+
+Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box) {
+  UnitWeapon* w = PrimaryWeapon(u);
+  if (!w || !w->bp) return nullptr;
+  std::vector<Unit*> cand;
+  for (Unit* e : u->blipCache) {  // as the weapons last built it (not refreshed here)
+    if (!e || e->dead || e->destroyQueued) continue;
+    WorldShape s;
+    if (!GetWorldShape(e, &s)) continue;
+    // the shape against the box (it is 200 high, so only xz matters): the shape's horizontal reach
+    float reach = s.type == ShapeType::Sphere ? s.r : std::max(s.half.x, s.half.z);
+    float rx = s.c.x - box.cx, rz = s.c.z - box.cz;
+    float along = std::fabs(rx * box.dx + rz * box.dz), across = std::fabs(-rx * box.dz + rz * box.dx);
+    if (along > box.along + reach || across > box.side + reach) continue;
+    cand.push_back(e);
+  }
+  float r = CB(u).guardScanRadius;
+  Unit* best = FindBestEnemy(sim, w, cand, r, false);
+  if (best && DistXZ(best->position, u->position) > r) return nullptr;
+  return best;
+}
+
+// ---- CUnitAttackTargetTask (engine-ref attack_move.md 3) ---------------------------------------------
+
+struct AttackData {
+  Vec3 lastPos;              // +0x80: the target's position at the last goal update (zero: none)
+  bool trackMobile = false;  // +0x8c: the target is a MOBILE unit
+  bool coordinated = false;  // +0x8d: FormAttack
+  bool firstUpdate = true;   // +0x8e
+  bool listening = false;    // the attacker-event listener is linked (from the first UpdateAttacker on)
+  int result = 0;            // 1 success, 2 failure (the listener's result)
+};
+
+namespace {
+
+bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+// !Unit::WontFitAt 0x62aa90: the unit's footprint fits at world position p
+bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
+  const MotionBlueprint& b = *u->motion.bp;
+  const PathGrid* g = FootprintGrid(sim, b);
+  if (!g) return true;
+  int cx, cz;
+  GoalCell(b, p.x, p.z, &cx, &cz);
+  return g->Passable(cx, cz);
+}
+bool CanFlyU(const Unit* u) { return u->motion.bp && u->motion.bp->canFly; }
+
+void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
+  auto d = std::make_shared<AttackData>();
+  d->coordinated = coordinated;
+  t.adata = d;
+  t.state = 0;
+  u->unitStates.insert("Attacking");
+  if (!coordinated) u->navIgnoreFormation = true;
+  AiTarget target = CommandTarget(sim, t);
+  if (target.type == 1)
+    if (Entity* e = sim.FindEntity(target.entityId))
+      d->trackMobile = e->kind == Entity::Kind::Unit && BpInCategory(sim, e->blueprint, "MOBILE");
+  if (HasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);  // UpdatePos
+  if (IsZeroV(d->lastPos)) d->lastPos = u->position;
+  if (CanFlyU(u)) d->firstUpdate = false;
+}
+
+// CAiAttackerImpl::VectorIsWithinAttackRange 0x5d70e0: any enabled weapon reaches p (2D)
+bool VectorInAttackRange(Unit* u, const Vec3& p) {
+  for (UnitWeapon* w : u->weapons)
+    if (w->bp && w->enabled && DistXZ(u->position, p) <= MaxR(w)) return true;
+  return false;
+}
+
+void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
+  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {
+    TaskMoveToward(sim, u, Vec3{(x0 + x1) * 0.5f, u->position.y, (z0 + z1) * 0.5f});
+    return;
+  }
+  u->motion.failed = false;
+  LandNavSetGoalRect(sim, u, x0, z0, x1, z1, false);
+  u->unitStates.insert("Moving");
+}
+// a 1x1 goal at the footprint-origin cell of p
+void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
+  const MotionBlueprint& b = *u->motion.bp;
+  int cx = static_cast<int>(std::nearbyint(p.x - b.footprint.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(p.z - b.footprint.sizeZ * 0.5f));
+  AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
+}
+// CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
+void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
+  int cx = static_cast<int>(std::nearbyint(e->position.x - 0.5f));
+  int cz = static_cast<int>(std::nearbyint(e->position.z - 0.5f));
+  AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
+}
+
+// Update 0x5f3020 (no formation)
+void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
+  AttackData& d = *t.adata;
+  bool has = HasTarget(sim, target);
+  if (has) d.lastPos = TargetPos(sim, target, false);
+  if (IsZeroV(d.lastPos)) d.lastPos = u->position;
+  UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
+  Entity* e = target.type == 1 ? sim.FindEntity(target.entityId) : nullptr;
+  if (w) {
+    // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point
+    Vec3 p = TargetPos(sim, target, true);
+    int R = static_cast<int>(w->bp->maxRadius);
+    int x0 = static_cast<int>(std::nearbyint(p.x - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(p.z - R * 0.5f));
+    if (R < 1) AttackSetPosGoal(sim, u, p);
+    else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
+  } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
+    AttackSetDestUnit(sim, u, e);
+  } else {
+    AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, true) : d.lastPos);
+  }
+  d.firstUpdate = false;
+}
+
+// UpdateAttacker 0x5f3450
+void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
+  if (u->weapons.empty()) return;
+  if (!(u->desiredTarget.type == target.type && u->desiredTarget.entityId == target.entityId &&
+        (target.type != 2 || u->desiredTarget == target))) {
+    SetDesiredTarget(sim, u, target);
+    t.adata->listening = true;
+    u->attackStateSignal = false;
+  } else {
+    u->attackState = 0;  // ResetReportingState: the next report is news
+    u->attackStateSignal = false;
+    t.adata->listening = true;
+  }
+}
+
+void AbortNavigation(Unit* u) {
+  u->navIgnoreFormation = false;
+  TaskStopMoving(u);
+}
+
+// the weapon's state report (attacker-event listener 0x5f3ee0)
+void AttackEvent(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
+  AttackData& d = *t.adata;
+  if (t.state == 5) return;
+  bool mobile = TaskCanMove(u);
+  if (!HasTarget(sim, target)) {
+    t.state = mobile ? 3 : 5;
+  } else {
+    switch (u->attackState) {
+      case 1: t.state = 4; break;
+      case 2:
+      case 4:
+        if (mobile) t.state = 1;
+        else { d.result = 2; t.state = 5; }
+        break;
+      case 6: t.state = 1; break;
+      case 3:
+        if (mobile) { d.result = 2; t.state = 5; }
+        else t.state = 4;
+        break;
+      case 5: d.result = 2; t.state = 5; break;
+      case 7:
+        if (mobile) t.state = 2;
+        else { d.result = 2; t.state = 5; }
+        break;
+      case 8: d.result = 1; t.state = 5; break;
+      default: break;
+    }
+  }
+  t.waitUntil = 0;  // wake
+}
+
+// TaskTick 0x5f34c0 for a ground (non-flying) attacker. Returns the original's task code.
+int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
+  AttackData& d = *t.adata;
+  UnitWeapon* w = u->weapons.empty() ? nullptr : TargetWeapon(sim, u, target);
+  bool direct = BpInCategory(sim, u->blueprint, "DIRECTFIRE");
+  if (!HasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
+  if (!w && !d.coordinated && !direct) return -1;
+  bool mobile = TaskCanMove(u);
+  switch (t.state) {
+    case 0:
+      t.state = 1;
+      return 0;
+    case 1:
+      if (!mobile) {
+        UpdateAttacker(sim, u, t, target);
+        t.state = 4;
+        return 0;
+      }
+      AttackUpdate(sim, u, t, target);
+      t.state = 3;
+      return 0;
+    case 2: {  // back off (inside MinRadius)
+      if (u->weapons.empty()) return -1;
+      if (w && TargetStatus(sim, w, target) == 1) {
+        Vec3 tp = TargetPos(sim, target, false);
+        Vec3 v = Sub(u->position, tp);
+        float l = Len(v);
+        float gsr = CB(u).guardScanRadius;
+        Vec3 p = l > 0 ? Add(tp, Mul(v, gsr / l)) : tp;
+        AttackSetPosGoal(sim, u, p);
+        return 10;
+      }
+      AttackUpdate(sim, u, t, target);
+      t.state = 3;
+      return 0;
+    }
+    case 3: {  // chase
+      bool has = HasTarget(sim, target);
+      bool busy = u->motion.hasGoal;
+      if (!has) {
+        if (VectorInAttackRange(u, d.lastPos)) return -1;
+        if (busy) return 1;
+        AttackUpdate(sim, u, t, target);
+        return 1;
+      }
+      if (w && WithinWeaponRange(sim, w, target)) {
+        bool any = false;
+        for (UnitWeapon* x : u->weapons) any = any || (x->bp && CanAttackTarget(sim, x, target));
+        if (!any) return -1;
+        u->navIgnoreFormation = true;
+        UpdateAttacker(sim, u, t, target);
+        return -2;  // suspended; the navigator keeps driving until the weapon reports
+      }
+      if (w && TargetStatus(sim, w, target) == 1) {
+        t.state = 2;
+        return 1;
+      }
+      if (!busy) {
+        AttackUpdate(sim, u, t, target);
+        return 1;
+      }
+      if (!d.trackMobile) return 1;
+      Vec3 tp = TargetPos(sim, target, false);
+      Vec3 dv = Sub(d.lastPos, tp);
+      if (Len(dv) <= (CanFlyU(u) ? 2.0f : 10.0f)) return 1;
+      Entity* e = sim.FindEntity(target.entityId);
+      if (!e || e->dead || e->destroyQueued) return 1;
+      if (!StandableFor(sim, u, tp)) return 1;  // UnitWontFitAt
+      AttackSetDestUnit(sim, u, e);
+      d.lastPos = tp;
+      return 1;
+    }
+    case 4:  // engaged: stop, the weapons fire; the weapon's reports drive the task
+      if (!CanFlyU(u)) AbortNavigation(u);
+      return -2;
+    case 5:
+    default:
+      AbortNavigation(u);
+      return -1;
+  }
+}
+
+}  // namespace
+
+// new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
   if (u->weapons.empty() || !e) return nullptr;
   auto t = std::make_unique<BuildTask>();
@@ -1482,8 +1746,8 @@ BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
   t->order = "Attack";
   t->goalId = EntityRef(e);
   t->site = e->position;
-  t->state = 1;
-  u->unitStates.insert("Attacking");
+  t->child = true;
+  InitAttack(sim, u, *t, false);
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -1498,8 +1762,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
-  t->state = 1;
-  u->unitStates.insert("Attacking");
+  InitAttack(sim, u, *t, c.type == CommandType::FormAttack);
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -1508,74 +1771,53 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   (void)L;
   AiTarget target = CommandTarget(sim, t);
+  bool air = u->motion.bp && u->motion.bp->motionType == kMotionAir;
+  if (!air && t.adata) {
+    AttackData& d = *t.adata;
+    if (d.listening && u->attackStateSignal) {
+      u->attackStateSignal = false;
+      AttackEvent(sim, u, t, target);
+    }
+    if (sim.tick() < t.waitUntil) return kTaskRunning;
+    for (int guard = 0; guard < 16; ++guard) {
+      int r = AttackStep(sim, u, t, target);
+      if (r == 0) continue;
+      if (r == -1) return d.result == 2 ? kTaskFailed : kTaskDone;
+      if (r == -2) t.waitUntil = 0xffffffffu;
+      else t.waitUntil = sim.tick() + static_cast<uint32_t>(r >= 2 ? r - 1 : 1);
+      return kTaskRunning;
+    }
+    return kTaskRunning;
+  }
   if (!HasTarget(sim, target)) return kTaskDone;
   UnitWeapon* w = TargetWeapon(sim, u, target);
   if (!w) return kTaskDone;
-  // UpdateAttacker 0x5f3450: immobile units (and aircraft) take the target as their weapons'
-  // desired target at once; ground units only once a weapon has it in range (state 3 -> 4).
   bool mobile = TaskCanMove(u);
-  if (!mobile || u->motion.bp->motionType == kMotionAir) {
+  if (!mobile || air) {
     if (!(u->desiredTarget == target)) SetDesiredTarget(sim, u, target);
     if (!mobile) return kTaskRunning;
   }
   Vec3 tp = TargetPos(sim, target, true);
-  bool air = u->motion.bp->motionType == kMotionAir;
-  if (air) {
-    // attack runs: fly at the target, past it, and come round again
-    float d = DistXZ(u->position, tp);
-    Vec3 f = Forward(u->orientation);
-    float ahead = (tp.x - u->position.x) * f.x + (tp.z - u->position.z) * f.z;
-    if (ahead > 0 && d < 60) u->unitStates.insert("MakingAttackRun");
-    else u->unitStates.erase("MakingAttackRun");
-    if (t.state == 5) {  // flying past
-      if (d > 25 || !u->motion.hasGoal) t.state = 3;
-      return kTaskRunning;
-    }
-    if (d < 6) {
-      Vec3 past{u->position.x + f.x * 30, tp.y, u->position.z + f.z * 30};
-      TaskMoveToward(sim, u, past);
-      t.state = 5;
-      return kTaskRunning;
-    }
-    if (!u->motion.hasGoal || Dist2XZ(t.site, tp) > 4) {
-      t.site = tp;
-      TaskMoveToward(sim, u, tp);
-      u->motion.passThrough = true;
-    }
+  // aircraft: attack runs - fly at the target, past it, and come round again
+  float d = DistXZ(u->position, tp);
+  Vec3 f = Forward(u->orientation);
+  float ahead = (tp.x - u->position.x) * f.x + (tp.z - u->position.z) * f.z;
+  if (ahead > 0 && d < 60) u->unitStates.insert("MakingAttackRun");
+  else u->unitStates.erase("MakingAttackRun");
+  if (t.state == 5) {  // flying past
+    if (d > 25 || !u->motion.hasGoal) t.state = 3;
     return kTaskRunning;
   }
-  bool inRange = WithinWeaponRange(sim, w, target);
-  u->attackStateSignal = false;
-  if (inRange && !(u->desiredTarget == target)) SetDesiredTarget(sim, u, target);
-  switch (t.state) {
-    case 1:  // path toward the target
-      if (inRange) {
-        TaskStopMoving(u);
-        t.state = 4;
-        break;
-      }
-      t.site = tp;
-      TaskMoveToward(sim, u, tp);
-      t.state = 3;
-      break;
-    case 3:  // chase
-      if (inRange) {
-        TaskStopMoving(u);
-        t.state = 4;
-        break;
-      }
-      if (u->motion.failed) return kTaskFailed;
-      if (!u->motion.hasGoal || (target.mobile && Dist2XZ(t.site, tp) > 100)) {
-        t.site = tp;
-        TaskMoveToward(sim, u, tp);
-      }
-      break;
-    case 4:  // engaged: the weapons do the rest
-      if (!WithinWeaponRange(sim, w, target)) t.state = 1;
-      break;
-    default:
-      t.state = 1;
-      break;
+  if (d < 6) {
+    Vec3 past{u->position.x + f.x * 30, tp.y, u->position.z + f.z * 30};
+    TaskMoveToward(sim, u, past);
+    t.state = 5;
+    return kTaskRunning;
+  }
+  if (!u->motion.hasGoal || Dist2XZ(t.site, tp) > 4) {
+    t.site = tp;
+    TaskMoveToward(sim, u, tp);
+    u->motion.passThrough = true;
   }
   return kTaskRunning;
 }
@@ -1584,43 +1826,9 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   (void)t;
   if (u->dead || u->destroyQueued) return;
   if (u->desiredTarget.type != 0) SetDesiredTarget(sim, u, AiTarget{});
+  u->navIgnoreFormation = false;
   u->unitStates.erase("Attacking");
   u->unitStates.erase("MakingAttackRun");
-}
-
-// Aggressive moves and patrols (CUnitPatrolTask::FindTarget 0x61b710): every few ticks the
-// primary weapon looks for an enemy within GuardScanRadius; the unit stops to fight it (moving into
-// range) and carries on when it is gone.
-void PatrolEngageTick(Sim& sim, Unit* u, UnitCommand& c) {
-  (void)c;
-  UnitWeapon* w = PrimaryWeapon(u);
-  if (!w || !w->bp || !TaskCanMove(u)) return;
-  if (u->engageId) {
-    Entity* e = sim.FindEntity(u->engageId);
-    AiTarget t = EntityTarget(e);
-    if (!e || !HasTarget(sim, t) || !CanAttackTarget(sim, w, t)) {
-      u->engageId = 0;
-      SetDesiredTarget(sim, u, AiTarget{});
-      u->unitStates.erase("Attacking");
-      u->headState = 0;  // re-path the move
-      return;
-    }
-    if (!(u->desiredTarget == t)) SetDesiredTarget(sim, u, t);
-    if (WithinWeaponRange(sim, w, t)) {
-      if (u->motion.hasGoal) TaskStopMoving(u);
-    } else if (!u->motion.hasGoal || (++u->engageCheck % 10) == 0) {
-      TaskMoveToward(sim, u, e->position);
-    }
-    return;
-  }
-  if ((++u->engageCheck % 5) != 0) return;
-  float scan = std::max(CB(u).guardScanRadius, MaxR(w));
-  const std::vector<Unit*>& list = BlipsInRange(sim, u, 5);
-  Unit* best = FindBestEnemy(sim, w, list, scan, w->bp->turreted || w->bp->slavedToBody);
-  if (!best || DistXZ(best->position, u->position) > scan) return;
-  u->engageId = EntityRef(best);
-  u->unitStates.insert("Attacking");
-  SetDesiredTarget(sim, u, EntityTarget(best));
 }
 
 void ClearEngagement(Sim& sim, Unit* u) {

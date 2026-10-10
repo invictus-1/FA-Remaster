@@ -507,7 +507,7 @@ float Dist2D(float ax, float az, float bx, float bz) {
   return std::sqrt(dx * dx + dz * dz);
 }
 
-bool NavIgnoring(const Unit* u) { return u->navigator && u->navigator->ignoreFormation; }
+bool NavIgnoring(const Unit* u) { return u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation); }
 
 // 4.3 at-goal check
 void AtGoalCheck(Formation& F, FormGroup& g) {

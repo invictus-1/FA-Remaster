@@ -656,15 +656,24 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
 
 // CAiNavigatorLand::SetGoal 0x5a3ed0 (1x1 goal) with the free-spot spiral 0x62b200
 void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
+  PathCell gc = CellOf(u, goalPos.x, goalPos.z);
+  LandNavSetGoalRect(sim, u, gc.x, gc.z, gc.x + 1, gc.z + 1, speedThrough);
+}
+
+// SetGoal 0x5a3ed0 with a goal rect [x0, x1) x [z0, z1) of cells: a 1x1 goal is moved to a free spot nearby,
+// larger rects are taken as they are (pathfinding.md 4.1)
+void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough) {
   if (!u->motion.nav) u->motion.nav = std::make_shared<LandNav>();
   LandNav& n = *u->motion.nav;
-  PathCell gc = CellOf(u, goalPos.x, goalPos.z);
-  if (n.active && n.state == 2 && n.goal[0] == gc.x && n.goal[1] == gc.z) {
+  PathCell gc{x0, z0};
+  const bool single = x1 == x0 + 1 && z1 == z0 + 1;
+  if (single && n.active && n.state == 2 && n.goal[0] == gc.x && n.goal[1] == gc.z && n.goal[2] == gc.x + 1 &&
+      n.goal[3] == gc.z + 1) {
     n.speedThroughGoal = speedThrough;
     return;
   }
   // the free-spot spiral: the cell itself, then square rings stepping by the footprint size
-  if (!Fits(sim, u, gc)) {
+  if (single && !Fits(sim, u, gc)) {
     int step = std::max(SX(u), SZ(u));
     int tested = 0;
     bool found = false;
@@ -694,8 +703,8 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
   n.active = true;
   n.goal[0] = gc.x;
   n.goal[1] = gc.z;
-  n.goal[2] = gc.x + 1;
-  n.goal[3] = gc.z + 1;
+  n.goal[2] = single ? gc.x + 1 : x1;
+  n.goal[3] = single ? gc.z + 1 : z1;
   n.speedThroughGoal = speedThrough;
   n.thinking = true;
   n.problem = false;
@@ -714,7 +723,7 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
   n.following = false;
   n.lastFollow = {};
   n.inFormation = false;
-  if (!(u->navigator && u->navigator->ignoreFormation)) {
+  if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
     Formation* F = GetFormation(sim, u);
     n.inFormation = F && FormationIsForm(*F);
     if (n.inFormation) {

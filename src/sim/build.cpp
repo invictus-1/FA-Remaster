@@ -1614,6 +1614,10 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::AssistCommander: r = TickAssistLegacy(sim, L, u, t); break;
     case CommandType::Attack:
     case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
+    case CommandType::Patrol:
+    case CommandType::FormPatrol:
+    case CommandType::AggressiveMove:
+    case CommandType::FormAggressiveMove: r = t.pdata ? TickPatrol(sim, u, t) : kTaskFailed; break;
     default: break;
   }
   if (r != kTaskRunning) {
@@ -1642,6 +1646,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.gdata) {
     EndGuard(sim, u, t);
+    return;
+  }
+  if (t.pdata) {
+    EndPatrol(sim, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {

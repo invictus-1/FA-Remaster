@@ -72,6 +72,11 @@ template <> struct ScriptTypeOf<NavigatorObject> { static constexpr uint32_t bit
 
 // The command stage (0x958): per unit in thread order, end an arrived move, then run the head command.
 void CommandStage(Sim& sim);
+// The patrol / attack-move task (CUnitPatrolTask, engine-ref attack_move.md 2).
+struct BuildTask;
+BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c);
+int TickPatrol(Sim& sim, Unit* u, BuildTask& t);
+void EndPatrol(Sim& sim, Unit* u, BuildTask& t);
 // u no longer holds c (CUnitCommand::RemoveUnit; a Ferry command's beacon dies with its last holder).
 void ReleaseCommand(Unit* u, UnitCommand& c);
 // A unit is going away: drop its commands.

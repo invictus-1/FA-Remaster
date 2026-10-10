@@ -1800,13 +1800,13 @@ void AirMotionTick(Sim& sim, Unit* u) {
     a.steering = true;
     SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
     a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
-    if (!(u->navigator && u->navigator->ignoreFormation)) {
+    if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
       Formation* f = GetFormation(sim, u);
       a.inFormation = f && FormationIsForm(*f);
     }
   }
   // UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while the leader steers
-  if (a.steering && a.inFormation && !(u->navigator && u->navigator->ignoreFormation) && !State(u, "Ferrying")) {
+  if (a.steering && a.inFormation && !(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation)) && !State(u, "Ferrying")) {
     Formation* f = GetFormation(sim, u);
     Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
     Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;

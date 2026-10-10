@@ -1396,6 +1396,27 @@ function P.Armies()
         { 'struct', categories.STRUCTURE },
         { 'fac', categories.FACTORY * categories.STRUCTURE },
     }
+    -- (v20) every new unit of a non-civilian army: "PROBE arnew <tick> <army> <id> <bp> <fraction>" (every tick to
+    -- 600, then every 10 ticks)
+    ForkThread(function()
+        local seen = {}
+        while true do
+            local tick = GetGameTick()
+            for i, name in ListArmies() do
+                pcall(function()
+                    if ArmyIsCivilian(i) then return end
+                    for _, u in GetArmyBrain(i):GetListOfUnits(categories.ALLUNITS, false) or {} do
+                        local id = u:GetEntityId()
+                        if not seen[id] then
+                            seen[id] = true
+                            out('arnew', tick, i, id, u:GetBlueprint().BlueprintId, fmt(u:GetFractionComplete()))
+                        end
+                    end
+                end)
+            end
+            WaitTicks(tick < 600 and 1 or 10)
+        end
+    end)
     while GetGameTick() < 50 do WaitTicks(1) end
     while true do
         local tick = GetGameTick()
