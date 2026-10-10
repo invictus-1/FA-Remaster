@@ -107,8 +107,9 @@ class Sim {
   void GenerateArmyStart(Army* a);  // the army ctor's / Lua GenerateArmyStart's two draws
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
+  // keepY: the construction params' +0x25 (Lua CreateUnit with an explicit layer keeps the given height).
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
-                   Unit* builder = nullptr);
+                   Unit* builder = nullptr, bool keepY = false);
   // PROJ_Create (sim/projectile.cpp): runs OnPreCreate, OnLayerChange and OnCreate; nullptr when
   // it destroyed itself (a homing projectile without a target).
   class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* army, Entity* launcher, Vec3 pos,

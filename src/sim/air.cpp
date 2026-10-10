@@ -666,8 +666,8 @@ bool GroundCanReserve(Sim& sim, Unit* u, const int* r) {
   return !blocked;
 }
 bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl) {
-  if (excl && excl[2] > excl[0] && excl[3] > excl[1] && cx < excl[2] && excl[0] < cx + 1 && cz < excl[3] &&
-      excl[1] < cz + 1)
+  if (excl && excl[2] > excl[0] && excl[3] > excl[1] && cx <= excl[2] && excl[0] <= cx + 1 && cz <= excl[3] &&
+      excl[1] <= cz + 1)  // closed: a cell touching the rect is out
     return false;
   int S = std::max(fp.sizeX, fp.sizeZ);
   if (!IsWithin(sim, w, static_cast<float>(S))) return false;
@@ -683,12 +683,12 @@ bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, c
 }
 }  // namespace
 
-bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) {
+bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int spacing) {
   const NamedFootprint& fp = u->motion.bp->footprint;
   int cx = static_cast<int>(std::nearbyint(pos->x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(pos->z - fp.sizeZ * 0.5f));
   if (GroundSpotOk(sim, u, fp, cx, cz, *pos, excl)) return true;
-  int step = 2 * std::max(fp.sizeX, fp.sizeZ);
+  int step = spacing > 0 ? spacing : 2 * std::max(fp.sizeX, fp.sizeZ);
   int tested = 0;
   for (int r = 1;; ++r) {
     bool found = false;
@@ -1743,7 +1743,9 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
   SetTarget(sim, u, p, Vec3{}, layer);
 }
 
-bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]) { return GroundPrepareMoveImpl(sim, u, pos, excl); }
+bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int spacing) {
+  return GroundPrepareMoveImpl(sim, u, pos, excl, spacing);
+}
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImpl(sim, u, r); }
 void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
 

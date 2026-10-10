@@ -166,7 +166,8 @@ int l_CreateUnit(lua_State* L) {
          static_cast<float>(luaL_checknumber(L, 5))};
   Quat q{static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 7, 0)),
          static_cast<float>(luaL_optnumber(L, 8, 0)), static_cast<float>(luaL_optnumber(L, 9, 1))};
-  return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true));
+  bool layer = lua_gettop(L) >= 10 && !lua_isnil(L, 10);  // an explicit layer keeps the given y (0x585ab0 +0x25)
+  return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true, nullptr, layer));
 }
 
 // CreateUnitHPR(bp, army, x, y, z, pitch, yaw, roll)
@@ -1194,7 +1195,7 @@ std::string StartingLayer(lua_State* L, int bpIdx, const TerrainMap* map, const 
 }  // namespace
 
 Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
-                      Unit* builder) {
+                      Unit* builder, bool keepY) {
   lua_checkstack(L, 40);
   int top = lua_gettop(L);
   auto owned = std::make_unique<Unit>();
@@ -1215,7 +1216,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->lastMaterializeTick = tick_;
   UnitEconomyInit(L, u);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
-  if (u->motion.bp->motionType == kMotionAir && complete && !builder) {
+  if (u->motion.bp->motionType == kMotionAir && complete && !builder && !keepY) {
     // IUnit::CalcSpawnElevation: flyers appear at their flying height
     u->position.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
     u->lastPosition = u->position;

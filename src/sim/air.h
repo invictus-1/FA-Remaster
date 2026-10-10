@@ -135,7 +135,8 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos);
 // Unit::PrepareMove for a ground unit (its own footprint): a free spot near *pos whose cell does
 // not overlap `excl` (x0, z0, x1, z1; empty = none). false: none found.
-bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4]);
+// Unit::PrepareMove 0x62b780 (air_nav.md 7.1): spacing 0 = 2 x the footprint size; the exclusion test is closed.
+bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int spacing = 0);
 // A ground unit's o-grid reservation (ReserveOgridRect / FreeOgridRect).
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
 void GroundFreeRect(Sim& sim, Unit* u);

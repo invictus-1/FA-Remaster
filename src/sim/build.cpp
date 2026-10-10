@@ -379,7 +379,7 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
 namespace {
 
 BuildTask* NewChild(Sim& sim, CommandType type, const char* order);
-bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4]);
+bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4], int spacing = 0);
 
 // A prop blueprint's float field (default when missing).
 float PropBpNum(Sim& sim, lua_State* L, const BlueprintInfo& bp, const char* sect, const char* key, float def) {
@@ -496,7 +496,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + pfx,
                          static_cast<float>(pz0) + pfz};
         Vec3 a = tp;
-        PrepareMoveFor(sim, u, &a, excl);
+        PrepareMoveFor(sim, u, &a, excl, 1);  // spacing 1 (air_nav.md 7.1)
         const NamedFootprint& ufp = Footprint(*u->blueprint);
         int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
         int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
@@ -629,7 +629,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           float excl[4] = {static_cast<float>(sx0) - 1.0f, static_cast<float>(sz0) - 1.0f,
                            static_cast<float>(sx0 + sfp.sizeX) + 1.0f, static_cast<float>(sz0 + sfp.sizeZ) + 1.0f};
           Vec3 a = t.site;
-          PrepareMoveFor(sim, u, &a, excl);
+          PrepareMoveFor(sim, u, &a, excl, 1);  // spacing 1 (air_nav.md 7.1)
           int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
           int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
           int rr[4] = {x0, z0, x0 + ufp.sizeX, z0 + ufp.sizeZ};
@@ -1148,9 +1148,9 @@ void SkirtRect(const Unit* B, float excl[4]) {
   }
 }
 
-bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4]) {
+bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4], int spacing) {
   if (u->motion.bp && u->motion.bp->motionType == kMotionAir) return AirPrepareMove(sim, u, p);
-  return GroundPrepareMove(sim, u, p, excl);
+  return GroundPrepareMove(sim, u, p, excl, spacing);
 }
 
 // a Lua method returning a boolean (RunScript_Bool 0x5f48a0)
@@ -1529,7 +1529,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           excl[2] += 1.0f;
           excl[3] += 1.0f;
           Vec3 a = R->position;
-          PrepareMoveFor(sim, u, &a, excl);
+          PrepareMoveFor(sim, u, &a, excl, 1);  // spacing 1 (air_nav.md 7.1)
           const NamedFootprint& fp = Fp(u);
           int x0 = static_cast<int>(std::nearbyint(a.x - fp.sizeX * 0.5f));
           int z0 = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
