@@ -448,10 +448,17 @@ lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }
 
 Sim* Sim::From(lua_State* L) { return static_cast<Sim*>(lua_getextra(L, 1)); }
 
+#if defined(__linux__)
 extern "C" char __executable_start;
+#endif
+// MOHO64_DEBUG_RNG: one line per draw (tick, value, caller address relative to the image; addr2line on Linux)
 __attribute__((noinline)) void Sim::RngTrace(uint32_t r) {
-  void* a = __builtin_return_address(0);
-  Logf(LogLevel::Info, "rngdbg %u %08x %lx", tick_, r, (unsigned long)((char*)a - &__executable_start));
+#if defined(__linux__)
+  const char* a = static_cast<const char*>(__builtin_return_address(0));
+  Logf(LogLevel::Info, "rngdbg %u %08x %lx", tick_, r, static_cast<unsigned long>(a - &__executable_start));
+#else
+  Logf(LogLevel::Info, "rngdbg %u %08x %p", tick_, r, __builtin_return_address(0));
+#endif
 }
 
 float Sim::U01() { return static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-32); }
