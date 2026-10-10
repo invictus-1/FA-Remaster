@@ -353,11 +353,11 @@ void SteeringStop(UnitMotion& m) {
   m.sideStep = {};
 }
 
-void MotionNavBegin(Unit* u) {
+void MotionNavBegin(Unit* u) {  // CAiNavigatorImpl::SetGoal 0x5a3ed0
   UnitMotion& m = u->motion;
   // a new goal while the steering drives: it keeps its waypoint until the navigator gives the next one
-  // (SetGoal resets the path navigator only)
   bool keep = m.hasGoal && m.navDriven && m.hasWaypoint;
+  bool braking = !m.hasWaypoint;  // after an abort: the brake spline runs on (SetGoal makes no steering call)
   m.hasGoal = true;
   m.arrived = false;
   m.failed = false;
@@ -366,7 +366,7 @@ void MotionNavBegin(Unit* u) {
   m.hasWaypoint = false;
   m.path.clear();
   m.pathIndex = 0;
-  SteeringStop(m);
+  if (!braking) SteeringStop(m);
 }
 
 void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
@@ -393,15 +393,28 @@ void MotionNavDone(Unit* u, bool succeeded) {
   Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
 }
 
+// AbortMove 0x5a3750 (land: SetSpeedThroughGoal(0) + MakeIdle -> SetWaypoints(0, 0): a brake spline).
 void MotionStop(Unit* u) {
   UnitMotion& m = u->motion;
-  if (m.air) AirAbort(*Sim::From(u->luaState()), u);
-  if (m.nav) LandNavStop(*Sim::From(u->luaState()), u);
+  Sim& sim = *Sim::From(u->luaState());
+  if (m.air) {
+    AirAbort(sim, u);
+    m.hasGoal = false;
+    m.hasWaypoint = false;
+    m.navDriven = false;
+    m.path.clear();
+    SteeringStop(m);
+    return;
+  }
+  if (m.nav) {
+    LandNavSetSpeedThrough(u, false);
+    LandNavStop(sim, u);
+  }
+  u->unitStates.erase("ProblemGettingToGoal");
+  m.passThrough = false;
   m.hasGoal = false;
-  m.hasWaypoint = false;
   m.navDriven = false;
-  m.path.clear();
-  SteeringStop(m);
+  SteeringClearWaypoints(sim, u);
 }
 
 const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
@@ -786,7 +799,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
 
 // CAiPathSpline::Update 0x5b26c0 (modes 3/4, outline): a stop sequence from the unit's position and
 // velocity, at twice the deceleration in mode 4, at least 6 points in mode 4.
-void BrakeSpline(Sim& sim, Unit* u, int mode) {
+void BrakeSplineOld(Sim& sim, Unit* u, int mode) {
   UnitMotion& m = u->motion;
   StepParams P = Params(m);
   m.spline.clear();
@@ -835,7 +848,94 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   (void)sim;
 }
 
+// CAiPathSpline::Update 0x5b26c0 (modes 3/4): brake to a stop along the facing (move_handoff.md 5.5).
+void BrakeSpline(Sim& sim, Unit* u, int mode) {
+  // mode 4 (collision brake): the older form still tracks the motion probes better (group1-3); the
+  // move_handoff.md reading is applied to mode 3 (SetWaypoints(0, 0)) only for now.
+  if (mode == 4) return BrakeSplineOld(sim, u, mode);
+  UnitMotion& m = u->motion;
+  StepParams P = Params(m);
+  m.spline.clear();
+  m.splineIdx = 0;
+  m.hasSpline = true;
+  m.splineMode = mode;
+  float acc = P.acc, brake = P.brake;
+  if (mode == 4) {
+    acc *= 2;
+    brake *= 2;
+  }
+  Vec3 F = Rotate(u->orientation, Vec3{0, 0, 1});
+  const Vec3& lm = m.lastMove;
+  float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
+  float fl = std::sqrt(F.x * F.x + F.y * F.y + F.z * F.z);
+  Vec3 V{0, 0, 0};
+  if (fl > 0) V = Vec3{F.x * s / fl, F.y * s / fl, F.z * s / fl};
+  if (s > 0 && (lm.x * F.x + lm.y * F.y + lm.z * F.z) / s < 0) V = Vec3{-V.x, -V.y, -V.z};
+  float fxz = std::sqrt(F.x * F.x + F.z * F.z);
+  float dfx = fxz > 0 ? F.x / fxz : m.fx, dfz = fxz > 0 ? F.z / fxz : m.fz;
+  Gen g;
+  g.p = u->position;
+  g.vel = Vec3{V.x, 0, V.z};
+  g.fx = g.bx = dfx;
+  g.fz = g.bz = dfz;
+  for (int n = 0; n < 400; ++n) {
+    m.genLast = PointOf(g);
+    bool stop = false;
+    float vl2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
+    if (vl2 > 0) {
+      float dvx = -g.vel.x, dvz = -g.vel.z;
+      float lim = (dvx * g.vel.x + dvz * g.vel.z > 0.0f) ? acc : brake;
+      float dl = dvx * dvx + dvz * dvz;
+      if (lim * lim < dl) {
+        float k = lim / std::sqrt(dl);
+        dvx *= k;
+        dvz *= k;
+      }
+      g.vel.x += dvx;
+      g.vel.z += dvz;
+      float v2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
+      if (P.maxF * P.maxF < v2) {
+        float k = P.maxF / std::sqrt(v2);
+        g.vel.x *= k;
+        g.vel.z *= k;
+        v2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
+      }
+      if (v2 <= 1e-6f) {
+        g.vel.x = g.vel.z = 0;
+      } else {
+        g.p.x += g.vel.x;
+        g.p.z += g.vel.z;
+      }
+    }
+    bool zero = g.vel.x == 0 && g.vel.z == 0;
+    if (zero && (mode == 3 || (mode == 4 && m.spline.size() > 5))) stop = true;
+    m.spline.push_back(PointOf(g));
+    if (stop) break;
+  }
+  m.savedState = 0;
+  m.genReverse = false;
+}
+
 }  // namespace
+
+void SteeringClearWaypoints(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  m.path.clear();
+  m.pathIndex = 0;
+  m.hasWaypoint = false;
+  m.newSegment = false;
+  if (!m.hasSpline) return;
+  m.colType = 0;
+  m.colUnit = 0;
+  m.colTick = 0xffffffffu;
+  m.sideStep = {};
+  if (!u->dead && !u->destroyQueued && m.bp) BrakeSpline(sim, u, 3);
+  if (m.splineIdx < m.spline.size()) {
+    m.point = m.spline[m.splineIdx++];
+    m.pointNow = true;
+    m.handOutTick = sim.tick();
+  }
+}
 
 void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode) {
   UnitMotion& m = u->motion;

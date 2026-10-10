@@ -1658,4 +1658,38 @@ function P.TreeWatch()
     out('treewatch', GetGameTick(), tostring(okt), tostring(okp))
 end
 
+-- 17) (v28) M28 engineer move-and-build orders (ticks 300..700): the inputs M28 compares before re-issuing.
+-- "PROBE m28mb <tick> <army> <id> pos x z build x z bp move x z dist n <last order type,x,z ...> | queue n"
+function P.M28Orders()
+    while GetGameTick() < 10 do WaitTicks(1) end
+    local ok, O = pcall(import, '/mods/M28AI/lua/AI/M28Orders.lua')
+    if not ok or not O or not O.IssueTrackedMoveAndBuild then out('m28mb-none') return end
+    local function f3(v) return v and string.format('%.3f', v) or '-' end
+    local orig = O.IssueTrackedMoveAndBuild
+    O.IssueTrackedMoveAndBuild = function(oUnit, tB, sBp, tM, iD, a6, a7, a8)
+        local tick = GetGameTick()
+        if tick >= 300 and tick < 700 then
+            pcall(function()
+                local p = oUnit:GetPosition()
+                local parts = {}
+                local lo = oUnit[O.reftiLastOrders]
+                local n = oUnit[O.refiOrderCount] or 0
+                for i = 1, n do
+                    local o = lo and lo[i]
+                    if o then
+                        local op = o[O.subreftOrderPosition]
+                        table.insert(parts, tostring(o[O.subrefiOrderType]) .. ',' .. f3(op and op[1]) .. ',' .. f3(op and op[3]))
+                    end
+                end
+                local q = oUnit:GetCommandQueue() or {}
+                out('m28mb', tick, oUnit:GetAIBrain():GetArmyIndex(), oUnit:GetEntityId(), 'pos', f3(p[1]), f3(p[3]),
+                    'build', f3(tB and tB[1]), f3(tB and tB[3]), tostring(sBp), 'move', f3(tM and tM[1]), f3(tM and tM[3]),
+                    'dist', tostring(iD), 'add', tostring(a6), 'n', n, table.concat(parts, ' '), '| queue', table.getn(q))
+            end)
+        end
+        return orig(oUnit, tB, sBp, tM, iD, a6, a7, a8)
+    end
+    out('m28mb-hooked', GetGameTick())
+end
+
 moho64_probe = P

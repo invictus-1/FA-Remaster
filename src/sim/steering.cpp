@@ -567,6 +567,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
 // the waypoint's cell).
 void SteeringTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  if (m.handOutTick == sim.tick()) return;  // SetWaypoints(0, 0) already handed this beat's point
   m.pointNow = false;
   if (!HasSteering(u) || u->dead || u->parentId) return;
   ProcessSplineMovement(sim, u);
