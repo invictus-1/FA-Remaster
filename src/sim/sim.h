@@ -53,6 +53,18 @@ class Army {
   ArmyEconomy econ;  // sim/economy.cpp
   std::vector<uint64_t> buildRestricted;  // AddBuildRestriction(army, category)
   std::map<std::string, float> stats;  // army statistics (GetArmyStat)
+  // stat triggers (engine-ref army_stats.md): SetArmyStatsTrigger appends, CArmyStats::Update fires and removes
+  struct StatCond {
+    std::string stat;
+    int op = 0;  // 0 >, 1 >=, 2 <, 3 <=
+    float thr = 0;
+    bool category = false;  // category conditions sum per-blueprint stats (not kept: they read 0)
+  };
+  struct StatTrigger {
+    std::string name;
+    std::vector<StatCond> conds;
+  };
+  std::vector<std::shared_ptr<StatTrigger>> statTriggers;
   float unitCap = 1000;
   float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;

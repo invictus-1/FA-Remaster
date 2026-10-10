@@ -382,6 +382,78 @@ int l_brain_AddArmyStat(lua_State* L) {
   Brain(L)->army->stats[luaL_checkstring(L, 2)] += static_cast<float>(luaL_checknumber(L, 3));
   return 0;
 }
+bool IEquals(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+// ETriggerOperator enum parse (0x8d9670): case-insensitive, optional TRIGGER_ prefix, decimal, a|b
+int ParseTriggerOp(lua_State* L, const char* s) {
+  static const char* names[4] = {"GreaterThan", "GreaterThanOrEqual", "LessThan", "LessThanOrEqual"};
+  int v = 0;
+  std::string all = s ? s : "";
+  size_t pos = 0;
+  bool any = false;
+  while (pos <= all.size()) {
+    size_t bar = all.find('|', pos);
+    std::string t = all.substr(pos, bar == std::string::npos ? std::string::npos : bar - pos);
+    if (t.size() >= 8 && IEquals(t.substr(0, 8), "TRIGGER_")) t = t.substr(8);
+    int k = -1;
+    for (int i = 0; i < 4; ++i)
+      if (IEquals(t, names[i])) k = i;
+    if (k < 0 && !t.empty() && std::all_of(t.begin(), t.end(), [](char c) { return c >= '0' && c <= '9'; }))
+      k = std::atoi(t.c_str());
+    if (k < 0)
+      luaL_error(L, "Invalid enum value %s\nValid Options are:\n   GreaterThan\n   GreaterThanOrEqual\n   LessThan\n   LessThanOrEqual", s);
+    v |= k;
+    any = true;
+    if (bar == std::string::npos) break;
+    pos = bar + 1;
+  }
+  return any ? v : 0;
+}
+// SetArmyStatsTrigger(statName, triggerName, compareType, value [, category]) 0x587c00
+int l_brain_SetArmyStatsTrigger(lua_State* L) {
+  int n = lua_gettop(L);
+  if (n < 5 || n > 6) return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "SetArmyStatsTrigger", 5, 6, n);
+  Army* a = Brain(L)->army;
+  std::string stat = luaL_checkstring(L, 2), name = luaL_checkstring(L, 3);
+  int op = ParseTriggerOp(L, luaL_checkstring(L, 4));
+  if (lua_type(L, 5) != LUA_TNUMBER) luaL_typerror(L, 5, "number");
+  float thr = static_cast<float>(lua_tonumber(L, 5));
+  bool cat = n > 5 && !lua_isnil(L, 6);
+  std::shared_ptr<Army::StatTrigger> t;
+  for (auto& x : a->statTriggers)
+    if (IEquals(x->name, name)) {
+      t = x;
+      break;
+    }
+  if (!t) {
+    t = std::make_shared<Army::StatTrigger>();
+    t->name = name;
+    a->statTriggers.push_back(t);
+  }
+  if (!a->stats.count(stat)) {
+    Logf(LogLevel::Warning, "ArmyStatItem %s does not exist.", stat.c_str());
+    return 0;
+  }
+  t->conds.push_back({stat, op, thr, cat});
+  return 0;
+}
+// RemoveArmyStatsTrigger(statName, triggerName) 0x588020: the first trigger of that name (the stat is ignored)
+int l_brain_RemoveArmyStatsTrigger(lua_State* L) {
+  if (lua_gettop(L) != 3) return luaL_error(L, "%s\n  expected %d args, but got %d", "RemoveArmyStatsTrigger", 3, lua_gettop(L));
+  Army* a = Brain(L)->army;
+  luaL_checkstring(L, 2);
+  std::string name = luaL_checkstring(L, 3);
+  for (auto it = a->statTriggers.begin(); it != a->statTriggers.end(); ++it)
+    if (IEquals((*it)->name, name)) {
+      a->statTriggers.erase(it);
+      break;
+    }
+  return 0;
+}
 int l_brain_GetBlueprintStat(lua_State* L) {
   Brain(L);
   lua_pushnumber(L, 0);  // TODO(M4): per-blueprint army stats
@@ -395,6 +467,8 @@ void RegisterSimBindings(lua_State* L) {
   SetMethod(L, "CAiBrain", "SetArmyStat", l_brain_SetArmyStat);
   SetMethod(L, "CAiBrain", "AddArmyStat", l_brain_AddArmyStat);
   SetMethod(L, "CAiBrain", "GetBlueprintStat", l_brain_GetBlueprintStat);
+  SetMethod(L, "CAiBrain", "SetArmyStatsTrigger", l_brain_SetArmyStatsTrigger);
+  SetMethod(L, "CAiBrain", "RemoveArmyStatsTrigger", l_brain_RemoveArmyStatsTrigger);
   SetGlobal(L, "ListArmies", l_ListArmies);
   SetGlobal(L, "GetArmyBrain", l_GetArmyBrain);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
@@ -974,6 +1048,42 @@ PhaseTimer g_prof;
 // fired and an impact found in beat N reaches OnImpact in beat N+1's move); then recon, killed
 // units' clean-up, intel coordinates and the destroy queue. Lua at tick N sees the positions of
 // beat N-1's motion; callbacks raised during motion are labelled N.
+// CArmyStats::Update 0x70bea0 (army_stats.md 2.3): after the army's economy pass, from tick 11 on
+void EvaluateStatTriggers(Sim& sim, Army& a) {
+  std::vector<std::shared_ptr<Army::StatTrigger>> fired;
+  for (auto it = a.statTriggers.begin(); it != a.statTriggers.end();) {
+    const Army::StatTrigger& t = **it;
+    bool ok = !t.conds.empty();
+    for (const Army::StatCond& c : t.conds) {
+      float v = 0;
+      if (!c.category) {
+        auto f = a.stats.find(c.stat);
+        v = f != a.stats.end() ? f->second : 0.0f;
+      }
+      switch (c.op) {
+        case 0: ok = v > c.thr; break;
+        case 1: ok = v >= c.thr; break;
+        case 2: ok = c.thr > v; break;
+        case 3: ok = c.thr >= v; break;
+        default: break;
+      }
+      if (!ok) break;
+    }
+    if (ok) {
+      fired.push_back(*it);
+      it = a.statTriggers.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto& t : fired) {
+    if (!a.brain || !a.brain->HasLuaObject()) continue;
+    lua_State* L = sim.L();
+    lua_pushstring(L, t->name.c_str());
+    sim.CallMethod(L, a.brain, "OnStatsTrigger", 1);
+  }
+}
+
 void Sim::Tick() {
   ++tick_;
   g_prof.Start();

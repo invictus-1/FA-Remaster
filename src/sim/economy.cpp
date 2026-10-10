@@ -13,6 +13,7 @@
 #include "sim/units.h"
 
 namespace moho {
+void EvaluateStatTriggers(Sim& sim, Army& a);  // sim.cpp
 namespace {
 
 Sim* S(lua_State* L) { return Sim::From(L); }
@@ -338,7 +339,10 @@ void EconomyBeginBeat(Sim& sim) {
     if (u->dead) continue;
     for (int i = 0; i < 2; ++i) u->producedTick[i] = u->consumedTick[i] = 0;
   }
-  for (auto& a : sim.armies()) ProcessArmyEconomy(sim, *a);
+  for (auto& a : sim.armies()) {  // CArmyImpl::OnTick: economy, then (tick > 10) the stat triggers
+    ProcessArmyEconomy(sim, *a);
+    if (sim.tick() > 10) EvaluateStatTriggers(sim, *a);
+  }
 }
 
 void UnitEconomyInit(lua_State* L, Unit* u) {

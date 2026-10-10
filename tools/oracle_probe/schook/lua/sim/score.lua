@@ -13,6 +13,7 @@ if rawget(_G, 'moho64_probe') then
         ForkThread(P.M28Orders) -- v28
         ForkThread(P.M28Zones) -- v29
         ForkThread(P.JamWatch) -- v33
+        ForkThread(P.RngClock) -- v34
         ForkThread(function()
             while GetGameTick() < 20 do WaitTicks(1) end
             P.Motion() -- yields (WaitTicks): no pcall around it; its own steps are pcall'd

@@ -1793,4 +1793,16 @@ function P.JamWatch()
     end
 end
 
+-- 21) (v34) a clock in the random stream: one raw Random() per tick at the probe's Lua turn, ticks 46..52.
+-- It draws (so it shifts everything after it, the same way in both engines): "PROBE rngc <tick> <value>"
+function P.RngClock()
+    while GetGameTick() < 46 do WaitTicks(1) end
+    local R = rawget(_G, 'moho64_random_raw')
+    if not R then out('rngc-none') return end
+    while GetGameTick() <= 52 do
+        out('rngc', GetGameTick(), string.format('%.9f', R()))
+        WaitTicks(1)
+    end
+end
+
 moho64_probe = P
