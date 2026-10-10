@@ -400,10 +400,8 @@ void ArrivalStep(Sim& sim, Unit* u) {
     keep->units.insert(u);
   }
   m.failed = false;
-  if (u->commands.empty()) {
-    SetMoving(u, false);
-    return;
-  }
+  SetMoving(u, false);  // the move task's dtor clears it; a following move sets it again
+  if (u->commands.empty()) return;
   StartHead(sim, u);
 }
 
@@ -446,8 +444,8 @@ void CommandStep(Sim& sim, Unit* u) {
       (u->formAllAtGoal || FormationGroupAtGoal(sim, *u->commands.front(), u))) {
     PopHead(u);
     u->motion.arrived = u->motion.failed = false;
-    if (u->commands.empty()) SetMoving(u, false);
-    else StartHead(sim, u);
+    SetMoving(u, false);
+    if (!u->commands.empty()) StartHead(sim, u);
     return;
   }
   // keep "drive through" up to date when moves were queued behind the current one

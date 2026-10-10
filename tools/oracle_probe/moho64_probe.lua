@@ -1421,19 +1421,26 @@ function P.Armies()
     -- "PROBE acu <tick> <army> x z heading ncmd headType@x,z states"
     ForkThread(function()
         local states = { 'Moving', 'Building', 'Repairing', 'Reclaiming', 'Guarding', 'Busy', 'Immobile', 'Attacking' }
-        while GetGameTick() < 400 do
+        -- (v27) to tick 700, and from tick 340 every engineer too ('acu' lines carry the unit id after the army)
+        while GetGameTick() < 700 do
             local tick = GetGameTick()
             for i, name in ListArmies() do
                 pcall(function()
                     if ArmyIsCivilian(i) then return end
-                    for _, u in GetArmyBrain(i):GetListOfUnits(categories.COMMAND, false) or {} do
+                    local cat = categories.COMMAND
+                    if tick >= 340 then cat = categories.COMMAND + categories.ENGINEER end
+                    for _, u in GetArmyBrain(i):GetListOfUnits(cat, false) or {} do
                         local p = u:GetPosition()
                         local q = u:GetCommandQueue() or {}
                         local h = '-'
                         if q[1] then h = tostring(q[1].commandType) .. '@' .. fmt(q[1].x or 0) .. ',' .. fmt(q[1].z or 0) end
                         local st = {}
                         for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
-                        out('acu', tick, i, fmt(p[1]), fmt(p[3]), fmt(u:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                        if tick < 340 then
+                            out('acu', tick, i, fmt(p[1]), fmt(p[3]), fmt(u:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                        else
+                            out('acu', tick, i, u:GetEntityId(), fmt(p[1]), fmt(p[3]), fmt(u:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                        end
                     end
                 end)
             end
@@ -1526,7 +1533,7 @@ function P.M28Sites()
     local function f3(v) return v and string.format('%.3f', v) or '-' end
     M.GetBestBuildLocationForTarget = function(oEngineer, sBp, tTarget, tCands, iMaxD, ...)
         local r = orig(oEngineer, sBp, tTarget, tCands, iMaxD, unpack(arg))
-        if GetGameTick() < 400 then
+        if GetGameTick() < 700 then
             pcall(function()
                 local tick = GetGameTick()
                 local brain = oEngineer:GetAIBrain()

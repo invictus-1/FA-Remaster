@@ -1,4 +1,5 @@
 #include "sim/entity_grid.h"
+#include "sim/prop_motor.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
 #include "sim/formation.h"
@@ -567,6 +568,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterEconomyBindings(L);
   RegisterBuildBindings(L);
   RegisterCollisionBindings(L);
+  RegisterMotorBindings(L);
   RegisterCombatBindings(L);
   RegisterAnimBindings(L);
   RegisterAirBindings(L);
@@ -988,6 +990,7 @@ void Sim::Tick() {
       if (u->parentId && u->attachFull) UnitAimTick(*this, u);
     }
   }
+  MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
   g_prof.Lap(4);
   AnimTick(*this);
   gridDirty_ = true;
@@ -1004,7 +1007,8 @@ void Sim::Tick() {
   ReconBeat(*this);  // army (tick % armies) updates its blips
   FormationsTick(*this);  // step 11: the formation DB
   KillCleanupTick(*this);
-  GridAdvanceCoords(*this);   // step 13: moved units take their (widened) cells in the entity grid
+  GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
+  MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);
   ProcessDestroyQueue();

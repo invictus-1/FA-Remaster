@@ -21,6 +21,7 @@
 #include "sim/collision.h"
 #include "sim/combat.h"
 #include "sim/entity_grid.h"
+#include "sim/vecmath.h"
 #include "sim/intel.h"
 #include "sim/sim.h"
 #include "sim/air.h"
@@ -271,7 +272,21 @@ int l_CreatePropAtBone(lua_State* L) {
   Vec3 wp;
   Quat wq;
   BoneWorld(e, bone < 0 ? 0 : bone, &wp, &wq);
-  return PushNew(L, S(L)->CreateProp(L, *bp, wp, wq, Vec3{1, 1, 1}));
+  Prop* p = S(L)->CreateProp(L, *bp, wp, wq, Vec3{1, 1, 1});
+  // after OnCreate: warp so the new prop's own bone 0 sits on the bone's transform (W o L0^-1; tree meshes
+  // have a rotated bone 0, so the split trees stand upright)
+  if (p && !p->destroyQueued && p->skeleton && p->skeleton->Count() > 0) {
+    const Bone& b0 = p->skeleton->bones()[0];
+    float sc = p->meshScale * p->scale[0];
+    Vec3 t0{b0.modelPos.x * sc, b0.modelPos.y * sc, b0.modelPos.z * sc};
+    Quat r0c{-b0.modelRot.x, -b0.modelRot.y, -b0.modelRot.z, b0.modelRot.w};
+    Quat q = vm::QMul(wq, r0c);
+    Vec3 d = vm::Rotate(q, t0);
+    p->position = Vec3{wp.x - d.x, wp.y - d.y, wp.z - d.z};
+    p->orientation = q;
+    GridUpdate(*S(L), p, false);
+  }
+  return PushNew(L, p);
 }
 
 int l_SetArmyStart(lua_State* L) {

@@ -376,8 +376,11 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
 
 namespace {
 
+// CUnitMobileBuildTask::Tick 0x5f7440 (engine-ref mobile_build.md): states 1 -> 2 -> 3 run in one beat (the
+// original's return 0), so a builder whose arm is already on target creates the structure the beat after the
+// order; joining a structure at the site works in the same beat.
 int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
-  switch (t.state) {
+  for (;;) switch (t.state) {
     case 0:
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
       t.site = SnapStructurePosition(sim, *t.bp, t.site);
@@ -403,18 +406,21 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         SetArmAimTarget(sim, u, Vec3{t.site.x, t.site.y + sd.sizeY * 0.5f + sd.collisionOffsetY, t.site.z});
       }
       u->unitStates.insert("Building");
-      t.state = 3;  // (2: turning to face the site; NeedToFaceTargetToBuild units turn on the spot)
-      return kTaskRunning;
+      t.state = 2;
+      continue;  // return 0
+    case 2:  // NeedToFaceTargetToBuild units turn on the spot first (TODO: no FA structure builder sets it)
+      t.state = 3;
+      continue;  // return 0
     case 3: {
-      if (!u->armReady) return kTaskRunning;  // 0x5f7ba7: wait for the build arm
       if (u->paused) return kTaskRunning;      // (return 10)
       if (sim.tick() < t.waitUntil) return kTaskRunning;
-      if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {
+      if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {  // join: no arm wait, work this beat
         SetFocus(sim, L, u, ex, t);
         t.state = 4;
-        return kTaskRunning;
+        continue;
       }
       if (!LocationIsFree(sim, *t.bp, t.site.x, t.site.z)) return kTaskFailed;
+      if (!u->armReady) return kTaskRunning;  // 0x5f7ba7: wait for the build arm (after the location checks)
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
       if (!UnderUnitCap(u->army, d)) {
         if (++t.tries > 10) return kTaskFailed;
