@@ -63,7 +63,7 @@ add_library(mohocore STATIC
   src/sim/entity_grid.cpp
   src/sim/prop_motor.cpp
   src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
-  src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp)
+  src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp src/sim/recorder.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
 

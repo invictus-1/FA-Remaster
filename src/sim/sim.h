@@ -4,6 +4,7 @@
 // simInit.lua runs, ScenarioInfo is filled from the session, SetupSession() runs, the armies
 // and their brains are created (OnCreateArmyBrain), then BeginSession().
 #pragma once
+#include <cstdio>
 #include <algorithm>
 #include <cstdint>
 #include <deque>
@@ -111,9 +112,17 @@ class Sim {
   // session seed. Every engine and sim-Lua draw comes from it, in the original's order.
   uint32_t NextUInt32() {
     uint32_t r = rng_();
-    if (rngTrace_) RngTrace(r);
+    ++rngDraws_;
+    if (rngTrace_ || rec_) RngTrace(r);
     return r;
   }
+  // Tick recorder (MOHO64_RECORD, sim/recorder.cpp; the labhook 0.4 format)
+  void RecorderOpen();
+  void RecorderDraw(uintptr_t where);
+  void RecorderBeat();
+  FILE* rec_ = nullptr;
+  uint64_t rngDraws_ = 0;
+  bool beatStarted_ = false;
   void RngTrace(uint32_t r);
   bool rngTrace_ = false;
   float Random() { return U01(); }  // = U01

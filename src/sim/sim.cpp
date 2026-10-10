@@ -511,6 +511,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
       skeletons_(std::make_unique<SkeletonCache>(vfs)) {}
 
 Sim::~Sim() {
+  if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
   ReleaseEffectObjects();
   ReleaseAnimators();
@@ -529,6 +530,14 @@ extern "C" char __executable_start;
 #endif
 // MOHO64_DEBUG_RNG: one line per draw (tick, value, caller address relative to the image; addr2line on Linux)
 __attribute__((noinline)) void Sim::RngTrace(uint32_t r) {
+  if (rec_) {
+#if defined(__linux__)
+    RecorderDraw(static_cast<uintptr_t>(static_cast<const char*>(__builtin_return_address(0)) - &__executable_start));
+#else
+    RecorderDraw(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+#endif
+    if (!rngTrace_) return;
+  }
 #if defined(__linux__)
   const char* a = static_cast<const char*>(__builtin_return_address(0));
   Logf(LogLevel::Info, "rngdbg %u %08x %lx", tick_, r, static_cast<unsigned long>(a - &__executable_start));
@@ -648,6 +657,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   rng_.seed(replay.seed);
   hasGauss_ = false;
   rngTrace_ = getenv("MOHO64_DEBUG_RNG") != nullptr;
+  RecorderOpen();
   cheats = replay.cheats;
 
   // Map
@@ -1096,6 +1106,8 @@ void EvaluateStatTriggers(Sim& sim, Army& a) {
 }
 
 void Sim::Tick() {
+  if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
+  beatStarted_ = true;
   ++tick_;
   g_prof.Start();
   {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
@@ -1106,7 +1118,7 @@ void Sim::Tick() {
       unsigned t = 0;
       int n = 0;
       if (sscanf(sh, "%u:%d", &t, &n) == 2 && t == tick_)
-        for (int i = 0; i < n; ++i) rng_();
+        for (int i = 0; i < n; ++i) NextUInt32();
     }
   }
   LandNavBackground(*this);  // AdvanceBeat step 3: path tables' background build
