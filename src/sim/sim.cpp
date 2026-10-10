@@ -450,6 +450,7 @@ lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }
 Sim* Sim::From(lua_State* L) { return static_cast<Sim*>(lua_getextra(L, 1)); }
 
 #if defined(__linux__)
+#include <execinfo.h>
 extern "C" char __executable_start;
 #endif
 // MOHO64_DEBUG_RNG: one line per draw (tick, value, caller address relative to the image; addr2line on Linux)
@@ -457,6 +458,18 @@ __attribute__((noinline)) void Sim::RngTrace(uint32_t r) {
 #if defined(__linux__)
   const char* a = static_cast<const char*>(__builtin_return_address(0));
   Logf(LogLevel::Info, "rngdbg %u %08x %lx", tick_, r, static_cast<unsigned long>(a - &__executable_start));
+  static const char* bt = getenv("MOHO64_DEBUG_RNGBT");
+  if (bt && tick_ == static_cast<uint32_t>(atoi(bt))) {
+    void* fr[12];
+    int n = backtrace(fr, 12);
+    std::string s;
+    for (int i = 1; i < n; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %lx", static_cast<unsigned long>(static_cast<char*>(fr[i]) - &__executable_start));
+      s += b;
+    }
+    Logf(LogLevel::Info, "rngbt%s", s.c_str());
+  }
 #else
   Logf(LogLevel::Info, "rngdbg %u %08x %p", tick_, r, __builtin_return_address(0));
 #endif

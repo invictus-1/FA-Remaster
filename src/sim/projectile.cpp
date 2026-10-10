@@ -106,6 +106,7 @@ struct ProjBp {
   float rotVel = 0, rotVelRange = 0, maxZigZag = 0, zigZagFrequency = 0;
   int minBounce = 0, maxBounce = 0;
   float bounceVelDamp = 0.5f;
+  float uniformScale = 1, meshScaleRange = 0, meshScaleVel = 0, meshScaleVelRange = 0;  // Display (bp+0x1b4..)
 };
 const ProjBp& GetProjBp(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
   static std::map<const BlueprintInfo*, ProjBp> cache;
@@ -152,6 +153,11 @@ const ProjBp& GetProjBp(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
   d.minBounce = static_cast<int>(lu::Num(L, ph, "MinBounceCount", 0));
   d.maxBounce = static_cast<int>(lu::Num(L, ph, "MaxBounceCount", 0));
   d.bounceVelDamp = lu::Num(L, ph, "BounceVelDamp", 0.5f);
+  int di = lu::Sub(L, top + 1, "Display");
+  d.uniformScale = lu::Num(L, di, "UniformScale", 1);
+  d.meshScaleRange = lu::Num(L, di, "MeshScaleRange", 0);
+  d.meshScaleVel = lu::Num(L, di, "MeshScaleVelocity", 0);
+  d.meshScaleVelRange = lu::Num(L, di, "MeshScaleVelocityRange", 0);
   lua_settop(L, top);
   return cache.emplace(&bp, d).first->second;
 }
@@ -172,6 +178,19 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->blueprint = &bp;
   p->army = army;
   p->id = ReserveId(army, 0x1);
+  // the script object: Entity::Entity 0x677c90 resolves the script class (0x677360, importing its module) and
+  // creates the object first, so a module's import-time Random calls come before the ctor's draws below
+  PushScriptClass(L, bp, "/lua/sim/projectile.lua", "Projectile");
+  int cls = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_pushvalue(L, cls);
+  if (lua_pcall(L, 0, 1, cls + 1) != 0 || !lua_istable(L, -1)) {
+    LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "projectile script class did not create an object");
+    lua_settop(L, top);
+    return nullptr;
+  }
+  BindObject(L, -1, p);
+  lua_settop(L, top);
   AttachSkeleton(L, p);
   RevertCollisionShape(L, p);
   p->position = p->prevPos = pos;
@@ -201,28 +220,14 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->expireTick = tick_ + static_cast<uint32_t>(std::max(0.0f, std::nearbyint(Uniform(*this, b.lifetime, b.lifetimeRange) * 10)));
   p->launcher = launcher && launcher->kind == Entity::Kind::Projectile ? static_cast<Projectile*>(launcher)->launcher
                                                                         : launcher;
-  // the script object
-  PushScriptClass(L, bp, "/lua/sim/projectile.lua", "Projectile");
-  int cls = lua_gettop(L);
-  lua_pushcfunction(L, ScriptTraceback);
-  lua_pushvalue(L, cls);
-  if (lua_pcall(L, 0, 1, cls + 1) != 0 || !lua_istable(L, -1)) {
-    LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "projectile script class did not create an object");
-    lua_settop(L, top);
-    return nullptr;
-  }
-  BindObject(L, -1, p);
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);
   ++g_projectiles;
   lua_settop(L, top);
   CallMethod(L, p, "OnPreCreate", 0);
-  if (b.maxBounce > b.minBounce) {
-    p->bounceLimit = b.minBounce + static_cast<int>(IntRange(static_cast<uint32_t>(b.maxBounce - b.minBounce)));
-  } else {
-    p->bounceLimit = b.minBounce;
-  }
+  // bounce limit: always one draw (0x69b540), Min + (u * (Max - Min)) >> 32
+  p->bounceLimit = b.minBounce + static_cast<int>(IntRange(static_cast<uint32_t>(b.maxBounce - b.minBounce)));
   // initial velocity
   if (b.realisticOrdinance && p->launcher) {
     Vec3 v = Mul(EntityVelocity(p->launcher), 10);
@@ -238,6 +243,13 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     p->velocity = v;
   } else {
     p->velocity = Mul(Forward(q), Uniform(*this, b.initialSpeed, b.initialSpeedRange));
+  }
+  // step 6: mesh scale and scale velocity (0x69b952, 0x69ba1d: one draw each)
+  {
+    float sc = Uniform(*this, b.uniformScale, b.meshScaleRange);
+    float sv = Uniform(*this, b.meshScaleVel, b.meshScaleVelRange);
+    if (b.meshScaleRange != 0 && b.uniformScale != 0) p->scale[0] = p->scale[1] = p->scale[2] = sc / b.uniformScale;
+    if (b.meshScaleVelRange != 0 || b.meshScaleVel != 0) p->scaleVel = {sv, sv, sv};
   }
   if (p->trackTarget && !HasTarget(*this, target)) {
     QueueDestroy(p);

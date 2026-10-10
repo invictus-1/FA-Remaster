@@ -49,6 +49,7 @@ enum MotionType : int {
 struct MotionBlueprint {
   int motionType = kMotionNone;
   float maxSpeed = 0, maxSpeedReverse = 0, maxAccel = 0, maxBrake = 0, maxSteerForce = 0;
+  float bankingSlope = 0, wobbleFactor = 0, wobbleSpeed = 0;  // Physics +0x3c, +0x48, +0x4c (hover)
   float turnRadius = 0, turnRate = 0, turnFacingRate = 0;
   float elevation = 0;
   bool rotateOnSpot = false, standUpright = false, sinkLower = false, rotateBodyWhileMoving = false;
@@ -76,6 +77,10 @@ struct UnitMotion {
   float fx = 0, fz = 1;  // steering facing (unit vector in xz): the direction it drives
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
+  Vec3 accel;            // m+0x44: this tick's change of vel (spline-point moves; 0 when blocked)
+  // CalcMoveHover 0x6c2bc0: the hover's lean (m+0xc0) and wobble (target m+0xf0, velocity m+0xe4, offset
+  // m+0xd8); lean and offset are added to the ground normal before the orientation is built
+  Vec3 hoverLean, wobbleTarget, wobbleVel, wobble;
   float speedMult = 1, accMult = 1, turnMult = 1;
   // fuel (fuel.md): m+0x0c use time, Physics.FuelRechargeRate, the platform refuel/repair state
   float fuelUseTime = 0, fuelRecharge = 0;

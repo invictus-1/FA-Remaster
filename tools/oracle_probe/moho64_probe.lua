@@ -1770,4 +1770,27 @@ function P.RandomWatch()
 end
 P.RandomWatch()
 
+-- 20) (v33) the motion test's frigate (ues0103, JammerBlips 5) and its army's energy, ticks 18..130:
+-- "PROBE jam <tick> <id> jammer radar sonar ResetJammer EnergyDepleted storedE"
+function P.JamWatch()
+    while GetGameTick() < 18 do WaitTicks(1) end
+    local civ
+    for i, name in ListArmies() do if name == 'NEUTRAL_CIVILIAN' then civ = i end end
+    if not civ then out('jam-none') return end
+    local brain = GetArmyBrain(civ)
+    while GetGameTick() <= 130 do
+        pcall(function()
+            local us = brain:GetListOfUnits(categories.ALLUNITS, false) or {}
+            for _, u in us do
+                if not u.Dead and u:GetBlueprint().BlueprintId == 'ues0103' then
+                    local function ie(t) local ok, v = pcall(u.IsIntelEnabled, u, t) return ok and tostring(v) or 'err' end
+                    out('jam', GetGameTick(), u:GetEntityId(), ie('Jammer'), ie('Radar'), ie('Sonar'), tostring(u.ResetJammer),
+                        tostring(brain.EnergyDepleted), fmt(brain:GetEconomyStored('ENERGY')))
+                end
+            end
+        end)
+        WaitTicks(1)
+    end
+end
+
 moho64_probe = P

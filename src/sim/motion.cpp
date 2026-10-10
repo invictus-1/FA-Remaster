@@ -200,6 +200,9 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
       m.maxAccel = GetNum(L, p, "MaxAcceleration", 0);
       m.maxBrake = GetNum(L, p, "MaxBrake", 0);
       m.maxSteerForce = GetNum(L, p, "MaxSteerForce", 0);
+      m.bankingSlope = GetNum(L, p, "BankingSlope", 0);
+      m.wobbleFactor = GetNum(L, p, "WobbleFactor", 0);
+      m.wobbleSpeed = GetNum(L, p, "WobbleSpeed", 0);
       m.turnRadius = GetNum(L, p, "TurnRadius", 0);
       m.turnRate = GetNum(L, p, "TurnRate", 0);
       m.turnFacingRate = GetNum(L, p, "TurnFacingRate", 0);
@@ -1049,6 +1052,117 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   return true;
 }
 
+// ---- hover: CUnitMotion::CalcMoveHover 0x6c2bc0 (lean and wobble) and SnapToGround 0x6c1610's hover branch ----
+namespace {
+bool ClampLength(Vec3& v, float p) {  // 0x5d1e70
+  float l2 = v.x * v.x + v.y * v.y + v.z * v.z;
+  if (l2 <= p * p) return false;
+  float s = p / std::sqrt(l2);
+  v.x *= s;
+  v.y *= s;
+  v.z = s * v.z;
+  return true;
+}
+// lo + u * (hi - lo) * 2^-32 on the x87 stack (80-bit), rounded once to float
+float WobbleDraw(Sim& sim, float W) {
+  float lo = -0.0f - W;
+  uint32_t r = sim.NextUInt32();
+  long double t = (static_cast<long double>(W) - static_cast<long double>(lo)) * static_cast<long double>(r);
+  t = t * static_cast<long double>(2.3283064365386963e-10f);
+  return static_cast<float>(static_cast<long double>(lo) + t);
+}
+// 0x452af0: normalise in place, returns the length (0 and a zero vector at or below 1e-6)
+float NormalizeExe(Vec3& v) {
+  float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (l > 1e-6f) {
+    float s = 1.0f / l;
+    v.x *= s;
+    v.y *= s;
+    v.z *= s;
+    return l;
+  }
+  v = {};
+  return 0;
+}
+// 0x50b820: turn q so that its up axis becomes n (the shortest arc 0x50cb50, applied on the left)
+void AlignUp(Quat& q, Vec3 n) {
+  if (!(NormalizeExe(n) > 0)) return;
+  const float q0 = q.w, q1 = q.x, q2 = q.y, q3 = q.z;
+  Vec3 up{(q2 * q1 - q0 * q3) * 2.0f, 1.0f - (q3 * q3 + q1 * q1) * 2.0f, (q3 * q2 + q0 * q1) * 2.0f};
+  Vec3 h{up.x + n.x, up.y + n.y, up.z + n.z};
+  NormalizeExe(h);
+  float rw = up.z * h.z + up.x * h.x + up.y * h.y, rx, ry, rz;
+  if (rw != 0.0f) {
+    rx = up.y * h.z - up.z * h.y;
+    ry = up.z * h.x - up.x * h.z;
+    rz = up.x * h.y - up.y * h.x;
+  } else {  // opposite vectors (not reached on a map)
+    rx = 1;
+    ry = rz = 0;
+  }
+  Quat o;
+  o.w = ((q0 * rw - q1 * rx) - q2 * ry) - q3 * rz;
+  o.x = ((q3 * ry + q1 * rw) + q0 * rx) - q2 * rz;
+  o.y = ((q0 * ry + q1 * rz) + q2 * rw) - q3 * rx;
+  o.z = ((q0 * rz + q3 * rw) + q2 * rx) - q1 * ry;
+  q = o;
+}
+// SnapToGround 0x6c1610 for MotionType 7: corners from the transform as it is (tilted by last beat's snap
+// unless the move just rebuilt it), surface heights, normal + wobble + lean, then AlignUp
+void HoverSnap(Sim& sim, Unit* u) {
+  const TerrainMap* map = sim.map();
+  const MotionBlueprint& b = *u->motion.bp;
+  const UnitMotion& m = u->motion;
+  float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
+  const Vec3 offs[4] = {{hx, 0, hz}, {-0.0f - hx, 0, hz}, {-0.0f - hx, 0, -0.0f - hz}, {hx, 0, -0.0f - hz}};
+  Vec3 c[4];
+  for (int i = 0; i < 4; ++i) {
+    Vec3 r = Rotate(u->orientation, offs[i]);
+    c[i] = {u->position.x + r.x, 0, u->position.z + r.z};
+    c[i].y = map->SurfaceHeight(c[i].x, c[i].z);
+  }
+  float y = (c[3].y + c[2].y + c[1].y + c[0].y) * 0.25f;
+  Vec3 n{0, 1, 0};
+  if (!b.standUpright) {
+    n = {(c[3].y - c[1].y) * (c[2].z - c[0].z) - (c[3].z - c[1].z) * (c[2].y - c[0].y),
+         (c[3].z - c[1].z) * (c[2].x - c[0].x) - (c[2].z - c[0].z) * (c[3].x - c[1].x),
+         (c[3].x - c[1].x) * (c[2].y - c[0].y) - (c[3].y - c[1].y) * (c[2].x - c[0].x)};
+  }
+  if (b.standUpright || b.sinkLower) {
+    float t = map->TerrainHeight(u->position.x, u->position.z);
+    float lo = std::min({c[0].y, c[1].y, c[2].y, c[3].y, t});
+    float hi = std::max({c[0].y, c[1].y, c[2].y, c[3].y, t});
+    y -= (hi - lo) * 0.25f;
+  }
+  u->position.y = b.elevation + y;
+  n = {(m.wobble.x + m.hoverLean.x) + n.x, (m.wobble.y + m.hoverLean.y) + n.y, (m.wobble.z + m.hoverLean.z) + n.z};
+  AlignUp(u->orientation, n);
+}
+// the CalcMoveHover part after CalcMoveCommon
+void HoverMove(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  const MotionBlueprint& b = *m.bp;
+  const float k = b.bankingSlope / b.maxAccel;
+  const float lx = ((m.accel.x * 10.0f) * k) * 0.2f, ly = (k * 0.0f) * 0.2f, lz = ((m.accel.z * 10.0f) * k) * 0.2f;
+  m.hoverLean = {m.hoverLean.x * 0.8f + lx, m.hoverLean.y * 0.8f + ly, m.hoverLean.z * 0.8f + lz};
+  if (sim.tick() % 5 == 0) {  // two draws of the sim stream (sim_random.md)
+    m.wobbleTarget.x = WobbleDraw(sim, b.wobbleFactor);
+    m.wobbleTarget.z = WobbleDraw(sim, b.wobbleFactor);
+  }
+  Vec3 d{m.wobbleTarget.x - m.wobble.x, m.wobbleTarget.y - m.wobble.y, m.wobbleTarget.z - m.wobble.z};
+  ClampLength(d, b.wobbleSpeed * 0.1f);
+  m.wobbleVel = {d.x + m.wobbleVel.x, m.wobbleVel.y + d.y, m.wobbleVel.z + d.z};
+  ClampLength(m.wobbleVel, b.wobbleSpeed);
+  m.wobble = {m.wobble.x * 0.98f + m.wobbleVel.x, m.wobbleVel.y + m.wobble.y * 0.98f,
+              m.wobbleVel.z + m.wobble.z * 0.98f};
+  if (!u->unitStates.count("Teleporting") || m.needSnap) HoverSnap(sim, u);
+  m.needSnap = false;
+}
+bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHover (0x6b9f10..0x6b9f87)
+  return !u->beingBuilt && !u->immobile && !u->unitStates.count("Immobile") && !u->stunned;
+}
+}  // namespace
+
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
@@ -1057,6 +1171,12 @@ void MotionTick(Sim& sim, Unit* u) {
   }
   if (m.ballistic) {  // dropped from a transport: falls (also when dead)
     LandBallisticTick(sim, u);
+    return;
+  }
+  if (m.bp && m.bp->motionType == kMotionHover && u->dead && HoverRuns(u)) {  // dead hovers still wobble
+    Vec3 s0 = u->position;
+    HoverMove(sim, u);
+    m.lastMove = {u->position.x - s0.x, u->position.y - s0.y, u->position.z - s0.z};
     return;
   }
   if (!m.bp || !m.bp->mobile() || u->dead) {
@@ -1079,7 +1199,9 @@ void MotionTick(Sim& sim, Unit* u) {
       if (q.bx != m.bx || q.bz != m.bz) m.needSnap = true;  // turning on the spot
       u->position.x = q.pos.x;
       u->position.z = q.pos.z;
+      m.accel = {q.vel.x - m.vel.x, q.vel.y - m.vel.y, q.vel.z - m.vel.z};
       m.vel = q.vel;
+      if (b.motionType == kMotionHover) u->orientation = YawQuat(q.bx, q.bz);  // CalcMoveCommon's facing
       m.fx = q.fx;
       m.fz = q.fz;
       m.bx = q.bx;
@@ -1096,6 +1218,7 @@ void MotionTick(Sim& sim, Unit* u) {
       float dx = start.x - u->position.x, dz = start.z - u->position.z;
       u->position = start;
       m.vel = {};
+      m.accel = {};
       if (!m.pushed) {
         float l = std::sqrt(dx * dx + dz * dz);
         float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594
@@ -1105,7 +1228,14 @@ void MotionTick(Sim& sim, Unit* u) {
       }
       moved = false;
     }
-    if (moved || m.needSnap) {
+    if (b.motionType == kMotionHover) {
+      if (m.needSnap && !(m.pointNow && !m.pushed)) u->orientation = YawQuat(m.bx, m.bz);  // turned in place
+      if (HoverRuns(u)) HoverMove(sim, u);
+      else if (moved || m.needSnap) {
+        SnapUnit(sim, u);
+        m.needSnap = false;
+      }
+    } else if (moved || m.needSnap) {
       SnapUnit(sim, u);
       m.needSnap = false;
     }

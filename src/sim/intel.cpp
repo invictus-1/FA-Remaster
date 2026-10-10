@@ -295,6 +295,8 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       if (f && !inUse) {
         pending.push_back({u, f});
       } else if (f) {
+        if (getenv("MOHO64_DEBUG_JAM") && FlagOn(u, 9))
+          Logf(LogLevel::Info, "jamdbg %u army %d unit %u flags %d", sim.tick(), a, u->id, f);
         UpdateBlip(sim, L, a, u, f);
       } else if (inUse) {
         bool mobile = u->motion.bp && u->motion.bp->mobile();
