@@ -505,20 +505,8 @@ int Resolve(Sim& sim, Unit* Y) {
 }
 
 // CAiSteeringImpl::ProcessSplineMovement 0x5d2c00 (and DriveToNextWaypoint 0x5d3000 for a new waypoint)
-void SteeringTick(Sim& sim, Unit* u) {
+void ProcessSplineMovement(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
-  m.pointNow = false;
-  if (!HasSteering(u) || u->dead || u->parentId) return;
-  if (m.newSegment) {  // a new waypoint
-    m.newSegment = false;
-    if (Driving(u)) {
-      m.steerTarget = m.path[m.pathIndex];
-      if (!AtPosition(u, m.steerTarget)) {
-        UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
-        CheckCollisions(sim, u);
-      }
-    }
-  }
   if (m.pushed) {
     if (m.hasSpline) SteeringStop(m);
     float v = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
@@ -536,7 +524,7 @@ void SteeringTick(Sim& sim, Unit* u) {
   } else if (m.hasSpline && m.splineIdx + 1 >= m.spline.size()) {  // the batch is used up (one point left)
     if (!Driving(u) || AtPosition(u, m.steerTarget)) {  // arrived at this waypoint
       SteeringStop(m);
-      if (Driving(u)) m.hasWaypoint = false;
+      if (Driving(u) && !m.newSegment) m.hasWaypoint = false;
       return;
     }
     UpdatePath(sim, u, m.steerTarget, false, GetVal(m));
@@ -572,6 +560,24 @@ void SteeringTick(Sim& sim, Unit* u) {
     m.point = m.spline[m.splineIdx++];
     m.pointNow = true;
   }
+}
+
+// CAiSteeringImpl::OnTick / DriveToNextWaypoint 0x5d3000: the current spline first, then a new waypoint
+// (a fresh batch, whose first point replaces the one just handed out; none when the unit already stands in
+// the waypoint's cell).
+void SteeringTick(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  m.pointNow = false;
+  if (!HasSteering(u) || u->dead || u->parentId) return;
+  ProcessSplineMovement(sim, u);
+  if (!m.newSegment) return;
+  m.newSegment = false;
+  if (!Driving(u)) return;
+  m.steerTarget = m.path[m.pathIndex];
+  if (AtPosition(u, m.steerTarget)) return;
+  UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+  CheckCollisions(sim, u);
+  ProcessSplineMovement(sim, u);
 }
 
 }  // namespace

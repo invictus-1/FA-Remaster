@@ -115,7 +115,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   float x0 = static_cast<float>(x), z0 = static_cast<float>(z), x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
-    if (blocked || e->layer == "Air" || e->layer == "Sub" || !BlocksFor(u, e, flags)) return;
+    if (blocked || e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) || !BlocksFor(u, e, flags)) return;
     const MotionBlueprint* b = e->motion.bp;
     float hx = b->sizeX * 0.5f, hz = b->sizeZ * 0.5f;
     if (e->position.x + hx < x0 || e->position.x - hx > x1 || e->position.z + hz < z0 || e->position.z - hz > z1) return;
@@ -126,17 +126,18 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
 
 namespace {
 
-// 0x7216d0: units in the box from the centre of a to the centre of b (width SizeX * 5/9)
-bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flags) {
-  if (a == b) return PathUnitBlocked(u, a.x, a.z, flags);
-  float ax = a.x + SX(u) * 0.5f, az = a.z + SZ(u) * 0.5f, bx = b.x + SX(u) * 0.5f, bz = b.z + SZ(u) * 0.5f;
+// 0x7216d0: units in the box along the line from (ax, az) to (bx, bz); air/sub units and formation mates are
+// skipped before the unit filter
+bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int flags) {
   float dx = bx - ax, dz = bz - az, len = std::sqrt(dx * dx + dz * dz);
   if (len <= 0) return false;
   float fx = dx / len, fz = dz / len, hw = Bp(u).sizeX * 0.5555556f;
   bool blocked = false;
   sim.ForUnitsInRect(std::min(ax, bx) - hw - 4, std::min(az, bz) - hw - 4, std::max(ax, bx) + hw + 4,
                      std::max(az, bz) + hw + 4, [&](Unit* e) {
-                       if (blocked || e->layer == "Air" || e->layer == "Sub" || !BlocksFor(u, e, flags)) return;
+                       if (blocked || e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
+                           !BlocksFor(u, e, flags))
+                         return;
                        float rx = e->position.x - ax, rz = e->position.z - az;
                        float along = rx * fx + rz * fz, side = std::fabs(-rx * fz + rz * fx);
                        float er = (e->motion.bp->sizeX + e->motion.bp->sizeZ) * 0.25f;
@@ -144,11 +145,20 @@ bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flag
                      });
   return blocked;
 }
-// UnitClear 0x5af670 (cur -> p) and UnitClearTo 0x5af5b0
+bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flags) {
+  if (a == b) return PathUnitBlocked(u, a.x, a.z, flags);
+  return UnitInLine(sim, u, a.x + SX(u) * 0.5f, a.z + SZ(u) * 0.5f, b.x + SX(u) * 0.5f, b.z + SZ(u) * 0.5f, flags);
+}
+// UnitClear 0x5af670 (cur -> p) and UnitClearTo 0x5af5b0 (the line from the unit's own position to p's centre,
+// then p itself)
 bool UnitClear(Sim& sim, Unit* u, const LandNav& n, const PathCell& p) {
   return !UnitInWay(sim, u, n.cur, p, n.attackVariant ? 2 : 1);
 }
-bool UnitClearTo(Sim& sim, Unit* u, const LandNav& n, const PathCell& p) { return UnitClear(sim, u, n, p); }
+bool UnitClearTo(Sim& sim, Unit* u, const LandNav& n, const PathCell& p) {
+  int f = n.attackVariant ? 2 : 1;
+  if (UnitInLine(sim, u, u->position.x, u->position.z, p.x + SX(u) * 0.5f, p.z + SZ(u) * 0.5f, f)) return false;
+  return !PathUnitBlocked(u, p.x, p.z, f);
+}
 
 HPathTables& Tables(Sim& sim) {
   auto& m = TablesMap()[&sim];
@@ -221,9 +231,20 @@ void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
   n.pf.anchor = n.cur;
   SetFinderGoal(sim, u, n, n.goal);
   n.pf.mode = mode;
-  u->unitStates.insert("PathFinding");
-  QueueSearch(sim, u, n);
-  n.state = 3;
+  n.lastFollow = {};
+  n.wait = 0;
+  n.poke = false;
+  if (n.waiting) {
+    // a formation follower waiting for its leader does not search: its goal corner joins the path and it
+    // follows its slot (0x5ae04c, state 6)
+    n.path.push_back(PathCell{n.goal[0], n.goal[1]});
+    n.state = 6;
+  } else {
+    u->unitStates.insert("PathFinding");
+    QueueSearch(sim, u, n);
+    n.state = 3;
+  }
+  n.adjacent = false;
   n.fits = Fits(sim, u, n.cur) && UnitClearTo(sim, u, n, n.cur);
 }
 
@@ -510,6 +531,9 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   n.cur = CellOf(u, u->position.x, u->position.z);
   if (n.thinkDelay > 0) {
     if (--n.thinkDelay == 0) RequestPath(sim, u, n, n.requestMode);
+    if (!n.hasTarget || n.target != n.cur) n.targetChanged = true;  // (0x5ae37f) the target is the own cell
+    n.target = n.cur;
+    n.hasTarget = true;
     return;
   }
   if (n.wait > 0) {
@@ -546,6 +570,11 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     }
   }
   // formation block (0x5ae63a)
+  static const long dbgF = getenv("MOHO64_DEBUG_FOLLOW") ? atol(getenv("MOHO64_DEBUG_FOLLOW")) : -1;
+  if (dbgF == static_cast<long>(u->id))
+    Logf(LogLevel::Info, "follow %u inForm %d ok %d lastFail %u waiting %d following %d state %d target (%d,%d) poke %d",
+         sim.tick(), n.inFormation ? 1 : 0, ok ? 1 : 0, n.lastFail, n.waiting ? 1 : 0, n.following ? 1 : 0, n.state,
+         n.target.x, n.target.z, n.poke ? 1 : 0);
   if (n.inFormation && ok && sim.tick() > n.lastFail + 100) {
     switch (FollowSlot(sim, u, n)) {
       case 1: return;      // following / re-pathed

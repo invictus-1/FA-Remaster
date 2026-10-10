@@ -484,6 +484,9 @@ struct Gen {
   float fx = 0, fz = 1, bx = 0, bz = 1;
   int state = 7;
   bool reverse = false;
+  // the first step of a batch uses the real unit's speed fraction and facing dot (set before the loop)
+  bool first = false;
+  float frac0 = 0, dot0 = 0;
 };
 
 struct StepParams {
@@ -522,22 +525,14 @@ void GenBody(const MotionBlueprint& b, const UnitMotion& m, Gen& g) {
 
 // How a fresh batch starts (Generate with a new path): the state from the speed, the facing and
 // where the target lies.
-void ChooseStart(const MotionBlueprint& b, const StepParams& P, Gen& g, float dotFG) {
+// (spline_generate.md 1: dot and frac are the real unit's; back = the velocity points against the facing)
+void ChooseStart(const MotionBlueprint& b, const StepParams& P, Gen& g, float dot, float frac, bool back) {
   g.reverse = false;
   g.state = 7;
   if (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) return;
-  float speed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
-  float speedFrac = b.maxSpeed > 0 ? speed * 10.0f / b.maxSpeed : 0;
-  bool forward = g.vel.x * g.fx + g.vel.z * g.fz >= 0.0f;
-  if (dotFG >= 0.0f || (speedFrac >= 0.5f && !P.wide)) {
-    if (forward) g.state = 7;
-    else if (dotFG >= 0.0f) g.state = 6;
-    else g.state = 5;
-  } else if (speedFrac > 0.0099999998f && forward) {
-    g.state = 4;
-  } else {
-    g.state = 5;
-  }
+  if (dot < 0.0f && (frac < 0.5f || P.wide)) g.state = (frac <= 0.0099999998f || back) ? 5 : 4;
+  else if (!back) g.state = 7;
+  else g.state = dot < 0.0f ? 5 : 6;
 }
 
 // One spline step (the loop body of CAiPathSpline::Generate 0x5b2ff0) toward tgt. Mode 0 stops at
@@ -546,8 +541,12 @@ void ChooseStart(const MotionBlueprint& b, const StepParams& P, Gen& g, float do
 bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m, Gen& g, const Vec3& tgt, int mode) {
   float dx = tgt.x - g.p.x, dz = tgt.z - g.p.z;
   float dist = std::sqrt(dx * dx + dz * dz);
-  if (dist < 0.0010000000474974513f) return false;
-  float tx = dx / dist, tz = dz / dist;
+  // at the target: no turn (the mode-0 cap brakes it to a stop)
+  float tx = g.fx, tz = g.fz;
+  if (dist > 0) {
+    tx = dx / dist;
+    tz = dz / dist;
+  }
   float speed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
   const int s = g.state;
   const bool backward = s == 5 || s == 6 || s == 2;
@@ -560,8 +559,13 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
     turn *= 2;
   }
   float speedFrac0 = P.maxF > 0 ? speed / P.maxF : 0;
-  float limit = TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, g.fx, g.fz, dx, dz, speedFrac0);
   float dotFG = g.fx * tx + g.fz * tz;
+  if (g.first) {  // the first step of a batch: the real unit's values
+    speedFrac0 = g.frac0;
+    dotFG = g.dot0;
+    g.first = false;
+  }
+  float limit = dist > 0 ? TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, g.fx, g.fz, dx, dz, speedFrac0) : P.maxF;
   if (!g.reverse) {
     RotateToward(g.fx, g.fz, tx, tz, turn);
   } else {
@@ -597,11 +601,12 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
       if (brake < dist) d = std::sqrt(dist * brake + dist * brake);
       if (d <= target) target = d;
     }
-    if (P.wide) target = (std::max(-0.5f, dotFG) + 1.0f) * 0.5f * target;
-    if (target < 0.0010000000474974513f) braking = true;
+    if (P.wide) target = (std::max(-0.5f, g.reverse ? -dotFG : dotFG) + 1.0f) * 0.5f * target;
+    if (target < 0.0010000000474974513f) braking = true;  // (the small target is kept)
+  } else {
+    target = 0;
   }
   if (braking) {  // keep the speed, ease the direction toward the move direction, brake
-    target = 0;
     float vl = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
     float sx = mx, sz = mz;
     if (ml2 != 0.0f) {
@@ -709,6 +714,14 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   if (std::sqrt(ex * ex + ez * ez) < 0.0010000000474974513f) return;
   StepParams P = Params(m);
   Gen g;
+  // the real unit: its (terrain-tilted) forward, distance, facing dot and speed fraction
+  const Quat& q = u->orientation;
+  Vec3 D{2 * (q.w * q.y + q.x * q.z), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
+  if (std::fabs(D.y) > 0.99f) D = {0, 0, 1};
+  float dist = std::sqrt(ex * ex + ez * ez);
+  float dot = (D.x * ex + D.z * ez) / dist;  // the 3-D forward: shortened on a slope
+  const Vec3& V = m.lastMove;
+  float frac = b.maxSpeed > 0 ? std::sqrt(V.x * V.x + V.y * V.y + V.z * V.z) * 10.0f / b.maxSpeed : 0;
   if (cont) {
     g.p = last.pos;
     g.vel = last.vel;
@@ -720,18 +733,19 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     g.reverse = false;
   } else {
     g.p = u->position;
-    g.vel = m.vel;
-    g.fx = m.fx;
-    g.fz = m.fz;
-    g.bx = m.bx;
-    g.bz = m.bz;
+    g.vel = {V.x, 0, V.z};
+    float l = std::sqrt(D.x * D.x + D.z * D.z);
+    g.fx = l > 1e-6f ? D.x / l : 0;
+    g.fz = l > 1e-6f ? D.z / l : 1;
+    g.bx = g.fx;
+    g.bz = g.fz;
+    ChooseStart(b, P, g, dot, frac, V.x * D.x + V.y * D.y + V.z * D.z < 0.0f);
   }
-  float dx = tgt.x - g.p.x, dz = tgt.z - g.p.z;
-  float dist = std::sqrt(dx * dx + dz * dz);
-  float dotFG = dist > 0 ? (g.fx * dx + g.fz * dz) / dist : 1.0f;
-  if (!cont) ChooseStart(b, P, g, dotFG);
-  // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5)
-  if (g.state == 5 && dist < b.backUpDistance && dotFG < -0.5f) g.reverse = true;
+  // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5), from the real unit
+  if (g.state == 5 && dist < b.backUpDistance && dot < -0.5f) g.reverse = true;
+  g.first = true;
+  g.frac0 = frac;
+  g.dot0 = dot;
   const int N = BatchSize(sim, u);
   const bool realAt = AtPosition(u, tgt);  // tested with the unit's real position
   m.savedState = 0;
