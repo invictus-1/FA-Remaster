@@ -19,6 +19,8 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/combat.h"
+#include "sim/entity_grid.h"
 #include "sim/intel.h"
 #include "sim/sim.h"
 #include "sim/air.h"
@@ -183,6 +185,22 @@ int l_CreateProp(lua_State* L) {
   Vec3 p = CheckVec(L, 1);
   const BlueprintInfo* bp = CheckBlueprint(L, 2);
   return PushNew(L, S(L)->CreateProp(L, *bp, p, Quat{}, Vec3{1, 1, 1}));
+}
+
+// Entity:CreatePropAtBone(bone, bp) 0x6fc610 (engine-ref prop_split.md): a prop at the bone's world
+// position and orientation (OnCreate inside the call); its own scale; no army, no terrain snap.
+int ResolveBone(lua_State* L, Entity* e, int arg);
+int l_CreatePropAtBone(lua_State* L) {
+  if (lua_gettop(L) != 3) return luaL_error(L, "%s\n  expected %d args, but got %d", "Entity:CreatePropAtBone", 3, lua_gettop(L));
+  Entity* e = CheckObject<Entity>(L, 1);
+  int bone = ResolveBone(L, e, 2);
+  const char* id = luaL_checkstring(L, 3);
+  const BlueprintInfo* bp = S(L)->blueprints().Find(id);
+  if (!bp) return luaL_error(L, "Unable to create prop '%s'", id);
+  Vec3 wp;
+  Quat wq;
+  BoneWorld(e, bone < 0 ? 0 : bone, &wp, &wq);
+  return PushNew(L, S(L)->CreateProp(L, *bp, wp, wq, Vec3{1, 1, 1}));
 }
 
 int l_SetArmyStart(lua_State* L) {
@@ -386,22 +404,31 @@ int l_Destroy(lua_State* L) {
   }
   return 0;
 }
-// GetReclaimablesInRect(rect) -> props (and wrecks) inside; TODO(M3): spatial index
+// GetReclaimablesInRect(rect) / (x0, z0, x1, z1) (0x75b280): every unit and prop (trees, rocks, wrecks)
+// registered in the entity-grid cells the rect touches, unfiltered, in grid order; nil when none
+// (rect_queries.md).
 int l_GetReclaimablesInRect(lua_State* L) {
-  luaL_checktype(L, 1, LUA_TTABLE);
   float r[4];
-  const char* k[4] = {"x0", "y0", "x1", "y1"};
-  for (int i = 0; i < 4; ++i) {
-    lua_pushstring(L, k[i]);
-    lua_gettable(L, 1);
-    r[i] = static_cast<float>(lua_tonumber(L, -1));
-    lua_pop(L, 1);
+  if (lua_istable(L, 1)) {
+    const char* k[4] = {"x0", "y0", "x1", "y1"};
+    for (int i = 0; i < 4; ++i) {
+      lua_pushstring(L, k[i]);
+      lua_gettable(L, 1);
+      r[i] = static_cast<float>(lua_tonumber(L, -1));
+      lua_pop(L, 1);
+    }
+  } else {
+    for (int i = 0; i < 4; ++i) r[i] = static_cast<float>(luaL_checknumber(L, i + 1));
   }
-  lua_newtable(L);
+  std::vector<Entity*> found;
+  S(L)->entityGrid().Gather(r[0], r[1], r[2], r[3], 3, &found);
+  if (found.empty()) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_newtablesized(L, static_cast<int>(found.size()), 0);
   int n = 0;
-  for (auto& [id, e] : S(L)->entities()) {
-    if (e->kind != Entity::Kind::Prop || e->destroyQueued) continue;
-    if (e->position.x < r[0] || e->position.x > r[2] || e->position.z < r[1] || e->position.z > r[3]) continue;
+  for (Entity* e : found) {
     PushObject(L, e);
     lua_rawseti(L, -2, ++n);
   }
@@ -821,6 +848,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "Entity", "GetScale", l_GetScale);
   SetMethod(L, "Entity", "SetScale", l_SetScale);
   SetMethod(L, "Entity", "GetBoneCount", l_GetBoneCount);
+  SetMethod(L, "Entity", "CreatePropAtBone", l_CreatePropAtBone);
   SetMethod(L, "Entity", "IsValidBone", l_IsValidBone);
   SetMethod(L, "Entity", "GetBoneName", l_GetBoneName);
   SetMethod(L, "Entity", "GetBoneDirection", l_GetBoneDirection);

@@ -1,5 +1,6 @@
 // Unit commands and their Lua bindings (see commands.h).
 #include "sim/commands.h"
+#include "sim/entity_grid.h"
 #include "sim/formation.h"
 #include "sim/landnav.h"
 #include "sim/combat.h"
@@ -1001,25 +1002,21 @@ bool RectArgs(lua_State* L, float r[4]) {
   return true;
 }
 
-// GetUnitsInRect(rect) / (x0, z0, x1, z1): units whose position is inside; nil when none.
-// TODO(speed pass): spatial grid instead of a scan; the original tests collision bounds.
+// GetUnitsInRect(rect) / (x0, z0, x1, z1) (0x75ae80): every unit registered in the entity-grid cells the
+// rect touches (no position test; dead units too), in grid order; nil when none (rect_queries.md).
 int l_GetUnitsInRect(lua_State* L) {
   float r[4];
   RectArgs(L, r);
-  float x0 = std::min(r[0], r[2]), x1 = std::max(r[0], r[2]), z0 = std::min(r[1], r[3]), z1 = std::max(r[1], r[3]);
-  std::vector<Unit*> found;
-  S(L)->ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) {
-    if (!u->dead) found.push_back(u);
-  });
+  std::vector<Entity*> found;
+  S(L)->entityGrid().Gather(r[0], r[1], r[2], r[3], 1, &found);
   if (found.empty()) {
     lua_pushnil(L);
     return 1;
   }
-  std::sort(found.begin(), found.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
   lua_newtablesized(L, static_cast<int>(found.size()), 0);
   int n = 0;
-  for (Unit* u : found) {
-    PushObject(L, u);
+  for (Entity* e : found) {
+    PushObject(L, static_cast<Unit*>(e));
     lua_rawseti(L, -2, ++n);
   }
   return 1;

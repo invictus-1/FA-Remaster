@@ -30,6 +30,7 @@ class AiBrain;
 class TerrainMap;
 class Unit;
 class Prop;
+class EntityGrid;
 class Platoon;
 class Navigation;
 struct UnitCommand;
@@ -173,6 +174,8 @@ class Sim {
         }
   }
   void MarkUnitsMoved() { gridDirty_ = true; }
+  // The entity grid behind GetUnitsInRect / GetReclaimablesInRect (sim/entity_grid.h).
+  EntityGrid& entityGrid();
   bool anyAttached = false;  // some unit rides a transport (sim/transport.cpp)
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
@@ -206,6 +209,7 @@ class Sim {
   std::unique_ptr<ThreadScheduler> threads_;
   std::unique_ptr<TerrainMap> map_;
   std::unique_ptr<Navigation> nav_;
+  std::unique_ptr<EntityGrid> egrid_;
   SimBlueprints bps_;
   std::vector<std::unique_ptr<Army>> armies_;
   std::mt19937 rng_;

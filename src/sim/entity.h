@@ -57,6 +57,9 @@ class Entity : public ScriptObject {
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)
   int shooters = 0;           // weapons targeting it (DesiredShooterCap)
   std::shared_ptr<EntityIntel> intel;  // intel circles (sim/intel.cpp; InitIntel / unit blueprints)
+  // the entity grid (sim/entity_grid.h): its cell span (w or h 0: in no cell), the dedup mark
+  uint16_t gridX0 = 0, gridZ0 = 0, gridW = 0, gridH = 0;
+  bool gridMark = false;
 };
 
 // The engine's fields that refer to an entity store EntityRef(e): its handle, unique for the whole

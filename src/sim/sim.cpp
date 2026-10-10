@@ -1,3 +1,4 @@
+#include "sim/entity_grid.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
 #include "sim/formation.h"
@@ -728,6 +729,7 @@ void Sim::ProcessDestroyQueue() {
     entities_.erase(e->handle);
     byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);
+    GridRemove(*this, e);
     if (e->kind == Entity::Kind::Projectile) {
       auto& v = projectiles;
       v.erase(std::remove(v.begin(), v.end(), static_cast<Projectile*>(e)), v.end());
@@ -950,6 +952,7 @@ void Sim::Tick() {
   ReconBeat(*this);  // army (tick % armies) updates its blips
   FormationsTick(*this);  // step 11: the formation DB
   KillCleanupTick(*this);
+  GridAdvanceCoords(*this);   // step 13: moved units take their (widened) cells in the entity grid
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);
   ProcessDestroyQueue();
@@ -1021,6 +1024,12 @@ void Sim::RebuildPropGrid() {
     propGrid_[static_cast<size_t>(cz) * gridW_ + cx].push_back(p);
   }
   propGridDirty_ = false;
+}
+
+EntityGrid& Sim::entityGrid() {
+  if (!egrid_) egrid_ = std::make_unique<EntityGrid>();
+  if (!egrid_->ready() && map_) egrid_->Init(map_->width(), map_->height());
+  return *egrid_;
 }
 
 Navigation& Sim::navigation() {

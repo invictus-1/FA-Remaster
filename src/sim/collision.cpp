@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 
+#include "sim/entity_grid.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
 #include "sim/vecmath.h"
@@ -125,7 +126,12 @@ void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx) {
   *mx = Add(s.c, e);
 }
 
+static void RevertShape(lua_State* L, Entity* e);
 void RevertCollisionShape(lua_State* L, Entity* e) {
+  RevertShape(L, e);
+  GridUpdate(*Sim::From(L), e, false);  // the plain primitive (a unit widens at its next AdvanceCoords)
+}
+static void RevertShape(lua_State* L, Entity* e) {
   e->shape = CollisionShape{};
   if (!e->blueprint) return;
   int top = lua_gettop(L);
@@ -156,6 +162,7 @@ int l_SetCollisionShape(lua_State* L) {
   std::string t = type;
   if (!strncasecmp(type, "None", 4) && t.size() == 4) {
     e->shape = CollisionShape{};
+    GridUpdate(*Sim::From(L), e, false);
     return 0;
   }
   auto num = [&](int i) { return static_cast<float>(luaL_checknumber(L, i)); };
@@ -170,6 +177,7 @@ int l_SetCollisionShape(lua_State* L) {
   } else {
     return luaL_error(L, "Unknown shape type %s; should be None, Box, or Sphere", type);
   }
+  GridUpdate(*Sim::From(L), e, false);
   return 0;
 }
 

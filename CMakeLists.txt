@@ -60,6 +60,7 @@ add_library(mohocore STATIC
   src/sim/terrain.cpp src/sim/sim.cpp src/sim/entities.cpp src/sim/effects.cpp src/sim/bp_reflect.cpp
   src/sim/bp_derived.cpp src/sim/skeleton.cpp src/sim/motion.cpp src/sim/air.cpp src/sim/transport.cpp src/sim/navigation.cpp src/sim/hpath.cpp src/sim/landnav.cpp src/sim/formation.cpp
   src/sim/steering.cpp
+  src/sim/entity_grid.cpp
   src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
   src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp)
 target_include_directories(mohocore PUBLIC src)

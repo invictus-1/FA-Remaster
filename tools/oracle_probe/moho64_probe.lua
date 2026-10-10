@@ -1561,4 +1561,34 @@ function P.M28Sites()
     out('m28bl-hooked', GetGameTick())
 end
 
+-- 15) (v24) props around each commander: GetReclaimablesInRect(start +- 12) at ticks 30 and 46, in the order
+-- returned. "PROBE prd <tick> <army> <i> <bp short> x z ry" (ry: heading; units are listed too, bp id)
+function P.PropDump()
+    local function dump(tick)
+        for i, name in ListArmies() do
+            pcall(function()
+                if ArmyIsCivilian(i) then return end
+                local sx, sz = GetArmyBrain(i):GetArmyStartPos()
+                local t = GetReclaimablesInRect(Rect(sx - 12, sz - 12, sx + 12, sz + 12)) or {}
+                local k = 0
+                for _, e in t do
+                    k = k + 1
+                    local bp = e:GetBlueprint()
+                    local id = (bp and (bp.BlueprintId or bp.UnitId)) or '?'
+                    id = string.gsub(id, '^.*/', '')
+                    local p = e:GetPosition()
+                    local h = e.GetHeading and e:GetHeading() or 0
+                    out('prd', tick, i, k, id, string.format('%.3f', p[1]), string.format('%.3f', p[3]),
+                        string.format('%.3f', h))
+                end
+                out('prdn', tick, i, k)
+            end)
+        end
+    end
+    while GetGameTick() < 30 do WaitTicks(1) end
+    dump(GetGameTick())
+    while GetGameTick() < 46 do WaitTicks(1) end
+    dump(GetGameTick())
+end
+
 moho64_probe = P
