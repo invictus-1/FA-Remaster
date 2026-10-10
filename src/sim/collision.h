@@ -39,6 +39,8 @@ bool SegmentHit(const WorldShape& s, Vec3 p0, Vec3 p1, Vec3* hit, float* dist);
 bool SphereOverlap(const WorldShape& s, Vec3 c, float r);
 bool PointInShape(const WorldShape& s, Vec3 p);
 void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx);
+// CollideBox against an axis-aligned box (touching counts).
+bool ShapeOverlapsAABox(const WorldShape& s, Vec3 mn, Vec3 mx);
 
 // The blueprint's shape (Entity::RevertCollisionShape).
 void RevertCollisionShape(lua_State* L, Entity* e);

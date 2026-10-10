@@ -36,6 +36,8 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/collision.h"
+#include "sim/entity_grid.h"
 #include "sim/formation.h"
 #include "sim/transport.h"
 #include "sim/combat.h"
@@ -376,30 +378,275 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
 
 namespace {
 
+BuildTask* NewChild(Sim& sim, CommandType type, const char* order);
+bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4]);
+
+// A prop blueprint's float field (default when missing).
+float PropBpNum(Sim& sim, lua_State* L, const BlueprintInfo& bp, const char* sect, const char* key, float def) {
+  int top = lua_gettop(L);
+  sim.blueprints().PushTable(L, bp);
+  if (sect) {
+    lua_pushstring(L, sect);
+    lua_rawget(L, -2);
+    if (!lua_istable(L, -1)) {
+      lua_settop(L, top);
+      return def;
+    }
+  }
+  lua_pushstring(L, key);
+  lua_rawget(L, -2);
+  float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+  lua_settop(L, top);
+  return v;
+}
+
+// 0x5f6ea0 (mobile_build.md 8.2): the obstructing prop nearest the builder in the target's footprint, unless it is
+// the matching wreck exactly on the site (kept: destroyed when the unit is created).
+Entity* FindSiteProp(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  const NamedFootprint& fp = Footprint(*t.bp);
+  int x0 = RoundEven(t.site.x - fp.sizeX * 0.5f), z0 = RoundEven(t.site.z - fp.sizeZ * 0.5f);
+  Vec3 mn{static_cast<float>(x0), t.site.y - 1000.0f, static_cast<float>(z0)};
+  Vec3 mx{static_cast<float>(x0 + fp.sizeX), t.site.y + 1000.0f, static_cast<float>(z0 + fp.sizeZ)};
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(mn.x, mn.z, mx.x, mx.z, 2, &cand);
+  Entity* best = nullptr;
+  float bestD = std::numeric_limits<float>::infinity();
+  for (Entity* p : cand) {
+    if (p->kind != Entity::Kind::Prop || !p->blueprint) continue;
+    WorldShape ws;
+    if (!GetWorldShape(p, &ws)) continue;
+    Vec3 a, b;
+    ShapeBounds(ws, &a, &b);
+    if (a.x > mx.x || b.x < mn.x || a.y > mx.y || b.y < mn.y || a.z > mx.z || b.z < mn.z) continue;
+    if (!ShapeOverlapsAABox(ws, mn, mx)) continue;
+    if (!BpInCategory(sim, p->blueprint, "OBSTRUCTSBUILDING")) continue;
+    float dx = p->position.x - u->position.x, dy = p->position.y - u->position.y, dz = p->position.z - u->position.z;
+    float d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < bestD) {
+      bestD = d2;
+      best = p;
+    }
+  }
+  if (!best) return nullptr;
+  // a wreck the target rebuilds (Economy.RebuildBonusIds), centred on the site, is kept
+  int top = lua_gettop(L);
+  PushObject(L, best);
+  lua_pushstring(L, "AssociatedBP");
+  lua_gettable(L, -2);
+  std::string assoc = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+  lua_settop(L, top);
+  if (assoc.empty()) return best;
+  bool listed = false;
+  sim.blueprints().PushTable(L, *t.bp);
+  lua_pushstring(L, "Economy");
+  lua_rawget(L, -2);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "RebuildBonusIds");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1))
+      for (int i = 1;; ++i) {
+        lua_rawgeti(L, -1, i);
+        if (lua_isnil(L, -1)) {
+          lua_pop(L, 1);
+          break;
+        }
+        if (lua_type(L, -1) == LUA_TSTRING && !strcasecmp(lua_tostring(L, -1), assoc.c_str())) listed = true;
+        lua_pop(L, 1);
+      }
+  }
+  lua_settop(L, top);
+  if (!listed) return best;
+  float dx = t.site.x - best->position.x, dz = t.site.z - best->position.z;
+  if (!(dx * dx + dz * dz < 1e-6f)) return best;
+  t.rebuildWreck = EntityRef(best);  // FAF's GetRebuildBonus returns 0: no engine bonus
+  return nullptr;
+}
+
+// CUnitReclaimTask for a prop target (mobile_build.md 8.4), the child clearing a build site.
+void EndPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
+  Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
+  if (c.reclaimStarted) {
+    c.reclaimStarted = false;
+    PushObject(L, e);
+    sim.CallMethod(L, u, "OnStopReclaim", 1);
+  }
+  if (!u->builderArms.empty()) SetArmAimTarget(sim, u, Vec3{0, 0, 0});
+  u->unitStates.erase("Reclaiming");
+  u->focusId = 0;
+  u->workProgress = 0;
+  if (c.moving) StopMoving(u);
+}
+
+int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
+  Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
+  if (!e || e->destroyQueued) return kTaskFailed;
+  Vec3 tp = e->position;
+  float dx = u->position.x - tp.x, dz = u->position.z - tp.z;
+  float dist = std::sqrt(dx * dx + dz * dz);
+  const NamedFootprint& bf = Footprint(*u->blueprint);
+  float pfx = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeX", 1), pfz = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeZ", 1);
+  float gap = dist - static_cast<float>(std::max(bf.sizeX, bf.sizeZ)) - std::max(pfx, pfz);
+  float maxBD = u->bpData->maxBuildDistance;
+  for (;;) switch (c.state) {
+    case 0:
+      if (!BpInCategory(sim, e->blueprint, "RECLAIMABLE") || e == u) return kTaskFailed;
+      if (gap > maxBD || dist < 1.0f) {  // PrepareMove next to the prop's footprint rect, reserve, move
+        if (!CanMove(u)) return kTaskFailed;
+        int px0 = RoundEven(tp.x - pfx * 0.5f), pz0 = RoundEven(tp.z - pfz * 0.5f);
+        float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + pfx,
+                         static_cast<float>(pz0) + pfz};
+        Vec3 a = tp;
+        PrepareMoveFor(sim, u, &a, excl);
+        const NamedFootprint& ufp = Footprint(*u->blueprint);
+        int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
+        int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
+        int rr[4] = {x0, z0, x0 + ufp.sizeX, z0 + ufp.sizeZ};
+        GroundReserveRect(sim, u, rr);
+        MoveToward(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});
+        c.moving = true;
+      }
+      c.state = 1;
+      if (c.moving) return kTaskRunning;
+      continue;
+    case 1:
+      if (c.moving) {
+        if (u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
+        c.moving = false;
+        StopMoving(u);
+        GroundFreeRect(sim, u);
+      }
+      if (gap > maxBD) return kTaskFailed;
+      if (!u->builderArms.empty()) SetArmAimTarget(sim, u, tp);
+      if (!c.reclaimStarted) {
+        c.reclaimStarted = true;
+        PushObject(L, e);
+        sim.CallMethod(L, u, "OnStartReclaim", 1);
+      }
+      c.state = 2;
+      continue;
+    case 2:
+      c.state = 3;
+      return kTaskRunning;
+    case 3: {
+      if (!u->builderArms.empty() && dist > 1.0f && !u->armReady) return kTaskRunning;
+      int top = lua_gettop(L);
+      PushObject(L, e);
+      int obj = lua_gettop(L);
+      lua_pushstring(L, "GetReclaimCosts");
+      lua_gettable(L, obj);
+      if (!lua_isfunction(L, -1)) {
+        lua_settop(L, top);
+        return kTaskFailed;
+      }
+      lua_pushcfunction(L, ScriptTraceback);
+      lua_insert(L, -2);
+      lua_pushvalue(L, obj);
+      PushObject(L, u);
+      if (lua_pcall(L, 2, 3, top + 2) != 0) {
+        LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+        lua_settop(L, top);
+        return kTaskFailed;
+      }
+      float time = static_cast<float>(lua_tonumber(L, -3)), energy = static_cast<float>(lua_tonumber(L, -2)),
+            mass = static_cast<float>(lua_tonumber(L, -1));
+      lua_settop(L, top);
+      float rate = std::max(1.0f, time * 10.0f);
+      c.reclaimStep = 1.0f / rate;
+      if (energy < 0 || mass < 0) return kTaskFailed;
+      c.reclaimPerTick[kEnergy] = energy / rate;
+      c.reclaimPerTick[kMass] = mass / rate;
+      u->unitStates.insert("Reclaiming");
+      u->focusId = EntityRef(e);
+      if (e->maxHealth > 0) e->fractionComplete = std::min(e->fractionComplete, e->health / e->maxHealth);
+      c.state = 4;
+      return kTaskRunning;
+    }
+    case 4: {
+      if (gap > maxBD) return kTaskFailed;
+      if (!c.reclaimStarted) {
+        c.reclaimStarted = true;
+        PushObject(L, e);
+        sim.CallMethod(L, u, "OnStartReclaim", 1);
+      }
+      if (u->paused) return kTaskRunning;
+      float k = u->request ? u->request->LimitingRate() : 1.0f;
+      float old = e->fractionComplete;
+      float f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
+      e->fractionComplete = f;
+      float taken = old - f;
+      float h = e->maxHealth * f;
+      if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
+      u->workProgress = 1.0f - f;
+      if (u->army && c.reclaimStep > 0) {
+        float q = taken / c.reclaimStep;
+        for (int i = 0; i < 2; ++i) {
+          float got = q * c.reclaimPerTick[i];
+          u->army->econ.income[i] += got;
+          u->army->econ.reclaimed[i] += got;
+        }
+      }
+      if (f <= 0.0f && !e->destroyQueued) {
+        PushObject(L, u);
+        sim.CallMethod(L, e, "OnReclaimed", 1);
+        if (!e->destroyQueued) sim.QueueDestroy(e);
+      }
+      return kTaskRunning;  // the end is the next beat's pre-check
+    }
+    default:
+      return kTaskFailed;
+  }
+}
+
 // CUnitMobileBuildTask::Tick 0x5f7440 (engine-ref mobile_build.md): states 1 -> 2 -> 3 run in one beat (the
 // original's return 0), so a builder whose arm is already on target creates the structure the beat after the
 // order; joining a structure at the site works in the same beat.
 int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.sub) {  // the reclaim child clearing the site runs on top of this task
+    if (sim.tick() < t.subFrom) return kTaskRunning;
+    int r = TickPropReclaim(sim, L, u, *t.sub);
+    if (r == kTaskRunning) return kTaskRunning;
+    EndPropReclaim(sim, L, u, *t.sub);
+    t.sub = nullptr;  // its result is not read; state 0 runs again now
+  }
   for (;;) switch (t.state) {
     case 0:
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
       t.site = SnapStructurePosition(sim, *t.bp, t.site);
-      if (CanMove(u) && !InBuildRange(u, *t.bp, t.site)) MoveToward(sim, u, t.site);
+      if (Entity* p = FindSiteProp(sim, L, u, t)) {  // 0x5f6ea0: clear the site first
+        BuildTask* c = NewChild(sim, CommandType::Reclaim, "Reclaim");
+        c->goalId = EntityRef(p);
+        t.sub = c;
+        t.subFrom = sim.tick() + 1;
+        return kTaskRunning;
+      }
+      if (CanMove(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
+        const NamedFootprint& sfp = Footprint(*t.bp);
+        int sx0 = RoundEven(t.site.x - sfp.sizeX * 0.5f), sz0 = RoundEven(t.site.z - sfp.sizeZ * 0.5f);
+        const NamedFootprint& ufp = Footprint(*u->blueprint);
+        int ux0 = RoundEven(u->position.x - ufp.sizeX * 0.5f), uz0 = RoundEven(u->position.z - ufp.sizeZ * 0.5f);
+        bool overlap = ux0 <= sx0 + sfp.sizeX && sx0 <= ux0 + ufp.sizeX && uz0 <= sz0 + sfp.sizeZ && sz0 <= uz0 + ufp.sizeZ;
+        if (!UnitFitsAt(sim, u, u->position.x, u->position.z) || !InBuildRange(u, *t.bp, t.site) || overlap) {
+          float excl[4] = {static_cast<float>(sx0) - 1.0f, static_cast<float>(sz0) - 1.0f,
+                           static_cast<float>(sx0 + sfp.sizeX) + 1.0f, static_cast<float>(sz0 + sfp.sizeZ) + 1.0f};
+          Vec3 a = t.site;
+          PrepareMoveFor(sim, u, &a, excl);
+          int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
+          int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
+          int rr[4] = {x0, z0, x0 + ufp.sizeX, z0 + ufp.sizeZ};
+          GroundReserveRect(sim, u, rr);
+          MoveToward(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});
+          t.moving = true;
+        }
+      }
       t.state = 1;
       return kTaskRunning;
     case 1:
-      if (!InBuildRange(u, *t.bp, t.site)) {
-        if (!CanMove(u)) return kTaskFailed;
-        if (u->motion.failed || (!u->motion.hasGoal && u->motion.arrived)) {
-          u->motion.arrived = false;
-          if (!u->motion.failed) MoveToward(sim, u, t.site);
-          if (u->motion.failed) return kTaskFailed;
-        } else if (!u->motion.hasGoal) {
-          MoveToward(sim, u, t.site);
-          if (u->motion.failed) return kTaskFailed;
-        }
-        return kTaskRunning;
+      if (t.moving) {  // the move child: state 1 runs in the beat it ends
+        if (u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
+        t.moving = false;
+        GroundFreeRect(sim, u);
       }
+      if (!InBuildRange(u, *t.bp, t.site)) return kTaskFailed;  // no re-move
       StopMoving(u);
       {  // aim the build arm at the middle of the structure (0x5f78bf)
         const UnitBpData& sd = GetUnitBpData(L, *t.bp);
@@ -430,6 +677,9 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       float h = dmath::Atan2(u->position.x - t.site.x, u->position.z - t.site.z);  // (structures face the builder? kept level)
       (void)h;
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, t.site, Quat{}, false, u);
+      if (Entity* w = t.rebuildWreck ? sim.FindEntity(t.rebuildWreck) : nullptr)  // the rebuilt wreck goes
+        if (!w->destroyQueued) sim.QueueDestroy(w);
+      t.rebuildWreck = 0;
       if (!nu || !Alive(nu)) return kTaskFailed;
       nu->unitStates.insert("NoReclaim");
       SetFocus(sim, L, u, nu, t);
@@ -1654,6 +1904,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   lua_State* L = sim.L();
   if (t.ended) return;
   t.ended = true;
+  if (t.sub) {  // a mobile build's site-clearing reclaim is popped first
+    EndPropReclaim(sim, L, u, *t.sub);
+    t.sub = nullptr;
+  }
   if (t.scriptTask) {  // the task object's OnDestroy, then it is gone
     if (t.HasLuaObject()) sim.CallMethod(L, &t, "OnDestroy", 0);
     t.UnbindLua();

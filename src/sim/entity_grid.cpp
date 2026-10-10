@@ -83,6 +83,34 @@ void EntityGrid::Gather(float x0, float z0, float x1, float z1, int mask, std::v
   for (Entity* e : *out) e->gridMark = false;
 }
 
+void EntityGrid::GatherBox(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) {
+  out->clear();
+  if (!w_) return;
+  auto span = [](float lo, float hi, int* c0, int* n) {
+    int f = static_cast<int>(std::floor(lo)), c = static_cast<int>(std::ceil(hi));
+    *c0 = std::clamp(f >> 2, 0, 0xffff);
+    *n = std::clamp(((c + 3) >> 2) - *c0, 0, 0xffff - *c0);
+  };
+  int cx0, cz0, w, h;
+  span(x0, x1, &cx0, &w);
+  span(z0, z1, &cz0, &h);
+  int cols = std::min(w, w_ - cx0), rows = std::min(h, h_ - cz0);
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      size_t idx = static_cast<size_t>(cz0 + r) * w_ + (cx0 + c);
+      for (int k = 0; k < 2; ++k) {
+        if (!(mask & (1 << k))) continue;
+        const auto& l = lists_[k][idx];
+        for (auto it = l.rbegin(); it != l.rend(); ++it)
+          if (!(*it)->gridMark) {
+            (*it)->gridMark = true;
+            out->push_back(*it);
+          }
+      }
+    }
+  for (Entity* e : *out) e->gridMark = false;
+}
+
 void GridUpdate(Sim& sim, Entity* e, bool widened) {
   if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop) return;
   EntityGrid& g = sim.entityGrid();

@@ -23,6 +23,8 @@ class EntityGrid {
   // Everything registered in the cells the rect touches (mask 1: units, 2: props), each once, in grid
   // order (Rect2fToInt16 + GatherUnmarked).
   void Gather(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
+  // COGrid::CollectEntitiesInBox's cell span (func_AABoxToRect 0x4fcbe0: floor / ceil, like an entity's own span).
+  void GatherBox(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
   bool ready() const { return w_ > 0; }
 
  private:

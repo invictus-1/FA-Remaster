@@ -993,10 +993,7 @@ bool Coast(Unit* u) {
   }
   m.vel.x = m.vel.x * 0.800000011920929f - bx;
   m.vel.z = m.vel.z * 0.800000011920929f - bz;
-  if (m.vel.x * m.vel.x + m.vel.z * m.vel.z < kStopSq) {
-    m.vel = {};
-    return false;
-  }
+  // CalcMoveCommon applies the new velocity even when it is tiny (|v| < brake gives -0.2 v: a small step back)
   u->position.x += m.vel.x;
   u->position.z += m.vel.z;
   return true;

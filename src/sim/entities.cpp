@@ -289,6 +289,26 @@ int l_CreatePropAtBone(lua_State* L) {
   return PushNew(L, p);
 }
 
+// CAiBrain:GetMapWaterRatio 0x58feb0 -> 0x62d7e0 (engine-ref map_water_ratio.md): every 8th heightfield vertex
+// (edges excluded) below the water level, recomputed per call.
+int l_brain_GetMapWaterRatio(lua_State* L) {
+  const TerrainMap* map = S(L)->map();
+  float water = 0.0f, total = 0.0f;
+  if (map) {
+    const int nx = static_cast<int>(static_cast<unsigned>(map->width()) >> 3) - 1;
+    const int ny = static_cast<int>(static_cast<unsigned>(map->height()) >> 3) - 1;
+    const float level = map->hasWater ? map->waterElevation : -10000.0f;
+    if (nx > 1)
+      for (int i = 1; i < nx; ++i)
+        for (int j = 1; j < ny; ++j) {
+          if (map->HeightAt(8 * i, 8 * j) < level) water += 1.0f;
+          total += 1.0f;
+        }
+  }
+  lua_pushnumber(L, water / total);
+  return 1;
+}
+
 int l_SetArmyStart(lua_State* L) {
   Army* a = CheckArmy(L, 1);
   a->startX = static_cast<float>(luaL_checknumber(L, 2));
@@ -975,6 +995,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "CPlatoon", "GetAIPlan", l_platoon_GetAIPlan);
 
   SetMethod(L, "CAiBrain", "GetArmyStartPos", l_brain_GetArmyStartPos);
+  SetMethod(L, "CAiBrain", "GetMapWaterRatio", l_brain_GetMapWaterRatio);
   SetMethod(L, "CAiBrain", "MakePlatoon", l_brain_MakePlatoon);
   SetMethod(L, "CAiBrain", "GetPlatoonUniquelyNamed", l_brain_GetPlatoonUniquelyNamed);
   SetMethod(L, "CAiBrain", "GetListOfUnits", l_brain_GetListOfUnits);

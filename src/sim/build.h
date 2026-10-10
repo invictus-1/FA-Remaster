@@ -45,6 +45,9 @@ struct BuildTask : public ScriptObject {
   uint32_t workId = 0;
   bool noMove = false, silo = false, assist = false, inheritWork = false, moving = false;
   bool child = false;  // a child task of the guard (or another task), not a command's own task
+  // CUnitMobileBuildTask: the reclaim child clearing the site (0x5f6ea0), the wreck being rebuilt
+  BuildTask* sub = nullptr;
+  uint32_t subFrom = 0, rebuildWreck = 0;
   std::shared_ptr<struct TransportTaskData> tdata;  // transport load / unload tasks (sim/transport.cpp)
   std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
   std::shared_ptr<struct AttackData> adata;         // the attack task (CUnitAttackTargetTask)

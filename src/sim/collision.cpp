@@ -127,6 +127,43 @@ void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx) {
 }
 
 static void RevertShape(lua_State* L, Entity* e);
+bool ShapeOverlapsAABox(const WorldShape& s, Vec3 mn, Vec3 mx) {
+  Vec3 bc{(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
+  Vec3 bh{(mx.x - mn.x) * 0.5f, (mx.y - mn.y) * 0.5f, (mx.z - mn.z) * 0.5f};
+  if (s.type == ShapeType::Sphere) {
+    float d2 = 0;
+    const float c[3] = {s.c.x, s.c.y, s.c.z}, lo[3] = {mn.x, mn.y, mn.z}, hi[3] = {mx.x, mx.y, mx.z};
+    for (int i = 0; i < 3; ++i) {
+      float v = c[i] < lo[i] ? lo[i] - c[i] : (c[i] > hi[i] ? c[i] - hi[i] : 0.0f);
+      d2 += v * v;
+    }
+    return d2 <= s.r * s.r;
+  }
+  if (s.type != ShapeType::Box) return false;
+  // separating axis test: OBB (s) vs AABB (bc, bh)
+  const Vec3 A[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  const float ah[3] = {bh.x, bh.y, bh.z}, oh[3] = {s.half.x, s.half.y, s.half.z};
+  Vec3 T{s.c.x - bc.x, s.c.y - bc.y, s.c.z - bc.z};
+  auto dot = [](Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+  auto cross = [](Vec3 a, Vec3 b) { return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; };
+  auto sep = [&](Vec3 L) {
+    float l2 = dot(L, L);
+    if (l2 < 1e-12f) return false;
+    float ra = 0, rb = 0;
+    for (int i = 0; i < 3; ++i) {
+      ra += ah[i] * std::fabs(dot(A[i], L));
+      rb += oh[i] * std::fabs(dot(s.ax[i], L));
+    }
+    return std::fabs(dot(T, L)) > ra + rb;
+  };
+  for (int i = 0; i < 3; ++i)
+    if (sep(A[i]) || sep(s.ax[i])) return false;
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      if (sep(cross(A[i], s.ax[j]))) return false;
+  return true;
+}
+
 void RevertCollisionShape(lua_State* L, Entity* e) {
   RevertShape(L, e);
   GridUpdate(*Sim::From(L), e, false);  // the plain primitive (a unit widens at its next AdvanceCoords)
