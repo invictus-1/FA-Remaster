@@ -378,6 +378,8 @@ void PropCollisions(Sim& sim, Unit* u, const Obb& box) {
 
 void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  if (getenv("MOHO64_DEBUG_PROPHIT") && (sim.tick() < 3 || u->id == 9437229))
+    Logf(LogLevel::Info, "psc0 %u unit %u layer %s dead %d bb %d par %u pushed %d", sim.tick(), u->id, u->layer.c_str(), (int)u->dead, (int)u->beingBuilt, u->parentId, (int)m.pushed);
   if (u->layer == "Air" || u->layer == "Sub") return;
   if (u->dead || u->beingBuilt || u->parentId || St(u, "Attached")) return;
   if (!m.bp || m.bp->canFly) return;
@@ -390,6 +392,8 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   box.ax[2] = Forward(u->orientation);
   box.h = {b.sizeX * 0.5f, b.sizeY, b.sizeZ * 0.5f};
   // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also hits props: prop:OnCollision (prop_collision.md)
+  if (getenv("MOHO64_DEBUG_PROPHIT") && (sim.tick() < 3 || u->id == 9437229))
+    Logf(LogLevel::Info, "psc %u unit %u bp %s size %.2f %.2f pos %.2f %.2f", sim.tick(), u->id, u->blueprint ? u->blueprint->id.c_str() : "?", b.sizeX, b.sizeZ, u->position.x, u->position.z);
   if (b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u) PropCollisions(sim, u, box);
   std::vector<Hit> hits;
   float r = std::max(b.sizeX, b.sizeZ) + 8.0f;

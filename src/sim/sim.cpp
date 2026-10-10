@@ -1102,6 +1102,8 @@ void Sim::Tick() {
   g_prof.Lap(3);
   for (size_t i = 0; i < units_.size(); ++i) {  // (motion may create or destroy nothing)
     Unit* u = units_[i];
+    if (getenv("MOHO64_DEBUG_PROPHIT") && tick_ < 3 && u->id == 9437226)
+      Logf(LogLevel::Info, "loop %u dq %d par %u attach %d bb %d", tick_, (int)u->destroyQueued, u->parentId, (int)u->attachFull, (int)u->beingBuilt);
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)

@@ -29,12 +29,18 @@ class Animator : public ScriptObject {
   bool hasAnim = false, looping = false, alive = true;
   float duration = 0, time = 0, rate = 1;
   int frames = 0;
-  int EventState() const override {
+  // the task event's signalled flag: recomputed only by UpdateTriggeredState 0x63fb10, which runs from
+  // SetAnimationResource (PlayAnim), SetRate and the per-tick manipulator update, not from SetAnimationTime /
+  // SetAnimationFraction (a script that jumps to the end still waits until the next update)
+  bool triggered = true;
+  int Compute() const {
     if (!hasAnim || rate == 0) return 1;
     if (looping) return 0;
     if (rate < 0) return time == 0 ? 1 : 0;
     return time == duration ? 1 : 0;
   }
+  void UpdateTriggered() { triggered = Compute() == 1; }
+  int EventState() const override { return triggered ? 1 : 0; }
 };
 
 std::vector<Animator*>& Animators() {
@@ -98,6 +104,7 @@ int l_PlayAnim(lua_State* L) {  // (anim [, looping])
   a->frames = h.frames;
   a->duration = h.duration;
   a->time = 0;
+  a->UpdateTriggered();
   return Self(L);
 }
 int l_GetRate(lua_State* L) {
@@ -106,6 +113,7 @@ int l_GetRate(lua_State* L) {
 }
 int l_SetRate(lua_State* L) {
   A(L)->rate = static_cast<float>(luaL_checknumber(L, 2));
+  A(L)->UpdateTriggered();
   return Self(L);
 }
 int l_GetAnimationFraction(lua_State* L) {
@@ -161,7 +169,10 @@ void AnimTick(Sim& sim) {
       continue;
     }
     v[w++] = a;
-    if (!a->hasAnim) continue;
+    if (!a->hasAnim) {
+      a->UpdateTriggered();
+      continue;
+    }
     if (a->entity && a->entity->kind == Entity::Kind::Unit && static_cast<Unit*>(a->entity)->beingBuilt) continue;
     float t = a->time + a->rate * 0.1f;
     if (!a->looping) {
@@ -174,6 +185,7 @@ void AnimTick(Sim& sim) {
       t = 0;
     }
     a->time = t;
+    a->UpdateTriggered();
   }
   v.resize(w);
 }

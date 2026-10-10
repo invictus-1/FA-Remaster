@@ -982,24 +982,30 @@ namespace {
 bool Coast(Unit* u) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
-  float v2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
+  // v = the entity velocity (m+0x38 for a land unit, 3-D: a fresh spline point's terrain y counts too)
+  float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
   if (v2 < kStopSq) {
     m.vel = {};
+    m.prevPosY = u->position.y;
     return false;
   }
   float brake = (b.maxBrake > 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
-  float bx = m.vel.x, bz = m.vel.z;
+  float bx = m.vel.x, by = m.vel.y, bz = m.vel.z;
   if (v2 > brake * brake) {
     float k = brake / std::sqrt(v2);
     bx *= k;
+    by *= k;
     bz *= k;
   }
   m.vel.x = m.vel.x * 0.800000011920929f - bx;
+  m.vel.y = m.vel.y * 0.800000011920929f - by;
   m.vel.z = m.vel.z * 0.800000011920929f - bz;
   // CalcMoveCommon applies the new velocity even when it is tiny (|v| < brake gives -0.2 v: a small step back)
   u->position.x += m.vel.x;
+  u->position.y += m.vel.y;
   u->position.z += m.vel.z;
-  return true;
+  m.prevPosY = u->position.y;
+  return m.vel.x != 0 || m.vel.z != 0 || m.vel.y != 0;
 }
 
 }  // namespace
@@ -1165,6 +1171,8 @@ bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHove
 
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  if (getenv("MOHO64_DEBUG_PROPHIT") && sim.tick() < 3 && u->id == 9437226)
+    Logf(LogLevel::Info, "mt0 %u bp %d mob %d dead %d ball %d", sim.tick(), m.bp != nullptr, m.bp ? (int)m.bp->mobile() : -1, (int)u->dead, (int)m.ballistic);
   if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
     AirMotionTick(sim, u);
     return;
@@ -1191,16 +1199,29 @@ void MotionTick(Sim& sim, Unit* u) {
     return;
   } else {
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
+    if (getenv("MOHO64_DEBUG_PROPHIT") && sim.tick() < 3 && u->id == 9437226)
+      Logf(LogLevel::Info, "mt %u surf %d vel %.4f %.4f", sim.tick(), (int)m.surfaceNext, m.vel.x, m.vel.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
-    if (m.vel.x * m.vel.x + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
+    if (!m.prevPosSet) {
+      m.prevPosY = start.y;
+      m.prevPosSet = true;
+    }
+    if ((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
     if (m.pointNow && !m.pushed) {
       // CalcMoveCommon: the unit moves onto the spline point the steering handed out
       const UnitMotion::SplinePoint& q = m.point;
       if (q.bx != m.bx || q.bz != m.bz) m.needSnap = true;  // turning on the spot
       u->position.x = q.pos.x;
       u->position.z = q.pos.z;
-      m.accel = {q.vel.x - m.vel.x, q.vel.y - m.vel.y, q.vel.z - m.vel.z};
-      m.vel = q.vel;
+      // the point's y is the terrain height at its centre (water: max with the surface for MotionType
+      // 3/7/8); vel = point - prevPos (3-D) (spline_generate.md 3, land_motion_blocking.md 3.1)
+      float py = (b.motionType == kMotionWater || b.motionType == kMotionHover || b.motionType == kMotionAmphibiousFloating)
+                     ? sim.map()->SurfaceHeight(q.pos.x, q.pos.z)
+                     : sim.map()->TerrainHeight(q.pos.x, q.pos.z);
+      Vec3 nv{q.vel.x, py - m.prevPosY, q.vel.z};
+      m.prevPosY = py;
+      m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};
+      m.vel = nv;
       if (b.motionType == kMotionHover) u->orientation = YawQuat(q.bx, q.bz);  // CalcMoveCommon's facing
       m.fx = q.fx;
       m.fz = q.fz;
@@ -1219,6 +1240,7 @@ void MotionTick(Sim& sim, Unit* u) {
       u->position = start;
       m.vel = {};
       m.accel = {};
+      m.prevPosY = start.y;
       if (!m.pushed) {
         float l = std::sqrt(dx * dx + dz * dz);
         float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594

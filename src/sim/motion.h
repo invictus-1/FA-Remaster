@@ -77,6 +77,8 @@ struct UnitMotion {
   float fx = 0, fz = 1;  // steering facing (unit vector in xz): the direction it drives
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
+  float prevPosY = 0;    // m+0x30: y of the position the last move started from (the spline point's terrain y)
+  bool prevPosSet = false;
   Vec3 accel;            // m+0x44: this tick's change of vel (spline-point moves; 0 when blocked)
   // CalcMoveHover 0x6c2bc0: the hover's lean (m+0xc0) and wobble (target m+0xf0, velocity m+0xe4, offset
   // m+0xd8); lean and offset are added to the ground normal before the orientation is built

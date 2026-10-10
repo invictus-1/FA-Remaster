@@ -818,9 +818,14 @@ int l_IsIdleState(lua_State* L) {
 
 int l_GetVelocity(lua_State* L) {
   Unit* u = U(L);
-  lua_pushnumber(L, u->motion.lastMove.x);
-  lua_pushnumber(L, u->motion.lastMove.y);
-  lua_pushnumber(L, u->motion.lastMove.z);
+  // Unit::GetVelocity 0x6a9c90: a unit with a motion that is not on the Air layer reports m+0x38 (the land
+  // motion's per-tick velocity); otherwise the last committed displacement
+  const bool land = u->motion.bp && u->motion.bp->mobile() && u->motion.bp->motionType != kMotionAir &&
+                    u->layer != "Air" && !u->motion.ballistic;
+  const Vec3& v = land ? u->motion.vel : u->motion.lastMove;
+  lua_pushnumber(L, v.x);
+  lua_pushnumber(L, v.y);
+  lua_pushnumber(L, v.z);
   return 3;
 }
 

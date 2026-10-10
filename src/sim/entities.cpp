@@ -485,6 +485,14 @@ int l_BeenDestroyed(lua_State* L) {
   return 1;
 }
 int l_Destroy(lua_State* L) {
+  if (getenv("MOHO64_DEBUG_DESTROY")) {
+    Entity* de = ToObject<Entity>(L, 1);
+    lua_Debug ar;
+    std::string tb;
+    for (int lv = 1; lv < 6 && lua_getstack(L, lv, &ar); ++lv)
+      if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+    Logf(LogLevel::Info, "destroydbg %u id %u%s", S(L)->tick(), de ? de->id : 0, tb.c_str());
+  }
   if (Entity* e = ToObject<Entity>(L, 1)) S(L)->QueueDestroy(e);
   static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
   if (dbg) {
@@ -1216,6 +1224,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->lastMaterializeTick = tick_;
   UnitEconomyInit(L, u);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
+  u->motion.surfaceNext = true;
+  if (getenv("MOHO64_DEBUG_CREATE"))
+    Logf(LogLevel::Info, "create %u unit %u bp %s pos %.2f %.2f motion %d", tick_, u->id, bp.id.c_str(), u->position.x, u->position.z, u->motion.bp->motionType);  // CUnitMotion ctor: m+0x90 = 1, so the first MotionTick processes contacts (0x6b7c9a)
   if (u->motion.bp->motionType == kMotionAir && complete && !builder && !keepY) {
     // IUnit::CalcSpawnElevation: flyers appear at their flying height
     u->position.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
