@@ -408,6 +408,19 @@ bool FactoryCommand(CommandType t) {
 }
 
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type) {
+  static const long dbgIssue = getenv("MOHO64_DEBUG_ISSUE") ? atol(getenv("MOHO64_DEBUG_ISSUE")) : -1;
+  if (dbgIssue >= 0)
+    for (Unit* u : units)
+      if (static_cast<long>(u->id) == dbgIssue) {
+        lua_getglobal(L, "debug");
+        lua_pushstring(L, "traceback");
+        lua_gettable(L, -2);
+        lua_pushstring(L, "");
+        lua_call(L, 1, 1);
+        Logf(LogLevel::Info, "issue %u type %d unit %u: %s", S(L)->tick(), static_cast<int>(type), u->id,
+             lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+        lua_pop(L, 2);
+      }
   auto c = std::make_shared<UnitCommand>();
   Sim* sim = S(L);
   c->id = sim->nextCommandId++;

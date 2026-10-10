@@ -508,7 +508,7 @@ function P.NavLine(kind, tick, tag, u)
         if u:IsUnitState('ProblemGettingToGoal') then f = f .. 'P' end
         if u:IsUnitState('PathFinding') then f = f .. 'F' end
         -- v6: goal and path flags (the transport cargo only: what ends tank2's first walk)
-        if kind == 'trnav' or kind == 'fynav' then
+        if kind == 'trnav' or kind == 'fynav' or kind == 'fmnav' then
             local g = nav:GetGoalPos()
             local ok1, good = pcall(function() return nav:HasGoodPath() end)
             local ok2, at = pcall(function() return nav:AtGoal() end)
@@ -1360,9 +1360,16 @@ function P.Formation()
                         local q = u:GetCommandQueue() or {}
                         out('fm', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(),
                             table.getn(q), fmt(u:GetHeading()), table.concat(st, ','))
-                        -- (v17) the command types while the queue changes
+                        -- (v18) the land navigators of the mixed group and the guards: target, status, goal
+                        if string.sub(e.tag, 1, 2) == 'm_' or string.sub(e.tag, 1, 2) == 'g_' or string.sub(e.tag, 1, 2) == 'e_' then
+                            P.NavLine('fmnav', tick, e.tag, u)
+                        end
+                        -- (v17) the command types while the queue changes (v18: with the target position / id)
                         local types = {}
-                        for _, c in q do table.insert(types, tostring(c.commandType)) end
+                        for _, c in q do
+                            table.insert(types, tostring(c.commandType) .. '@' .. fmt(c.x or 0) .. ',' .. fmt(c.z or 0) ..
+                                (c.targetId and ('#' .. tostring(c.targetId)) or ''))
+                        end
                         local key = table.concat(types, ',')
                         if key ~= e.lastq then
                             e.lastq = key
