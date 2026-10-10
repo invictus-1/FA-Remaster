@@ -508,7 +508,7 @@ function P.NavLine(kind, tick, tag, u)
         if u:IsUnitState('ProblemGettingToGoal') then f = f .. 'P' end
         if u:IsUnitState('PathFinding') then f = f .. 'F' end
         -- v6: goal and path flags (the transport cargo only: what ends tank2's first walk)
-        if kind == 'trnav' or kind == 'fynav' or kind == 'fmnav' then
+        if kind == 'trnav' or kind == 'fynav' or kind == 'fmnav' or kind == 'podnav' then
             local g = nav:GetGoalPos()
             local ok1, good = pcall(function() return nav:HasGoodPath() end)
             local ok2, at = pcall(function() return nav:AtGoal() end)
@@ -1439,6 +1439,17 @@ function P.Armies()
                             local st = {}
                             for _, s in states do if d:IsUnitState(s) then table.insert(st, s) end end
                             out('pod', tick, i, d:GetEntityId(), fmt(p[1]), fmt(p[2]), fmt(p[3]), fmt(d:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                            -- (v30) the drones' navigator, focus and velocity, ticks 50..120
+                            if tick <= 120 then P.NavLine('podnav', tick, tostring(d:GetEntityId()), d) end
+                            if tick <= 120 then
+                                pcall(function()
+                                    local vx, vy, vz = d:GetVelocity()
+                                    local f = d:GetFocusUnit()
+                                    local fp = f and f:GetPosition()
+                                    out('podv', tick, d:GetEntityId(), fmt(vx), fmt(vy), fmt(vz), f and f:GetEntityId() or '-',
+                                        fp and fmt(fp[1]) or '-', fp and fmt(fp[3]) or '-', d:GetCurrentLayer())
+                                end)
+                            end
                         end
                     end
                     for _, u in GetArmyBrain(i):GetListOfUnits(cat, false) or {} do
