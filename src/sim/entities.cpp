@@ -91,6 +91,50 @@ Quat FromEuler(float pitch, float yaw, float roll) {  // radians; yaw about Y
   return q;
 }
 
+// 0x6d1e30 + Wm3 FromRotationMatrix 0x4f0cb0 (sim_random.md 7): M = Ry(h) Rx(p) Rz(r) in float, then to a
+// quaternion with the original's sign (w > 0 when the trace is positive).
+Quat HprQuat(float h, float pi, float r) {
+  float ch = dmath::Cos(h), sh = dmath::Sin(h), cp = dmath::Cos(pi), sp = dmath::Sin(pi), cr = dmath::Cos(r),
+        sr = dmath::Sin(r);
+  float H[3][3] = {{ch, 0, sh}, {0, 1, 0}, {-sh, 0, ch}};
+  float P[3][3] = {{1, 0, 0}, {0, cp, -sp}, {0, sp, cp}};
+  float R[3][3] = {{cr, -sr, 0}, {sr, cr, 0}, {0, 0, 1}};
+  auto mul = [](const float A[3][3], const float B[3][3], float O[3][3]) {
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) {
+        float acc = 0.0f;
+        for (int k = 0; k < 3; ++k) acc = A[i][k] * B[k][j] + acc;
+        O[i][j] = acc;
+      }
+  };
+  float T[3][3], m[3][3];
+  mul(P, R, T);
+  mul(H, T, m);
+  float q[3], w;
+  float tr = (m[0][0] + m[1][1]) + m[2][2];
+  if (tr > 0) {
+    double rt = std::sqrt(static_cast<double>(tr + 1.0f));
+    float rf = static_cast<float>(rt);
+    w = static_cast<float>(rt * 0.5);
+    float inv = 0.5f / rf;
+    q[0] = (m[2][1] - m[1][2]) * inv;
+    q[1] = (m[0][2] - m[2][0]) * inv;
+    q[2] = (m[1][0] - m[0][1]) * inv;
+  } else {
+    int i = m[0][0] < m[1][1] ? 1 : 0;
+    if (m[i][i] < m[2][2]) i = 2;
+    int j = (i + 1) % 3, k = (j + 1) % 3;
+    double rt = std::sqrt(static_cast<double>(((m[i][i] - m[j][j]) - m[k][k]) + 1.0f));
+    float rf = static_cast<float>(rt);
+    q[i] = static_cast<float>(rt * 0.5);
+    float inv = 0.5f / rf;
+    w = (m[k][j] - m[j][k]) * inv;
+    q[j] = (m[j][i] + m[i][j]) * inv;
+    q[k] = (m[k][i] + m[i][k]) * inv;
+  }
+  return Quat{q[0], q[1], q[2], w};
+}
+
 float Heading(const Quat& q) { return dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x)); }
 
 const BlueprintInfo* CheckBlueprint(lua_State* L, int idx) {
@@ -130,8 +174,8 @@ int l_CreateUnitHPR(lua_State* L) {
   Army* a = CheckArmy(L, 2);
   Vec3 p{static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4)),
          static_cast<float>(luaL_checknumber(L, 5))};
-  Quat q = FromEuler(static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 7, 0)),
-                     static_cast<float>(luaL_optnumber(L, 8, 0)));
+  Quat q = HprQuat(static_cast<float>(luaL_optnumber(L, 7, 0)), static_cast<float>(luaL_optnumber(L, 6, 0)),
+                   static_cast<float>(luaL_optnumber(L, 8, 0)));  // radians (yaw = arg 7)
   return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true));
 }
 
@@ -170,14 +214,41 @@ int l_CreateInitialArmyUnit(lua_State* L) {
   return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, Quat{}, true));
 }
 
-// CreatePropHPR(bp, x, y, z, heading, pitch, roll)
+// CreatePropHPR(bp, x, y, z, heading, pitch, roll) 0x6fc010: exactly 7 args, the angles in degrees.
 int l_CreatePropHPR(lua_State* L) {
+  if (lua_gettop(L) != 7) return luaL_error(L, "%s\n  expected %d args, but got %d", "CreatePropHPR", 7, lua_gettop(L));
   const BlueprintInfo* bp = CheckBlueprint(L, 1);
-  Vec3 p{static_cast<float>(luaL_checknumber(L, 2)), static_cast<float>(luaL_checknumber(L, 3)),
-         static_cast<float>(luaL_checknumber(L, 4))};
-  Quat q = FromEuler(static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 5, 0)),
-                     static_cast<float>(luaL_optnumber(L, 7, 0)));
-  return PushNew(L, S(L)->CreateProp(L, *bp, p, q, Vec3{1, 1, 1}));
+  auto num = [&](int i) {
+    if (lua_type(L, i) != LUA_TNUMBER) luaL_typerror(L, i, "number");
+    return lua_tonumber(L, i);
+  };
+  float z = static_cast<float>(num(4)), y = static_cast<float>(num(3)), x = static_cast<float>(num(2));
+  const double d2r = static_cast<double>(0.0174532924f);
+  float h = static_cast<float>(num(5) * d2r), pi = static_cast<float>(num(6) * d2r), r = static_cast<float>(num(7) * d2r);
+  return PushNew(L, S(L)->CreateProp(L, *bp, Vec3{x, y, z}, HprQuat(h, pi, r), Vec3{1, 1, 1}));
+}
+
+// GenerateRandomOrientation() 0x75a600: four Gaussian draws, normalised (sim_random.md 6).
+int l_GenerateRandomOrientation(lua_State* L) {
+  if (lua_gettop(L) != 0) return luaL_error(L, "%s\n  expected %d args, but got %d", "GenerateRandomOrientation", 0, lua_gettop(L));
+  Sim& sim = *S(L);
+  float g1 = static_cast<float>(sim.Gauss()), g2 = static_cast<float>(sim.Gauss()), g3 = static_cast<float>(sim.Gauss());
+  double g4w = sim.Gauss();
+  float g4 = static_cast<float>(g4w);
+  double sum = ((static_cast<double>(g3) * g3 + static_cast<double>(g2) * g2) + static_cast<double>(g1) * g1) + g4w * g4w;
+  double len = std::sqrt(static_cast<double>(static_cast<float>(sum)));
+  Quat q{0, 0, 0, 0};
+  if (len > 1e-6f) {
+    float inv = 1.0f / static_cast<float>(len);
+    q = Quat{g1 * inv, g2 * inv, g3 * inv, g4 * inv};
+  }
+  PushVector(L, 0, 0, 0);  // {x, y, z, w} with the vector metatable, as GetOrientation
+  const float v[4] = {q.x, q.y, q.z, q.w};
+  for (int i = 0; i < 4; ++i) {
+    lua_pushnumber(L, v[i]);
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
 }
 
 // CreateProp(location, bp)
@@ -213,11 +284,7 @@ int l_SetArmyStart(lua_State* L) {
 
 int l_GenerateArmyStart(lua_State* L) {
   Army* a = CheckArmy(L, 1);
-  const TerrainMap* m = S(L)->map();
-  if (m) {
-    a->startX = m->width() * 0.5f;
-    a->startZ = m->height() * 0.5f;
-  }
+  S(L)->GenerateArmyStart(a);  // two draws (sim_random.md 4.2)
   a->hasStart = true;
   return 0;
 }
@@ -815,6 +882,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "CreateInitialArmyUnit", l_CreateInitialArmyUnit);
   SetGlobal(L, "CreatePropHPR", l_CreatePropHPR);
   SetGlobal(L, "CreateProp", l_CreateProp);
+  SetGlobal(L, "GenerateRandomOrientation", l_GenerateRandomOrientation);
   SetGlobal(L, "SetArmyStart", l_SetArmyStart);
   SetGlobal(L, "GenerateArmyStart", l_GenerateArmyStart);
   SetGlobal(L, "GetEntityById", l_GetEntityById);

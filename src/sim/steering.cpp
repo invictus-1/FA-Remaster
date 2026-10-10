@@ -238,8 +238,8 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     if (SameFormationLayer(self, o)) continue;
     Vec3 d{prev.x - o->position.x, 0, prev.z - o->position.z};
     if (d.x * d.x + d.z * d.z < 1e-6f) {
-      d.x = sim.Random() * 2 - 1;
-      d.z = sim.Random() * 2 - 1;
+      d.x = static_cast<float>(sim.FRand(-1, 1));
+      d.z = static_cast<float>(sim.FRand(-1, 1));
     }
     d = Norm(d);
     float mag = std::max(h.depth, 0.5f * std::max(b.sizeX, b.sizeZ)) + vPush;

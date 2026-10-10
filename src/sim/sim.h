@@ -95,8 +95,16 @@ class Sim {
   const SimBlueprints& blueprints() const { return bps_; }
   const TerrainMap* map() const { return map_.get(); }
   TerrainMap* mutableMap() { return map_.get(); }
-  float Random();  // [0, 1)
-  uint32_t NextUInt32() { return rng_(); }  // the sim's Mersenne twister (CMersenneTwister::NextUInt32)
+  // The sim stream (Sim+0x904, CMersenneTwister; engine-ref sim_random.md): MT19937 seeded once with the
+  // session seed. Every engine and sim-Lua draw comes from it, in the original's order.
+  uint32_t NextUInt32() { return rng_(); }
+  float Random() { return U01(); }  // = U01
+  float U01();                       // (double)u * 2^-32 rounded to float: [0, 1] (1 for u >= 0xFFFFFF80)
+  double FRand(float lo, float hi);  // CRandomStream::FRand 0x51b5c0 (callers round)
+  float BpUniform(float base, float range);  // base + uniform(-range, range), one rounding
+  uint32_t IntRange(uint32_t n) { return static_cast<uint32_t>((static_cast<uint64_t>(NextUInt32()) * n) >> 32); }
+  double Gauss();  // 0x40eec0: polar method, the second value cached in the stream
+  void GenerateArmyStart(Army* a);  // the army ctor's / Lua GenerateArmyStart's two draws
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
@@ -213,6 +221,8 @@ class Sim {
   SimBlueprints bps_;
   std::vector<std::unique_ptr<Army>> armies_;
   std::mt19937 rng_;
+  float gauss_ = 0;
+  bool hasGauss_ = false;
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;

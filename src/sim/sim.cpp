@@ -214,18 +214,29 @@ int l_IsGameOver(lua_State* L) {
   return 1;
 }
 
-// Random() -> [0,1); Random(max) -> 1..max; Random(min, max) -> min..max (integers)
+// Random() -> [0,1]; Random(max) -> 1..max; Random(min, max) -> min..max (integers; 0x759010, sim_random.md 3)
+int32_t RandomArg(lua_State* L, int i) {
+  if (lua_type(L, i) != LUA_TNUMBER) luaL_typerror(L, i, "number");
+  float f = static_cast<float>(lua_tonumber(L, i));
+  if (!(f > -2147483904.0f && f < 2147483648.0f)) return INT32_MIN;  // MSVC cvttss2si: NaN / out of range
+  return static_cast<int32_t>(f);
+}
 int l_Random(lua_State* L) {
-  float r = S(L)->Random();
+  Sim* sim = S(L);
   int n = lua_gettop(L);
+  if (n > 2) return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "Random", 0, 2, n);
   if (n == 0) {
-    lua_pushnumber(L, r);
+    lua_pushnumber(L, sim->U01());
   } else if (n == 1) {
-    int hi = static_cast<int>(luaL_checknumber(L, 1));
-    lua_pushnumber(L, 1 + static_cast<int>(r * hi));
+    uint32_t hi = static_cast<uint32_t>(RandomArg(L, 1));
+    uint32_t u = sim->NextUInt32();
+    lua_pushnumber(L, static_cast<float>(static_cast<int32_t>(static_cast<uint32_t>((static_cast<uint64_t>(u) * hi) >> 32) + 1u)));
   } else {
-    int lo = static_cast<int>(luaL_checknumber(L, 1)), hi = static_cast<int>(luaL_checknumber(L, 2));
-    lua_pushnumber(L, lo + static_cast<int>(r * (hi - lo + 1)));
+    uint32_t hp1 = static_cast<uint32_t>(RandomArg(L, 2)) + 1u;
+    uint32_t lo = static_cast<uint32_t>(RandomArg(L, 1));
+    uint32_t u = sim->NextUInt32();
+    lua_pushnumber(L, static_cast<float>(static_cast<int32_t>(
+                          static_cast<uint32_t>((static_cast<uint64_t>(u) * (hp1 - lo)) >> 32) + lo)));
   }
   return 1;
 }
@@ -425,7 +436,34 @@ lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }
 
 Sim* Sim::From(lua_State* L) { return static_cast<Sim*>(lua_getextra(L, 1)); }
 
-float Sim::Random() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng_); }
+float Sim::U01() { return static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-32); }
+double Sim::FRand(float lo, float hi) {
+  uint32_t u = NextUInt32();
+  return (static_cast<double>(u) * (static_cast<double>(hi) - static_cast<double>(lo))) * 0x1p-32 + static_cast<double>(lo);
+}
+float Sim::BpUniform(float base, float range) {
+  float lo = -0.0f - range;
+  uint32_t u = NextUInt32();
+  return static_cast<float>((static_cast<double>(u) * (static_cast<double>(range) - static_cast<double>(lo))) * 0x1p-32 +
+                            static_cast<double>(lo) + static_cast<double>(base));
+}
+double Sim::Gauss() {
+  if (hasGauss_) {
+    hasGauss_ = false;
+    return gauss_;
+  }
+  float x, y, q;
+  do {
+    x = static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-31 - 1.0);
+    y = static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-31 - 1.0);
+    q = y * y + x * x;
+  } while (!(q < 1.0f));
+  float t = static_cast<float>((-2.0 * std::log(static_cast<double>(q))) / static_cast<double>(q));
+  double f = std::sqrt(static_cast<double>(t));
+  gauss_ = static_cast<float>(static_cast<double>(y) * f);
+  hasGauss_ = true;
+  return static_cast<double>(x) * f;
+}
 
 Army* Sim::GetArmy(lua_State* L, int idx) {
   if (lua_type(L, idx) == LUA_TNUMBER) {
@@ -495,6 +533,7 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 
 bool Sim::Start(const ReplayHeader& replay) {
   rng_.seed(replay.seed);
+  hasGauss_ = false;
   cheats = replay.cheats;
 
   // Map
@@ -657,6 +696,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     lua_pushstring(L, "AIBrain");
     lua_gettable(L, -2);
     int cls = lua_gettop(L);
+    GenerateArmyStart(a.get());  // the army ctor's two draws (0x6fe842), before its OnCreateArmyBrain
     auto* brain = new AiBrain;
     brain->army = a.get();
     a->brain = brain;
@@ -675,6 +715,18 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     lua_settop(L, top);
   }
   return true;
+}
+
+// CArmyImpl::GenerateArmyStart 0x6ffcb0 (sim_random.md 4.2): a provisional start from two draws.
+void Sim::GenerateArmyStart(Army* a) {
+  uint32_t cb = 0x2f4ccccc;
+  float c;
+  std::memcpy(&c, &cb, 4);
+  float fx = static_cast<float>(static_cast<double>(NextUInt32()) * c + 0.1f);
+  double fz = static_cast<double>(NextUInt32()) * c + 0.1f;
+  uint32_t w = map_ ? static_cast<uint32_t>(map_->width()) : 0, h = map_ ? static_cast<uint32_t>(map_->height()) : 0;
+  a->startX = static_cast<float>(static_cast<double>(w) * fx);
+  a->startZ = static_cast<float>(static_cast<double>(h) * fz);
 }
 
 // The map's own props (trees, rocks, wrecks placed in the editor).

@@ -636,8 +636,7 @@ int PickAimBone(Sim& sim, Entity* e) {
   Unit* tu = static_cast<Unit*>(e);
   const CombatBpData& cb = CB(tu);
   if (cb.targetBones.empty()) return -1;
-  uint32_t r = static_cast<uint32_t>(sim.Random() * 4294967296.0);
-  size_t i = static_cast<size_t>((static_cast<uint64_t>(r) * cb.targetBones.size()) >> 32);
+  size_t i = sim.IntRange(static_cast<uint32_t>(cb.targetBones.size()));
   return e->skeleton->Find(cb.targetBones[i]);
 }
 

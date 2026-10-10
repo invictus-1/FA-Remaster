@@ -89,28 +89,10 @@ Vec3 ReadVec(lua_State* L, int idx) {
 }
 void PushVec(lua_State* L, Vec3 v) { PushVector(L, v.x, v.y, v.z); }
 
-// The sim RNG: one draw in [0, 1); uniform(base, range) = base + U(-range, range).
-float U(Sim& sim) { return sim.Random(); }
-float Uniform(Sim& sim, float base, float range) { return base - range + U(sim) * (2 * range); }
-// Gaussian (polar Box-Muller, second value cached; shared by weapons and projectiles).
-float Gauss(Sim& sim) {
-  static bool have = false;
-  static float cached = 0;
-  if (have) {
-    have = false;
-    return cached;
-  }
-  float x, y, s;
-  do {
-    x = 2 * U(sim) - 1;
-    y = 2 * U(sim) - 1;
-    s = x * x + y * y;
-  } while (s >= 1 || s == 0);
-  float m = std::sqrt(-2 * dmath::Log(s) / s);
-  cached = y * m;
-  have = true;
-  return x * m;
-}
+// The sim stream (engine-ref sim_random.md 4.1): U01, the blueprint uniform base + U(-range, range), Gauss.
+float U(Sim& sim) { return sim.U01(); }
+float Uniform(Sim& sim, float base, float range) { return sim.BpUniform(base, range); }
+float Gauss(Sim& sim) { return static_cast<float>(sim.Gauss()); }
 
 // Projectile blueprint values, cached.
 struct ProjBp {
@@ -195,7 +177,8 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->position = p->prevPos = pos;
   p->orientation = q;
   // spin
-  Vec3 sd = Norm({Gauss(*this), Gauss(*this), Gauss(*this)});
+  float sg1 = static_cast<float>(Gauss()), sg2 = static_cast<float>(Gauss()), sg3 = static_cast<float>(Gauss());
+  Vec3 sd = Norm({sg1, sg2, sg3});
   p->angVel = Mul(sd, Uniform(*this, b.rotVel, b.rotVelRange) * kPi / 180);
   p->turnRate = Uniform(*this, b.turnRate, b.turnRateRange);
   p->maxSpeed = Uniform(*this, b.maxSpeed, b.maxSpeedRange);
@@ -236,8 +219,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   lua_settop(L, top);
   CallMethod(L, p, "OnPreCreate", 0);
   if (b.maxBounce > b.minBounce) {
-    uint32_t r = static_cast<uint32_t>(U(*this) * 4294967296.0);
-    p->bounceLimit = b.minBounce + static_cast<int>((static_cast<uint64_t>(r) * static_cast<uint64_t>(b.maxBounce - b.minBounce)) >> 32);
+    p->bounceLimit = b.minBounce + static_cast<int>(IntRange(static_cast<uint32_t>(b.maxBounce - b.minBounce)));
   } else {
     p->bounceLimit = b.minBounce;
   }
@@ -250,8 +232,8 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
       v = Mul(Norm(dd), Len(v));
     }
     if (b.rotVelRange > 0) {
-      v.x += -b.rotVelRange + U(*this) * 2 * b.rotVelRange;
-      v.z += -b.rotVelRange + U(*this) * 2 * b.rotVelRange;
+      v.x += static_cast<float>(FRand(-b.rotVelRange, b.rotVelRange));
+      v.z += static_cast<float>(FRand(-b.rotVelRange, b.rotVelRange));
     }
     p->velocity = v;
   } else {
@@ -326,7 +308,9 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   float F = p->ovZigZagFreq >= 0 ? p->ovZigZagFreq : b.zigZagFrequency;
   if (Z > 0 && F > 0) {
     if (sim.tick() >= p->nextZigZag) {
-      float ox = -Z + U(sim) * 2 * Z, oy = -Z + U(sim) * 2 * Z, oz = -Z + U(sim) * 2 * Z;
+      float ox = static_cast<float>(sim.FRand(-Z, Z));
+      float oy = static_cast<float>(sim.FRand(-Z, Z));
+      float oz = static_cast<float>(sim.FRand(-Z, Z));
       p->zigOffset = {ox, oy, oz};
       p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
     }
@@ -918,7 +902,13 @@ int l_SetVelocityAlign(lua_State* L) {
 int l_SetVelocityRandomUpVector(lua_State* L) {
   Projectile* p = P(L);
   Sim& sim = *S(L);
-  Vec3 v{U(sim), 0.05f + 0.95f * U(sim), U(sim)};
+  float vx = sim.U01();
+  uint32_t cb = 0x2f733333u;
+  float c;
+  std::memcpy(&c, &cb, 4);
+  float vy = static_cast<float>(static_cast<double>(sim.NextUInt32()) * static_cast<double>(c) + 0.05f);
+  float vz = sim.U01();
+  Vec3 v{vx, vy, vz};
   const ProjBp& b = GetProjBp(sim, L, *p->blueprint);
   p->velocity = b.maxSpeed > 0 ? Mul(Norm(v), b.maxSpeed) : Vec3{};
   return 0;

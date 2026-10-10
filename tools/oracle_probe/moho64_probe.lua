@@ -1591,4 +1591,63 @@ function P.PropDump()
     dump(GetGameTick())
 end
 
+-- 16) (v25) tree groups breaking up and props destroyed near the starts (ticks < 60):
+-- "PROBE tgb <tick> <bp short> x z <children or -1>"   "PROBE prdel <tick> <bp short> x z"
+function P.TreeWatch()
+    local starts
+    local function near(e)
+        if not starts then
+            starts = {}
+            for i, name in ListArmies() do
+                local okb, b = pcall(GetArmyBrain, i)
+                if okb and b then
+                    local okp, sx, sz = pcall(b.GetArmyStartPos, b)
+                    if okp and sx then table.insert(starts, { sx, sz }) end
+                end
+            end
+        end
+        local p = e:GetPosition()
+        for _, s in starts do
+            if math.abs(p[1] - s[1]) < 20 and math.abs(p[3] - s[2]) < 20 then return p end
+        end
+    end
+    local function short(e)
+        local bp = e:GetBlueprint()
+        return string.gsub((bp and bp.BlueprintId) or '?', '^.*/', '')
+    end
+    local okt, T = pcall(import, '/lua/proptree.lua')
+    if okt and T and T.TreeGroup and T.TreeGroup.Breakup then
+        local orig = T.TreeGroup.Breakup
+        T.TreeGroup.Breakup = function(self, a, b, c, d)
+            local p
+            if GetGameTick() < 60 then
+                local okn, pn = pcall(near, self)
+                if okn then p = pn end
+            end
+            local name = p and short(self)
+            local r = orig(self, a, b, c, d)
+            if p then
+                local n = -1
+                if type(r) == 'table' then n = 0 for _ in r do n = n + 1 end end
+                out('tgb', GetGameTick(), name, string.format('%.3f', p[1]), string.format('%.3f', p[3]), n)
+            end
+            return r
+        end
+    end
+    local okp, PM = pcall(import, '/lua/sim/prop.lua')
+    if okp and PM and PM.Prop and PM.Prop.OnDestroy then
+        local orig = PM.Prop.OnDestroy
+        PM.Prop.OnDestroy = function(self)
+            if GetGameTick() < 60 then
+                pcall(function()
+                    local p = near(self)
+                    if p then out('prdel', GetGameTick(), short(self), string.format('%.3f', p[1]), string.format('%.3f', p[3])) end
+                end)
+            end
+            return orig(self)
+        end
+    end
+    out('treewatch', GetGameTick(), tostring(okt), tostring(okp))
+end
+
 moho64_probe = P
