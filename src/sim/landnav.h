@@ -51,6 +51,12 @@ struct LandNav {
   bool startedThisTick = false;
   Vec3 prevPos;
   bool targetChanged = false;
+  // formation following (formations.md 9): +0x90 inFormation, +0x91 waiting for the leader,
+  // +0x92 following the slot, +0x7c cached leader, +0x84 last followed slot, +0x78 last failed follow
+  bool inFormation = false, waiting = false, following = false;
+  uint32_t cachedLeader = 0;
+  Vec3 lastFollow;
+  uint32_t lastFail = 0;
 };
 
 // Start a move to world position `goal` (land units). speedThrough: drive through the goal.
@@ -71,5 +77,9 @@ int LandNavStatus(const Unit* u);
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1);
 // Can the unit's footprint stand at world (x, z)? (Unit::WontFitAt 0x62aa90, negated)
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z);
+// FootprintFits at a cell (terrain and structures).
+bool LandCellFits(Sim& sim, const Unit* u, int x, int z);
+// The path navigator follows its formation slot (state 6): the land navigator's FollowingLeader.
+bool LandNavFollowingSlot(const Unit* u);
 
 }  // namespace moho

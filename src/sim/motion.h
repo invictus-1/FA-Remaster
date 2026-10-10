@@ -79,7 +79,7 @@ struct UnitMotion {
   bool refuelFlag = false;
   std::shared_ptr<struct EconRequest> repairRequest;
   float repairReq[2] = {0, 0};  // energy, mass
-  float speedCap = 0;  // > 0: top speed (MaxSpeed units) while moving in formation
+  float speedCap = 0;  // > 0: the formation-capped top speed u+0x594 (world units/s, speedMult included)
 
   // Steering: the waypoints of the current move (the last one is the goal).
   std::vector<Vec3> path;

@@ -1,5 +1,6 @@
 #include "sim/landnav.h"
 #include "sim/sim.h"
+#include "sim/formation.h"
 #include "sim/transport.h"
 #include "sim/air.h"
 #include "sim/collision.h"
@@ -900,6 +901,7 @@ void Sim::Tick() {
     u->lastPosition = u->position;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
+    UpdateInfoCache(*this, u);  // formation fields and the speed cap
     if (!u->builderArms.empty()) BuilderArmsTick(*this, u);  // UpdateManipulators, before the motion
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
@@ -945,6 +947,7 @@ void Sim::Tick() {
   BeamsTick(*this);
   g_prof.Lap(7);
   ReconBeat(*this);  // army (tick % armies) updates its blips
+  FormationsTick(*this);  // step 11: the formation DB
   KillCleanupTick(*this);
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);

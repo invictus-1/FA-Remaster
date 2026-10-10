@@ -25,6 +25,7 @@ namespace moho {
 
 class Sim;
 class Unit;
+struct Formation;
 
 enum class CommandType : int {
   None = 0, Stop = 1, Move = 2, Dive = 3, FormMove = 4, BuildSiloTactical = 5, BuildSiloNuke = 6,
@@ -45,11 +46,11 @@ struct UnitCommand {
   uint32_t targetId = 0;  // entity target (0: none)
   std::string blueprintId;
   std::string formation;
-  float heading = 0;
-  // Formation moves: each unit's place (the formation's slot, centred on the goal and turned to
-  // the heading) and the speed the formation keeps (its slowest unit's).
-  std::map<Unit*, Vec3> slots;
-  float formationSpeed = 0;
+  // formation issue data (SSTICommandIssueData +0x38..+0x4c): script index (-1 none), orientation
+  // quaternion (w, x, y, z; all zero = none) and scale; the formation is made at dispatch
+  int formIndex = -1;
+  float formQw = 1, formQx = 0, formQy = 0, formQz = 0, formScale = 1;
+  std::shared_ptr<Formation> form;
   int count = 1;
   int luaRef = -2;        // LUA_NOREF: the table handed to Lua (IsCommandDone)
   int scriptRef = -2;     // IssueScript: the command data table (TaskName, ...)

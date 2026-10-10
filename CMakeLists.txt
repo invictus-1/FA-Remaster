@@ -58,7 +58,7 @@ add_library(mohocore STATIC
   src/script/script_state.cpp src/script/core_bindings.cpp src/script/mods.cpp
   src/script/threads.cpp src/sim/script_object.cpp src/sim/blueprints.cpp src/sim/replay.cpp
   src/sim/terrain.cpp src/sim/sim.cpp src/sim/entities.cpp src/sim/effects.cpp src/sim/bp_reflect.cpp
-  src/sim/bp_derived.cpp src/sim/skeleton.cpp src/sim/motion.cpp src/sim/air.cpp src/sim/transport.cpp src/sim/navigation.cpp src/sim/hpath.cpp src/sim/landnav.cpp
+  src/sim/bp_derived.cpp src/sim/skeleton.cpp src/sim/motion.cpp src/sim/air.cpp src/sim/transport.cpp src/sim/navigation.cpp src/sim/hpath.cpp src/sim/landnav.cpp src/sim/formation.cpp
   src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
   src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp)
 target_include_directories(mohocore PUBLIC src)

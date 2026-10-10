@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/formation.h"
 #include "sim/air.h"
 #include "sim/commands.h"
 
@@ -133,9 +134,7 @@ bool HigherPriority(const Unit* a, const Unit* b) {
 // same formation-move command at the head of both queues)
 bool SameFormation(const Unit* a, const Unit* b) {
   if (a->unitStates.count("Attacking") || b->unitStates.count("Attacking")) return false;
-  if (a->commands.empty() || b->commands.empty()) return false;
-  const UnitCommand* c = a->commands.front().get();
-  return c == b->commands.front().get() && !c->slots.empty();
+  return a->form && a->form == b->form;
 }
 
 bool BlocksFor(const Unit* self, const Unit* e, int flags) {
@@ -457,6 +456,8 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
     if (n.stuck > 30 && i == 0) return false;
     SetTargetPoint(n, i);
     n.attackVariant = false;
+    n.following = false;
+    n.lastFollow = {};
     return true;
   }
   if (n.attackVariant && hi > 0) {
@@ -466,6 +467,89 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
   }
   if (lo > 0) Pop(n, lo - 1);
   return false;
+}
+
+bool IsZeroVec(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+
+// The formation block of UpdateCurrentPosition (formations.md 9.2). 1: return now, 0: go on to the tail.
+int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
+  Formation* F = GetFormation(sim, u);
+  if (!F) {
+    n.inFormation = false;
+    n.cachedLeader = 0;
+    n.following = false;
+    n.lastFollow = {};
+    return 0;
+  }
+  const uint32_t self = EntityRef(u);
+  uint32_t L = u->formLeader;
+  bool changed = L != n.cachedLeader;
+  n.cachedLeader = L;
+  if (!L || L == self) {
+    if (changed && n.cachedLeader == self) {  // just became the leader: re-path to its own goal
+      n.path.clear();
+      n.wait = 0;
+      n.lastFollow = {};
+      n.following = false;
+      n.waiting = false;
+      RequestPath(sim, u, n, 0);
+      return 1;
+    }
+    n.lastFollow = {};
+    n.following = false;
+    n.cachedLeader = 0;
+    n.inFormation = false;
+    return 0;
+  }
+  Entity* le = sim.FindEntity(L);
+  Unit* lu = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
+  if (lu && LandNavStatus(lu) == 1) {  // the leader is still computing its path: hold
+    if (!n.hasTarget || n.target != n.cur) {
+      n.target = n.cur;
+      n.hasTarget = true;
+      n.targetChanged = true;
+    }
+    n.waiting = true;
+    return 0;
+  }
+  n.waiting = false;
+  const Vec3 p = u->formSlot;
+  PathCell s = CellOf(u, p.x, p.z);
+  if (u->id % 13 != sim.tick() % 13 && !IsZeroVec(n.lastFollow)) return 1;  // between phases: keep following
+  if (n.hasTarget && n.target == s) {
+    n.lastFollow = p;
+    return 1;
+  }
+  float dd = Dist(n.cur, s);
+  float step = std::min(dd, 10.0f);
+  PathCell probe = n.cur;
+  if (dd > 0) {
+    probe = {n.cur.x + static_cast<int>((s.x - n.cur.x) * step / dd), n.cur.z + static_cast<int>((s.z - n.cur.z) * step / dd)};
+  }
+  const TerrainMap* map = sim.map();
+  bool within = !map || (p.x - 1.0f >= 0 && p.z - 1.0f >= 0 && p.x + 1.0f <= map->width() && p.z + 1.0f <= map->height());
+  if (Reach(sim, u, n.cur, probe) && UnitClearTo(sim, u, n, probe) && within) {
+    n.advanceDist = 0.5f * dd;
+    n.target = s;
+    n.hasTarget = true;
+    n.targetChanged = true;
+    n.following = true;
+    n.lastFollow = p;
+    n.state = 6;
+    n.adjacent = Manhattan(n.cur, n.target) <= 1;
+    if (n.path.size() > 1) n.path = {PathCell{n.goal[0], n.goal[1]}};
+    return 1;
+  }
+  n.lastFail = sim.tick();
+  if (n.following || n.path.size() == 1) {
+    n.lastFollow = {};
+    n.following = false;
+    n.path.clear();
+    n.wait = 0;
+    RequestPath(sim, u, n, 0);
+    return 1;
+  }
+  return 0;
 }
 
 // UpdateCurrentPosition 0x5ae2d0
@@ -489,8 +573,10 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   float d = n.hasTarget ? Dist(n.cur, n.target) : kInf;
   bool force = n.poke;  // the steering's push report forces a TryAdvance (Func1 0x5a3e80)
   const MotionBlueprint& b = Bp(u);
-  if (n.hasTarget && sim.tick() % 7 == u->id % 7 && n.cur != n.target && !n.adjacent && !n.poke &&
-      Fits(sim, u, n.cur)) {
+  const uint32_t t13 = sim.tick() % 13, t7 = sim.tick() % 7;
+  bool ok = !n.poke;
+  if (n.hasTarget && (n.inFormation ? u->id % 13 == t13 : u->id % 7 == t7) && n.cur != n.target && !n.waiting &&
+      !n.adjacent && !n.poke && Fits(sim, u, n.cur)) {
     float look = std::max(4.0f * std::max(SX(u), SZ(u)), 4.0f * b.maxSpeed);
     PathCell t = n.target;
     float dd = Dist(n.cur, t);
@@ -499,9 +585,21 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
       t = {n.cur.x + static_cast<int>(std::nearbyint((t.x - n.cur.x) * k)),
            n.cur.z + static_cast<int>(std::nearbyint((t.z - n.cur.z) * k))};
     }
-    if (!Reach(sim, u, n.cur, t) || !UnitClear(sim, u, n, t)) force = true;
-    else if (b.turnRadius > b.turnRate && sim.tick() > n.lastAdvance + 10) force = true;
+    if (!Reach(sim, u, n.cur, t) || !UnitClear(sim, u, n, t)) {
+      force = true;
+      ok = false;
+    } else if (b.turnRadius > b.turnRate && sim.tick() > n.lastAdvance + 10) {
+      force = true;
+    }
   }
+  // formation block (0x5ae63a)
+  if (n.inFormation && ok && sim.tick() > n.lastFail + 100) {
+    switch (FollowSlot(sim, u, n)) {
+      case 1: return;      // following / re-pathed
+      default: break;      // TAIL
+    }
+  }
+  if (n.waiting) return;   // waiting for the leader: no stuck count, no advance
   bool still = u->position.x == n.prevPos.x && u->position.y == n.prevPos.y && u->position.z == n.prevPos.z;
   n.stuck = (still && !u->immobile) ? n.stuck + 1 : 0;
   if (n.advanceDist < d && !force && n.stuck < 31) return;
@@ -553,6 +651,13 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
 }
 
 }  // namespace
+
+bool LandCellFits(Sim& sim, const Unit* u, int x, int z) { return Fits(sim, u, PathCell{x, z}); }
+
+bool LandNavFollowingSlot(const Unit* u) {
+  const LandNav* n = u->motion.nav.get();
+  return n && n->active && n->state == 6;
+}
 
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   const TerrainMap* map = sim.map();
@@ -613,7 +718,23 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
   n.hasTarget = false;
   n.requestMode = 0;
   n.state = 2;
-  n.thinkDelay = 1;
+  // ConfigureGoal 0x5ad6e0: the formation flags
+  n.lastFail = 0;
+  n.cachedLeader = 0;
+  n.waiting = false;
+  n.following = false;
+  n.lastFollow = {};
+  n.inFormation = false;
+  if (!(u->navigator && u->navigator->ignoreFormation)) {
+    Formation* F = GetFormation(sim, u);
+    n.inFormation = F && FormationIsForm(*F);
+    if (n.inFormation) {
+      n.cachedLeader = u->formLeader;
+      if (u->formLeader && u->formLeader != EntityRef(u)) n.waiting = true;
+    }
+  }
+  // BeginThinking 0x5adba0: a formation member waits its path delay
+  n.thinkDelay = u->unitStates.count("TransportLoading") ? 1 : FormationPathDelay(sim, u);
   n.startedThisTick = true;
   n.prevPos = u->position;
   u->unitStates.erase("ProblemGettingToGoal");

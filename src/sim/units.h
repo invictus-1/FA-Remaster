@@ -150,6 +150,13 @@ class Unit : public Entity {
   std::vector<AimController*> aimControllers;
   std::vector<class RotateManipulator*> rotators;
   std::vector<class BuilderArm*> builderArms;
+  // formation (Unit::UpdateInfoCache, formations.md 2.5)
+  struct Formation* form = nullptr;  // u+0x580
+  int formPathDelay = 1;             // u+0x58c
+  uint32_t formLeader = 0;           // u+0x584 (entity handle)
+  Vec3 formSlot;                     // u+0x59c
+  float formRank = 0;                // u+0x598
+  bool formAllAtGoal = false;        // u+0x590
   Vec3 armAim;                     // CAiBuilderImpl +0xc: the build arm's aim target (zero: none)
   bool armReady = true;            // CAiBuilderImpl +9: the arm is on target (no arm: always)
   std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach

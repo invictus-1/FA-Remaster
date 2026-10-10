@@ -1938,6 +1938,9 @@ int TickCarrierLaunch(Sim& sim, Unit* C, BuildTask& t, TransportTaskData& d) {
         auto c = NewCommand(sim, CommandType::Guard);
         c->pos = p;
         c->hasPos = true;
+        c->formIndex = 0;  // formation index 0, no orientation, scale 1 (formations.md 0)
+        c->formQw = c->formQx = c->formQy = c->formQz = 0;
+        c->formScale = 1.0f;
         for (uint32_t r : d.which)
           if (Unit* x = UnitRef(sim, r)) {
             if (x->dead) continue;

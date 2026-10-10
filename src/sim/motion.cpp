@@ -1,6 +1,8 @@
 // Unit motion (see motion.h for what the original does and how it was checked).
 #include "core/dmath.h"
 #include "sim/motion.h"
+#include "sim/formation.h"
+#include "sim/combat.h"
 #include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/air.h"
@@ -456,7 +458,7 @@ float TurnSpeedLimit(const MotionBlueprint& b, float maxF, float turnRadius, flo
 bool DriveStep(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
-  float maxF = (m.speedCap > 0 ? std::min(b.maxSpeed, m.speedCap) : b.maxSpeed) * m.speedMult * 0.1f;
+  float maxF = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.1f;  // u+0x594
   float maxR = b.maxSpeedReverse * m.speedMult * 0.1f;
   float acc = b.maxAccel * m.accMult * 0.01f;
   float brake = (b.maxBrake != 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
@@ -737,6 +739,54 @@ void CollisionTick(Sim& sim) {
   }
 }
 
+namespace combat {
+bool HasTarget(Sim& sim, const AiTarget& t);
+}  // namespace combat
+
+// CalcMoveCommon's no-spline branch (formations.md 12): an idle unit of a form formation turns on the
+// spot to the formation's forward vector (Unit::GetFormationVector), TurnInfo 0x6990e0 / RotateToward
+// 0x6992c0, in the negated-z frame. Returns true when it turned.
+bool ArrivalTurn(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  if (!u->form || !FormationIsForm(*u->form)) return false;
+  if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling")) return false;
+  if (combat::HasTarget(sim, u->desiredTarget)) return false;  // (weapon facing has priority: not carried out)
+  if (LandNavActive(u)) return false;                          // the navigator is not idle
+  Vec3 fv = u->form->fwd;
+  if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
+  const MotionBlueprint& b = *m.bp;
+  float cx = m.bx, cz = -m.bz;          // current forward (x, -z)
+  float wx = fv.x, wz = -fv.z;          // toward T = pos + fv
+  float len = std::sqrt(wx * wx + wz * wz);
+  if (len <= 0) return false;
+  if ((wx / len) * cx + (wz / len) * cz >= 0.9999f) return false;
+  float rate = (b.motionType == kMotionHover ? b.turnFacingRate : b.turnRate) * m.turnMult * 0.0017453292f;
+  float th = std::min(rate, 3.14159274f);
+  float lc = std::sqrt(cx * cx + cz * cz), lw = len;
+  if (lc * lw == 0) return false;
+  float nx, nz;
+  float k = std::cos(th);
+  if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
+    nx = wx * lc / lw;
+    nz = wz * lc / lw;
+  } else {
+    float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
+    if (wz * cx - cz * wx < 0) sn = -sn;
+    if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
+      float r = std::sqrt(sn * sn + k * k);
+      sn /= r;
+      k /= r;
+    }
+    nx = k * cx - sn * cz;
+    nz = k * cz + sn * cx;
+  }
+  float l = std::sqrt(nx * nx + nz * nz);
+  if (l <= 0) return false;
+  m.fx = m.bx = nx / l;
+  m.fz = m.bz = -nz / l;
+  return true;
+}
+
 void MotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (m.bp && m.bp->motionType == kMotionAir) {  // aircraft (also dead ones: they fall)
@@ -826,7 +876,9 @@ void MotionTick(Sim& sim, Unit* u) {
         }
       }
     } else {
+      bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       moved = Coast(u);
+      if (turned) m.needSnap = true;
     }
     // CalcMoveCommon 0x6c1e20: from a cell the footprint fits into one it does not: undone, and
     // pushed back by MaxSpeed/100 along the step (AddImpulse 0x6b8ac0)

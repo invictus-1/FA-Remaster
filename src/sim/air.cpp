@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -446,7 +447,7 @@ bool InCategory(Sim& sim, Unit* u, const char* cat) { return BpInCategory(sim, u
 float MaxSpeed(Unit* u) {
   const AirBp& b = *A(u).bp;
   float ms = b.maxAirspeed * u->motion.speedMult / 1.0f;
-  if (u->motion.speedCap > 0) ms = std::min(ms, u->motion.speedCap * u->motion.speedMult);
+  if (u->motion.speedCap > 0) ms = u->motion.speedCap;  // UpdateInfoCache: the formation cap
   return ms;
 }
 
@@ -1048,6 +1049,15 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   T.x = H.x * b.kTurnDamping + err.x * kTurn;
   T.y = H.y * b.kTurnDamping + err.y * kTurn;
   T.z = b.kRollDamping * H.z + err.z * kRoll;
+  {
+    static const long dbgId = getenv("MOHO64_DEBUG_AIR") ? atol(getenv("MOHO64_DEBUG_AIR")) : -1;
+    if (dbgId >= 0 && static_cast<long>(u->id) == dbgId)
+      Logf(LogLevel::Info, "airdbg %u mode %d pos %.4f %.4f %.4f v %.4f %.4f %.4f d %.4f %.4f %.4f dv %.4f %.4f %.4f "
+           "dampF %.4f F %.4f %.4f %.4f tgt %.3f %.3f %.3f landL %d vert %d elev %.3f h %.3f cev %d",
+           sim.tick(), mode, u->position.x, u->position.y, u->position.z, pb.v.x, pb.v.y, pb.v.z, desired.x,
+           desired.y, desired.z, dv.x, dv.y, dv.z, dampF, F.x, F.y, F.z, a.target.x, a.target.y, a.target.z,
+           a.landLayer, a.vertEvent, a.elevOffset, a.height, a.carrierEvent);
+  }
   Ctrl c;
   float m = pb.mass;
   c.force = {(F.x - 0.0f) * m, (F.y - kGravityY) * m, (F.z - 0.0f) * m};

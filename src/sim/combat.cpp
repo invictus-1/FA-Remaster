@@ -1985,6 +1985,15 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
     Vec3 p;
     Quat q;
     BoneWorld(u, a->yawBone, &p, &q);
+    {
+      static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
+      if (dbg >= 0 && static_cast<long>(u->id) == dbg && !local) {
+        Vec3 d = Rotate(Conj(q), dir);
+        Logf(LogLevel::Info, "armdbg %u dir %.4f %.4f %.4f yawq %.4f %.4f %.4f %.4f unitq %.4f %.4f %.4f %.4f local %.4f %.4f %.4f tgt %.4f",
+             sim.tick(), dir.x, dir.y, dir.z, q.x, q.y, q.z, q.w, u->orientation.x, u->orientation.y, u->orientation.z,
+             u->orientation.w, d.x, d.y, d.z, dmath::Atan2(d.x, d.z));
+      }
+    }
     r = ArmAxis(a, dir, local, true, a->hSlew * (slow ? 0.25f : 1.0f), q);
     u->poseRot[static_cast<size_t>(a->yawBone)] = AxisAngle({0, 1, 0}, a->heading);
   }

@@ -1,5 +1,6 @@
 // Unit commands and their Lua bindings (see commands.h).
 #include "sim/commands.h"
+#include "sim/formation.h"
 #include "sim/landnav.h"
 #include "sim/combat.h"
 
@@ -73,9 +74,9 @@ constexpr uint64_t kPathWorkPerTick = 1000;
 bool IsAlive(const Unit* u) { return u && !u->dead && !u->destroyQueued; }
 
 Vec3 TargetPos(Sim& sim, const UnitCommand& c, Unit* u = nullptr) {
-  if (u) {
-    auto it = c.slots.find(u);
-    if (it != c.slots.end()) return it->second;
+  if (u && c.form) {  // 0x6e8a30: the unit's formation cell when the command holds more than one unit
+    Vec3 g;
+    if (FormationGoal(sim, const_cast<UnitCommand&>(c), u, &g)) return g;
   }
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) return e->position;
@@ -90,6 +91,7 @@ void SetMoving(Unit* u, bool on) {
 // A unit drops a command: when no unit holds it any more the command object goes, and with it
 // the ferry beacon it created (CUnitCommand::DestroyInternal 0x6e8500).
 void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
+  FormationRemoveUnit(c, u);
   c.units.erase(u);
   if (!c.units.empty() || !c.beaconRef) return;
   Sim& sim = *Sim::From(u->luaState());
@@ -106,7 +108,6 @@ void PopHead(Unit* u) {
     u->task = nullptr;
   }
   if (u->commands.empty()) return;
-  u->motion.speedCap = 0;
   auto head = u->commands.front();
   u->commands.pop_front();
   ReleaseCommandImpl(u, *head);
@@ -119,7 +120,6 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
   UnitCommand& c = *u->commands.front();
   Vec3 goal = TargetPos(sim, c, u);
-  u->motion.speedCap = c.slots.count(u) ? c.formationSpeed : 0;
   std::vector<Vec3> path;
   bool ok = true;
   path.push_back(goal);  // land units: the navigator plans (sim/landnav.cpp)
@@ -154,6 +154,23 @@ void StartHead(Sim& sim, Unit* u) {
     if (SiloCommand(sim, u, c)) {
       PopHead(u);
       continue;
+    }
+    switch (c.type) {  // DispatchTask 0x608ef0: CUnitCommand::GenerateFormation (formations.md 1.2)
+      case CommandType::Move:
+      case CommandType::FormMove:
+      case CommandType::Attack:
+      case CommandType::FormAttack:
+      case CommandType::FormPatrol:
+      case CommandType::FormAggressiveMove:
+      case CommandType::AggressiveMove:
+      case CommandType::AssistMove:
+        GenerateFormation(sim, c, u);
+        break;
+      case CommandType::Guard:
+        if (!c.targetId) GenerateFormation(sim, c, u);  // (entity guards use the guard formation)
+        break;
+      default:
+        break;
     }
     if (BuildTask* bt = StartBuildTask(sim, u, c)) {
       u->task = bt;
@@ -213,6 +230,11 @@ void ArrivalStep(Sim& sim, Unit* u) {
     return;
   }
   UnitCommand& c = *u->commands.front();
+  // CUnitFormAndMoveTask: arriving does not end it; it waits for its group to be at goal (formations.md 11)
+  if (c.type == CommandType::FormMove && !m.failed && FormationHas(c, u)) {
+    m.arrived = false;
+    return;
+  }
   bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
   std::shared_ptr<UnitCommand> keep = u->commands.front();
   PopHead(u);
@@ -253,6 +275,16 @@ void CommandStep(Sim& sim, Unit* u) {
       if (!IsAlive(u) || u->commands.empty()) break;
       StartHead(sim, u);
     }
+    return;
+  }
+  // a form move ends when its group (or every group) is at goal: FormationAtGoal / u+0x590
+  if (st == kRunning && !u->commands.empty() && u->commands.front()->type == CommandType::FormMove &&
+      FormationHas(*u->commands.front(), u) &&
+      (u->formAllAtGoal || FormationGroupAtGoal(sim, *u->commands.front(), u))) {
+    PopHead(u);
+    u->motion.arrived = u->motion.failed = false;
+    if (u->commands.empty()) SetMoving(u, false);
+    else StartHead(sim, u);
     return;
   }
   // keep "drive through" up to date when moves were queued behind the current one
@@ -391,91 +423,18 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
   return c;
 }
 
-// Formation slots from the formation script (/lua/formations.lua: <name>(units) returns
-// { x, z, filter category, row, ... } per slot, x to the right, z forward, in unit-size steps).
-// Each slot takes the nearest unassigned unit its filter allows. TODO(M3b): the original's
-// CFormationInstance (slot assignment order, travel formation, catch-up speeds).
-void PlaceFormation(lua_State* L, UnitCommand& c, const std::vector<Unit*>& units) {
-  if (units.size() < 2 || c.formation.empty() || c.formation == "NoFormation") return;
-  int top = lua_gettop(L);
-  lua_getglobal(L, "import");
-  lua_pushstring(L, "/lua/formations.lua");
-  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
-    lua_settop(L, top);
-    return;
-  }
-  lua_pushstring(L, c.formation.c_str());
-  lua_gettable(L, -2);
-  if (!lua_isfunction(L, -1)) {
-    lua_settop(L, top);
-    return;
-  }
-  lua_newtable(L);
-  int n = 0;
-  for (Unit* u : units) {
-    PushObject(L, u);
-    lua_rawseti(L, -2, ++n);
-  }
-  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
-    if (lua_isstring(L, -1)) LogScriptError(lua_tostring(L, -1));
-    lua_settop(L, top);
-    return;
-  }
-  int slotsIdx = lua_gettop(L);
-  // a formation unit is (largest footprint + 2) world units (formations' categorizeUnits.lua)
-  int largest = 1;
-  for (Unit* u : units)
-    if (u->motion.bp) largest = std::max<int>(largest, std::max(u->motion.bp->footprint.sizeX, u->motion.bp->footprint.sizeZ));
-  const float scale = static_cast<float>(largest + 2);
-  float sn = dmath::Sin(c.heading), cs = dmath::Cos(c.heading);
-  // forward = (sin h, cos h), right = (cos h, -sin h)
-  // candidates in entity-id order (ties go to the lowest id: the same on every machine)
-  std::vector<Unit*> free(units.begin(), units.end());
-  std::sort(free.begin(), free.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
-  free.erase(std::unique(free.begin(), free.end()), free.end());
-  float slowest = 1e30f;
-  for (int i = 1; !free.empty(); ++i) {
-    lua_rawgeti(L, slotsIdx, i);
-    if (!lua_istable(L, -1)) {
-      lua_pop(L, 1);
-      break;
-    }
-    int sl = lua_gettop(L);
-    lua_rawgeti(L, sl, 1);
-    float sx = static_cast<float>(lua_tonumber(L, -1)) * scale;
-    lua_rawgeti(L, sl, 2);
-    float sz = static_cast<float>(lua_tonumber(L, -1)) * scale;
-    lua_rawgeti(L, sl, 3);
-    const uint64_t* filter = ToCategory(L, -1);
-    Vec3 p{c.pos.x + sx * cs + sz * sn, c.pos.y, c.pos.z - sx * sn + sz * cs};
-    Unit* best = nullptr;
-    float bestD = 1e30f;
-    for (Unit* u : free) {
-      if (filter && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(filter, u->blueprint->entityIndex)))
-        continue;
-      float dx = u->position.x - p.x, dz = u->position.z - p.z;
-      float d = dx * dx + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = u;
-      }
-    }
-    if (best) {
-      c.slots[best] = p;
-      free.erase(std::find(free.begin(), free.end(), best));
-      if (best->motion.bp) slowest = std::min(slowest, best->motion.bp->maxSpeed);
-    }
-    lua_settop(L, slotsIdx);
-  }
-  c.formationSpeed = slowest < 1e29f ? slowest : 0;
-  if (getenv("MOHO64_DEBUG_FORM")) for (auto& [u, p] : c.slots) Logf(LogLevel::Debug, "form slot %u %.2f %.2f", u->id, p.x, p.z);
-  lua_settop(L, top);
-}
-
 // Issue<Type>(units, position or entity target)
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
   auto units = UnitsArg(L, 1);
+  constexpr bool kForm = T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
+                         T == CommandType::FormAggressiveMove;
+  int formIndex = -1;
+  if (kForm) {  // IssueForm*: the formation name -> script index; nothing is issued for an unknown one
+    std::string name = lua_isstring(L, 3) ? lua_tostring(L, 3) : "";
+    formIndex = FormationScriptIndex(L, name, units);
+    if (formIndex < 0) return 0;
+  }
   auto c = Issue(L, units, T);
   if (Entity* e = ToObject<Entity>(L, 2)) {
     c->targetId = EntityRef(e);
@@ -484,11 +443,16 @@ int l_IssueTarget(lua_State* L) {
   } else {
     c->hasPos = PosArg(L, 2, &c->pos);
   }
-  if (T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
-      T == CommandType::FormAggressiveMove) {
-    if (lua_isstring(L, 3)) c->formation = lua_tostring(L, 3);
-    c->heading = static_cast<float>(lua_tonumber(L, 4));
-    if (c->hasPos) PlaceFormation(L, *c, units);
+  if (kForm) {
+    c->formation = lua_tostring(L, 3);
+    c->formIndex = formIndex;
+    // arg 4: heading in degrees -> a quaternion about +Y (0x570750)
+    float h = static_cast<float>(lua_tonumber(L, 4)) * 0.0174532924f;
+    c->formQw = dmath::Cos(h * 0.5f);
+    c->formQx = 0;
+    c->formQy = dmath::Sin(h * 0.5f);
+    c->formQz = 0;
+    c->formScale = 1.0f;
   }
   PushCommand(L, c);
   return 1;
