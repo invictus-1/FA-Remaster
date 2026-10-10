@@ -625,6 +625,15 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
 
 // ---- weapons: target changes -----------------------------------------------------------------------
 
+int TargetPointDraw(Sim& sim, Entity* e) {
+  if (!e) return -1;
+  if (e->kind == Entity::Kind::Blip) e = static_cast<ReconBlip*>(e)->source;
+  if (!e || e->kind != Entity::Kind::Unit) return -1;
+  const CombatBpData& cb = CB(static_cast<Unit*>(e));
+  if (cb.targetBones.empty()) return -1;
+  return static_cast<int>(sim.IntRange(static_cast<uint32_t>(cb.targetBones.size())));
+}
+
 namespace {
 
 void WeaponCall(Sim& sim, UnitWeapon* w, const char* method) {

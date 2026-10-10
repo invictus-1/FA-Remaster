@@ -33,6 +33,9 @@ class Projectile;
 struct BlueprintInfo;
 struct BuildTask;
 struct UnitCommand;
+// Unit::PickTargetPoint 0x6aaf50 via CAiTarget::UpdateTarget 0x5d55b0 for an entity target (a unit, or a recon
+// blip's source unit): IntRange(#AI.TargetBones) -> index, or -1 without a draw (structure_draws.md 1).
+int TargetPointDraw(Sim& sim, Entity* e);
 
 // Weapon blueprint values the engine reads (RUnitBlueprintWeapon), cached per blueprint table.
 struct WeaponBp {

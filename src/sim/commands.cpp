@@ -590,6 +590,10 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
 // Issue<Type>(units, position or entity target)
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
+  // SCR_GetTarget 0x6eef60 converts the target first: an entity target picks a target point (one draw,
+  // value unused); the CUnitCommand ctor decodes it again (a second draw) when a command is created
+  Entity* te = ToObject<Entity>(L, 2);
+  TargetPointDraw(*S(L), te);
   auto units = UnitsArg(L, 1);
   constexpr bool kForm = T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
                          T == CommandType::FormAggressiveMove;
@@ -600,10 +604,11 @@ int l_IssueTarget(lua_State* L) {
     if (formIndex < 0) return 0;
   }
   auto c = Issue(L, units, T);
-  if (Entity* e = ToObject<Entity>(L, 2)) {
+  if (Entity* e = te) {
     c->targetId = EntityRef(e);
     c->pos = e->position;
     c->hasPos = true;
+    if (!c->units.empty()) c->targetPoint = TargetPointDraw(*S(L), e);
   } else {
     c->hasPos = PosArg(L, 2, &c->pos);
   }
@@ -630,8 +635,11 @@ int l_IssueOther(lua_State* L) {
   for (int i = 2; i <= lua_gettop(L); ++i) {
     if (lua_type(L, i) == LUA_TSTRING && c->blueprintId.empty()) c->blueprintId = lua_tostring(L, i);
     else if (lua_type(L, i) == LUA_TNUMBER) c->count = static_cast<int>(lua_tonumber(L, i));
-    else if (Entity* e = ToObject<Entity>(L, i)) c->targetId = EntityRef(e);
-    else if (!c->hasPos && lua_istable(L, i)) {
+    else if (Entity* e = ToObject<Entity>(L, i)) {
+      c->targetId = EntityRef(e);
+      TargetPointDraw(*S(L), e);  // UpdateTarget (IssueSacrifice ...), then the command ctor's decode
+      if (!c->units.empty()) c->targetPoint = TargetPointDraw(*S(L), e);
+    } else if (!c->hasPos && lua_istable(L, i)) {
       Vec3 p;
       lua_rawgeti(L, i, 1);
       bool isPos = lua_isnumber(L, -1);
@@ -651,6 +659,7 @@ int l_IssueOther(lua_State* L) {
 int l_IssueFactoryAssist(lua_State* L) {
   Sim& sim = *S(L);
   Entity* e = ToObject<Entity>(L, 2);
+  TargetPointDraw(sim, e);  // UpdateTarget 0x5d55b0 on the target arg
   std::shared_ptr<UnitCommand> c;
   for (Unit* u : UnitsArg(L, 1)) {
     if (!(UnitCommandCaps(L, *u->blueprint) & 0x8u) || !u->isFactoryBuilder || u->dead) continue;  // RULEUCC_Guard
@@ -663,6 +672,7 @@ int l_IssueFactoryAssist(lua_State* L) {
         c->targetId = EntityRef(e);
         c->pos = e->position;
         c->hasPos = true;
+        c->targetPoint = TargetPointDraw(sim, e);  // the CUnitCommand ctor's decode
       } else {
         c->hasPos = PosArg(L, 2, &c->pos);
       }

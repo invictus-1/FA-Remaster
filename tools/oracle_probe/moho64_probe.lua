@@ -1735,12 +1735,14 @@ end
 -- it hands out are summarised per tick. Ticks 0..130:
 -- "PROBE rngl <tick> <calls> <hash>"; ticks 0..70 also every value, 40 per line: "PROBE rngv <tick> <i> v v ..."
 -- (v32: math.random, which config.lua points at Random, goes through the wrapper as well)
+-- (v35: ticks 53-54 also every call with its caller: "PROBE rngw <tick> <i> <nargs> <value> <file:line>")
 function P.RandomWatch()
     local R = rawget(_G, 'Random')
     if not R or rawget(_G, 'moho64_random_raw') then return end
     moho64_random_raw = R
     local GT = GetGameTick
     local cur, n, h, buf, bi = -1, 0, 0, {}, 0
+    local dgi = rawget(_G, 'debug') and debug.getinfo
     local function flush()
         if cur >= 0 and cur <= 130 and n > 0 then out('rngl', cur, n, h) end
         if bi > 0 then out('rngv', cur, n - bi, table.concat(buf, ' ', 1, bi)) end
@@ -1753,6 +1755,16 @@ function P.RandomWatch()
         else v = R(unpack(arg)) end
         local okt, t = pcall(GT)
         if okt and t ~= cur then flush() cur = t end
+        if cur >= 53 and cur <= 54 and dgi then  -- (v35) who draws, ticks 53-54
+            local function at(lv)
+                local ok, info = pcall(dgi, lv, 'Sl')
+                if not ok or not info then return '-' end
+                local f = string.gsub(tostring(info.short_src), '^.*[/\\]', '')
+                return f .. ':' .. tostring(info.currentline)
+            end
+            local where = at(4) .. '<' .. at(5)
+            out('rngw', cur, n, c, (c == 0) and string.format('%.6f', v) or tostring(v), where)
+        end
         if cur >= 0 and cur <= 130 then
             n = n + 1
             local iv = math.floor(v * 1000 + 0.5)

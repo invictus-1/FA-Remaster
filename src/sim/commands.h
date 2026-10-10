@@ -39,6 +39,7 @@ enum class CommandType : int {
 };
 
 struct UnitCommand {
+  int targetPoint = -1;  // CAiTarget bone pick of an entity target (index into AI.TargetBones; -1 none)
   uint32_t id = 0;
   CommandType type = CommandType::None;
   Vec3 pos;

@@ -642,6 +642,13 @@ int ResolveBoneOf(lua_State* L, Entity* e, int idx) {
 int l_CreateProjectile(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   Sim& sim = *S(L);
+  if (sim.rngTrace_) {
+    lua_Debug ar;
+    std::string tb;
+    for (int lv = 1; lv < 6 && lua_getstack(L, lv, &ar); ++lv)
+      if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+    Logf(LogLevel::Info, "projtb %u %s%s", sim.tick(), lua_tostring(L, 2) ? lua_tostring(L, 2) : "?", tb.c_str());
+  }
   const BlueprintInfo* bp = CheckProjBp(L, 2);
   if (!bp) return luaL_error(L, "CreateProjectile: Invalid blueprint %s", lua_tostring(L, 2) ? lua_tostring(L, 2) : "?");
   const ProjBp& b = GetProjBp(sim, L, *bp);
