@@ -1417,6 +1417,29 @@ function P.Armies()
             WaitTicks(tick < 600 and 1 or 10)
         end
     end)
+    -- (v21) each army's commander for the first 400 ticks: position, heading, the head command and states.
+    -- "PROBE acu <tick> <army> x z heading ncmd headType@x,z states"
+    ForkThread(function()
+        local states = { 'Moving', 'Building', 'Repairing', 'Reclaiming', 'Guarding', 'Busy', 'Immobile', 'Attacking' }
+        while GetGameTick() < 400 do
+            local tick = GetGameTick()
+            for i, name in ListArmies() do
+                pcall(function()
+                    if ArmyIsCivilian(i) then return end
+                    for _, u in GetArmyBrain(i):GetListOfUnits(categories.COMMAND, false) or {} do
+                        local p = u:GetPosition()
+                        local q = u:GetCommandQueue() or {}
+                        local h = '-'
+                        if q[1] then h = tostring(q[1].commandType) .. '@' .. fmt(q[1].x or 0) .. ',' .. fmt(q[1].z or 0) end
+                        local st = {}
+                        for _, s in states do if u:IsUnitState(s) then table.insert(st, s) end end
+                        out('acu', tick, i, fmt(p[1]), fmt(p[3]), fmt(u:GetHeading()), table.getn(q), h, table.concat(st, ','))
+                    end
+                end)
+            end
+            WaitTicks(1)
+        end
+    end)
     while GetGameTick() < 50 do WaitTicks(1) end
     while true do
         local tick = GetGameTick()
@@ -1451,6 +1474,42 @@ function P.Armies()
             if not ok then out('ar-error', tick, i, tostring(err)) end
         end
         WaitTicks(50)
+    end
+end
+
+-- 13) (v22) structure placement around each AI start: CanBuildStructureAt('ueb0101') on a 49x49 grid of whole
+-- cells (+0.5) at tick 3 ("PROBE cbs <army> <z> <bits from x0>") and FAF NavUtils land labels at tick 45 (step 2,
+-- "PROBE navl <army> <z> <labels>").
+function P.BuildChecks()
+    local function grid(tag, step, f)
+        for i, name in ListArmies() do
+            pcall(function()
+                if ArmyIsCivilian(i) then return end
+                local b = GetArmyBrain(i)
+                local sx, sz = b:GetArmyStartPos()
+                local x0, z0 = math.floor(sx) - 24, math.floor(sz) - 24
+                out(tag .. 'org', i, x0, z0, step)
+                for z = z0, z0 + 48, step do
+                    local row = {}
+                    for x = x0, x0 + 48, step do table.insert(row, f(b, x + 0.5, z + 0.5)) end
+                    out(tag, i, z, table.concat(row, step == 1 and '' or ','))
+                end
+            end)
+        end
+    end
+    while GetGameTick() < 3 do WaitTicks(1) end
+    grid('cbs', 1, function(b, x, z)
+        return b:CanBuildStructureAt('ueb0101', { x, GetSurfaceHeight(x, z), z }) and '1' or '0'
+    end)
+    while GetGameTick() < 45 do WaitTicks(1) end
+    local ok, NavUtils = pcall(import, '/lua/sim/navutils.lua')
+    if ok and NavUtils then
+        grid('navl', 2, function(b, x, z)
+            local okl, l = pcall(NavUtils.GetLabel, 'Land', { x, GetSurfaceHeight(x, z), z })
+            return okl and tostring(l) or 'e'
+        end)
+    else
+        out('navl-error', tostring(NavUtils))
     end
 end
 
