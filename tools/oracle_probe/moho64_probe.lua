@@ -1665,6 +1665,26 @@ function P.TreeWatch()
             return r
         end
     end
+    -- (v36) units hitting trees: "PROBE pcol <tick> <prop bp> x z <unit id> nx ny nz depth" (ticks < 200)
+    if okt and T then
+        for _, cname in { 'Tree', 'TreeGroup' } do
+            local cls = T[cname]
+            if cls and cls.OnCollision then
+                local orig = cls.OnCollision
+                cls.OnCollision = function(self, other, nx, ny, nz, depth)
+                    if GetGameTick() < 200 then
+                        pcall(function()
+                            local p = self:GetPosition()
+                            out('pcol', GetGameTick(), short(self), string.format('%.3f', p[1]), string.format('%.3f', p[3]),
+                                other and other.GetEntityId and other:GetEntityId() or '-', fmt(nx), fmt(ny), fmt(nz), fmt(depth),
+                                tostring(self.Fallen))
+                        end)
+                    end
+                    return orig(self, other, nx, ny, nz, depth)
+                end
+            end
+        end
+    end
     local okp, PM = pcall(import, '/lua/sim/prop.lua')
     if okp and PM and PM.Prop and PM.Prop.OnDestroy then
         local orig = PM.Prop.OnDestroy

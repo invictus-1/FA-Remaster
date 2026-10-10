@@ -11,6 +11,8 @@
 
 #include "core/log.h"
 #include "sim/collision.h"
+#include "sim/entity_grid.h"
+#include "script/script_state.h"
 #include "sim/navigation.h"
 #include "sim/combat.h"
 #include "sim/formation.h"
@@ -257,6 +259,123 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
 
 }  // namespace
 
+namespace {
+// BoxBox 0x474830 (prop_collision.md 3.2): A = prop, B = unit. True with the minimum-overlap face normal (pointing
+// from the unit to the prop) and depth; an edge axis gives a zero normal and depth.
+bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
+  auto dot = [](const Vec3& a, const Vec3& b) { return (a.y * b.y + a.z * b.z) + a.x * b.x; };
+  auto cross = [](const Vec3& a, const Vec3& b) {
+    return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+  };
+  auto project = [&](const Obb& o, const Vec3& a, float* lo, float* hi) {  // 0x475550
+    float c = (o.c.y * a.y + o.c.z * a.z) + o.c.x * a.x;
+    long double r = (static_cast<long double>(std::fabs(dot(a, o.ax[2]))) * o.h.z +
+                     static_cast<long double>(std::fabs(dot(a, o.ax[1]))) * o.h.y) +
+                    static_cast<long double>(std::fabs(dot(a, o.ax[0]))) * o.h.x;
+    float rf = static_cast<float>(r);
+    *lo = c - rf;
+    *hi = c + rf;
+  };
+  Vec3 axes[15] = {A.ax[0], A.ax[2], A.ax[1], B.ax[0], B.ax[2], B.ax[1],
+                   cross(A.ax[0], B.ax[0]), cross(A.ax[0], B.ax[2]), cross(A.ax[0], B.ax[1]),
+                   cross(A.ax[2], B.ax[0]), cross(A.ax[2], B.ax[2]), cross(A.ax[2], B.ax[1]),
+                   cross(A.ax[1], B.ax[0]), cross(A.ax[1], B.ax[2]), cross(A.ax[1], B.ax[1])};
+  float ov[15];
+  for (int i = 0; i < 15; ++i) {
+    float a0, a1, b0, b1;
+    project(A, axes[i], &a0, &a1);
+    project(B, axes[i], &b0, &b1);
+    if (b0 > a1 || a0 > b1) return false;
+    ov[i] = std::min(a1, b1) - std::max(a0, b0);
+  }
+  float best = 1e9f;
+  int bi = -1;
+  for (int i = 0; i < 15; ++i) {
+    const Vec3& ax = axes[i];
+    float l2 = (ax.x * ax.x + ax.y * ax.y) + ax.z * ax.z;
+    if (1e-6f > l2) continue;
+    long double inv = 1.0L / std::sqrt(static_cast<long double>(l2));
+    ov[i] = ov[i] * static_cast<float>(inv);
+    axes[i] = {static_cast<float>(inv * ax.x), static_cast<float>(inv * ax.y), static_cast<float>(inv * ax.z)};
+    if (best > ov[i]) {
+      best = ov[i];
+      bi = i;
+    }
+  }
+  if (bi < 0) return false;
+  Vec3 n = axes[bi];
+  if (((B.c.z - A.c.z) * n.z + (B.c.x - A.c.x) * n.x) + (B.c.y - A.c.y) * n.y > 0)
+    n = {n.x * -1.0f, n.y * -1.0f, n.z * -1.0f};
+  if (bi < 6) {
+    *normal = n;
+    *depth = best;
+  } else {
+    *normal = {};
+    *depth = 0;
+  }
+  return true;
+}
+
+// The prop part of ProcessSurfaceCollisionFromLastMove / DoCollisionsFor: props in the cells under the unit box's
+// AABB (grid order), AABB pre-test, BoxBox; depth >= 0.001 calls prop:OnCollision(unit, nx, ny, nz, depth).
+void PropCollisions(Sim& sim, Unit* u, const Obb& box) {
+  if (u->destroyQueued || u->dead) return;
+  if (u->motion.bp && u->motion.bp->naval < 0)
+    u->motion.bp->naval = BpInCategory(sim, u->blueprint, "NAVAL") ? 1 : 0;
+  if (u->motion.bp && u->motion.bp->naval == 1) return;
+  Vec3 mn{1e30f, 1e30f, 1e30f}, mx{-1e30f, -1e30f, -1e30f};
+  for (int i = 0; i < 8; ++i) {
+    float sx = (i & 1) ? 1.f : -1.f, sy = (i & 2) ? 1.f : -1.f, sz = (i & 4) ? 1.f : -1.f;
+    Vec3 p = Add(Add(Add(box.c, Scale(box.ax[0], sx * box.h.x)), Scale(box.ax[1], sy * box.h.y)), Scale(box.ax[2], sz * box.h.z));
+    mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
+    mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
+  }
+  Vec3 c{(mx.x + mn.x) * 0.5f, (mx.y + mn.y) * 0.5f, (mx.z + mn.z) * 0.5f};
+  Vec3 e{(mx.x - mn.x) * 0.5f, (mx.y - mn.y) * 0.5f, (mx.z - mn.z) * 0.5f};
+  mn = Sub(c, e);
+  mx = Add(c, e);
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(mn.x, mn.z, mx.x, mx.z, 2, &cand);
+  struct PropHit {
+    Entity* e;
+    Vec3 n;
+    float d;
+  };
+  std::vector<PropHit> hits;
+  for (Entity* p : cand) {
+    WorldShape s;
+    if (!GetWorldShape(p, &s) || s.type != ShapeType::Box) continue;  // (sphere props: not handled)
+    Vec3 pmn, pmx;
+    ShapeBounds(s, &pmn, &pmx);
+    if (mn.x > pmx.x || pmn.x > mx.x || mn.y > pmx.y || pmn.y > mx.y || mn.z > pmx.z || pmn.z > mx.z) continue;
+    Obb a;
+    a.c = s.c;
+    a.ax[0] = s.ax[0];
+    a.ax[1] = s.ax[1];
+    a.ax[2] = s.ax[2];
+    a.h = s.half;
+    Vec3 n;
+    float d = 0;
+    if (!BoxBoxSat(a, box, &n, &d)) continue;
+    hits.push_back({p, n, d});
+  }
+  lua_State* L = sim.L();
+  for (const PropHit& h : hits) {
+    if (getenv("MOHO64_DEBUG_PROPHIT"))
+      Logf(LogLevel::Info, "prophit %u unit %u prop %.3f %.3f n %.4f %.4f %.4f d %.4f", sim.tick(), u->id, h.e->position.x,
+           h.e->position.z, h.n.x, h.n.y, h.n.z, h.d);
+    if (0.001f > h.d) continue;
+    if (!h.e->HasLuaObject() || !u->HasLuaObject()) continue;
+    PushObject(L, u);
+    lua_pushnumber(L, h.n.x);
+    lua_pushnumber(L, h.n.y);
+    lua_pushnumber(L, h.n.z);
+    lua_pushnumber(L, h.d);
+    sim.CallMethod(L, h.e, "OnCollision", 5);
+  }
+}
+}  // namespace
+
 void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (u->layer == "Air" || u->layer == "Sub") return;
@@ -270,7 +389,8 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   box.ax[1] = Up(u->orientation);
   box.ax[2] = Forward(u->orientation);
   box.h = {b.sizeX * 0.5f, b.sizeY, b.sizeZ * 0.5f};
-  // (every 5th tick a unit larger than 0.2 also knocks props: prop:OnCollision, not modelled)
+  // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also hits props: prop:OnCollision (prop_collision.md)
+  if (b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u) PropCollisions(sim, u, box);
   std::vector<Hit> hits;
   float r = std::max(b.sizeX, b.sizeZ) + 8.0f;
   sim.ForUnitsInRect(u->position.x - r, u->position.z - r, u->position.x + r, u->position.z + r, [&](Unit* e) {
