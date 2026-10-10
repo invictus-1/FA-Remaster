@@ -5,6 +5,7 @@ if rawget(_G, 'moho64_probe') then
         P.out('score.lua loaded at tick', GetGameTick())
         P.Blueprints()
         P.Threads()
+        ForkThread(P.Armies) -- v19
         ForkThread(function()
             while GetGameTick() < 20 do WaitTicks(1) end
             P.Motion() -- yields (WaitTicks): no pcall around it; its own steps are pcall'd

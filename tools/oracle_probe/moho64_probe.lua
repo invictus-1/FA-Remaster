@@ -588,7 +588,7 @@ function P.Transport()
                     local extra = ''
                     if e.tag == 'tr' then extra = 'cargo=' .. table.getn(u:GetCargo()) end
                     out('tru', tick, e.tag, fmt(p[1]), fmt(p[2]), fmt(p[3]), u:GetCurrentLayer(), table.getn(u:GetCommandQueue()),
-                        table.concat(st, ','), extra)
+                        table.concat(st, ','), extra, 'h=' .. fmt(u:GetHeading())) -- (v19) heading
                     if e.tag ~= 'tr' then P.NavLine('trnav', tick, e.tag, u) end
                 end
             end
@@ -1383,6 +1383,54 @@ function P.Formation()
         WaitTicks(1)
     end
     out('formation done')
+end
+
+-- 12) (v19) the whole game, per army every 50 ticks: economy, unit counts by kind, army value and where the
+-- mobile land army is. "PROBE ar <tick> <army> mi ei ms es n eng land air naval struct fac val cx cz"
+function P.Armies()
+    local kinds = {
+        { 'eng', categories.ENGINEER },
+        { 'land', categories.LAND * categories.MOBILE - categories.ENGINEER },
+        { 'air', categories.AIR * categories.MOBILE - categories.ENGINEER },
+        { 'naval', categories.NAVAL * categories.MOBILE - categories.ENGINEER },
+        { 'struct', categories.STRUCTURE },
+        { 'fac', categories.FACTORY * categories.STRUCTURE },
+    }
+    while GetGameTick() < 50 do WaitTicks(1) end
+    while true do
+        local tick = GetGameTick()
+        for i, name in ListArmies() do
+            local ok, err = pcall(function()
+                if ArmyIsCivilian(i) then return end
+                local b = GetArmyBrain(i)
+                if not b then return end
+                local all = b:GetListOfUnits(categories.ALLUNITS, false) or {}
+                local val, cx, cz, nl = 0, 0, 0, 0
+                for _, u in all do
+                    if not u.Dead and u:GetFractionComplete() >= 1 then
+                        local bp = u:GetBlueprint()
+                        val = val + ((bp.Economy and bp.Economy.BuildCostMass) or 0)
+                        if EntityCategoryContains(categories.LAND * categories.MOBILE - categories.ENGINEER, u) then
+                            local p = u:GetPosition()
+                            cx = cx + p[1]; cz = cz + p[3]; nl = nl + 1
+                        end
+                    end
+                end
+                local f = { 'ar', tick, i,
+                    fmt(b:GetEconomyIncome('MASS')), fmt(b:GetEconomyIncome('ENERGY')),
+                    fmt(b:GetEconomyStored('MASS')), fmt(b:GetEconomyStored('ENERGY')), table.getn(all) }
+                for _, k in kinds do
+                    table.insert(f, table.getn(b:GetListOfUnits(k[2], false) or {}))
+                end
+                table.insert(f, fmt(val))
+                table.insert(f, nl > 0 and fmt(cx / nl) or '-')
+                table.insert(f, nl > 0 and fmt(cz / nl) or '-')
+                out(unpack(f))
+            end)
+            if not ok then out('ar-error', tick, i, tostring(err)) end
+        end
+        WaitTicks(50)
+    end
 end
 
 moho64_probe = P

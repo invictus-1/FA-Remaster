@@ -490,6 +490,11 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   if (u->id % 13 != sim.tick() % 13 && !IsZeroVec(n.lastFollow)) return 1;  // between phases: keep following
   if (n.hasTarget && n.target == s) {
     n.lastFollow = p;
+    // the target position is the slot's (+0x84): a new position in the same cell is a new steering waypoint
+    if (n.following && n.followCell == s && (n.followPos.x != p.x || n.followPos.z != p.z)) {
+      n.followPos = p;
+      n.targetChanged = true;
+    }
     return 1;
   }
   float dd = Dist(n.cur, s);
@@ -809,7 +814,7 @@ void LandNavTickAll(Sim& sim) {
 
 bool LandNavTarget(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
-  if (!n || !n->active || !n->hasTarget) return false;
+  if (!n || !n->hasTarget) return false;  // (the last target stays readable after the move ended)
   *out = {n->target.x + SX(u) * 0.5f, 0, n->target.z + SZ(u) * 0.5f};
   if (n->following && n->target == n->followCell) *out = {n->followPos.x, 0, n->followPos.z};
   return true;
