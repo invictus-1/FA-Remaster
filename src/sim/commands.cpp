@@ -718,6 +718,28 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
   return c;
 }
 
+// The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
+// what is left in the queue goes, the command ctor draws the target point.
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target) {
+  if (!IsAlive(u) || !target) return nullptr;
+  auto c = std::make_shared<UnitCommand>();
+  c->id = sim.nextCommandId++;
+  c->type = CommandType::Attack;
+  sim.commandsById[c->id] = c;
+  c->targetId = EntityRef(target);
+  c->pos = target->position;
+  c->hasPos = true;
+  c->targetPoint = TargetPointDraw(sim, target);
+  if (!u->commands.empty()) {
+    ForgetUnitCommands(u);
+    SetMoving(u, false);
+  }
+  u->commands.push_back(c);
+  c->units.insert(u);
+  AirSpeedThroughEvent(sim, u);  // queue event 0
+  return c;
+}
+
 namespace {
 
 // Issue<Type>(units, position or entity target)

@@ -93,6 +93,8 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t);
 // RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
+// The Attack order a weapon with AutoInitiateAttackCommand gives its own idle unit (CAcquireTargetTask 0x5d9415).
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target);
 
 // Lua's view of a unit's navigator (Unit:GetNavigator()).
 class NavigatorObject : public ScriptObject {

@@ -874,6 +874,20 @@ void ReportState(Unit* u, int code) {
   }
 }
 
+// CheckAutoInitiate 0x5d8c40: the weapon may order its unit to attack what it acquires while the unit has no
+// orders, or only an Attack / FormAttack whose target entity is gone or dead.
+bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
+  if (!w->bp->autoInitiateAttackCommand) return false;
+  const Unit* u = w->unit;
+  if (u->commands.empty()) return true;
+  if (u->commands.size() != 1) return false;
+  const UnitCommand& c = *u->commands.front();
+  if (c.type != CommandType::Attack && c.type != CommandType::FormAttack) return false;
+  if (!c.targetId) return false;  // (a ground target)
+  const Entity* e = sim.FindEntity(c.targetId);
+  return !e || e->dead || e->destroyQueued;
+}
+
 // CAcquireTargetTask::TaskTick 0x5d8d10. Returns the ticks until it runs again.
 int AcquireTick(Sim& sim, UnitWeapon* w) {
   Unit* u = w->unit;
@@ -922,7 +936,9 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   }
   if (reporter) ReportState(u, code);
   if (w->suppress > 0) --w->suppress;
-  if (u->unitStates.count("Attacking") && (b.autoInitiateAttackCommand || cb.needUnpack || code == 1)) return 1;
+  if (u->unitStates.count("Attacking") &&
+      ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1))
+    return 1;
   // keep the current target
   if (!b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 && CanAttackTarget(sim, w, w->target) &&
       HasTarget(sim, w->target) && !TargetExempt(u, TargetEntity(sim, w->target)))
@@ -972,7 +988,13 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   const std::vector<Unit*>& list = BlipsInRange(sim, u, period);
   Unit* best = FindBestEnemy(sim, w, list, range, useAngle);
   if (best) {
+    // an idle unit's AutoInitiateAttackCommand weapon also orders the unit to attack what it found (0x5d93d5)
+    const bool autoAttack = CheckAutoInitiate(sim, w);
+    // the task first builds a CAiTarget of what it found (UpdateTarget 0x5d55b0: one target-point draw, every
+    // time), then hands it to the weapon, whose own draw (PickNewTargetAimSpot) only comes with a new target
+    TargetPointDraw(sim, best);
     SetTarget(sim, w, EntityTarget(best));
+    if (autoAttack) IssueAutoAttack(sim, u, best);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
   } else {
