@@ -167,6 +167,8 @@ class Unit : public Entity {
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
+  Quat lastOrientation;            // orientation at the start of the tick (with lastPosition)
+  uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
   bool everMobileChecked = false;
   uint32_t engageId = 0;           // aggressive move / patrol: the enemy it stopped for

@@ -181,9 +181,13 @@ float TerrainMap::TerrainHeight(float x, float z) const {
   float fx = std::floor(x), fz = std::floor(z);
   int ix = static_cast<int>(fx), iz = static_cast<int>(fz);
   float tx = x - fx, tz = z - fz;
-  float h00 = HeightAt(ix, iz), h10 = HeightAt(ix + 1, iz);
-  float h01 = HeightAt(ix, iz + 1), h11 = HeightAt(ix + 1, iz + 1);
-  return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+  // STIMap::GetElevation 0x44fb90: lerp along z first, then x; the x87 part runs with precision control
+  // 24 bits on the sim thread, so every step rounds like a float op
+  float A = HeightAt(ix, iz), B = HeightAt(ix, iz + 1);
+  float C = HeightAt(ix + 1, iz), D = HeightAt(ix + 1, iz + 1);
+  float a = A + (B - A) * tz;
+  float b = C + (D - C) * tz;
+  return a + (b - a) * tx;
 }
 
 float TerrainMap::SurfaceHeight(float x, float z) const {

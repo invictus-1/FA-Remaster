@@ -157,10 +157,12 @@ void NormalizeQuat(QuatW& q) {
 bool SetLength(Vec3& v, float L) {
   float n2 = (v.x * v.x + v.y * v.y) + v.z * v.z;
   if (!(n2 > 0.0f)) return false;
-  double s = static_cast<double>(L) / std::sqrt(static_cast<double>(n2));
-  v.x = static_cast<float>(v.x * s);
-  v.y = static_cast<float>(s * v.y);
-  v.z = static_cast<float>(s * v.z);
+  // x87 with precision control 24 bits (the sim thread's control word, confirmed by labhook 0.6 'A' records:
+  // 21221 single-only matches, 0 double-only): every x87 op rounds like a float op
+  float s = L / std::sqrt(n2);
+  v.x = v.x * s;
+  v.y = s * v.y;
+  v.z = s * v.z;
   return true;
 }
 
@@ -317,6 +319,31 @@ int BitLen(unsigned v) {
   }
   return n;
 }
+// One tier cell (CHeightField::UpdateBounds 0x476bb0): tier 1 from the 3x3 samples, higher tiers from 2x2 children.
+uint32_t TierCell(const Tiers& t, const TerrainMap* map, int k, int i, int j) {
+  auto raw = [&](int x, int z) {
+    x = std::clamp(x, 0, t.W - 1);
+    z = std::clamp(z, 0, t.H - 1);
+    return static_cast<uint32_t>(std::lround(map->HeightAt(x, z) * 128.0f));
+  };
+  uint32_t m = 0;
+  int s = 1 << k;
+  if (k == 1) {
+    int x0 = i * s, z0 = j * s;
+    int x1 = std::min(x0 + s, t.W - 1), z1 = std::min(z0 + s, t.H - 1);
+    for (int z = z0; z <= z1; ++z)
+      for (int x = x0; x <= x1; ++x) m = std::max(m, raw(x, z));
+    return m;
+  }
+  const auto& p = t.hi[k - 2];
+  int pw = t.tw[k - 2], ph = t.th[k - 2];
+  for (int dz = 0; dz < 2; ++dz)
+    for (int dx = 0; dx < 2; ++dx) {
+      int ci = std::min(2 * i + dx, pw - 1), cj = std::min(2 * j + dz, ph - 1);
+      m = std::max(m, p[static_cast<size_t>(cj) * pw + ci]);
+    }
+  return m;
+}
 const Tiers& GetTiers(const TerrainMap* map) {
   auto& c = TierCache();
   auto it = c.find(map);
@@ -327,37 +354,13 @@ const Tiers& GetTiers(const TerrainMap* map) {
   t.W = w + 1;
   t.H = h + 1;
   int n = BitLen(static_cast<unsigned>(std::max(w, h) - 1));
-  auto raw = [&](int x, int z) {
-    x = std::clamp(x, 0, t.W - 1);
-    z = std::clamp(z, 0, t.H - 1);
-    return static_cast<uint32_t>(std::lround(map->HeightAt(x, z) * 128.0f));
-  };
   for (int k = 1; k <= n; ++k) {
     int tw = std::max(1, w >> k), th = std::max(1, h >> k);
     t.tw.push_back(tw);
     t.th.push_back(th);
-    std::vector<uint32_t> v(static_cast<size_t>(tw) * th, 0);
-    int s = 1 << k;
+    t.hi.emplace_back(static_cast<size_t>(tw) * th, 0);
     for (int j = 0; j < th; ++j)
-      for (int i = 0; i < tw; ++i) {
-        uint32_t m = 0;
-        int x0 = i * s, z0 = j * s;
-        int x1 = std::min(x0 + s, t.W - 1), z1 = std::min(z0 + s, t.H - 1);
-        if (k == 1 || t.hi.empty()) {
-          for (int z = z0; z <= z1; ++z)
-            for (int x = x0; x <= x1; ++x) m = std::max(m, raw(x, z));
-        } else {
-          const auto& p = t.hi.back();
-          int pw = t.tw[k - 2], ph = t.th[k - 2];
-          for (int dz = 0; dz < 2; ++dz)
-            for (int dx = 0; dx < 2; ++dx) {
-              int ci = std::min(2 * i + dx, pw - 1), cj = std::min(2 * j + dz, ph - 1);
-              m = std::max(m, p[static_cast<size_t>(cj) * pw + ci]);
-            }
-        }
-        v[static_cast<size_t>(j) * tw + i] = m;
-      }
-    t.hi.push_back(std::move(v));
+      for (int i = 0; i < tw; ++i) t.hi.back()[static_cast<size_t>(j) * tw + i] = TierCell(t, map, k, i, j);
   }
   return t;
 }
@@ -966,7 +969,29 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
 }
 
 // CUnitMotion::CalcAirMovementDampingFactor 0x6bca10
-float DampingFactor(Unit* u, const Vec3& d) {
+void RecordAir(Sim& sim, Unit* u, const Vec3& d) {  // labhook 0.6 'A' record (CalcAirMovementDampingFactor entry)
+  const AirMotion& a = A(u);
+  unsigned char r[56];
+  auto put = [&](int o, uint32_t v) { r[o] = v & 0xff; r[o + 1] = (v >> 8) & 0xff; r[o + 2] = (v >> 16) & 0xff; r[o + 3] = v >> 24; };
+  auto putf = [&](int o, float f) { uint32_t v; std::memcpy(&v, &f, 4); put(o, v); };
+  r[0] = 'A';
+  r[1] = a.fullSpeed ? 1 : 0;
+  r[2] = r[3] = 0;
+  put(4, sim.RecorderTick());
+  put(8, u->id);
+  putf(12, d.x); putf(16, d.y); putf(20, d.z);
+  putf(24, MaxSpeed(u));
+  putf(28, a.target.x); putf(32, a.target.y); putf(36, a.target.z);
+  putf(40, a.curTerrain); putf(44, a.elevOffset); putf(48, a.height);
+  r[52] = static_cast<unsigned char>(a.landLayer);
+  r[53] = static_cast<unsigned char>(a.vertEvent);
+  r[54] = static_cast<unsigned char>(a.horzEvent);
+  r[55] = static_cast<unsigned char>(a.carrierEvent);
+  sim.RecorderRaw(r, 56);
+}
+
+float DampingFactor(Sim& sim, Unit* u, const Vec3& d) {
+  if (sim.Recording()) RecordAir(sim, u, d);
   const AirBp& b = *A(u).bp;
   if (b.targetChaser) return 1.0f;
   float ms = MaxSpeed(u);
@@ -1037,7 +1062,7 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   Vec3 err{axis.x * angle, axis.y * angle, axis.z * angle};
   Vec3 wb = MultQuadVec(QuatW{q.w, cx, cy, cz}, pb.L);
   Vec3 H{-0.0f - pb.invI[0] * wb.x, -0.0f - pb.invI[1] * wb.y, -0.0f - pb.invI[2] * wb.z};
-  float dampF = DampingFactor(u, desired);
+  float dampF = DampingFactor(sim, u, desired);
   Vec3 F;
   F.x = dv.x * b.kMove + nv.x * dampF;
   F.y = b.kLiftDamping * nv.y + dv.y * kLift;
@@ -1743,6 +1768,22 @@ void AirSetFacing(Unit* u, Vec3 dir) {
   AirMotion& a = A(u);
   a.facing = dir;
   if (a.pending) a.pendingFacing = dir;
+}
+
+// SetElevationRect 0x477e10 -> UpdateBounds(x0-1, z0-1, x1, z1): the samples [x0, x1] x [z0, z1] changed
+// (Sim::FlattenMapRect); every tier cell whose sample block meets the rectangle is recomputed.
+void AirTerrainChanged(const TerrainMap* map, int x0, int z0, int x1, int z1) {
+  auto it = TierCache().find(map);
+  if (it == TierCache().end()) return;
+  Tiers& t = it->second;
+  for (int k = 1; k <= static_cast<int>(t.hi.size()); ++k) {
+    int s = 1 << k, tw = t.tw[k - 1], th = t.th[k - 1];
+    // cell i covers samples [i*s, i*s + s]
+    int i0 = std::max(0, (x0 - 1 - s) / s), i1 = std::min(tw - 1, std::max(0, x1 + 1) / s);
+    int j0 = std::max(0, (z0 - 1 - s) / s), j1 = std::min(th - 1, std::max(0, z1 + 1) / s);
+    for (int j = j0; j <= j1; ++j)
+      for (int i = i0; i <= i1; ++i) t.hi[k - 1][static_cast<size_t>(j) * tw + i] = TierCell(t, map, k, i, j);
+  }
 }
 
 void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {

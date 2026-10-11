@@ -193,6 +193,7 @@ int l_FlattenMapRect(lua_State* L) {
   float h = static_cast<float>(luaL_checknumber(L, 5));
   for (int j = z; j <= std::min(z + sz, m->height()); ++j)
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  AirTerrainChanged(m, x, z, x + sx, z + sz);
   for (Unit* u : sim.units()) {
     if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
     if (u->position.x < x - 1 || u->position.x > x + sx + 1 || u->position.z < z - 1 || u->position.z > z + sz + 1) continue;

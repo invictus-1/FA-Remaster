@@ -1140,6 +1140,8 @@ void Sim::Tick() {
     Unit* u = motionOrder[i];
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
+    u->lastOrientation = u->orientation;
+    u->lastPosTick = tick_;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
@@ -1196,7 +1198,25 @@ void Sim::Tick() {
   BeamsTick(*this);
   g_prof.Lap(7);
   ReconBeat(*this);  // army (tick % armies) updates its blips
-  FormationsTick(*this);  // step 11: the formation DB
+  {
+    // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
+    // PENDING transform, so the formation update still sees every unit where it stood before this beat's
+    // motion (the oracle recorder: the original's slot point at tick t = ours at t-1 with post-motion positions).
+    std::vector<std::pair<Vec3, Quat>> moved;
+    std::vector<Unit*> who;
+    for (Unit* u : units_)
+      if (u->lastPosTick == tick_ && !u->destroyQueued) {
+        who.push_back(u);
+        moved.emplace_back(u->position, u->orientation);
+        u->position = u->lastPosition;
+        u->orientation = u->lastOrientation;
+      }
+    FormationsTick(*this);  // step 11: the formation DB
+    for (size_t i = 0; i < who.size(); ++i) {
+      who[i]->position = moved[i].first;
+      who[i]->orientation = moved[i].second;
+    }
+  }
   KillCleanupTick(*this);
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs

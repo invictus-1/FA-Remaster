@@ -297,7 +297,9 @@ void SnapUnit(const Sim& csim, Unit* u) {
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-hx, 0, hz}, {-hx, 0, -hz}, {hx, 0, -hz}};
   Vec3 c[4];
-  const Unit* plat = (hover || floating) ? nullptr : FindRaisedPlatform(sim, u);
+  // SnapToGround 0x6c1610 takes the platform for every non-hover type (AmphibiousFloating too: T1 engineers
+  // rolling off a factory deck)
+  const Unit* plat = hover ? nullptr : FindRaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {r.x + u->position.x, 0, r.z + u->position.z};

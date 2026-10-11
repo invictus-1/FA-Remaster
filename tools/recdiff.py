@@ -30,6 +30,8 @@ INLINE_SITES = {1: "Gauss draw 1 (0x40ef00)", 2: "Gauss draw 2 (0x40ef63)", 3: "
                 4: "inline draw 0x6b8297"}
 Unit = collections.namedtuple("Unit", "id q p states layer health frac cmd ncmd dead bb ext")
 Ext = collections.namedtuple("Ext", "maxspeed slot delay rank vel through atgoal inform hasmotion")
+# 'A' (labhook 0.6): one per flying unit per tick, at CalcAirMovementDampingFactor (the desired velocity d)
+Air = collections.namedtuple("Air", "full d ms target curterrain elevoffset height landlayer vert horz carrier")
 
 
 def load(path):
@@ -37,7 +39,7 @@ def load(path):
     if data[:4] != b"LREC":
         sys.exit("%s: not a recording" % path)
     ver, usize, flags = struct.unpack_from("<III", data, 4)
-    draws, beats, econ = [], {}, {}
+    draws, beats, econ, air = [], {}, {}, {}
     off, n = 16, len(data)
     while off + 12 <= n:
         t = data[off]
@@ -57,6 +59,14 @@ def load(path):
             tick = struct.unpack_from("<I", data, off + 4)[0]
             econ[tick] = [struct.unpack_from("<8f", data, off + 8 + 32 * i) for i in range(na)]
             off += 8 + 32 * na
+        elif t == 0x41:  # 'A': air motion at the damping factor
+            if off + 56 > n:
+                break
+            tick, uid = struct.unpack_from("<II", data, off + 4)
+            f = struct.unpack_from("<10f4B", data, off + 12)
+            air.setdefault(tick, {}).setdefault(uid, Air(data[off + 1], f[0:3], f[3], f[4:7], f[7], f[8], f[9], f[10],
+                                                         f[11], f[12], f[13]))
+            off += 56
         elif t == 0x54:  # 'T'
             tick, cnt = struct.unpack_from("<II", data, off + 4)
             off += 12
@@ -78,7 +88,7 @@ def load(path):
         else:
             print("%s: unknown record 0x%02x at %d, stopping" % (path, t, off))
             break
-    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ}
+    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ, "air": air}
 
 
 def index_draws(draws, label):
@@ -397,6 +407,43 @@ def compare_econ(A, B, tol):
     print("economy: all armies agree on all %d common ticks (%d..%d)" % (len(ticks), ticks[0], ticks[-1]))
 
 
+def compare_air(A, B, tol, maxn):
+    aa, ab = A["air"], B["air"]
+    ticks = sorted(set(aa) & set(ab))
+    if not ticks:
+        return
+    shown, first = 0, None
+    for t in ticks:
+        for uid in sorted(set(aa[t]) | set(ab[t])):
+            x, y = aa[t].get(uid), ab[t].get(uid)
+            if x is None or y is None:
+                bad = ["only in %s" % ("ours" if x is None else "the original")]
+            else:
+                bad = []
+                for name in Air._fields:
+                    u, v = getattr(x, name), getattr(y, name)
+                    uu, vv = (u, v) if isinstance(u, tuple) else ((u,), (v,))
+                    if any(abs(p - q) > tol * max(1.0, abs(p)) for p, q in zip(uu, vv)):
+                        bad.append(name)
+            if not bad:
+                continue
+            if first is None:
+                first = t
+            if shown < maxn:
+                print("air, tick %d: unit %x: %s" % (t, uid, ", ".join(bad)))
+                for lab, r in (("orig", x), ("ours", y)):
+                    if r:
+                        print("    %s: full %d d %s |d| %.5f ms %.4f tgt %s curT %.4f elev %.4f h %.4f land %d v %d h %d c %d" % (
+                            lab, r.full, " ".join("%.4f" % q for q in r.d), sum(q * q for q in r.d) ** 0.5, r.ms,
+                            " ".join("%.4f" % q for q in r.target), r.curterrain, r.elevoffset, r.height, r.landlayer,
+                            r.vert, r.horz, r.carrier))
+            shown += 1
+    if first is None:
+        print("air: all %d common ticks agree (%d..%d)" % (len(ticks), ticks[0], ticks[-1]))
+    else:
+        print("air: %d difference(s), the first at tick %d" % (shown, first))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("orig")
@@ -413,6 +460,7 @@ def main():
                                                                        len(B["draws"]), len(B["beats"])))
     compare_draws(A, B, ExeNames(a.names), a.moho64, a.context)
     compare_econ(A, B, a.units_tol)
+    compare_air(A, B, a.units_tol, a.max_unit_diffs)
     if not a.no_units:
         compare_units(A, B, a.units_tol, a.max_unit_diffs)
 

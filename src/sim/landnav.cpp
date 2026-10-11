@@ -625,7 +625,11 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     n.thinking = false;
     // following a formation slot: the target position is the slot's own (not the cell centre)
     Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z} : WorldOf(sim, u, n.target);
-    MotionSetWaypoint(sim, u, wp, through);
+    // the steering gets it only when it differs from its last waypoint (GetWaypoint 0x5d2170): the same
+    // point re-set by TryAdvance makes no new batch
+    const UnitMotion& m = u->motion;
+    bool same = m.hasWaypoint && !m.path.empty() && m.path.back().x == wp.x && m.path.back().y == wp.y && m.path.back().z == wp.z;
+    if (!same) MotionSetWaypoint(sim, u, wp, through);
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u target (%d,%d) through %d cur (%d,%d) path %zu", sim.tick(), u->id,
            n.target.x, n.target.z, through ? 1 : 0, n.cur.x, n.cur.z, n.path.size());
