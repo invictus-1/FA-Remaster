@@ -1129,6 +1129,7 @@ bool Sim::OkayToMessWith(const Army* a) const {
 
 void Sim::PausedBeat() {
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
+  if (rec_) RecorderBeat();
   ProcessDestroyQueue();
   UpdateIdPools();
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd

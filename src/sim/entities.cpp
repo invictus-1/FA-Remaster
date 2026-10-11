@@ -366,6 +366,14 @@ int l_IsKind(lua_State* L) {
 
 // ---- Entity --------------------------------------------------------------------------------
 
+}  // namespace
+
+Entity::~Entity() {
+  if (positionRef != LUA_NOREF && positionState) luaL_unref(positionState, LUA_REGISTRYINDEX, positionRef);
+}
+
+namespace {
+
 Entity* E(lua_State* L) { return CheckObject<Entity>(L, 1); }
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
 
@@ -400,7 +408,27 @@ int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world pos
     PushVec(L, Vec3{0, 0, 0});
     return 1;
   }
-  PushVec(L, lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2)));
+  if (lua_gettop(L) > 1) {  // with a bone: a new vector every call
+    PushVec(L, lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2)));
+    return 1;
+  }
+  // Without a bone the entity keeps ONE Lua vector (a LuaObject at entity+0x258): the first call makes it, every
+  // later call writes x, y, z into that same table and returns it. So every position a script got from this
+  // entity is the same table and follows the entity (and the script's own edits): FAF's CreateAdjacencyBeams
+  // shifts its "hub" copies and then compares the "original" ones, which are the same tables.
+  if (e->positionRef == LUA_NOREF) {
+    PushVec(L, e->position);
+    lua_pushvalue(L, -1);
+    e->positionRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    e->positionState = ScriptState::From(L)->L();
+    return 1;
+  }
+  lua_rawgeti(L, LUA_REGISTRYINDEX, e->positionRef);
+  const float v[3] = {e->position.x, e->position.y, e->position.z};
+  for (int i = 0; i < 3; ++i) {
+    lua_pushnumber(L, v[i]);
+    lua_rawseti(L, -2, i + 1);
+  }
   return 1;
 }
 int l_GetPositionXYZ(lua_State* L) {

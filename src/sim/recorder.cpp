@@ -110,6 +110,10 @@ void Sim::RecorderDraw(uintptr_t where) {
 }
 
 void Sim::RecorderBeat() {
+  // labhook writes a game tick once, at the first AdvanceBeat entry that sees it: while the game is paused the
+  // tick stays, and what the paused beats' messages do (cheat spawns) shows in the next tick's record
+  if (recTick_ == tick_) return;
+  recTick_ = tick_;
   std::vector<Unit*> list;
   for (Unit* u : units_)
     if (u->id < 0x10000000u) list.push_back(u);

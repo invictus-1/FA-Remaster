@@ -33,6 +33,7 @@ struct CollisionShape {
 class Entity : public ScriptObject {
  public:
   Entity() { typeBits |= kTypeEntity; }
+  ~Entity() override;
   enum class Kind { Entity, Unit, Prop, Projectile, Shield, Blip, Beam };
   Kind kind = Kind::Entity;
   uint32_t id = 0;      // the game's entity id (GetEntityId; reused after a 99-beat quarantine)
@@ -41,6 +42,9 @@ class Entity : public ScriptObject {
   Army* army = nullptr;
   Vec3 position;
   Quat orientation;
+  // entity+0x258: the ONE Lua vector Entity:GetPosition() hands out (registry reference, made by the first call)
+  int positionRef = LUA_NOREF;
+  lua_State* positionState = nullptr;
   float scale[3] = {1, 1, 1};
   const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)
   float meshScale = 1;                 // Display.UniformScale: model units -> world

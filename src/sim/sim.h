@@ -127,6 +127,7 @@ class Sim {
   void RecorderRaw(const void* p, size_t n) { if (rec_) fwrite(p, 1, n, rec_); }
   uint32_t RecorderTick() const { return beatStarted_ ? tick_ : 0xffffffffu; }
   FILE* rec_ = nullptr;
+  uint32_t recTick_ = 0xffffffffu;  // the last game tick RecorderBeat wrote
   uint64_t rngDraws_ = 0;
   bool beatStarted_ = false;
   void RngTrace(uint32_t r);
