@@ -2415,11 +2415,16 @@ int BoneIndex(lua_State* L, Entity* e, int arg) {
 }
 // A plain entity (no unit) attached to another entity's bone: it takes the bone's transform now and whenever
 // something attached to it asks (Sim::Tick). FAF hangs a mobile factory's external factory on such an anchor.
-bool AttachPlainEntity(Entity* e, Entity* parent, int bone) {
+// It does not jump there: until the entity stage at the end of the tick its transform is zero (seen in the
+// original: the units FAF hangs on a fresh anchor entity sit at (0, 0, 0) for their first tick, and from then on
+// one tick behind the bone).
+bool AttachPlainEntity(Sim& sim, Entity* e, Entity* parent, int bone) {
   if (!e || e->kind == Entity::Kind::Unit) return false;
   e->attachParent = EntityRef(parent);
   e->attachBone = bone;
-  BoneWorld(parent, bone, &e->position, &e->orientation);
+  e->position = {};
+  e->orientation = Quat{};
+  sim.attachedEntities.push_back(EntityRef(e));
   return true;
 }
 // Unit state Attached (14) belongs to the unit's motion: a unit without one (a structure, a dummy unit) never
@@ -2431,7 +2436,7 @@ void SetAttachedState(Unit* u) {
 int l_AttachBoneTo(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 3);
-  if (!u && parent && AttachPlainEntity(ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 4))) return 0;
+  if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 4))) return 0;
   if (!u || !parent) return 0;
   u->parentId = EntityRef(parent);
   u->ownBone = BoneIndex(L, u, 2);
@@ -2451,7 +2456,7 @@ int l_AttachBoneTo(lua_State* L) {
 int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 2);
-  if (!u && parent && AttachPlainEntity(ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
+  if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
   if (!u || !parent) return 0;
   u->parentId = EntityRef(parent);
   u->ownBone = -1;

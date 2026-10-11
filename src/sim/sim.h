@@ -126,6 +126,7 @@ class Sim {
   bool Recording() const { return rec_ != nullptr; }
   void RecorderRaw(const void* p, size_t n) { if (rec_) fwrite(p, 1, n, rec_); }
   uint32_t RecorderTick() const { return beatStarted_ ? tick_ : 0xffffffffu; }
+  std::vector<uint32_t> attachedEntities;  // plain entities attached to a bone (they follow it each tick)
   FILE* rec_ = nullptr;
   uint32_t recTick_ = 0xffffffffu;  // the last game tick RecorderBeat wrote
   uint64_t rngDraws_ = 0;

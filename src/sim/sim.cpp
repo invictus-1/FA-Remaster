@@ -1180,16 +1180,6 @@ void Sim::Tick() {
     if (u->parentId) {  // attached (a factory's product): held at the parent's bone
       Entity* p = FindEntity(u->parentId);
       if (p && !p->destroyQueued) {  // the child takes the bone's transform (Entity attach)
-        // a plain entity in between (FAF's anchor entity on a mobile factory's bone) follows its own parent first
-        for (Entity* e = p; e && e->kind != Entity::Kind::Unit && e->attachParent;) {
-          Entity* pp = FindEntity(e->attachParent);
-          if (!pp || pp->destroyQueued) break;
-          if (pp->kind != Entity::Kind::Unit && pp->attachParent) {
-            if (Entity* g = FindEntity(pp->attachParent)) BoneWorld(g, pp->attachBone, &pp->position, &pp->orientation);
-          }
-          BoneWorld(pp, e->attachBone, &e->position, &e->orientation);
-          break;
-        }
         Vec3 bp;
         Quat bq;
         BoneWorld(p, u->parentBone, &bp, &bq);
@@ -1219,6 +1209,20 @@ void Sim::Tick() {
       anyAttached = true;
       if (u->parentId && u->attachFull) UnitAimTick(*this, u);
     }
+  }
+  // plain entities attached to a bone (Entity:AttachTo / AttachBoneTo) take its transform now, after the units
+  // moved; a unit hanging on one read it before this, so it is a tick behind
+  if (!attachedEntities.empty()) {
+    size_t keep = 0;
+    for (size_t i = 0; i < attachedEntities.size(); ++i) {
+      Entity* e = FindEntity(attachedEntities[i]);
+      if (!e || e->destroyQueued || !e->attachParent) continue;
+      Entity* p = FindEntity(e->attachParent);
+      if (!p || p->destroyQueued) continue;
+      BoneWorld(p, e->attachBone, &e->position, &e->orientation);
+      attachedEntities[keep++] = attachedEntities[i];
+    }
+    attachedEntities.resize(keep);
   }
   MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
   g_prof.Lap(4);
