@@ -226,7 +226,7 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
   if (self->dead || self->destroyQueued) return;
   const MotionBlueprint& b = *self->motion.bp;
   float mSelf = Mass(b);
-  float vPush = std::min(Len(self->motion.lastMove), b.maxSpeed * 0.1f);
+  float vPush = std::min(Len(UnitVelocity(self)), b.maxSpeed * 0.1f);
   UnitCommand* c = Current(self);
   Vec3 prev = Sub(self->position, self->motion.lastMove);  // the position before its last move (u+0xd0)
   static const long dbg = getenv("MOHO64_DEBUG_PUSH") ? atol(getenv("MOHO64_DEBUG_PUSH")) : -1;
@@ -485,14 +485,14 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
       size_t i = my.splineIdx + k;
       if (i >= my.spline.size()) return;
       pY = my.spline[i].pos;
-      vY = k == 0 ? Y->motion.lastMove : Sub(pY, prevY);
+      vY = k == 0 ? UnitVelocity(Y) : Sub(pY, prevY);
       prevY = pY;
     }
     if (splA) {
       size_t j = mx.splineIdx + k;
       if (j >= mx.spline.size()) return;
       pX = mx.spline[j].pos;
-      vX = k == 0 ? X->motion.lastMove : Sub(pX, prevX);
+      vX = k == 0 ? UnitVelocity(X) : Sub(pX, prevX);
       prevX = pX;
     }
     if (WillCollide(Y, X, vY, pY, pX, vX, sameForm)) {
@@ -559,7 +559,7 @@ int Resolve(Sim& sim, Unit* Y) {
     return 0;
   };
   Vec3 pY = Y->position, pX = X->position;
-  Vec3 vY = Y->motion.lastMove, vX = X->motion.lastMove;
+  Vec3 vY = UnitVelocity(Y), vX = UnitVelocity(X);  // vtbl+0x3c
   bool Ymoving = Dot(vY, vY) > 0;
   if (X->motion.bp->canFly) return clear();  // (an air-capable blocker would lift off: not modelled)
   if (my.hasSpline && my.splineIdx < my.spline.size()) pY = my.spline[my.splineIdx].pos;
