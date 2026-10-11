@@ -52,6 +52,8 @@ struct MotionBlueprint {
   float bankingSlope = 0, wobbleFactor = 0, wobbleSpeed = 0;  // Physics +0x3c, +0x48, +0x4c (hover)
   float turnRadius = 0, turnRate = 0, turnFacingRate = 0;
   float elevation = 0;
+  float layerChangeOffset = -0.1f;    // Physics.LayerChangeOffsetHeight (P+0x74)
+  float layerTransitionDuration = 0;  // Physics.LayerTransitionDuration (P+0x78; the blend is not done)
   bool rotateOnSpot = false, standUpright = false, sinkLower = false, rotateBodyWhileMoving = false;
   float rotateOnSpotThreshold = 0.5f;
   float backUpDistance = 0;

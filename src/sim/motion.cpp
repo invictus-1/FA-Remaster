@@ -142,21 +142,40 @@ void SetLayer(Sim& sim, Unit* u, const char* layer) {
   sim.CallMethod(L, u, "OnLayerChange", 2);
 }
 
+// CUnitMotion::UpdateCurrentLayer 0x6c35c0 (engine-ref layer_change.md): run by MotionTick before this tick's
+// move, on the committed position (end of the previous tick), only while the last move |v|^2 > 1e-6.
+// thr = water elevation (-10000 without water) + LayerChangeOffsetHeight when the footprint occupies Land;
+// strictly above: Seabed->Land (Land, Amphibious), Water->Land (Hover, AmphibiousFloating, Water); strictly
+// below: Land->Seabed (Land, Amphibious), Land->Water (Hover, AmphibiousFloating).
 void UpdateLayer(Sim& sim, Unit* u) {
   const MotionBlueprint& b = *u->motion.bp;
   const TerrainMap* map = sim.map();
-  if (!map || !map->hasWater) return;
-  bool underWater = map->TerrainHeight(u->position.x, u->position.z) < map->waterElevation;
-  switch (b.motionType) {
-    case kMotionHover:
-    case kMotionAmphibiousFloating:
-      SetLayer(sim, u, underWater ? "Water" : "Land");
-      break;
-    case kMotionAmphibious:
-      SetLayer(sim, u, underWater ? "Seabed" : "Land");
-      break;
-    default:
-      break;
+  if (!map) return;
+  const int mt = b.motionType;
+  float thr = map->hasWater ? map->waterElevation : -10000.0f;
+  // footprint OccupancyCaps & Land (by motion type: Land, Biped, Amphibious, Hover, AmphibiousFloating)
+  if (mt == kMotionLand || mt == kMotionBiped || mt == kMotionAmphibious || mt == kMotionHover ||
+      mt == kMotionAmphibiousFloating)
+    thr = thr + b.layerChangeOffset;
+  float h = map->TerrainHeight(u->position.x, u->position.z);
+  const std::string& L = u->layer;
+  static bool warned = false;
+  auto set = [&](const char* to) {
+    if (b.layerTransitionDuration != 0 && (mt == kMotionHover || mt == kMotionAmphibiousFloating || mt == kMotionWater) &&
+        !warned) {
+      warned = true;
+      Logf(LogLevel::Debug, "moho64: LayerTransitionDuration blend not implemented (layer_change.md 4)");
+    }
+    SetLayer(sim, u, to);
+  };
+  if (h > thr) {
+    if (L == "Seabed" && (mt == kMotionAmphibious || mt == kMotionLand)) set("Land");
+    else if (L == "Water" && (mt == kMotionHover || mt == kMotionAmphibiousFloating || mt == kMotionWater)) set("Land");
+  } else if (thr > h) {
+    if (L == "Land") {
+      if (mt == kMotionAmphibious || mt == kMotionLand) set("Seabed");
+      else if (mt == kMotionHover || mt == kMotionAmphibiousFloating) set("Water");
+    }
   }
 }
 
@@ -255,6 +274,8 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
       m.turnRate = GetNum(L, p, "TurnRate", 0);
       m.turnFacingRate = GetNum(L, p, "TurnFacingRate", 0);
       m.elevation = GetNum(L, p, "Elevation", 0);
+      m.layerChangeOffset = GetNum(L, p, "LayerChangeOffsetHeight", -0.1f);
+      m.layerTransitionDuration = GetNum(L, p, "LayerTransitionDuration", 0);
       m.rotateOnSpot = GetBool(L, p, "RotateOnSpot");
       m.rotateOnSpotThreshold = GetNum(L, p, "RotateOnSpotThreshold", 0.5f);
       m.backUpDistance = GetNum(L, p, "BackUpDistance", 0);
@@ -1191,6 +1212,8 @@ void MotionTick(Sim& sim, Unit* u) {
     AirMotionTick(sim, u);
     return;
   } else {
+    // UpdateCurrentLayer 0x6b9f64: before the move, on the committed position, while the last move is non-zero
+    if (!u->immobile && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) UpdateLayer(sim, u);
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {
@@ -1258,7 +1281,6 @@ void MotionTick(Sim& sim, Unit* u) {
       SnapUnit(sim, u);
       m.needSnap = false;
     }
-    if (moved) UpdateLayer(sim, u);
     m.surfaceNext = false;  // (cleared after SnapToGround)
   }
   m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
