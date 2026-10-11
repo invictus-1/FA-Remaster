@@ -18,6 +18,7 @@
 #include <map>
 #include <unordered_map>
 
+#include "core/backtrace.h"
 #include "core/log.h"
 #include "sim/commands.h"
 #include "sim/economy.h"
@@ -766,6 +767,20 @@ void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
 void Stop(Sim& sim, Unit* u, const Vec3* pos) {
   AirMotion& a = A(u);
   a.stopped = true;
+  {
+    static const long dbgUnit = getenv("MOHO64_DEBUG_AIRSTOP") ? atol(getenv("MOHO64_DEBUG_AIRSTOP")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {  // who stops it (image offsets for llvm-symbolizer)
+      void* fr[10];
+      const int n = CaptureFrames(fr, 10);
+      std::string s;
+      for (int i = 1; i < n; ++i) {
+        char b[32];
+        snprintf(b, sizeof b, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+        s += b;
+      }
+      Logf(LogLevel::Info, "airstop %u unit %u from%s", sim.tick(), u->id, s.c_str());
+    }
+  }
   if (!State(u, "TransportUnloading") && !State(u, "TransportLoading") && !State(u, "Ferrying")) a.landLayer = kAir;
   a.target = pos ? *pos : u->position;
   (void)sim;
@@ -1750,6 +1765,7 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   a.pending = true;
   a.pendingTick = tick;
   a.pendingGoal = {cx + b.footprintX * 0.5f, goal.y, cz + b.footprintZ * 0.5f};
+  a.destEntity = 0;  // (a destination is cleared by the next SetGoal)
   u->motion.hasGoal = true;
   u->motion.arrived = false;
   (void)sim;
@@ -1762,6 +1778,7 @@ void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e) {
   AirMotion& a = A(u);
   a.pending = false;
   a.steering = true;
+  a.destEntity = EntityRef(e);
   SetTarget(sim, u, e->position, Vec3{}, 0);
   u->motion.hasGoal = true;
   u->motion.arrived = false;
@@ -1814,6 +1831,7 @@ void AirAbort(Sim& sim, Unit* u) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
   a.pending = false;
+  a.destEntity = 0;
   Vec3 p = PredictAhead(sim, u, 1.0f);
   Stop(sim, u, &p);
   a.steering = false;
@@ -1875,6 +1893,22 @@ void AirMotionTick(Sim& sim, Unit* u) {
     } else {
       a.inFormation = false;
       SetTarget(sim, u, a.goal, Vec3{}, 0);
+    }
+  }
+  // CAiNavigatorAir::Execute 0x5a50d0, while it steers (status 2): a unit in category TARGETCHASER whose
+  // destination entity is mobile and moved in the last beat (its transform against its previous one) takes the
+  // entity's position as the motion's target again (UpdateCurrentTargetFromDestinationEntity 0x5a4ea0; the layer
+  // stays). Everybody else keeps the target SetDestUnit gave. A CZAR chases; a gunship does not.
+  if (a.destEntity && a.steering && !a.pending) {
+    Entity* de = sim.FindEntity(a.destEntity);
+    if (de && !de->destroyQueued && de->kind == Entity::Kind::Unit) {
+      const Unit* du = static_cast<const Unit*>(de);
+      const bool ticked = du->lastPosTick == sim.tick();  // (it already moved this beat: go back one)
+      const Vec3& now = ticked ? du->lastPosition : du->position;
+      const Vec3& before = ticked ? du->prevLastPosition : du->lastPosition;
+      const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
+      if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER"))
+        SetTarget(sim, u, now, Vec3{}, 0);
     }
   }
   Transform T{ToW(u->orientation), u->position};

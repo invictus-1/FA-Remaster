@@ -700,8 +700,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
       bool keep = keepsMove(d.type) && u->commands.size() > 1 && IsAlive(u) &&
                   keepsMove(static_cast<int>(u->commands[1]->type));
+      // the stop comes from the running command's task being torn down (its navigator's AbortMove): a unit with an
+      // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
+      // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
+      const bool hadCommands = !u->commands.empty();
       ForgetUnitCommands(u);
-      if (!keep) MotionStop(u);
+      if (!keep && hadCommands) MotionStop(u);
       SetMoving(u, false);
       at = -1;
     }

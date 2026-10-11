@@ -1171,6 +1171,7 @@ void Sim::Tick() {
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     if (u->destroyQueued) continue;
+    u->prevLastPosition = u->lastPosTick ? u->lastPosition : u->position;
     u->lastPosition = u->position;
     u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;

@@ -181,6 +181,7 @@ class Unit : public Entity {
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
   Quat lastOrientation;            // orientation at the start of the tick (with lastPosition)
   Quat prevLastOrientation;        // ... and at the start of the tick before (the entity's previous transform)
+  Vec3 prevLastPosition;
   uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
   std::vector<class ReconBlip*> fakeBlips;  // a jammer's fake blips (shared by the armies that hold them)
