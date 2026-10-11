@@ -81,6 +81,9 @@ bool FormationHas(const UnitCommand& c, const Unit* u);
 void FormationRemoveUnit(UnitCommand& c, Unit* u);
 // The final position of u (its formation cell's world centre). False when u has none.
 bool FormationGoal(Sim& sim, UnitCommand& c, Unit* u, Vec3* out);
+// u's adjusted position in the command's formation (vt+0x18), and moving the formation's centre (vt+0x08).
+bool FormationAdjusted(Sim& sim, UnitCommand& c, Unit* u, float* x, float* z);
+void FormationSetCentre(UnitCommand& c, float x, float z);
 // u's group has reached the goal (FormationAtGoal + IsInFormation(u)).
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u);
 // Per tick: the formation DB update (beat step 11).

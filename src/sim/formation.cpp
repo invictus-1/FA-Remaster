@@ -851,6 +851,27 @@ void FormationRemoveUnit(UnitCommand& c, Unit* u) {
   }
 }
 
+// vt+0x18 GetAdjustedPosition for the command's formation (false: u has no place in one)
+bool FormationAdjusted(Sim& sim, UnitCommand& c, Unit* u, float* x, float* z) {
+  (void)sim;
+  if (!c.form || c.units.size() == 1 || !Contains(*c.form, u, true)) return false;
+  AdjustedPosition(*c.form, u, nullptr, x, z);
+  return true;
+}
+
+// vt+0x08 SetCentre 0x569a30: a new centre (both finite, and different from the old one) moves the formation;
+// the adjusted-position cache and the reservations go, the slots stay (no rebuild)
+void FormationSetCentre(UnitCommand& c, float x, float z) {
+  if (!c.form) return;
+  Formation& F = *c.form;
+  if (F.cx == x && F.cz == z) return;
+  if (!std::isfinite(x) || !std::isfinite(z)) return;
+  F.cx = x;
+  F.cz = z;
+  F.adjusted.clear();
+  F.reservations.clear();
+}
+
 bool FormationGoal(Sim& sim, UnitCommand& c, Unit* u, Vec3* out) {
   (void)sim;
   if (!c.form || c.units.size() == 1 || !Contains(*c.form, u, true)) return false;

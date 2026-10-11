@@ -38,6 +38,7 @@
 #include "sim/navigation.h"
 #include "sim/intel.h"
 #include "sim/commands.h"
+#include "sim/formation.h"
 #include "sim/luautil.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
@@ -1950,6 +1951,39 @@ void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
 void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
   bool has = HasTarget(sim, target);
+  // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
+  // command's formation, which is laid out around the target, not for the target itself.
+  UnitCommand* fc = nullptr;
+  if (!t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp && u->motion.bp->mobile() &&
+      !BpInCategory(sim, u->blueprint, "TARGETCHASER") && FormationHas(*u->commands.front(), u))
+    fc = u->commands.front().get();
+  if (fc) {
+    Vec3 cell;
+    if (d.trackMobile) {  // a mobile target: the formation is centred on where it is now (SetCentre)
+      if (has) d.lastPos = TargetPos(sim, target, false);
+      if (IsZeroV(d.lastPos)) d.lastPos = u->position;
+      FormationSetCentre(*fc, d.lastPos.x, d.lastPos.z);
+    } else {
+      d.lastPos = FormationGoal(sim, *fc, u, &cell) ? cell : u->position;
+    }
+    if (d.firstUpdate) {
+      UnitWeapon* fw = TargetWeapon(sim, u, target);
+      float ax = 0, az = 0;
+      if (fw && FormationAdjusted(sim, *fc, u, &ax, &az)) {
+        // SetWeaponGoal 0x5f2ce0 around the unit's adjusted place
+        const int R = static_cast<int>(fw->bp->maxRadius);
+        const int x0 = static_cast<int>(std::nearbyint(ax - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(az - R * 0.5f));
+        if (R < 1) AttackSetPosGoal(sim, u, Vec3{ax, 0, az});
+        else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
+      } else if (FormationGoal(sim, *fc, u, &cell)) {
+        AttackSetPosGoal(sim, u, cell);  // (SetPosGoal 0x5f2d90 at its formation cell)
+      }
+    } else {
+      AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);
+    }
+    d.firstUpdate = false;
+    return;
+  }
   if (has) d.lastPos = TargetPos(sim, target, false);
   if (IsZeroV(d.lastPos)) d.lastPos = u->position;
   UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
