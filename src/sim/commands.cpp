@@ -608,10 +608,16 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   c.targetPoint = -1;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
+      c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
+      // The player's orders on an enemy name its recon blip (the UI only knows blips). Our tasks and weapons work
+      // on units, so a real blip stands for its unit; a jammer's fake blip is not a target yet.
+      if (e->kind == Entity::Kind::Blip) {
+        auto* b = static_cast<ReconBlip*>(e);
+        if (!b->fake && b->source && !b->source->destroyQueued) e = b->source;
+      }
       c.targetId = EntityRef(e);
       c.pos = e->position;
       c.hasPos = true;
-      c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
     }
   } else if (t.type == 2) {
     c.pos = t.pos;
