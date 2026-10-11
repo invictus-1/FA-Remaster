@@ -649,6 +649,27 @@ int PickAimBone(Sim& sim, Entity* e) {
   return e->skeleton->Find(cb.targetBones[i]);
 }
 
+// Unit::PickTargetPointAboveWater 0x6aafb0 (weapons with AboveWaterTargetsOnly): one of the target bones that
+// are above the water; no draw when the unit has no target bones or none of them is above it. (Its own function,
+// as in the exe: the recorder's draw callers then pair up with the original's.)
+__attribute__((noinline)) int PickAimBoneAboveWater(Sim& sim, Entity* e) {
+  if (!e || e->kind != Entity::Kind::Unit || !e->skeleton) return -1;
+  Unit* tu = static_cast<Unit*>(e);
+  const CombatBpData& cb = CB(tu);
+  if (cb.targetBones.empty()) return -1;
+  const float wl = WaterLevel(sim);
+  std::vector<int> above;
+  for (const std::string& name : cb.targetBones) {
+    int bone = e->skeleton->Find(name);
+    Vec3 p;
+    Quat q;
+    BoneWorld(e, bone < 0 ? 0 : bone, &p, &q);
+    if (p.y > wl) above.push_back(bone);
+  }
+  if (above.empty()) return -1;
+  return above[sim.IntRange(static_cast<uint32_t>(above.size()))];
+}
+
 // Blacklist decay (0x6d78f0), run whenever a weapon gets a target.
 void DecayBlacklist(Sim& sim, UnitWeapon* w) {
   auto& bl = w->blacklist;
@@ -675,7 +696,8 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   w->target = nt;
   Entity* e = TargetEntity(sim, w->target);
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
-  w->target.aimBone = PickAimBone(sim, e);
+  // PickNewTargetAimSpot 0x6d5de0
+  w->target.aimBone = w->bp->aboveWaterTargetsOnly ? PickAimBoneAboveWater(sim, e) : PickAimBone(sim, e);
   if (e && !e->dead) ++e->shooters;
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   w->missCount = 0;
