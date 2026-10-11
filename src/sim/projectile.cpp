@@ -292,7 +292,12 @@ void SetLayer(Sim& sim, Projectile* p, const char* layer) {
 // UpdateTracking 0x69c8f0
 void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   Vec3 pos = p->position;
-  if (!HasTarget(sim, p->target)) {
+  // CAiTarget::HasTarget 0x5e2a10: a unit target is gone when the unit is dead, a recon blip target (a shell of a
+  // weapon that was ORDERED onto the unit) only when the blip is, and the blip outlives the dying unit: such a
+  // missile keeps homing on the falling wreck (seen: 41 ticks of flight where ours gave up 7 after the death)
+  const Entity* blipOf = p->target.type == 1 && p->target.viaBlip ? TargetEntity(sim, p->target) : nullptr;
+  const bool has = blipOf ? true : HasTarget(sim, p->target);
+  if (!has) {
     sim.CallMethod(sim.L(), p, "OnLostTarget", 0);
     p->trackTarget = false;
     if (!p->homeLastPos) return;
@@ -303,7 +308,7 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   Vec3 aim = p->lastTargetPos;
   if (IsNaN(aim)) return;
   Entity* te = TargetEntity(sim, p->target);
-  if (p->leadTarget && p->maxSpeed > 0 && te && HasTarget(sim, p->target)) {
+  if (p->leadTarget && p->maxSpeed > 0 && te && has) {
     Vec3 tv = EntityVelocity(te);
     float k = 1 / (p->maxSpeed * 0.1f);
     float t1 = Len(Sub(pos, aim)) * k;
