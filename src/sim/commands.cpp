@@ -663,10 +663,40 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
         return false;
     }
   };
+  // ProcessUnitCommand 0x6efbb4, the "same order again" test (types whose byte in the table 0x6f1218 is 0): with
+  // clear, a unit whose queue holds exactly ONE command, of this type, on the same target entity id (0x6efe1b) or
+  // within 0.001 of the same point (0x6efc19), held by exactly the units of this message (0x6eec40), does not get
+  // the new command: its queue is not cleared and it carries on (a player clicking the same attack twice).
+  auto sameOrderAgain = [&](const Unit* u) {
+    switch (d.type) {
+      case 2: case 4: case 10: case 11: case 16: case 18: case 19: case 20: case 21: case 22: case 23: case 27:
+      case 32: case 35: case 36: case 39:
+        break;
+      default:
+        return false;
+    }
+    if (!clear || u->commands.size() != 1) return false;
+    const UnitCommand& f = *u->commands[0];
+    if (static_cast<int>(f.type) != d.type) return false;
+    if (d.target.type == 1) {
+      if (f.issueTargetEntity != d.target.entity) return false;
+    } else if (d.target.type == 2) {
+      const float dx = d.target.pos.x - f.issueTargetPos.x, dy = d.target.pos.y - f.issueTargetPos.y,
+                  dz = d.target.pos.z - f.issueTargetPos.z;
+      if (!(0.001f > std::sqrt(dx * dx + dy * dy + dz * dz))) return false;
+    } else {
+      return false;
+    }
+    if (f.units.size() != units.size()) return false;
+    for (Unit* o : f.units)
+      if (std::find(units.begin(), units.end(), o) == units.end()) return false;
+    return true;
+  };
   std::shared_ptr<UnitCommand> c;
   for (Unit* u : units) {
     // ProcessUnitCommand 0x6ef9e0 (outline only, command_stream.md 5.2): dead units refuse
     if (!IsAlive(u)) continue;
+    if (sameOrderAgain(u)) continue;
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
     if (d.insertBefore != -1) {
@@ -695,6 +725,9 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
         c->formScale = d.scale;
       }
       SetCommandTargetFromStream(sim, *c, d.target);  // the ctor's decode (the only draw on this path)
+      c->issueTargetType = d.target.type;
+      c->issueTargetEntity = d.target.entity;
+      c->issueTargetPos = d.target.pos;
       sim.streamCommands[d.id] = c;
     }
     if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
@@ -740,6 +773,8 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target) 
   c->pos = target->position;
   c->hasPos = true;
   c->targetPoint = TargetPointDraw(sim, target);
+  c->issueTargetType = 1;
+  c->issueTargetEntity = target->id;
   if (getenv("MOHO64_DEBUG_AUTOATTACK"))
     Logf(LogLevel::Info, "autoattack %u unit %u -> %u target point %d", sim.tick(), u->id, target->id, c->targetPoint);
   if (!u->commands.empty()) {

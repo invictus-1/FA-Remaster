@@ -61,6 +61,11 @@ struct UnitCommand {
   bool fromStream = false;     // issued by the command stream: id = its stream id (source << 24 | n)
   int maxCount = 1;            // cmd+0xe0
   std::vector<std::pair<int16_t, int16_t>> cells;  // cmd+0xc8 (SetCommandCells)
+  // the target as the stream sent it (cmd+0x9c SSTITarget: type, raw entity id, point), for the "same order
+  // again" test of ProcessUnitCommand
+  int issueTargetType = 0;
+  uint32_t issueTargetEntity = 0xf0000000u;
+  Vec3 issueTargetPos;
 };
 
 // A target as the command stream sends it (SSTITarget): 0 none, 1 entity id, 2 position.
