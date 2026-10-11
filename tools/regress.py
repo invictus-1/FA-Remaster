@@ -60,7 +60,8 @@ def main():
     ours = a.ours
     if a.run:
         ours = ours or os.path.join(tempfile.gettempdir(), "regress_ours.rec")
-        cmd = M["run"].replace("{rec}", shlex.quote(ours))
+        q = ours if os.name == "nt" else shlex.quote(ours)  # cmd.exe: the template quotes it (set "VAR={rec}")
+        cmd = M["run"].replace("{rec}", q)
         t0 = time.time()
         r = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         if r.returncode != 0:

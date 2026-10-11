@@ -194,6 +194,12 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 #ifdef MOHO64_CALLGRIND
   CALLGRIND_START_INSTRUMENTATION;  // profile build: only the ticks are measured
 #endif
+  // debugging aid: MOHO64_START_LUA=<host file> runs that Lua in the sim state right after start-up (e.g. to wrap
+  // a script function with logging); it changes nothing unless the file does
+  if (ok && getenv("MOHO64_START_LUA")) {
+    if (auto code = hostfs::ReadFile(getenv("MOHO64_START_LUA"))) sim.RunString(*code, "@moho64_start_lua");
+    else Logf(LogLevel::Error, "cannot read %s", getenv("MOHO64_START_LUA"));
+  }
   // The command stream (sim/command_stream.cpp): the messages before each Advance are applied, then the beat
   // runs (or, while paused / after EndGame, only its end-of-beat part). --ticks counts game ticks.
   CommandStream stream(*data, header->streamOffset);

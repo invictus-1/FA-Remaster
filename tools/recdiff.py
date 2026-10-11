@@ -156,8 +156,11 @@ def our_names(binary, addrs):
     addrs = sorted(set(addrs))
     if not binary or not os.path.exists(binary) or not addrs:
         return {}
-    r = subprocess.run(["addr2line", "-a", "-f", "-C", "-i", "-e", binary] + ["0x%x" % a for a in addrs],
-                       capture_output=True, text=True)
+    try:  # (not installed on Windows: names then stay raw addresses; grouping still works)
+        r = subprocess.run(["addr2line", "-a", "-f", "-C", "-i", "-e", binary] + ["0x%x" % a for a in addrs],
+                           capture_output=True, text=True)
+    except OSError:
+        return {}
     out, cur, frames = {}, None, []
 
     def done():
