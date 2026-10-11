@@ -537,11 +537,26 @@ float UnitHeading(const Unit* u) {
   return dmath::Atan2(f.x, f.z);
 }
 
-// PickTargetPoint 0x6d5590: whether the weapon may target the entity at all.
-bool Targetable(UnitWeapon* w, Entity* e) {
+bool PickPointAboveWater(Sim& sim, Entity* e, int* bone, bool peek);
+bool PickPointBelowWater(Sim& sim, Entity* e, int* bone, bool peek);
+
+// PickTargetPoint 0x6d5590: whether the weapon may target the entity at all. For an entity on the SEABED a weapon
+// that only takes targets above (below) the water must find a target point of it there, and the search draws one
+// of them every time it is asked (0x6d55f6 / 0x6d564e), although the pick is thrown away. (peek: no draw, for
+// debug output.)
+bool Targetable(Sim& sim, UnitWeapon* w, Entity* e, bool peek = false) {
   if (!e) return false;
   if (w->bp->ignoreIfDisabled && !w->enabled) return false;
-  if ((w->layerCaps & EntityLayerBit(e)) == 0) return false;
+  const int layerBit = EntityLayerBit(e);
+  if ((w->layerCaps & layerBit) == 0) return false;
+  if (layerBit == 2) {
+    int bone;
+    if (w->bp->aboveWaterTargetsOnly) {
+      if (!PickPointAboveWater(sim, e, &bone, peek)) return false;
+    } else if (w->bp->belowWaterTargetsOnly) {
+      if (!PickPointBelowWater(sim, e, &bone, peek)) return false;
+    }
+  }
   if (!e->blueprint) return false;
   if (!SetEmpty(w->disallow) && InSet(w->disallow, e->blueprint)) return false;
   if (!SetEmpty(w->onlyAllow) && !InSet(w->onlyAllow, e->blueprint)) return false;
@@ -549,10 +564,10 @@ bool Targetable(UnitWeapon* w, Entity* e) {
 }
 
 // UnitWeapon::CanAttackTarget 0x6d5720
-bool CanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t) {
+bool CanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t, bool peek = false) {
   if (t.type == 0) return false;
   if (w->bp->ignoreIfDisabled && !w->enabled) return false;
-  if (t.type == 1) return Targetable(w, TargetEntity(sim, t));
+  if (t.type == 1) return Targetable(sim, w, TargetEntity(sim, t), peek);
   if (t.type == 2) {
     if (w->bp->cannotAttackGround) return false;
     const TerrainMap* m = sim.map();
@@ -671,25 +686,37 @@ int PickAimBone(Sim& sim, Entity* e) {
   return e->skeleton->Find(cb.targetBones[i]);
 }
 
-// Unit::PickTargetPointAboveWater 0x6aafb0 (weapons with AboveWaterTargetsOnly): one of the target bones that
-// are above the water; no draw when the unit has no target bones or none of them is above it. (Its own function,
-// as in the exe: the recorder's draw callers then pair up with the original's.)
-__attribute__((noinline)) int PickAimBoneAboveWater(Sim& sim, Entity* e) {
-  if (!e || e->kind != Entity::Kind::Unit || !e->skeleton) return -1;
+// Unit::PickTargetPointAboveWater 0x6aafb0 / ...BelowWater 0x6ab190 (weapons with AboveWaterTargetsOnly /
+// BelowWaterTargetsOnly): the unit's target points above (below) the water and one of them drawn; false when none
+// is. A unit without target bones: its own height decides, no draw. (Each its own function, as in the exe: the
+// recorder's draw callers then pair up with the original's.)
+bool PickPointBeside(Sim& sim, Entity* e, int* bone, bool above, std::vector<int>* pts) {
+  *bone = -1;
+  if (!e || e->kind != Entity::Kind::Unit) return false;
   Unit* tu = static_cast<Unit*>(e);
   const CombatBpData& cb = CB(tu);
-  if (cb.targetBones.empty()) return -1;
   const float wl = WaterLevel(sim);
-  std::vector<int> above;
+  if (cb.targetBones.empty() || !e->skeleton) return above ? tu->position.y > wl : wl > tu->position.y;
   for (const std::string& name : cb.targetBones) {
-    int bone = e->skeleton->Find(name);
+    int b = e->skeleton->Find(name);
     Vec3 p;
     Quat q;
-    BoneWorld(e, bone < 0 ? 0 : bone, &p, &q);
-    if (p.y > wl) above.push_back(bone);
+    BoneWorld(e, b < 0 ? 0 : b, &p, &q);
+    if (above ? p.y > wl : wl > p.y) pts->push_back(b);
   }
-  if (above.empty()) return -1;
-  return above[sim.IntRange(static_cast<uint32_t>(above.size()))];
+  return !pts->empty();
+}
+__attribute__((noinline)) bool PickPointAboveWater(Sim& sim, Entity* e, int* bone, bool peek) {
+  std::vector<int> pts;
+  if (!PickPointBeside(sim, e, bone, true, &pts)) return false;
+  if (!pts.empty() && !peek) *bone = pts[sim.IntRange(static_cast<uint32_t>(pts.size()))];
+  return true;
+}
+__attribute__((noinline)) bool PickPointBelowWater(Sim& sim, Entity* e, int* bone, bool peek) {
+  std::vector<int> pts;
+  if (!PickPointBeside(sim, e, bone, false, &pts)) return false;
+  if (!pts.empty() && !peek) *bone = pts[sim.IntRange(static_cast<uint32_t>(pts.size()))];
+  return true;
 }
 
 // Blacklist decay (0x6d78f0), run whenever a weapon gets a target.
@@ -719,7 +746,11 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   Entity* e = TargetEntity(sim, w->target);
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
   // PickNewTargetAimSpot 0x6d5de0
-  w->target.aimBone = w->bp->aboveWaterTargetsOnly ? PickAimBoneAboveWater(sim, e) : PickAimBone(sim, e);
+  int aimBone = -1;
+  if (w->bp->aboveWaterTargetsOnly) PickPointAboveWater(sim, e, &aimBone, false);
+  else if (w->bp->belowWaterTargetsOnly) PickPointBelowWater(sim, e, &aimBone, false);
+  else aimBone = PickAimBone(sim, e);
+  w->target.aimBone = aimBone;
   if (e && !e->dead) ++e->shooters;
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   w->missCount = 0;
@@ -861,7 +892,7 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     }
     if (Blacklisted(w, e) || TargetExempt(u, e) || e->unitStates.count("DoNotTarget")) continue;
     if (e->layer != "Air" && !InMap(sim, e->position)) continue;
-    if (!Targetable(w, e)) continue;
+    if (!Targetable(sim, w, e)) continue;
     int s = SolutionStatus(w, e->position, &d2);
     if (s == 1 || s == 2) {
       if (!(IsMobile(u) && (w->bp->autoInitiateAttackCommand || w->bp->slavedToBody))) continue;
@@ -1004,7 +1035,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
         if (d2 > reach * reach) continue;
         if (!((w->layerCaps & 8) || p->position.y > wl)) continue;
         if (!((w->layerCaps & 16) || p->position.y <= wl)) continue;
-        if (!Targetable(w, p)) continue;
+        if (!Targetable(sim, w, p)) continue;
         if (SolutionStatus(w, p->position, nullptr) != 0) continue;
         int cap = 3;
         if (p->blueprint) {
@@ -1036,10 +1067,22 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     const bool autoAttack = CheckAutoInitiate(sim, w);
     // the task first builds a CAiTarget of what it found (UpdateTarget 0x5d55b0: one target-point draw, every
     // time), then hands it to the weapon, whose own draw (PickNewTargetAimSpot) only comes with a new target
+    {
+      static const bool dbgAcq = getenv("MOHO64_DEBUG_ACQUIRE") != nullptr;
+      if (dbgAcq)
+        Logf(LogLevel::Info, "acq %u unit %u %s -> %u (had %u)", sim.tick(), u->id, b.label.c_str(), best->id,
+             TargetEntity(sim, w->target) ? TargetEntity(sim, w->target)->id : 0u);
+    }
     TargetPointDraw(sim, best);
     SetTarget(sim, w, EntityTarget(best));  // (Unit::GetBlipsInRange 0x6acc60 lists the units themselves)
     if (autoAttack) IssueAutoAttack(sim, u, best);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
+    SetTarget(sim, w, d);
+  } else if (d.type == 1 && d.viaBlip && TargetEntity(sim, d) && TargetEntity(sim, d)->dead &&
+             CanAttackTarget(sim, w, d)) {
+    // CAiTarget::HasTarget 0x5e2a10 of a recon blip is "the BLIP is not dead", and the blip of a unit that just died
+    // lives on: a weapon that finds nothing else is given the commanded blip (seen: a Fatboy's riot guns draw two
+    // above-water target points the beat after the unit they were ordered onto died)
     SetTarget(sim, w, d);
   } else {
     SetTarget(sim, w, AiTarget{});
@@ -1056,7 +1099,7 @@ void FireTick(Sim& sim, UnitWeapon* w) {
     const bool has = HasTarget(sim, w->target);
     Logf(LogLevel::Info, "wdbg %u unit %u %s clock %d enabled %d target %d(%u) canAttack %d canFire %d onTarget %d status %d",
          sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
-         w->target.entityId, has ? static_cast<int>(CanAttackTarget(sim, w, w->target)) : -1,
+         w->target.entityId, has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
          has ? TargetStatus(sim, w, w->target) : -1);
   }
@@ -2243,7 +2286,7 @@ int l_w_SetFireTargetLayerCaps(lua_State* L) {
 int l_w_SetTargetEntity(lua_State* L) {
   UnitWeapon* w = W(L);
   Unit* t = CheckObject<Unit>(L, 2);
-  if (Targetable(w, t)) SetTarget(*S(L), w, EntityTarget(t));
+  if (Targetable(*S(L), w, t)) SetTarget(*S(L), w, EntityTarget(t));
   return 0;
 }
 int l_w_SetTargetGround(lua_State* L) {

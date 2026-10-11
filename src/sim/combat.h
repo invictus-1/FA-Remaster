@@ -82,8 +82,10 @@ struct AiTarget {
   // the target is held as the army's recon blip of the unit (an order's enemy target), not as the unit (what a
   // weapon found itself): scripts see the difference (GetCurrentTarget returns the blip)
   bool viaBlip = false;
+  // (a unit and the blip of that unit are two entities in the original: going from one to the other is a new target)
   bool operator==(const AiTarget& o) const {
-    return type == o.type && entityId == o.entityId && (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
+    return type == o.type && entityId == o.entityId && (type != 1 || viaBlip == o.viaBlip) &&
+           (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
   }
 };
 
