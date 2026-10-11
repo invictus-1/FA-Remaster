@@ -2211,11 +2211,13 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 
 void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   (void)t;
+  // the task's teardown clears its unit states also when the unit died (seen: a killed unit's queue empties and
+  // "Attacking" goes in the same beat)
+  u->unitStates.erase("Attacking");
+  u->unitStates.erase("MakingAttackRun");
   if (u->dead || u->destroyQueued) return;
   if (u->desiredTarget.type != 0) SetDesiredTarget(sim, u, AiTarget{});
   u->navIgnoreFormation = false;
-  u->unitStates.erase("Attacking");
-  u->unitStates.erase("MakingAttackRun");
 }
 
 void ClearEngagement(Sim& sim, Unit* u) {
