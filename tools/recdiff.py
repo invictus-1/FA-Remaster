@@ -220,23 +220,49 @@ def compare_draws(A, B, exe, binary, context):
         i = bisect.bisect_right(exe.starts, w) - 1
         return i >= 0 and w < exe.ends[i] and exe.starts[i] in helper_fn
 
-    pair_a, pair_b = {}, {}  # caller pairing learned from the matching prefix
+    def key_b(w):  # our function (not the line: one function may draw from several lines)
+        n = names_b.get(w, "0x%x" % w)
+        if n.startswith("Lua Random"):
+            return "Lua Random"
+        fn = n.split(" ")[0]
+        return fn or n.split(" (discriminator")[0]
+
+    def key_a(s, w):  # the exe function that contains the call site
+        if s in (1, 2):
+            return 0x40eec0
+        i = bisect.bisect_right(exe.starts, w) - 1
+        return exe.starts[i] if i >= 0 and w < exe.ends[i] else w
+
+    # Callers are grouped as they draw in lockstep (union-find over original and our callers): the two engines
+    # split work into functions differently (one helper vs two call sites, one ctor vs several functions), so a
+    # new caller on either side just joins the group. A draw that pairs two callers already in different groups
+    # is a real mismatch (e.g. our drones drawing where the original's hover wobble draws). Shared helpers of the
+    # original (FRand, IntRange, ...) are wildcards.
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
     first, why = None, ""
     for k in common:
         ta, sa, wa = da[k]
         tb, sb, wb = db[k]
-        ka, kb = (sa, wa), wb
         if ta != tb:
             first, why = k, "tick differs (original %s, ours %s)" % (tick_s(ta), tick_s(tb))
             break
-        wild = wildcard(sa, wa)
-        bad_a = ka in pair_a and pair_a[ka] != kb and not wild
-        bad_b = kb in pair_b and pair_b[kb] != ka
-        if (bad_a and bad_b) or (bad_a and kb not in pair_b) or (bad_b and ka not in pair_a and not wild):
+        na = ("a", key_a(sa, wa) if not A["flags"] & 1 else key_b(wa))
+        nb = ("b", key_b(wb))
+        if wildcard(sa, wa):
+            continue
+        known_a, known_b = na in parent, nb in parent
+        ra, rb = find(na), find(nb)
+        if known_a and known_b and ra != rb:
             first, why = k, "callers no longer pair up (original %s, ours %s)" % (nm_a(sa, wa), nm_b(wb))
             break
-        pair_a.setdefault(ka, kb)
-        pair_b.setdefault(kb, ka)
+        parent[ra] = rb
     last = common[-1]
     if first is None:
         print("draws: all %d common draws agree (draws %d..%d, through tick %s)" % (len(common), common[0], last,

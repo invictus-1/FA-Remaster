@@ -2376,6 +2376,13 @@ int l_SetBusy(lua_State* L) {
   else u->unitStates.erase("Busy");
   return 0;
 }
+// Unit:SetUnSelectable(flag) 0x6c6a50: sets or clears unit state UnSelectable (bit 33), nothing else
+int l_SetUnSelectable(lua_State* L) {
+  Unit* u = U(L);
+  if (lua_toboolean(L, 2)) u->unitStates.insert("UnSelectable");
+  else u->unitStates.erase("UnSelectable");
+  return 0;
+}
 int l_SetBlockCommandQueue(lua_State* L) {
   Unit* u = U(L);
   u->blockCommandQueue = lua_toboolean(L, 2) != 0;
@@ -2572,6 +2579,7 @@ void RegisterBuildBindings(lua_State* L) {
   SetMethod(L, "Unit", "GetGuards", l_GetGuards);
   SetGlobal(L, "NotifyUpgrade", l_NotifyUpgrade);
   SetMethod(L, "Unit", "SetBusy", l_SetBusy);
+  SetMethod(L, "Unit", "SetUnSelectable", l_SetUnSelectable);
   SetMethod(L, "Unit", "SetBlockCommandQueue", l_SetBlockCommandQueue);
   SetMethod(L, "Entity", "AttachBoneTo", l_AttachBoneTo);
   SetMethod(L, "Entity", "AttachTo", l_AttachTo);
