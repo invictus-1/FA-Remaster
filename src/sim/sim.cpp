@@ -2,6 +2,7 @@
 #include "sim/prop_motor.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
+#include "core/dmath.h"
 #include "sim/formation.h"
 #include "sim/transport.h"
 #include "sim/air.h"
@@ -558,16 +559,16 @@ __attribute__((noinline)) void Sim::RngTrace(uint32_t r) {
 #endif
 }
 
-float Sim::U01() { return static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-32); }
+// The sim random helpers run on the x87 at precision control 24 (core/dmath.h): every op rounds to float.
+float Sim::U01() { return static_cast<float>(NextUInt32()) * 0x1p-32f; }
 double Sim::FRand(float lo, float hi) {
   uint32_t u = NextUInt32();
-  return (static_cast<double>(u) * (static_cast<double>(hi) - static_cast<double>(lo))) * 0x1p-32 + static_cast<double>(lo);
+  return dmath::MulU32(u, hi - lo) * 0x1p-32f + lo;
 }
 float Sim::BpUniform(float base, float range) {
   float lo = -0.0f - range;
   uint32_t u = NextUInt32();
-  return static_cast<float>((static_cast<double>(u) * (static_cast<double>(range) - static_cast<double>(lo))) * 0x1p-32 +
-                            static_cast<double>(lo) + static_cast<double>(base));
+  return (dmath::MulU32(u, range - lo) * 0x1p-32f + lo) + base;
 }
 double Sim::Gauss() {
   if (hasGauss_) {
@@ -576,15 +577,15 @@ double Sim::Gauss() {
   }
   float x, y, q;
   do {
-    x = static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-31 - 1.0);
-    y = static_cast<float>(static_cast<double>(NextUInt32()) * 0x1p-31 - 1.0);
+    x = static_cast<float>(NextUInt32()) * 0x1p-31f - 1.0f;
+    y = static_cast<float>(NextUInt32()) * 0x1p-31f - 1.0f;
     q = y * y + x * x;
   } while (!(q < 1.0f));
-  float t = static_cast<float>((-2.0 * std::log(static_cast<double>(q))) / static_cast<double>(q));
-  double f = std::sqrt(static_cast<double>(t));
-  gauss_ = static_cast<float>(static_cast<double>(y) * f);
+  float t = static_cast<float>(-2.0 * dmath::Logd(static_cast<double>(q))) / q;  // fyl2x stays wide
+  float f = std::sqrt(t);
+  gauss_ = y * f;
   hasGauss_ = true;
-  return static_cast<double>(x) * f;
+  return x * f;
 }
 
 Army* Sim::GetArmy(lua_State* L, int idx) {
@@ -847,11 +848,11 @@ void Sim::GenerateArmyStart(Army* a) {
   uint32_t cb = 0x2f4ccccc;
   float c;
   std::memcpy(&c, &cb, 4);
-  float fx = static_cast<float>(static_cast<double>(NextUInt32()) * c + 0.1f);
-  double fz = static_cast<double>(NextUInt32()) * c + 0.1f;
+  float fx = dmath::MulU32(NextUInt32(), c) + 0.1f;  // x87 at PC_24: every op rounds to float
+  float fz = dmath::MulU32(NextUInt32(), c) + 0.1f;
   uint32_t w = map_ ? static_cast<uint32_t>(map_->width()) : 0, h = map_ ? static_cast<uint32_t>(map_->height()) : 0;
-  a->startX = static_cast<float>(static_cast<double>(w) * fx);
-  a->startZ = static_cast<float>(static_cast<double>(h) * fz);
+  a->startX = dmath::MulU32(w, fx);
+  a->startZ = dmath::MulU32(h, fz);
 }
 
 // The map's own props (trees, rocks, wrecks placed in the editor).

@@ -802,62 +802,10 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
             fresh ? 1 : 0, m.spline.size(), tgt.x, tgt.z, m.savedState, g.p.x, g.p.z);
 }
 
-// CAiPathSpline::Update 0x5b26c0 (modes 3/4, outline): a stop sequence from the unit's position and
-// velocity, at twice the deceleration in mode 4, at least 6 points in mode 4.
-void BrakeSplineOld(Sim& sim, Unit* u, int mode) {
-  UnitMotion& m = u->motion;
-  StepParams P = Params(m);
-  m.spline.clear();
-  m.splineIdx = 0;
-  m.hasSpline = true;
-  m.splineMode = mode;
-  float acc = P.acc, brake = P.brake;
-  if (mode == 4) {
-    acc *= 2;
-    brake *= 2;
-  }
-  Gen g;
-  g.p = u->position;
-  g.vel = m.vel;
-  g.fx = m.fx;
-  g.fz = m.fz;
-  g.bx = m.bx;
-  g.bz = m.bz;
-  for (int n = 0; n < 400;) {
-    float dvx = -g.vel.x, dvz = -g.vel.z;
-    float lim = (dvx * g.fx + dvz * g.fz > 0.0f) ? acc : brake;
-    float dl = dvx * dvx + dvz * dvz;
-    if (lim * lim < dl) {
-      float k = lim / std::sqrt(dl);
-      dvx *= k;
-      dvz *= k;
-    }
-    g.vel.x += dvx;
-    g.vel.z += dvz;
-    float vl2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
-    float cap = std::max(P.maxF, P.maxR);
-    if (cap * cap < vl2) {
-      float k = cap / std::sqrt(vl2);
-      g.vel.x *= k;
-      g.vel.z *= k;
-    }
-    g.p.x += g.vel.x;
-    g.p.z += g.vel.z;
-    m.spline.push_back(PointOf(g));
-    ++n;
-    if (dvx * dvx + dvz * dvz <= 1e-6f && (mode == 3 || n > 5)) break;
-  }
-  m.savedState = 0;
-  m.genLast = m.spline.size() >= 2 ? m.spline[m.spline.size() - 2] : PointOf(g);
-  m.genReverse = false;
-  (void)sim;
-}
-
 // CAiPathSpline::Update 0x5b26c0 (modes 3/4): brake to a stop along the facing (move_handoff.md 5.5).
 void BrakeSpline(Sim& sim, Unit* u, int mode) {
-  // mode 4 (collision brake): the older form still tracks the motion probes better (group1-3); the
-  // move_handoff.md reading is applied to mode 3 (SetWaypoints(0, 0)) only for now.
-  if (mode == 4) return BrakeSplineOld(sim, u, mode);
+  // mode 4 (collision brake) is the same stop sequence with doubled limits (recorder: pond_path's brake and
+  // its two standing ticks match only this form)
   UnitMotion& m = u->motion;
   StepParams P = Params(m);
   m.spline.clear();
@@ -1071,13 +1019,11 @@ bool ClampLength(Vec3& v, float p) {  // 0x5d1e70
   v.z = s * v.z;
   return true;
 }
-// lo + u * (hi - lo) * 2^-32 on the x87 stack (80-bit), rounded once to float
+// lo + u * (hi - lo) * 2^-32 on the x87 stack (precision control 24: each op rounds to float)
 float WobbleDraw(Sim& sim, float W) {
   float lo = -0.0f - W;
   uint32_t r = sim.NextUInt32();
-  long double t = (static_cast<long double>(W) - static_cast<long double>(lo)) * static_cast<long double>(r);
-  t = t * static_cast<long double>(2.3283064365386963e-10f);
-  return static_cast<float>(static_cast<long double>(lo) + t);
+  return dmath::MulU32(r, W - lo) * 2.3283064365386963e-10f + lo;
 }
 // 0x452af0: normalise in place, returns the length (0 and a zero vector at or below 1e-6)
 float NormalizeExe(Vec3& v) {

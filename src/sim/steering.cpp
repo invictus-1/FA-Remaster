@@ -269,10 +269,9 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
   };
   auto project = [&](const Obb& o, const Vec3& a, float* lo, float* hi) {  // 0x475550
     float c = (o.c.y * a.y + o.c.z * a.z) + o.c.x * a.x;
-    long double r = (static_cast<long double>(std::fabs(dot(a, o.ax[2]))) * o.h.z +
-                     static_cast<long double>(std::fabs(dot(a, o.ax[1]))) * o.h.y) +
-                    static_cast<long double>(std::fabs(dot(a, o.ax[0]))) * o.h.x;
-    float rf = static_cast<float>(r);
+    // x87 at precision control 24: each op rounds to float
+    float rf = (std::fabs(dot(a, o.ax[2])) * o.h.z + std::fabs(dot(a, o.ax[1])) * o.h.y) +
+               std::fabs(dot(a, o.ax[0])) * o.h.x;
     *lo = c - rf;
     *hi = c + rf;
   };
@@ -294,9 +293,9 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
     const Vec3& ax = axes[i];
     float l2 = (ax.x * ax.x + ax.y * ax.y) + ax.z * ax.z;
     if (1e-6f > l2) continue;
-    long double inv = 1.0L / std::sqrt(static_cast<long double>(l2));
-    ov[i] = ov[i] * static_cast<float>(inv);
-    axes[i] = {static_cast<float>(inv * ax.x), static_cast<float>(inv * ax.y), static_cast<float>(inv * ax.z)};
+    float inv = 1.0f / std::sqrt(l2);  // x87 at PC_24
+    ov[i] = ov[i] * inv;
+    axes[i] = {inv * ax.x, inv * ax.y, inv * ax.z};
     if (best > ov[i]) {
       best = ov[i];
       bi = i;

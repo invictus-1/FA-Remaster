@@ -2182,7 +2182,12 @@ namespace {
 struct IRect {
   float x0, z0, x1, z1;
 };
+// 0x6a7600 -> GetSkirtRect 0x51ec50: the skirt (the footprint where SkirtSize is 0)
 IRect UnitRect(const Unit* u) {
+  if (u->bpData) {
+    FRect r = SkirtRect(*u->blueprint, *u->bpData, u->position.x, u->position.z);
+    return {r.x0, r.z0, r.x1, r.z1};
+  }
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   return {static_cast<float>(ox), static_cast<float>(oz), static_cast<float>(ox + fp.sizeX),

@@ -6,8 +6,22 @@
 // sqrt, which IEEE 754 rounds identically everywhere, evaluated in double and rounded to float.
 #pragma once
 #include <cmath>
+#include <cstdint>
 
 namespace moho::dmath {
+
+// The original's sim thread runs the x87 with precision control 24 bits (confirmed by the tick recorder,
+// 2026-10-10): +, -, *, / and fsqrt on the x87 stack round like float ops (transcendentals fsin/fcos/fpatan/
+// fyl2x do not: they stay wide). An integer loaded with fild is exact; the first op on it rounds.
+// u * f for an unsigned 32-bit u and a float f, rounded once to float (fild + fmul at PC_24).
+inline float MulU32(uint32_t u, float f) {
+  if (u == 0 || f == 0.0f || !std::isfinite(f)) return static_cast<float>(u) * f;
+  int e;
+  float m = std::frexp(f, &e);                                     // f = m * 2^e, 0.5 <= |m| < 1
+  int64_t mi = static_cast<int64_t>(std::ldexp(m, 24));            // exact 24-bit significand
+  int64_t p = static_cast<int64_t>(u) * mi;                        // exact, |p| < 2^56
+  return std::ldexp(static_cast<float>(p), e - 24);                // one round-to-nearest-even
+}
 
 // sin and cos of x (radians), |error| < 1e-15 for |x| < 1e6.
 inline void SinCos(double x, double* s, double* c) {

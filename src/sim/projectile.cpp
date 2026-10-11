@@ -925,7 +925,7 @@ int l_SetVelocityRandomUpVector(lua_State* L) {
   uint32_t cb = 0x2f733333u;
   float c;
   std::memcpy(&c, &cb, 4);
-  float vy = static_cast<float>(static_cast<double>(sim.NextUInt32()) * static_cast<double>(c) + 0.05f);
+  float vy = dmath::MulU32(sim.NextUInt32(), c) + 0.05f;  // x87 at PC_24
   float vz = sim.U01();
   Vec3 v{vx, vy, vz};
   const ProjBp& b = GetProjBp(sim, L, *p->blueprint);

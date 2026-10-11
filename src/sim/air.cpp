@@ -1,5 +1,5 @@
 // Aircraft flight model (see air.h for what the original does). The arithmetic follows the
-// original's operation order (float32, with the x87 parts evaluated in double), because the
+// original's operation order (float32; the x87 parts too: the sim thread runs at precision control 24), because the
 // trajectory is a feedback loop: a last-bit difference grows. Function names and addresses refer
 // to the FA exe; the specs in engine-ref/specs/air_*.md give the details.
 #include "core/dmath.h"
@@ -195,8 +195,8 @@ void QuatToAxisAngle(const QuatW& q, Vec3* axis, float* angle) {
   if (s2 > 9.99999997e-07f) {
     float a = (q.w > -1.0f) ? ((1.0f > q.w) ? dmath::Acos(q.w) : 0.0f) : 3.14159274f;
     *angle = a * 2.0f;
-    double inv = 1.0 / std::sqrt(static_cast<double>(s2));
-    *axis = {static_cast<float>(q.x * inv), static_cast<float>(inv * q.y), static_cast<float>(inv * q.z)};
+    float inv = 1.0f / std::sqrt(s2);  // x87 at PC_24
+    *axis = {q.x * inv, inv * q.y, inv * q.z};
   } else {
     *axis = {1, 0, 0};
     *angle = 0;
@@ -285,11 +285,11 @@ float Elevation(const TerrainMap* map, float x, float z) {
   if (!map) return 0;
   int ix = EngineFloor(x), iz = EngineFloor(z);
   float fx = x - static_cast<float>(ix), fz = z - static_cast<float>(iz);
-  double a = map->HeightAt(ix, iz);
-  a = (static_cast<double>(map->HeightAt(ix, iz + 1)) - a) * fz + a;
-  double b = map->HeightAt(ix + 1, iz);
-  b = (static_cast<double>(map->HeightAt(ix + 1, iz + 1)) - b) * fz + b;
-  return static_cast<float>((b - a) * fx + a);
+  float a = map->HeightAt(ix, iz);  // x87 at PC_24: each step rounds to float
+  a = (map->HeightAt(ix, iz + 1) - a) * fz + a;
+  float b = map->HeightAt(ix + 1, iz);
+  b = (map->HeightAt(ix + 1, iz + 1) - b) * fz + b;
+  return (b - a) * fx + a;
 }
 float WaterOrNone(const TerrainMap* map) { return (map && map->hasWater) ? map->waterElevation : -10000.0f; }
 // STIMap::GetElevation 0x6bc400: raw sample at the rounded point, raised to the water
@@ -828,18 +828,18 @@ void WingedOrientation(Unit* u, const QuatW& tq, const Vec3& desired, const Vec3
   float side = (right.z * dir.z + right.y * dir.y) + right.x * dir.x;
   float sign = (0.0f > side) ? -1.0f : 1.0f;
   float a1 = dmath::Atan2(aim.x, aim.z);
-  double diff = static_cast<double>(a1) - dmath::Atan2d(f.x, f.z);
+  float diff = static_cast<float>(static_cast<double>(a1) - dmath::Atan2d(f.x, f.z));  // fpatan wide, fsub at PC_24
   float d;
-  if (diff > static_cast<double>(3.14159274f)) {
-    d = static_cast<float>(diff) - 6.28318548f;
+  if (diff > 3.14159274f) {
+    d = diff - 6.28318548f;
   } else {
-    d = static_cast<float>(diff);
+    d = diff;
     if (-3.14159274f > d) d = d + 6.28318548f;
   }
   float maxStep = ((cs == 3) ? b.combatTurnSpeed : b.turnSpeed) * 0.1f;
   float step = (maxStep > d) ? d : maxStep;
   if (-maxStep > step) step = -maxStep;
-  float half = static_cast<float>(static_cast<double>(step) * 10.0 * 0.5);
+  float half = (step * 10.0f) * 0.5f;
   float s = dmath::Sin(half), c = dmath::Cos(half);
   QuatW rot{c, s * 0.0f, s, s * 0.0f};
   Vec3 t = MultQuadVec(rot, f);
@@ -901,12 +901,10 @@ void HoverOrientation(Unit* u, const Vec3& facing, Axes& axes) {
   axes.Z = facing;
 }
 
-// RandRange of the circling parameters: lo + r * (hi - lo) * 2^-32 in double, one rounding
+// RandRange of the circling parameters: lo + r * (hi - lo) * 2^-32 on the x87 (precision control 24)
 float RandRange(Sim& sim, float lo, float hi) {
   uint32_t r = sim.NextUInt32();
-  return static_cast<float>(static_cast<double>(lo) +
-                            (static_cast<double>(r) * (static_cast<double>(hi) - static_cast<double>(lo))) *
-                                2.3283064365386963e-10);
+  return dmath::MulU32(r, hi - lo) * 2.3283064365386963e-10f + lo;
 }
 
 // CUnitMotion::CalcCirclingOrientation 0x6bdee0
@@ -1321,9 +1319,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     for (int i = 0; i < 3; ++i) {
       float ai = std::max(0.25f, std::min(body.invI[i], 4.0f));
       uint32_t x = sim.NextUInt32();
-      r[i] = static_cast<float>(static_cast<double>(x) * (static_cast<double>(ai) - static_cast<double>(-ai)) *
-                                    2.3283064365386963e-10 +
-                                static_cast<double>(-ai));
+      r[i] = dmath::MulU32(x, ai - (-0.0f - ai)) * 2.3283064365386963e-10f + (-0.0f - ai);  // x87 at PC_24
     }
     a.spinTorque = MultQuadVec(body.q, Vec3{r[0] / body.invI[0], r[1] / body.invI[1], r[2] / body.invI[2]});
   } else {
