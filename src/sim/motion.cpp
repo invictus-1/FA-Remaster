@@ -1218,7 +1218,10 @@ void MotionTick(Sim& sim, Unit* u) {
       m.fz = q.fz;
       m.bx = q.bx;
       m.bz = q.bz;
-      moved = u->position.x != start.x || u->position.z != start.z;
+      // CalcMoveCommon returns 1 on this path whether or not the point moved the unit (0x6c2a33), so
+      // CalcMoveLand 0x6c3180 snaps: a unit whose point is its own position keeps its terrain tilt (it was
+      // flattened by the facing above and not re-tilted: probe unit 0x90002f at ticks 142-143)
+      moved = true;
     } else if (!m.hasGoal && !m.pushed) {
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       moved = Coast(u);
