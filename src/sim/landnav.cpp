@@ -151,19 +151,28 @@ namespace {
 // 0x7216d0: units in the box along the line from (ax, az) to (bx, bz); air/sub units and formation mates are
 // skipped before the unit filter
 bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int flags) {
-  float dx = bx - ax, dz = bz - az, len = std::sqrt(dx * dx + dz * dz);
+  // LineBlocked 0x7216d0 (read 2026-10-11): an oriented box around the line (centre = the midpoint, forward = the
+  // line's direction in the plane, half length = half its plane length, half width = the unit's SizeX x 0.5555556,
+  // half height 1000), and every unit whose COLLISION PRIMITIVE meets that box (CollectEntitiesInBox 0x721dc0:
+  // AABB reject, then the primitive's own box test) goes through the filters. (Ours used to test the units'
+  // centres with a radius: a turned or long hull was judged wrong by a few tenths.)
+  float dx = bx - ax, dz = bz - az, len = std::sqrt(dz * dz + dx * dx);
   if (len <= 0) return false;
-  float fx = dx / len, fz = dz / len, hw = Bp(u).sizeX * 0.5555556f;
+  const float fx = dx / len, fz = dz / len, hw = Bp(u).sizeX * 0.5555556f;
+  const Vec3 centre{(ax + bx) * 0.5f, u->position.y, (az + bz) * 0.5f};
+  const Vec3 axes[3] = {{fz, 0.0f, -fx}, {0.0f, 1.0f, 0.0f}, {fx, 0.0f, fz}};
+  const float half[3] = {hw, 1000.0f, len * 0.5f};
   bool blocked = false;
-  sim.ForUnitsInRect(std::min(ax, bx) - hw - 4, std::min(az, bz) - hw - 4, std::max(ax, bx) + hw + 4,
-                     std::max(az, bz) + hw + 4, [&](Unit* e) {
-                       if (blocked || e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
+  const float reach = hw + 16.0f;  // (candidates come by their centre: far enough for the biggest hulls)
+  sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
+                     std::max(az, bz) + reach, [&](Unit* e) {
+                       if (blocked || e == u) return;
+                       WorldShape s;
+                       if (!GetWorldShape(e, &s) || !ShapeOverlapsOBox(s, centre, axes, half)) return;
+                       if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
                            !BlocksFor(u, e, flags))
                          return;
-                       float rx = e->position.x - ax, rz = e->position.z - az;
-                       float along = rx * fx + rz * fz, side = std::fabs(-rx * fz + rz * fx);
-                       float er = (e->motion.bp->sizeX + e->motion.bp->sizeZ) * 0.25f;
-                       if (along >= -er && along <= len + er && side <= hw + er) blocked = true;
+                       blocked = true;
                      });
   return blocked;
 }
@@ -435,6 +444,9 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
     if (!(Dist(n.path[i], n.cur) < LookAhead() || i == lo)) continue;
     bool ok1 = Reach(sim, u, n.cur, n.path[i]);
     bool ok2 = Manhattan(n.path[i], n.cur) <= 1 ? UnitClear(sim, u, n, n.path[i]) : UnitClearTo(sim, u, n, n.path[i]);
+    if (Dbg())
+      Logf(LogLevel::Info, "nav: tick %u unit %u advance? i %d (%d,%d) from (%d,%d) reach %d clear %d fits %d lo %d hi %d",
+           sim.tick(), u->id, i, n.path[i].x, n.path[i].z, n.cur.x, n.cur.z, ok1 ? 1 : 0, ok2 ? 1 : 0, n.fits ? 1 : 0, lo, hi);
     bool set = false;
     if (ok1 && ok2) {
       n.fits = true;

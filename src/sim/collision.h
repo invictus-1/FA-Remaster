@@ -42,6 +42,8 @@ bool PointInShape(const WorldShape& s, Vec3 p);
 void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx);
 // CollideBox against an axis-aligned box (touching counts).
 bool ShapeOverlapsAABox(const WorldShape& s, Vec3 mn, Vec3 mx);
+// The same against an oriented box: centre, three unit axes, half extents along them.
+bool ShapeOverlapsOBox(const WorldShape& s, Vec3 centre, const Vec3 axes[3], const float half[3]);
 
 // The blueprint's shape (Entity::RevertCollisionShape).
 void RevertCollisionShape(lua_State* L, Entity* e);
