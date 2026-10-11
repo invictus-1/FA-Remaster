@@ -731,8 +731,13 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       sim.streamCommands[d.id] = c;
     }
     if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
-      bool keep = keepsMove(d.type) && u->commands.size() > 1 && IsAlive(u) &&
-                  keepsMove(static_cast<int>(u->commands[1]->type));
+      // CUnitMoveTask's destructor 0x618700 (read again 2026-10-11): queue+0x1c holds the NEW command's type while
+      // the queue is cleared for it. A type outside the table 0x618998 aborts the move; one inside it aborts only
+      // when a SECOND queued command exists and is itself outside the table (0x618807..0x618844). A lone Move
+      // replaced by another Move is therefore not aborted: the navigator keeps what it was doing until the new
+      // task sets its goal (seen: a tank ordered at 68, 70 and 71 takes its first step at 71, not at 74).
+      const int second = u->commands.size() > 1 ? static_cast<int>(u->commands[1]->type) : -1;
+      bool keep = keepsMove(d.type) && IsAlive(u) && !(second >= 0 && second <= 0x1f && !keepsMove(second));
       // the stop comes from the running command's task being torn down (its navigator's AbortMove): a unit with an
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
       // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
