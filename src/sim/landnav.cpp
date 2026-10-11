@@ -672,6 +672,7 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     bool ok = n.state == 0;
     if (Dbg()) Logf(LogLevel::Info, "nav: tick %u unit %u %s", sim.tick(), u->id, ok ? "succeeded" : "failed");
     n.active = false;
+    n.hasTarget = false;  // (a navigator that went idle starts its next goal with a target change)
     Tables(sim).Cancel(&n.pf);
     u->unitStates.erase("PathFinding");
     MotionNavDone(u, ok);
@@ -756,7 +757,9 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   n.stuck = 0;
   n.poke = false;
   n.attackVariant = false;
-  n.hasTarget = false;
+  // (the target point survives a new goal: seen in the original's navigator lines, a unit re-ordered while its
+  // target is already its own cell reports no target change the next beat, so the first waypoint of the new path
+  // still counts as the goal's first ("thinking") and is not a drive-through one)
   n.requestMode = 0;
   n.state = 2;
   // ConfigureGoal 0x5ad6e0: the formation flags
@@ -790,6 +793,7 @@ void LandNavStop(Sim& sim, Unit* u) {
   if (!n || !n->active) return;
   ResetPathState(sim, *n);
   n->active = false;
+  n->hasTarget = false;
   u->unitStates.erase("PathFinding");
 }
 
@@ -849,6 +853,7 @@ void LandNavTickAll(Sim& sim) {
     OnPath(sim, u, *n);
     if (n->state < 2) {
       n->active = false;
+      n->hasTarget = false;
       u->unitStates.erase("PathFinding");
       MotionNavDone(u, n->state == 0);
     }
