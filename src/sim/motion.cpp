@@ -999,6 +999,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     brake *= 2;
   }
   Vec3 F = Rotate(u->orientation, Vec3{0, 0, 1});
+  m.brakeDir = F;
   const Vec3& lm = UnitVelocity(u);
   float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
   float fl = std::sqrt(F.x * F.x + F.y * F.y + F.z * F.z);
@@ -1406,10 +1407,12 @@ void MotionTick(Sim& sim, Unit* u) {
       m.prevPos = Vec3{q.pos.x, py, q.pos.z};
       m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};
       m.vel = nv;
-      // CalcMoveCommon's facing (0x6c2297). Not for the points of a brake spline: there the hull is only tilted
-      // on from where it is (seen: a braking tank's heading stays put to 0.02 degrees on a steady slope and
-      // drifts by hundredths where the slope changes, which a flat facing re-applied each beat does not give)
-      if (!(m.hasSpline && (m.splineMode == 3 || m.splineMode == 4))) u->orientation = LookQuat(q.bx, 0.0f, q.bz);
+      // CalcMoveCommon's facing (0x6c2297). The points of a brake spline all carry the hull's 3-D forward axis
+      // as it was when the brake began (CAiPathSpline::Update mode 3: `dir = F (unchanged)`, tilt included), so
+      // the look direction there is not flat: a braking tank's heading stays put on a steady slope and moves by
+      // hundredths of a degree where the slope changes, as the original's does.
+      if (m.hasSpline && (m.splineMode == 3 || m.splineMode == 4)) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
+      else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
       m.fx = q.fx;
       m.fz = q.fz;
       m.bx = q.bx;
