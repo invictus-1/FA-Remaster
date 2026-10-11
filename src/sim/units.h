@@ -174,6 +174,7 @@ class Unit : public Entity {
   Quat lastOrientation;            // orientation at the start of the tick (with lastPosition)
   uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
+  std::vector<class ReconBlip*> fakeBlips;  // a jammer's fake blips (shared by the armies that hold them)
   bool everMobileChecked = false;
   uint32_t engageId = 0;           // aggressive move / patrol: the enemy it stopped for
   int engageCheck = 0;
@@ -194,6 +195,11 @@ class ReconBlip : public Entity {
  public:
   Unit* source = nullptr;
   bool mobile = false;
+  // A jammer's fake blip (blip+0x294): its place relative to the source (+0x27c, drawn in the ctor) and, per army
+  // index, that army's recon flags with kReconInUse. (A real blip's flags are the unit's Unit::recon.)
+  bool fake = false;
+  Vec3 offset;
+  uint8_t rflags[16] = {};
 };
 
 // CollisionBeamEntity (sim/combat.cpp): a weapon's beam, attached to its unit's muzzle bone.

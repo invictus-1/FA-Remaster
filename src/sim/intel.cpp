@@ -123,10 +123,18 @@ void UpdatePos(IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
 
 int ArmyIdx(const Army* a) { return a ? a->index - 1 : -1; }
 
+// The unit whose layer an entity has for recon: itself, or a blip's source (ReconBlip::Refresh copies the layer)
+const Unit* LayerUnit(const Entity* e) {
+  if (!e) return nullptr;
+  if (e->kind == Entity::Kind::Unit) return static_cast<const Unit*>(e);
+  if (e->kind == Entity::Kind::Blip) return static_cast<const ReconBlip*>(e)->source;
+  return nullptr;
+}
+
 bool Underwater(const Entity* e) {
-  if (e->kind != Entity::Kind::Unit) return false;
-  const std::string& l = static_cast<const Unit*>(e)->layer;
-  return l == "Seabed" || l == "Sub";
+  const Unit* u = LayerUnit(e);
+  if (!u) return false;
+  return u->layer == "Seabed" || u->layer == "Sub";
 }
 
 uint8_t NewReconFor(const ArmyIntel& db, const Entity* e, Vec3 p, bool underwater) {
@@ -134,10 +142,8 @@ uint8_t NewReconFor(const ArmyIntel& db, const Entity* e, Vec3 p, bool underwate
   if (!db.fog || !db.g[0]) f = 8;
   else if (underwater ? (db.g[1] && db.g[1]->Visible(p)) : db.g[0]->Visible(p)) f = 8;
   bool sonar = underwater;
-  if (!sonar && e && e->kind == Entity::Kind::Unit) {
-    const std::string& l = static_cast<const Unit*>(e)->layer;
-    sonar = l == "Sub" || l == "Water";
-  }
+  if (!sonar)
+    if (const Unit* src = LayerUnit(e)) sonar = src->layer == "Sub" || src->layer == "Water";
   if (sonar && db.g[3] && db.g[3]->Visible(p)) f |= 2;
   if (!underwater && db.g[2] && db.g[2]->Visible(p)) f |= 1;
   if (db.g[4] && db.g[4]->Visible(p)) f |= 4;
@@ -174,8 +180,10 @@ uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
   return f;
 }
 
-// The blip Lua object: an instance of /lua/sim/Blip.lua's Blip.
-ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u) {
+// ReconBlip::ReconBlip 0x5be6e0. The blip Lua object: an instance of /lua/sim/Blip.lua's Blip. A jammer's fake
+// blip sits at a random offset from its source: distance JamRadius.Min + IntRange(Max - Min), scaled by a uniform
+// number, in the direction normalize(Gauss, 0, Gauss); the draws are NextUInt32, Gauss, Gauss, NextUInt32.
+ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
   auto o = std::make_unique<ReconBlip>();
   ReconBlip* b = o.get();
   b->kind = Entity::Kind::Blip;
@@ -184,7 +192,23 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u) {
   b->blueprint = u->blueprint;
   b->army = u->army;
   b->id = sim.ReserveId(u->army, 0x3);
-  b->position = u->position;
+  b->fake = fake;
+  if (fake && u->intel) {
+    const EntityIntel& ei = *u->intel;
+    const uint32_t span = ei.jamMax > ei.jamMin ? ei.jamMax - ei.jamMin : 0;
+    const uint32_t d = ei.jamMin + sim.IntRange(span);
+    float gx = static_cast<float>(sim.Gauss()), gz = static_cast<float>(sim.Gauss());
+    float len = std::sqrt(gx * gx + gz * gz);
+    if (len > 9.99999997e-07f) {
+      gx *= 1.0f / len;
+      gz *= 1.0f / len;
+    } else {
+      gx = gz = 0;
+    }
+    const float r = sim.U01() * static_cast<float>(d);
+    b->offset = Vec3{gx * r, 0, gz * r};
+  }
+  b->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
   b->orientation = u->orientation;
   int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
@@ -253,11 +277,81 @@ void DestroyIfUnused(Sim& sim, ReconBlip* b) {
 
 std::vector<Unit*> g_goneUnits;  // destroyed units whose blips armies may still hold
 
+// ---- a jammer's fake blips (intel.md 3.4, 3.5) ----
+
+bool HoldsFake(const Unit* u, int a) {
+  for (const ReconBlip* b : u->fakeBlips)
+    if (b->rflags[a] & kReconInUse) return true;
+  return false;
+}
+
+// DestroyIfUnused 0x5bf6f0 for a fake: it goes once no army holds it
+void DestroyFakeIfUnused(Sim& sim, ReconBlip* b) {
+  for (int k = 0; k < 16; ++k)
+    if (b->rflags[k] & kReconInUse) return;
+  if (Unit* u = b->source) u->fakeBlips.erase(std::remove(u->fakeBlips.begin(), u->fakeBlips.end(), b), u->fakeBlips.end());
+  b->source = nullptr;
+  if (!b->destroyQueued) sim.QueueDestroy(b);
+  g_blips.erase(std::remove(g_blips.begin(), g_blips.end(), b), g_blips.end());
+}
+
+// army a lets go of a fake (DeleteBlip: events for what it showed, the entry cleared)
+void DropFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
+  uint8_t old = b->rflags[a] & 0x7f;
+  CheckIntelEvents(sim, L, a, b, old, 0);
+  b->rflags[a] = 0;
+  DestroyFakeIfUnused(sim, b);
+}
+
+// FindOrCreateBlip 0x5c0930 for a fake: one of the unit's fakes this army does not hold yet, else a new one
+ReconBlip* FindOrCreateFake(Sim& sim, lua_State* L, int a, Unit* u) {
+  ReconBlip* b = nullptr;
+  for (ReconBlip* f : u->fakeBlips)
+    if (!(f->rflags[a] & kReconInUse)) {
+      b = f;
+      break;
+    }
+  if (!b) {
+    b = MakeBlip(sim, L, u, true);
+    u->fakeBlips.push_back(b);
+  }
+  b->rflags[a] = kReconInUse;
+  return b;
+}
+
+// UpdateBlip 0x5c1cf0 for a fake: it is detected at its own spot; line of sight, omni, an allied jammer or a
+// spot off the playable area (shrunk by the source's footprint) give it away (KnownFake)
+void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
+  uint8_t old = b->rflags[a] & 0x7f;
+  uint8_t flags = CanDetect(sim, a, b, b->position);
+  flags |= old & 0x30;
+  if (flags & 8) flags |= 0x30;
+  const Army* us = sim.armies()[static_cast<size_t>(a)].get();
+  const bool ally = b->army && combat::Relation(b->army, us) == 2;
+  if (!(flags & 4) && !ally) {
+    const TerrainMap* m = sim.map();
+    float margin = 0;
+    if (b->blueprint && b->blueprint->hasFootprint)
+      margin = static_cast<float>(std::max(b->blueprint->footprint.sizeX, b->blueprint->footprint.sizeZ));
+    const Vec3& p = b->position;
+    if (m && !(p.x >= margin && p.z >= margin && p.x <= m->width() - margin && p.z <= m->height() - margin)) flags |= 0x20;
+  } else {
+    flags |= 0x20;
+  }
+  b->rflags[a] = static_cast<uint8_t>(kReconInUse | flags);
+  CheckIntelEvents(sim, L, a, b, old, flags);
+}
+
 // CAiReconDBImpl::ReconTick 0x5c0c40 for army a
 void ReconTick(Sim& sim, lua_State* L, int a) {
   // blips whose unit is gone: mobile ones go, structures stay (MaybeDead) until seen again
   for (size_t i = 0; i < g_goneUnits.size(); ++i) {
     Unit* u = g_goneUnits[i];
+    {
+      const std::vector<ReconBlip*> fakes = u->fakeBlips;  // (a gone jammer's fakes go with it)
+      for (ReconBlip* f : fakes)
+        if (f->rflags[a] & kReconInUse) DropFake(sim, L, a, f);
+    }
     if (!(u->recon[a] & kReconInUse)) continue;
     ReconBlip* b = u->blip;
     bool mobile = b ? b->mobile : true;
@@ -273,7 +367,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
   g_goneUnits.erase(std::remove_if(g_goneUnits.begin(), g_goneUnits.end(),
                                    [](Unit* u) {
                                      for (int k = 0; k < 16; ++k)
-                                       if (u->recon[k] & kReconInUse) return false;
+                                       if ((u->recon[k] & kReconInUse) || HoldsFake(u, k)) return false;
                                      return true;
                                    }),
                     g_goneUnits.end());
@@ -281,8 +375,27 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
   struct Pending {
     Unit* u;
     uint8_t flags;
+    bool fake;
   };
   std::vector<Pending> pending;
+  // UpdateBlips 0x5c1f80: the unit's real blip, then its fakes: as many as the jammer makes are kept, the rest
+  // dropped, and the missing ones are queued as new blips
+  auto updateBlips = [&](Unit* u, uint8_t f) {
+    if (u->recon[a] & kReconInUse) UpdateBlip(sim, L, a, u, f);
+    const uint32_t jam = FlagOn(u, 9) ? u->intel->jammerBlips : 0;
+    uint32_t kept = 0;
+    const std::vector<ReconBlip*> fakes = u->fakeBlips;
+    for (ReconBlip* b : fakes) {
+      if (!(b->rflags[a] & kReconInUse)) continue;
+      if (kept < jam) {
+        UpdateFake(sim, L, a, b);
+        ++kept;
+      } else {
+        DropFake(sim, L, a, b);
+      }
+    }
+    for (uint32_t i = kept; i < jam; ++i) pending.push_back({u, f, true});
+  };
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
   for (const auto& army : sim.armies()) {
     if (army.get() == us) continue;
@@ -293,17 +406,20 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       uint8_t f = CanDetect(sim, a, u, u->position);
       bool inUse = (u->recon[a] & kReconInUse) != 0;
       if (f && !inUse) {
-        pending.push_back({u, f});
+        pending.push_back({u, f, false});
       } else if (f) {
         if (getenv("MOHO64_DEBUG_JAM") && FlagOn(u, 9))
           Logf(LogLevel::Info, "jamdbg %u army %d unit %u flags %d", sim.tick(), a, u->id, f);
-        UpdateBlip(sim, L, a, u, f);
+        updateBlips(u, f);
       } else if (inUse) {
         bool mobile = u->motion.bp && u->motion.bp->mobile();
-        if ((u->recon[a] & 0x10) && !mobile) UpdateBlip(sim, L, a, u, 0);
+        if ((u->recon[a] & 0x10) && !mobile) updateBlips(u, 0);
         else {
           DeleteEntry(sim, L, a, u);
           if (u->blip) DestroyIfUnused(sim, u->blip);
+          const std::vector<ReconBlip*> fakes = u->fakeBlips;
+          for (ReconBlip* b : fakes)
+            if (b->rflags[a] & kReconInUse) DropFake(sim, L, a, b);
         }
       }
     }
@@ -312,6 +428,14 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
   for (const Pending& p : pending) {
     Unit* u = p.u;
     if (u->destroyQueued) continue;
+    if (p.fake) {
+      UpdateFake(sim, L, a, FindOrCreateFake(sim, L, a, u));
+      if (u->HasLuaObject()) {
+        lua_pushnumber(L, a + 1);
+        sim.CallMethod(L, u, "OnDetectedBy", 1);
+      }
+      continue;
+    }
     if (!u->blip) u->blip = MakeBlip(sim, L, u);
     u->recon[a] = kReconInUse;
     UpdateBlip(sim, L, a, u, p.flags);
@@ -379,7 +503,7 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
   bool rs = lu::Bool(L, intel, "RadarStealth"), ss = lu::Bool(L, intel, "SonarStealth"), cl = lu::Bool(L, intel, "Cloak");
   float jb = lu::Num(L, intel, "JammerBlips", 0);
   int jr = lu::Sub(L, intel, "JamRadius");
-  float jmax = lu::Num(L, jr, "Max", 0);
+  float jmax = lu::Num(L, jr, "Max", 0), jmin = lu::Num(L, jr, "Min", 0);
   lua_pop(L, 1);
   int sr = lu::Sub(L, intel, "SpoofRadius");
   float smax = lu::Num(L, sr, "Max", 0);
@@ -390,6 +514,9 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
     e.has[11] = cl;
     e.has[9] = jb > 0 && jmax > 0;
     e.has[10] = smax > 0;
+    e.jammerBlips = jb > 0 ? static_cast<uint32_t>(jb) : 0;
+    e.jamMin = jmin > 0 ? static_cast<uint32_t>(jmin) : 0;
+    e.jamMax = jmax > 0 ? static_cast<uint32_t>(jmax) : 0;
   }
   lua_settop(L, top);
 }
@@ -404,7 +531,7 @@ void ReleaseEntityIntel(Sim& sim, Entity* e) {
   }
   if (e->kind == Entity::Kind::Unit) {
     Unit* u = static_cast<Unit*>(e);
-    bool any = false;
+    bool any = !u->fakeBlips.empty();
     for (int a = 0; a < 16; ++a) any = any || (u->recon[a] & kReconInUse);
     if (any) g_goneUnits.push_back(u);
     else if (u->blip) DestroyIfUnused(sim, u->blip);
@@ -418,7 +545,7 @@ void ReconBeat(Sim& sim) {
   for (ReconBlip* b : g_blips) {
     Unit* u = b->source;
     if (!u || u->destroyQueued) continue;
-    b->position = u->position;
+    b->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
     b->orientation = u->orientation;
     b->health = u->health;
     b->maxHealth = u->maxHealth;
@@ -571,7 +698,9 @@ uint8_t BlipFlags(lua_State* L) {
   Army* army = S(L)->GetArmy(L, 2);
   int a = ArmyIdx(army);
   Unit* u = b->source;
-  if (!u || a < 0 || a >= 16) return 0;
+  if (a < 0 || a >= 16) return 0;
+  if (b->fake) return b->rflags[a] & 0x7f;
+  if (!u) return 0;
   return u->recon[a] & 0x7f;
 }
 int l_blip_IsOnRadar(lua_State* L) { lua_pushboolean(L, BlipFlags(L) & 1); return 1; }

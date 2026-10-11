@@ -40,6 +40,7 @@ struct IntelHandle {
 struct EntityIntel {
   IntelHandle h[9];          // slots 1..8
   bool has[14] = {}, on[14] = {};  // flags 9..13
+  uint32_t jammerBlips = 0, jamMin = 0, jamMax = 0;  // Intel.JammerBlips, Intel.JamRadius {Min, Max}
 };
 
 // Recon flags per army on a unit (Unit::recon): Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10,
