@@ -23,6 +23,7 @@
 #include "sim/entity_grid.h"
 #include "sim/vecmath.h"
 #include "sim/intel.h"
+#include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/air.h"
 #include "sim/skeleton.h"
@@ -66,6 +67,18 @@ void PushPath(lua_State* L, int t, const char* a, const char* b = nullptr) {
 }
 
 void PushVec(lua_State* L, const Vec3& v) { PushVector(L, v.x, v.y, v.z); }
+
+const char* const kLayerOfBit[] = {"Land", "Seabed", "Sub", "Water", "Air", "Orbit"};
+uint8_t LayerBit(const char* name) {
+  for (int i = 0; i < 6; ++i)
+    if (!std::strcmp(name, kLayerOfBit[i])) return static_cast<uint8_t>(1u << i);
+  return 0;
+}
+const char* LayerName(uint8_t bit) {
+  for (int i = 0; i < 6; ++i)
+    if (bit == (1u << i)) return kLayerOfBit[i];
+  return "Land";
+}
 
 Vec3 CheckVec(lua_State* L, int idx) {
   luaL_checktype(L, idx, LUA_TTABLE);
@@ -167,7 +180,8 @@ int l_CreateUnit(lua_State* L) {
   Quat q{static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 7, 0)),
          static_cast<float>(luaL_optnumber(L, 8, 0)), static_cast<float>(luaL_optnumber(L, 9, 1))};
   bool layer = lua_gettop(L) >= 10 && !lua_isnil(L, 10);  // an explicit layer keeps the given y (0x585ab0 +0x25)
-  return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true, nullptr, layer));
+  uint8_t want = layer && lua_isstring(L, 10) ? LayerBit(lua_tostring(L, 10)) : 0;
+  return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true, nullptr, layer, want));
 }
 
 // CreateUnitHPR(bp, army, x, y, z, pitch, yaw, roll)
@@ -1220,22 +1234,35 @@ Entity* Sim::FindEntity(uint32_t id) const {
 }
 
 namespace {
-// The layer a unit starts on (Entity::GetStartingLayer): from its motion type and the water.
-std::string StartingLayer(lua_State* L, int bpIdx, const TerrainMap* map, const Vec3& p) {
-  PushPath(L, bpIdx, "Physics", "MotionType");
-  std::string mt = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-  lua_pop(L, 1);
-  bool underWater = map && map->hasWater && map->TerrainHeight(p.x, p.z) < map->waterElevation;
-  if (mt == "RULEUMT_Air") return "Air";
-  if (mt == "RULEUMT_Water" || mt == "RULEUMT_SurfacingSub") return mt == "RULEUMT_SurfacingSub" ? "Sub" : "Water";
-  if (!underWater) return "Land";
-  if (mt == "RULEUMT_Amphibious") return "Seabed";
-  return "Water";
+// The layer a unit starts on (Entity::GetStartingLayer 0x62ad30; `want` = the construction params' layer, 0 =
+// choose). The footprint's caps decide, not the motion type: an EXPERIMENTAL aircraft starts on Land (it appears on
+// the ground and takes off), an experimental submarine on the surface, a land unit under water on the Seabed.
+uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, const Vec3& p, uint8_t want) {
+  const NamedFootprint& fp = bp.footprint;
+  // the cell's caps (OCCUPY_FootprintFits 0x7209e0 with caps -1: the terrain's answer for this footprint)
+  int cx = static_cast<int16_t>(std::lrintf(p.x - static_cast<float>(fp.sizeX) * 0.5f));
+  int cz = static_cast<int16_t>(std::lrintf(p.z - static_cast<float>(fp.sizeZ) * 0.5f));
+  uint8_t caps = 0;
+  if (fp.caps & 0xf) {
+    const PathGrid* g = sim.navigation().Grid(fp);
+    caps = g ? g->Caps(cx, cz) : 0;
+  }
+  if (map && cx >= 0 && cz >= 0 && cx + fp.sizeX <= map->width() && cz + fp.sizeZ <= map->height())
+    caps |= fp.caps & 0x30;  // the terrain never takes the Air / Orbit bits away
+  if (want & caps) return want;
+  if (caps & kLayerAir) return BpInCategory(sim, &bp, "EXPERIMENTAL") ? kLayerLand : kLayerAir;
+  float water = map && map->hasWater ? map->waterElevation : -10000.0f;
+  if (map && water > map->TerrainHeight(p.x, p.z)) {
+    if ((fp.caps & kLayerSub) && !BpInCategory(sim, &bp, "EXPERIMENTAL")) return kLayerSub;
+    if (!(fp.caps & kLayerWater) && !BpInCategory(sim, &bp, "FERRYBEACON")) return kLayerSeabed;
+    return kLayerWater;
+  }
+  return kLayerLand;
 }
 }  // namespace
 
 Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
-                      Unit* builder, bool keepY) {
+                      Unit* builder, bool keepY, uint8_t wantLayer) {
   lua_checkstack(L, 40);
   int top = lua_gettop(L);
   auto owned = std::make_unique<Unit>();
@@ -1259,9 +1286,25 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->motion.surfaceNext = true;
   if (getenv("MOHO64_DEBUG_CREATE"))
     Logf(LogLevel::Info, "create %u unit %u bp %s pos %.2f %.2f motion %d", tick_, u->id, bp.id.c_str(), u->position.x, u->position.z, u->motion.bp->motionType);  // CUnitMotion ctor: m+0x90 = 1, so the first MotionTick processes contacts (0x6b7c9a)
-  if (u->motion.bp->motionType == kMotionAir && complete && !builder && !keepY) {
-    // IUnit::CalcSpawnElevation: flyers appear at their flying height
-    u->position.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
+  const uint8_t startLayer = StartingLayer(*this, bp, map_.get(), pos, wantLayer);
+  if (complete && !builder && !keepY) {
+    // IUnit::CalcSpawnElevation 0x541540 (ids_repair_placement.md 3.2): the given y is ignored. Land / Seabed:
+    // the terrain; Water: the water; Sub: the water + the unit's elevation; Air: flyers appear at their height
+    const TerrainMap* m = map_.get();
+    float water = m && m->hasWater ? m->waterElevation : -10000.0f;
+    if (startLayer & (kLayerLand | kLayerSeabed)) {
+      if (m) u->position.y = m->TerrainHeight(pos.x, pos.z);
+    } else if (startLayer == kLayerWater) {
+      u->position.y = water;
+    } else if (startLayer == kLayerSub) {
+      bps_.PushTable(L, bp);
+      lua_pushstring(L, "Physics");
+      lua_rawget(L, -2);
+      u->position.y = water + FieldNumber(L, -1, "Elevation", 0);
+      lua_pop(L, 2);
+    } else if (u->motion.bp->motionType == kMotionAir) {
+      u->position.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
+    }
     u->lastPosition = u->position;
   }
   if (u->motion.bp->motionType == kMotionAir) AirInit(*this, u);
@@ -1317,10 +1360,11 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (army && army->pool) army->pool->units.push_back(u);
 
   CallMethod(L, u, "OnPreCreate", 0);
-  u->layer = StartingLayer(L, bpIdx, map_.get(), pos);
+  u->layer = LayerName(startLayer);
   lua_pushstring(L, u->layer.c_str());
   lua_pushstring(L, "None");
   CallMethod(L, u, "OnLayerChange", 2);
+  MotionCreated(*this, u);  // (the CUnitMotion ctor follows SetCurrentLayer: 0x6a5b65, 0x6a5df2)
 
   // Weapons: one per bp.Weapon entry; class from unit:GetWeaponClass(label) (FA exe
   // UnitWeapon::CreateInstance), falling back to /lua/sim/Weapon.lua's Weapon.

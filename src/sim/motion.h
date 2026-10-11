@@ -52,6 +52,7 @@ struct MotionBlueprint {
   float bankingSlope = 0, wobbleFactor = 0, wobbleSpeed = 0;  // Physics +0x3c, +0x48, +0x4c (hover)
   float turnRadius = 0, turnRate = 0, turnFacingRate = 0;
   float elevation = 0;
+  float diveSurfaceSpeed = 1;         // Physics.DiveSurfaceSpeed (P+0x24)
   float layerChangeOffset = -0.1f;    // Physics.LayerChangeOffsetHeight (P+0x74)
   float layerTransitionDuration = 0;  // Physics.LayerTransitionDuration (P+0x78; the blend is not done)
   bool rotateOnSpot = false, standUpright = false, sinkLower = false, rotateBodyWhileMoving = false;
@@ -133,6 +134,12 @@ struct UnitMotion {
   uint32_t colTick = 0xffffffffu;
   Vec3 sideStep;           // st+0x84
   bool surfaceNext = false;  // m+0x90: process contacts next tick (set by AddImpulse)
+  // CalcMoveWater 0x6c3480 (ships and submarines): m+0x5c the depth below the water (<= 0: the unit rides at
+  // water + depth), m+0x60 this tick's dive / surfacing step, m+0x74 the layer the dive or surfacing ends on,
+  // m+0x80 the vertical event of a non-flying unit (0 Top, 1 Bottom, 2 Up, 3 Down), and the unit attribute
+  // elevation (u+0x428+0x30; Physics.Elevation until Unit:SetElevation)
+  float depth = 0, depthStep = 0, elevationAttr = 0;
+  int targetLayer = 0, vertEvent = 0;
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)
@@ -153,6 +160,12 @@ void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz);
 
 // One sim tick of a unit's motion (after its commands ran).
 void MotionTick(Sim& sim, Unit* u);
+// The CUnitMotion constructor's last step (0x6b8133), once the unit's starting layer is set: a unit created on
+// the Sub layer is at its depth at once (OnMotionVertEventChange 'Bottom').
+void MotionCreated(Sim& sim, Unit* u);
+// CUnitMotion::SetNewTargetLayer 0x6b8920 (a layer bit): Sub -> Water starts surfacing (MovingUp), Water -> Sub
+// a dive (MovingDown); CalcMoveWater changes the layer when the depth gets there.
+void SetNewTargetLayer(Sim& sim, Unit* u, int layer);
 // Start moving toward `goal` along `path` (waypoints after the start; last = goal).
 // It starts driving at `driveTick` (until then it coasts).
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);

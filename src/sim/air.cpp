@@ -1930,11 +1930,13 @@ namespace {
 int l_SetElevation(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   if (u && u->motion.air) u->motion.air->elevationAttr = static_cast<float>(luaL_checknumber(L, 2));
+  else if (u) u->motion.elevationAttr = static_cast<float>(luaL_checknumber(L, 2));  // (submarines: the dive depth)
   return 0;
 }
 int l_RevertElevation(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   if (u && u->motion.air) u->motion.air->elevationAttr = u->motion.air->bp->elevation;
+  else if (u && u->motion.bp) u->motion.elevationAttr = u->motion.bp->elevation;
   return 0;
 }
 }  // namespace

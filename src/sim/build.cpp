@@ -2413,15 +2413,30 @@ int BoneIndex(lua_State* L, Entity* e, int arg) {
   if (lua_isstring(L, arg) && e->skeleton) return e->skeleton->Find(lua_tostring(L, arg));
   return -1;
 }
+// A plain entity (no unit) attached to another entity's bone: it takes the bone's transform now and whenever
+// something attached to it asks (Sim::Tick). FAF hangs a mobile factory's external factory on such an anchor.
+bool AttachPlainEntity(Entity* e, Entity* parent, int bone) {
+  if (!e || e->kind == Entity::Kind::Unit) return false;
+  e->attachParent = EntityRef(parent);
+  e->attachBone = bone;
+  BoneWorld(parent, bone, &e->position, &e->orientation);
+  return true;
+}
+// Unit state Attached (14) belongs to the unit's motion: a unit without one (a structure, a dummy unit) never
+// shows it (the anchor and external factory units of a Fatboy are attached and not Attached)
+void SetAttachedState(Unit* u) {
+  if (u->motion.bp && u->motion.bp->mobile()) u->unitStates.insert("Attached");
+}
 // entity:AttachBoneTo(selfBone, parent, parentBone)
 int l_AttachBoneTo(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 3);
+  if (!u && parent && AttachPlainEntity(ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 4))) return 0;
   if (!u || !parent) return 0;
   u->parentId = EntityRef(parent);
   u->ownBone = BoneIndex(L, u, 2);
   u->parentBone = BoneIndex(L, parent, 4);
-  u->unitStates.insert("Attached");
+  SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
   {
     Vec3 bp;
@@ -2436,11 +2451,12 @@ int l_AttachBoneTo(lua_State* L) {
 int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 2);
+  if (!u && parent && AttachPlainEntity(ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
   if (!u || !parent) return 0;
   u->parentId = EntityRef(parent);
   u->ownBone = -1;
   u->parentBone = BoneIndex(L, parent, 3);
-  u->unitStates.insert("Attached");
+  SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
   u->position = EntityBonePosition(parent, u->parentBone);
   S(L)->MarkUnitsMoved();
@@ -2463,6 +2479,14 @@ void Detach(Sim& sim, Unit* u) {
 }
 int l_DetachFrom(lua_State* L) {
   if (Unit* u = ToObject<Unit>(L, 1)) Detach(*S(L), u);
+  else if (Entity* e = ToObject<Entity>(L, 1)) e->attachParent = 0;
+  return 0;
+}
+// Unit:SetDoNotTarget(flag) 0x6c6bc0: sets or clears unit state DoNotTarget (bit 34), nothing else
+int l_SetDoNotTarget(lua_State* L) {
+  Unit* u = U(L);
+  if (lua_toboolean(L, 2)) u->unitStates.insert("DoNotTarget");
+  else u->unitStates.erase("DoNotTarget");
   return 0;
 }
 int l_DetachAll(lua_State* L) {  // entity:DetachAll(bone)
@@ -2596,6 +2620,7 @@ void RegisterBuildBindings(lua_State* L) {
   SetGlobal(L, "NotifyUpgrade", l_NotifyUpgrade);
   SetMethod(L, "Unit", "SetBusy", l_SetBusy);
   SetMethod(L, "Unit", "SetUnSelectable", l_SetUnSelectable);
+  SetMethod(L, "Unit", "SetDoNotTarget", l_SetDoNotTarget);
   SetMethod(L, "Unit", "SetBlockCommandQueue", l_SetBlockCommandQueue);
   SetMethod(L, "Entity", "AttachBoneTo", l_AttachBoneTo);
   SetMethod(L, "Entity", "AttachTo", l_AttachTo);

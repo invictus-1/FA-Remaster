@@ -179,7 +179,106 @@ void UpdateLayer(Sim& sim, Unit* u) {
   }
 }
 
+const char* const kVertEventNames[] = {"Top", "Bottom", "Up", "Down", "Hover", "Straight"};  // 0xf58360
+
+const char* LayerNameOf(int bit) {
+  switch (bit) {
+    case kLayerLand: return "Land";
+    case kLayerSeabed: return "Seabed";
+    case kLayerSub: return "Sub";
+    case kLayerWater: return "Water";
+    case kLayerAir: return "Air";
+    default: return "Orbit";
+  }
+}
+
+// 0x6b8f70: the vertical event of a non-flying unit (m+0x80) and its script callback
+void SetVertEvent(Sim& sim, Unit* u, int e) {
+  UnitMotion& m = u->motion;
+  if (m.vertEvent == e) return;
+  int old = m.vertEvent;
+  m.vertEvent = e;
+  lua_State* L = sim.L();
+  lua_pushstring(L, kVertEventNames[e]);
+  lua_pushstring(L, kVertEventNames[old]);
+  sim.CallMethod(L, u, "OnMotionVertEventChange", 2);
+}
+
+// CUnitMotion::HandleDivingAndSurfacing 0x6c3220 (CalcMoveWater, after the move): while MovingUp / MovingDown the
+// depth moves by sin(pi * progress) x DiveSurfaceSpeed / 10 per tick (progress folded at the half, at least a
+// tenth of the full step) between 0 and the unit's elevation (not below 0.25 over the bottom); at the end the
+// unit takes the target layer. Returns whether the unit can dive at all and is diving or surfacing.
+bool HandleDivingAndSurfacing(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  const float elev = m.elevationAttr;
+  if (elev == 0.0f) return false;
+  const bool up = u->unitStates.count("MovingUp") != 0;
+  if (!up && !u->unitStates.count("MovingDown")) {
+    m.depthStep = 0;
+    return false;
+  }
+  const TerrainMap* map = sim.map();
+  const float water = map->hasWater ? map->waterElevation : -10000.0f;
+  float bottom = (map->TerrainHeight(u->position.x, u->position.z) + 0.25f) - water;
+  if (bottom > 0.0f) bottom = 0.0f;
+  const float target = bottom > elev ? bottom : elev;
+  float frac = std::fabs(m.depth / target);
+  const float speed = m.bp->diveSurfaceSpeed * 0.1f;
+  if (frac > 0.5f) frac = 1.0f - frac;
+  double s, c;
+  dmath::SinCos(static_cast<double>(frac * 3.1415927f), &s, &c);
+  const float sinStep = static_cast<float>(s * static_cast<double>(speed));  // (x87: fsin wide, one rounding)
+  const float minStep = speed * 0.1f;
+  m.depthStep = minStep > sinStep ? minStep : sinStep;
+  if (up) {
+    float d = m.depth + m.depthStep;
+    if (d > 0.0f) d = 0.0f;
+    m.depth = d;
+    if (d == 0.0f) {
+      if (m.targetLayer) SetLayer(sim, u, LayerNameOf(m.targetLayer));
+      u->unitStates.erase("MovingUp");
+      SetVertEvent(sim, u, 0);
+    }
+  } else {
+    float d = m.depth - m.depthStep;
+    if (!(d > target)) d = target;
+    m.depth = d;
+    if (target >= d) {
+      if (m.targetLayer) SetLayer(sim, u, LayerNameOf(m.targetLayer));
+      u->unitStates.erase("MovingDown");
+      SetVertEvent(sim, u, 1);
+    }
+  }
+  return true;
+}
+
 }  // namespace
+
+void MotionCreated(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  if (!m.bp) return;
+  m.elevationAttr = m.bp->elevation;
+  if (u->layer == "Sub") {
+    m.depth = m.elevationAttr;
+    SetVertEvent(sim, u, 1);
+  }
+}
+
+void SetNewTargetLayer(Sim& sim, Unit* u, int layer) {
+  UnitMotion& m = u->motion;
+  if (u->layer == "Sub") {
+    if (layer == kLayerWater) {
+      u->unitStates.insert("MovingUp");
+      SetVertEvent(sim, u, 2);
+    }
+  } else if (u->layer == "Water") {
+    if (layer == kLayerSub) {
+      u->unitStates.insert("MovingDown");
+      SetVertEvent(sim, u, 3);
+    }
+  }
+  m.targetLayer = layer;
+}
 
 // CalcMoveCommon's facing: the look rotation 0x50b480 of the point's direction (Z = dir, X = (Z.z, 0, -Z.x),
 // Y = Z x X, each normalised by 0x452af0), turned into a quaternion by MatrixToQuat 0x4eb3f0 (rows X, Y, Z).
@@ -274,6 +373,7 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
       m.turnRate = GetNum(L, p, "TurnRate", 0);
       m.turnFacingRate = GetNum(L, p, "TurnFacingRate", 0);
       m.elevation = GetNum(L, p, "Elevation", 0);
+      m.diveSurfaceSpeed = GetNum(L, p, "DiveSurfaceSpeed", 1);
       m.layerChangeOffset = GetNum(L, p, "LayerChangeOffsetHeight", -0.1f);
       m.layerTransitionDuration = GetNum(L, p, "LayerTransitionDuration", 0);
       m.rotateOnSpot = GetBool(L, p, "RotateOnSpot");
@@ -361,7 +461,17 @@ void SnapUnit(const Sim& csim, Unit* u) {
   const MotionBlueprint& b = *u->motion.bp;
   // SnapToGround 0x6c1610 tilts the transform as it is (CalcMoveCommon set the facing when the unit moved)
   if (b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub) {
-    u->position.y = map->hasWater ? map->waterElevation : map->TerrainHeight(u->position.x, u->position.z);
+    // SnapToWater 0x6c1cb0: at water + depth, but never closer than 0.25 to the bottom; a submerged unit stays
+    // under the surface and its depth follows the bottom
+    UnitMotion& m = u->motion;
+    const float water = map->hasWater ? map->waterElevation : -10000.0f;
+    float y = map->TerrainHeight(u->position.x, u->position.z) + 0.25f;
+    if (water + m.depth > y) y = water + m.depth;
+    if (0.0f > m.depth) {
+      if (y > water) y = water;
+      m.depth = y - water;
+    }
+    u->position.y = y;
     return;
   }
   if (b.motionType == kMotionAir) return;
@@ -1280,9 +1390,14 @@ void MotionTick(Sim& sim, Unit* u) {
         SnapUnit(sim, u);
         m.needSnap = false;
       }
-    } else if (moved || m.needSnap) {
-      SnapUnit(sim, u);
-      m.needSnap = false;
+    } else {
+      // CalcMoveWater 0x6c3480 (every layer but Land and Seabed): the dive / surfacing step comes after the
+      // move, and the unit is put at its depth while it lasts
+      const bool diving = u->layer != "Land" && u->layer != "Seabed" && HandleDivingAndSurfacing(sim, u);
+      if (moved || m.needSnap || diving) {
+        SnapUnit(sim, u);
+        m.needSnap = false;
+      }
     }
     m.surfaceNext = false;  // (cleared after SnapToGround)
   }

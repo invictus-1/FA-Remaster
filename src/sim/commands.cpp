@@ -310,6 +310,12 @@ void StartHead(Sim& sim, Unit* u) {
       PopHead(u);
       continue;
     }
+    if (c.type == CommandType::Dive) {
+      // DispatchTask 0x60971d: a Dive order toggles between the Water and the Sub layer and is done at once
+      SetNewTargetLayer(sim, u, u->layer == "Sub" ? kLayerWater : kLayerSub);
+      PopHead(u);
+      continue;
+    }
     switch (c.type) {  // DispatchTask 0x608ef0: CUnitCommand::GenerateFormation (formations.md 1.2)
       case CommandType::Move:
       case CommandType::FormMove:
