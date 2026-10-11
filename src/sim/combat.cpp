@@ -1300,16 +1300,11 @@ Vec3 Aim(Sim& sim, AimController* c) {
   }
   if (IsNaN(tPos)) return NaNVec();
   if (te) {
-    // FAF patch 0x128b054: a unit riding another (unit+0x270) whose carrier has not been updated this beat, or
-    // an entity that is no unit (a projectile) and has not been: one tick of its velocity ahead
-    Entity* m = te;
-    bool ahead = true;
-    if (tu) {
-      Entity* p = tu->parentId ? sim.FindEntity(tu->parentId) : nullptr;
-      if (p) m = p;
-      else ahead = false;
-    }
-    if (ahead && m->lastMoveTick != sim.tick()) tPos = Add(tPos, tVel);
+    // FAF patch 0x128b054: a target the entity stage has not ticked yet this beat (entity+0x174 != the sim's
+    // tick; for a recon blip (vf+0x1c) the stamp of its source unit, blip+0x270) is taken one tick of its
+    // velocity ahead
+    const bool ticked = tu ? tu->lastPosTick == sim.tick() : te->lastMoveTick == sim.tick();
+    if (!ticked) tPos = Add(tPos, tVel);
   }
   float hDist = DistXZ(tPos, Mpos);
   float mv = w->bp->muzzleVelocity;

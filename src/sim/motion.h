@@ -76,7 +76,8 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
 struct UnitMotion {
   const MotionBlueprint* bp = nullptr;
   Vec3 vel;          // steering velocity (world units per tick)
-  Vec3 lastMove;     // what GetVelocity returns: the last tick's displacement
+  Vec3 lastMove;     // the displacement of its last motion tick
+  Vec3 velCommitted; // lastMove as of the last AdvanceCoords (step 13): what GetVelocity returns in the air
   float fx = 0, fz = 1;  // steering facing (unit vector in xz): the direction it drives
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)

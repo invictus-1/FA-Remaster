@@ -1281,6 +1281,7 @@ void Sim::Tick() {
     }
   }
   KillCleanupTick(*this);
+  for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles

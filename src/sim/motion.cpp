@@ -1458,7 +1458,10 @@ void MotionTick(Sim& sim, Unit* u) {
 const Vec3& UnitVelocity(const Unit* u) {
   const UnitMotion& m = u->motion;
   const bool land = m.bp && m.bp->mobile() && m.bp->motionType != kMotionAir && u->layer != "Air" && !m.ballistic;
-  return land ? m.vel : m.lastMove;
+  // Unit::GetVelocity 0x6a9c90: with a motion and off the Air layer the motion's velocity; else the entity's
+  // (committed position - previous position) x scale (0x678dc0), which changes in AdvanceCoords only: a flyer
+  // that already moved this beat still reports last beat's displacement
+  return land ? m.vel : m.velCommitted;
 }
 
 }  // namespace moho
