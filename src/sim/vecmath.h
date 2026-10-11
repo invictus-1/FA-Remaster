@@ -37,6 +37,23 @@ inline Vec3 NaNVec() {
 inline Quat Conj(Quat q) { return {-q.x, -q.y, -q.z, q.w}; }
 inline Quat QMul(const Quat& a, const Quat& b) { return QuatMul(a, b); }
 inline Vec3 Rotate(const Quat& q, Vec3 v) { return QuatRotate(q, v); }
+// parent x local as the transform compose 0x549c20 multiplies its quaternions (a pose bone's composite)
+inline Quat ComposeQ(const Quat& p, const Quat& l) {
+  return {((l.z * p.y + p.x * l.w) + l.x * p.w) - p.z * l.y, ((p.z * l.x + p.y * l.w) + l.y * p.w) - l.z * p.x,
+          ((l.y * p.x + p.z * l.w) + l.z * p.w) - p.y * l.x, ((l.w * p.w - l.x * p.x) - l.y * p.y) - l.z * p.z};
+}
+// The exe's rotate-by-quaternion 0x452d40: through the quaternion's matrix (0x452fd0), in its order of operations
+// (the manipulators use it: the last digit matters for an aim controller's angles)
+inline Vec3 RotateM(const Quat& q, Vec3 v) {
+  const float x2 = q.x * 2.0f, y2 = q.y * 2.0f, z2 = q.z * 2.0f;
+  const float wx = q.w * x2, wy = q.w * y2, wz = q.w * z2;
+  const float xx = q.x * x2, xy = q.x * y2, xz = q.x * z2, yy = q.y * y2, yz = q.y * z2, zz = q.z * z2;
+  const float m0 = 1.0f - (zz + yy), m1 = xy - wz, m2 = xz + wy;
+  const float m3 = xy + wz, m4 = 1.0f - (zz + xx), m5 = yz - wx;
+  const float m6 = xz - wy, m7 = yz + wx, m8 = 1.0f - (yy + xx);
+  return {((0.0f + v.x * m0) + v.y * m1) + v.z * m2, ((0.0f + v.x * m3) + v.y * m4) + v.z * m5,
+          ((0.0f + v.x * m6) + v.y * m7) + v.z * m8};
+}
 inline Vec3 Forward(const Quat& q) {  // local +z in the world
   return {2 * (q.x * q.z + q.w * q.y), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
 }
@@ -88,7 +105,7 @@ inline Quat FromRotVec(Vec3 r) {
 }
 
 constexpr float kPi = 3.14159265358979f;
-constexpr float kDeg2Rad = 0.0174533f;
+constexpr float kDeg2Rad = 0.017453292f;  // 0xdff090
 inline float WrapPi(float x) {
   float r = std::fmod(x, 2 * kPi);
   if (r < -kPi) r += 2 * kPi;

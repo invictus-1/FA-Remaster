@@ -1195,6 +1195,7 @@ void Sim::Tick() {
       u->lastMoveTick = tick_;
     // CAniActor::UpdateManipulators 0x63aa80, after CUnitMotion::MotionTick (0x6a908c before 0x6a90d5): the pose
     // is built on the pending transform this motion just wrote; the aim bone is read from last beat's pose
+    PoseAdvance(u);
     if (!u->builderArms.empty()) BuilderArmsTick(*this, u, u->lastPosition, prevOri);
     UnitAimTick(*this, u);
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
@@ -1207,7 +1208,10 @@ void Sim::Tick() {
       Unit* u = units_[i];
       if (u->destroyQueued || !u->transportedBy) continue;
       anyAttached = true;
-      if (u->parentId && u->attachFull) UnitAimTick(*this, u);
+      if (u->parentId && u->attachFull) {
+        PoseAdvance(u);
+        UnitAimTick(*this, u);
+      }
     }
   }
   // plain entities attached to a bone (Entity:AttachTo / AttachBoneTo) take its transform now, after the units

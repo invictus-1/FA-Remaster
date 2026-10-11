@@ -1307,6 +1307,10 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     }
     u->lastPosition = u->position;
   }
+  // the constructor gives both poses the unit's transform (0x6a5c74, 0x6a5c82)
+  u->poseBasePos = u->prevPoseBasePos = u->position;
+  u->poseBaseOri = u->prevPoseBaseOri = u->orientation;
+  u->poseSet = true;
   if (u->motion.bp->motionType == kMotionAir) AirInit(*this, u);
   TransportCreate(*this, u);
   CreateUnitIntel(*this, L, u);

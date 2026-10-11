@@ -101,8 +101,30 @@ class AimController : public ScriptObject {
   bool alive = true;
   bool usesGravity = false, tracksTarget = false;
   float projMaxSpeed = 0;
+  // the muzzle bone in last beat's pose (actor+8: last beat's unit transform and bone rotations), which is what
+  // Aim 0x6317b0 measures the target from
+  Vec3 lastMuzzlePos;
+  Quat lastMuzzleRot;
+  int precedence = 0;
   int EventState() const override { return onTarget ? 1 : 0; }
 };
+
+// CSlideManipulator (CreateSlider 0x6476e0): moves one bone along a vector in the bone's own frame toward a goal
+// (weapon recoil, hatches, sinking wrecks). An event: scripts WaitFor it, signalled while it is at its goal.
+class SlideManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int bone = -1;
+  Vec3 cur, goal;                       // +0x80, +0x8c (pose units: x mesh scale unless world units)
+  float speed = std::numeric_limits<float>::infinity();  // +0x98, per tick; <= 0: there at once
+  float vel = 0, accel = 0, decel = 0;  // +0x9c, +0xa0, +0xa4
+  bool world = false;                   // +0xa8 SetWorldUnits
+  bool signalled = true, enabled = true, alive = true;
+  int precedence = 0;
+  int EventState() const override { return signalled ? 1 : 0; }
+};
+// MoveManipulator 0x647300 of the unit's sliders whose precedence is in [lo, hi)
+void SlidersTick(Unit* u, int lo, int hi);
 
 // CRotateManipulator (CreateRotator): turns one bone about a local axis toward a goal or at a speed;
 // applied to the pose every tick before the aim controllers.
@@ -145,6 +167,9 @@ bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name);
 void InitUnitWeapon(lua_State* L, UnitWeapon* w);
 // Per tick (see Sim::Tick for the order).
 void KillCleanupTick(Sim& sim);
+// The unit's pose takes the unit's transform (and last beat's pose is kept): the start of UpdateManipulators
+// 0x63aa80, once per beat after the unit's motion, before its builder arms and UnitAimTick
+void PoseAdvance(Unit* u);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
 void ProjectilesTick(Sim& sim);
 void BeamsTick(Sim& sim);

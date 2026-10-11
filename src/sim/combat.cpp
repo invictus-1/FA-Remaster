@@ -238,7 +238,7 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
     BoneWorld(u, bone, &p, &q);
     return p;
   }
-  if (u->shape.type != ShapeType::None) return Add(u->position, Rotate(u->orientation, u->shape.center));
+  if (u->blueprint) return Add(u->position, RotateM(u->orientation, u->bpCenter));  // bone -1 (0x679d19)
   return u->position;
 }
 
@@ -279,28 +279,32 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   }
   const auto& bones = e->skeleton->bones();
   float s = e->meshScale * e->scale[0];
-  if (e->poseRot.empty()) {
-    const Bone& b = bones[static_cast<size_t>(bone)];
-    Vec3 m{b.modelPos.x * s, b.modelPos.y * s, b.modelPos.z * s};
-    *pos = Add(e->position, Rotate(e->orientation, m));
-    *rot = QMul(e->orientation, b.modelRot);
-    return;
-  }
-  // walk the chain from the root: rot_i = rot_parent * local_i * extra_i
+  // CAniPoseBone's composite 0x54bec0: down the chain from the pose's world transform (the entity's), each
+  // bone parent x local (0x549c20); local = rest x this beat's manipulators
   int chain[64];
   int n = 0;
   for (int i = bone; i >= 0 && n < 64; i = bones[static_cast<size_t>(i)].parent) chain[n++] = i;
-  Quat r{};
-  Vec3 p{};
-  for (int k = n - 1; k >= 0; --k) {
-    const Bone& b = bones[static_cast<size_t>(chain[k])];
-    Vec3 lp{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
-    p = Add(p, Rotate(r, lp));
-    r = QMul(r, b.localRot);
-    if (static_cast<size_t>(chain[k]) < e->poseRot.size()) r = QMul(r, e->poseRot[static_cast<size_t>(chain[k])]);
+  Quat r = e->orientation;
+  Vec3 p = e->position;
+  if (e->kind == Entity::Kind::Unit) {  // the pose's own world transform (Unit::GetBoneWorldTransform 0x6aa5c0)
+    const Unit* u = static_cast<const Unit*>(e);
+    if (u->poseSet) {
+      r = u->poseBaseOri;
+      p = u->poseBasePos;
+    }
   }
-  *pos = Add(e->position, Rotate(e->orientation, p));
-  *rot = QMul(e->orientation, r);
+  for (int k = n - 1; k >= 0; --k) {
+    const size_t bi = static_cast<size_t>(chain[k]);
+    const Bone& b = bones[bi];
+    Vec3 lp{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
+    if (bi < e->poseOff.size()) lp = Add(lp, e->poseOff[bi]);
+    Quat lr = b.localRot;
+    if (bi < e->poseRot.size()) lr = QMul(lr, e->poseRot[bi]);
+    p = Add(p, RotateM(r, lp));
+    r = ComposeQ(r, lr);
+  }
+  *pos = p;
+  *rot = r;
 }
 
 bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
@@ -1030,6 +1034,15 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
 void FireTick(Sim& sim, UnitWeapon* w) {
   Unit* u = w->unit;
   if (w->fireClock != 0) --w->fireClock;
+  static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+  if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {  // why it does or does not fire this tick
+    const bool has = HasTarget(sim, w->target);
+    Logf(LogLevel::Info, "wdbg %u unit %u %s clock %d enabled %d target %d(%u) canAttack %d canFire %d onTarget %d status %d",
+         sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
+         w->target.entityId, has ? static_cast<int>(CanAttackTarget(sim, w, w->target)) : -1,
+         has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
+         has ? TargetStatus(sim, w, w->target) : -1);
+  }
   if (!w->enabled || w->bp->manualFire) return;
   if (w->fireClock != 0 || u->fireState == 1) return;
   if (!HasTarget(sim, w->target)) return;
@@ -1113,23 +1126,24 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
     Vec3 bp;
     Quat bq;
     BoneWorld(c->unit, bone, &bp, &bq);
-    v = Rotate(Conj(bq), goal);
+    v = RotateM(Conj(bq), goal);
   }
   float target;
   if (heading) {
     target = dmath::Atan2(v.x, v.z) + c->headingOffset;
   } else {
-    // v' = Rx(center) * v, target = center - FastNegAsin(v'.y / |v'|). FastNegAsin is the
+    // v' = Rx(center) * v, target = center - FastNegAsin(v'.y / |v'|) (0x50b710). FastNegAsin is the
     // Abramowitz-Stegun acos polynomial minus pi/2, used for negative arguments too (no reflection),
     // so pitches below the arc centre carry its error (a 45-degree arc rests at 0.0508, not 0).
-    float sc = std::sin(center * 0.5f), cc = std::cos(center * 0.5f);
-    float s2 = 2 * sc * cc, c2 = cc * cc - sc * sc;
-    float y = v.y * c2 - v.z * s2;
-    float l = Len(v);
+    const float hc = center * 0.5f;
+    const Vec3 r = RotateM(Quat{dmath::Sin(hc), 0.0f, 0.0f, dmath::Cos(hc)}, v);
+    const float l = std::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
     if (l > 0) {
-      float t = std::fmax(-1.0f, std::fmin(1.0f, y / l));
-      float neg = std::sqrt(1.0f - t) * (1.5707288f - 0.2121144f * t + 0.0742610f * t * t - 0.0187293f * t * t * t) -
-                  1.5707964f;
+      const float t = std::fmin(1.0f, r.y / l);
+      float p = t * -0.0187293f + 0.0742610f;
+      p = p * t - 0.2121144f;
+      p = p * t + 1.5707288f;
+      const float neg = -(1.5707964f - std::sqrt(1.0f - t) * p);
       target = center - neg;
     } else {
       target = center;
@@ -1143,6 +1157,10 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
     delta = (center + rel) - cur;
   }
   float step = std::fabs(delta) > slew ? std::copysign(slew, delta) : delta;
+  static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+  if (dbgUnit >= 0 && static_cast<long>(c->unit->id) == dbgUnit)
+    Logf(LogLevel::Info, "wdbg   aim %s %s cur %.6f target %.6f delta %.6f slew %.6f tol %.6f goal %.5f %.5f %.5f",
+         c->label.c_str(), heading ? "yaw" : "pitch", cur, target, delta, slew, tol, goal.x, goal.y, goal.z);
   cur = WrapPi(cur + step);
   int bits = 0;
   if (heading && std::fabs(delta) > 0.001f) bits |= 2;
@@ -1170,6 +1188,13 @@ void Hold(AimController* c) {
 bool Track(Sim& sim, AimController* c, Vec3 goal, bool raw) {
   float tol = (c->weapon ? Tolerance(c->weapon) : 0.01f) * kDeg2Rad;
   int bits = 0;
+  {
+    static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(c->unit->id) == dbgUnit)
+      Logf(LogLevel::Info, "wdbg   track %s yaw bone %d pitch bone %d muzzle %d vertical %d hCenter %.6f hHalf %.6f pCenter %.6f pHalf %.6f",
+           c->label.c_str(), c->yawBone, c->pitchBone, c->muzzleBone, static_cast<int>(c->yawVertical), c->hCenter,
+           c->hHalf, c->pCenter, c->pHalf);
+  }
   if (c->yawBone >= 0 && c->yawBone == c->pitchBone && c->yawVertical) {
     bits |= CheckTracking(c, false, raw, goal, c->pitchBone, tol);
     ApplyPitch(c, c->pitchBone);
@@ -1237,24 +1262,55 @@ Vec3 Aim(Sim& sim, AimController* c) {
   UnitWeapon* w = c->weapon;
   Unit* u = c->unit;
   if (c->muzzleBone < 0) return Forward(u->orientation);
-  Vec3 Mpos;
-  Quat Mrot;
-  BoneWorld(u, c->muzzleBone, &Mpos, &Mrot);
-  if (IsMobile(u)) Mpos = Add(Mpos, u->motion.lastMove);
+  // the muzzle in last beat's pose (actor+8), moved on by the unit's velocity
+  Vec3 Mpos = c->lastMuzzlePos;
+  Quat Mrot = c->lastMuzzleRot;
+  if (IsMobile(u)) Mpos = Add(Mpos, UnitVelocity(u));  // (vtbl+0x3c)
   Entity* te = TargetEntity(sim, w->target);
   Vec3 tVel = te && !te->dead ? EntityVelocity(te) : Vec3{};
-  Vec3 tPos = TargetPos(sim, w->target, false);
+  // Unit::GetTargetPoint 0x6ab340: a target bone comes from the unit's pose (0x6aa5c0: where its motion already
+  // put it this beat); without target bones it is the blueprint centre on the entity's committed transform
+  // (0x679ce0, entity+0x9c), which this beat's motion has not replaced yet (AdvanceCoords is step 13): such a
+  // target that already moved this beat is still seen where it stood
+  Vec3 tPos;
+  Unit* tu = te && te->kind == Entity::Kind::Unit ? static_cast<Unit*>(te) : nullptr;
+  if (tu && w->target.aimBone < 0 && tu->lastPosTick == sim.tick()) {
+    const Vec3 curPos = tu->position;
+    const Quat curOri = tu->orientation;
+    tu->position = tu->lastPosition;
+    tu->orientation = tu->lastOrientation;
+    tPos = TargetPos(sim, w->target, false);
+    tu->position = curPos;
+    tu->orientation = curOri;
+  } else {
+    tPos = TargetPos(sim, w->target, false);
+  }
   if (IsNaN(tPos)) return NaNVec();
-  if (te) {  // FAF: the target has not moved yet this tick
+  if (te) {
+    // FAF patch 0x128b054: a unit riding another (unit+0x270) whose carrier has not been updated this beat, or
+    // an entity that is no unit (a projectile) and has not been: one tick of its velocity ahead
     Entity* m = te;
-    if (te->kind == Entity::Kind::Unit && static_cast<Unit*>(te)->parentId)
-      if (Entity* p = sim.FindEntity(static_cast<Unit*>(te)->parentId)) m = p;
-    if (m->lastMoveTick != sim.tick()) tPos = Add(tPos, tVel);
+    bool ahead = true;
+    if (tu) {
+      Entity* p = tu->parentId ? sim.FindEntity(tu->parentId) : nullptr;
+      if (p) m = p;
+      else ahead = false;
+    }
+    if (ahead && m->lastMoveTick != sim.tick()) tPos = Add(tPos, tVel);
   }
   float hDist = DistXZ(tPos, Mpos);
   float mv = w->bp->muzzleVelocity;
   if (hDist < w->bp->muzzleVelocityReduceDistance) mv *= std::sqrt(hDist / w->bp->muzzleVelocityReduceDistance);
   bool phys = w->projBp != nullptr;
+  {
+    static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
+      Logf(LogLevel::Info, "wdbg   solve %s M %.9g %.9g %.9g T %.9g %.9g %.9g V %.9g %.9g %.9g mv %.9g lead %d phys %d grav %d track %d moved %d",
+           c->label.c_str(), Mpos.x, Mpos.y, Mpos.z, tPos.x, tPos.y, tPos.z, tVel.x, tVel.y, tVel.z, mv,
+           static_cast<int>(w->bp->leadTarget && w->target.type == 1), static_cast<int>(phys),
+           static_cast<int>(c->usesGravity), static_cast<int>(c->tracksTarget),
+           te ? static_cast<int>(te->lastMoveTick == sim.tick()) : -1);
+  }
   if (w->bp->leadTarget && w->target.type == 1) {
     Vec3 v10 = Mul(tVel, 10);
     if (phys && c->tracksTarget) tPos = LeadConstantSpeed(c->projMaxSpeed, Mpos, tPos, v10);
@@ -1322,11 +1378,35 @@ void MoveManipulator(Sim& sim, AimController* c) {
 
 }  // namespace
 
+void PoseAdvance(Unit* u) {
+  u->prevPoseBasePos = u->poseSet ? u->poseBasePos : u->position;
+  u->prevPoseBaseOri = u->poseSet ? u->poseBaseOri : u->orientation;
+  u->poseBasePos = u->position;
+  u->poseBaseOri = u->orientation;
+  u->poseSet = true;
+}
+
 void UnitAimTick(Sim& sim, Unit* u) {
-  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty()) return;
+  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty()) return;
   if (!u->skeleton) return;
+  if (!u->aimControllers.empty()) {  // (poseRot / poseOff are still last beat's)
+    const Vec3 curPos = u->poseBasePos;
+    const Quat curOri = u->poseBaseOri;
+    u->poseBasePos = u->prevPoseBasePos;
+    u->poseBaseOri = u->prevPoseBaseOri;
+    for (AimController* c : u->aimControllers)
+      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+    u->poseBasePos = curPos;
+    u->poseBaseOri = curOri;
+  }
   u->poseRot.assign(static_cast<size_t>(u->skeleton->Count()), Quat{});
+  u->poseOff.clear();
   RotatorsTick(u);
+  // manipulators run in the order of their precedence (0x63ace0): a slider below every aim controller's goes first
+  int aimPrec = INT_MAX;
+  for (const AimController* c : u->aimControllers)
+    if (c->alive) aimPrec = std::min(aimPrec, c->precedence);
+  SlidersTick(u, INT_MIN, aimPrec);
   for (BuilderArm* a : u->builderArms) {  // the arm's angles from this beat's MoveManipulator
     if (!a->alive || !a->enabled) continue;
     if (a->yawBone >= 0 && static_cast<size_t>(a->yawBone) < u->poseRot.size())
@@ -1338,6 +1418,7 @@ void UnitAimTick(Sim& sim, Unit* u) {
     AimController* c = u->aimControllers[i];
     if (c->alive) MoveManipulator(sim, c);
   }
+  SlidersTick(u, aimPrec, INT_MAX);  // (a weapon's recoil sliders have precedence 11, its aim controller 10)
 }
 
 namespace {
@@ -1456,6 +1537,7 @@ int l_aim_Destroy(lua_State* L) {
   return 0;
 }
 int l_aim_SetPrecedence(lua_State* L) {
+  if (auto* c = dynamic_cast<AimController*>(GetObject(L, 1))) c->precedence = static_cast<int>(luaL_checknumber(L, 2));
   lua_settop(L, 1);
   return 1;
 }
@@ -2216,6 +2298,65 @@ void RotatorsTick(Unit* u) {
   }
 }
 
+// ---- sliders (CSlideManipulator) --------------------------------------------------------------
+
+// MoveManipulator 0x647300
+void SlidersTick(Unit* u, int lo, int hi) {
+  auto& v = u->sliders;
+  if (v.empty()) return;
+  v.erase(std::remove_if(v.begin(), v.end(), [](SlideManipulator* m) { return !m->alive; }), v.end());
+  const auto& bones = u->skeleton->bones();
+  for (SlideManipulator* m : v) {
+    if (m->precedence < lo || m->precedence >= hi || !m->enabled) continue;
+    if (m->bone < 0 || static_cast<size_t>(m->bone) >= bones.size()) continue;
+    if (m->speed > 0.0f) {  // this tick's speed
+      bool brake = false;
+      if (m->decel > 0.0f) {  // 0x647250: braking from this speed would end past the goal
+        const Vec3 d = Sub(m->goal, m->cur);
+        const float dist = std::sqrt(d.x * d.x + d.z * d.z + d.y * d.y);
+        const float dec = m->decel * 10.0f, sp = m->vel * 10.0f;
+        const float stop = dec > 0.0f ? sp * sp / (dec * 2.0f) : 0.0f;
+        brake = stop > dist;
+      }
+      if (brake) {
+        float s = m->vel - m->decel * 0.1f;
+        if (!(m->speed > s)) s = m->speed;
+        if (0.0f > s) s = 0.0f;
+        m->vel = s;
+      } else if (m->accel > 0.0f) {
+        float s = m->accel * 0.1f + m->vel;
+        if (!(m->speed > s)) s = m->speed;
+        if (0.0f > s) s = 0.0f;
+        m->vel = s;
+      } else {
+        m->vel = m->speed;
+      }
+    }
+    Vec3 d = Sub(m->goal, m->cur);
+    bool stepped = false;
+    if (m->speed > 0.0f) {  // 0x5d1e70: a step of at most the speed
+      const float l2 = d.x * d.x + d.y * d.y + d.z * d.z;
+      if (m->vel * m->vel < l2) {
+        const float k = m->vel / std::sqrt(l2);
+        m->cur = Add(m->cur, Vec3{d.x * k, d.y * k, d.z * k});
+        m->signalled = false;
+        stepped = true;
+      }
+    }
+    if (!stepped) {
+      m->vel = 0.0f;
+      m->cur = m->goal;
+      m->signalled = true;
+    }
+    // onto the bone's local position, turned by the bone's local rotation as it is now
+    const size_t bi = static_cast<size_t>(m->bone);
+    Quat lr = bones[bi].localRot;
+    if (bi < u->poseRot.size()) lr = QMul(lr, u->poseRot[bi]);
+    if (u->poseOff.size() != bones.size()) u->poseOff.assign(bones.size(), Vec3{});
+    u->poseOff[bi] = Add(u->poseOff[bi], RotateM(lr, m->cur));
+  }
+}
+
 // ---- builder arms (CBuilderArmManipulator, builder_arm.md) -----------------------------------------
 
 namespace {
@@ -2342,13 +2483,13 @@ void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorO
     Vec3 p;
     Quat q;
     {
-      const Vec3 curPos = u->position;
-      const Quat curOri = u->orientation;
-      u->position = priorPos;
-      u->orientation = priorOri;
+      const Vec3 curPos = u->poseBasePos;
+      const Quat curOri = u->poseBaseOri;
+      u->poseBasePos = u->prevPoseBasePos;
+      u->poseBaseOri = u->prevPoseBaseOri;
       BoneWorld(u, a->aimBone, &p, &q);
-      u->position = curPos;
-      u->orientation = curOri;
+      u->poseBasePos = curPos;
+      u->poseBaseOri = curOri;
     }
     Vec3 d = Sub(aim, p);
     float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
@@ -2515,6 +2656,101 @@ int l_rot_Destroy(lua_State* L) {
   r->UnbindLua();
   return 0;
 }
+
+SlideManipulator* CheckSlide(lua_State* L) { return CheckObject<SlideManipulator>(L, 1); }
+float SlideScale(const SlideManipulator* m) {  // the pose's scale ([pose]+8)
+  return m->unit ? m->unit->meshScale * m->unit->scale[0] : 1.0f;
+}
+// 0x647530
+void SlideSetGoal(SlideManipulator* m, float x, float y, float z) {
+  m->goal = {x, y, z};
+  if (!m->world) {
+    const float s = SlideScale(m);
+    m->goal = {m->goal.x * s, m->goal.y * s, m->goal.z * s};
+  }
+  m->signalled = m->cur.x == m->goal.x && m->cur.y == m->goal.y && m->cur.z == m->goal.z;
+  if (!m->unit) {  // (not on a unit: nothing moves it, it is there at once)
+    m->cur = m->goal;
+    m->signalled = true;
+  }
+}
+void SlideSetSpeed(SlideManipulator* m, float speed) {
+  if (speed > 0.0f) {
+    m->speed = speed * 0.1f;
+    if (!m->world) m->speed = SlideScale(m) * m->speed;
+  } else {
+    m->speed = -1.0f;
+    m->vel = 0.0f;
+  }
+}
+// CreateSlider(unit, bone, [goal_x, goal_y, goal_z, [speed, [world_space]]]) 0x6476e0
+int l_CreateSlider(lua_State* L) {
+  const int n = lua_gettop(L);
+  Unit* u = ToObject<Unit>(L, 1);
+  auto m = std::make_unique<SlideManipulator>();
+  m->unit = u;
+  if (u && u->skeleton) m->bone = ResolveBoneArg(L, u, 2);
+  if (n >= 7) m->world = lua_toboolean(L, 7) != 0;
+  if (n >= 3)
+    SlideSetGoal(m.get(), static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4)),
+                 static_cast<float>(luaL_checknumber(L, 5)));
+  if (n >= 6) SlideSetSpeed(m.get(), static_cast<float>(luaL_checknumber(L, 6)));
+  SlideManipulator* raw = m.get();
+  if (u && u->skeleton) u->sliders.push_back(raw);
+  else raw->unit = nullptr;
+  CreateObject(L, raw, "CSlideManipulator");
+  S(L)->Own(std::move(m));
+  return 1;
+}
+int l_slide_SetWorldUnits(lua_State* L) {
+  CheckSlide(L)->world = lua_toboolean(L, 2) != 0;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_SetSpeed(lua_State* L) {
+  SlideSetSpeed(CheckSlide(L), static_cast<float>(luaL_checknumber(L, 2)));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_SetAcceleration(lua_State* L) {
+  const float a = static_cast<float>(luaL_checknumber(L, 2));
+  CheckSlide(L)->accel = (a > 0.0f ? a : 0.0f) * 0.1f;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_SetDeceleration(lua_State* L) {
+  const float a = static_cast<float>(luaL_checknumber(L, 2));
+  CheckSlide(L)->decel = (a > 0.0f ? a : 0.0f) * 0.1f;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_SetGoal(lua_State* L) {
+  SlideSetGoal(CheckSlide(L), static_cast<float>(luaL_checknumber(L, 2)), static_cast<float>(luaL_checknumber(L, 3)),
+               static_cast<float>(luaL_checknumber(L, 4)));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_SetPrecedence(lua_State* L) {
+  CheckSlide(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_Enable(lua_State* L) {
+  CheckSlide(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_Disable(lua_State* L) {
+  CheckSlide(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slide_Destroy(lua_State* L) {
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* m = dynamic_cast<SlideManipulator*>(o)) m->alive = false;
+  if (o) o->UnbindLua();
+  return 0;
+}
 }  // namespace
 
 void RegisterCombatBindings(lua_State* L) {
@@ -2538,6 +2774,16 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CRotateManipulator", "Enable", l_rot_Enable);
   SetMethod(L, "CRotateManipulator", "Disable", l_rot_Disable);
   SetMethod(L, "CRotateManipulator", "Destroy", l_rot_Destroy);
+  SetGlobal(L, "CreateSlider", l_CreateSlider);
+  SetMethod(L, "CSlideManipulator", "SetWorldUnits", l_slide_SetWorldUnits);
+  SetMethod(L, "CSlideManipulator", "SetSpeed", l_slide_SetSpeed);
+  SetMethod(L, "CSlideManipulator", "SetAcceleration", l_slide_SetAcceleration);
+  SetMethod(L, "CSlideManipulator", "SetDeceleration", l_slide_SetDeceleration);
+  SetMethod(L, "CSlideManipulator", "SetGoal", l_slide_SetGoal);
+  SetMethod(L, "CSlideManipulator", "SetPrecedence", l_slide_SetPrecedence);
+  SetMethod(L, "CSlideManipulator", "Enable", l_slide_Enable);
+  SetMethod(L, "CSlideManipulator", "Disable", l_slide_Disable);
+  SetMethod(L, "CSlideManipulator", "Destroy", l_slide_Destroy);
   SetMethod(L, "CAimManipulator", "SetFiringArc", l_aim_SetFiringArc);
   SetMethod(L, "CAimManipulator", "SetResetPoseTime", l_aim_SetResetPoseTime);
   SetMethod(L, "CAimManipulator", "OnTarget", l_aim_OnTarget);

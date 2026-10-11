@@ -155,6 +155,13 @@ class Unit : public Entity {
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went
   std::vector<AimController*> aimControllers;
+  // The world transform of the unit's pose (CAniPose, set by the Unit constructor and then once per beat by
+  // UpdateManipulators 0x63aa80 after the unit's motion): its bones hang on this, not on a transform a script
+  // set since. prevPoseBase*: last beat's pose (actor+8), which aim controllers and builder arms measure from.
+  Vec3 poseBasePos, prevPoseBasePos;
+  Quat poseBaseOri, prevPoseBaseOri;
+  bool poseSet = false;
+  std::vector<class SlideManipulator*> sliders;
   std::vector<class RotateManipulator*> rotators;
   std::vector<class BuilderArm*> builderArms;
   // formation (Unit::UpdateInfoCache, formations.md 2.5)

@@ -53,9 +53,14 @@ class Entity : public ScriptObject {
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
   CollisionShape shape;
+  // (CollisionOffsetX, SizeY / 2 + CollisionOffsetY, CollisionOffsetZ) of the blueprint: the point "bone -1" of
+  // Entity::GetBoneWorldTransform 0x679ce0 (what a weapon aims at on a unit without target bones)
+  Vec3 bpCenter;
   // Extra local rotation per bone this tick (aim controllers; empty: rest pose). Reset every tick
   // before the unit's manipulators run (sim/combat.cpp).
   std::vector<Quat> poseRot;
+  // Extra local offset per bone this tick, in the parent bone's frame (sliders; empty: none)
+  std::vector<Vec3> poseOff;
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
   int attachBone = -1;
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)
