@@ -2954,4 +2954,12 @@ bool SiloCommand(Sim& sim, Unit* u, const UnitCommand& c) {
   return true;
 }
 
+void UnitSkirtRect(const Unit* u, float r[4]) {
+  const FRect s = SkirtRect(*u->blueprint, *u->bpData, u->position.x, u->position.z);
+  r[0] = s.x0;
+  r[1] = s.z0;
+  r[2] = s.x1;
+  r[3] = s.z1;
+}
+
 }  // namespace moho

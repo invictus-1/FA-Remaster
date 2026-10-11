@@ -27,6 +27,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/transport.h"
+#include "sim/air.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -278,6 +279,7 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   if (u->beingBuilt && u->fractionComplete < 0.5f) ratio = 10.0f;
   sim.CallMethod(L, u, "SetDead", 0);
   u->dead = true;
+  GroundFreeRect(sim, u);  // Unit::Kill frees its o-grid reservation (0x6a83b9)
   TransportOnKillEnd(sim, L, u);  // steps 8 and 11: attach callbacks, a transport's cargo
   u->killCleanup = true;
   if (!u->beingBuilt) AdjacencyLost(sim, L, u);

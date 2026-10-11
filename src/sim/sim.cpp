@@ -917,6 +917,7 @@ void Sim::ProcessDestroyQueue() {
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
+    if (e->kind == Entity::Kind::Unit) GroundFreeRect(*this, static_cast<Unit*>(e));  // Unit::OnDestroy 0x6a89d2
     entities_.erase(e->handle);
     byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);

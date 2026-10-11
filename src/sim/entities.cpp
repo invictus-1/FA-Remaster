@@ -1359,6 +1359,15 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   AddUnitToLists(u);
   OccupyStructure(*this, u);
   u->isFactoryBuilder = IsFactoryBuilder(*this, u);
+  if (u->isFactoryBuilder && u->motion.bp->motionType == kMotionNone) {
+    // the Unit constructor reserves a factory structure's skirt in the o-grid (air_extra.md 3.5): no unit's
+    // PrepareMove (a builder's spot, a landing spot, a guard's anchor) may end inside it
+    float sk[4];
+    UnitSkirtRect(u, sk);
+    const int rr[4] = {static_cast<int>(std::floor(sk[0])), static_cast<int>(std::floor(sk[1])),
+                       static_cast<int>(std::ceil(sk[2])), static_cast<int>(std::ceil(sk[3]))};
+    GroundReserveRect(*this, u, rr);
+  }
   if (builder) u->creatorId = EntityRef(builder);
   if (u->isFactoryBuilder) SetUpInitialRally(*this, u);  // Unit ctor end (0x6a6413)
   if (army && army->pool) army->pool->units.push_back(u);
