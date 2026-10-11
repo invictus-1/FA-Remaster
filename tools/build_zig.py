@@ -3,7 +3,8 @@
 
     py -m pip install ziglang                 (once)
     py tools/build_zig.py                     -> build-zig/moho64.exe (Windows) or build-zig/moho64 (Linux)
-    py tools/build_zig.py --jobs 32 --debug   (-g: symbols for tools/recdiff.py's call-chain names)
+    py tools/build_zig.py --jobs 32           (built with -g: tools/recdiff.py names our callers from it;
+                                               --no-debug leaves it out; delete build-zig/obj when switching)
     py tools/build_zig.py --target x86_64-windows-gnu   (cross-build from Linux)
 
 Same sources and flags as CMakeLists.txt (C++20, -ffp-contract=off -fno-fast-math, mimalloc for the Lua heap,
@@ -22,7 +23,8 @@ def zig(*args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
-    ap.add_argument("--debug", action="store_true", help="add -g")
+    ap.add_argument("--debug", action="store_true", help="add -g (the default; kept for old command lines)")
+    ap.add_argument("--no-debug", action="store_true", help="leave out -g (recdiff/regress then cannot name our callers)")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-zig"))
     a = ap.parse_args()
@@ -30,7 +32,7 @@ def main():
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
     os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
-    common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + (["-g"] if a.debug else [])
+    common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     lua_inc = ["-I", os.path.join(ROOT, "third_party", "lua")]
     zlib_inc = ["-I", os.path.join(ROOT, "third_party", "zlib")]
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]

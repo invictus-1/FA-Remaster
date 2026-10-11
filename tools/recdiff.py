@@ -150,16 +150,45 @@ class ExeNames:
         return "0x%x" % a
 
 
+def default_moho64():
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    for p in (("build-zig", "moho64.exe"), ("build", "moho64"), ("build-zig", "moho64")):
+        if os.path.exists(os.path.join(root, *p)):
+            return os.path.join(root, *p)
+    return os.path.join(root, "build", "moho64")
+
+
+def pe_image_base(binary):
+    """ImageBase of a PE32+ file, 0 for anything else (an ELF build records offsets addr2line takes as they are)."""
+    with open(binary, "rb") as f:
+        h = f.read(4096)
+    if h[:2] != b"MZ":
+        return 0
+    pe = struct.unpack_from("<I", h, 0x3c)[0]
+    if h[pe:pe + 4] != b"PE\0\0" or struct.unpack_from("<H", h, pe + 24)[0] != 0x20b:
+        return 0
+    return struct.unpack_from("<Q", h, pe + 24 + 24)[0]
+
+
 def our_names(binary, addrs):
     """addr2line with inline frames; the name is the outermost frame that is not the draw helper itself
     (NextUInt32 is inlined into its callers). Needs a build with -g for file:line."""
     addrs = sorted(set(addrs))
     if not binary or not os.path.exists(binary) or not addrs:
         return {}
-    try:  # (not installed on Windows: names then stay raw addresses; grouping still works)
-        r = subprocess.run(["addr2line", "-a", "-f", "-C", "-i", "-e", binary] + ["0x%x" % a for a in addrs],
-                           capture_output=True, text=True)
-    except OSError:
+    base = pe_image_base(binary)  # a Windows exe: recorded offsets + the preferred image base
+    text = "".join("0x%x\n" % (a + base) for a in addrs)
+    r = None
+    for tool in (["addr2line"], ["llvm-addr2line"], ["llvm-symbolizer", "--output-style=GNU"]):
+        try:  # (Windows has no addr2line; Visual Studio and LLVM ship llvm-symbolizer)
+            r = subprocess.run(tool + ["-a", "-f", "-C", "-i", "-e", binary], input=text, capture_output=True, text=True)
+        except OSError:
+            continue
+        if r.returncode == 0 and r.stdout.strip():
+            break
+        r = None
+    if r is None:
+        print("  (no addr2line / llvm-symbolizer found: our callers stay raw addresses and are NOT grouped by function)")
         return {}
     out, cur, frames = {}, None, []
 
@@ -173,7 +202,8 @@ def our_names(binary, addrs):
             pick = (fn, loc)
             break
         fn, loc = pick or (frames[-1] if frames else ("?", ""))
-        fn = fn.split("(")[0].replace("moho::", "").replace("(anonymous namespace)::", "")
+        fn = fn.replace("(anonymous namespace)::", "").replace("`anonymous namespace'::", "")  # GNU / PDB spelling
+        fn = fn.split("(")[0].replace("moho::", "")
         out[cur] = "%s %s" % (fn, os.path.basename(loc))
 
     lines = r.stdout.splitlines()
@@ -182,7 +212,10 @@ def our_names(binary, addrs):
         ln = lines[k]
         if ln.startswith("0x") and len(ln) > 2 and all(c in "0123456789abcdefx" for c in ln):
             done()
-            cur, frames = int(ln, 16), []
+            cur, frames = int(ln, 16) - base, []
+            k += 1
+            continue
+        if not ln.strip():  # llvm-symbolizer ends each address with an empty line
             k += 1
             continue
         fn = ln
@@ -208,7 +241,7 @@ def compare_draws(A, B, exe, binary, context):
     names_b = our_names(binary, addrs)
     for k in list(names_b):
         n = names_b[k]
-        if n.startswith("luaD_precall") or n.strip().startswith("sim.cpp:2"):
+        if n.startswith("luaD_precall") or n.startswith("l_Random ") or n.strip().startswith("sim.cpp:2"):
             names_b[k] = "Lua Random (%s)" % n.strip()
     helpers = ("NextUInt32", "RngTrace", "RecorderDraw", "U01", "FRand", "BpUniform", "IntRange", "Gauss",
                "Sim::Random")
@@ -469,7 +502,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("orig")
     ap.add_argument("ours")
-    ap.add_argument("--moho64", default=os.path.join(os.path.dirname(__file__), "..", "build", "moho64"))
+    ap.add_argument("--moho64", default=default_moho64())
     ap.add_argument("--names", nargs="*", default=[])
     ap.add_argument("--units-tol", type=float, default=0.001)
     ap.add_argument("--context", type=int, default=12)

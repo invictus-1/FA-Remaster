@@ -17,11 +17,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#if defined(__linux__)
-#include <execinfo.h>
-extern "C" char __executable_start;
-#endif
 
+#include "core/backtrace.h"
 #include "core/log.h"
 #include "sim/commands.h"
 #include "sim/sim.h"
@@ -93,18 +90,23 @@ void Sim::RecorderDraw(uintptr_t where) {
   Put32(r + 4, beatStarted_ ? tick_ : 0xffffffffu);
   Put32(r + 8, static_cast<uint32_t>(where));
   fwrite(r, 1, 12, rec_);
-#if defined(__linux__)
-  void* fr[10];
-  int n = backtrace(fr, 10);
+  void* fr[12];
+  int n = CaptureFrames(fr, 12);
+  if (n <= 0) return;
+  int first = 2;  // skip RecorderDraw and RngTrace: the chain starts at RngTrace's return address
+  for (int i = 0; i < n; ++i)
+    if (ImageOffset(fr[i]) == where) {
+      first = i;
+      break;
+    }
   unsigned char x[4 + 4 * 10];
   int m = 0;
-  for (int i = 2; i < n && m < 8; ++i)  // skip RecorderDraw and RngTrace
-    Put32(x + 4 + 4 * m++, static_cast<uint32_t>(static_cast<char*>(fr[i]) - &__executable_start - 1));
+  for (int i = first; i < n && m < 8; ++i)
+    Put32(x + 4 + 4 * m++, static_cast<uint32_t>(ImageOffset(fr[i]) - 1));
   x[0] = 'X';
   x[1] = static_cast<unsigned char>(m);
   x[2] = x[3] = 0;
   fwrite(x, 1, 4 + 4 * m, rec_);
-#endif
 }
 
 void Sim::RecorderBeat() {

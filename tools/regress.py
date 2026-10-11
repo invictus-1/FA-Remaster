@@ -43,7 +43,7 @@ def main():
     ap.add_argument("--ours")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--update", action="store_true")
-    ap.add_argument("--moho64", default=os.path.join(os.path.dirname(__file__), "..", "build", "moho64"))
+    ap.add_argument("--moho64", default=recdiff.default_moho64())
     ap.add_argument("--names", nargs="*", default=[])
     ap.add_argument("--report", help="write recdiff's full text report here")
     a = ap.parse_args()
