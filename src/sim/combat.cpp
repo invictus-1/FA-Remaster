@@ -1513,7 +1513,15 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
     a.type = 1;
     a.entityId = t.goalId;
     if (Entity* e = sim.FindEntity(t.goalId))
-      if (e->kind == Entity::Kind::Unit) a.mobile = IsMobile(static_cast<Unit*>(e));
+      if (e->kind == Entity::Kind::Unit) {
+        Unit* tu = static_cast<Unit*>(e);
+        a.mobile = IsMobile(tu);
+        // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
+        // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
+        const CombatBpData& cb = CB(tu);
+        if (t.targetPoint >= 0 && t.targetPoint < static_cast<int>(cb.targetBones.size()) && e->skeleton)
+          a.aimBone = e->skeleton->Find(cb.targetBones[static_cast<size_t>(t.targetPoint)]);
+      }
   } else {
     a.type = 2;
     a.pos = t.site;
@@ -1817,6 +1825,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->type = c.type;
   t->order = "Attack";
   t->goalId = c.targetId;
+  t->targetPoint = c.targetPoint;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;

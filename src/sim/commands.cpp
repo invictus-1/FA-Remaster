@@ -736,6 +736,8 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target) 
   c->pos = target->position;
   c->hasPos = true;
   c->targetPoint = TargetPointDraw(sim, target);
+  if (getenv("MOHO64_DEBUG_AUTOATTACK"))
+    Logf(LogLevel::Info, "autoattack %u unit %u -> %u target point %d", sim.tick(), u->id, target->id, c->targetPoint);
   if (!u->commands.empty()) {
     ForgetUnitCommands(u);
     SetMoving(u, false);
