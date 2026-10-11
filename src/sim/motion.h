@@ -77,7 +77,7 @@ struct UnitMotion {
   float fx = 0, fz = 1;  // steering facing (unit vector in xz): the direction it drives
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
-  float prevPosY = 0;    // m+0x30: y of the position the last move started from (the spline point's terrain y)
+  Vec3 prevPos;          // m+0x2c: where the last move ended (a spline point: its terrain y); vel = pos - prevPos
   bool prevPosSet = false;
   Vec3 accel;            // m+0x44: this tick's change of vel (spline-point moves; 0 when blocked)
   // CalcMoveHover 0x6c2bc0: the hover's lean (m+0xc0) and wobble (target m+0xf0, velocity m+0xe4, offset
@@ -156,6 +156,9 @@ void MotionTick(Sim& sim, Unit* u);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// Unit::GetVelocity 0x6a9c90 (entity vtbl+0x3c): a unit with a land motion not on the Air layer reports m+0x38,
+// otherwise the last tick's displacement
+const Vec3& UnitVelocity(const Unit* u);
 // CAiSteeringImpl::SetWaypoints(nullptr, 0) 0x5d29c0: no waypoint; a unit still on a spline gets a brake spline
 // and its first point at once (engine-ref move_handoff.md).
 void SteeringClearWaypoints(Sim& sim, Unit* u);

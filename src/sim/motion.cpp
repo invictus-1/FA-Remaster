@@ -785,7 +785,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   if (std::fabs(D.y) > 0.99f) D = {0, 0, 1};
   float dist = std::sqrt(ex * ex + ez * ez);
   float dot = (D.x * ex + D.z * ez) / dist;  // the 3-D forward: shortened on a slope
-  const Vec3& V = m.lastMove;
+  const Vec3& V = UnitVelocity(u);
   float frac = b.maxSpeed > 0 ? std::sqrt(V.x * V.x + V.y * V.y + V.z * V.z) * 10.0f / b.maxSpeed : 0;
   if (cont) {
     g.p = last.pos;
@@ -865,7 +865,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     brake *= 2;
   }
   Vec3 F = Rotate(u->orientation, Vec3{0, 0, 1});
-  const Vec3& lm = m.lastMove;
+  const Vec3& lm = UnitVelocity(u);
   float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
   float fl = std::sqrt(F.x * F.x + F.y * F.y + F.z * F.z);
   Vec3 V{0, 0, 0};
@@ -983,7 +983,7 @@ bool Coast(Unit* u) {
   float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
   if (v2 < kStopSq) {
     m.vel = {};
-    m.prevPosY = u->position.y;
+    m.prevPos = u->position;
     return false;
   }
   float brake = (b.maxBrake > 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
@@ -1001,7 +1001,7 @@ bool Coast(Unit* u) {
   u->position.x += m.vel.x;
   u->position.y += m.vel.y;
   u->position.z += m.vel.z;
-  m.prevPosY = u->position.y;
+  m.prevPos = u->position;
   return m.vel.x != 0 || m.vel.z != 0 || m.vel.y != 0;
 }
 
@@ -1194,7 +1194,7 @@ void MotionTick(Sim& sim, Unit* u) {
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {
-      m.prevPosY = start.y;
+      m.prevPos = start;
       m.prevPosSet = true;
     }
     if ((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
@@ -1209,8 +1209,8 @@ void MotionTick(Sim& sim, Unit* u) {
       float py = (b.motionType == kMotionWater || b.motionType == kMotionHover || b.motionType == kMotionAmphibiousFloating)
                      ? sim.map()->SurfaceHeight(q.pos.x, q.pos.z)
                      : sim.map()->TerrainHeight(q.pos.x, q.pos.z);
-      Vec3 nv{q.vel.x, py - m.prevPosY, q.vel.z};
-      m.prevPosY = py;
+      Vec3 nv{q.pos.x - m.prevPos.x, py - m.prevPos.y, q.pos.z - m.prevPos.z};
+      m.prevPos = Vec3{q.pos.x, py, q.pos.z};
       m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};
       m.vel = nv;
       u->orientation = LookQuat(q.bx, 0.0f, q.bz);  // CalcMoveCommon's facing (0x6c2297)
@@ -1234,7 +1234,7 @@ void MotionTick(Sim& sim, Unit* u) {
       u->position = start;
       m.vel = {};
       m.accel = {};
-      m.prevPosY = start.y;
+      m.prevPos = start;
       if (!m.pushed) {
         float l = std::sqrt(dx * dx + dz * dz);
         float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594
@@ -1259,6 +1259,12 @@ void MotionTick(Sim& sim, Unit* u) {
     m.surfaceNext = false;  // (cleared after SnapToGround)
   }
   m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
+}
+
+const Vec3& UnitVelocity(const Unit* u) {
+  const UnitMotion& m = u->motion;
+  const bool land = m.bp && m.bp->mobile() && m.bp->motionType != kMotionAir && u->layer != "Air" && !m.ballistic;
+  return land ? m.vel : m.lastMove;
 }
 
 }  // namespace moho
