@@ -594,7 +594,10 @@ void MotionStop(Unit* u) {
     LandNavStop(sim, u);
   }
   u->unitStates.erase("ProblemGettingToGoal");
-  m.passThrough = false;
+  // (the motion's drive-through byte is only what SetSpeedThroughGoal(0) above makes of it: it changes when the
+  // target point lies in the goal, else it keeps the last waypoint's value until the next waypoint. Seen: a tank
+  // stopped on the way to a drive-through waypoint still reports 1 until its next goal.)
+  if (!m.nav) m.passThrough = false;
   m.hasGoal = false;
   m.navDriven = false;
   SteeringClearWaypoints(sim, u);
