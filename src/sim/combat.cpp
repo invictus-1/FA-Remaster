@@ -256,7 +256,7 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
 }  // namespace combat
 
 Vec3 EntityVelocity(const Entity* e) {
-  if (e->kind == Entity::Kind::Unit) return static_cast<const Unit*>(e)->motion.lastMove;
+  if (e->kind == Entity::Kind::Unit) return UnitVelocity(static_cast<const Unit*>(e));  // vtbl+0x3c
   if (e->kind == Entity::Kind::Projectile) {
     const Projectile* p = static_cast<const Projectile*>(e);
     return Mul(Sub(p->position, p->prevPos), p->velScale);
