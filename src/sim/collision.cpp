@@ -19,11 +19,13 @@ bool GetWorldShape(const Entity* e, WorldShape* out) {
   const CollisionShape& s = e->shape;
   if (s.type == ShapeType::None) return false;
   out->type = s.type;
-  out->c = Add(e->position, Rotate(e->orientation, s.center));
+  const Vec3& pos = e->shapeHeld ? e->shapePos : e->position;
+  const Quat& ori = e->shapeHeld ? e->shapeOri : e->orientation;
+  out->c = Add(pos, Rotate(ori, s.center));
   if (s.type == ShapeType::Box) {
-    out->ax[0] = Rotate(e->orientation, {1, 0, 0});
-    out->ax[1] = Rotate(e->orientation, {0, 1, 0});
-    out->ax[2] = Rotate(e->orientation, {0, 0, 1});
+    out->ax[0] = Rotate(ori, {1, 0, 0});
+    out->ax[1] = Rotate(ori, {0, 1, 0});
+    out->ax[2] = Rotate(ori, {0, 0, 1});
     out->half = s.half;
   } else {
     out->r = s.radius;
@@ -32,45 +34,68 @@ bool GetWorldShape(const Entity* e, WorldShape* out) {
 }
 
 bool SegmentHit(const WorldShape& s, Vec3 p0, Vec3 p1, Vec3* hit, float* dist) {
-  Vec3 d = Sub(p1, p0);
-  float len = Len(d);
-  float t0 = 0, t1 = 1;  // segment parameter of entry and exit
+  // The segment as centre, unit direction and half length (0x4fe130)
+  const Vec3 h{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
+  const float ext = std::sqrt(h.y * h.y + h.z * h.z + h.x * h.x);
+  Vec3 dir{};
+  if (ext > 0.0f) {
+    const float inv = 1.0f / ext;
+    dir = {inv * h.x, h.y * inv, h.z * inv};
+  }
+  const Vec3 org{p0.x + h.x, p0.y + h.y, p0.z + h.z};
+  const Vec3 diff{org.x - s.c.x, org.y - s.c.y, org.z - s.c.z};
+  float t;
   if (s.type == ShapeType::Sphere) {
-    Vec3 m = Sub(p0, s.c);
-    float a = Dot(d, d), b = Dot(m, d), c = Dot(m, m) - s.r * s.r;
-    if (a <= 0) return false;
-    float disc = b * b - a * c;
-    if (disc < 0) return false;
-    float sq = std::sqrt(disc);
-    t0 = (-b - sq) / a;
-    t1 = (-b + sq) / a;
-  } else if (s.type == ShapeType::Box) {
-    Vec3 m = Sub(p0, s.c);
-    float lo = -std::numeric_limits<float>::infinity(), hi = std::numeric_limits<float>::infinity();
-    const float h[3] = {s.half.x, s.half.y, s.half.z};
-    for (int i = 0; i < 3; ++i) {
-      float o = Dot(m, s.ax[i]), v = Dot(d, s.ax[i]);
-      if (std::fabs(v) < 1e-12f) {
-        if (o < -h[i] || o > h[i]) return false;
-        continue;
-      }
-      float a = (-h[i] - o) / v, b = (h[i] - o) / v;
-      if (a > b) std::swap(a, b);
-      lo = std::max(lo, a);
-      hi = std::min(hi, b);
-      if (lo > hi) return false;
+    // 0x4fe9d0: Wild Magic's IntrSegment3Sphere3::Find 0xa471c0, its first point
+    const float a0 = (diff.y * diff.y + diff.x * diff.x + diff.z * diff.z) - s.r * s.r;
+    const float a1 = diff.y * dir.y + diff.x * dir.x + diff.z * dir.z;
+    const float discr = a1 * a1 - a0;
+    if (discr < 0.0f) return false;
+    const float tmp0 = ext * ext + a0, tmp1 = (a1 + a1) * ext;
+    const float qm = tmp0 - tmp1, qp = tmp0 + tmp1;
+    if (static_cast<double>(qm * qp) <= 0.0) {  // one end inside: where it crosses the surface
+      const float root = std::sqrt(discr);
+      t = 0.0f < qm ? -a1 - root : root - a1;
+    } else if (qm > 0.0f && std::fabs(a1) < ext) {  // both ends outside, through it: where it enters
+      t = discr >= 1e-6f ? -a1 - std::sqrt(discr) : -a1;
+    } else {
+      return false;  // misses, or lies inside
     }
-    t0 = lo;
-    t1 = hi;
+  } else if (s.type == ShapeType::Box) {
+    // 0x4ff2d0: Wild Magic's IntrSegment3Box3 (not solid) 0xa462a0 -> DoClipping 0xa50220, its first point: where
+    // the segment enters the box, or THE SEGMENT'S START when it begins inside and leaves; nothing when it lies
+    // inside or misses
+    const float he[3] = {s.half.x, s.half.y, s.half.z};
+    float bo[3], bd[3];
+    for (int i = 0; i < 3; ++i) {
+      bo[i] = s.ax[i].y * diff.y + s.ax[i].x * diff.x + s.ax[i].z * diff.z;
+      bd[i] = s.ax[i].y * dir.y + dir.x * s.ax[i].x + s.ax[i].z * dir.z;
+    }
+    float t0 = -ext, t1 = ext;
+    const float save0 = t0, save1 = t1;
+    auto clip = [&](float denom, float numer) {  // 0xa4fcc0
+      if (denom > 0.0f) {
+        if (numer > denom * t1) return false;
+        if (numer > denom * t0) t0 = numer / denom;
+        return true;
+      }
+      if (denom < 0.0f) {
+        if (numer > denom * t0) return false;
+        if (numer > denom * t1) t1 = numer / denom;
+        return true;
+      }
+      return numer <= 0.0f;
+    };
+    for (int i = 0; i < 3; ++i)
+      if (!clip(bd[i], -bo[i] - he[i]) || !clip(-bd[i], bo[i] - he[i])) return false;
+    if (t0 == save0 && t1 == save1) return false;
+    t = t0;
   } else {
     return false;
   }
-  float t;
-  if (t0 >= 0 && t0 <= 1) t = t0;          // enters
-  else if (t0 < 0 && t1 >= 0 && t1 <= 1) t = t1;  // starts inside: leaves
-  else return false;                        // misses, or entirely inside
-  *hit = Add(p0, Mul(d, t));
-  *dist = t * len;
+  *hit = {org.x + dir.x * t, org.y + dir.y * t, org.z + dir.z * t};
+  const Vec3 fromStart{hit->x - p0.x, hit->y - p0.y, hit->z - p0.z};
+  *dist = std::sqrt(fromStart.x * fromStart.x + fromStart.y * fromStart.y + fromStart.z * fromStart.z);
   return true;
 }
 

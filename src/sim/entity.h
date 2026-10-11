@@ -53,6 +53,11 @@ class Entity : public ScriptObject {
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
   CollisionShape shape;
+  // The collision primitive follows its entity in Entity::AdvanceCoords 0x678f10 only (step 13, vt+0x84): once
+  // the entity has moved in a beat (Sim::HoldShape) the shape still stands at the transform the beat began with
+  bool shapeHeld = false;
+  Vec3 shapePos;
+  Quat shapeOri;
   // (CollisionOffsetX, SizeY / 2 + CollisionOffsetY, CollisionOffsetZ) of the blueprint: the point "bone -1" of
   // Entity::GetBoneWorldTransform 0x679ce0 (what a weapon aims at on a unit without target bones)
   Vec3 bpCenter;

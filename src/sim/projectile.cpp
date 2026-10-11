@@ -431,8 +431,9 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
     if (len >= 0.01f) {
       Vec3 a = Sub(p0, Mul(seg, 0.01f)), b2 = Add(p1, Mul(seg, 0.01f));
       std::vector<Entity*> cands;
-      float x0 = std::min(a.x, b2.x) - 10, x1 = std::max(a.x, b2.x) + 10, z0 = std::min(a.z, b2.z) - 10,
-            z1 = std::max(a.z, b2.z) + 10;
+      // (candidates by their centre: the margin must cover the biggest shape's reach, a CZAR's box corner is 15)
+      float x0 = std::min(a.x, b2.x) - 32, x1 = std::max(a.x, b2.x) + 32, z0 = std::min(a.z, b2.z) - 32,
+            z1 = std::max(a.z, b2.z) + 32;
       std::vector<Unit*> units;
       sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
       std::sort(units.begin(), units.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
@@ -447,8 +448,8 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         WorldShape ws;
         Vec3 hit;
         float d;
+        // (the record's distance is from the extended start: 0x69dc49 compares and divides it as it is)
         if (!GetWorldShape(e, &ws) || !SegmentHit(ws, a, b2, &hit, &d)) continue;
-        d = std::max(0.0f, d - 0.01f * len);
         if (e != target) {
           if (e == p || (launcherUnit && e == launcherUnit) || e == p->launcher) continue;
           if (p->ignoresAlly && p->army && e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->layer == "Air" &&
@@ -586,7 +587,9 @@ void MotionTick(Sim& sim, Projectile* p) {
       p->hitFraction = -1;
       p->bouncePending = true;
     }
-    p->velScale = t * 0.95f > 0.001f ? 1 / (t * 0.95f) : 1000;
+    // (seen in the original, per shell and tick: velocity = step x 1 / fraction, the fraction being the hit's
+    // distance from the 1% extended start over the step's length; 1000 at fraction 0)
+    p->velScale = t > 0.001f ? 1 / t : 1000;
     float f = p->hitFraction >= 0 ? std::clamp(p->hitFraction, 0.0f, 1.0f) : 0.0f;
     p->orientation = Nlerp(qStart, q, f);
     p->position = p->hitPos;
@@ -604,6 +607,7 @@ void ProjectilesTick(Sim& sim) {
   std::vector<Projectile*> list = sim.projectiles;  // (impacts create and destroy projectiles)
   for (Projectile* p : list) {
     if (p->destroyQueued || !p->HasLuaObject()) continue;
+    sim.HoldShape(p);
     MotionTick(sim, p);
   }
 }

@@ -33,8 +33,9 @@ struct WorldShape {
 
 // The entity's primitive in the world (false: it has none).
 bool GetWorldShape(const Entity* e, WorldShape* out);
-// Segment p0->p1 against the shape: entry point (or exit point when p0 is inside) and its
-// distance from p0.
+// Segment p0->p1 against the shape, as the original's primitives answer it (Wild Magic): the point where it
+// enters; starting inside and leaving, a box gives p0 itself and a sphere the exit point; lying inside, nothing.
+// dist: from p0 to that point.
 bool SegmentHit(const WorldShape& s, Vec3 p0, Vec3 p1, Vec3* hit, float* dist);
 bool SphereOverlap(const WorldShape& s, Vec3 c, float r);
 bool PointInShape(const WorldShape& s, Vec3 p);

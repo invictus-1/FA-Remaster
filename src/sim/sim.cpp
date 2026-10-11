@@ -1176,6 +1176,7 @@ void Sim::Tick() {
     u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;
     u->lastPosTick = tick_;
+    HoldShape(u);
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
@@ -1227,6 +1228,7 @@ void Sim::Tick() {
       if (!e || e->destroyQueued || !e->attachParent) continue;
       Entity* p = FindEntity(e->attachParent);
       if (!p || p->destroyQueued) continue;
+      HoldShape(e);
       BoneWorld(p, e->attachBone, &e->position, &e->orientation);
       // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform 0x6aa637):
       // a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its origin
@@ -1282,6 +1284,8 @@ void Sim::Tick() {
   }
   KillCleanupTick(*this);
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
+  for (Entity* e : heldShapes_) e->shapeHeld = false;  // (vt+0x84: the collision shapes follow)
+  heldShapes_.clear();
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
