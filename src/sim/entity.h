@@ -61,6 +61,7 @@ class Entity : public ScriptObject {
   // Empty: the rest pose.
   std::vector<Quat> poseQ;
   std::vector<Vec3> poseP;
+  Vec3 attachOffset;          // Entity:SetParentOffset: where it sits relative to the bone it is attached to
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
   int attachBone = -1;
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)

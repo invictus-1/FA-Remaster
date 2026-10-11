@@ -29,6 +29,7 @@
 #include "sim/navigation.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 namespace {
@@ -1226,6 +1227,17 @@ void Sim::Tick() {
       Entity* p = FindEntity(e->attachParent);
       if (!p || p->destroyQueued) continue;
       BoneWorld(p, e->attachBone, &e->position, &e->orientation);
+      // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform 0x6aa637):
+      // a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its origin
+      // before the ShieldVerticalOffset)
+      if (e->attachBone == -1 && p->kind == Entity::Kind::Unit) {
+        const Unit* pu = static_cast<const Unit*>(p);
+        if (pu->motion.bp)
+          e->position = vm::Add(e->position, vm::RotateM(e->orientation, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f}));
+      }
+      // Entity:SetParentOffset 0x68c330: its transform relative to the bone (entity+0x19c: no rotation, the vector)
+      if (e->attachOffset.x != 0 || e->attachOffset.y != 0 || e->attachOffset.z != 0)
+        e->position = vm::Add(e->position, vm::RotateM(e->orientation, e->attachOffset));
       attachedEntities[keep++] = attachedEntities[i];
     }
     attachedEntities.resize(keep);

@@ -2422,10 +2422,26 @@ bool AttachPlainEntity(Sim& sim, Entity* e, Entity* parent, int bone) {
   if (!e || e->kind == Entity::Kind::Unit) return false;
   e->attachParent = EntityRef(parent);
   e->attachBone = bone;
+  e->attachOffset = {};
   e->position = {};
   e->orientation = Quat{};
   sim.attachedEntities.push_back(EntityRef(e));
   return true;
+}
+// Entity:SetParentOffset(vector) 0x68c330: an attached entity's place relative to the bone (a shield bubble hangs
+// ShieldVerticalOffset below its unit)
+int l_SetParentOffset(lua_State* L) {
+  Entity* e = CheckObject<Entity>(L, 1);
+  if (!e->attachParent) return luaL_error(L, "Entity:SetParentOffset: entity is not attached to anything");
+  luaL_checktype(L, 2, LUA_TTABLE);
+  float v[3];
+  for (int i = 0; i < 3; ++i) {
+    lua_rawgeti(L, 2, i + 1);
+    v[i] = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  e->attachOffset = {v[0], v[1], v[2]};
+  return 0;
 }
 // Unit state Attached (14) belongs to the unit's motion: a unit without one (a structure, a dummy unit) never
 // shows it (the anchor and external factory units of a Fatboy are attached and not Attached)
@@ -2630,6 +2646,7 @@ void RegisterBuildBindings(lua_State* L) {
   SetMethod(L, "Entity", "AttachBoneTo", l_AttachBoneTo);
   SetMethod(L, "Entity", "AttachTo", l_AttachTo);
   SetMethod(L, "Entity", "DetachFrom", l_DetachFrom);
+  SetMethod(L, "Entity", "SetParentOffset", l_SetParentOffset);
   SetMethod(L, "Entity", "DetachAll", l_DetachAll);
   SetMethod(L, "Entity", "GetParent", l_GetParent);
   SetGlobal(L, "IssueFactoryRallyPoint", l_IssueFactoryRallyPoint);
