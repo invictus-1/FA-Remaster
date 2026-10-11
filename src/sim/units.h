@@ -78,6 +78,8 @@ struct UnitBpData {
   bool hasBuilder = false;          // it can build (non-empty BuildableCategory)
 };
 const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp);
+// An EUnitState name (reflection 0x55bba0); Lua calls with any other name raise "Invalid enum value".
+bool IsUnitStateName(const char* name);
 
 class Unit : public Entity {
  public:

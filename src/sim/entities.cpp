@@ -660,12 +660,15 @@ int l_GetWeapon(lua_State* L) {
   return PushNew(L, u->weapons[i - 1]);
 }
 int l_IsUnitState(lua_State* L) {
-  lua_pushboolean(L, U(L)->unitStates.count(luaL_checkstring(L, 2)) > 0);
+  const char* name = luaL_checkstring(L, 2);
+  if (!IsUnitStateName(name)) return luaL_error(L, "Invalid enum value %s", name);
+  lua_pushboolean(L, U(L)->unitStates.count(name) > 0);
   return 1;
 }
 int l_SetUnitState(lua_State* L) {
   Unit* u = U(L);
   std::string s = luaL_checkstring(L, 2);
+  if (!IsUnitStateName(s.c_str())) return luaL_error(L, "Invalid enum value %s", s.c_str());
   if (lua_toboolean(L, 3)) u->unitStates.insert(s);
   else u->unitStates.erase(s);
   return 0;

@@ -64,6 +64,12 @@ void PutF(unsigned char* p, float f) {
 
 }  // namespace
 
+bool IsUnitStateName(const char* name) {  // the EUnitState names (Lua's IsUnitState / SetUnitState convert them)
+  for (int i = 1; i < static_cast<int>(sizeof(kUnitStates) / sizeof(kUnitStates[0])); ++i)
+    if (std::strcmp(kUnitStates[i], name) == 0) return true;
+  return false;
+}
+
 void Sim::RecorderOpen() {
   const char* path = getenv("MOHO64_RECORD");
   if (!path || !*path) return;
