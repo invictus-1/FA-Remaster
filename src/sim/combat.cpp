@@ -1552,8 +1552,10 @@ void PoseAdvance(Unit* u) {
 
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
-  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() && !anims)
+  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() && !anims) {
+    if (!u->colliders.empty()) CollidersTick(sim, u);
     return;
+  }
   if (!u->skeleton) {
     if (anims) AnimatorsUpdate(sim, u);  // (their time still runs)
     return;
@@ -1586,6 +1588,53 @@ void UnitAimTick(Sim& sim, Unit* u) {
     if (c->alive) MoveManipulator(sim, c);
   }
   SlidersTick(u, aimPrec, INT_MAX);  // (a weapon's recoil sliders have precedence 11, its aim controller 10)
+  if (!u->colliders.empty()) CollidersTick(sim, u);
+}
+
+// CCollisionManipulator::ManipulatorUpdate 0x637c90
+void CollidersTick(Sim& sim, Unit* u) {
+  if (!u->skeleton) return;
+  const std::vector<CollisionManipulator*> list = u->colliders;  // (the callbacks may make or destroy some)
+  for (CollisionManipulator* c : list) {
+    if (!c->alive || !c->enabled) continue;
+    for (size_t i = 0; i < c->watch.size(); ++i) {
+      const int bone = c->watch[i].bone;
+      if (bone < 0 || bone >= u->skeleton->Count()) continue;
+      Vec3 p;
+      Quat q;
+      BoneWorld(u, bone, &p, &q);
+      const char* event = nullptr;
+      Vec3 arg = p;
+      if (c->terrain) {
+        // under the surface: the terrain's elevation there, or the water when that is higher (0x637d58)
+        const TerrainMap* m = sim.map();
+        float h = m ? m->TerrainHeight(p.x, p.z) : 0.0f;
+        if (m && m->hasWater && m->waterElevation > h) h = m->waterElevation;
+        const bool under = h > p.y;
+        if (under == c->watch[i].under) continue;
+        c->watch[i].under = under;
+        event = under ? "OnAnimTerrainCollision" : "OnNotAnimTerrainCollision";
+      } else {
+        // the bone in the unit's own frame, less than 0.1 above its base (0x637e6a)
+        arg = RotateM(Conj(u->orientation), Sub(p, u->position));
+        if (!(0.1f > arg.y)) {
+          c->watch[i].atBase = false;
+          continue;
+        }
+        if (c->watch[i].atBase) continue;
+        c->watch[i].atBase = true;
+        event = "OnAnimCollision";
+      }
+      if (!u->HasLuaObject()) continue;
+      lua_State* L = sim.L();
+      lua_pushstring(L, u->skeleton->bones()[static_cast<size_t>(bone)].name.c_str());
+      lua_pushnumber(L, arg.x);
+      lua_pushnumber(L, arg.y);
+      lua_pushnumber(L, arg.z);
+      sim.CallMethod(L, u, event, 4);
+      if (!c->alive || !c->enabled) break;
+    }
+  }
 }
 
 namespace {
@@ -2936,6 +2985,60 @@ int l_CreateSlider(lua_State* L) {
   S(L)->Own(std::move(m));
   return 1;
 }
+// CreateCollisionDetector(unit) 0x638020; WatchBone(bone), EnableTerrainCheck(bool), Enable(), Disable()
+int l_CreateCollisionDetector(lua_State* L) {
+  Unit* u = ToObject<Unit>(L, 1);
+  auto m = std::make_unique<CollisionManipulator>();
+  m->unit = u;
+  CollisionManipulator* raw = m.get();
+  if (u) u->colliders.push_back(raw);
+  CreateObject(L, raw, "CCollisionManipulator");
+  S(L)->Own(std::move(m));
+  return 1;
+}
+CollisionManipulator* CheckCollider(lua_State* L) { return CheckObject<CollisionManipulator>(L, 1); }
+int l_coll_WatchBone(lua_State* L) {
+  CollisionManipulator* c = CheckCollider(L);
+  if (c->unit && c->unit->skeleton) {
+    const int bone = ResolveBoneArg(L, c->unit, 2);
+    bool have = false;
+    for (const auto& w : c->watch) have = have || w.bone == bone;
+    if (bone >= 0 && !have) {
+      CollisionManipulator::Watch w;
+      w.bone = bone;
+      c->watch.push_back(w);
+    }
+  }
+  lua_settop(L, 1);
+  return 1;
+}
+int l_coll_EnableTerrainCheck(lua_State* L) {
+  CheckCollider(L)->terrain = lua_toboolean(L, 2) != 0;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_coll_Enable(lua_State* L) {
+  CheckCollider(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_coll_Disable(lua_State* L) {
+  CheckCollider(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_coll_Destroy(lua_State* L) {
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* c = dynamic_cast<CollisionManipulator*>(o)) {
+    c->alive = false;
+    if (c->unit) {
+      auto& v = c->unit->colliders;
+      v.erase(std::remove(v.begin(), v.end(), c), v.end());
+    }
+  }
+  if (o) o->UnbindLua();
+  return 0;
+}
 int l_slide_SetWorldUnits(lua_State* L) {
   CheckSlide(L)->world = lua_toboolean(L, 2) != 0;
   lua_settop(L, 1);
@@ -3011,6 +3114,12 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CRotateManipulator", "Enable", l_rot_Enable);
   SetMethod(L, "CRotateManipulator", "Disable", l_rot_Disable);
   SetMethod(L, "CRotateManipulator", "Destroy", l_rot_Destroy);
+  SetGlobal(L, "CreateCollisionDetector", l_CreateCollisionDetector);
+  SetMethod(L, "CCollisionManipulator", "WatchBone", l_coll_WatchBone);
+  SetMethod(L, "CCollisionManipulator", "EnableTerrainCheck", l_coll_EnableTerrainCheck);
+  SetMethod(L, "CCollisionManipulator", "Enable", l_coll_Enable);
+  SetMethod(L, "CCollisionManipulator", "Disable", l_coll_Disable);
+  SetMethod(L, "CCollisionManipulator", "Destroy", l_coll_Destroy);
   SetGlobal(L, "CreateSlider", l_CreateSlider);
   SetMethod(L, "CSlideManipulator", "SetWorldUnits", l_slide_SetWorldUnits);
   SetMethod(L, "CSlideManipulator", "SetSpeed", l_slide_SetSpeed);

@@ -131,6 +131,23 @@ class SlideManipulator : public ScriptObject {
 // MoveManipulator 0x647300 of the unit's sliders whose precedence is in [lo, hi)
 void SlidersTick(Unit* u, int lo, int hi);
 
+// CCollisionManipulator (CreateCollisionDetector 0x638020, ManipulatorUpdate 0x637c90): watches bones of a unit
+// and tells the unit's script when one goes under the surface and when it comes back up (EnableTerrainCheck:
+// OnAnimTerrainCollision / OnNotAnimTerrainCollision(bone name, x, y, z)), or, without the terrain check, when
+// one comes within 0.1 of the unit's own base plane (OnAnimCollision(bone name, the point in the unit's frame)).
+// A crashing CZAR's death script waits for its rim to touch the ground this way.
+class CollisionManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  bool enabled = false, terrain = false, alive = true;
+  struct Watch {
+    int bone = -1;
+    bool under = false, atBase = false;
+  };
+  std::vector<Watch> watch;
+};
+void CollidersTick(Sim& sim, Unit* u);
+
 // CRotateManipulator (CreateRotator 0x643d80, MoveManipulator 0x643860): turns one bone about a local axis
 // toward a goal, at a speed, or spinning down; applied to the pose every tick before the aim controllers. An
 // event: scripts WaitFor it (signalled at the goal, or when the speed reached the target speed).
