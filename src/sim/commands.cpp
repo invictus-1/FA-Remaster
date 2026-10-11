@@ -210,7 +210,8 @@ void PatrolSetGoal(Sim& sim, Unit* u) {
   std::vector<Vec3> path{TargetPos(sim, *u->commands.front(), u)};
   u->motion.arrived = u->motion.failed = false;
   MotionSetGoal(sim, u, path, NextIsMove(u), sim.tick());
-  SetMoving(u, true);
+  // (no "Moving": that is the move task's state; a patrolling unit on its way only has "Patrolling", as seen in
+  // the original's unit records)
   AirSpeedThroughEvent(sim, u);  // the patrol's TaskTick
 }
 
@@ -441,6 +442,10 @@ void CommandStep(Sim& sim, Unit* u) {
         PopHead(u);
         u->commands.push_back(keep);
         keep->units.insert(u);
+        // the next patrol leg starts a beat later (seen: one beat with neither "Patrolling" nor the drive-through
+        // byte between two legs, the new goal the beat after)
+        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        break;
       } else {
         PopHead(u);
       }

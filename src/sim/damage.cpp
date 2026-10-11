@@ -286,6 +286,8 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   ForgetUnitCommands(u);
   u->unitStates.erase("Moving");  // (the move task goes with the queue: a unit killed on its way is not "Moving")
   u->unitStates.erase("Patrolling");  // (nor "Patrolling": the patrol task goes the same way)
+  u->unitStates.erase("Guarding");    // (nor guarding)
+  u->unitStates.erase("GuardBusy");
   PushObject(L, instigator && instigator->HasLuaObject() ? instigator : nullptr);
   lua_pushstring(L, type.c_str());
   lua_pushnumber(L, ratio);
