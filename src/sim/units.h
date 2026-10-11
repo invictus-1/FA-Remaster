@@ -162,6 +162,7 @@ class Unit : public Entity {
   Quat poseBaseOri, prevPoseBaseOri;
   bool poseSet = false;
   std::vector<class SlideManipulator*> sliders;
+  std::vector<ScriptObject*> animators;  // its CAnimationManipulators, in creation order (sim/anim.cpp)
   std::vector<class RotateManipulator*> rotators;
   std::vector<class BuilderArm*> builderArms;
   // formation (Unit::UpdateInfoCache, formations.md 2.5)
@@ -179,6 +180,7 @@ class Unit : public Entity {
   bool blipCacheValid = false;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
   Quat lastOrientation;            // orientation at the start of the tick (with lastPosition)
+  Quat prevLastOrientation;        // ... and at the start of the tick before (the entity's previous transform)
   uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
   std::vector<class ReconBlip*> fakeBlips;  // a jammer's fake blips (shared by the armies that hold them)

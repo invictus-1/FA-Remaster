@@ -56,11 +56,11 @@ class Entity : public ScriptObject {
   // (CollisionOffsetX, SizeY / 2 + CollisionOffsetY, CollisionOffsetZ) of the blueprint: the point "bone -1" of
   // Entity::GetBoneWorldTransform 0x679ce0 (what a weapon aims at on a unit without target bones)
   Vec3 bpCenter;
-  // Extra local rotation per bone this tick (aim controllers; empty: rest pose). Reset every tick
-  // before the unit's manipulators run (sim/combat.cpp).
-  std::vector<Quat> poseRot;
-  // Extra local offset per bone this tick, in the parent bone's frame (sliders; empty: none)
-  std::vector<Vec3> poseOff;
+  // This beat's pose (CAniPose): every bone's local transform, reset to the skeleton's rest values each beat
+  // (UpdateBones 0x54b5f0, positions x the mesh scale) and then changed by the unit's manipulators in turn.
+  // Empty: the rest pose.
+  std::vector<Quat> poseQ;
+  std::vector<Vec3> poseP;
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
   int attachBone = -1;
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)

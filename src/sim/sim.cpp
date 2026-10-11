@@ -1170,6 +1170,7 @@ void Sim::Tick() {
     Unit* u = motionOrder[i];
     if (u->destroyQueued) continue;
     u->lastPosition = u->position;
+    u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;
     u->lastPosTick = tick_;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)

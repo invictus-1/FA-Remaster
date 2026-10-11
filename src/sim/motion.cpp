@@ -1300,6 +1300,47 @@ void HoverMove(Sim& sim, Unit* u) {
 bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHover (0x6b9f10..0x6b9f87)
   return !u->beingBuilt && !u->immobile && !u->unitStates.count("Immobile") && !u->stunned;
 }
+
+const char* const kHorzEventNames[] = {"Cruise", "TopSpeed", "Stopping", "Stopped"};
+
+// CUnitMotion::SetMotionHorzEvent 0x6b8f30
+void SetHorzEvent(Sim& sim, Unit* u, int e) {
+  UnitMotion& m = u->motion;
+  if (m.horzEvent == e) return;
+  const int old = m.horzEvent;
+  m.horzEvent = e;
+  lua_State* L = sim.L();
+  lua_pushstring(L, kHorzEventNames[e]);
+  lua_pushstring(L, kHorzEventNames[old]);
+  sim.CallMethod(L, u, "OnMotionHorzEventChange", 2);
+}
+
+// CUnitMotion::ProcessCommonMotionState 0x6c2a40, the end of CalcMoveLand / Hover / Water. `moving` is what
+// CalcMoveCommon 0x6c1e20 returned: it took a spline point, turned on the spot, or still rolls (|v|^2 >= 1e-6).
+// Stopped when not; TopSpeed above 80% of the unit's top speed (u+0x594); Cruise when it starts; then Stopping
+// once the motion's target is nearer than a second at full speed, else Cruise.
+void ProcessCommonMotionState(Sim& sim, Unit* u, bool moving) {
+  UnitMotion& m = u->motion;
+  if (!moving) {
+    SetHorzEvent(sim, u, 3);
+    return;
+  }
+  const MotionBlueprint& b = *m.bp;
+  const float speed = std::sqrt((m.vel.z * m.vel.z + m.vel.y * m.vel.y) + m.vel.x * m.vel.x);
+  const float top = m.maxSpeedU594 > 0.0f ? m.maxSpeedU594 : (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult);
+  if (speed > top * 0.08f) {
+    SetHorzEvent(sim, u, 1);
+    return;
+  }
+  if (m.horzEvent == 3) {
+    SetHorzEvent(sim, u, 0);
+    return;
+  }
+  const float dx = m.steerTarget.x - u->lastPosition.x, dz = m.steerTarget.z - u->lastPosition.z;
+  const float dist = std::sqrt(dz * dz + dx * dx);
+  // (also Stopping while the spline point's state is 1: not modelled, our points carry no state)
+  SetHorzEvent(sim, u, m.speedMult * b.maxSpeed > dist ? 2 : 0);
+}
 }  // namespace
 
 void MotionTick(Sim& sim, Unit* u) {
@@ -1320,11 +1361,13 @@ void MotionTick(Sim& sim, Unit* u) {
   }
   if (!m.bp || !m.bp->mobile() || u->dead) {
     m.lastMove = {};
+    if (m.bp && m.bp->mobile() && u->dead) ProcessCommonMotionState(sim, u, false);  // (CalcMoveLand 0x6c3212)
     return;
   }
   Vec3 start = u->position;
   const MotionBlueprint& b = *m.bp;
   bool moved = false;
+  bool common = false;  // CalcMoveCommon's result (for ProcessCommonMotionState)
   if (b.motionType == kMotionAir) {
     AirMotionTick(sim, u);
     return;
@@ -1362,14 +1405,17 @@ void MotionTick(Sim& sim, Unit* u) {
       // CalcMoveLand 0x6c3180 snaps: a unit whose point is its own position keeps its terrain tilt (it was
       // flattened by the facing above and not re-tilted: probe unit 0x90002f at ticks 142-143)
       moved = true;
+      common = true;
     } else if (!m.hasGoal && !m.pushed) {
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
+      common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
       moved = Coast(u);
       if (turned) {
         m.needSnap = true;
         u->orientation = LookQuat(m.bx, 0.0f, m.bz);
       }
     } else {
+      common = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
       moved = Coast(u);  // pushed, or no spline point (the navigator is thinking): keeps rolling and slows down
     }
     if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {
@@ -1406,6 +1452,7 @@ void MotionTick(Sim& sim, Unit* u) {
     m.surfaceNext = false;  // (cleared after SnapToGround)
   }
   m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
+  if (!u->beingBuilt) ProcessCommonMotionState(sim, u, common);
 }
 
 const Vec3& UnitVelocity(const Unit* u) {

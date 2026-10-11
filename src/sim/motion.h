@@ -140,6 +140,9 @@ struct UnitMotion {
   // elevation (u+0x428+0x30; Physics.Elevation until Unit:SetElevation)
   float depth = 0, depthStep = 0, elevationAttr = 0;
   int targetLayer = 0, vertEvent = 0;
+  // m+0x7c: the horizontal event of a non-flying unit (0 Cruise, 1 TopSpeed, 2 Stopping, 3 Stopped), which
+  // scripts hear as OnMotionHorzEventChange (ProcessCommonMotionState 0x6c2a40)
+  int horzEvent = 3;
   bool slavedTurning = false;  // m+0x91: turning the body toward a slaved weapon's target
   // m+0x20: the facing a task asked for (CUnitMotion::SetFacing 0x6b8590: the attack task's AttackAngle); a
   // standing unit turns to it when no slaved weapon and no formation say otherwise; a new goal clears it

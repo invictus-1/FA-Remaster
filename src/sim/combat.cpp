@@ -293,18 +293,35 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
       p = u->poseBasePos;
     }
   }
+  const bool posed = e->poseQ.size() == bones.size();
   for (int k = n - 1; k >= 0; --k) {
     const size_t bi = static_cast<size_t>(chain[k]);
     const Bone& b = bones[bi];
-    Vec3 lp{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
-    if (bi < e->poseOff.size()) lp = Add(lp, e->poseOff[bi]);
-    Quat lr = b.localRot;
-    if (bi < e->poseRot.size()) lr = QMul(lr, e->poseRot[bi]);
+    const Vec3 lp = posed ? e->poseP[bi] : Vec3{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
     p = Add(p, RotateM(r, lp));
-    r = ComposeQ(r, lr);
+    r = ComposeQ(r, posed ? e->poseQ[bi] : b.localRot);
   }
   *pos = p;
   *rot = r;
+}
+
+// CAniPose::UpdateBones 0x54b5f0: every bone back to the skeleton's rest transform
+void PoseReset(Entity* e) {
+  if (!e->skeleton) return;
+  const auto& bones = e->skeleton->bones();
+  const float s = e->meshScale * e->scale[0];
+  e->poseQ.resize(bones.size());
+  e->poseP.resize(bones.size());
+  for (size_t i = 0; i < bones.size(); ++i) {
+    e->poseQ[i] = bones[i].localRot;
+    e->poseP[i] = {bones[i].localPos.x * s, bones[i].localPos.y * s, bones[i].localPos.z * s};
+  }
+}
+// CAniPoseBone::Rotate 0x54bc00: local rotation = local rotation x q
+void PoseRotate(Entity* e, int bone, const Quat& q) {
+  if (bone < 0 || static_cast<size_t>(bone) >= e->poseQ.size()) return;
+  Quat& l = e->poseQ[static_cast<size_t>(bone)];
+  l = ComposeQ(l, q);
 }
 
 bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
@@ -1169,16 +1186,8 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
   return bits;
 }
 
-void ApplyHeading(AimController* c, int bone) {
-  if (bone < 0 || static_cast<size_t>(bone) >= c->unit->poseRot.size()) return;
-  Quat& r = c->unit->poseRot[static_cast<size_t>(bone)];
-  r = QMul(r, AxisAngle({0, 1, 0}, c->heading));
-}
-void ApplyPitch(AimController* c, int bone) {
-  if (bone < 0 || static_cast<size_t>(bone) >= c->unit->poseRot.size()) return;
-  Quat& r = c->unit->poseRot[static_cast<size_t>(bone)];
-  r = QMul(r, AxisAngle({1, 0, 0}, -c->pitch));
-}
+void ApplyHeading(AimController* c, int bone) { PoseRotate(c->unit, bone, AxisAngle({0, 1, 0}, c->heading)); }
+void ApplyPitch(AimController* c, int bone) { PoseRotate(c->unit, bone, AxisAngle({1, 0, 0}, -c->pitch)); }
 void Hold(AimController* c) {
   ApplyHeading(c, c->yawBone);
   ApplyPitch(c, c->pitchBone);
@@ -1387,9 +1396,14 @@ void PoseAdvance(Unit* u) {
 }
 
 void UnitAimTick(Sim& sim, Unit* u) {
-  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty()) return;
-  if (!u->skeleton) return;
-  if (!u->aimControllers.empty()) {  // (poseRot / poseOff are still last beat's)
+  const bool anims = !u->animators.empty();
+  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() && !anims)
+    return;
+  if (!u->skeleton) {
+    if (anims) AnimatorsUpdate(sim, u);  // (their time still runs)
+    return;
+  }
+  if (!u->aimControllers.empty()) {  // (the pose is still last beat's)
     const Vec3 curPos = u->poseBasePos;
     const Quat curOri = u->poseBaseOri;
     u->poseBasePos = u->prevPoseBasePos;
@@ -1399,8 +1413,8 @@ void UnitAimTick(Sim& sim, Unit* u) {
     u->poseBasePos = curPos;
     u->poseBaseOri = curOri;
   }
-  u->poseRot.assign(static_cast<size_t>(u->skeleton->Count()), Quat{});
-  u->poseOff.clear();
+  PoseReset(u);
+  if (anims) AnimatorsUpdate(sim, u);  // (precedence 0, usually the unit's first manipulators)
   RotatorsTick(u);
   // manipulators run in the order of their precedence (0x63ace0): a slider below every aim controller's goes first
   int aimPrec = INT_MAX;
@@ -1409,10 +1423,8 @@ void UnitAimTick(Sim& sim, Unit* u) {
   SlidersTick(u, INT_MIN, aimPrec);
   for (BuilderArm* a : u->builderArms) {  // the arm's angles from this beat's MoveManipulator
     if (!a->alive || !a->enabled) continue;
-    if (a->yawBone >= 0 && static_cast<size_t>(a->yawBone) < u->poseRot.size())
-      u->poseRot[static_cast<size_t>(a->yawBone)] = QMul(u->poseRot[static_cast<size_t>(a->yawBone)], AxisAngle({0, 1, 0}, a->heading));
-    if (a->pitchBone >= 0 && static_cast<size_t>(a->pitchBone) < u->poseRot.size())
-      u->poseRot[static_cast<size_t>(a->pitchBone)] = QMul(u->poseRot[static_cast<size_t>(a->pitchBone)], AxisAngle({1, 0, 0}, -a->pitch));
+    PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
+    PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
   }
   for (size_t i = 0; i < u->aimControllers.size(); ++i) {
     AimController* c = u->aimControllers[i];
@@ -2291,10 +2303,9 @@ void RotatorsTick(Unit* u) {
       r->cur += r->speed * 0.1f;
       if (r->cur > 360.0f || r->cur < -360.0f) r->cur = std::fmod(r->cur, 360.0f);
     }
-    if (!r->enabled || r->bone < 0 || static_cast<size_t>(r->bone) >= u->poseRot.size()) continue;
+    if (!r->enabled) continue;
     Vec3 ax{r->axis == 0 ? 1.0f : 0.0f, r->axis == 1 ? 1.0f : 0.0f, r->axis == 2 ? 1.0f : 0.0f};
-    Quat& q = u->poseRot[static_cast<size_t>(r->bone)];
-    q = QMul(q, AxisAngle(ax, r->cur * kDeg2Rad));
+    PoseRotate(u, r->bone, AxisAngle(ax, r->cur * kDeg2Rad));
   }
 }
 
@@ -2350,10 +2361,7 @@ void SlidersTick(Unit* u, int lo, int hi) {
     }
     // onto the bone's local position, turned by the bone's local rotation as it is now
     const size_t bi = static_cast<size_t>(m->bone);
-    Quat lr = bones[bi].localRot;
-    if (bi < u->poseRot.size()) lr = QMul(lr, u->poseRot[bi]);
-    if (u->poseOff.size() != bones.size()) u->poseOff.assign(bones.size(), Vec3{});
-    u->poseOff[bi] = Add(u->poseOff[bi], RotateM(lr, m->cur));
+    if (bi < u->poseQ.size()) u->poseP[bi] = Add(u->poseP[bi], RotateM(u->poseQ[bi], m->cur));
   }
 }
 
@@ -2427,12 +2435,14 @@ int ArmAxis(BuilderArm* a, Vec3 dir, bool local, bool isHeading, float slew, con
 bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
   Unit* u = a->unit;
   const int n = u->skeleton ? u->skeleton->Count() : 0;
-  if (static_cast<int>(u->poseRot.size()) != n) u->poseRot.assign(static_cast<size_t>(n), Quat{});
+  if (static_cast<int>(u->poseQ.size()) != n) PoseReset(u);
+  const auto& bones = u->skeleton->bones();
   int r = 0;
   if (a->yawBone >= 0 && a->yawBone < n) {
     // the yaw bone's frame this tick, before this manipulator's own rotation
-    u->poseRot[static_cast<size_t>(a->yawBone)] = Quat{};
-    if (a->pitchBone >= 0 && a->pitchBone < n) u->poseRot[static_cast<size_t>(a->pitchBone)] = Quat{};
+    u->poseQ[static_cast<size_t>(a->yawBone)] = bones[static_cast<size_t>(a->yawBone)].localRot;
+    if (a->pitchBone >= 0 && a->pitchBone < n)
+      u->poseQ[static_cast<size_t>(a->pitchBone)] = bones[static_cast<size_t>(a->pitchBone)].localRot;
     Vec3 p;
     Quat q;
     BoneWorld(u, a->yawBone, &p, &q);
@@ -2446,14 +2456,16 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
       }
     }
     r = ArmAxis(a, dir, local, true, a->hSlew * (slow ? 0.25f : 1.0f), q);
-    u->poseRot[static_cast<size_t>(a->yawBone)] = AxisAngle({0, 1, 0}, a->heading);
+    u->poseQ[static_cast<size_t>(a->yawBone)] =
+        ComposeQ(bones[static_cast<size_t>(a->yawBone)].localRot, AxisAngle({0, 1, 0}, a->heading));
   }
   if (a->pitchBone >= 0 && a->pitchBone < n) {
     Vec3 p;
     Quat q;
     BoneWorld(u, a->pitchBone, &p, &q);
     r |= ArmAxis(a, dir, local, false, a->pSlew * (slow ? 0.25f : 1.0f), q);
-    u->poseRot[static_cast<size_t>(a->pitchBone)] = AxisAngle({1, 0, 0}, -a->pitch);
+    u->poseQ[static_cast<size_t>(a->pitchBone)] =
+        ComposeQ(bones[static_cast<size_t>(a->pitchBone)].localRot, AxisAngle({1, 0, 0}, -a->pitch));
   }
   bool moving = (r & 2) != 0;
   if (moving && !a->tracking) sim.CallMethod(sim.L(), u, "OnStartBuilderTracking", 0);

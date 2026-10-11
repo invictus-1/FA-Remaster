@@ -202,7 +202,13 @@ bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t);
 void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::string& type, float ratio);
 
 void RegisterCombatBindings(lua_State* L);
-// Animation manipulators (sim/anim.cpp): timing only.
+// A unit's pose (Entity::poseQ / poseP): back to rest (CAniPose::UpdateBones 0x54b5f0), and one bone's local
+// rotation x q (CAniPoseBone::Rotate 0x54bc00)
+void PoseReset(Entity* e);
+void PoseRotate(Entity* e, int bone, const Quat& q);
+// Animation manipulators (sim/anim.cpp). A unit's animators advance and pose its bones with its other
+// manipulators (AnimatorsUpdate, from UnitAimTick); AnimTick runs the ones of other entities (time only).
+void AnimatorsUpdate(Sim& sim, Unit* u);
 void AnimTick(Sim& sim);
 void ReleaseAnimators();
 void RegisterAnimBindings(lua_State* L);
