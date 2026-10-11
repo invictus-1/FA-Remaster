@@ -106,10 +106,10 @@ inline Quat FromRotVec(Vec3 r) {
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kDeg2Rad = 0.017453292f;  // 0xdff090
-inline float WrapPi(float x) {
-  float r = std::fmod(x, 2 * kPi);
-  if (r < -kPi) r += 2 * kPi;
-  else if (r > kPi) r -= 2 * kPi;
+inline float WrapPi(float x) {  // 0x62fb50 (the remainder is taken with the double 2 pi, 0xe4f780)
+  float r = static_cast<float>(std::fmod(static_cast<double>(x), 6.283185307179586));
+  if (r < -3.14159265f) r += 6.28318531f;
+  else if (r > 3.14159265f) r -= 6.28318531f;
   return r;
 }
 

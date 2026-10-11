@@ -1037,7 +1037,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     // the task first builds a CAiTarget of what it found (UpdateTarget 0x5d55b0: one target-point draw, every
     // time), then hands it to the weapon, whose own draw (PickNewTargetAimSpot) only comes with a new target
     TargetPointDraw(sim, best);
-    SetTarget(sim, w, EntityTarget(best));
+    SetTarget(sim, w, EntityTarget(best));  // (Unit::GetBlipsInRange 0x6acc60 lists the units themselves)
     if (autoAttack) IssueAutoAttack(sim, u, best);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
@@ -1117,6 +1117,10 @@ void WeaponsTick(Sim& sim) {
 // SetDesiredTarget 0x5d75b0
 static void SetDesiredTarget(Sim& sim, Unit* u, const AiTarget& t) {
   u->desiredTarget = t;
+  // an order's enemy unit is held as the army's recon blip of it (the watch: weapons that take the order's
+  // target report the blip, weapons that found the same unit themselves report the unit)
+  if (Entity* e = TargetEntity(sim, t))
+    if (e->kind == Entity::Kind::Unit && e->army && u->army && IsEnemy(u->army, e->army)) u->desiredTarget.viaBlip = true;
   bool has = HasTarget(sim, t);
   for (UnitWeapon* w : u->weapons) {
     if (!w->bp) continue;
@@ -2154,6 +2158,10 @@ int l_w_FireWeapon(lua_State* L) {
 int l_w_GetCurrentTarget(lua_State* L) {
   UnitWeapon* w = W(L);
   Entity* e = w->target.type == 1 ? S(L)->FindEntity(w->target.entityId) : nullptr;
+  if (e && w->target.viaBlip && e->kind == Entity::Kind::Unit) {  // the blip its army holds of the unit
+    Unit* tu = static_cast<Unit*>(e);
+    if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
+  }
   if (e && e->HasLuaObject()) PushObject(L, e);
   else lua_pushnil(L);
   return 1;
@@ -2290,22 +2298,49 @@ void RegisterProjectileBindings(lua_State* L);
 void RotatorsTick(Unit* u) {
   auto& v = u->rotators;
   v.erase(std::remove_if(v.begin(), v.end(), [](RotateManipulator* r) { return !r->alive; }), v.end());
-  for (RotateManipulator* r : v) {
-    if (r->accel != 0) {  // the speed approaches the target speed
-      float d = r->targetSpeed - r->speed, step = std::fabs(r->accel) * 0.1f;
-      r->speed = std::fabs(d) <= step ? r->targetSpeed : r->speed + std::copysign(step, d);
+  for (RotateManipulator* r : v) {  // MoveManipulator 0x643860
+    if (!r->enabled || r->bone < 0 || !u->skeleton || r->bone >= u->skeleton->Count()) continue;
+    if (r->followBone >= 0) {  // the goal follows that bone's heading
+      Vec3 p;
+      Quat q;
+      BoneWorld(u, r->followBone, &p, &q);
+      r->goal = dmath::Atan2((q.w * q.y + q.z * q.x) * 2.0f, 1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
     }
-    float step = std::fabs(r->speed) * 0.1f;
-    if (r->hasGoal) {
-      float d = r->goal - r->cur;
-      r->cur = std::fabs(d) <= step ? r->goal : r->cur + std::copysign(step, d);
-    } else {
-      r->cur += r->speed * 0.1f;
-      if (r->cur > 360.0f || r->cur < -360.0f) r->cur = std::fmod(r->cur, 360.0f);
+    if (r->spinDown && r->accel != 0.0f) {  // slow to a fifth of the target speed, then settle at the angle's half
+      const float lim = r->targetSpeed * 0.2f;
+      if (r->speed > lim) {
+        const float d = -r->speed;
+        if (r->accel > std::fabs(d)) r->speed = lim;
+        else r->speed = std::copysign(r->accel, d) + r->speed;
+        r->cur = WrapPi(r->cur + r->speed);
+        r->signalled = false;
+      } else if (!(lim < std::fabs(r->cur))) {
+        r->speed = 0.0f;
+        r->cur = r->cur * 0.5f;
+        r->signalled = true;
+      } else {
+        r->cur = WrapPi(r->cur + lim);
+        r->signalled = false;
+      }
+    } else if (r->hasGoal) {  // a step of the speed toward the goal; there: it signals (the speed stays)
+      const float delta = WrapPi(r->goal - r->cur);
+      if (!(r->speed < std::fabs(delta))) {
+        r->cur = r->goal;
+        r->signalled = true;
+      } else {
+        r->cur = std::copysign(r->speed, delta) + r->cur;
+        r->signalled = false;
+      }
+    } else {  // spinning: the speed approaches the target speed by the acceleration; signalled when it is there
+      if (r->accel != 0.0f && r->speed != r->targetSpeed) {
+        const float d = r->targetSpeed - r->speed;
+        if (r->accel > std::fabs(d)) r->speed = r->targetSpeed;
+        else r->speed = std::copysign(r->accel, d) + r->speed;
+      }
+      r->signalled = r->targetSpeed == r->speed;
+      r->cur = WrapPi(r->cur + r->speed);
     }
-    if (!r->enabled) continue;
-    Vec3 ax{r->axis == 0 ? 1.0f : 0.0f, r->axis == 1 ? 1.0f : 0.0f, r->axis == 2 ? 1.0f : 0.0f};
-    PoseRotate(u, r->bone, AxisAngle(ax, r->cur * kDeg2Rad));
+    PoseRotate(u, r->bone, AxisAngle(r->axis, r->cur));
   }
 }
 
@@ -2594,31 +2629,47 @@ int l_arm_Destroy(lua_State* L) {
 
 namespace {
 RotateManipulator* CheckRot(lua_State* L) { return CheckObject<RotateManipulator>(L, 1); }
+// degrees per second -> radians per tick (0xe4f768), degrees per second^2 -> radians per tick^2 (0xe4f764)
+const float kRotSpeed = 0.001745329238474369f, kRotAccel = 0.0001745329354889691f;
+void RotSetGoal(RotateManipulator* r, float degrees) {
+  r->goal = degrees * kDeg2Rad;
+  r->hasGoal = true;
+  r->signalled = r->goal == r->cur;
+  if (!r->unit) {  // (on no unit nothing turns it: it is there at once)
+    r->cur = r->goal;
+    r->signalled = true;
+  }
+}
 // CreateRotator(unit, bone, axis, [goal], [speed], [accel], [goalspeed])
 int l_CreateRotator(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
   auto r = std::make_unique<RotateManipulator>();
   r->unit = u;
   if (u) r->bone = ResolveBoneArg(L, u, 2);
+  // the axis: 'x', 'y', 'z', or with a minus for the other way round
   const char* ax = luaL_optstring(L, 3, "y");
-  r->axis = (ax[0] == 'x' || ax[0] == 'X') ? 0 : (ax[0] == 'z' || ax[0] == 'Z') ? 2 : 1;
-  if (lua_isnumber(L, 4)) {
-    r->goal = static_cast<float>(lua_tonumber(L, 4));
-    r->hasGoal = true;
+  const float sign = ax[0] == '-' ? -1.0f : 1.0f;
+  const char c = ax[0] == '-' ? ax[1] : ax[0];
+  r->axis = (c == 'x' || c == 'X') ? Vec3{sign, 0, 0} : (c == 'z' || c == 'Z') ? Vec3{0, 0, sign} : Vec3{0, sign, 0};
+  const int n = lua_gettop(L);
+  if (n >= 4 && !lua_isnil(L, 4)) {  // a goal alone is reached at once (the default speed is infinite)
+    RotSetGoal(r.get(), static_cast<float>(luaL_checknumber(L, 4)));
+    r->speed = std::numeric_limits<float>::infinity();
   }
-  if (lua_isnumber(L, 5)) r->speed = r->targetSpeed = static_cast<float>(lua_tonumber(L, 5));
-  if (lua_isnumber(L, 6)) r->accel = static_cast<float>(lua_tonumber(L, 6));
-  if (lua_isnumber(L, 7)) r->targetSpeed = static_cast<float>(lua_tonumber(L, 7));
+  if (n >= 5 && !lua_isnil(L, 5)) r->speed = static_cast<float>(luaL_checknumber(L, 5)) * kRotSpeed;
+  if (n >= 6 && !lua_isnil(L, 6)) r->accel = static_cast<float>(luaL_checknumber(L, 6)) * kRotAccel;
+  if (n >= 7 && !lua_isnil(L, 7)) {
+    r->targetSpeed = static_cast<float>(luaL_checknumber(L, 7)) * kRotSpeed;
+    r->signalled = r->speed == r->targetSpeed;
+  }
   RotateManipulator* raw = r.get();
   if (u) u->rotators.push_back(raw);
   CreateObject(L, raw, "CRotateManipulator");
   S(L)->Own(std::move(r));
   return 1;
 }
-int l_rot_SetGoal(lua_State* L) {
-  RotateManipulator* r = CheckRot(L);
-  r->goal = static_cast<float>(luaL_checknumber(L, 2));
-  r->hasGoal = true;
+int l_rot_SetGoal(lua_State* L) {  // 0x644470
+  RotSetGoal(CheckRot(L), static_cast<float>(luaL_checknumber(L, 2)));
   lua_settop(L, 1);
   return 1;
 }
@@ -2627,29 +2678,49 @@ int l_rot_ClearGoal(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
-int l_rot_SetSpeed(lua_State* L) {
+int l_rot_SetSpeed(lua_State* L) {  // 0x644790: the speed it turns at now (not the target speed)
+  CheckRot(L)->speed = static_cast<float>(luaL_checknumber(L, 2)) * kRotSpeed;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetTargetSpeed(lua_State* L) {  // 0x644930
   RotateManipulator* r = CheckRot(L);
-  r->speed = r->targetSpeed = static_cast<float>(luaL_checknumber(L, 2));
+  r->targetSpeed = static_cast<float>(luaL_checknumber(L, 2)) * kRotSpeed;
+  r->signalled = r->speed == r->targetSpeed;
   lua_settop(L, 1);
   return 1;
 }
-int l_rot_SetTargetSpeed(lua_State* L) {
-  CheckRot(L)->targetSpeed = static_cast<float>(luaL_checknumber(L, 2));
+int l_rot_SetAccel(lua_State* L) {  // 0x644b00
+  CheckRot(L)->accel = static_cast<float>(luaL_checknumber(L, 2)) * kRotAccel;
   lua_settop(L, 1);
   return 1;
 }
-int l_rot_SetAccel(lua_State* L) {
-  CheckRot(L)->accel = static_cast<float>(luaL_checknumber(L, 2));
+int l_rot_SetSpinDown(lua_State* L) {
+  CheckRot(L)->spinDown = lua_toboolean(L, 2) != 0;
   lua_settop(L, 1);
   return 1;
 }
-int l_rot_SetCurrentAngle(lua_State* L) {
-  CheckRot(L)->cur = static_cast<float>(luaL_checknumber(L, 2));
+int l_rot_SetFollowBone(lua_State* L) {
+  RotateManipulator* r = CheckRot(L);
+  r->followBone = r->unit ? ResolveBoneArg(L, r->unit, 2) : -1;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_ClearFollowBone(lua_State* L) {
+  CheckRot(L)->followBone = -1;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_rot_SetCurrentAngle(lua_State* L) {  // 0x643cf0: also turns the bone in the pose as it stands
+  RotateManipulator* r = CheckRot(L);
+  const float a = static_cast<float>(luaL_checknumber(L, 2)) * kDeg2Rad;
+  if (r->unit) PoseRotate(r->unit, r->bone, AxisAngle(r->axis, a));
+  r->cur = a;
   lua_settop(L, 1);
   return 1;
 }
 int l_rot_GetCurrentAngle(lua_State* L) {
-  lua_pushnumber(L, CheckRot(L)->cur);
+  lua_pushnumber(L, CheckRot(L)->cur * 57.295780181884766f);
   return 1;
 }
 int l_rot_Enable(lua_State* L) {
@@ -2781,6 +2852,9 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CRotateManipulator", "SetSpeed", l_rot_SetSpeed);
   SetMethod(L, "CRotateManipulator", "SetTargetSpeed", l_rot_SetTargetSpeed);
   SetMethod(L, "CRotateManipulator", "SetAccel", l_rot_SetAccel);
+  SetMethod(L, "CRotateManipulator", "SetSpinDown", l_rot_SetSpinDown);
+  SetMethod(L, "CRotateManipulator", "SetFollowBone", l_rot_SetFollowBone);
+  SetMethod(L, "CRotateManipulator", "ClearFollowBone", l_rot_ClearFollowBone);
   SetMethod(L, "CRotateManipulator", "SetCurrentAngle", l_rot_SetCurrentAngle);
   SetMethod(L, "CRotateManipulator", "GetCurrentAngle", l_rot_GetCurrentAngle);
   SetMethod(L, "CRotateManipulator", "Enable", l_rot_Enable);

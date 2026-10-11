@@ -47,9 +47,10 @@ int l_KillThread(lua_State* L) {
   ThreadScheduler* s = ThreadScheduler::From(L);
   lua_State* co = lua_tothread(L, 1);
   if (!s || !co) return 0;
-  bool self = co == L;
+  // exe 0x4ca060: the thread's tasks are dropped (0x409190) and the call returns. A thread that kills itself
+  // (a trash bag holding its own thread, destroyed from inside it) keeps running until it next yields, and is
+  // never resumed: the Monkeylord's ambient-effect thread still draws its random wait after its own clean-up.
   s->Kill(co);
-  if (self) return lua_yield(L, 0);
   return 0;
 }
 

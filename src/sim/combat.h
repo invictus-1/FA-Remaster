@@ -79,6 +79,9 @@ struct AiTarget {
   Vec3 pos;      // ground target
   int aimBone = -1;
   bool mobile = false;
+  // the target is held as the army's recon blip of the unit (an order's enemy target), not as the unit (what a
+  // weapon found itself): scripts see the difference (GetCurrentTarget returns the blip)
+  bool viaBlip = false;
   bool operator==(const AiTarget& o) const {
     return type == o.type && entityId == o.entityId && (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
   }
@@ -126,14 +129,21 @@ class SlideManipulator : public ScriptObject {
 // MoveManipulator 0x647300 of the unit's sliders whose precedence is in [lo, hi)
 void SlidersTick(Unit* u, int lo, int hi);
 
-// CRotateManipulator (CreateRotator): turns one bone about a local axis toward a goal or at a speed;
-// applied to the pose every tick before the aim controllers.
+// CRotateManipulator (CreateRotator 0x643d80, MoveManipulator 0x643860): turns one bone about a local axis
+// toward a goal, at a speed, or spinning down; applied to the pose every tick before the aim controllers. An
+// event: scripts WaitFor it (signalled at the goal, or when the speed reached the target speed).
 class RotateManipulator : public ScriptObject {
  public:
   Unit* unit = nullptr;
-  int bone = -1, axis = 1;  // 0 x, 1 y, 2 z
-  float cur = 0, goal = 0, speed = 0, targetSpeed = 0, accel = 0;  // degrees, degrees per second
-  bool hasGoal = false, enabled = true, alive = true;
+  int bone = -1;
+  Vec3 axis{0, 1, 0};                // +0x84 ('x' 'y' 'z', or '-x' '-y' '-z')
+  float cur = 0, goal = 0;           // +0x90, +0x94: radians
+  float speed = 0, targetSpeed = 0;  // +0x98, +0x9c: radians per tick
+  float accel = 0;                   // +0xa0: radians per tick per tick
+  int followBone = -1;               // +0xa4: the goal is that bone's heading
+  bool hasGoal = false, spinDown = false;  // +0x80, +0x81
+  bool signalled = true, enabled = true, alive = true;
+  int EventState() const override { return signalled ? 1 : 0; }
 };
 void RotatorsTick(Unit* u);
 
