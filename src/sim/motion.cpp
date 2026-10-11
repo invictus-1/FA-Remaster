@@ -1403,7 +1403,10 @@ void MotionTick(Sim& sim, Unit* u) {
       m.prevPos = Vec3{q.pos.x, py, q.pos.z};
       m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};
       m.vel = nv;
-      u->orientation = LookQuat(q.bx, 0.0f, q.bz);  // CalcMoveCommon's facing (0x6c2297)
+      // CalcMoveCommon's facing (0x6c2297). Not for the points of a brake spline: there the hull is only tilted
+      // on from where it is (seen: a braking tank's heading stays put to 0.02 degrees on a steady slope and
+      // drifts by hundredths where the slope changes, which a flat facing re-applied each beat does not give)
+      if (!(m.hasSpline && (m.splineMode == 3 || m.splineMode == 4))) u->orientation = LookQuat(q.bx, 0.0f, q.bz);
       m.fx = q.fx;
       m.fz = q.fz;
       m.bx = q.bx;
