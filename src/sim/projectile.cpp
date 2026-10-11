@@ -620,8 +620,11 @@ void MotionTick(Sim& sim, Projectile* p) {
 }  // namespace
 
 void ProjectilesTick(Sim& sim) {
-  std::vector<Projectile*> list = sim.projectiles;  // (impacts create and destroy projectiles)
-  for (Projectile* p : list) {
+  // By index over the live list: an impact's script may create projectiles (fragmentation shells), and the entity
+  // stage reaches a task that was added during its pass in that same pass: a child shell makes its first step in
+  // the beat it is made. (Destroyed ones leave the list at the end of the beat only.)
+  for (size_t i = 0; i < sim.projectiles.size(); ++i) {
+    Projectile* p = sim.projectiles[i];
     if (p->destroyQueued || !p->HasLuaObject()) continue;
     sim.HoldShape(p);
     MotionTick(sim, p);
