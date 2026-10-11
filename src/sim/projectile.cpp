@@ -289,18 +289,33 @@ void SetLayer(Sim& sim, Projectile* p, const char* layer) {
   sim.CallMethod(L, p, "OnLayerChange", 2);
 }
 
+// The recon blip a target was taken through, while it still exists.
+const Entity* BlipOfTarget(Sim& sim, const AiTarget& t) {
+  if (t.type != 1 || !t.viaBlip || !t.blipId) return nullptr;
+  const Entity* b = sim.FindEntity(t.blipId);
+  return b && !b->destroyQueued && b->kind == Entity::Kind::Blip ? b : nullptr;
+}
+
 // UpdateTracking 0x69c8f0
 void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   Vec3 pos = p->position;
   // CAiTarget::HasTarget 0x5e2a10: a unit target is gone when the unit is dead, a recon blip target (a shell of a
   // weapon that was ORDERED onto the unit) only when the blip is, and the blip outlives the dying unit: such a
   // missile keeps homing on the falling wreck (seen: 41 ticks of flight where ours gave up 7 after the death)
-  const Entity* blipOf = p->target.type == 1 && p->target.viaBlip ? TargetEntity(sim, p->target) : nullptr;
-  const bool has = blipOf ? true : HasTarget(sim, p->target);
+  // Once the unit is destroyed the blip stays where it was until the armies let go of it (their recon passes): the
+  // missile then steers at the blip's own position (seen: two beats at the wreck's origin, then the target is gone).
+  const bool viaBlip = p->target.type == 1 && p->target.viaBlip;
+  // (a unit whose Destroy is queued is still there until the end of the beat)
+  const Entity* blipUnit = viaBlip && p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
+  const Entity* blip = viaBlip && !blipUnit ? BlipOfTarget(sim, p->target) : nullptr;
+  const bool has = viaBlip ? (blipUnit != nullptr || blip != nullptr) : HasTarget(sim, p->target);
   if (!has) {
+    if (getenv("MOHO64_DEBUG_PROJ")) Logf(LogLevel::Info, "pdbg %u %u OnLostTarget", sim.tick(), p->id);
     sim.CallMethod(sim.L(), p, "OnLostTarget", 0);
     p->trackTarget = false;
     if (!p->homeLastPos) return;
+  } else if (blip) {
+    p->lastTargetPos = blip->position;
   } else {
     Vec3 t = TargetPos(sim, p->target, false);
     if (!IsNaN(t)) p->lastTargetPos = t;
@@ -818,6 +833,10 @@ static bool TargetGone(Sim& sim, const AiTarget& t) { return t.type == 1 && !Tar
 int l_GetCurrentTargetPosition(lua_State* L) {
   Projectile* p = P(L);
   if (TargetGone(*S(L), p->target)) {
+    if (const Entity* blip = BlipOfTarget(*S(L), p->target)) {  // (the blip the unit left behind, for a few beats)
+      PushVec(L, blip->position);
+      return 1;
+    }
     const float nan = std::numeric_limits<float>::quiet_NaN();
     PushVec(L, Vec3{nan, nan, nan});
     return 1;
@@ -886,6 +905,8 @@ int l_SetDestroyOnWater(lua_State* L) {
 }
 int l_SetLifetime(lua_State* L) {
   Projectile* p = P(L);
+  if (getenv("MOHO64_DEBUG_PROJ"))
+    Logf(LogLevel::Info, "pdbg %u %u SetLifetime %.3f (was until %u)", S(L)->tick(), p->id, lua_tonumber(L, 2), p->expireTick);
   p->expireTick = S(L)->tick() + static_cast<uint32_t>(std::max(0.0, static_cast<double>(std::nearbyint(luaL_checknumber(L, 2) * 10))));
   return Self(L);
 }

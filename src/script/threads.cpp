@@ -220,7 +220,10 @@ void ThreadScheduler::Step(Thread& t) {
   }
   double n = lua_tonumber(t.co, 1);
   lua_settop(t.co, 0);
-  if (n <= 0) {  // yield(0) / WaitTicks(0): the task runs again at once, in the same dispatch
+  // yield(0) / WaitTicks(0): the task runs again at once, in the same dispatch. The count is an integer: a
+  // fraction below 1 is 0 too (seen: FAF's Projectile.RetargetThread does WaitTicks(0.5) and the original has
+  // already set the new lifetime in the Lua pass in which that thread first runs)
+  if (static_cast<int>(n) <= 0) {
     t.wakeTick = tick_;
     t.again = true;
     return;

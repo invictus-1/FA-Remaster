@@ -858,6 +858,10 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   w->target = nt;
   Entity* e = TargetEntity(sim, w->target);
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
+  if (e && e->kind == Entity::Kind::Unit && w->target.viaBlip) {
+    const Unit* tu = static_cast<const Unit*>(e);
+    w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
+  }
   // PickNewTargetAimSpot 0x6d5de0
   int aimBone = -1;
   if (w->bp->aboveWaterTargetsOnly) PickPointAboveWater(sim, e, &aimBone, false);
