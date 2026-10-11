@@ -19,13 +19,14 @@ struct ReplayHeader {
   std::string scenario;
   struct Source {
     std::string name;
-    uint32_t id;
+    int32_t pausesAllowed = -1;  // source+0x20: pauses it may request (-1 = unlimited) (command_stream.md 2)
   };
   std::vector<Source> sources;
   bool cheats = false;
   struct Army {
     std::string options;  // serialized Lua table: the army's player options
-    int source = 255;     // command source, 255 = none
+    std::vector<int> sources;  // the command sources allowed to command it (army+0x130); u8 list ending in 0xFF
+    int source = 255;     // the first of them, 255 = none
   };
   std::vector<Army> armies;
   uint32_t seed = 0;

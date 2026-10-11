@@ -115,7 +115,7 @@ std::optional<ReplayHeader> ReadReplayHeader(const std::string& data, std::strin
   for (int i = 0; i < ns && r.ok; ++i) {
     ReplayHeader::Source s;
     s.name = r.CStr();
-    s.id = r.U32();
+    s.pausesAllowed = static_cast<int32_t>(r.U32());
     h.sources.push_back(s);
   }
   h.cheats = r.U8() != 0;
@@ -124,8 +124,8 @@ std::optional<ReplayHeader> ReadReplayHeader(const std::string& data, std::strin
     ReplayHeader::Army a;
     n = r.U32();
     a.options = r.Bytes(n);
-    a.source = r.U8();
-    if (a.source != 255) r.U8();
+    for (int b = r.U8(); r.ok && b != 255; b = r.U8()) a.sources.push_back(b);  // header writer 0x8764aa
+    a.source = a.sources.empty() ? 255 : a.sources.front();
     h.armies.push_back(a);
   }
   h.seed = r.U32();

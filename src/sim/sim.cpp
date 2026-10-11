@@ -2,6 +2,7 @@
 #include "sim/prop_motor.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
+#include "sim/script_bits.h"
 #include "core/dmath.h"
 #include "sim/formation.h"
 #include "sim/transport.h"
@@ -208,6 +209,22 @@ int l_GetSurfaceHeight(lua_State* L) {
 
 int l_CheatsEnabled(lua_State* L) {
   lua_pushboolean(L, S(L)->cheats);
+  return 1;
+}
+
+// GetCurrentCommandSource 0x74b790: the current command source + 1 (nil when none is active)
+int l_GetCurrentCommandSource(lua_State* L) {
+  Sim* sim = S(L);
+  if (sim->commandSource == 0xff) lua_pushnil(L);
+  else lua_pushnumber(L, static_cast<float>(sim->commandSource + 1));
+  return 1;
+}
+
+// OkayToMessWithArmy(army) 0x70a9a0 = Sim::OkayToMessWith(army) 0x747320
+int l_OkayToMessWithArmy(lua_State* L) {
+  Sim* sim = S(L);
+  Army* a = lua_isnil(L, 1) ? nullptr : sim->GetArmy(L, 1);
+  lua_pushboolean(L, sim->OkayToMessWith(a));
   return 1;
 }
 
@@ -486,6 +503,8 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "GetTerrainType", l_GetTerrainType);
   SetGlobal(L, "GetTerrainTypeOffset", l_GetTerrainTypeOffset);
   SetGlobal(L, "CheatsEnabled", l_CheatsEnabled);
+  SetGlobal(L, "GetCurrentCommandSource", l_GetCurrentCommandSource);
+  SetGlobal(L, "OkayToMessWithArmy", l_OkayToMessWithArmy);
   SetGlobal(L, "IsGameOver", l_IsGameOver);
   SetGlobal(L, "Random", l_Random);
   SetGlobal(L, "IsAlly", l_IsAlly);
@@ -660,6 +679,8 @@ bool Sim::Start(const ReplayHeader& replay) {
   rngTrace_ = getenv("MOHO64_DEBUG_RNG") != nullptr;
   RecorderOpen();
   cheats = replay.cheats;
+  cmdSources.clear();
+  for (const auto& src : replay.sources) cmdSources.push_back({src.name, src.pausesAllowed});
 
   // Map
   {
@@ -695,6 +716,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterMotorBindings(L);
   RegisterCombatBindings(L);
   RegisterAnimBindings(L);
+  RegisterScriptBitBindings(L);
   RegisterAirBindings(L);
   RegisterTransportBindings(L);
   RegisterIntelBindings(L);
@@ -786,6 +808,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     army->civilian = lua_toboolean(L, -1);
     field("Human");
     army->human = lua_toboolean(L, -1);
+    army->sources = ra.sources;
     lua_settop(L, setup);
     armies_.push_back(std::move(army));
   }
@@ -1106,6 +1129,21 @@ void EvaluateStatTriggers(Sim& sim, Army& a) {
   }
 }
 
+bool Sim::OkayToMessWith(const Army* a) const {
+  if (!a) return cheats;
+  if (a->outOfGame) return false;  // army+0x1c0, even with cheats
+  if (commandSource != 0xff && std::find(a->sources.begin(), a->sources.end(), commandSource) != a->sources.end())
+    return true;
+  return cheats;  // CheatsEnabled() (also feeds the beat checksum in the original)
+}
+
+void Sim::PausedBeat() {
+  // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
+  ProcessDestroyQueue();
+  UpdateIdPools();
+  frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
+}
+
 void Sim::Tick() {
   if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
   beatStarted_ = true;
@@ -1225,6 +1263,8 @@ void Sim::Tick() {
   g_prof.Lap(1);
   ProcessDestroyQueue();
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
+  singleStep = false;  // step 14 (sim+0x8e4 = 0)
+  frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   g_prof.Lap(11);
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;

@@ -133,6 +133,8 @@ class Unit : public Entity {
   // commands to a factory land here; a finished unit takes them over.
   std::deque<std::shared_ptr<UnitCommand>> factoryCommands;
   uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
+  uint32_t scriptBits = 0;         // u+0x498: the toggle buttons' state (sim/script_bits.cpp)
+  int64_t toggleCaps = -1;         // u+0x48c: live toggle caps (-1 = not yet read from the blueprint)
   bool attachFull = false;         // carried by a transport: full attach transform, parent's layer
   std::shared_ptr<struct TransportObj> transport;  // transports (sim/transport.cpp)
   uint32_t transportedBy = 0;      // the transport carrying it (entity ref)

@@ -1,0 +1,192 @@
+// Unit script bits (the toggle buttons: shield, weapon, jamming, intel, production, stealth, generic,
+// special, cloak) and the live toggle caps (engine-ref script_bits.md).
+//
+// - The mask (u+0x498) changes only through Unit::ToggleScriptBit 0x6a7490: refused silently without the live
+//   toggle cap, or while the unit rides a TRANSPORTATION parent; the bit is written first, then Lua
+//   OnScriptBitClear(self, bit) / OnScriptBitSet(self, bit) runs.
+// - Lua names are ERuleBPUnitToggleCaps values (masks): 'RULEUTC_ShieldToggle' = 1 = bit 0, ... A number is read
+//   as the mask value too. The command stream's ProcessInfoPair "ToggleScriptBit" carries the bit NUMBER.
+// - The live caps (u+0x48c) start as the blueprint's General.ToggleCaps; Add/Remove/RestoreToggleCaps change
+//   them; TestToggleCaps reads the blueprint.
+#include <cstdlib>
+#include <cstring>
+#include <strings.h>
+
+#include "script/script_state.h"
+#include "sim/blueprints.h"
+#include "sim/combat.h"
+#include "sim/script_bits.h"
+#include "sim/sim.h"
+#include "sim/units.h"
+
+namespace moho {
+namespace {
+
+const char* const kToggleNames[] = {"RULEUTC_ShieldToggle", "RULEUTC_WeaponToggle", "RULEUTC_JammingToggle",
+                                    "RULEUTC_IntelToggle", "RULEUTC_ProductionToggle", "RULEUTC_StealthToggle",
+                                    "RULEUTC_GenericToggle", "RULEUTC_SpecialToggle", "RULEUTC_CloakToggle"};
+
+// The blueprint's General.ToggleCaps as a mask (bp_reflect converts the names to numbers at load).
+uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
+  lua_State* L = sim.L();
+  int top = lua_gettop(L);
+  uint32_t caps = 0;
+  sim.blueprints().PushTable(L, bp);
+  lua_pushstring(L, "General");
+  lua_gettable(L, -2);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "ToggleCaps");
+    lua_gettable(L, -2);
+    if (lua_isnumber(L, -1)) caps = static_cast<uint32_t>(lua_tonumber(L, -1));
+    else if (lua_istable(L, -1)) {  // unconverted { RULEUTC_x = true, ... }
+      for (int i = 0; i < 9; ++i) {
+        lua_pushstring(L, kToggleNames[i]);
+        lua_gettable(L, -2);
+        if (lua_toboolean(L, -1)) caps |= 1u << i;
+        lua_pop(L, 1);
+      }
+    }
+  }
+  lua_settop(L, top);
+  return caps;
+}
+
+// ERuleBPUnitToggleCaps lexical value ('|'-separated names or numbers, OR-ed); false if nothing parsed.
+bool ParseToggleCaps(const char* s, uint32_t* out) {
+  uint32_t v = 0;
+  bool any = false;
+  while (*s) {
+    const char* e = strchr(s, '|');
+    size_t n = e ? static_cast<size_t>(e - s) : strlen(s);
+    bool hit = false;
+    for (int i = 0; i < 9; ++i)
+      if (strlen(kToggleNames[i]) == n && !strncasecmp(s, kToggleNames[i], n)) {
+        v |= 1u << i;
+        hit = any = true;
+      }
+    if (!hit && n) {
+      char buf[32];
+      size_t m = n < 31 ? n : 31;
+      memcpy(buf, s, m);
+      buf[m] = 0;
+      char* end = nullptr;
+      long x = strtol(buf, &end, 0);
+      if (end && *end == 0) {
+        v |= static_cast<uint32_t>(x);
+        any = true;
+      }
+    }
+    if (!e) break;
+    s = e + 1;
+  }
+  *out = v;
+  return any;
+}
+
+// value -> bit (value must be 1..256; bit = floor(log2(value)))
+bool ToggleBit(lua_State* L, int idx, int* bit) {
+  const char* s = lua_tostring(L, idx);
+  if (!s) luaL_typerror(L, idx, "string");
+  uint32_t v = 0;
+  if (!ParseToggleCaps(s, &v)) return false;
+  if (v - 1 > 0xffu) return false;
+  int b = 0;
+  while (v != 1) {
+    v >>= 1;
+    ++b;
+  }
+  *bit = b;
+  return true;
+}
+
+void CheckArgs(lua_State* L, int n, const char* what) {
+  if (lua_gettop(L) != n) luaL_error(L, "%s\n  expected %d args, but got %d", what, n, lua_gettop(L));
+}
+
+int l_GetScriptBit(lua_State* L) {
+  CheckArgs(L, 2, "Unit:GetScriptBit(bit)");
+  Unit* u = CheckObject<Unit>(L, 1);
+  int bit;
+  if (!ToggleBit(L, 2, &bit)) return 0;
+  lua_pushboolean(L, (u->scriptBits >> bit) & 1u);
+  return 1;
+}
+
+int l_SetScriptBit(lua_State* L) {
+  CheckArgs(L, 3, "Unit:SetScriptBit(bit, state)");
+  Unit* u = CheckObject<Unit>(L, 1);
+  if (!lua_isnil(L, 3) && !lua_isboolean(L, 3)) luaL_typerror(L, 3, "boolean");
+  bool on = lua_toboolean(L, 3) != 0;
+  int bit;
+  if (!ToggleBit(L, 2, &bit)) return 0;
+  if ((((u->scriptBits >> bit) & 1u) != 0) != on) UnitToggleScriptBit(*Sim::From(L), u, bit);
+  return 0;
+}
+
+int l_ToggleScriptBit(lua_State* L) {
+  CheckArgs(L, 2, "Unit:ToggleScriptBit(bit)");
+  Unit* u = CheckObject<Unit>(L, 1);
+  int bit;
+  if (ToggleBit(L, 2, &bit)) UnitToggleScriptBit(*Sim::From(L), u, bit);
+  return 0;
+}
+
+template <int Op>  // 0 add, 1 remove
+int l_ChangeToggleCap(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  const char* s = luaL_checkstring(L, 2);
+  uint32_t v = 0;
+  if (!ParseToggleCaps(s, &v)) return 0;
+  uint32_t caps = UnitToggleCaps(*Sim::From(L), u);
+  u->toggleCaps = Op == 0 ? (caps | v) : (caps & ~v);
+  return 0;
+}
+
+int l_RestoreToggleCaps(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  u->toggleCaps = BlueprintToggleCaps(*Sim::From(L), *u->blueprint);
+  return 0;
+}
+
+int l_TestToggleCaps(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  const char* s = luaL_checkstring(L, 2);
+  uint32_t v = 0;
+  ParseToggleCaps(s, &v);
+  lua_pushboolean(L, (BlueprintToggleCaps(*Sim::From(L), *u->blueprint) & v) != 0);
+  return 1;
+}
+
+}  // namespace
+
+uint32_t UnitToggleCaps(Sim& sim, Unit* u) {
+  if (u->toggleCaps < 0) u->toggleCaps = BlueprintToggleCaps(sim, *u->blueprint);
+  return static_cast<uint32_t>(u->toggleCaps);
+}
+
+void UnitToggleScriptBit(Sim& sim, Unit* u, long bit) {
+  uint32_t m = 1u << (static_cast<unsigned long>(bit) & 31u);
+  if (!(UnitToggleCaps(sim, u) & m)) return;
+  if (u->unitStates.count("Attached") && u->parentId) {  // cargo of a transport cannot toggle
+    Entity* p = sim.FindEntity(u->parentId);
+    if (p && p->blueprint && BpInCategory(sim, p->blueprint, "TRANSPORTATION")) return;
+  }
+  bool clear = (u->scriptBits & m) != 0;
+  if (clear) u->scriptBits &= ~m;
+  else u->scriptBits |= m;
+  if (!u->HasLuaObject()) return;
+  lua_pushnumber(sim.L(), static_cast<float>(bit));
+  sim.CallMethod(sim.L(), u, clear ? "OnScriptBitClear" : "OnScriptBitSet", 1);
+}
+
+void RegisterScriptBitBindings(lua_State* L) {
+  SetMethod(L, "Unit", "GetScriptBit", l_GetScriptBit);
+  SetMethod(L, "Unit", "SetScriptBit", l_SetScriptBit);
+  SetMethod(L, "Unit", "ToggleScriptBit", l_ToggleScriptBit);
+  SetMethod(L, "Unit", "AddToggleCap", l_ChangeToggleCap<0>);
+  SetMethod(L, "Unit", "RemoveToggleCap", l_ChangeToggleCap<1>);
+  SetMethod(L, "Unit", "RestoreToggleCaps", l_RestoreToggleCaps);
+  SetMethod(L, "Unit", "TestToggleCaps", l_TestToggleCaps);
+}
+
+}  // namespace moho

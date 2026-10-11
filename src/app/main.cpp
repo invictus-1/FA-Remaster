@@ -26,6 +26,7 @@
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "sim/script_object.h"
+#include "sim/command_stream.h"
 #include "sim/sim.h"
 
 using namespace moho;
@@ -193,15 +194,41 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 #ifdef MOHO64_CALLGRIND
   CALLGRIND_START_INSTRUMENTATION;  // profile build: only the ticks are measured
 #endif
-  for (int i = 0; ok && i < o.ticks; ++i) sim.Tick();
+  // The command stream (sim/command_stream.cpp): the messages before each Advance are applied, then the beat
+  // runs (or, while paused / after EndGame, only its end-of-beat part). --ticks counts game ticks.
+  CommandStream stream(*data, header->streamOffset);
+  bool playStream = !getenv("MOHO64_NO_STREAM");
+  int done = 0, paused = 0;
+  while (ok && done < o.ticks) {
+    if (playStream && !stream.AtEnd()) {
+      if (!stream.ApplyUntilAdvance(sim)) {
+        Logf(LogLevel::Info, "moho64: the replay's command stream ended after %u beats (tick %u)", stream.beats(),
+             sim.tick());
+        if (!getenv("MOHO64_PAST_END")) break;
+      }
+    }
+    if (sim.Paused()) {
+      sim.PausedBeat();
+      ++paused;
+      if (sim.frozen && (stream.AtEnd() || !playStream)) break;
+      continue;
+    }
+    sim.Tick();
+    ++done;
+  }
+  if (playStream)
+    Logf(LogLevel::Info, "moho64: command stream: %u messages, %u beats (%d paused)%s", stream.messages(),
+         stream.beats(), paused, stream.hadError() ? ", with errors" : "");
+  for (auto& [what, n] : stream.unhandled())
+    Logf(LogLevel::Warning, "moho64: command stream: %s not carried out (x%d)", what.c_str(), n);
 #ifdef MOHO64_CALLGRIND
   CALLGRIND_STOP_INSTRUMENTATION;
 #endif
   auto t3 = std::chrono::steady_clock::now();
-  if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", o.ticks);
+  if (o.ticks) Logf(LogLevel::Info, "moho64: ran %d ticks", done);
   auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
   Logf(LogLevel::Info, "moho64: timing: rules %.2f s, sim start-up %.2f s, %d ticks %.2f s (%.2f ms/tick)",
-       secs(t0, t1), secs(t1, t2), o.ticks, secs(t2, t3), o.ticks ? secs(t2, t3) * 1000.0 / o.ticks : 0.0);
+       secs(t0, t1), secs(t1, t2), done, secs(t2, t3), done ? secs(t2, t3) * 1000.0 / done : 0.0);
   if (ok && !o.simLua.empty()) {
     if (auto code = hostfs::ReadFile(o.simLua)) sim.RunString(*code, "@" + o.simLua);
     else Logf(LogLevel::Error, "cannot read %s", o.simLua.c_str());

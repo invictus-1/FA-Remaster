@@ -69,6 +69,7 @@ class Army {
   float unitCap = 1000;
   float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;
+  std::vector<int> sources;  // command sources allowed to command this army (army+0x130, replay header)
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
   std::vector<Unit*> units;   // the army's live units, by entity id
 };
@@ -97,6 +98,8 @@ class Sim {
   bool Start(const ReplayHeader& replay);
   // Advance one tick (runs the script threads that are due).
   void Tick();
+  // A paused beat (AdvanceBeat steps 15-19 + Sync): destroy queue and id pools only; the game tick stays.
+  void PausedBeat();
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 
@@ -228,7 +231,24 @@ class Sim {
   std::string sessionMods;
   bool cheats = false;
 
+  // Command stream state (engine-ref command_stream.md 4 and 7; sim/command_stream.cpp plays the messages)
+  struct CmdSource {
+    std::string name;
+    int pausesLeft = -1;  // source+0x20
+  };
+  std::vector<CmdSource> cmdSources;  // sim+0x91c, from the replay header
+  int commandSource = 0xff;           // sim+0x92c, 0xff = none
+  int pauseOwner = -1;                // sim+0x8e0: the source that paused, -1 = running
+  bool singleStep = false;            // sim+0x8e4
+  bool endGame = false;               // sim+0x8dc (EndGame message)
+  bool frozen = false;                // sim+0x8dd (= endGame after the next Sync): beats do nothing
+  bool Paused() const { return frozen || (pauseOwner != -1 && !singleStep); }
+  bool OkayToMessWith(const Army* a) const;  // 0x747320
+  // Stream-issued commands by their stream id (source << 24 | n); Lua-issued ones are in commandsById.
+  std::map<uint32_t, std::weak_ptr<UnitCommand>> streamCommands;
+
   static Sim* From(lua_State* L);
+  bool PushImport(lua_State* L, const std::string& module);  // import(module) -> table, or false (logged)
 
   // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
   Navigation& navigation();
@@ -294,7 +314,6 @@ class Sim {
   // Push the script class for a blueprint: bp.ScriptModule/ScriptClass, else
   // <dir>/<name>_script.lua's TypeClass, else the default module's class.
   void PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* defModule, const char* defClass);
-  bool PushImport(lua_State* L, const std::string& module);  // import(module) -> table, or false (logged)
   void InitializeArmor(lua_State* L, Unit* u);
   // The entity's skeleton: Display.MeshBlueprint -> that mesh blueprint's first LOD MeshName.
   void AttachSkeleton(lua_State* L, Entity* e);

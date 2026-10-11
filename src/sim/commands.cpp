@@ -7,6 +7,7 @@
 #include "sim/combat.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <map>
 
@@ -591,6 +592,127 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
   }
   return c;
 }
+
+// ---- the command stream's orders (engine-ref command_stream.md 5) ----------------------------------------------
+
+}  // namespace
+
+void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t) {
+  c.targetId = 0;
+  c.targetPoint = -1;
+  if (t.type == 1) {
+    if (Entity* e = sim.FindEntityById(t.entity)) {
+      c.targetId = EntityRef(e);
+      c.pos = e->position;
+      c.hasPos = true;
+      c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
+    }
+  } else if (t.type == 2) {
+    c.pos = t.pos;
+    c.hasPos = true;
+  }
+}
+
+bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
+  auto& q = u->commands;
+  size_t i = 0;
+  while (i < q.size() && q[i].get() != &c) ++i;
+  if (i == q.size()) return false;
+  std::shared_ptr<UnitCommand> keep = q[i];
+  if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
+    if (u->engageId) ClearEngagement(sim, u);
+    if (u->task) {
+      EndBuildTask(sim, u, *u->task, false);
+      u->task = nullptr;
+    }
+    q.pop_front();
+    ReleaseCommandImpl(u, c);
+    u->headState = kNotStarted;
+    auto& pq = sim.pathQueue;
+    pq.erase(std::remove(pq.begin(), pq.end(), u), pq.end());
+    MotionStop(u);
+    SetMoving(u, false);
+  } else {
+    q.erase(q.begin() + static_cast<long>(i));
+    ReleaseCommandImpl(u, c);
+  }
+  return true;
+}
+
+std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
+                                             bool clear) {
+  // types whose move-task destructor does not abort the move when the next command is one of them (0x618998)
+  auto keepsMove = [](int t) {
+    switch (t) {
+      case 2: case 4: case 5: case 6: case 7: case 9: case 10: case 11: case 15: case 16: case 17: case 18:
+      case 20: case 22: case 23: case 24: case 25: case 28: case 29:
+        return true;
+      default:
+        return false;
+    }
+  };
+  std::shared_ptr<UnitCommand> c;
+  for (Unit* u : units) {
+    // ProcessUnitCommand 0x6ef9e0 (outline only, command_stream.md 5.2): dead units refuse
+    if (!IsAlive(u)) continue;
+    if (!clear && u->commands.size() > 500) continue;
+    int at = -1;  // insert-before: the queued command with that stream id
+    if (d.insertBefore != -1) {
+      for (size_t i = 0; i < u->commands.size(); ++i)
+        if (u->commands[i]->fromStream && u->commands[i]->id == static_cast<uint32_t>(d.insertBefore)) {
+          at = static_cast<int>(i);
+          break;
+        }
+    }
+    if (!c) {  // CommandDatabase::AddIssueData: one CUnitCommand per message
+      c = std::make_shared<UnitCommand>();
+      c->id = d.id;
+      c->fromStream = true;
+      c->type = static_cast<CommandType>(d.type);
+      c->blueprintId = d.blueprint;
+      for (auto& ch : c->blueprintId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      c->count = d.count;
+      c->maxCount = d.maxCount;
+      c->cells = d.cells;
+      c->formIndex = d.formIndex;
+      if (d.formIndex != -1) {
+        c->formQw = d.qw;
+        c->formQx = d.qx;
+        c->formQy = d.qy;
+        c->formQz = d.qz;
+        c->formScale = d.scale;
+      }
+      SetCommandTargetFromStream(sim, *c, d.target);  // the ctor's decode (the only draw on this path)
+      sim.streamCommands[d.id] = c;
+    }
+    if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
+      bool keep = keepsMove(d.type) && u->commands.size() > 1 && IsAlive(u) &&
+                  keepsMove(static_cast<int>(u->commands[1]->type));
+      ForgetUnitCommands(u);
+      if (!keep) MotionStop(u);
+      SetMoving(u, false);
+      at = -1;
+    }
+    if (d.insertBefore != -1 && at < 0) continue;  // not in this unit's queue: it does not get the command
+    if (at < 0) {
+      u->commands.push_back(c);
+    } else {
+      u->commands.insert(u->commands.begin() + at, c);
+      if (at == 0) {  // a new head: the running one is interrupted and dispatched again later (inferred)
+        if (u->task) {
+          EndBuildTask(sim, u, *u->task, false);
+          u->task = nullptr;
+        }
+        u->headState = kNotStarted;
+      }
+    }
+    c->units.insert(u);
+    AirSpeedThroughEvent(sim, u);  // queue event 0
+  }
+  return c;
+}
+
+namespace {
 
 // Issue<Type>(units, position or entity target)
 template <CommandType T>

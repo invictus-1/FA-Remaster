@@ -58,7 +58,41 @@ struct UnitCommand {
   std::set<Unit*> units;  // units that still have it queued
   uint32_t beaconRef = 0; // Ferry: the beacon created for it (CUnitCommand+0x158); dies with the command
   bool factoryIssued = false;  // cmd+0x142: a factory (rally) command or MoveOffFactory
+  bool fromStream = false;     // issued by the command stream: id = its stream id (source << 24 | n)
+  int maxCount = 1;            // cmd+0xe0
+  std::vector<std::pair<int16_t, int16_t>> cells;  // cmd+0xc8 (SetCommandCells)
 };
+
+// A target as the command stream sends it (SSTITarget): 0 none, 1 entity id, 2 position.
+struct StreamTarget {
+  int type = 0;
+  uint32_t entity = 0xf0000000u;
+  Vec3 pos;
+};
+// SSTICommandIssueData (engine-ref command_stream.md 3): what an IssueCommand message carries.
+struct StreamIssueData {
+  uint32_t id = 0xffffffffu;
+  int32_t coordWith = -1;
+  int type = 0;
+  int32_t insertBefore = -1;
+  StreamTarget target, target2;
+  int formIndex = -1;
+  float qw = 1, qx = 0, qy = 0, qz = 0, scale = 1;
+  std::string blueprint;
+  std::vector<std::pair<int16_t, int16_t>> cells;
+  int maxCount = 1, count = 1;
+  std::string lua;  // the serialized Lua value (nil = "\x02")
+};
+// UNIT_IssueCommand 0x6f12c0 for a command-stream order: one command for every unit that accepts it (units in
+// ascending entity id), created at the first; clear empties each accepting unit's queue first. nullptr if no
+// unit took it.
+std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
+                                             bool clear);
+// CUnitCommand::SetTarget from an SSTITarget (DecodeFromSSTITarget 0x5e2620: an entity target draws its
+// target point); draw = false for SetCommandCells' ground target.
+void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t);
+// RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
+bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
 
 // Lua's view of a unit's navigator (Unit:GetNavigator()).
 class NavigatorObject : public ScriptObject {
