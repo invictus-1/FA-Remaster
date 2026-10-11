@@ -224,7 +224,7 @@ def compare_draws(A, B, exe, binary, context):
     common = sorted(set(da) & set(db))
     if not common:
         print("draws: nothing in common")
-        return
+        return {"first_draw": None, "first_tick": None}
 
     def nm_a(s, w):
         if A["flags"] & 1:
@@ -294,7 +294,7 @@ def compare_draws(A, B, exe, binary, context):
     if first is None:
         print("draws: all %d common draws agree (draws %d..%d, through tick %s)" % (len(common), common[0], last,
                                                                                   tick_s(da[last][0])))
-        return
+        return {"first_draw": last + 1, "first_tick": None, "agree_through_tick": da[last][0]}
     print("draws: first difference at draw %d: %s" % (first, why))
     print("  agreed draws %d..%d" % (common[0], first - 1))
     print("  %-8s | %-6s %-46s | %-6s %s" % ("draw", "tick", "original", "tick", "ours"))
@@ -311,6 +311,7 @@ def compare_draws(A, B, exe, binary, context):
     t0 = da[first][0] if da[first][0] != 0xffffffff else 0
     print("  draws per tick (original / ours):", ", ".join("%d: %d/%d" % (t, ca.get(t, 0), cb.get(t, 0))
                                                            for t in range(max(0, t0 - 2), t0 + 4)))
+    return {"first_draw": first, "first_tick": min(da[first][0], db[first][0]), "why": why}
 
 
 def states_s(m):
@@ -326,7 +327,7 @@ def compare_units(A, B, tol, max_diffs):
     ticks = sorted(set(ta) & set(tb))
     if not ticks:
         print("units: no common ticks")
-        return
+        return {"first_tick": None, "pairs": []}
     # orientation order: the exe stores the quaternion in its own order; pick the permutation that fits
     perm = (0, 1, 2, 3)
     t0 = ticks[min(1, len(ticks) - 1)]
@@ -338,6 +339,7 @@ def compare_units(A, B, tol, max_diffs):
             break
     shown, first_tick = 0, None
     only_a = only_b = 0
+    pairs = []  # (tick, unit id, fields) for every unit that differs or exists in one game only
     for t in ticks:
         ua, ub = ta[t], tb[t]
         only_a += len(set(ua) - set(ub))
@@ -383,6 +385,10 @@ def compare_units(A, B, tol, max_diffs):
             if d:
                 diffs.append((i, d))
         missing = sorted(set(ua) ^ set(ub))
+        for i, d in diffs:
+            pairs.append((t, i, sorted(set(x.split(" ")[0] for x in d))))
+        for i in missing:
+            pairs.append((t, i, ["only-" + ("orig" if i in ua else "ours")]))
         if diffs or missing:
             if first_tick is None:
                 first_tick = t
@@ -396,13 +402,14 @@ def compare_units(A, B, tol, max_diffs):
         print("units: all %d common ticks agree (%d..%d), %d units at the end" % (len(ticks), ticks[0], ticks[-1],
                                                                                  len(ta[ticks[-1]])))
     print("units: quaternion order in the original file = %s" % (perm,))
+    return {"first_tick": first_tick, "last_common_tick": ticks[-1], "pairs": pairs}
 
 
 def compare_econ(A, B, tol):
     ea, eb = A["econ"], B["econ"]
     ticks = sorted(set(ea) & set(eb))
     if not ticks:
-        return
+        return {"first_tick": None}
     names = ["stored E", "stored M", "income E", "income M", "requested E", "requested M", "used E", "used M"]
     for t in ticks:
         for i, (x, y) in enumerate(zip(ea[t], eb[t])):
@@ -410,16 +417,18 @@ def compare_econ(A, B, tol):
             if bad:
                 print("economy: first difference at tick %d, army %d: %s" % (t, i + 1, "; ".join(
                     "%s %.4f vs %.4f" % b for b in bad)))
-                return
+                return {"first_tick": t, "army": i + 1}
     print("economy: all armies agree on all %d common ticks (%d..%d)" % (len(ticks), ticks[0], ticks[-1]))
+    return {"first_tick": None, "last_common_tick": ticks[-1]}
 
 
 def compare_air(A, B, tol, maxn):
     aa, ab = A["air"], B["air"]
     ticks = sorted(set(aa) & set(ab))
     if not ticks:
-        return
+        return {"first_tick": None, "pairs": []}
     shown, first = 0, None
+    pairs = []
     for t in ticks:
         for uid in sorted(set(aa[t]) | set(ab[t])):
             x, y = aa[t].get(uid), ab[t].get(uid)
@@ -434,6 +443,7 @@ def compare_air(A, B, tol, maxn):
                         bad.append(name)
             if not bad:
                 continue
+            pairs.append((t, uid, bad))
             if first is None:
                 first = t
             if shown < maxn:
@@ -449,6 +459,7 @@ def compare_air(A, B, tol, maxn):
         print("air: all %d common ticks agree (%d..%d)" % (len(ticks), ticks[0], ticks[-1]))
     else:
         print("air: %d difference(s), the first at tick %d" % (shown, first))
+    return {"first_tick": first, "pairs": pairs}
 
 
 def main():
