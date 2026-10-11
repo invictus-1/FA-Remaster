@@ -2171,6 +2171,23 @@ int ArmAxis(BuilderArm* a, Vec3 dir, bool local, bool isHeading, float slew, con
     float len = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
     target = center - (AcosA(len > 0 ? e.y / len : 0.0f) - 1.57079637f);
   }
+  if (Sim* sim = a->unit ? Sim::From(a->unit->luaState()) : nullptr; sim && sim->Recording()) {
+    // labhook 0.7 'R' record (Axis 0x636220 after the target)
+    unsigned char r[32];
+    auto put = [&](int o, uint32_t v) { r[o] = v & 0xff; r[o + 1] = (v >> 8) & 0xff; r[o + 2] = (v >> 16) & 0xff; r[o + 3] = v >> 24; };
+    auto putf = [&](int o, float f) { uint32_t v; std::memcpy(&v, &f, 4); put(o, v); };
+    r[0] = 'R';
+    r[1] = static_cast<unsigned char>((isHeading ? 1 : 2) | (local ? 4 : 0));
+    r[2] = r[3] = 0;
+    put(4, sim->RecorderTick());
+    put(8, a->unit->id);
+    putf(12, *cur);
+    putf(16, target);
+    putf(20, d.x);
+    putf(24, d.y);
+    putf(28, d.z);
+    sim->RecorderRaw(r, 32);
+  }
   float delta;
   if (half >= 3.14059281f) {
     delta = WrapAngle(target - *cur);

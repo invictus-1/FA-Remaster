@@ -39,7 +39,7 @@ def load(path):
     if data[:4] != b"LREC":
         sys.exit("%s: not a recording" % path)
     ver, usize, flags = struct.unpack_from("<III", data, 4)
-    draws, beats, econ, air = [], {}, {}, {}
+    draws, beats, econ, air, arm = [], {}, {}, {}, {}
     off, n = 16, len(data)
     while off + 12 <= n:
         t = data[off]
@@ -67,6 +67,13 @@ def load(path):
             air.setdefault(tick, {}).setdefault(uid, Air(data[off + 1], f[0:3], f[3], f[4:7], f[7], f[8], f[9], f[10],
                                                          f[11], f[12], f[13]))
             off += 56
+        elif t == 0x52:  # 'R': builder arm axis (flags 1 heading / 2 pitch, 4 local): cur, target, local dir
+            if off + 32 > n:
+                break
+            tick, uid = struct.unpack_from("<II", data, off + 4)
+            f = struct.unpack_from("<5f", data, off + 12)
+            arm.setdefault(tick, {}).setdefault(uid, []).append((data[off + 1], f[0], f[1], f[2:5]))
+            off += 32
         elif t == 0x54:  # 'T'
             tick, cnt = struct.unpack_from("<II", data, off + 4)
             off += 12
@@ -88,7 +95,7 @@ def load(path):
         else:
             print("%s: unknown record 0x%02x at %d, stopping" % (path, t, off))
             break
-    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ, "air": air}
+    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ, "air": air, "arm": arm}
 
 
 def index_draws(draws, label):
