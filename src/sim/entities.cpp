@@ -909,6 +909,7 @@ Vec3 EntityBonePosition(const Entity* e, int bone) { return BonePosition(e, bone
 
 void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float amount) {
   if (amount == 0.0f) return;
+  if (e->dead && amount > 0.0f) return;  // Entity::AdjustHealth 0x6798cf: nothing heals a dead entity (regeneration)
   float h = e->health + amount;
   if (e->maxHealth <= h) h = e->maxHealth;
   if (h < 0.0f) h = 0.0f;
