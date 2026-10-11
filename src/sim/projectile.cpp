@@ -811,8 +811,17 @@ int l_GetCurrentSpeed(lua_State* L) {
   lua_pushnumber(L, Len(EntityVelocity(P(L))));
   return 1;
 }
+// A shell whose target entity no longer exists has no target position any more: the original hands the script
+// the invalid vector (seen in the watch: 1.#QNAN x 3 once the dead unit is destroyed; while the dead unit is
+// still there, its position).
+static bool TargetGone(Sim& sim, const AiTarget& t) { return t.type == 1 && !TargetEntity(sim, t); }
 int l_GetCurrentTargetPosition(lua_State* L) {
   Projectile* p = P(L);
+  if (TargetGone(*S(L), p->target)) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    PushVec(L, Vec3{nan, nan, nan});
+    return 1;
+  }
   Vec3 t = p->target.type == 0 ? Vec3{} : TargetPos(*S(L), p->target, false);
   if (IsNaN(t)) t = p->lastTargetPos;
   if (IsNaN(t)) t = {};
