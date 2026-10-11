@@ -620,14 +620,14 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return kTaskRunning;
       }
       if (CanMove(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
-        const NamedFootprint& sfp = Footprint(*t.bp);
-        int sx0 = RoundEven(t.site.x - sfp.sizeX * 0.5f), sz0 = RoundEven(t.site.z - sfp.sizeZ * 0.5f);
+        // the site rect (task+0xd8) is the blueprint's SKIRT rect at the site (GetSkirtRect 0x51ec50: the
+        // footprint only where SkirtSize is 0), and the builder's own rect is its skirt rect too (0x6a7600)
+        const FRect sr = SkirtRect(*t.bp, GetUnitBpData(L, *t.bp), t.site.x, t.site.z);
+        const FRect ur = SkirtRect(*u->blueprint, *u->bpData, u->position.x, u->position.z);
         const NamedFootprint& ufp = Footprint(*u->blueprint);
-        int ux0 = RoundEven(u->position.x - ufp.sizeX * 0.5f), uz0 = RoundEven(u->position.z - ufp.sizeZ * 0.5f);
-        bool overlap = ux0 <= sx0 + sfp.sizeX && sx0 <= ux0 + ufp.sizeX && uz0 <= sz0 + sfp.sizeZ && sz0 <= uz0 + ufp.sizeZ;
+        bool overlap = ur.x0 <= sr.x1 && sr.x0 <= ur.x1 && ur.z0 <= sr.z1 && sr.z0 <= ur.z1;
         if (!UnitFitsAt(sim, u, u->position.x, u->position.z) || !InBuildRange(u, *t.bp, t.site) || overlap) {
-          float excl[4] = {static_cast<float>(sx0) - 1.0f, static_cast<float>(sz0) - 1.0f,
-                           static_cast<float>(sx0 + sfp.sizeX) + 1.0f, static_cast<float>(sz0 + sfp.sizeZ) + 1.0f};
+          float excl[4] = {sr.x0 - 1.0f, sr.z0 - 1.0f, sr.x1 + 1.0f, sr.z1 + 1.0f};
           Vec3 a = t.site;
           PrepareMoveFor(sim, u, &a, excl, 1);  // spacing 1 (air_nav.md 7.1)
           int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
