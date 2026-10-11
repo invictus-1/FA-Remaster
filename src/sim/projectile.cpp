@@ -714,6 +714,11 @@ int l_weapon_CreateProjectile(lua_State* L) {
   if (pb.straightDown) q = Orient({0, -1, 0});
   else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) q = Orient(Norm(w->solution));
   float R = w->firingRandomness;
+  static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;
+  if (dbgProj)
+    Logf(LogLevel::Info, "wproj %u unit %u %s weapon %s randomness %g moving %d", sim.tick(), u->id,
+         u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str(), R,
+         static_cast<int>(u->unitStates.count("Moving")));
   if (R > 0) {
     float g1 = Gauss(sim), g2 = Gauss(sim);
     float pitch = g1 * R * kPi / 180, yaw = g2 * R * kPi / 180;
