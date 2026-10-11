@@ -1837,12 +1837,12 @@ function P.RngClock()
     end
 end
 
--- 22) (v37, v38) Cybran build drones (ura0001*) and the builders they serve, ticks 40..420. Read-only: hooks log and
+-- 22) (v37-v39) Cybran build drones (ura0001*) and the builders they serve, ticks 40..420. Read-only: hooks log and
 -- call through. "PROBE dw <tick> <id> <state> ncmd=<n> c1=<type> focus=<id> guard=<id> st=<flags>" when a drone's
 -- line changes; "PROBE dwev <tick> <id> <callback> <arg entity id>" for builder and drone callbacks.
 function P.DroneWatch()
     while GetGameTick() < 40 do WaitTicks(1) end
-    local hooked, last = {}, {}
+    local hooked, last, errs = {}, {}, {}
     local function eid(x)
         if type(x) ~= 'table' then return '-' end
         local ok, v = pcall(function() return x:GetEntityId() end)
@@ -1878,11 +1878,27 @@ function P.DroneWatch()
                                 end
                             end
                             if drone then
-                                local q = u:GetCommandQueue() or {}
-                                local fl = ''
-                                for _, f in FL do if u:IsUnitState(f[1]) then fl = fl .. f[2] end end
-                                local line = sname(u) .. ' ncmd=' .. table.getn(q) .. ' c1=' .. tostring(q[1] and q[1].commandType)
-                                    .. ' focus=' .. eid(u:GetFocusUnit()) .. ' guard=' .. eid(u:GetGuardedUnit()) .. ' st=' .. fl
+                                -- (v39) every piece on its own pcall: the v37/v38 sweeps failed in the original
+                                -- (not here); "PROBE dw-err <piece> <message>" names the call, once per piece
+                                local function try(name, f)
+                                    local ok, v = pcall(f)
+                                    if ok then return tostring(v) end
+                                    if not errs[name] then
+                                        errs[name] = true
+                                        out('dw-err', GetGameTick(), name, (string.gsub(tostring(v), '\n', ' | ')))
+                                    end
+                                    return 'ERR'
+                                end
+                                local line = try('state', function() return sname(u) end)
+                                    .. ' ncmd=' .. try('queue', function() return table.getn(u:GetCommandQueue() or {}) end)
+                                    .. ' c1=' .. try('c1', function() local q = u:GetCommandQueue() or {} return q[1] and q[1].commandType end)
+                                    .. ' focus=' .. try('focus', function() return eid(u:GetFocusUnit()) end)
+                                    .. ' guard=' .. try('guard', function() return eid(u:GetGuardedUnit()) end)
+                                    .. ' st=' .. try('flags', function()
+                                        local fl = ''
+                                        for _, f in FL do if u:IsUnitState(f[1]) then fl = fl .. f[2] end end
+                                        return fl
+                                    end)
                                 if last[id] ~= line then
                                     last[id] = line
                                     out('dw', GetGameTick(), id, line)
