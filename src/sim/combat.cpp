@@ -2577,4 +2577,53 @@ void RegisterCombatBindings(lua_State* L) {
 // For the flight model (sim/air.cpp).
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t) { return CanAttackTarget(sim, w, t); }
 
+// CUnitMotion::CalcMoveCommon 0x6c1e9b (a unit without a spline point this tick): the first weapon that has a
+// target and is SlavedToBody (CAiAttackerImpl::HasSlavedTarget 0x5d72b0) makes the unit turn its body. With an arc
+// below 180 the turn starts when the target is more than SlavedToBodyArcRange degrees off the bow and stops inside
+// half of it (motion+0x91); in between the unit keeps facing where it faces. *dir = the direction to face.
+// False: no such weapon, the formation's facing applies.
+bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
+  UnitMotion& m = u->motion;
+  UnitWeapon* w = nullptr;
+  for (UnitWeapon* x : u->weapons)
+    if (x->bp && x->bp->slavedToBody && HasTarget(sim, x->target)) {
+      w = x;
+      break;
+    }
+  if (!w) {
+    m.slavedTurning = false;
+    return false;
+  }
+  Vec3 tp = TargetPos(sim, w->target, false);
+  if (IsNaN(tp)) return false;
+  if (const float aa = CB(u).attackAngle; aa > 0) {
+    // AI.AttackAngle (ubp+0x4d0; 0x6c2350): the unit shows the target its side. The direction to the target is
+    // turned about the up axis by the angle, away from the side the target is on, so the target ends up
+    // AttackAngle degrees off the bow (a Battlecruiser's broadside: 60).
+    Vec3 n = Norm(Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z});
+    const Quat& q = u->orientation;
+    const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+    const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
+    double s, c;
+    dmath::SinCos(static_cast<double>(ang), &s, &c);
+    const float sn = static_cast<float>(s), cs = static_cast<float>(c);
+    *dir = Vec3{n.x * cs + n.z * sn, n.y, n.z * cs - n.x * sn};
+    return true;
+  }
+  const float arc = w->bp->slavedToBodyArcRange;
+  if (!(180.0f > arc)) return false;
+  float a = dmath::Atan2(tp.x - u->position.x, tp.z - u->position.z);
+  float rel = std::fabs(WrapAngle(a - UnitHeading(u)));
+  if (m.slavedTurning) {
+    if (arc * 0.008726646f > rel) m.slavedTurning = false;
+  } else if (rel > arc * 0.017453292f) {
+    m.slavedTurning = true;
+  }
+  if (m.slavedTurning || (m.bp && m.bp->motionType == kMotionHover && m.pointNow))
+    *dir = Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
+  else
+    *dir = Forward(u->orientation);
+  return true;
+}
+
 }  // namespace moho

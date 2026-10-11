@@ -140,6 +140,7 @@ struct UnitMotion {
   // elevation (u+0x428+0x30; Physics.Elevation until Unit:SetElevation)
   float depth = 0, depthStep = 0, elevationAttr = 0;
   int targetLayer = 0, vertEvent = 0;
+  bool slavedTurning = false;  // m+0x91: turning the body toward a slaved weapon's target
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)

@@ -1150,11 +1150,15 @@ bool HasTarget(Sim& sim, const AiTarget& t);
 // 0x6992c0, in the negated-z frame. Returns true when it turned.
 bool ArrivalTurn(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
-  if (!u->form || !FormationIsForm(*u->form)) return false;
-  if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling")) return false;
-  if (combat::HasTarget(sim, u->desiredTarget)) return false;  // (weapon facing has priority: not carried out)
-  if (LandNavActive(u)) return false;                          // the navigator is not idle
-  Vec3 fv = FormationVector(sim, u);
+  // a weapon slaved to the body comes first (0x6c1e9b); only without one the formation's forward (0x6c25ca)
+  Vec3 fv{};
+  if (!SlavedFaceVector(sim, u, &fv)) {
+    if (!u->form || !FormationIsForm(*u->form)) return false;
+    if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling")) return false;
+    if (combat::HasTarget(sim, u->desiredTarget)) return false;
+    if (LandNavActive(u)) return false;  // the navigator is not idle
+    fv = FormationVector(sim, u);
+  }
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
   float cx = m.bx, cz = -m.bz;          // current forward (x, -z)
