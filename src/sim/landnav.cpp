@@ -663,7 +663,10 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     // point re-set by TryAdvance makes no new batch
     const UnitMotion& m = u->motion;
     bool same = m.hasWaypoint && !m.path.empty() && m.path.back().x == wp.x && m.path.back().y == wp.y && m.path.back().z == wp.z;
-    if (!same) MotionSetWaypoint(sim, u, wp, through);
+    if (!same) {
+      MotionSetWaypoint(sim, u, wp, through);
+      u->motion.wpInGoal = inGoal;
+    }
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u target (%d,%d) through %d cur (%d,%d) path %zu", sim.tick(), u->id,
            n.target.x, n.target.z, through ? 1 : 0, n.cur.x, n.cur.z, n.path.size());
@@ -798,10 +801,13 @@ void LandNavStop(Sim& sim, Unit* u) {
 }
 
 void LandNavSetSpeedThrough(Unit* u, bool on) {
+  // CAiNavigatorLand::SetSpeedThroughGoal 0x5a4240 -> CAiSteeringImpl 0x5d2390: the request is stored, and the
+  // motion's byte becomes it when the steering's last waypoint lay in the goal (also when the navigator is idle:
+  // two patrol points given to standing tanks set it at once); else the byte keeps that waypoint's own flag.
   LandNav* n = Nav(u);
-  if (!n || !n->active) return;
+  if (!n) return;
   n->speedThroughGoal = on;
-  if (n->hasTarget && InGoal(*n, n->target)) u->motion.passThrough = on;
+  if (u->motion.wpInGoal) u->motion.passThrough = on;
 }
 
 void LandNavPoke(Unit* u) {

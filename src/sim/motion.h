@@ -101,6 +101,9 @@ struct UnitMotion {
   size_t pathIndex = 0;
   bool hasGoal = false;
   bool passThrough = false;  // queued move follows: drive through the goal
+  // CAiSteeringImpl+0x9f: the navigator's last waypoint lay in the goal. SetSpeedThrough 0x5d2390 makes the
+  // drive-through byte (motion+0x8c) `wpInGoal ? the requested value : the waypoint's own flag (+0x9e)`.
+  bool wpInGoal = false;
   bool airSpeedThrough = false;  // aircraft: navigator.SetSpeedThroughGoal (motion+0x8c), set only on events
   int goalCellX = 0, goalCellZ = 0;
   uint32_t driveTick = 0;  // first tick it drives (path search latency; it coasts until then)

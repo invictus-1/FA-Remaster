@@ -490,8 +490,22 @@ bool IsMoveLikeType(CommandType t) {
 // the landing branches below); the flag keeps its value in between. E.g. a build drone (NOFORMATION) gets its
 // Guard command (event: not yet Guarding -> false) and never re-goals, so it circles with speed-through off.
 void UpdateSpeedThrough(Sim& sim, Unit* u) {
-  if (!u->motion.bp || u->motion.bp->motionType != kMotionAir) return;
+  if (!u->motion.bp) return;
   if (u->beingBuilt || u->dead || u->destroyQueued) return;
+  if (u->motion.bp->motionType != kMotionAir) {
+    // the same status for a land navigator (0x6ac940 is one function for every unit)
+    if (!u->motion.nav || !u->motion.bp->mobile()) return;
+    bool lv;
+    if (State(u, "ForceSpeedThrough")) lv = true;
+    else if (State(u, "Guarding") && !State(u, "Ferrying") && !InCategory(sim, u, "EXPERIMENTAL")) lv = true;
+    else {
+      const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
+      const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
+      lv = cur && next && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
+    }
+    LandNavSetSpeedThrough(u, lv);
+    return;
+  }
   bool v;
   if (State(u, "Refueling")) v = false;
   else if (State(u, "ForceSpeedThrough") || State(u, "CannotFindPlaceToLand")) v = true;
