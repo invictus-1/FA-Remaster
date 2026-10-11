@@ -162,6 +162,54 @@ void UpdateLayer(Sim& sim, Unit* u) {
 
 }  // namespace
 
+// CalcMoveCommon's facing: the look rotation 0x50b480 of the point's direction (Z = dir, X = (Z.z, 0, -Z.x),
+// Y = Z x X, each normalised by 0x452af0), turned into a quaternion by MatrixToQuat 0x4eb3f0 (rows X, Y, Z).
+Quat LookQuat(float dx, float dy, float dz) {
+  auto norm = [](float& x, float& y, float& z) {  // 0x452af0: returns the length; zero vector at or below 1e-6
+    float l = std::sqrt((x * x + y * y) + z * z);
+    if (l > 9.99999997e-07f) {
+      float inv = 1.0f / l;
+      x *= inv;
+      y *= inv;
+      z *= inv;
+    } else {
+      x = y = z = 0;
+    }
+    return l;
+  };
+  float Z[3] = {dx, dy, dz};
+  if (norm(Z[0], Z[1], Z[2]) == 0.0f) return Quat{0, 0, 0, 1};
+  float X[3] = {Z[2], 0.0f, -0.0f - Z[0]};
+  if (norm(X[0], X[1], X[2]) == 0.0f) {
+    float s = (dy > 0.0f) ? -0.707106769f : 0.707106769f;
+    return Quat{s, 0, 0, 0.707106769f};
+  }
+  float Y[3] = {Z[1] * X[2] - Z[2] * X[1], Z[2] * X[0] - X[2] * Z[0], X[1] * Z[0] - Z[1] * X[0]};
+  const float* A[3] = {X, Y, Z};
+  float q[3], w;
+  float tr = (A[0][0] + A[1][1]) + A[2][2];
+  if (tr > 0.0f) {
+    float r = std::sqrt(tr + 1.0f);  // x87 at PC_24
+    w = r * 0.5f;
+    float inv = 0.5f / r;
+    q[0] = (A[1][2] - A[2][1]) * inv;
+    q[1] = (A[2][0] - A[0][2]) * inv;
+    q[2] = (A[0][1] - A[1][0]) * inv;
+  } else {
+    static const int next[3] = {1, 2, 0};
+    int i = (A[1][1] > A[0][0]) ? 1 : 0;
+    if (A[2][2] > A[i][i]) i = 2;
+    int j = next[i], k = next[j];
+    float r = std::sqrt((A[i][i] - (A[k][k] + A[j][j])) + 1.0f);
+    float inv = 0.5f / r;
+    q[i] = r * 0.5f;
+    w = (A[j][k] - A[k][j]) * inv;
+    q[j] = (A[j][i] + A[i][j]) * inv;
+    q[k] = (A[i][k] + A[k][i]) * inv;
+  }
+  return Quat{q[0], q[1], q[2], w};
+}
+
 Quat YawQuat(float fx, float fz) {
   float h = dmath::Atan2(fx, fz);
   Quat q;
@@ -281,12 +329,16 @@ float PlatformHeight(const Unit* P, float x, float z) {
   return 0;
 }
 
+namespace {
+void AlignUp(Quat& q, Vec3 n);
+}
+
 void SnapUnit(const Sim& csim, Unit* u) {
   Sim& sim = const_cast<Sim&>(csim);
   const TerrainMap* map = sim.map();
   if (!map || !u->motion.bp) return;
   const MotionBlueprint& b = *u->motion.bp;
-  u->orientation = YawQuat(u->motion.bx, u->motion.bz);
+  // SnapToGround 0x6c1610 tilts the transform as it is (CalcMoveCommon set the facing when the unit moved)
   if (b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub) {
     u->position.y = map->hasWater ? map->waterElevation : map->TerrainHeight(u->position.x, u->position.z);
     return;
@@ -325,12 +377,7 @@ void SnapUnit(const Sim& csim, Unit* u) {
   }
   if (hover) y += b.elevation;
   u->position.y = y;
-  float l = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-  if (l > 0) {
-    if (n.y < 0) l = -l;
-    Vec3 nn{n.x / l, n.y / l, n.z / l};
-    u->orientation = Mul(Align({0, 1, 0}, nn), u->orientation);
-  }
+  AlignUp(u->orientation, n);  // 0x50b820: the transform's own up axis turns onto the normal
 }
 
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick) {
@@ -1166,7 +1213,7 @@ void MotionTick(Sim& sim, Unit* u) {
       m.prevPosY = py;
       m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};
       m.vel = nv;
-      if (b.motionType == kMotionHover) u->orientation = YawQuat(q.bx, q.bz);  // CalcMoveCommon's facing
+      u->orientation = LookQuat(q.bx, 0.0f, q.bz);  // CalcMoveCommon's facing (0x6c2297)
       m.fx = q.fx;
       m.fz = q.fz;
       m.bx = q.bx;
@@ -1175,7 +1222,10 @@ void MotionTick(Sim& sim, Unit* u) {
     } else if (!m.hasGoal && !m.pushed) {
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       moved = Coast(u);
-      if (turned) m.needSnap = true;
+      if (turned) {
+        m.needSnap = true;
+        u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+      }
     } else {
       moved = Coast(u);  // pushed, or no spline point (the navigator is thinking): keeps rolling and slows down
     }
@@ -1195,7 +1245,7 @@ void MotionTick(Sim& sim, Unit* u) {
       moved = false;
     }
     if (b.motionType == kMotionHover) {
-      if (m.needSnap && !(m.pointNow && !m.pushed)) u->orientation = YawQuat(m.bx, m.bz);  // turned in place
+      if (m.needSnap && !(m.pointNow && !m.pushed)) u->orientation = LookQuat(m.bx, 0.0f, m.bz);  // turned in place
       if (HoverRuns(u)) HoverMove(sim, u);
       else if (moved || m.needSnap) {
         SnapUnit(sim, u);
