@@ -177,39 +177,152 @@ bool CallMethodNumber(Sim& sim, lua_State* L, ScriptObject* obj, const char* met
   return ok;
 }
 
-// The first point of the segment below the terrain (STIMap::Intersection, approximated by
-// marching at most half a unit at a time and refining).
-bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit) {
-  if (!map) return false;
-  Vec3 d = Sub(p1, p0);
-  float len = Len(d);
-  auto below = [&](const Vec3& p) { return p.y < map->TerrainHeight(p.x, p.z); };
-  if (below(p0)) {
-    *dist = 0;
-    *hit = p0;
+// One terrain triangle of a cell (0x4778f0 / 0x477b80): the plane through (cx, hA, cz) with normal n. A segment
+// part P0 -> P1 that starts under the plane hits at tIn (the t the ray entered the CELL at, also for the second
+// triangle of a cell); one that ends under it hits where the ray meets the plane.
+static bool TerrainTriHit(float nx, float ny, float nz, float fcx, float fcz, float hA, const Vec3& O, const Vec3& D,
+                          const Vec3& P0, const Vec3& P1, float tIn, float* out) {
+  const float len = std::sqrt(nx * nx + ny * ny + nz * nz);  // 0x452af0
+  if (len > 9.99999997e-07f) {
+    const float inv = 1.0f / len;
+    nx *= inv;
+    ny *= inv;
+    nz *= inv;
+  } else {
+    nx = ny = nz = 0.0f;
+  }
+  const float d = nz * fcz + nx * fcx + ny * hA;
+  const float s0 = (P0.z * nz + P0.y * ny + P0.x * nx) - d;
+  if (0.0f > s0) {
+    *out = tIn;
     return true;
   }
-  int n = std::max(1, static_cast<int>(std::ceil(len / 0.5f)));
-  float prev = 0;
-  for (int i = 1; i <= n; ++i) {
-    float t = static_cast<float>(i) / n;
-    Vec3 p = Add(p0, Mul(d, t));
-    if (below(p)) {
-      float lo = prev, hi = t;
-      for (int k = 0; k < 8; ++k) {
-        float m = 0.5f * (lo + hi);
-        if (below(Add(p0, Mul(d, m)))) hi = m;
-        else lo = m;
-      }
-      Vec3 h = Add(p0, Mul(d, hi));
-      h.y = map->TerrainHeight(h.x, h.z);
-      *hit = h;
-      *dist = hi * len;
-      return true;
-    }
-    prev = t;
+  const float s1 = (P1.z * nz + P1.y * ny + P1.x * nx) - d;
+  if (0.0f > s1) {
+    const float num = (O.z * nz + O.y * ny + nx * O.x) - d;
+    const float den = D.z * nz + D.y * ny + nx * D.x;
+    *out = -0.0f - num / den;
+    return true;
   }
   return false;
+}
+
+// CHeightField's line test 0x477030 (behind STIMap::Intersection 0x476f30): the first t in [nearT, farT] at which
+// the ray O + D t is under the terrain. The exe walks a min/max pyramid of the heights; what it ends up testing
+// are the ray's cells in order, each cut along its (x, z) -> (x + 1, z + 1) diagonal into two triangles. (The
+// pyramid only skips blocks the ray passes above, and the clip against the highest point of the map is left out
+// for the same reason.)
+static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, float nearT, float farT, float* dist) {
+  const int w = map->width() + 1, h = map->height() + 1;  // height samples per row / column
+  // 0x4776e0: the part of the ray over the map
+  auto clip = [&](float o, float dv, int n) {
+    if (dv != 0.0f) {
+      const float tA = (-1.0f / dv) * o, tB = (static_cast<float>(n - 1) - o) / dv;
+      if (tB > tA) {
+        if (tA > nearT) nearT = tA;
+        if (!(tB > farT)) farT = tB;
+      } else {
+        if (tB > nearT) nearT = tB;
+        if (!(tA > farT)) farT = tA;
+      }
+      return true;
+    }
+    return !(0.0f > o) && !(o > static_cast<float>(n - 1));
+  };
+  if (!clip(O.x, D.x, w) || !clip(O.z, D.z, h)) return false;
+  if (farT < nearT) return false;
+  if (D.x == 0.0f && D.z == 0.0f) {  // straight down or up: the elevation under it
+    const float t = (map->TerrainHeight(O.x, O.z) - O.y) / D.y;
+    if (!(t >= nearT) || !(farT >= t)) return false;
+    *dist = t;
+    return true;
+  }
+  // 0x40d860: the walk runs mirrored so that the ray goes toward +x and +z (a mirrored cell index is ~index)
+  const float xN = D.x * nearT + O.x, xF = D.x * farT + O.x, zN = D.z * nearT + O.z, zF = D.z * farT + O.z;
+  const bool mx = !(xF >= xN), mz = !(zF >= zN);
+  const float x0 = mx ? -0.0f - xN : xN, x1 = mx ? -0.0f - xF : xF;
+  const float z0 = mz ? -0.0f - zN : zN, z1 = mz ? -0.0f - zF : zF;
+  const float dx = x1 - x0, dz = z1 - z0;
+  int curX = static_cast<int>(std::floor(x0)), curZ = static_cast<int>(std::floor(z0));
+  int cx = mx ? ~curX : curX, cz = mz ? ~curZ : curZ;
+  float tIn = nearT;
+  for (int guard = 0; guard < 1000000; ++guard) {
+    // the next cell: across x when the cell's far corner lies on the z side of the line (0x477230)
+    const int nX = curX + 1, nZ = curZ + 1;
+    if ((static_cast<float>(nZ) - z1) * dx > (static_cast<float>(nX) - x1) * dz) curX = nX;
+    else curZ = nZ;
+    bool last = false;
+    float tOut;
+    int ncx = cx, ncz = cz;
+    if (static_cast<float>(curX) > x1 || static_cast<float>(curZ) > z1) {
+      last = true;
+      tOut = farT;
+    } else {
+      ncx = mx ? ~curX : curX;
+      ncz = mz ? ~curZ : curZ;
+      if (cx != ncx) tOut = (static_cast<float>(std::max(cx, ncx)) - O.x) / D.x;
+      else tOut = (static_cast<float>(std::max(cz, ncz)) - O.z) / D.z;
+    }
+    if (cx >= 0 && cx < w - 1 && cz >= 0 && cz < h - 1) {
+      const Vec3 P0{O.x + D.x * tIn, O.y + D.y * tIn, O.z + D.z * tIn};
+      const Vec3 P1{O.x + D.x * tOut, O.y + D.y * tOut, O.z + D.z * tOut};
+      const float fcx = static_cast<float>(cx), fcz = static_cast<float>(cz);
+      const float hA = map->HeightAt(cx, cz), hC = map->HeightAt(cx + 1, cz + 1);
+      // 0x4778f0: the triangle holding (cx, cz + 1); 0x477b80: the one holding (cx + 1, cz)
+      auto triA = [&](const Vec3& a, const Vec3& b) {
+        const float ay = map->HeightAt(cx, cz + 1) - hA, by = hC - hA;
+        return TerrainTriHit(ay - by, 1.0f, by * 0.0f - ay, fcx, fcz, hA, O, D, a, b, tIn, dist);
+      };
+      auto triB = [&](const Vec3& a, const Vec3& b) {
+        const float ay = map->HeightAt(cx + 1, cz) - hA, by = hC - hA;
+        return TerrainTriHit(by * 0.0f - ay, 1.0f, ay - by, fcx, fcz, hA, O, D, a, b, tIn, dist);
+      };
+      const float k = static_cast<float>(cx - cz);
+      const float e0 = P0.x - P0.z, e1 = P1.x - P1.z;
+      auto mid = [&]() {
+        const float tm = (k - (O.x - O.z)) / (D.x - D.z);
+        return Vec3{O.x + D.x * tm, O.y + D.y * tm, O.z + D.z * tm};
+      };
+      bool hit;
+      if (k > e0) {
+        if (k > e1) {
+          hit = triA(P0, P1);
+        } else {
+          const Vec3 M = mid();
+          hit = triA(P0, M) || triB(M, P1);
+        }
+      } else if (!(e1 < k)) {
+        hit = triB(P0, P1);
+      } else {
+        const Vec3 M = mid();
+        hit = triB(P0, M) || triA(M, P1);
+      }
+      if (hit) return true;
+    }
+    if (last) return false;
+    tIn = tOut;
+    cx = ncx;
+    cz = ncz;
+  }
+  return false;
+}
+
+// STIMap::Intersection 0x476f30 along the segment p0 -> p1, as Projectile::CheckCollision 0x69d4a8 asks it: the
+// segment as centre, unit direction and half length (0x4fe130), the line from its start over twice that length.
+bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit) {
+  if (!map) return false;
+  const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
+  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+  if (!(ext > 0.0f)) return false;
+  const float inv = 1.0f / ext;
+  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
+  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+  const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
+  float t;
+  if (!TerrainLineHit(map, O, D, 0.0f, ext * 2.0f, &t)) return false;
+  *dist = t;
+  *hit = {O.x + D.x * t, O.y + D.y * t, O.z + D.z * t};
+  return true;
 }
 
 Entity* TargetEntity(Sim& sim, const AiTarget& t) {

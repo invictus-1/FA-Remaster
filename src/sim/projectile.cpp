@@ -570,6 +570,17 @@ void MotionTick(Sim& sim, Projectile* p) {
   }
   p->prevPos = p0;
   p->velScale = 1;
+  {
+    // MOHO64_DEBUG_PROJ=<a>-<b>: every projectile's step in ticks a..b (and what it hit)
+    static const char* dbg = getenv("MOHO64_DEBUG_PROJ");
+    static const uint32_t dbgA = dbg ? static_cast<uint32_t>(atol(dbg)) : 1u;
+    static const uint32_t dbgB = dbg && strchr(dbg, '-') ? static_cast<uint32_t>(atol(strchr(dbg, '-') + 1)) : 0u;
+    if (sim.tick() >= dbgA && sim.tick() <= dbgB)
+      Logf(LogLevel::Info, "pdbg %u %u %s p0 %.9g %.9g %.9g p1 %.9g %.9g %.9g v %.9g %.9g %.9g hit %.9g type %d terrain %.9g %.9g",
+           sim.tick(), p->id, p->blueprint ? p->blueprint->id.c_str() : "?", p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, v.x,
+           v.y, v.z, p->hitFraction, p->impactType, sim.map() ? sim.map()->TerrainHeight(p0.x, p0.z) : 0.0f,
+           sim.map() ? sim.map()->TerrainHeight(p1.x, p1.z) : 0.0f);
+  }
   if (p->hitFraction >= 0) {
     float t = p->hitFraction;
     if (p->impactType == 1 && p->bounces++ < p->bounceLimit) {
