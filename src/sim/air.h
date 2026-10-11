@@ -127,6 +127,8 @@ void AirMotionTick(Sim& sim, Unit* u);
 // aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.
 void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0, bool landingSpot = true);
 // CUnitMotion+0x64: a fixed landing height (+inf: none), e.g. a staging platform's bone.
+// The navigator's SetDestUnit: fly at an entity's exact position (attack runs on a mobile target).
+void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e);
 void AirSetLandHeight(Unit* u, float h);
 // CUnitMotion::SetFacing: the heading wanted on arrival.
 void AirSetFacing(Unit* u, Vec3 dir);

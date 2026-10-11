@@ -30,6 +30,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/air.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -1626,6 +1627,11 @@ void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
 void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
+  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {  // CAiNavigatorAir::SetDestUnit: the exact spot
+    u->motion.failed = false;
+    AirSetDestEntity(sim, u, e);
+    return;
+  }
   int cx = static_cast<int>(std::nearbyint(e->position.x - 0.5f));
   int cz = static_cast<int>(std::nearbyint(e->position.z - 0.5f));
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
@@ -1824,7 +1830,10 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   (void)L;
   AiTarget target = CommandTarget(sim, t);
   bool air = u->motion.bp && u->motion.bp->motionType == kMotionAir;
-  if (!air && t.adata) {
+  // CUnitAttackTargetTask::TaskTick 0x5f34c0 is one task for every unit; an aircraft's attack runs are the
+  // motion's own (ComputeAirCombatTactics), the task only keeps the navigator on the target
+  static const bool oldAirAttack = getenv("MOHO64_OLD_AIR_ATTACK") != nullptr;
+  if ((!air || !oldAirAttack) && t.adata) {
     AttackData& d = *t.adata;
     if (d.listening && u->attackStateSignal) {
       u->attackStateSignal = false;

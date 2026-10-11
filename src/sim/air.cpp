@@ -1755,6 +1755,18 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   (void)sim;
 }
 
+// CAiNavigatorAir::SetDestUnit 0x5a4a70 (air_nav.md 4.5): the motion flies at the entity's position itself (no
+// goal cell), the target layer stays, the navigator steers; its own goal is not touched.
+void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e) {
+  if (!u->motion.air || !e) return;
+  AirMotion& a = A(u);
+  a.pending = false;
+  a.steering = true;
+  SetTarget(sim, u, e->position, Vec3{}, 0);
+  u->motion.hasGoal = true;
+  u->motion.arrived = false;
+}
+
 void AirSetLandHeight(Unit* u, float h) {
   if (u->motion.air) A(u).landHeight = h;
 }
