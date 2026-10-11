@@ -1557,7 +1557,13 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
         u->unitStates.erase("Moving");
         t.workId = t.goalId;
-        if (Unit* w = FindUnit(sim, t.workId)) SetArmAimTarget(sim, u, w->position);
+        // aim = the target's bone -1 world transform (Unit::GetBoneWorldTransform 0x6aa5c0): the transform with
+        // local offset (0, SizeY / 2, 0)
+        if (Unit* w = FindUnit(sim, t.workId)) {
+          float hy = w->bpData ? w->bpData->sizeY * 0.5f : 0.0f;
+          Vec3 o = vm::Rotate(w->orientation, Vec3{0, hy, 0});
+          SetArmAimTarget(sim, u, Vec3{w->position.x + o.x, w->position.y + o.y, w->position.z + o.z});
+        }
         [[fallthrough]];
       }
       case 2:
