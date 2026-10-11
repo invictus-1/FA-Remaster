@@ -1007,8 +1007,15 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   Gen g;
   g.p = u->position;
   g.vel = Vec3{V.x, 0, V.z};
-  g.fx = g.bx = dfx;
-  g.fz = g.bz = dfz;
+  // The velocity goes along the hull's forward axis as it lies on the slope, but the facing stays the steering's
+  // own: taking it from the tilted hull turned a braking tank by about a degree on a side slope (seen: the
+  // original's heading does not move in the beat a tank starts to brake).
+  (void)dfx;
+  (void)dfz;
+  g.fx = m.fx;
+  g.fz = m.fz;
+  g.bx = m.bx;
+  g.bz = m.bz;
   for (int n = 0; n < 400; ++n) {
     m.genLast = PointOf(g);
     bool stop = false;
