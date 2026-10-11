@@ -314,6 +314,9 @@ ReconBlip* FindOrCreateFake(Sim& sim, lua_State* L, int a, Unit* u) {
   if (!b) {
     b = MakeBlip(sim, L, u, true);
     u->fakeBlips.push_back(b);
+    if (getenv("MOHO64_DEBUG_JAM"))
+      Logf(LogLevel::Info, "jamnew %u army %d unit %u %s fake %u at %.2f %.2f", sim.tick(), a, u->id,
+           u->blueprint ? u->blueprint->id.c_str() : "?", b->id, b->position.x, b->position.z);
   }
   b->rflags[a] = kReconInUse;
   return b;

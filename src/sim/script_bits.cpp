@@ -12,6 +12,7 @@
 #include <cstring>
 #include <strings.h>
 
+#include "core/log.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/combat.h"
@@ -26,7 +27,10 @@ const char* const kToggleNames[] = {"RULEUTC_ShieldToggle", "RULEUTC_WeaponToggl
                                     "RULEUTC_IntelToggle", "RULEUTC_ProductionToggle", "RULEUTC_StealthToggle",
                                     "RULEUTC_GenericToggle", "RULEUTC_SpecialToggle", "RULEUTC_CloakToggle"};
 
-// The blueprint's General.ToggleCaps as a mask (bp_reflect converts the names to numbers at load).
+bool ParseToggleCaps(const char* s, uint32_t* out);
+
+// The blueprint's General.ToggleCaps as a mask. bp_reflect turns the table into the enum's lexical value: the
+// NAME when exactly one cap is set ("RULEUTC_JammingToggle"), else the mask as a decimal string.
 uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
   lua_State* L = sim.L();
   int top = lua_gettop(L);
@@ -38,6 +42,7 @@ uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
     lua_pushstring(L, "ToggleCaps");
     lua_gettable(L, -2);
     if (lua_isnumber(L, -1)) caps = static_cast<uint32_t>(lua_tonumber(L, -1));
+    else if (lua_type(L, -1) == LUA_TSTRING) ParseToggleCaps(lua_tostring(L, -1), &caps);
     else if (lua_istable(L, -1)) {  // unconverted { RULEUTC_x = true, ... }
       for (int i = 0; i < 9; ++i) {
         lua_pushstring(L, kToggleNames[i]);
@@ -174,6 +179,15 @@ void UnitToggleScriptBit(Sim& sim, Unit* u, long bit) {
   bool clear = (u->scriptBits & m) != 0;
   if (clear) u->scriptBits &= ~m;
   else u->scriptBits |= m;
+  if (getenv("MOHO64_DEBUG_BITS")) {  // who toggles: tick, unit, bit, new value, the Lua callers
+    lua_State* L = sim.L();
+    std::string tb;
+    lua_Debug ar;
+    for (int lv = 0; lv < 8 && lua_getstack(L, lv, &ar); ++lv)
+      if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+    Logf(LogLevel::Info, "bitdbg %u unit %u %s bit %ld -> %d%s", sim.tick(), u->id,
+         u->blueprint ? u->blueprint->id.c_str() : "?", bit, clear ? 0 : 1, tb.c_str());
+  }
   if (!u->HasLuaObject()) return;
   lua_pushnumber(sim.L(), static_cast<float>(bit));
   sim.CallMethod(sim.L(), u, clear ? "OnScriptBitClear" : "OnScriptBitSet", 1);
