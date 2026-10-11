@@ -1837,4 +1837,64 @@ function P.RngClock()
     end
 end
 
+-- 22) (v37, v38) Cybran build drones (ura0001*) and the builders they serve, ticks 40..420. Read-only: hooks log and
+-- call through. "PROBE dw <tick> <id> <state> ncmd=<n> c1=<type> focus=<id> guard=<id> st=<flags>" when a drone's
+-- line changes; "PROBE dwev <tick> <id> <callback> <arg entity id>" for builder and drone callbacks.
+function P.DroneWatch()
+    while GetGameTick() < 40 do WaitTicks(1) end
+    local hooked, last = {}, {}
+    local function eid(x)
+        if type(x) ~= 'table' then return '-' end
+        local ok, v = pcall(function() return x:GetEntityId() end)
+        return ok and tostring(v) or '?'
+    end
+    local function sname(u)
+        local mt = getmetatable(u)
+        if mt and mt == rawget(u, 'IdleState') or mt == u.IdleState then return 'Idle' end
+        if mt and mt == u.BuildState then return 'Build' end
+        return 'base'
+    end
+    local EV = { 'OnStartBuild', 'OnStopBuild', 'OnStartRepair', 'OnStopRepair', 'OnFailedToBuild',
+                 'CreateBuildEffects', 'StopBuildingEffects', 'OnStartAssist' }
+    -- (v38) 'Assisting' is not an EUnitState: IsUnitState raised and the pcall ended each sweep early
+    local FL = { { 'Guarding', 'G' }, { 'Repairing', 'R' }, { 'Building', 'B' }, { 'Moving', 'M' }, { 'GuardBusy', 'Y' },
+                 { 'AssistMoving', 'A' } }
+    while GetGameTick() <= 420 do
+        pcall(function()
+            for i, _ in ListArmies() do
+                local brain = GetArmyBrain(i)
+                local us = brain and brain:GetListOfUnits(categories.ALLUNITS, false) or {}
+                for _, u in us do
+                    if not u.Dead then
+                        local bp = u:GetBlueprint().BlueprintId
+                        local drone = string.sub(bp, 1, 7) == 'ura0001'
+                        if drone or EntityCategoryContains(categories.COMMAND, u) then
+                            local id = u:GetEntityId()
+                            if not hooked[id] then
+                                hooked[id] = true
+                                for _, name in EV do
+                                    local n = name
+                                    hook(u, 'dw', n, function(self, a) out('dwev', GetGameTick(), id, n, eid(a)) end)
+                                end
+                            end
+                            if drone then
+                                local q = u:GetCommandQueue() or {}
+                                local fl = ''
+                                for _, f in FL do if u:IsUnitState(f[1]) then fl = fl .. f[2] end end
+                                local line = sname(u) .. ' ncmd=' .. table.getn(q) .. ' c1=' .. tostring(q[1] and q[1].commandType)
+                                    .. ' focus=' .. eid(u:GetFocusUnit()) .. ' guard=' .. eid(u:GetGuardedUnit()) .. ' st=' .. fl
+                                if last[id] ~= line then
+                                    last[id] = line
+                                    out('dw', GetGameTick(), id, line)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        WaitTicks(1)
+    end
+end
+
 moho64_probe = P
