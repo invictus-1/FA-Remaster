@@ -28,7 +28,8 @@ COMMANDS = ["None", "Stop", "Move", "Dive", "FormMove", "BuildSiloTactical", "Bu
             "FormAggressiveMove", "AssistMove", "SpecialAction", "Dock"]
 INLINE_SITES = {1: "Gauss draw 1 (0x40ef00)", 2: "Gauss draw 2 (0x40ef63)", 3: "inline draw 0x5e75a6",
                 4: "inline draw 0x6b8297"}
-Unit = collections.namedtuple("Unit", "id q p states layer health frac cmd ncmd dead bb")
+Unit = collections.namedtuple("Unit", "id q p states layer health frac cmd ncmd dead bb ext")
+Ext = collections.namedtuple("Ext", "maxspeed slot delay rank vel through atgoal inform hasmotion")
 
 
 def load(path):
@@ -36,7 +37,7 @@ def load(path):
     if data[:4] != b"LREC":
         sys.exit("%s: not a recording" % path)
     ver, usize, flags = struct.unpack_from("<III", data, 4)
-    draws, beats = [], {}
+    draws, beats, econ = [], {}, {}
     off, n = 16, len(data)
     while off + 12 <= n:
         t = data[off]
@@ -51,6 +52,11 @@ def load(path):
                 mti, tick, site, where = draws[-1][:4]
                 draws[-1] = (mti, tick, site, where, chain)
             off += 4 + 4 * m
+        elif t == 0x45:  # 'E': per-army economy
+            na = data[off + 1]
+            tick = struct.unpack_from("<I", data, off + 4)[0]
+            econ[tick] = [struct.unpack_from("<8f", data, off + 8 + 32 * i) for i in range(na)]
+            off += 8 + 32 * na
         elif t == 0x54:  # 'T'
             tick, cnt = struct.unpack_from("<II", data, off + 4)
             off += 12
@@ -60,15 +66,19 @@ def load(path):
             for i in range(cnt):
                 b = off + i * usize
                 f = struct.unpack_from("<I4f3fIIIffHHBB", data, b)
+                ext = None
+                if usize >= 112:
+                    e = struct.unpack_from("<f3fIf3fBBBB", data, b + 60)
+                    ext = Ext(e[0], e[1:4], e[4], e[5], e[6:9], e[9], e[10], e[11], e[12])
                 units[f[0]] = Unit(f[0], f[1:5], f[5:8], f[8] | (f[9] << 32), f[10], f[11], f[12], f[13], f[14],
-                                   f[15], f[16])
+                                   f[15], f[16], ext)
                 off_end = b
             off += cnt * usize
             beats[tick] = units
         else:
             print("%s: unknown record 0x%02x at %d, stopping" % (path, t, off))
             break
-    return {"flags": flags, "draws": draws, "beats": beats}
+    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ}
 
 
 def index_draws(draws, label):
@@ -338,6 +348,21 @@ def compare_units(A, B, tol, max_diffs):
                 d.append("head command %s vs %s" % (cmd_s(x.cmd, x.ncmd), cmd_s(y.cmd, y.ncmd)))
             if x.dead != y.dead:
                 d.append("dead %d vs %d" % (x.dead, y.dead))
+            if x.ext and y.ext:
+                a, c = x.ext, y.ext
+                if a.hasmotion and abs(a.maxspeed - c.maxspeed) > tol * max(1.0, abs(a.maxspeed)):
+                    d.append("max speed %.5f vs %.5f" % (a.maxspeed, c.maxspeed))
+                if a.inform != c.inform:
+                    d.append("in formation %d vs %d" % (a.inform, c.inform))
+                elif a.inform:
+                    if max(abs(a.slot[j] - c.slot[j]) for j in (0, 2)) > tol:
+                        d.append("slot %.4f,%.4f vs %.4f,%.4f" % (a.slot[0], a.slot[2], c.slot[0], c.slot[2]))
+                    if a.delay != c.delay:
+                        d.append("path delay %d vs %d" % (a.delay, c.delay))
+                    if a.atgoal != c.atgoal:
+                        d.append("all at goal %d vs %d" % (a.atgoal, c.atgoal))
+                if a.hasmotion and a.through != c.through:
+                    d.append("speed-through %d vs %d" % (a.through, c.through))
             if d:
                 diffs.append((i, d))
         missing = sorted(set(ua) ^ set(ub))
@@ -356,6 +381,22 @@ def compare_units(A, B, tol, max_diffs):
     print("units: quaternion order in the original file = %s" % (perm,))
 
 
+def compare_econ(A, B, tol):
+    ea, eb = A["econ"], B["econ"]
+    ticks = sorted(set(ea) & set(eb))
+    if not ticks:
+        return
+    names = ["stored E", "stored M", "income E", "income M", "requested E", "requested M", "used E", "used M"]
+    for t in ticks:
+        for i, (x, y) in enumerate(zip(ea[t], eb[t])):
+            bad = [(names[k], x[k], y[k]) for k in range(8) if abs(x[k] - y[k]) > tol * max(1.0, abs(x[k]))]
+            if bad:
+                print("economy: first difference at tick %d, army %d: %s" % (t, i + 1, "; ".join(
+                    "%s %.4f vs %.4f" % b for b in bad)))
+                return
+    print("economy: all armies agree on all %d common ticks (%d..%d)" % (len(ticks), ticks[0], ticks[-1]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("orig")
@@ -371,6 +412,7 @@ def main():
     print("original: %d draws, %d beats; ours: %d draws, %d beats" % (len(A["draws"]), len(A["beats"]),
                                                                        len(B["draws"]), len(B["beats"])))
     compare_draws(A, B, ExeNames(a.names), a.moho64, a.context)
+    compare_econ(A, B, a.units_tol)
     if not a.no_units:
         compare_units(A, B, a.units_tol, a.max_unit_diffs)
 

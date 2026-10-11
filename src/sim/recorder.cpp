@@ -11,7 +11,9 @@
 //   'T' (12 bytes): u8 'T', 0, 0, 0, u32 tick (at beat entry: the state after that tick), u32 n; then n units of
 //       64 bytes in entity-id order: id, quat[4] (x y z w), pos[3], states (64-bit set, the exe's EUnitState
 //       numbers), layer bits, health, fractionComplete, u16 head command type, u16 queue length, u8 dead,
-//       u8 being built, 2 pad, u32 0.
+//       u8 being built, 2 pad; format 2 (112 bytes) adds: f32 max speed (u+0x594), f32 slot[3] (u+0x59c), u32 path
+//       delay (u+0x58c), f32 rank (u+0x598), f32 motion velocity[3] (m+0x38), u8 speed-through (m+0x8c),
+//       u8 all-at-goal (u+0x590), u8 in a formation (u+0x580), u8 has motion, 12 pad.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -71,7 +73,7 @@ void Sim::RecorderOpen() {
     return;
   }
   setvbuf(rec_, nullptr, _IOFBF, 1 << 20);
-  unsigned char h[16] = {'L', 'R', 'E', 'C', 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0};
+  unsigned char h[16] = {'L', 'R', 'E', 'C', 2, 0, 0, 0, 112, 0, 0, 0, 1, 0, 0, 0};
   fwrite(h, 1, 16, rec_);
 }
 
@@ -108,7 +110,7 @@ void Sim::RecorderBeat() {
   Put32(h + 8, static_cast<uint32_t>(list.size()));
   fwrite(h, 1, 12, rec_);
   for (Unit* u : list) {
-    unsigned char r[64] = {};
+    unsigned char r[112] = {};
     Put32(r, u->id);
     PutF(r + 4, u->orientation.x);
     PutF(r + 8, u->orientation.y);
@@ -134,7 +136,32 @@ void Sim::RecorderBeat() {
     r[55] = static_cast<unsigned char>(n >> 8);
     r[56] = u->dead ? 1 : 0;
     r[57] = u->beingBuilt ? 1 : 0;
-    fwrite(r, 1, 64, rec_);
+    PutF(r + 60, u->motion.maxSpeedU594);
+    PutF(r + 64, u->formSlot.x);
+    PutF(r + 68, u->formSlot.y);
+    PutF(r + 72, u->formSlot.z);
+    Put32(r + 76, static_cast<uint32_t>(u->formPathDelay));
+    PutF(r + 80, u->formRank);
+    PutF(r + 84, u->motion.vel.x);
+    PutF(r + 88, u->motion.vel.y);
+    PutF(r + 92, u->motion.vel.z);
+    r[96] = (u->motion.air ? u->motion.airSpeedThrough : u->motion.passThrough) ? 1 : 0;
+    r[97] = u->formAllAtGoal ? 1 : 0;
+    r[98] = u->form ? 1 : 0;
+    r[99] = u->motion.bp && u->motion.bp->mobile() ? 1 : 0;
+    fwrite(r, 1, 112, rec_);
+  }
+  // 'E': u8 'E', u8 n, u16 0, u32 tick; per army stored e,m, income e,m, requested e,m, used e,m
+  unsigned char e[8] = {'E', static_cast<unsigned char>(armies_.size()), 0, 0};
+  Put32(e + 4, tick_);
+  fwrite(e, 1, 8, rec_);
+  for (const auto& a : armies_) {
+    unsigned char r[32];
+    const ArmyEconomy& c = a->econ;
+    const float v[8] = {c.stored[0], c.stored[1], c.incomeStat[0], c.incomeStat[1],
+                        c.requested[0], c.requested[1], c.usage[0], c.usage[1]};
+    for (int k = 0; k < 8; ++k) PutF(r + 4 * k, v[k]);
+    fwrite(r, 1, 32, rec_);
   }
   fflush(rec_);
 }

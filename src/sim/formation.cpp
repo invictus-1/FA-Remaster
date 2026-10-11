@@ -939,6 +939,7 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
   }
   float ms = mult * capped > base ? base : mult * capped;
   u->motion.speedCap = (F && g) ? ms : 0.0f;
+  u->motion.maxSpeedU594 = ms;
   static const long dbg = getenv("MOHO64_DEBUG_FORMU") ? atol(getenv("MOHO64_DEBUG_FORMU")) : -1;
   if (dbg >= 0 && static_cast<long>(u->id) == dbg)
     Logf(LogLevel::Info, "formu %u self %u F %p g %p slot %.3f %.3f leader %u cap %.4f mult %.4f mid %.4f pos %.3f %.3f follow %d",
