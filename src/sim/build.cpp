@@ -1192,9 +1192,11 @@ int NavStatus(const Unit* u) {  // navigator GetStatus: 0 idle, 1 thinking, 2 st
 }
 
 // GuardAbort 0x614170: GuardBusy, and the navigator's AbortMove
+// GuardAbort 0x614170: GuardBusy, then navigator.AbortMove() whenever the unit has a navigator (no goal test:
+// an aircraft re-targets a point 1 s ahead every time, guard_task.md 4 / air_nav.md 4.7)
 void GuardAbort(Unit* u) {
   u->unitStates.insert("GuardBusy");
-  if (u->motion.hasGoal) MotionStop(u);
+  if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
 }
 
 // RefreshGuardedUnitFromTarget 0x611a40 (never clears anything)
@@ -1550,7 +1552,10 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           if (Unit* f = FactoryOf(sim, tg)) R = f;
           if (RepairGap(u, R) > mbd) return kTaskFailed;  // could not get in range
         }
-        StopMoving(u);
+        // 0x5f99ab: navigator.AbortMove() whenever there is a navigator (no goal test: an aircraft re-targets a
+        // point 1 s ahead)
+        if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+        u->unitStates.erase("Moving");
         t.workId = t.goalId;
         if (Unit* w = FindUnit(sim, t.workId)) SetArmAimTarget(sim, u, w->position);
         [[fallthrough]];

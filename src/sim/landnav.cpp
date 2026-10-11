@@ -656,6 +656,9 @@ bool LandNavFollowingSlot(const Unit* u) {
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   const TerrainMap* map = sim.map();
   if (map && (x < 0 || z < 0 || x > map->width() || z > map->height())) return false;
+  // 0x720aa0 -> OCCUPY_FootprintFits(caps = -1): the occupancy layers only clear the land (1, 2) and water (8)
+  // bits, so a footprint that may be in the Air (16) always fits (a build drone over a factory)
+  if (u->blueprint && u->blueprint->hasFootprint && (u->blueprint->footprint.caps & 0x10)) return true;
   return Fits(sim, u, CellOf(u, x, z));
 }
 
