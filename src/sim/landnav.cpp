@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/collision.h"
 #include "sim/steering.h"
 #include "sim/formation.h"
 #include "sim/air.h"
@@ -108,6 +109,9 @@ bool BlocksFor(const Unit* self, const Unit* e, int flags) { return !UnitIgnores
 
 }  // namespace
 
+// COGrid::UnitIsBlocked 0x721340: the square [x, x+S] x [z, z+S] (S = the larger footprint byte), y in
+// [-1000, 1000]. Candidates are the units whose collision AABB touches the square (GatherUnmarkedUnitsInBox
+// 0x721c00, inclusive), not the blueprint size around the position: a turned 0.6 box reaches further.
 bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   if (!u) return false;
   Sim& sim = *Sim::From(u->luaState());
@@ -115,11 +119,29 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   float x0 = static_cast<float>(x), z0 = static_cast<float>(z), x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
-    if (blocked || e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) || !BlocksFor(u, e, flags)) return;
-    const MotionBlueprint* b = e->motion.bp;
-    float hx = b->sizeX * 0.5f, hz = b->sizeZ * 0.5f;
-    if (e->position.x + hx < x0 || e->position.x - hx > x1 || e->position.z + hz < z0 || e->position.z - hz > z1) return;
-    blocked = true;
+    if (blocked || e == u) return;
+    WorldShape s;
+    if (!GetWorldShape(e, &s)) return;
+    Vec3 mn, mx;
+    ShapeBounds(s, &mn, &mx);
+    if (x0 > mx.x || mn.x > x1 || -1000.0f > mx.y || mn.y > 1000.0f || z0 > mx.z || mn.z > z1) return;
+    // 0x721488: a Land-layer unit counts for an IgnoreStructures footprint only when its own has the flag;
+    // Air and Sub layer units never count
+    if (e->layer == "Land") {
+      if ((Fp(u).flags & 1) && !(e->motion.bp && (Fp(e).flags & 1))) return;
+    } else if (e->layer == "Air" || e->layer == "Sub") {
+      return;
+    }
+    if (SameFormationLayer(u, e) || !BlocksFor(u, e, flags)) return;
+    // 0x721540: a unit whose footprint is at most 1 blocks outright; a bigger one only when its collision
+    // primitive meets the box (square centre, half extents = the path-finder's footprint / 2, 1000) (0x67a9d0)
+    if (std::max(Fp(e).sizeX, Fp(e).sizeZ) <= 1) {
+      blocked = true;
+      return;
+    }
+    float cx = (x1 + x0) * 0.5f, cz = (z1 + z0) * 0.5f;
+    float hx = static_cast<float>(Fp(u).sizeX) * 0.5f, hz = static_cast<float>(Fp(u).sizeZ) * 0.5f;
+    if (ShapeOverlapsAABox(s, Vec3{cx - hx, -1000.0f, cz - hz}, Vec3{cx + hx, 1000.0f, cz + hz})) blocked = true;
   });
   return blocked;
 }

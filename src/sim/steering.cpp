@@ -627,7 +627,13 @@ int Resolve(Sim& sim, Unit* Y) {
 void ProcessSplineMovement(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (m.pushed) {
-    if (m.hasSpline) SteeringStop(m);
+    if (m.hasSpline) {  // "pushed!": Stop (vt+0x2c, 0x5d35e0)
+      // Stop re-predicts (CheckCollisions, with the spline already gone) when the deleted batch still had
+      // unhanded points: idx(+0x240) < points.size (0x5d35ee..0x5d3666)
+      const bool unused = m.splineIdx < m.spline.size();
+      SteeringStop(m);
+      if (unused) CheckCollisions(sim, u);
+    }
     float v = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
     if (v < m.bp->maxSpeed * m.speedMult * 0.01f) {
       m.pushed = false;

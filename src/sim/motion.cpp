@@ -981,14 +981,17 @@ void AddImpulse(Unit* u, const Vec3& imp) {
   UnitMotion& m = u->motion;
   if (!m.bp) return;
   if (m.pointNow) m.wasMoving = true;  // "was moving when pushed"
-  m.vel.x = m.vel.x * 0.5f + imp.x;
-  m.vel.z = m.vel.z * 0.5f + imp.z;
-  float cap = (m.speedCap > 0 ? m.speedCap : m.bp->maxSpeed * m.speedMult) * 0.2f;  // u+0x594 * 0.2
-  float l2 = m.vel.x * m.vel.x + m.vel.z * m.vel.z;
-  if (l2 > cap * cap && l2 > 0) {
+  // 0x6b8b9d..0x6b8c23: vel = 0.5*vel + imp and accel = 0.5*accel + imp, all three components (imp.y is 0, so the
+  // vertical velocity halves too)
+  m.vel = {m.vel.x * 0.5f + imp.x, m.vel.y * 0.5f + imp.y, m.vel.z * 0.5f + imp.z};
+  m.accel = {m.accel.x * 0.5f + imp.x, m.accel.y * 0.5f + imp.y, m.accel.z * 0.5f + imp.z};
+  // 0x6b8e60: |vel| (3-D) > u+0x594 * 0.2 -> SetLength (0x5b1c90) and accel = vel
+  float cap = (m.speedCap > 0 ? m.speedCap : m.bp->maxSpeed * m.speedMult) * 0.2f;
+  float l2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
+  if (std::sqrt(l2) > cap && l2 > 0) {
     float k = cap / std::sqrt(l2);
-    m.vel.x *= k;
-    m.vel.z *= k;
+    m.vel = {m.vel.x * k, m.vel.y * k, m.vel.z * k};
+    m.accel = m.vel;
   }
   m.surfaceNext = true;
   m.pushed = true;
