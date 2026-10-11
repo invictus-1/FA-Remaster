@@ -693,6 +693,7 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
 // SetGoal 0x5a3ed0 with a goal rect [x0, x1) x [z0, z1) of cells: a 1x1 goal is moved to a free spot nearby,
 // larger rects are taken as they are (pathfinding.md 4.1)
 void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough) {
+  u->motion.faceDir = {};  // (CUnitMotion::SetTarget 0x6b8872 takes the goal's facing: none)
   if (!u->motion.nav) u->motion.nav = std::make_shared<LandNav>();
   LandNav& n = *u->motion.nav;
   PathCell gc{x0, z0};

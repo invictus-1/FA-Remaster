@@ -141,6 +141,9 @@ struct UnitMotion {
   float depth = 0, depthStep = 0, elevationAttr = 0;
   int targetLayer = 0, vertEvent = 0;
   bool slavedTurning = false;  // m+0x91: turning the body toward a slaved weapon's target
+  // m+0x20: the facing a task asked for (CUnitMotion::SetFacing 0x6b8590: the attack task's AttackAngle); a
+  // standing unit turns to it when no slaved weapon and no formation say otherwise; a new goal clears it
+  Vec3 faceDir;
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)

@@ -1623,8 +1623,7 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
     return;
   }
   u->motion.failed = false;
-  LandNavSetGoalRect(sim, u, x0, z0, x1, z1, false);
-  u->unitStates.insert("Moving");
+  LandNavSetGoalRect(sim, u, x0, z0, x1, z1, false);  // (the navigator's goal only: Moving is the move task's state)
 }
 // a 1x1 goal at the footprint-origin cell of p
 void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
@@ -1794,6 +1793,22 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     }
     case 4:  // engaged: stop, the weapons fire; the weapon's reports drive the task
       if (!CanFlyU(u)) AbortNavigation(u);
+      // AI.AttackAngle (0x5f3d..): the unit keeps the target that many degrees off its bow; the direction to the
+      // target turned about the up axis away from the target's side goes to the motion (SetFacing 0x6b8590)
+      if (const float aa = CB(u).attackAngle; aa > 0 && HasTarget(sim, target)) {
+        Vec3 tp = TargetPos(sim, target, false);
+        if (!IsNaN(tp)) {
+          Vec3 v{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
+          const Quat& q = u->orientation;
+          const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+          const float ang = (v.z * fx - fz * v.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
+          double s, c;
+          dmath::SinCos(static_cast<double>(ang), &s, &c);
+          const float sn = static_cast<float>(s), cs = static_cast<float>(c);
+          u->motion.faceDir = Norm(Vec3{v.x * cs + v.z * sn, v.y, v.z * cs - v.x * sn});
+        }
+        return 10;
+      }
       return -2;
     case 5:
     default:

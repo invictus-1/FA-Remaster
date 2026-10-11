@@ -1153,11 +1153,11 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   // a weapon slaved to the body comes first (0x6c1e9b); only without one the formation's forward (0x6c25ca)
   Vec3 fv{};
   if (!SlavedFaceVector(sim, u, &fv)) {
-    if (!u->form || !FormationIsForm(*u->form)) return false;
-    if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling")) return false;
-    if (combat::HasTarget(sim, u->desiredTarget)) return false;
-    if (LandNavActive(u)) return false;  // the navigator is not idle
-    fv = FormationVector(sim, u);
+    if (LandNavActive(u)) return false;  // the navigator is not idle (0x6c25d4)
+    if (u->form && FormationIsForm(*u->form) && !u->unitStates.count("TransportLoading") &&
+        !u->unitStates.count("Refueling") && !combat::HasTarget(sim, u->desiredTarget))
+      fv = FormationVector(sim, u);
+    if (fv.x == 0 && fv.y == 0 && fv.z == 0) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
   }
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
