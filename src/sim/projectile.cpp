@@ -521,7 +521,9 @@ void Impact(Sim& sim, Projectile* p) {
 // MotionTick 0x69bdd0
 void MotionTick(Sim& sim, Projectile* p) {
   if (p->hitFraction >= 0) {
-    p->prevPos = p->position;
+    // no movement this tick, so the entity is not on the moved list and its previous coords stay those of
+    // the hit tick's AdvanceCoords: OnImpact's GetVelocity is the last step to the hit point (projectile.md 3.1,
+    // 3.5 GetVelocity). (Was prevPos = position: speed 0, and the Salvation's fragment math divided by it.)
     Impact(sim, p);
     return;
   }
