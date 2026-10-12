@@ -28,9 +28,12 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
-// --map-decals centre|corner|off, --decal-turn 1|-1, --decal-range <n>  the map's decals: off, or (for finding
-//           out what the map file means) what a decal's position is and which way its heading turns; and a
-//           factor on the distance up to which decals are drawn
+// --map-decals normals|all|albedo|off|corner  which of the map's decals are drawn: normals (the default: only
+//           the sculpting of cliffs and erosion), all (also the painted ground details, which as drawn
+//           today make the ground too busy), albedo (those alone), off; corner: all, with a decal's position
+//           taken as its corner (for finding out what the map file means)
+// --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
+//           to which the map's decals are drawn
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -127,7 +130,7 @@ struct Options {
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
-  std::string mapDecals = "centre";
+  std::string mapDecals = "normals";  // --map-decals
   float decalTurn = 1, decalRange = 1;
   std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;

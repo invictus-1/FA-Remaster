@@ -61,7 +61,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
                [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
-               [--hide particles,bands,decals] [--map-decals off|albedo|normals] [--decal-filter <name part>]
+               [--hide particles,bands,decals] [--map-decals normals|all|albedo|off] [--decal-filter <name part>]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -273,8 +273,11 @@ Known gaps, to be closed in the steps they belong to:
   edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- The map's decals are drawn (Seton's Clutch: 1,233 albedo and 1,003 normal ones): albedo decals
-  as pictures over the ground, tinted under water as the ground is; normal decals - the sculpting
+- The map's decals (Seton's Clutch: 1,233 albedo and 1,003 normal ones). By default only the
+  normal decals are drawn. The albedo decals can be (`--map-decals all`), but as drawn today they
+  make the ground far busier than the game's (judged by someone who knows the map; why is not
+  found yet - their strength, their anchoring, or what the original fades them by). Albedo decals
+  are pictures over the ground, tinted under water as the ground is; normal decals - the sculpting
   of cliffs and erosion - by multiplying the lit ground with (the light it would take with the
   decal's tilt) / (the light it took), since the ground is already lit when decals are drawn; each
   up to its own distance from the camera, coming in over the last fifth of it. Cost at 1080p on
