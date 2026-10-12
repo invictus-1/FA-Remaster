@@ -86,10 +86,12 @@ struct ResourceDeposit {
   int x0 = 0, z0 = 0, x1 = 0, z1 = 0, type = 0;
 };
 
+class AiPersonality;
 class AiBrain : public ScriptObject {
  public:
   AiBrain() { typeBits |= kTypeBrain; }
   Army* army = nullptr;
+  AiPersonality* personality = nullptr;  // sim/ai_personality.h (owned by the Sim)
 };
 
 template <> struct ScriptTypeOf<AiBrain> { static constexpr uint32_t bit = kTypeBrain; };

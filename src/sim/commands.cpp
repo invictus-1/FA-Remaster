@@ -658,6 +658,55 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   return true;
 }
 
+namespace {
+// CommandDatabase::AddIssueData: the CUnitCommand of a stream message (one per message, made for the first unit
+// that takes it)
+std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& d) {
+  auto c = std::make_shared<UnitCommand>();
+  c->id = d.id;
+  c->fromStream = true;
+  c->type = static_cast<CommandType>(d.type);
+  c->blueprintId = d.blueprint;
+  for (auto& ch : c->blueprintId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  c->count = d.count;
+  c->maxCount = d.maxCount;
+  c->cells = d.cells;
+  c->formIndex = d.formIndex;
+  if (d.formIndex != -1) {
+    c->formQw = d.qw;
+    c->formQx = d.qx;
+    c->formQy = d.qy;
+    c->formQz = d.qz;
+    c->formScale = d.scale;
+  }
+  SetCommandTargetFromStream(sim, *c, d.target);  // the ctor's decode (the only draw on this path)
+  c->issueTargetType = d.target.type;
+  c->issueTargetEntity = d.target.entity;
+  c->issueTargetPos = d.target.pos;
+  sim.streamCommands[d.id] = c;
+  return c;
+}
+}  // namespace
+
+// UNIT_IssueFactoryCommand 0x6f14d0 for a stream order (command_stream.md 5.5): the command goes to the rally
+// queue of every factory among the units (the orders its products inherit), not to the factories' own queues.
+// (Not built: the army's +0x1c4..+0x1d8 distance test on the target, meaning not traced.)
+std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<Unit*>& units,
+                                                    const StreamIssueData& d, bool clear) {
+  std::shared_ptr<UnitCommand> c;
+  for (Unit* u : units) {
+    if (u->dead || u->transportedBy) continue;
+    if (!IsFactoryBuilder(sim, u)) continue;
+    if (!c) {
+      c = MakeStreamCommand(sim, d);
+      c->factoryIssued = true;  // cmd+0x142
+    }
+    if (clear) ClearFactoryCommandQueue(u);
+    AddFactoryCommand(u, c);
+  }
+  return c;
+}
+
 std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
                                              bool clear) {
   // types whose move-task destructor does not abort the move when the next command is one of them (0x618998)
@@ -713,30 +762,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
           break;
         }
     }
-    if (!c) {  // CommandDatabase::AddIssueData: one CUnitCommand per message
-      c = std::make_shared<UnitCommand>();
-      c->id = d.id;
-      c->fromStream = true;
-      c->type = static_cast<CommandType>(d.type);
-      c->blueprintId = d.blueprint;
-      for (auto& ch : c->blueprintId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-      c->count = d.count;
-      c->maxCount = d.maxCount;
-      c->cells = d.cells;
-      c->formIndex = d.formIndex;
-      if (d.formIndex != -1) {
-        c->formQw = d.qw;
-        c->formQx = d.qx;
-        c->formQy = d.qy;
-        c->formQz = d.qz;
-        c->formScale = d.scale;
-      }
-      SetCommandTargetFromStream(sim, *c, d.target);  // the ctor's decode (the only draw on this path)
-      c->issueTargetType = d.target.type;
-      c->issueTargetEntity = d.target.entity;
-      c->issueTargetPos = d.target.pos;
-      sim.streamCommands[d.id] = c;
-    }
+    if (!c) c = MakeStreamCommand(sim, d);  // CommandDatabase::AddIssueData: one CUnitCommand per message
     if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
       // CUnitMoveTask's destructor 0x618700 (read again 2026-10-11): queue+0x1c holds the NEW command's type while
       // the queue is cleared for it. A type outside the table 0x618998 aborts the move; one inside it aborts only

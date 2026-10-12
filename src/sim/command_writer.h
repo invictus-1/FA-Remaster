@@ -38,6 +38,8 @@ class CommandWriter {
   // The order `data` for `units` (entity ids); clear empties their queues first (no shift key). data.id is
   // given a fresh id when left at 0xffffffff. Returns the command's id (for the calls below).
   uint32_t IssueCommand(const std::vector<uint32_t>& units, StreamIssueData data, bool clear);
+  // The same for the factories among `units`, into their rally queues (what their products are told to do).
+  uint32_t IssueFactoryCommand(const std::vector<uint32_t>& units, StreamIssueData data, bool clear);
   void IncreaseCommandCount(uint32_t command, int32_t delta);
   void DecreaseCommandCount(uint32_t command, int32_t delta);
   void SetCommandTarget(uint32_t command, const StreamTarget& target);
@@ -60,6 +62,7 @@ class CommandWriter {
 
  private:
   void Message(int type, const std::string& payload);
+  uint32_t Issue(int message, const std::vector<uint32_t>& units, StreamIssueData data, bool clear);
   int source_;
   uint32_t nextId_ = 1;
   std::string body_;

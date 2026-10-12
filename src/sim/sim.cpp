@@ -27,6 +27,7 @@
 #include "sim/commands.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/ai_personality.h"
 #include "sim/session.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -389,6 +390,10 @@ int l_ShouldCreateInitialArmyUnits(lua_State* L) {
 
 AiBrain* Brain(lua_State* L) { return CheckObject<AiBrain>(L, 1); }
 
+int l_brain_GetPersonality(lua_State* L) {
+  PushObject(L, CheckObject<AiBrain>(L, 1)->personality);
+  return 1;
+}
 int l_brain_GetArmyIndex(lua_State* L) {
   lua_pushnumber(L, Brain(L)->army->index);
   return 1;
@@ -546,6 +551,8 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "SetArmyUnitCap", l_SetArmyUnitCap);
   SetGlobal(L, "SetIgnoreArmyUnitCap", l_SetIgnoreArmyUnitCap);
   SetMethod(L, "CAiBrain", "GetArmyIndex", l_brain_GetArmyIndex);
+  SetMethod(L, "CAiBrain", "GetPersonality", l_brain_GetPersonality);
+  RegisterAiPersonalityBindings(L);
   SetMethod(L, "CAiBrain", "GetFactionIndex", l_brain_GetFactionIndex);
   SetMethod(L, "CAiBrain", "IsDefeated", l_brain_IsDefeated);
 }
@@ -875,6 +882,8 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     auto* brain = new AiBrain;
     brain->army = a.get();
     a->brain = brain;
+    brain->personality = CreateAiPersonality(*this, L);  // the brain ctor makes it (0x57a08c) and reads its data
+    owned_.emplace_back(brain->personality);
     lua_newtable(L);
     lua_pushvalue(L, cls);
     lua_setmetatable(L, -2);

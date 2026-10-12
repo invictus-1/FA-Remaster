@@ -384,9 +384,22 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       IssueFromStream(sim, units, data, clear != 0);
       break;
     }
-    case 13:
-      unhandled("IssueFactoryCommand");
+    case 13: {  // IssueFactoryCommand 0x7494b0: rally orders; one unit the source may not order drops the message
+      std::vector<uint32_t> ids = in.IdSet();
+      StreamIssueData data = in.CmdData();
+      int clear = in.U8();
+      if (!in.ok || clear > 1) {
+        Logf(LogLevel::Error, "command stream: bad IssueFactoryCommand at message %u", messages_);
+        error_ = true;
+        break;
+      }
+      if (!ValidateNewCommandId(sim, data.id, "IssueFactoryCommand")) break;
+      bool abortAll = false;
+      std::vector<Unit*> units = CommandableUnits(sim, ids, &abortAll);
+      if (abortAll) break;
+      IssueFactoryFromStream(sim, units, data, clear != 0);
       break;
+    }
     case 14:
     case 15: {  // Increase / DecreaseCommandCount 0x749680 / 0x7496e0
       uint32_t id = in.U32();

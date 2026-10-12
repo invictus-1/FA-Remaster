@@ -120,6 +120,14 @@ void CommandWriter::ProcessInfoPair(uint32_t entity, const std::string& key, con
 }
 
 uint32_t CommandWriter::IssueCommand(const std::vector<uint32_t>& units, StreamIssueData c, bool clear) {
+  return Issue(12, units, std::move(c), clear);
+}
+
+uint32_t CommandWriter::IssueFactoryCommand(const std::vector<uint32_t>& units, StreamIssueData c, bool clear) {
+  return Issue(13, units, std::move(c), clear);
+}
+
+uint32_t CommandWriter::Issue(int message, const std::vector<uint32_t>& units, StreamIssueData c, bool clear) {
   if (c.id == 0xffffffffu) c.id = NewCommandId();
   Out o;
   o.IdSet(units);
@@ -143,7 +151,7 @@ uint32_t CommandWriter::IssueCommand(const std::vector<uint32_t>& units, StreamI
   o.U32(static_cast<uint32_t>(c.count));
   o.Lua(c.lua);
   o.U8(clear ? 1 : 0);
-  Message(12, o.d);
+  Message(message, o.d);
   return c.id;
 }
 

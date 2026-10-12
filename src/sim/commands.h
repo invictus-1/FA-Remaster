@@ -93,6 +93,10 @@ struct StreamIssueData {
 // unit took it.
 std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
                                              bool clear);
+// UNIT_IssueFactoryCommand 0x6f14d0 for a command-stream order: into the rally queues of the factories among
+// the units (clear empties each first). nullptr if none took it.
+std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<Unit*>& units,
+                                                    const StreamIssueData& d, bool clear);
 // CUnitCommand::SetTarget from an SSTITarget (DecodeFromSSTITarget 0x5e2620: an entity target draws its
 // target point); draw = false for SetCommandCells' ground target.
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t);

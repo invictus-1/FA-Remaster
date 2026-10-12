@@ -56,9 +56,20 @@ Keeping the taken bytes with `CommandWriter::AdvanceMessage()` between beats giv
 Checked: a Move for the commander walks it there; a pause holds the tick while beats and sync tables go
 on; a callback reaches `/lua/SimCallbacks.lua`'s `DoCallback`.
 
-Known gaps on the engine side, in the order they will hurt: **`IssueFactoryCommand`** (a factory's build
-queue: read but not carried out yet, next on the list), `WarpEntity`, some orders that still end at once
-(nuke and tactical launch, see FINDINGS part 24), and classic AI opponents (ui 3, point 2).
+`writer.IssueFactoryCommand(factoryIds, d, clear)` is the rally order (what a factory's products are told
+to do: the order a player gives with a factory selected); it is carried out since 2026-10-12. Building
+from a factory is an ordinary `IssueCommand` of type 7 (BuildFactory) with the blueprint and a count.
+
+Known gaps on the engine side, in the order they will hurt: `WarpEntity`, some orders that still end at
+once (nuke and tactical launch, see FINDINGS part 24), and classic AI opponents (below).
+
+**AI opponents, where they stand (2026-10-12).** A new game against M28 runs: the recorded skirmish's
+set-up (the player and seven M28 AIx armies on Seton's Clutch) started as a new game through `--session`
+plays ten game-minutes headless, the AIs building up to 1,400 units. The classic AIs (`rush`, `adaptive`,
+`turtle`, ...) now get their commander and their economy (the personality object and the platoons'
+`OnCreate` call were missing) but do not build: their brains rest on engine functions that are still
+stubs (39 of `CAiBrain`'s: threat map, `BuildPlatoon`, `DecideWhatToBuild`, attack vectors; 44 of
+`CPlatoon`'s: forming platoons, their orders). That block comes after the interface can show a game.
 
 ## render 5: standing request to merge `render` into `main` — accepted
 
@@ -149,10 +160,8 @@ Three things to know:
    (`GameMods = { -- table: ... (40 bytes)},`), so three braces stay open. `PushGameConfigFile` (what
    `--session` uses) removes exactly those comments before compiling, so the file works as it is; a host
    that passes the live table to `SessionFromGameConfig` is not affected.
-2. **Classic AI armies do not play yet.** A configuration with `AIPersonality = 'rush'` starts, but that
-   brain's set-up needs the engine's personality object (`CAiBrain:GetPersonality` and its getters such as
-   `GetAirUnitsEmphasis`), which is still a stub here, so the AI stops before it spawns its commander. Mod
-   AIs that do not use it (M28) run, as the recorded skirmish replay shows. This is on the engine's list.
+2. **Classic AI armies do not play yet** (state as of 2026-10-12 under ui 4, "AI opponents"): they start
+   with their commander but do not build. M28 plays.
 3. **Nothing reaches the simulation after the start yet**: orders, sim callbacks and the per-beat sync data
    are ui 4. Say which you need first.
 

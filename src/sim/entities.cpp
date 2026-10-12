@@ -1555,6 +1555,10 @@ Platoon* Sim::CreatePlatoon(lua_State* L, Army* army, const std::string& name, c
   BindObject(L, -1, p);
   owned_.push_back(std::move(owned));
   lua_settop(L, top);
+  // the CPlatoon ctor ends with its script's OnCreate(plan) (0x724e84), the army pool's included
+  lua_pushstring(L, plan.c_str());
+  CallMethod(L, p, "OnCreate", 1);
+  lua_settop(L, top);
   return p;
 }
 
