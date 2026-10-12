@@ -168,9 +168,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
-    const SkyLight light = SkyAt(timeOfDay);
-    SetSky(light, &c);
-    lightDirection = light.direction;
+    skyLight = SkyAt(timeOfDay);
+    SetSky(skyLight, &c);
+    lightDirection = skyLight.direction;
   }
   if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
 
@@ -289,7 +289,6 @@ void World::Render() {
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
-  skyDraw.Draw(view, camera);
   device_->SetTexture(kEnvironmentSlot, sky_);
   lights.Bind();
   if (haveMap_) {
@@ -310,9 +309,11 @@ void World::Render() {
       post.ContinueScene();
       ao.Apply(view);
     }
+    skyDraw.Draw(view, camera, skyLight);  // where nothing solid is
     water.Draw(view);
   } else {
     draw.Flush(view);
+    skyDraw.Draw(view, camera, skyLight);
   }
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);

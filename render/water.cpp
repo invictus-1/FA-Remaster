@@ -65,7 +65,7 @@ float4 PS(VOut i) : SV_Target {
     // the computed sky: it is what the water mirrors, and the glint is the falling light's. (The
     // water's own colours are the map's, made for daylight: all of it is dimmed by how bright the
     // day is in the last line, so the mirrored sky is first brought up by as much.)
-    daylight = skyGlow.w;
+    daylight = skyGlow.w * lerp(1, 0.45, skyHorizon.w);  // (and less by night: its day colours would glow)
     skyColor = pow(saturate(ComputedSky(R) / (daylight * lightMultiplier * modern.x * 0.55)), 1 / 2.2);
     sun = pow(saturate(dot(R, sunDirection)), reflection.z) * sunColor * fresnel;
   }

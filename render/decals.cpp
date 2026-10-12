@@ -112,7 +112,7 @@ float4 PS(VOut i) : SV_Target {
   if (mapInfo.z > 0.5) tint = waterRamp.Sample(samplerLinearClamp, float2(waterMap.Sample(samplerLinearClamp, world.xz * mapInfo.xy).g, 0.5));
   if (look > 0.5) {
     float3 lit = ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow);
-    float full = max(lightMultiplier * modern.x * (skyZenith.w > 0.5 ? skyGlow.w : 1), 0.001);
+    float full = max(lightMultiplier * modern.x * (skyZenith.w > 0.5 ? skyGlow.w * lerp(1, 0.45, skyHorizon.w) : 1), 0.001);
     float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), tint.rgb, tint.a);
     return float4(ToLinear(screen) * full, c.a);
   }
