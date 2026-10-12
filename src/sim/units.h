@@ -64,6 +64,7 @@ struct UnitBpData {
   float storage[2] = {0, 0};  // StorageEnergy, StorageMass
   bool naturalProducer = false, needToFaceTargetToBuild = false;
   float maxBuildDistance = 0;
+  float sacrificeMult[2] = {0, 0};  // Economy.SacrificeEnergyMult (bp+0x560), SacrificeMassMult (bp+0x55c)
   float regenRate = 0, maxHealth = 1;
   bool initialAutoMode = false;  // AI.InitialAutoMode (bp+0x48d)
   float sizeX = 1, sizeY = 1, sizeZ = 1, collisionOffsetY = 0;

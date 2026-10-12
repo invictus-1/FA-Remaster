@@ -325,7 +325,7 @@ to do: the order a player gives with a factory selected); it is carried out sinc
 from a factory is an ordinary `IssueCommand` of type 7 (BuildFactory) with the blueprint and a count.
 
 Known gaps on the engine side, in the order they will hurt: some orders that still end at once
-(Sacrifice, Teleport, SpecialAction; nuke and tactical launch, overcharge, capture, kill / destroy
+(Teleport, SpecialAction; nuke and tactical launch, overcharge, capture, sacrifice, kill / destroy
 self and pause are carried out since 2026-10-12, and a captured unit changes army through
 `ChangeUnitArmy`), and classic AI opponents (below).
 

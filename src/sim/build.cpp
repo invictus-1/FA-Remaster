@@ -1855,6 +1855,123 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   CaptureCallback(sim, L, u, t, false);
 }
 
+// ---- sacrifice (CUnitSacrificeTask: new 0x5fb8b0, ctor 0x5fad90, TaskTick 0x5fb180, dtor 0x5fae40) ----
+// The unit walks up to its target, and ten ticks after it arrived its own build cost, times the blueprint's
+// sacrifice multipliers, goes into the target's construction (Materialize) or enhancement (the script's
+// WorkProgress); the engine then destroys the unit (the dtor, for a task that reached state 2).
+
+Unit* UnitOfRef(Sim& sim, uint32_t ref) {
+  Entity* e = ref ? sim.FindEntity(ref) : nullptr;
+  return e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+}
+float ScriptNumber(lua_State* L, Unit* u, const char* key) {  // CScriptObject::GetLuaValue 0x5fca70
+  PushObjectValue(L, u, key);
+  float v = static_cast<float>(lua_tonumber(L, -1));
+  lua_pop(L, 1);
+  return v;
+}
+
+int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.moving) {  // the move child: the task runs again when it ends
+    if (u->motion.hasGoal) return kTaskRunning;
+    t.moving = false;
+    u->unitStates.erase("Moving");
+  } else if (sim.tick() < t.waitUntil) {
+    return kTaskRunning;
+  }
+  Unit* T = UnitOfRef(sim, t.goalId);
+  if (!T || T->destroyQueued || T->layer == "Air" || T->dead) return kTaskFailed;
+  switch (t.state) {
+    case 0: {  // to a free spot beside the target; a unit in a factory: beside the factory
+      SetArmAimTarget(sim, u, Vec3{});
+      Unit* G = T;
+      Unit* creator = T->beingBuilt ? UnitOfRef(sim, T->creatorId) : nullptr;
+      if (creator && BpInCategory(sim, creator->blueprint, "FACTORY")) {
+        G = creator;
+      } else if (T->unitStates.count("Upgrading")) {  // the upgrade being built becomes the task's target
+        if (Unit* f = UnitOfRef(sim, T->focusId)) {
+          G = f;
+          t.goalId = EntityRef(f);
+        }
+      }
+      t.state = 1;
+      if (CanMove(u)) {
+        const NamedFootprint& uf = Fp(u);
+        float excl[4] = {0, 0, 0, 0};
+        SkirtRect(G, excl);
+        Vec3 a = G->position;
+        PrepareMoveFor(sim, u, &a, excl, 1);
+        int x0 = static_cast<int>(std::nearbyint(a.x - uf.sizeX * 0.5f));
+        int z0 = static_cast<int>(std::nearbyint(a.z - uf.sizeZ * 0.5f));
+        int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
+        GroundReserveRect(sim, u, rr);
+        TaskMoveToward(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});
+        u->unitStates.insert("Moving");
+        t.moving = true;
+      }
+      return kTaskRunning;
+    }
+    case 1: {
+      // the gap: the distance less the larger side of each footprint
+      const NamedFootprint& uf = Fp(u);
+      const NamedFootprint& tf = Fp(T);
+      const float dx = u->position.x - T->position.x, dz = u->position.z - T->position.z;
+      const float gap = std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(uf.sizeX, uf.sizeZ)) -
+                        static_cast<float>(std::max(tf.sizeX, tf.sizeZ));
+      const float reach = u->bpData ? u->bpData->maxBuildDistance : 0.0f;
+      if (gap > reach) return kTaskFailed;
+      if (T->unitStates.count("Enhancing")) {
+        // T+0x2a0 set, or nothing asked of the economy (T+0x534): no work to add to. (That +0x2a0 is the
+        // pause flag and +0x534 the unit's request: inferred.)
+        if (T->paused) return kTaskFailed;
+        if (!T->request || 0.0f >= std::max(T->request->requested[0], T->request->requested[1])) return kTaskFailed;
+      }
+      t.state = 2;
+      PushObject(L, T);
+      sim.CallMethod(L, u, "OnStartSacrifice", 1);
+      t.waitUntil = sim.tick() + 9;  // return 10
+      return kTaskRunning;
+    }
+    default: {
+      const UnitBpData* d = u->bpData;
+      const float mass = d ? d->buildCostMass * d->sacrificeMult[kMass] : 0.0f;
+      const float energy = d ? d->buildCostEnergy * d->sacrificeMult[kEnergy] : 0.0f;
+      // each as a fraction of the target's cost; a cost of 0 counts as a half (0xe4f724), the smaller one is given
+      auto share = [](float given, float cost) { return cost > 0.0f ? given / cost : 0.5f; };
+      if (T->unitStates.count("Enhancing")) {
+        float p = ScriptNumber(L, T, "WorkProgress");
+        float r = std::min(share(mass, ScriptNumber(L, T, "WorkItemBuildCostMass")),
+                           share(energy, ScriptNumber(L, T, "WorkItemBuildCostEnergy")));
+        p += r;
+        if (p > 1.0f) p = 1.0f;
+        lua_pushnumber(L, p);
+        SetObjectValue(L, T, "WorkProgress", lua_gettop(L));
+        lua_pop(L, 1);
+      } else {
+        const UnitBpData* td = T->bpData;
+        float rm = share(mass, td ? td->buildCostMass : 0.0f), re = share(energy, td ? td->buildCostEnergy : 0.0f);
+        Materialize(sim, L, T, rm > re ? re : rm);
+      }
+      PushObject(L, T);
+      sim.CallMethod(L, u, "OnStopSacrifice", 1);
+      return kTaskDone;
+    }
+  }
+}
+
+void EndSacrifice(Sim& sim, Unit* u, BuildTask& t) {
+  if (u && !u->destroyQueued) {
+    u->unitStates.erase("Repairing");  // the dtor clears unit state 16
+    if (t.moving) {
+      t.moving = false;
+      StopMoving(u);
+    }
+    if (t.state == 1) GroundFreeRect(sim, u);
+    // a task that got as far as state 2 takes the unit with it, however it ends (0x5faeb1)
+    if (t.state == 2) sim.QueueDestroy(u);
+  }
+}
+
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo) {
   BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
   InitRepair(sim, u, *t, target, silo);
@@ -2109,6 +2226,18 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       u->focusId = c.targetId;
       sim.CallMethod(sim.L(), u, "OnAssignedFocusEntity", 0);
       break;
+    case CommandType::Sacrifice: {  // DispatchTask 0x609a12
+      Unit* T = UnitOfRef(sim, c.targetId);
+      if (!T) return nullptr;
+      if (!(T->beingBuilt || T->unitStates.count("Upgrading") || T->maxHealth > T->health)) {
+        // a builder at work: the sacrifice goes to what it builds
+        T = T->unitStates.count("Building") ? UnitOfRef(sim, T->focusId) : nullptr;
+        if (!T) return nullptr;
+      }
+      t->order = "Sacrifice";
+      t->goalId = EntityRef(T);
+      break;
+    }
     case CommandType::Guard:
       return StartGuardTask(sim, u, c);
     case CommandType::AssistCommander:
@@ -2138,6 +2267,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Repair: r = TickRepair(sim, L, u, t); break;
     case CommandType::Reclaim: r = TickReclaim(sim, L, u, t); break;
     case CommandType::Capture: r = TickCapture(sim, L, u, t); break;
+    case CommandType::Sacrifice: r = TickSacrifice(sim, L, u, t); break;
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
     case CommandType::TransportUnloadUnits:
@@ -2201,6 +2331,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.type == CommandType::Capture) {
     EndCapture(sim, L, u, t);
+    return;
+  }
+  if (t.type == CommandType::Sacrifice) {
+    EndSacrifice(sim, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack || t.type == CommandType::OverCharge) {

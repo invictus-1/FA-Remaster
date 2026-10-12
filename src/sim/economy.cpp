@@ -284,6 +284,8 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   d.naturalProducer = GetBool(L, ec, "NaturalProducer");
   d.needToFaceTargetToBuild = GetBool(L, ec, "NeedToFaceTargetToBuild");
   d.maxBuildDistance = GetNum(L, ec, "MaxBuildDistance", 0);
+  d.sacrificeMult[kEnergy] = GetNum(L, ec, "SacrificeEnergyMult", 0);
+  d.sacrificeMult[kMass] = GetNum(L, ec, "SacrificeMassMult", 0);
   d.initialRallyX = GetNum(L, ec, "InitialRallyX", 0);
   d.initialRallyZ = GetNum(L, ec, "InitialRallyZ", 0);
   d.buildable.assign(static_cast<size_t>(CategoryWordCount()), 0);
