@@ -516,7 +516,17 @@ void World::Render() {
       ao.Apply(view);
     }
     skyDraw.Draw(view, camera, skyLight);  // where nothing solid is
-    water.Draw(view);
+    // the water: the modern look's sees through to a copy of the picture as it is now
+    if (look == Look::Modern && map.water.present && post.CopyBehind()) {
+      post.BeginColorOnly();
+      lights.Bind();
+      device_->SetTexture(kShadowMapSlot, shadows.Map());
+      water.DrawModern(view, camera, post.Behind(), post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    } else {
+      water.Draw(view);
+    }
   } else {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight);

@@ -318,6 +318,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   army does not see (an explosion, a flash, a mark) is not made. The minimap is darkened the
   same way, and its ground follows the hour and the weather. Not yet: ground seen before looks
   like ground never seen; buildings seen once are not remembered.
+- Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
+  picture as it was before the water is copied, and the water is drawn from it: what is under the
+  surface is seen through it, bent a little by the waves, and loses its red and then its green by
+  how much water lies between (so shallows are clear and the deep is dark, by the real depth
+  and not by a painted depth picture: the ground under it is no longer tinted by the map's
+  water ramp in this look); the sky is mirrored (the computed one, or the map's), and so is what
+  the picture shows in the mirrored direction, land and units, found by walking through the
+  picture's depth; foam lies where the water is shallow, along the shore and round whatever
+  stands in it, with a line running in toward the land; on a shallow bed the waves throw their
+  net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
+  before. Limits: mirrored things are only those in the picture (nothing from outside it or
+  behind something); the small lights do not light the water; rain makes no rings on it; no
+  wakes behind ships. The original look keeps the original's formula.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader

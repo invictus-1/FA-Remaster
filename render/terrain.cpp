@@ -135,6 +135,9 @@ float4 PS(VOut i) : SV_Target {
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, 0, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
     // full sunlight), so that shallows keep the map's water colours
+#ifdef MODERN_WATER
+    return float4(lit, 1);  // (the modern water colours what is under it itself, by how deep it is)
+#endif
     float full = max(lightMultiplier * modern.x * (skyZenith.w > 0.5 ? skyGlow.w * lerp(1, 0.45, skyHorizon.w) : 1), 0.001);  // (a computed sky: as bright as the day is)
     float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), ramp.rgb, ramp.a);
     return float4(ToLinear(screen) * full, 1);
@@ -182,7 +185,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   const int w = map->width, h = map->height;
 
   if (!pipeline_) {
-    std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
+    // (with several samples a pixel the modern look has its own water: water.cpp)
+    std::string source = std::string(gSceneSamples > 1 ? "#define MODERN_WATER 1\n" : "") + kViewShaderBlock + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
