@@ -52,6 +52,9 @@ class UnitWeapon : public ScriptObject {
   std::vector<BlackEntry> blacklist;
   int missCount = 0, shots = 0;
   int fireClock = 0;
+  // the fire task's thread is off the attacker's run list (CFireWeaponTask::Execute returned -2: disabled or
+  // manual fire, clock run down) until SetTarget or SetEnabled(true) links it back in, at the end
+  bool fireSuspended = false;
   uint32_t nextAcquire = 0;  // tick the acquire task runs next
   int suppress = 0;
   bool firstAcquire = true;
@@ -89,6 +92,10 @@ class Unit : public Entity {
   const UnitBpData* bpData = nullptr;
   std::string layer = "None";
   std::vector<UnitWeapon*> weapons;
+  // The attacker's task stage (attacker+0x44): each weapon's fire task (false) and acquire task (true), in the
+  // order they run. A fire thread that was suspended goes to the end when it is woken (WakeFireThread).
+  std::vector<std::pair<UnitWeapon*, bool>> weaponThreads;
+  int weaponThreadPos = -1;  // the thread running now (-1: the stage is not running)
   std::set<std::string> unitStates;
   float capCost = 1;  // General.CapCost: what the unit counts against its army's unit cap
   std::string armorType;  // Defense.ArmorType (multipliers: Sim armour types; used by damage, M4)

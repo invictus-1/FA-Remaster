@@ -1473,6 +1473,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
       }
       BindObject(L, -1, w);
       u->weapons.push_back(w);
+      // (the UnitWeapon ctor 0x6d4310 makes the fire task's thread, CreateWeapon 0x5d76e0 then the acquire task's)
+      u->weaponThreads.emplace_back(w, false);
+      u->weaponThreads.emplace_back(w, true);
       owned_.push_back(std::move(wowned));
       lua_settop(L, wbp - 1);
       InitUnitWeapon(L, w);

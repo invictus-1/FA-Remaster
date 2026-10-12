@@ -849,6 +849,24 @@ void DecayBlacklist(Sim& sim, UnitWeapon* w) {
 
 }  // namespace
 
+// The wake-up of a weapon's fire task (inlined in SetTarget 0x6d6186 and SetEnabled 0x6d7e98): the thread's wait
+// becomes 0, and a suspended thread is linked back into the attacker's run list at its "new" end. So it runs after
+// every other task of the unit from then on, in this pass too when the stage is running: a weapon that was once
+// switched off (an unpacking launcher) fires in the very beat its acquire task hands it a target.
+static void WakeFireThread(UnitWeapon* w) {
+  if (!w->fireSuspended) return;
+  w->fireSuspended = false;
+  Unit* u = w->unit;
+  auto& th = u->weaponThreads;
+  for (size_t p = 0; p < th.size(); ++p)
+    if (th[p].first == w && !th[p].second) {
+      th.erase(th.begin() + static_cast<std::ptrdiff_t>(p));
+      th.emplace_back(w, false);
+      if (u->weaponThreadPos >= 0 && static_cast<int>(p) < u->weaponThreadPos) --u->weaponThreadPos;
+      break;
+    }
+}
+
 // UnitWeapon::SetTarget 0x6d5f30
 static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   if (w->target == nt) return;
@@ -872,6 +890,7 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   w->target.aimBone = aimBone;
   if (e && !e->dead) ++e->shooters;
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
+  WakeFireThread(w);
   w->missCount = 0;
   w->canReach = true;
   w->shots = 0;
@@ -1252,7 +1271,10 @@ void FireTick(Sim& sim, UnitWeapon* w) {
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
          has ? TargetStatus(sim, w, w->target) : -1);
   }
-  if (!w->enabled || w->bp->manualFire) return;
+  if (!w->enabled || w->bp->manualFire) {
+    if (w->fireClock == 0) w->fireSuspended = true;  // (returns -2: off the run list until woken)
+    return;
+  }
   if (w->fireClock != 0 || u->fireState == 1) return;
   if (!HasTarget(sim, w->target)) return;
   if (!CanAttackTarget(sim, w, w->target)) return;
@@ -1287,16 +1309,20 @@ void WeaponsTick(Sim& sim) {
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
     if (u->destroyQueued || u->combatGone) continue;
-    for (size_t k = 0; k < u->weapons.size(); ++k) {
-      UnitWeapon* w = u->weapons[k];
+    // the attacker's stage (attacker+0x44): the unit's fire and acquire threads in their run order. A fire thread
+    // woken while the stage runs is at the end of the list by then and so runs in this pass.
+    for (u->weaponThreadPos = 0; u->weaponThreadPos < static_cast<int>(u->weaponThreads.size()); ++u->weaponThreadPos) {
+      const auto [w, acquire] = u->weaponThreads[static_cast<size_t>(u->weaponThreadPos)];
       if (!w->bp || !w->HasLuaObject()) continue;
-      FireTick(sim, w);
-      if (u->destroyQueued || u->combatGone) break;
-      if (!w->bp->manualFire && sim.tick() >= w->nextAcquire) {
+      if (!acquire) {
+        if (!w->fireSuspended) FireTick(sim, w);
+      } else if (!w->bp->manualFire && sim.tick() >= w->nextAcquire) {
         int r = AcquireTick(sim, w);
         w->nextAcquire = sim.tick() + static_cast<uint32_t>(std::max(1, r));
       }
+      if (u->destroyQueued || u->combatGone) break;
     }
+    u->weaponThreadPos = -1;
   }
 }
 
@@ -2640,6 +2666,7 @@ int l_w_ResetTarget(lua_State* L) {
 int l_w_SetEnabled(lua_State* L) {
   UnitWeapon* w = W(L);
   w->enabled = lua_toboolean(L, 2) != 0;
+  if (w->enabled) WakeFireThread(w);  // 0x6d7e98
   lua_settop(L, 1);
   return 1;
 }
