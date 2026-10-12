@@ -1,27 +1,9 @@
 // Text: one line of text in one font and colour.
-#include <cmath>
-
 #include "maui/control.h"
 #include "maui/font.h"
 #include "user/bindings.h"
 
 namespace moho::ui {
-
-// Placeholder measures (see font.h).
-FontMetrics GetFontMetrics(const std::string&, int pointSize) {
-  FontMetrics m;
-  m.ascent = std::floor(static_cast<float>(pointSize) * 0.8f + 0.5f);
-  m.descent = std::floor(static_cast<float>(pointSize) * 0.2f + 0.5f);
-  return m;
-}
-
-float StringAdvance(const std::string&, int pointSize, const std::string& text) {
-  int chars = 0;
-  for (unsigned char c : text)
-    if ((c & 0xc0) != 0x80) ++chars;  // UTF-8: count the first byte of each character
-  return std::floor(static_cast<float>(chars) * static_cast<float>(pointSize) * 0.5f + 0.5f);
-}
-
 namespace {
 
 class Text : public Control {

@@ -103,8 +103,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   LazyVar creation and reading, texture size with its border. Inferred from the scripts' use and
   marked so in the source: `SetParent`, keyboard focus callbacks, `GetTopmostDepth`, the order of
   control updates and script threads within a frame.
-- Not real yet: text measures (`font.h` is a placeholder, so text-dependent layout is approximate),
-  everything drawn, input, sound, key maps, movies.
+- Text measures are the original's on Windows: the same GDI font (family name, height = -size,
+  antialiased), its text metrics for ascent / descent / leading, and each character's width from
+  the same DrawText call, summed without kerning (`maui/font.*`). The game's `/fonts/*.ttf` are
+  added to the process at start, as the original does. On other hosts the measures are still a
+  placeholder.
+- Not real yet: everything drawn, input, sound, key maps, movies.
 - 155 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
