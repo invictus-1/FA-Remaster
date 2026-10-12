@@ -657,6 +657,9 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     bool inGoal = InGoal(n, n.target);
     bool f9e = n.thinking ? false : n.spliced < 0;
     bool through = inGoal ? n.speedThroughGoal : f9e;
+    if (Dbg())
+      Logf(LogLevel::Info, "nav: tick %u unit %u through: in goal %d (through goal %d) thinking %d spliced %d", sim.tick(), u->id,
+           inGoal ? 1 : 0, n.speedThroughGoal ? 1 : 0, n.thinking ? 1 : 0, n.spliced);
     n.thinking = false;
     // following a formation slot: the target position is the slot's own (not the cell centre)
     Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z} : WorldOf(sim, u, n.target);

@@ -1952,7 +1952,12 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
     return;
   }
   u->motion.failed = false;
-  LandNavSetGoalRect(sim, u, x0, z0, x1, z1, false);  // (the navigator's goal only: Moving is the move task's state)
+  // (the navigator's goal only: Moving is the move task's state. The steering's "speed through the goal" flag
+  // (+0x9d) is not the goal's: Unit::UpdateSpeedThroughStatus sets it at queue events, and a goal set by an attack
+  // leaves it. A patrolling unit that turns on an enemy keeps it: its waypoint inside the weapon's square is a
+  // drive-through one, as in the original's unit records.)
+  const bool through = u->motion.nav && u->motion.nav->speedThroughGoal;
+  LandNavSetGoalRect(sim, u, x0, z0, x1, z1, through);
 }
 // a 1x1 goal at the footprint-origin cell of p
 void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
