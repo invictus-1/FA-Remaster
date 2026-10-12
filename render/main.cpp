@@ -693,6 +693,19 @@ int main(int argc, char** argv) {
     if (!opt.picture.empty() && playing && !liveBusy && frameCount >= 3) {
       // --picture: the world through the pixel interface, and what it says about the screen
       const int w = device->Width(), h = device->Height();
+      {  // what the interface shows in the world: some units selected, a building's ghost, a line and a ring
+        std::vector<uint32_t> ids;
+        for (size_t i = 0; i < frame.units.size(); i += 3) ids.push_back(frame.units[i].id);
+        picture.SetSelection(ids);
+        Vec3 spot;
+        if (picture.Draw(camera, w, h, playTick + 1).size() && picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.75f, &spot)) {
+          WorldPicture::BuildPreview free{"ueb0101", {spot.x, spot.y, spot.z}, 0, true}, blocked{"ueb1101", {spot.x + 8, spot.y, spot.z}, 0.6f, false};
+          picture.SetBuildPreviews({free, blocked});
+          WorldPicture::Line line{{spot.x, spot.y, spot.z}, {camera.target.x, camera.target.y, camera.target.z}, 0xff40ff40u};
+          WorldPicture::Ring ring{{camera.target.x, camera.target.y, camera.target.z}, 6, 0xffff4040u};
+          picture.SetShapes({line}, {ring});
+        }
+      }
       const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, playTick + 1);
       std::vector<uint8_t> bytes(pixels.size() * 4);
       for (size_t i = 0; i < pixels.size(); ++i) {
@@ -706,6 +719,30 @@ int main(int argc, char** argv) {
         const auto t0 = std::chrono::steady_clock::now();
         for (int i = 0; i < 30; ++i) picture.Draw(camera, w, h, playTick + 1);
         printf("render: --picture: %.2f ms a call\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30);
+      }
+      {  // the minimap, in the map's proportion
+        float mw, mh;
+        picture.MapSize(&mw, &mh);
+        const int mapH = 400, mapW = mh > 0 ? static_cast<int>(400 * mw / mh) : 400;
+        const std::vector<uint32_t>& mini = picture.DrawMinimap(mapW, mapH);
+        std::vector<uint8_t> miniBytes(mini.size() * 4);
+        for (size_t i = 0; i < mini.size(); ++i) {
+          miniBytes[i * 4] = static_cast<uint8_t>(mini[i] >> 16);
+          miniBytes[i * 4 + 1] = static_cast<uint8_t>(mini[i] >> 8);
+          miniBytes[i * 4 + 2] = static_cast<uint8_t>(mini[i]);
+          miniBytes[i * 4 + 3] = 255;
+        }
+        const std::string miniPath = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimap.png";
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < 30; ++i) picture.DrawMinimap(mapW, mapH);
+        const double each = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30;
+        Vec3 back;
+        float mx = 0, my = 0;
+        const bool there = picture.MinimapProject(camera.target, &mx, &my) && picture.MinimapGroundAt(mx, my, &back);
+        printf("render: --picture: minimap %dx%d %s, %.2f ms a call; the camera's target %.1f %.1f is at %.1f %.1f on it, and back %.1f %.1f%s\n", mapW, mapH,
+               WritePng(miniPath, miniBytes.data(), mapW, mapH) ? miniPath.c_str() : "could not be written", each, camera.target.x, camera.target.z, mx, my,
+               back.x, back.z, there ? "" : " (failed)");
+        picture.Draw(camera, w, h, playTick + 1);  // (the device goes back to the picture's size)
       }
       std::vector<uint32_t> inside;
       picture.UnitsIn(0, 0, static_cast<float>(w), static_cast<float>(h), &inside);

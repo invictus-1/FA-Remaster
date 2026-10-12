@@ -16,6 +16,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "ambient_occlusion.h"
@@ -86,6 +87,32 @@ class World {
   // The units whose middle lies in a rectangle of the screen.
   void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const;
 
+  // --- what the player's interface shows in the world; each stays as set until it is changed ---
+  // The units shown as selected (entity ids): a ring on the ground under each, and its strategic
+  // icon in its selected form.
+  std::unordered_set<uint32_t> selected;
+  // A model shown as a ghost of one colour: a building's preview while its site is chosen.
+  struct Ghost {
+    std::string blueprint;  // a unit's blueprint id ("ueb0101")
+    Vec3 position;
+    float heading = 0;      // radians about the upright axis
+    Vec3 tint{0.3f, 1.0f, 0.4f};
+  };
+  std::vector<Ghost> ghosts;
+  // Lines between places of the world and rings lying on the ground (order lines, ranges).
+  // Colours are 0xAARRGGBB.
+  struct Line {
+    Vec3 a, b;
+    uint32_t color = 0xffffffffu;
+  };
+  struct Ring {
+    Vec3 centre;
+    float radius = 1;
+    uint32_t color = 0xffffffffu;
+  };
+  std::vector<Line> lines;
+  std::vector<Ring> rings;
+
   // --- settings, changeable between frames ---
   Look look = Look::Modern;
   bool shadowsOn = true, iconsOn = true;
@@ -125,7 +152,7 @@ class World {
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   bool haveMap_ = false;
-  gfx::Texture environment_, sky_;
+  gfx::Texture environment_, sky_, selectionRing_;
   std::vector<PlacedProp> props_;
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet
   std::vector<Pickable> pickables_;

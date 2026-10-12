@@ -100,6 +100,23 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
   }
   sky_ = textures.SkyCube(haveMap_ ? map.skyCubemap : std::string());
+  {  // the ring under a selected unit: a thin white circle, soft at both edges
+    const int size = 128;
+    std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4, 255);
+    for (int y = 0; y < size; ++y)
+      for (int x = 0; x < size; ++x) {
+        const float dx = (static_cast<float>(x) + 0.5f) / size * 2 - 1, dy = (static_cast<float>(y) + 0.5f) / size * 2 - 1;
+        const float r = std::sqrt(dx * dx + dy * dy);
+        const float a = Clamp((r - 0.86f) / 0.03f, 0, 1) * Clamp((0.985f - r) / 0.03f, 0, 1);
+        pixels[(static_cast<size_t>(y) * size + static_cast<size_t>(x)) * 4 + 3] = static_cast<uint8_t>(a * 255.0f);
+      }
+    gfx::TextureDesc td;
+    td.width = td.height = size;
+    td.format = gfx::Format::RGBA8;
+    td.data = pixels.data();
+    td.dataSize = pixels.size();
+    selectionRing_ = device_->CreateTexture(td);
+  }
   return true;
 }
 
@@ -139,6 +156,29 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lights.Begin(clock);
   pickables_.clear();
   for (const PlacedProp& p : props_) meshes.Add(p.model, p.world, {1, 1, 1});
+  // the interface's ghosts, lines and rings
+  for (const Ghost& g : ghosts) {
+    const Model* model = models.Unit(g.blueprint);
+    if (!model->ok) continue;
+    const Quat turn{0, std::sin(g.heading * 0.5f), 0, std::cos(g.heading * 0.5f)};
+    meshes.Add(model, Mat4::FromTRS(g.position, turn, model->scale), {0.6f, 0.6f, 0.6f}, 1, nullptr, &g.tint);
+  }
+  // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
+  auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
+  const Vec3 lift{0, 0.15f, 0};
+  for (const Line& l : lines) draw.Line(l.a + lift, l.b + lift, swapped(l.color));
+  for (const Ring& r : rings) {
+    // along the ground, in as many pieces as its size asks for
+    const int pieces = std::clamp(static_cast<int>(r.radius * 2), 24, 160);
+    Vec3 before;
+    for (int i = 0; i <= pieces; ++i) {
+      const float a = static_cast<float>(i) / static_cast<float>(pieces) * 6.2831853f;
+      Vec3 p{r.centre.x + std::cos(a) * r.radius, 0, r.centre.z + std::sin(a) * r.radius};
+      p.y = (haveMap_ ? GroundHeight(Clamp(p.x, 0, static_cast<float>(map.width)), Clamp(p.z, 0, static_cast<float>(map.height))) : r.centre.y) + 0.2f;
+      if (i) draw.Line(before, p, swapped(r.color));
+      before = p;
+    }
+  }
 }
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
@@ -153,7 +193,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (u.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
-      icons.Add(kind, position, color);
+      const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
+      icons.Add(kind, position, color, isSelected);
+      if (isSelected) {  // the ring on the ground under it, turned as the unit is
+        const Vec3 forward = Rotate(orientation, {0, 0, 1});
+        decals.AddMark(selectionRing_, position, kind->selectionX * 2.2f, kind->selectionZ * 2.2f, std::atan2(forward.x, forward.z));
+      }
     }
     const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
     float radius = 0.5f;

@@ -32,6 +32,10 @@ class StrategicIcons {
     int icon = -1;       // which symbol (-1: none: the blueprint names none, or its file is missing)
     float fadeIn = 130;  // the distance from the camera at which the symbol is fully there
     int priority = 128;  // 0 lies on top, 255 at the bottom
+    int iconSelected = -1;  // the symbol of a selected unit (<name>_selected.dds; -1: the plain one)
+    // the ring under a selected unit: half its extent along the unit's own x and z (the blueprint's
+    // SelectionSizeX, SelectionSizeZ)
+    float selectionX = 0.5f, selectionZ = 0.5f;
   };
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.
@@ -41,7 +45,11 @@ class StrategicIcons {
   void Begin(const View& view);
   // A unit of that kind at that place in the world, of an army with that colour (rgb in 0..1).
   // Nothing is listed while the unit is nearer than its kind's distance, or out of the picture.
-  void Add(const Kind* kind, Vec3 position, Vec3 color);
+  // `selected`: its selected form, where the game's files have one.
+  void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false);
+  // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
+  // middle at (x, y): for pictures made without the graphics card (a minimap).
+  void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height) const;
   // Draws the list into the current pass, which must be the window's.
   void Draw();
 
@@ -66,7 +74,7 @@ class StrategicIcons {
     float x, y, u, v;
     uint32_t color;
   };
-  int Icon(const std::string& name);
+  int Icon(const std::string& name, const char* suffix = "_rest");
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;

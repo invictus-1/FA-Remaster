@@ -47,6 +47,9 @@ class Decals {
   // `size` is half its edge.
   bool AddLight(const std::string& texture, const std::string& ramp, Vec3 centre, float size, double born, float seconds);
 
+  // A mark for this frame only, drawn in its own colours whatever the light (the ring under a
+  // selected unit). Forgotten after the next Draw.
+  void AddMark(gfx::Texture texture, Vec3 centre, float sizeX, float sizeZ, float heading);
   // The map's water: its depth picture and colour ramp (Terrain::WaterMap, WaterRamp) and the map's
   // size in world units. Pictures lying under water are then tinted as the ground there is.
   void SetWater(gfx::Texture waterMap, gfx::Texture waterRamp, float mapWidth, float mapHeight) {
@@ -61,7 +64,7 @@ class Decals {
 
   float glow = 2.5f;  // the modern look's brightness of a light on the ground (as Particles::glow)
   int drawn = 0;  // in the last Draw
-  int Count() const { return static_cast<int>(decals_.size()); }
+  int Count() const { return static_cast<int>(decals_.size() + marks_.size()); }
 
  private:
   struct Decal {
@@ -71,6 +74,7 @@ class Decals {
     double born;
     float seconds;
     bool normal = false;
+    bool mark = false;
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
@@ -87,9 +91,10 @@ class Decals {
   gfx::Texture waterMap_, waterRamp_;
   float mapWidth_ = 0, mapHeight_ = 0;
   std::vector<Decal> decals_;
+  std::vector<Decal> marks_;  // this frame's
   struct Visible {
     uint32_t texture, ramp;
-    int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights
+    int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights, 3 marks
     Instance instance;
   };
   std::vector<Visible> visible_;

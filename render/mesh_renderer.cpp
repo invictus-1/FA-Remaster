@@ -79,6 +79,7 @@ struct VOut {
   float3 binormal : BINORMAL;
   float4 uv : TEXCOORD1;
   float4 color : COLOR;
+  float3 tint : TEXCOORD2;
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
@@ -103,6 +104,7 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.binormal = mul(r, binormal);
   o.uv = i.uv;
   o.color = n.color;
+  o.tint = n.bones.yzw;
   return o;
 }
 
@@ -111,7 +113,7 @@ void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
 }
 
-float4 PS(VOut i) : SV_Target {
+float4 Shade(VOut i) {
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
   float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
@@ -209,6 +211,17 @@ float4 PS(VOut i) : SV_Target {
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
   float3 color = albedo.rgb * (2 * spec.b + light + 2 * environment * spec.r) + additive;
   return float4(color * built, 1);
+}
+
+// a ghost: its shape in one colour, the light and dark of the model kept
+float4 PS(VOut i) : SV_Target {
+  float4 c = Shade(i);
+  if (dot(i.tint, float3(1, 1, 1)) > 0) {
+    float lightness = dot(c.rgb, float3(0.3, 0.6, 0.1));
+    float3 tint = look > 0.5 ? ToLinear(i.tint) : i.tint;
+    c.rgb = lerp(c.rgb, tint * (lightness * 1.5 + 0.1), 0.8);
+  }
+  return c;
 }
 )hlsl";
 
@@ -308,7 +321,7 @@ void MeshRenderer::BuildRows(Entry* entry) {
   }
 }
 
-void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose) {
+void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint) {
   if (!model || !model->ok) return;
   Entry e;
   e.model = model;
@@ -328,7 +341,10 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   e.instance.color[2] = teamColor.z;
   e.instance.color[3] = built;
   e.instance.bones[0] = -1;
-  e.instance.bones[1] = e.instance.bones[2] = e.instance.bones[3] = 0;
+  e.instance.bones[1] = tint ? tint->x : 0;
+  e.instance.bones[2] = tint ? tint->y : 0;
+  e.instance.bones[3] = tint ? tint->z : 0;
+  e.sizeRadius = e.radius;
   if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
     e.pose = *pose;
     e.posed = true;
@@ -356,7 +372,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     const Vec3 r{e.radius, e.radius, e.radius};
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
     if (shadowPass && view.CoveredByNearer(e.centre, e.radius)) continue;  // the nearer shadow map has it
-    const float pixels = 2 * e.radius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
+    const float pixels = 2 * e.sizeRadius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
     if (pixels < smallest) continue;
     const float wanted = wish * pixels * pixels;
     // the level whose triangle count is nearest to that wish (nearest by ratio: a step down is taken

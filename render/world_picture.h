@@ -51,6 +51,44 @@ class WorldPicture {
   // top (the form of the interface's moho::ui::Image). Valid until the next Draw.
   const std::vector<uint32_t>& Draw(const Camera& camera, int width, int height, double tick);
 
+  // --- what the interface shows in the world; each stays as set until it is set again ---
+  // The selected units, by entity id: a ring on the ground under each, its strategic icon in the
+  // selected form.
+  void SetSelection(const std::vector<uint32_t>& ids);
+  // Buildings shown as ghosts while their site is chosen: green where the site is free, red where not.
+  struct BuildPreview {
+    std::string blueprint;  // the unit's blueprint id ("ueb0101")
+    float position[3] = {0, 0, 0};
+    float heading = 0;      // radians about the upright axis
+    bool free = true;
+  };
+  void SetBuildPreviews(const std::vector<BuildPreview>& previews);
+  // Lines between places of the world and rings lying on the ground (the lines of a unit's orders,
+  // ranges). Colours are 0xAARRGGBB; lines are one pixel wide and hidden by what is in front of them.
+  struct Line {
+    float a[3], b[3];
+    uint32_t color;
+  };
+  struct Ring {
+    float centre[3];
+    float radius;
+    uint32_t color;
+  };
+  void SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings);
+
+  // --- the minimap: the whole map from straight above with every unit's strategic icon ---
+  // `width` x `height` pixels as Draw gives them. The map's whole height fills the picture's height;
+  // give a width in the map's proportion (MapSize) and the map fills it exactly. The ground is drawn
+  // by the graphics card once per size and kept; the icons are laid on it on the processor at
+  // every call, from the units of the last Draw (selected ones in their selected form).
+  const std::vector<uint32_t>& DrawMinimap(int width, int height);
+  // Where a place of the world is on the minimap last drawn, and the place on the ground under a
+  // point of it.
+  bool MinimapProject(Vec3 world, float* x, float* y) const;
+  bool MinimapGroundAt(float x, float y, Vec3* hit) const;
+  // The map's size in world units.
+  void MapSize(float* width, float* height) const;
+
   // For the picture last drawn; x and y in its pixels.
   // Where a place in the world is on the picture. False when it is behind the camera.
   bool Project(Vec3 world, float* x, float* y) const;
