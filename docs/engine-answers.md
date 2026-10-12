@@ -3,6 +3,43 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## visuals (relayed by Chris, 2026-10-12): scenery under a new building — it is already removed, by FAF's script
+
+No engine change is needed, and none would be right: the game's own script does it, and the engine runs
+that script.
+
+`lua/sim/units/StructureUnit.lua`, `OnStartBeingBuilt` (FAF's file, the one the lab runs): when a
+structure starts being built **on land** and is **not an upgrade** of its builder, it takes
+`GetReclaimablesInRect` around its position and calls `Destroy()` on every entry that
+
+- is a prop (`IsProp`, set by `lua/sim/Prop.lua`, so any prop class that derives from `Prop`),
+- has neither `OBSTRUCTSBUILDING` nor `INVULNERABLE` among its blueprint's categories, and
+- has its **position** nearer than `radius` to the structure's position (the prop's centre counts, not
+  its box), with `radius = max(Physics.MeshExtentsX or SizeX, MeshExtentsY or SizeY, MeshExtentsZ or SizeZ)`
+  of the structure's blueprint. That is the largest full extent, height included, used as a radius: a
+  generous circle, wider than the footprint.
+
+It also puts a small flash on each prop it takes. The engine's part, `GetReclaimablesInRect`, returns
+every unit and prop in the entity-grid cells the rectangle touches, unfiltered (no category and no
+reclaim value is needed to be found), so props "with no category, nothing to reclaim" are found and
+destroyed like any other.
+
+So the split you already made is the one the game expects: `OBSTRUCTSBUILDING` + `RECLAIMABLE` props
+are reclaimed by the builder before the structure can start (`build.cpp` `FindSiteProp`: the original's
+0x5f6ea0); everything else under the structure is destroyed when it starts.
+
+What a scenery prop needs for this: it must be a real prop of the simulation (in the map's prop list
+or made with `CreateProp`), with a blueprint whose script class derives from `Prop`, and without the
+two categories above. Give `INVULNERABLE` to a prop only if it must survive a building on top of it.
+What it does not cover: structures built on water or the seabed (the script's `layer == 'Land'`
+test), upgrades in place, and anything that is drawn only by the renderer and is not a prop of the
+simulation: the simulation cannot remove what it does not hold.
+
+Seen running in ours: in the Economy test replay 31 props are destroyed from `StructureUnit.lua:301`
+(through `Prop.Destroy`), the first two at tick 688 (`MOHO64_DEBUG_DESTROY=1` logs every `Destroy()`
+with the script lines that called it: grep `structureunit.lua:301`). If a prop of yours stays under a
+new building in a game, send its blueprint id and where it stood.
+
 ## render 12: the session's seed — done
 
 `sim/sim_view.h`:
