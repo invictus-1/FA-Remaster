@@ -76,6 +76,32 @@ session starts (`/lua/ui/game/gamemain.lua` and what it loads). First the readin
    `/lua/SimCallbacks.lua`, and `IssueCommand` / `IssueUnitCommand` / `IssueBlueprintCommand` for the
    selected units, applied between beats the way a command stream's messages are.
 
+   **Status:** all four are done by the engine track (`docs/engine-answers.md`, "ui 4") and in use:
+   the sync table and `gamemain.OnBeat` after every beat, the facts, units as script objects, and
+   orders through `CommandWriter` (move, attack ground, patrol, build at a place). Thank you.
+
+### 5. Unit states for the panels
+With the in-game interface up (`ui/README.md`, status) the panels ask for more about a unit than
+`UnitView` holds. Today the interface answers each with the plain case, so the panels show a new
+unit's state whatever the unit does. In the order the panels need them:
+
+1. **The command queue of a unit:** per entry the command's id, its type, its target (position or
+   entity id), the blueprint for a build, the count. For `UserUnit:GetCommandQueue`, the queue
+   display of factories, waypoints, and for taking a command out of a queue again.
+2. **What a unit is doing:** the entity it builds or repairs (`GetFocus`), the entity it guards
+   (`GetGuardedEntity`), the unit that built it (`GetCreator`).
+3. **Its switches:** fire state, the script bits (toggles) that are set, paused, repeat queue,
+   auto mode, auto surface mode; and its live command and toggle caps (what it can do right now,
+   as `LiveCommandCaps` knows it), so that buttons follow upgrades.
+4. **Its meters:** shield ratio, fuel ratio, the missile silo counts, and per unit the economy it
+   makes and uses (`GetEconData`), its build rate as it is now.
+5. **Per army:** the blueprints that army may not build (restrictions), so that the construction
+   panel leaves them out; today it shows everything the blueprint lists (for a commander also what
+   needs an upgrade it does not have).
+
+Smallest form: more fields on `UnitView` (or a second view call for the queue, which is the big
+one), and a list of restricted blueprint ids per army.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

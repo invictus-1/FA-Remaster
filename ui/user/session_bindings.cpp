@@ -241,6 +241,28 @@ int l_ValidateUnitsList(lua_State* L) {
   return 1;
 }
 
+// IsAlly(army1, army2), IsEnemy, IsNeutral: how the first army stands towards the second
+// (armies counted from 1). An army stands as an ally towards itself.
+int Stance(lua_State* L) {
+  int a = static_cast<int>(luaL_checknumber(L, 1)), b = static_cast<int>(luaL_checknumber(L, 2));
+  if (a == b) return 2;
+  for (const ArmyView& v : ArmyViews(*TheSim(L)))
+    if (v.index == a && b >= 1 && b <= static_cast<int>(v.alliance.size())) return v.alliance[static_cast<size_t>(b - 1)];
+  return 0;
+}
+int l_IsAlly(lua_State* L) {
+  lua_pushboolean(L, Stance(L) == 2);
+  return 1;
+}
+int l_IsNeutral(lua_State* L) {
+  lua_pushboolean(L, Stance(L) == 1);
+  return 1;
+}
+int l_IsEnemy(lua_State* L) {
+  lua_pushboolean(L, Stance(L) == 0);
+  return 1;
+}
+
 // GetSessionClients(): the one local player. (Field names as the scripts read them.)
 int l_GetSessionClients(lua_State* L) {
   Sim* sim = TheSim(L);
@@ -347,6 +369,9 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GetArmiesTable", l_GetArmiesTable);
   SetGlobal(L, "GetEconomyTotals", l_GetEconomyTotals);
   SetGlobal(L, "GetSessionClients", l_GetSessionClients);
+  SetGlobal(L, "IsAlly", l_IsAlly);
+  SetGlobal(L, "IsNeutral", l_IsNeutral);
+  SetGlobal(L, "IsEnemy", l_IsEnemy);
 }
 
 }  // namespace moho::ui
