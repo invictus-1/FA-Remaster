@@ -51,6 +51,8 @@ class LiveSim {
   // The frame at a moment given in ticks, blended between the two beats around it (clamped to the
   // beats kept). False while there is no beat yet.
   bool FrameAt(double tick, Frame* out);
+  // The effect events of the beats computed since the last call, in order (each says its beat).
+  void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   // Each army's colour as the game shows it, by army index from 0; empty until the game has started.
   std::vector<Vec3> ArmyColors() const;
   float MsPerTick() const;     // what a beat costs the simulation, averaged over the last ones
@@ -84,6 +86,7 @@ class LiveSim {
   std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint and FrameProjectile::blueprint
                                        // (0: unknown); only grows
   std::vector<Vec3> armyColors_;
+  std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   float msPerTick_ = 0, loadSeconds_ = 0;
 
   std::vector<std::string> namesForFrames_;  // the renderer's copy of names_ (what Frame::blueprints points at)

@@ -129,6 +129,7 @@ prints what it reports.
 | `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
 | `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
 | `ribbons.h` | beams and trails: bands of texture that face the camera, from the game's beam and trail blueprints |
+| `effects.h` | a running game's effects: the scripts' effect calls turned into emitters, beams and trails, kept on what they hang on |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
@@ -173,7 +174,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
 - The live frame, first form: the viewer runs the simulation itself (`--sim`) and fills the same
   frame from the engine's `sim/sim_view.h` after every beat: units, army colours, the bones that
-  are not at rest, projectiles and beams. Replays and new games (`--session`); no orders yet.
+  are not at rest, projectiles, beams, and what the scripts did with effects. Replays and new
+  games (`--session`); no orders yet.
+- Effects in games (step 6). The simulation hands over every effect call of the scripts
+  (`EffectEvents`: created, changed, ended); `effects.h` starts the emitter, beam or trail when
+  the picture's clock reaches the call's beat and keeps what is attached on its unit's bone (in
+  the pose shown), its projectile, or its weapon's beam. So fights show the game's own muzzle
+  flashes, shots and trails, impacts, explosions and smoke. Acted on: `ScaleEmitter`,
+  `OffsetEmitter`, the `LIFETIME` parameter, `AttachBeamToEntity`; the other parameter and curve
+  calls are not yet. As in the original, an emitter out of the picture or farther from the camera
+  than its blueprint's `LODCutoff` throws nothing out. Measured at 1080p on an RTX 4090: a fight
+  close up with 14,600 particles of 246 emitters, 0.8 ms a frame; a ten-minute game of eight
+  armies seen whole, 4,075 live effects (all emitters too far away to throw anything), 2.2 ms a
+  frame, 0.56 ms of it keeping the effects in place.
 - Bones. A model's vertices each follow one bone; a model whose bones are away from rest is drawn
   posed (the bones' matrices go to the shaders in one buffer per pass; a model at rest costs what
   it did). The frame carries, per unit, the bones that are not at rest at two beats, and the
@@ -192,8 +205,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Beams and trails (step 6): the game's `BeamBlueprint`s (a band from start to end, its texture
   sliding along, its colour running from a start to an end colour) and `TrailEmitterBlueprint`s
   (a band through where the emitter has been, fading along a ramp texture) are drawn, facing the
-  camera. `--beam <name>` and `--trail <name>` show one. In games they wait for the same
-  hand-over as the particle emitters (REQUESTS.md, 8); what is guessed is asked in 10.
+  camera. `--beam <name>` and `--trail <name>` show one. What is guessed about the two kinds of
+  blueprint is asked in REQUESTS.md, 10.
 - Particle effects, first form (step 6). The game's emitters (`/effects/emitters/*_emit.bp`: fire,
   smoke, flashes, debris, sparks) are played: an emitter reads a particle's start values from its
   blueprint's curves, and from then on the graphics card works out where the particle is, how big
@@ -201,8 +214,7 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   game's `effects/particle.fx` does, written anew. Particles facing the camera, lying flat, or
   stretched along their flight; alpha, adding, darkening and premultiplied blending; textures with
   frames and strips. `--emit <name>` plays emitters over and over at a spot, to look at them.
-  NOT yet in games: the simulation does not hand over which effects the scripts start (asked for,
-  REQUESTS.md, 8). How an emitter turns its curves into particles is in the original program, not
+  How an emitter turns its curves into particles is in the original program, not
   in the game's files; `particles.cpp` marks what it guesses (time in ticks, a key's z as a random
   spread, rates per tick, degrees, sizes as half an edge), and REQUESTS.md, 9 asks.
 - Strategic icons (from step 6, brought forward: without them armies cannot be seen from far away).
@@ -253,8 +265,9 @@ Known gaps, to be closed in the steps they belong to:
   edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No decals, no sky, no ground beyond the map's edge. Effects play only on request (`--emit`), not
-  yet in games; particles are not sorted by distance, do not refract
+- No decals, no sky, no ground beyond the map's edge. Effects: no light particles (the flash of
+  light an explosion throws on its surroundings), no decals or scorch marks; scripts' changes to
+  emitter curves are ignored; particles are not sorted by distance, do not refract
   (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).

@@ -66,6 +66,7 @@
 #include "core/vfs.h"
 #include "script/mount.h"
 #include "debug_draw.h"
+#include "effects.h"
 #include "frame.h"
 #include "gfx.h"
 #include "ground.h"
@@ -365,6 +366,8 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
+  Effects effects(&particles, &ribbons, &models);
+  std::vector<FrameEffectEvent> effectEvents;
   StrategicIcons icons(device.get(), &vfs);
   if (!icons.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
@@ -706,8 +709,6 @@ int main(int argc, char** argv) {
         }
       }
     }
-    particles.Update(static_cast<double>(time));
-    ribbons.Update(static_cast<double>(time));
     if (!opt.beam.empty() || !opt.trail.empty()) {  // --beam, --trail
       const Vec3 base{emitAt.x, groundHeight(emitAt.x, emitAt.z) + 1, emitAt.z};
       for (size_t i = 0; i < opt.beam.size(); ++i)
@@ -816,13 +817,14 @@ int main(int argc, char** argv) {
           // in its own colours: the original gives every mesh that is not a unit's opaque white where a
           // unit gets its army's colour (docs/engine-answers.md, render 7)
           meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
-        } else {
+        } else if (!effects.OnEntity(p.id)) {  // (one with the game's own trail or glow needs no stand-in)
           const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
           ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
         }
       }
       // beams: a line in a lightened army colour, until the beam effects are written
       for (const FrameBeam& b : frame.beams) {
+        if (effects.OnEntity(b.id)) continue;
         const Vec3 c = armyColors[b.army % armyColors.size()] * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
         ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
       }
@@ -833,6 +835,15 @@ int main(int argc, char** argv) {
         for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
       meshes.Prepare(views);
     }
+    if (haveLive) {  // what the scripts did with effects in the beats since the last frame
+      live.TakeEffectEvents(&effectEvents);
+      effects.Queue(std::move(effectEvents));
+      effects.Update(playTick, frame);
+    }
+    // effects run on the game's clock while a game plays (so they stand still when it is paused)
+    const double effectTime = havePlay ? playTick * 0.1 : static_cast<double>(time);
+    particles.Update(effectTime, &view);
+    ribbons.Update(effectTime);
     // the sun's shadow maps first, then the scene into its own picture, then that onto the window
     if (haveMap && shadowsOn) {
       for (int i = 0; i < shadows.Count(); ++i) {
@@ -885,9 +896,13 @@ int main(int argc, char** argv) {
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
-      if (particles.liveParticles || particles.liveEmitters) printf("; %d particles of %d emitters", particles.liveParticles, particles.liveEmitters);
+      if (particles.liveParticles || particles.liveEmitters)
+        printf("; %d particles of %d emitters (%d quiet), %.2f ms", particles.liveParticles, particles.liveEmitters, particles.quietEmitters, particles.cpuMs);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
+      if (haveLive)
+        printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms", effects.live, effects.started, effects.notShown,
+               ribbons.drawnBands, effects.cpuMs);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;

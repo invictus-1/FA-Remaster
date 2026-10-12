@@ -57,6 +57,22 @@ struct FrameBeam {
   float end[3] = {0, 0, 0};
 };
 
+// What a script did with an effect in one beat: the engine's EffectEvent (src/sim/sim_view.h,
+// which says what each function fills), copied out.
+struct FrameEffectEvent {
+  enum Kind { Create, Call, Destroy } kind = Create;
+  uint32_t tick = 0;        // the beat it happened in
+  uint32_t id = 0;          // the effect's own number
+  std::string name;         // the function ("CreateEmitterAtBone") or the method ("ScaleEmitter")
+  std::string blueprint;    // Create: the emitter / beam / trail blueprint, or the texture
+  int army = 0;
+  uint32_t entity = 0xffffffff, entity2 = 0xffffffff;  // what it is on, and a beam's other end (0xffffffff: none)
+  int bone = -1, bone2 = -1;
+  float position[3] = {0, 0, 0};  // Create: where the attach point was
+  std::vector<float> numbers;
+  std::string text, text2;
+};
+
 struct Frame {
   uint32_t tick = 0;                    // ten ticks per second of game time
   std::vector<FrameUnit> units;         // in entity-id order

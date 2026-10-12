@@ -44,6 +44,7 @@ struct EmitterBlueprint {
   bool localVelocity = false, localAcceleration = false, gravity = false;
   bool alignRotation = false, alignToBone = false, flat = false, interpolateEmission = true;
   int sortOrder = 0;
+  float lodCutoff = 1e9f;  // farther from the camera than this, the emitter throws nothing out
   std::string texturePath, rampPath;
   gfx::Texture texture, ramp;
   int rampRows = 1;  // the ramp texture's height: one colour ramp per row
@@ -57,16 +58,23 @@ class Particles {
   bool Init(std::string* error);
 
   // Starts an emitter of that blueprint ("/effects/emitters/x_emit.bp") there. Returns its handle;
-  // 0 when the blueprint cannot be read (reported once).
-  uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1);
+  // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was
+  // before now (seconds, on Update's clock; negative: now).
+  uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1);
   // Where an emitter is now (one that sits on something that moves).
   void Move(uint32_t emitter, Vec3 position, const Quat& orientation);
+  // What the game's scripts change on an emitter: its size (ScaleEmitter), and how long it runs,
+  // in ticks (the LIFETIME parameter; negative: until stopped).
+  void SetScale(uint32_t emitter, float scale);
+  void SetLifetime(uint32_t emitter, float ticks);
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
 
-  // Moves time on to `now` (seconds): emitters throw out what is due, and end.
-  void Update(double now);
+  // Moves time on to `now` (seconds): emitters throw out what is due, and end. With `view`, an
+  // emitter that is out of the picture, or farther from the camera than its blueprint's LODCutoff,
+  // throws nothing out meanwhile (as in the original; what it would have thrown is not made up later).
+  void Update(double now, const View* view = nullptr);
   // Draws every living particle into the current pass, which must be the scene's.
   void Draw(const View& view);
 
@@ -75,6 +83,8 @@ class Particles {
   float glow = 2.5f;
   int liveParticles = 0;  // after the last Draw
   int liveEmitters = 0;   // after the last Update
+  int quietEmitters = 0;  // of those: out of sight or too far away in the last Update
+  float cpuMs = 0;        // Update and Draw on the processor, averaged over the last frames
 
  private:
   // As the shaders read it: five rows of four numbers.
@@ -96,12 +106,14 @@ class Particles {
     Vec3 position;
     Quat orientation;
     float scale = 1;
+    float lifetime = 1;  // the blueprint's, or what a script set
     double started = 0;
     int ticksDone = 0;   // of its own time, in tenths of a second
     float carry = 0;     // the fraction of a particle left over from the last tick
     bool stopped = false;
   };
   const EmitterBlueprint* Blueprint(const std::string& path);
+  Emitter* Find(uint32_t id);
   void Emit(Emitter* emitter, int tick);
   float Random();  // 0..1
 
@@ -114,10 +126,12 @@ class Particles {
   std::unordered_map<const EmitterBlueprint*, std::unique_ptr<Set>> sets_;
   std::vector<Set*> order_;  // the sets in drawing order
   std::vector<Emitter> emitters_;
+  std::unordered_map<uint32_t, size_t> index_;  // emitter id -> its place in emitters_
   std::vector<float> rows_;
   uint32_t nextId_ = 1;
   uint32_t seed_ = 0x2545f491u;
   double now_ = 0;
+  float updateMs_ = 0;
 };
 
 }  // namespace render

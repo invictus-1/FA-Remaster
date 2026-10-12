@@ -37,6 +37,8 @@ class Ribbons {
   bool Beam(const std::string& blueprint, Vec3 start, Vec3 end);
   // The same from `start` along `direction` (unit length), as long as the blueprint says.
   bool BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction);
+  // A beam of a texture alone (the scripts' CreateAttachedBeam), adding its light, for this frame.
+  void TextureBeam(const std::string& texture, Vec3 start, Vec3 end, float halfWidth);
   // A plain glowing band without a blueprint, for this frame: what stands in where the game's own
   // effect is not known yet. `color` is rgb in 0..1; `width` the whole width in world units.
   void PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width);
@@ -91,6 +93,7 @@ class Ribbons {
     bool stopped = false;
   };
   const Kind* Blueprint(const std::string& path);
+  Trail* Find(uint32_t id);
   Batch* BatchFor(const Kind* kind);
   // One camera-facing quad from a to b, `half` wide to either side.
   void Band(Batch* batch, const View& view, Vec3 a, Vec3 b, float halfA, float halfB, const float uvA[2], const float uvB[2],
