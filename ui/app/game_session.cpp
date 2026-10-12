@@ -7,6 +7,9 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/font.h"
+#include "script/script_state.h"
+#include "sim/blueprints.h"
+#include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
 
@@ -60,10 +63,31 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", secs(t0, t1), secs(t1, t2));
   sim_ = std::move(sim);
+  modUids_ = uids;
+  sessionMods_ = h.mods;
   map_ = h.map;
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
+  return true;
+}
+
+bool GameSession::LoadInterfaceRules(lua_State* userState) {
+  auto t0 = std::chrono::steady_clock::now();
+  rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
+  rules_->SetHookDirs(hookDirs_);
+  SimBlueprints::StartRecording(*rules_);
+  lua_State* R = rules_->L();
+  if (!sessionMods_.empty() && PushSerializedLua(R, sessionMods_) && lua_istable(R, -1)) lua_setglobal(R, "__active_mods");
+  else SetActiveMods(*rules_, modUids_);
+  lua_settop(R, 0);
+  if (!rules_->DoScript("/lua/ruleinit.lua")) return false;
+  interfaceBlueprints_ = std::make_unique<SimBlueprints>();
+  interfaceBlueprints_->fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
+  interfaceBlueprints_->CopyToSim(R, userState);
+  RegisterCategoryBindings(userState, interfaceBlueprints_.get());
+  Logf(LogLevel::Info, "moho64ui: session: %zu blueprints in the interface's state, %.2f s", interfaceBlueprints_->Count(),
+       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
   return true;
 }
 

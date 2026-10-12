@@ -53,8 +53,8 @@ lua_State* UserState::L() const { return state_->L(); }
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }
 
 bool UserState::Boot() {
-  bool ok = state_->DoScript("/lua/userInit.lua");
-  Logf(LogLevel::Info, "moho64ui: userInit.lua %s", ok ? "ok" : "FAILED");
+  bool ok = state_->DoScript(config_.bootScript);
+  Logf(LogLevel::Info, "moho64ui: %s %s", config_.bootScript.c_str(), ok ? "ok" : "FAILED");
   return ok;
 }
 
@@ -95,6 +95,11 @@ bool UserState::StartMainScript() {
   // that this comes after SetupUI.
   LoadKeyMappings(L);
   return true;
+}
+
+bool UserState::StartGame() {
+  uiState_ = "game";
+  return CallUiMain("StartGameUI");
 }
 
 bool UserState::StartFrontEnd() {

@@ -230,25 +230,44 @@ int main(int argc, char** argv) {
     if (auto code = hostfs::ReadFile(o.luaFile)) user.RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
   }
+  // When a game has been launched, its interface gets a state of its own: the session's start
+  // script, the rules, the root frame and the main script again, then the in-game interface.
+  // The front end's state stays as it is and is no longer shown.
+  std::unique_ptr<ui::UserState> game;
+  ui::UserState* shown = &user;
+  auto startGameInterface = [&]() {
+    if (game || !session.running()) return;
+    ui::UserState::Config gameCfg = cfg;
+    gameCfg.bootScript = "/lua/SessionInit.lua";
+    gameCfg.modUids = session.modUids();
+    gameCfg.launchSession = nullptr;
+    game = std::make_unique<ui::UserState>(&vfs, gameCfg);
+    bool up = session.LoadInterfaceRules(game->L()) && game->Boot() && game->StartMainScript() && game->StartGame();
+    Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
+    shown = game.get();
+  };
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
-    done = ui::RunWindow(user, width, height, o.frames, [&session](double seconds, ui::SoftwareTarget& target) {
-      session.Advance(seconds);
-      session.DrawStatus(target);
-    });
+    done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
+                         [&](double seconds, ui::SoftwareTarget& target) {
+                           session.Advance(seconds);
+                           session.DrawStatus(target);
+                           startGameInterface();
+                         });
     if (done < 0) ok = false;
   } else {
     for (; done < o.frames; ++done) {
-      user.Frame(1.0 / 60.0);
+      shown->Frame(1.0 / 60.0);
       session.Advance(1.0 / 60.0);
+      startGameInterface();
     }
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
   for (const auto& line : session.Status()) Logf(LogLevel::Info, "moho64ui: session: %s", line.c_str());
-  if (dumpUi) user.ui().Dump();
+  if (dumpUi) shown->ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture
     ui::SoftwareTarget target(width, height);
-    user.ui().Render(user.L(), target, 0);
+    shown->ui().Render(shown->L(), target, 0);
     session.DrawStatus(target);
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());

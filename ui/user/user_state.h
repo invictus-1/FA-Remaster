@@ -36,6 +36,9 @@ class UserState {
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
     int width = 1920, height = 1080;    // the head's size in pixels
+    // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
+    // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
+    std::string bootScript = "/lua/userInit.lua";
   };
 
   UserState(Vfs* vfs, Config config);
@@ -46,6 +49,7 @@ class UserState {
   bool Boot();             // /lua/userInit.lua
   bool StartMainScript();  // the root frames, then uimain.SetupUI()
   bool StartFrontEnd();    // uimain.StartFrontEndUI()
+  bool StartGame();        // uimain.StartGameUI(): the in-game interface, in a session's state (FA exe 0x83d240)
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
