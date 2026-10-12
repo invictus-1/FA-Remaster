@@ -307,6 +307,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   at yet: the minimap's ground (drawn once, in the map's light), and how bright the game's flashes
   should be to an eye opened for the night. The original look ignores the time of day. Cost: none
   that can be measured (1.3 ms a frame at 1920 x 1080 with half the picture sky, with or without).
+- Lamps on units (modern look, with a time of day). A remastered unit may bring a list of its
+  lights (`<id>_lights.bp`; the form is in `docs/render-unit-lights.md`): points of light that ride
+  on its bones. From dusk to dawn they are lit, as small lights (next point), for the units near
+  what the camera looks at. Tried with a hand-made list on the Striker; no unit ships one yet.
 - Small lights (modern look). A light is a point that lights what is within its radius. Every
   frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
   the lights of the square it is over - ground, units and decals alike, with the same material

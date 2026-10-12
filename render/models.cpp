@@ -284,6 +284,37 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
   const std::string preview = "/preview/" + base + "/";
   const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
+  // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md)
+  if (!original) {
+    const std::string file = previewed ? preview + base + "_lights.bp" : "/mods/labvisuals/textures/" + base + "/" + base + "_lights.bp";
+    auto text = vfs_->Exists(file) ? vfs_->ReadFile(file) : std::nullopt;
+    BpValue list;
+    if (text && !ReadBlueprintFile(*text, &list)) fprintf(stderr, "render: %s: the list of lights cannot be read\n", file.c_str());
+    for (const BpValue& entry : list.items) {
+      if (m->lights.size() >= 16) break;
+      auto three = [&](const char* name, Vec3 fallback) {
+        const BpValue& v = entry[name];
+        if (v.items.size() < 3) return fallback;
+        return Vec3{static_cast<float>(v.Item(0).NumberOr(0)), static_cast<float>(v.Item(1).NumberOr(0)), static_cast<float>(v.Item(2).NumberOr(0))};
+      };
+      ModelLight light;
+      const Vec3 at = three("Position", {0, 0, 0});  // in the mesh's own coordinates, at rest
+      light.place = at;
+      const std::string bone = Lower(entry["Bone"].StringOr(std::string()));
+      for (size_t b = 0; !bone.empty() && b < m->bones.size(); ++b)
+        if (Lower(m->bones[b].name) == bone) {
+          light.bone = static_cast<int>(b);
+          light.place = Rotate(Conjugate(m->bones[b].rotation), at - m->bones[b].position);
+          break;
+        }
+      if (!bone.empty() && light.bone < 0) fprintf(stderr, "render: %s: no bone named %s (the light rides on the unit itself)\n", file.c_str(), bone.c_str());
+      light.color = three("Color", {1, 1, 1});
+      light.radius = static_cast<float>(entry["Radius"].NumberOr(1.5));
+      light.strength = static_cast<float>(entry["Strength"].NumberOr(1));
+      light.blink = static_cast<float>(entry["Blink"].NumberOr(0));
+      m->lights.push_back(light);
+    }
+  }
   if (previewed) {
     size_t count = 1;
     while (count < 8 && vfs_->Exists(preview + base + "_lod" + std::to_string(count) + ".scm")) ++count;

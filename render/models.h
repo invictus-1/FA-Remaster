@@ -37,6 +37,17 @@ struct ModelBone {
   Quat rotation;
 };
 
+// A lamp of a remastered unit (its <id>_lights.bp; docs/render-unit-lights.md): a point of light
+// that rides on a bone.
+struct ModelLight {
+  int bone = -1;         // which of Model::bones it moves with (-1: the unit itself)
+  Vec3 place;            // in that bone's own frame, model units
+  Vec3 color{1, 1, 1};   // linear
+  float radius = 1.5f;   // how far it lights, model units
+  float strength = 1;
+  float blink = 0;       // seconds for one on-and-off; 0: steady
+};
+
 struct ModelLod {
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
@@ -78,6 +89,7 @@ struct Model {
   // size on screen, in pixels, down to which each level but the last is used - the sizes its levels
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
   std::vector<float> levelPixels;
+  std::vector<ModelLight> lights;  // a remastered unit's lamps (at most 16)
 };
 
 class ModelCache {
