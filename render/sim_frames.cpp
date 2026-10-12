@@ -162,8 +162,10 @@ void SimFrames::Beat(const moho::Sim& sim) {
   moho::EffectEvents(sim, &e.effects);
   std::vector<FrameEffectEvent> events;
   events.reserve(e.effects.size());
+  const int focusNow = focus_.load();
   for (moho::EffectEvent& v : e.effects) {
     FrameEffectEvent f;
+    if (focusNow > 0 && v.kind == moho::EffectEvent::Create) f.seen = (moho::ReconAt(sim, focusNow, v.position) & moho::kReconSeenNow) != 0;
     f.kind = v.kind == moho::EffectEvent::Create ? FrameEffectEvent::Create
              : v.kind == moho::EffectEvent::Call ? FrameEffectEvent::Call : FrameEffectEvent::Destroy;
     f.tick = sim.tick();

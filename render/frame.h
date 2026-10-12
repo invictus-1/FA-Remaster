@@ -75,6 +75,7 @@ struct FrameEffectEvent {
   uint32_t entity = 0xffffffff, entity2 = 0xffffffff;  // what it is on, and a beam's other end (0xffffffff: none)
   int bone = -1, bone2 = -1;
   float position[3] = {0, 0, 0};  // Create: where the attach point was
+  bool seen = true;               // Create: the army the picture is for sees that place
   std::vector<float> numbers;
   std::string text, text2;
 };
