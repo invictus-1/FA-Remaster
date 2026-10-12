@@ -60,15 +60,15 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--detail 1] [--msaa 4] [--ao 1]
-               [--look modern|original] [--noshadows]
+               [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
                [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
 Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, the middle button drags
 the ground, the right button turns and tilts. Keys: W A S D or the arrows move, L switches between
-the modern and the original look, H switches the shadows, F12 saves a screenshot, V switches vsync,
-Escape quits.
+the modern and the original look, H switches the shadows, I the strategic icons, F12 saves a
+screenshot, V switches vsync, Escape quits.
 
 Looking at a remastered model without a recording: `--preview uel0401=<folder>` takes that unit's
 meshes (`uel0401_lod0.scm`, `_lod1.scm`, ...) and LabPBR textures (`uel0401_lab_albedo.dds`,
@@ -124,6 +124,7 @@ prints what it reports.
 | `bp_reader.h` | reads a blueprint file as plain data, without Lua (for the viewer: mesh and texture names) |
 | `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
 | `mesh_renderer.h` | draws models, instanced: units and props |
+| `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
@@ -170,6 +171,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   frame from the engine's `sim/sim_view.h` after every beat. Units and army colours only: bone
   poses and projectiles are asked for (REQUESTS.md, 6). Replays and new games (`--session`); no
   orders yet.
+- Strategic icons (from step 6, brought forward: without them armies cannot be seen from far away).
+  A unit farther from the camera than its blueprint's `Display.Mesh.IconFadeInZoom` shows the symbol
+  its blueprint names (`StrategicIconName`), coloured as the original's shader colours it and
+  stacked by `StrategicIconSortPriority`; it comes in over the last tenth of that distance. That the
+  original measures this distance from the camera to each unit is inferred, not checked against it.
+  Symbols are drawn pixel for pixel; from 2160 lines up, two screen pixels for each (`--icon-scale`).
 - Step 5 has begun with what both looks need, and a first modern look:
   - The scene is drawn into a floating-point picture; a last pass puts it on the window.
   - The sun casts shadows (three cascaded shadow maps of 2048 pixels, 3 x 3 soft lookups), in both
@@ -195,9 +202,11 @@ Known gaps, to be closed in the steps they belong to:
 
 - Units: every model is drawn in its rest pose (a recording has no bone poses: turrets do not turn,
   legs do not walk) and with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
-  highlights). A unit under construction is only darker. Army colours are a fixed list, not the
-  replay's. No strategic icons: beyond its last level of detail a unit is not drawn.
-- A unit smaller than a pixel and a half is not drawn (strategic icons will take over there).
+  highlights). A unit under construction is only darker. With a recording, army colours are a fixed
+  list (the running simulation gives the game's own).
+- A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
+- Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
+  The symbol's name is read from the `.bp` file, so a change a mod's script makes to it is not seen.
 - Props do not sway, and blended far-away cards are not sorted by distance.
 - Each shadow cascade draws every caster inside it again, also those a nearer cascade already
   covers: the shadow maps often hold more triangles than the picture.

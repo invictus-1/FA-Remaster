@@ -107,16 +107,20 @@ const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
     auto listed = display_.find(id);
     if (listed != display_.end()) return FromDisplay(id, id, listed->second);
   }
+  return Blueprint(UnitBlueprintPath(id), original);
+}
+
+const std::string& ModelCache::UnitBlueprintPath(const std::string& blueprintId) {
+  const std::string id = Lower(blueprintId);
   auto known = unitPaths_.find(id);
-  if (known != unitPaths_.end()) return Blueprint(known->second, original);
+  if (known != unitPaths_.end()) return known->second;
   // the game's own units are in /units; a mod's are in its own folder under /mods
   std::string path = "/units/" + id + "/" + id + "_unit.bp";
   if (!vfs_->Exists(path)) {
     std::vector<std::string> found = vfs_->FindFiles("/mods", id + "_unit.bp");
     if (!found.empty()) path = found.front();
   }
-  unitPaths_.emplace(id, path);
-  return Blueprint(path, original);
+  return unitPaths_.emplace(id, path).first->second;
 }
 
 bool ModelCache::Remastered(const std::string& blueprintId) const {

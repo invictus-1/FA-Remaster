@@ -63,6 +63,8 @@ class ModelCache {
   // a model with ok == false (reported once).
   // `original`: the game's own model even when a remastered one is there (to show both side by side).
   const Model* Unit(const std::string& blueprintId, bool original = false);
+  // Where that unit's blueprint file is: the game's own in /units, a mod's in its folder under /mods.
+  const std::string& UnitBlueprintPath(const std::string& blueprintId);
   // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
   bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp").

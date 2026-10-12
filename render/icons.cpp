@@ -1,0 +1,198 @@
+#include "icons.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "bp_reader.h"
+#include "core/vfs.h"
+#include "dds.h"
+
+namespace render {
+namespace {
+
+// Positions arrive in screen pixels. The colouring is the original's (its technique TStrategicIcon):
+// a pixel whose colour is within half the colour cube's edge of middle grey takes the army's colour;
+// black outlines and white markings stay as they are.
+const char kShader[] = R"hlsl(
+Texture2D symbols : register(t0);
+
+struct VIn {
+  float2 position : POSITION;
+  float2 uv : TEXCOORD0;
+  float4 color : COLOR;
+};
+struct VOut {
+  float4 position : SV_Position;
+  float2 uv : TEXCOORD0;
+  float4 color : COLOR;
+};
+VOut VS(VIn i) {
+  VOut o;
+  o.position = float4(i.position.x * viewport.z * 2 - 1, 1 - i.position.y * viewport.w * 2, 0, 1);
+  o.uv = i.uv;
+  o.color = i.color;
+  return o;
+}
+float4 PS(VOut i) : SV_Target {
+  float4 c = symbols.SampleLevel(samplerPointClamp, i.uv, 0);
+  float3 d = c.rgb - 0.5;
+  if (dot(d, d) < 0.25) c.rgb = i.color.rgb;
+  c.a *= i.color.a;
+  if (c.a <= 0) discard;
+  return c;
+}
+)hlsl";
+
+const char kIconFolder[] = "/textures/ui/common/game/strategicicons/";
+
+}  // namespace
+
+bool StrategicIcons::Init(std::string* error) {
+  std::string source = std::string(kViewShaderBlock) + kShader;
+  gfx::PipelineDesc pd;
+  pd.name = "strategic icons";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}, {"TEXCOORD", 0, gfx::AttrType::Float2, 8}, {"COLOR", 0, gfx::AttrType::UByte4N, 16}};
+  pd.stride = sizeof(Vertex);
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.blend = gfx::Blend::Alpha;
+  pipeline_ = device_->CreatePipeline(pd, error);
+  if (!pipeline_) return false;
+  gfx::BufferDesc bd;
+  bd.stride = sizeof(Vertex);
+  bd.dynamic = true;
+  buffer_ = device_->CreateBuffer(bd);
+  atlasPixels_.assign(static_cast<size_t>(kAtlasSize) * kAtlasSize * 4, 0);
+  return true;
+}
+
+// The symbol of that name, put into the shared texture when it is first asked for. -1: no such file.
+int StrategicIcons::Icon(const std::string& name) {
+  auto known = iconByName_.find(name);
+  if (known != iconByName_.end()) return known->second;
+  int index = -1;
+  const std::string path = kIconFolder + name + "_rest.dds";
+  auto file = vfs_->ReadFile(path);
+  DdsImage image;
+  std::vector<uint8_t> pixels;
+  std::string error;
+  if (!file) {
+    fprintf(stderr, "render: strategic icon %s: file not found\n", path.c_str());
+  } else if (!ParseDds(*file, &image, &error) || !DecodeRgba(image, 0, &pixels)) {
+    fprintf(stderr, "render: strategic icon %s: %s\n", path.c_str(), error.empty() ? "a format symbols are not read from" : error.c_str());
+  } else {
+    if (rowX_ + image.width + 1 > kAtlasSize) {  // the row is full: start the next
+      rowX_ = 1;
+      rowY_ += rowHeight_ + 1;
+      rowHeight_ = 0;
+    }
+    if (image.width + 2 > kAtlasSize || rowY_ + image.height + 1 > kAtlasSize) {
+      fprintf(stderr, "render: strategic icon %s: no room left in the symbols' texture\n", path.c_str());
+    } else {
+      for (int y = 0; y < image.height; ++y)
+        std::memcpy(&atlasPixels_[(static_cast<size_t>(rowY_ + y) * kAtlasSize + static_cast<size_t>(rowX_)) * 4],
+                    &pixels[static_cast<size_t>(y) * static_cast<size_t>(image.width) * 4], static_cast<size_t>(image.width) * 4);
+      index = static_cast<int>(rects_.size());
+      rects_.push_back({rowX_, rowY_, image.width, image.height});
+      rowX_ += image.width + 1;
+      rowHeight_ = std::max(rowHeight_, image.height);
+      atlasChanged_ = true;
+    }
+  }
+  iconByName_.emplace(name, index);
+  return index;
+}
+
+const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blueprintPath) {
+  auto known = kinds_.find(blueprintPath);
+  if (known != kinds_.end()) return known->second.get();
+  Kind* kind = kinds_.emplace(blueprintPath, std::make_unique<Kind>()).first->second.get();
+  auto text = vfs_->ReadFile(blueprintPath);
+  BpValue bp;
+  if (!text || !ReadBlueprintFile(*text, &bp)) return kind;  // the models report a blueprint that cannot be read
+  kind->fadeIn = static_cast<float>(bp["Display"]["Mesh"]["IconFadeInZoom"].NumberOr(130));
+  kind->priority = std::clamp(static_cast<int>(bp["StrategicIconSortPriority"].NumberOr(128)), 0, 255);
+  std::string name = bp["StrategicIconName"].StringOr(std::string());
+  for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (!name.empty()) kind->icon = Icon(name);
+  return kind;
+}
+
+void StrategicIcons::Begin(const View& view) {
+  view_ = view;
+  listed_.clear();
+  pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
+}
+
+void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color) {
+  if (kind->icon < 0) return;
+  // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on
+  const float distance = Length(position - view_.eye);
+  const float from = kind->fadeIn * (1 - fadeShare);
+  float alpha = kind->fadeIn > from ? (distance - from) / (kind->fadeIn - from) : (distance >= from ? 1.0f : 0.0f);
+  if (alpha <= 0) return;
+  alpha = std::min(alpha, 1.0f);
+  const Mat4& m = view_.constants.viewProj;
+  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
+  if (w <= 1e-4f) return;  // behind the camera
+  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
+  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
+  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  const Rect& r = rects_[static_cast<size_t>(kind->icon)];
+  const float halfW = static_cast<float>(r.width) * pixel_ * 0.5f, halfH = static_cast<float>(r.height) * pixel_ * 0.5f;
+  if (x + halfW < 0 || y + halfH < 0 || x - halfW > static_cast<float>(view_.width) || y - halfH > static_cast<float>(view_.height)) return;
+  auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+  listed_.push_back({x, y, kind->icon, byte(alpha) << 24 | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x), kind->priority});
+}
+
+void StrategicIcons::Draw() {
+  drawn = static_cast<int>(listed_.size());
+  if (listed_.empty()) return;
+  if (atlasChanged_) {  // symbols were added: the texture is made anew (a game uses a few dozen, early on)
+    if (atlas_) device_->Destroy(atlas_);
+    gfx::TextureDesc td;
+    td.width = td.height = kAtlasSize;
+    td.format = gfx::Format::RGBA8;
+    td.data = atlasPixels_.data();
+    td.dataSize = atlasPixels_.size();
+    atlas_ = device_->CreateTexture(td);
+    atlasChanged_ = false;
+  }
+  // bottom first: the highest priority numbers, then down to 0; within one number in the list's order
+  uint32_t starts[256] = {};  // by 255 - priority: first how many there are, then where each group begins
+  for (const Listed& l : listed_) ++starts[255 - l.priority];
+  uint32_t total = 0;
+  for (uint32_t& s : starts) {
+    const uint32_t count = s;
+    s = total;
+    total += count;
+  }
+  order_.resize(listed_.size());
+  for (uint32_t i = 0; i < listed_.size(); ++i) order_[starts[255 - listed_[i].priority]++] = i;
+
+  vertices_.clear();
+  vertices_.reserve(listed_.size() * 6);
+  const float texel = 1.0f / static_cast<float>(kAtlasSize);
+  for (uint32_t index : order_) {
+    const Listed& l = listed_[index];
+    const Rect& r = rects_[static_cast<size_t>(l.icon)];
+    // on whole pixels, so every pixel of the symbol covers the same number of the screen's
+    const float x0 = std::floor(l.x - static_cast<float>(r.width) * pixel_ * 0.5f + 0.5f), y0 = std::floor(l.y - static_cast<float>(r.height) * pixel_ * 0.5f + 0.5f);
+    const float x1 = x0 + static_cast<float>(r.width) * pixel_, y1 = y0 + static_cast<float>(r.height) * pixel_;
+    const float u0 = static_cast<float>(r.x) * texel, v0 = static_cast<float>(r.y) * texel;
+    const float u1 = static_cast<float>(r.x + r.width) * texel, v1 = static_cast<float>(r.y + r.height) * texel;
+    const Vertex a{x0, y0, u0, v0, l.color}, b{x1, y0, u1, v0, l.color}, c{x1, y1, u1, v1, l.color}, d{x0, y1, u0, v1, l.color};
+    for (const Vertex& v : {a, b, c, a, c, d}) vertices_.push_back(v);
+  }
+  device_->SetPipeline(pipeline_);
+  device_->SetConstants(0, &view_.constants, sizeof view_.constants);
+  device_->SetTexture(0, atlas_);
+  device_->UpdateBuffer(buffer_, vertices_.data(), static_cast<uint32_t>(vertices_.size() * sizeof(Vertex)));
+  device_->SetVertexBuffer(buffer_);
+  device_->Draw(static_cast<uint32_t>(vertices_.size()));
+}
+
+}  // namespace render
