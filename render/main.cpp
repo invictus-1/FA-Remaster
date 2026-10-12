@@ -13,6 +13,9 @@
 // --createlog  only for recordings that do not name their units (older ones): the engine's log of the
 //           same run made with MOHO64_DEBUG_CREATE=1
 // --init <init file> --sim <replay> [--mod-uids <file>] [--simlog <file>]
+// --init <init file> --session <game configuration> [--seed N]
+//           the same with a new game: the configuration a lobby hands over at Launch (a Lua file with
+//           GameConfig = { ... }); its AI armies play, nobody gives orders yet
 //           the simulation itself plays the replay inside the viewer (no recording needed): the game's
 //           files are mounted by running its init file, the map is the replay's; --tick runs ahead to a tick
 // --display the log written by the engine's tools/dump_display.lua: models take their mesh and texture
@@ -96,7 +99,8 @@ struct Options {
   bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog, display;
-  std::string init, sim, modUids, simLog;  // the simulation run in the viewer (--init, --sim, --mod-uids, --simlog)
+  std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
+  unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -125,6 +129,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--display") o->display = v;
     else if (a == "--init") o->init = v;
     else if (a == "--sim") o->sim = v;
+    else if (a == "--session") o->session = v;
+    else if (a == "--seed") o->seed = static_cast<unsigned>(strtoul(v, nullptr, 0));
     else if (a == "--mod-uids") o->modUids = v;
     else if (a == "--simlog") o->simLog = v;
     else if (a == "--tick") o->tick = atof(v);
@@ -258,23 +264,26 @@ int main(int argc, char** argv) {
 
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
   LiveSim live;
-  const bool haveLive = !opt.sim.empty();
+  const bool haveLive = !opt.sim.empty() || !opt.session.empty();
   if (haveLive) {
     if (opt.init.empty()) {
-      fprintf(stderr, "render: --sim needs --init <the game's init file>\n");
+      fprintf(stderr, "render: --sim and --session need --init <the game's init file>\n");
       return 1;
     }
     if (!opt.simLog.empty()) moho::LogOpenFile(opt.simLog);
     LiveSim::Setup setup;
     setup.initFile = opt.init;
     setup.replay = opt.sim;
+    setup.session = opt.session;
+    setup.seed = opt.seed;
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
-      fprintf(stderr, "render: --sim: %s\n", error.c_str());
+      fprintf(stderr, "render: simulation: %s\n", error.c_str());
       return 1;
     }
     if (opt.map.empty()) opt.map = live.MapPath();
-    printf("render: simulation: %s on %s, loading ...\n", opt.sim.c_str(), live.MapPath().c_str());
+    printf("render: simulation: %s %s on %s, loading ...\n", opt.session.empty() ? "the replay" : "a new game from",
+           (opt.session.empty() ? opt.sim : opt.session).c_str(), live.MapPath().c_str());
     live.Start();
   }
 
@@ -508,6 +517,7 @@ int main(int argc, char** argv) {
   auto last = start;
   double titleTime = 0;
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
+  auto countedFrom = start;
 
   while (window->Pump(&events)) {
     auto now = std::chrono::steady_clock::now();
@@ -691,7 +701,10 @@ int main(int argc, char** argv) {
     }
     post.Present(view);
 
-    if (!(automatic && liveBusy)) ++frameCount;  // an automatic run counts its frames from where it was asked to look
+    if (!(automatic && liveBusy)) {  // an automatic run counts its frames from where it was asked to look
+      if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
+      ++frameCount;
+    }
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
     const bool shoot = wantScreenshot || (lastFrame && !opt.screenshot.empty());
     device->EndFrame(shoot ? &capture : nullptr);
@@ -702,8 +715,10 @@ int main(int argc, char** argv) {
       wantScreenshot = false;
     }
     if (lastFrame) {
-      const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-      printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
+      // (with a simulation: the time from the first counted frame, so loading and running ahead stay out)
+      const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - (haveLive ? countedFrom : start)).count();
+      const int timed = haveLive ? std::max(1, frameCount - 1) : frameCount;
+      printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
