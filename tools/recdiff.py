@@ -40,6 +40,7 @@ def load(path):
         sys.exit("%s: not a recording" % path)
     ver, usize, flags = struct.unpack_from("<III", data, 4)
     draws, beats, econ, air, arm = [], {}, {}, {}, {}
+    names = []  # (unit id, blueprint id) in the order units first appear ('U' records; ids are reused)
     off, n = 16, len(data)
     while off + 12 <= n:
         t = data[off]
@@ -74,6 +75,11 @@ def load(path):
             f = struct.unpack_from("<5f", data, off + 12)
             arm.setdefault(tick, {}).setdefault(uid, []).append((data[off + 1], f[0], f[1], f[2:5]))
             off += 32
+        elif t == 0x55:  # 'U' (moho64 only): a unit's blueprint id, before the first 'T' that lists it
+            ln = data[off + 1]
+            uid = struct.unpack_from("<I", data, off + 4)[0]
+            names.append((uid, data[off + 8:off + 8 + ln].decode("latin1")))
+            off += 8 + ((ln + 3) & ~3)
         elif t == 0x54:  # 'T'
             tick, cnt = struct.unpack_from("<II", data, off + 4)
             off += 12
@@ -95,7 +101,7 @@ def load(path):
         else:
             print("%s: unknown record 0x%02x at %d, stopping" % (path, t, off))
             break
-    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ, "air": air, "arm": arm}
+    return {"flags": flags, "draws": draws, "beats": beats, "econ": econ, "air": air, "arm": arm, "names": names}
 
 
 def index_draws(draws, label):

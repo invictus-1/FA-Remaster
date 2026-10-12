@@ -8,6 +8,9 @@
 //       (an offset in the moho64 image, for addr2line).
 //   'X' (moho64 only, after a 'D'): u8 'X', u8 n, u16 0, then n u32 return addresses (the call chain, innermost
 //       first, image offsets) so the reader can skip the random-number helpers and name the real caller.
+//   'U' (moho64 only): u8 'U', u8 length, u16 0, u32 unit id, then `length` bytes of the unit's blueprint id
+//       padded with zeros to a multiple of 4. Written once per unit, before the first 'T' that lists it; unit ids
+//       are reused, so a later 'U' with the same id is a new unit.
 //   'T' (12 bytes): u8 'T', 0, 0, 0, u32 tick (at beat entry: the state after that tick), u32 n; then n units of
 //       64 bytes in entity-id order: id, quat[4] (x y z w), pos[3], states (64-bit set, the exe's EUnitState
 //       numbers), layer bits, health, fractionComplete, u16 head command type, u16 queue length, u8 dead,
@@ -17,6 +20,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <string>
+#include <unordered_set>
 
 #include "core/backtrace.h"
 #include "core/log.h"
@@ -117,6 +123,23 @@ void Sim::RecorderBeat() {
   std::vector<Unit*> list;
   for (Unit* u : units_)
     if (u->id < 0x10000000u) list.push_back(u);
+  // 'U' (moho64 only): what a unit is, once, before the first 'T' record that lists it: u8 'U', u8 length,
+  // u16 0, u32 id, then `length` bytes of the blueprint id padded with zeros to a multiple of 4. (Ids are reused:
+  // a later 'U' with the same id is a new unit.) For viewers; the comparison tools skip it.
+  {
+    static std::unordered_set<uint32_t> named;  // by creation handle
+    for (Unit* u : list) {
+      if (!u->blueprint || !named.insert(u->handle).second) continue;
+      const std::string& bp = u->blueprint->id;
+      const size_t len = std::min<size_t>(bp.size(), 255);
+      unsigned char uh[8] = {'U', static_cast<unsigned char>(len), 0, 0};
+      Put32(uh + 4, u->id);
+      fwrite(uh, 1, 8, rec_);
+      unsigned char name[256] = {};
+      memcpy(name, bp.data(), len);
+      fwrite(name, 1, (len + 3) & ~static_cast<size_t>(3), rec_);
+    }
+  }
   unsigned char h[12] = {'T', 0, 0, 0};
   Put32(h + 4, tick_);
   Put32(h + 8, static_cast<uint32_t>(list.size()));
