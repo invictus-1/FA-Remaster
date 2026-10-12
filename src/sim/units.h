@@ -65,6 +65,7 @@ struct UnitBpData {
   bool naturalProducer = false, needToFaceTargetToBuild = false;
   float maxBuildDistance = 0;
   float regenRate = 0, maxHealth = 1;
+  bool initialAutoMode = false;  // AI.InitialAutoMode (bp+0x48d)
   float sizeX = 1, sizeY = 1, sizeZ = 1, collisionOffsetY = 0;
   std::vector<uint64_t> buildable;  // Economy.BuildableCategory (union of the expressions)
   std::string buildRestriction;     // Physics.BuildRestriction

@@ -12,6 +12,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/build.h"
 #include "sim/commands.h"
 #include "sim/replay.h"
 #include "sim/script_bits.h"
@@ -342,9 +343,15 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       if (e && sim.OkayToMessWith(e->army)) sim.QueueDestroy(e);
       break;
     }
-    case 10:  // WarpEntity 0x748cd0
-      unhandled("WarpEntity");
+    case 10: {  // WarpEntity 0x748cd0 (cheats; no ownership check): the entity takes the transform
+      Entity* e = sim.FindEntityById(in.U32());
+      float qw = in.F32(), qx = in.F32(), qy = in.F32(), qz = in.F32();
+      Vec3 p{in.F32(), in.F32(), in.F32()};
+      if (!in.ok || !sim.cheats || !e) break;
+      e->position = p;
+      e->orientation = Quat{qx, qy, qz, qw};
       break;
+    }
     case 11: {  // ProcessInfoPair 0x748d50
       Entity* e = sim.FindEntityById(in.U32());
       std::string key = in.Str(), value = in.Str();
@@ -361,6 +368,11 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
         if (value != "true" && value != "false") break;
         lua_pushboolean(L, value == "true");
         CallUnitBinding(sim, u, key.c_str(), 1);
+      } else if (!strcasecmp(k, "SiloBuildTactical") || !strcasecmp(k, "SiloBuildNuke")) {
+        if (value == "add") SiloQueueAmmo(sim, u, !strcasecmp(k, "SiloBuildNuke") ? 1 : 0);
+      } else if (!strcasecmp(k, "PlayNoStagingPlatformsVO") || !strcasecmp(k, "PlayBusyStagingPlatformsVO")) {
+        // the army's script object runs On<key>() (inferred: the brain)
+        if (u->army && u->army->brain) sim.CallMethod(L, u->army->brain, ("On" + key).c_str(), 0);
       } else if (!strcasecmp(k, "CustomName")) {
         lua_pushstring(L, value.c_str());
         CallUnitBinding(sim, u, "SetCustomName", 1);

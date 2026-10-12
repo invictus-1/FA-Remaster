@@ -96,6 +96,7 @@ std::vector<Unit*> Guards(Sim& sim, const Unit* g);
 
 // Missile silos (CAiSiloBuildImpl): queued and automatic missile builds; a unit's beat.
 void SiloTick(Sim& sim, Unit* u);
+bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);  // one more missile: 0 tactical, 1 nuke
 void SiloRelease(Unit* u);
 bool SiloCommand(Sim& sim, Unit* u, const UnitCommand& c);  // true: handled (done at once)
 void RegisterSiloBindings(lua_State* L);
