@@ -10,7 +10,7 @@
 namespace render {
 namespace {
 
-// .scm: "MODL", then 11 ints (version 5, bone offset, weighted bone count, vertex offset, extra vertex
+// .scm: "MODL", then 11 ints (version 5 or 6, bone offset, weighted bone count, vertex offset, extra vertex
 // offset, vertex count, index offset, index count, info offset, info count, total bone count);
 // vertices of 68 bytes; indices of 16 bits, three per triangle.
 bool LoadScm(gfx::Device* device, const std::string& file, ModelLod* lod, Vec3* boundsMin, Vec3* boundsMax, std::string* error) {
@@ -22,10 +22,13 @@ bool LoadScm(gfx::Device* device, const std::string& file, ModelLod* lod, Vec3* 
   int32_t h[11];
   std::memcpy(h, file.data() + 4, sizeof h);
   const int64_t vertexOffset = h[3], vertexCount = h[5], indexOffset = h[6], indexCount = h[7];
-  if (h[0] != 5) return fail("unsupported .scm version");
+  // version 6 is this project's extension for models of more than 65,535 vertices: version 5 with
+  // indices of 32 bits (render/REQUESTS.md, item 4)
+  if (h[0] != 5 && h[0] != 6) return fail("unsupported .scm version");
+  const int64_t indexBytes = h[0] == 6 ? 4 : 2;
   if (vertexCount <= 0 || indexCount <= 0 || vertexOffset < 0 || indexOffset < 0 ||
       vertexOffset + vertexCount * static_cast<int64_t>(sizeof(ScmVertex)) > static_cast<int64_t>(file.size()) ||
-      indexOffset + indexCount * 2 > static_cast<int64_t>(file.size()))
+      indexOffset + indexCount * indexBytes > static_cast<int64_t>(file.size()))
     return fail("the .scm file is cut short");
   static_assert(sizeof(ScmVertex) == 68, "the file's vertex layout");
 
@@ -47,8 +50,8 @@ bool LoadScm(gfx::Device* device, const std::string& file, ModelLod* lod, Vec3* 
   lod->vertices = device->CreateBuffer(vb);
   gfx::BufferDesc ib;
   ib.kind = gfx::BufferKind::Index;
-  ib.stride = 2;
-  ib.size = static_cast<uint32_t>(indexCount * 2);
+  ib.stride = static_cast<uint32_t>(indexBytes);
+  ib.size = static_cast<uint32_t>(indexCount * indexBytes);
   ib.data = file.data() + indexOffset;
   lod->indices = device->CreateBuffer(ib);
   lod->indexCount = static_cast<uint32_t>(indexCount);
@@ -63,10 +66,10 @@ std::string Lower(std::string s) {
 
 }  // namespace
 
-const Model* ModelCache::Unit(const std::string& blueprintId) {
+const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
   std::string id = Lower(blueprintId);
   auto known = unitPaths_.find(id);
-  if (known != unitPaths_.end()) return Blueprint(known->second);
+  if (known != unitPaths_.end()) return Blueprint(known->second, original);
   // the game's own units are in /units; a mod's are in its own folder under /mods
   std::string path = "/units/" + id + "/" + id + "_unit.bp";
   if (!vfs_->Exists(path)) {
@@ -74,14 +77,20 @@ const Model* ModelCache::Unit(const std::string& blueprintId) {
     if (!found.empty()) path = found.front();
   }
   unitPaths_.emplace(id, path);
-  return Blueprint(path);
+  return Blueprint(path, original);
 }
 
-const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
+bool ModelCache::Remastered(const std::string& blueprintId) const {
+  const std::string id = Lower(blueprintId);
+  return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
+}
+
+const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
-  auto it = models_.find(path);
+  const std::string key = original ? path + "#original" : path;
+  auto it = models_.find(key);
   if (it != models_.end()) return it->second.get();
-  Model* m = models_.emplace(path, std::make_unique<Model>()).first->second.get();
+  Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
 
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
   const size_t slash = path.rfind('/');
@@ -126,7 +135,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
     // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace
     // the blueprint's for every level. Scale and cutoffs stay the blueprint's.
     const std::string preview = "/preview/" + base + "/";
-    const bool previewed = vfs_->Exists(preview + base + "_lod0.scm");
+    const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
     const std::string meshPath = previewed ? preview + base + "_lod" + std::to_string(i) + ".scm"
                                            : file("MeshName", "_lod" + std::to_string(i) + ".scm");
     auto mesh = vfs_->ReadFile(meshPath);
@@ -156,7 +165,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
     // (In the running game the simulation's merged blueprints will say this, for any mod.)
     std::string lab = "/mods/labvisuals/textures/" + base + "/" + base + "_lab_";
     if (previewed) lab = preview + (vfs_->Exists(preview + "textures/" + base + "_lab_albedo.dds") ? "textures/" : "") + base + "_lab_";
-    if ((i == 0 || previewed) && vfs_->Exists(lab + "albedo.dds")) {
+    if (!original && (i == 0 || previewed) && vfs_->Exists(lab + "albedo.dds")) {
       lod.albedo = textures_->Get(lab + "albedo.dds", lod.albedo);
       lod.normals = textures_->Get(lab + "normal.dds", lod.normals);
       lod.specular = textures_->Get(lab + "spec.dds", lod.specular);

@@ -60,9 +60,12 @@ class ModelCache {
 
   // The model of a unit blueprint id ("uel0201"). Never null: a unit whose files cannot be read gets
   // a model with ok == false (reported once).
-  const Model* Unit(const std::string& blueprintId);
+  // `original`: the game's own model even when a remastered one is there (to show both side by side).
+  const Model* Unit(const std::string& blueprintId, bool original = false);
+  // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
+  bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp").
-  const Model* Blueprint(const std::string& blueprintPath);
+  const Model* Blueprint(const std::string& blueprintPath, bool original = false);
 
  private:
   gfx::Device* device_;

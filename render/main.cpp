@@ -76,6 +76,9 @@ struct Options {
   // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
   // chosen for the original's formula)
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
+  float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
+  float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
+  bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
   std::vector<std::string> data, mods, previews, place;
@@ -115,6 +118,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
+    else if (a == "--heading") o->heading = static_cast<float>(atof(v));
+    else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
+    else if (a == "--at") {
+      if (sscanf(v, "%f,%f", &o->at[0], &o->at[1]) != 2) return false;
+      o->hasAt = true;
+    }
     else if (a == "--map") o->map = v;
     else if (a == "--cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
@@ -337,20 +346,51 @@ int main(int argc, char** argv) {
     Vec3 position;
   };
   std::vector<PlacedUnit> placedUnits;
-  for (size_t i = 0; i < opt.place.size(); ++i) {
-    const Model* model = models.Unit(opt.place[i]);
-    if (!model->ok) continue;
-    Vec3 p = camera.target + Vec3{static_cast<float>(i) * 8, 0, 0};
-    p.y = haveMap ? map.Height(p.x, p.z) : 0;
-    if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
-    placedUnits.push_back({model, p});
+  float targetLift = 0;  // how far above the ground the camera's target is held
+  {
+    auto stand = [&](const Model* model, Vec3 p) {
+      p.y = haveMap ? map.Height(p.x, p.z) : 0;
+      if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
+      placedUnits.push_back({model, p});
+    };
+    Vec3 at = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
+    for (const std::string& id : opt.place) {
+      const Model* model = models.Unit(id);
+      if (!model->ok) continue;
+      const float width = (model->boundsMax.x - model->boundsMin.x) * model->scale;
+      stand(model, at);
+      // a remastered unit gets the game's own model beside it, in the same light, to compare
+      const Model* original = models.Remastered(id) ? models.Unit(id, true) : nullptr;
+      if (original && original->ok) {
+        const float originalWidth = (original->boundsMax.x - original->boundsMin.x) * original->scale;
+        at.x += (width + originalWidth) * 0.5f + std::max(width, originalWidth) * 0.25f;
+        stand(original, at);
+        at.x += originalWidth * 1.5f;
+      } else {
+        at.x += width * 1.5f;
+      }
+    }
+    // without --cam the camera frames what was placed; --heading and --pitch choose the side
+    if (!opt.hasCam && !placedUnits.empty()) {
+      Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+      for (const PlacedUnit& u : placedUnits) {
+        const Vec3 a = u.position + u.model->boundsMin * u.model->scale, b = u.position + u.model->boundsMax * u.model->scale;
+        lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+        hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
+      }
+      camera.target = (lo + hi) * 0.5f;
+      targetLift = (hi.y - lo.y) * 0.5f;  // look at the units' middle, not at their feet
+      camera.distance = Length(hi - lo) * 0.5f / std::tan(camera.fovY * 0.5f) * 0.95f;
+      camera.heading = opt.heading * kPi / 180;
+      camera.pitch = opt.pitch * kPi / 180;
+    }
   }
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
-  camera.target.y = groundHeight(camera.target.x, camera.target.z);
+  camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // what the pointer is on: the ground, or failing that the level plane through the camera's target
   auto pick = [&](int px, int py, Vec3* hit) {
     const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
@@ -447,7 +487,7 @@ int main(int argc, char** argv) {
       camera.target.x = Clamp(camera.target.x, 0, static_cast<float>(map.width));
       camera.target.z = Clamp(camera.target.z, 0, static_cast<float>(map.height));
     }
-    camera.target.y = groundHeight(camera.target.x, camera.target.z);
+    camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
 
     if (window->Width() == 0 || window->Height() == 0) {  // minimized
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
