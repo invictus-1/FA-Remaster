@@ -137,6 +137,11 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
 // none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
 bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+// The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
+// something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
+// colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
+uint32_t UnitUnderMouse(lua_State* L);
+std::string ArmyColorOf(lua_State* L, int army);
 // The living unit nearest to a place of the map, no farther than `radius` (0xffffffff: none): what
 // stands in for the picture's answer when there is no picture.
 uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius);

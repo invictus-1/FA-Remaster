@@ -266,8 +266,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - Not real yet: the other console commands, the game's cursor, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 401 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 130 are logged stubs. (`--list-bindings` counts
+- `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
+  blueprint, health, economy, what it works on, its army and colour; the fields as the original
+  writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by
+  its key as FAF's scripts ask.
+- 403 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 128 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

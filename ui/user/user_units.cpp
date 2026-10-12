@@ -1030,6 +1030,70 @@ int l_GetMissileInfoNow(lua_State* L) {
   return 1;
 }
 
+// GetRolloverInfo() (FA exe 0x842920; a unit's table 0x8421f0): what the mouse is over in the
+// world, nil for nothing. A unit: blueprintId, health, maxHealth, kills, the economy and silo
+// numbers, fuelRatio, shieldRatio, workProgress, userUnit, entityId (a string), armyIndex (from
+// 0), teamColor, customName; and `focus`, the same table for what it works on. (The original
+// also tells of things that are not units, and of `focusUpgrade` / `focusProp`; `kills` and the
+// silo's build and room counts are not in the simulation's view yet and read 0.)
+void PushRollover(lua_State* L, UserUnit* u, bool withFocus) {
+  UnitStateView s;
+  StateOf(L, u, &s);
+  lua_newtable(L);
+  auto num = [&](const char* key, lua_Number v) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  auto str = [&](const char* key, const std::string& v) {
+    lua_pushstring(L, key);
+    lua_pushstring(L, v.c_str());
+    lua_rawset(L, -3);
+  };
+  str("blueprintId", u->view.blueprint);
+  num("health", u->view.health);
+  num("maxHealth", u->view.maxHealth);
+  num("kills", 0);
+  num("energyConsumed", s.consumed[0]);
+  num("massConsumed", s.consumed[1]);
+  num("energyRequested", s.consumptionPerSecond[0]);
+  num("massRequested", s.consumptionPerSecond[1]);
+  num("energyProduced", s.produced[0]);
+  num("massProduced", s.produced[1]);
+  num("tacticalSiloBuildCount", 0);
+  num("tacticalSiloStorageCount", s.tacticalSiloCount);
+  num("tacticalSiloMaxStorageCount", 0);
+  num("nukeSiloBuildCount", 0);
+  num("nukeSiloStorageCount", s.nukeSiloCount);
+  num("nukeSiloMaxStorageCount", 0);
+  num("fuelRatio", s.fuelRatio);
+  num("shieldRatio", s.shieldRatio);
+  num("workProgress", u->view.workProgress);
+  lua_pushstring(L, "userUnit");
+  PushObject(L, u);
+  lua_rawset(L, -3);
+  str("entityId", std::to_string(u->view.id));
+  num("armyIndex", u->view.army - 1);
+  str("teamColor", ArmyColorOf(L, u->view.army));
+  if (!u->customName.empty()) str("customName", u->customName);
+  if (withFocus && s.focus != 0xffffffffu) {
+    UnitStore& store = Store(L);
+    auto it = store.units.find(s.focus);
+    if (it != store.units.end() && !it->second->gone) {
+      lua_pushstring(L, "focus");
+      PushRollover(L, it->second.get(), false);
+      lua_rawset(L, -3);
+    }
+  }
+}
+int l_GetRolloverInfo(lua_State* L) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(UnitUnderMouse(L));
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return 0;
+  PushRollover(L, it->second.get(), true);
+  return 1;
+}
+
 // The switches of a list of units, as the order buttons ask. GetFireState(units): the state they
 // share, -1 when they differ. The others: true when any of them has it on.
 int l_GetFireStateNow(lua_State* L) {
@@ -1257,6 +1321,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "SelectUnits", l_SelectUnits);
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
+  SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
   SetGlobal(L, "GetArmyAvatars", l_GetArmyAvatars);
   SetGlobal(L, "GetIdleEngineers", l_GetIdleEngineers);
   SetGlobal(L, "GetIdleFactories", l_GetIdleFactories);

@@ -103,5 +103,17 @@ ForkThread(function()
     check("Destroy on a destroyed control is no error", pcall(g.Destroy, g), true)
     check("other methods on a destroyed control are errors", pcall(g.Hide, g), false)
     check("the root frame cannot be destroyed", pcall(root.Destroy, root), false)
+
+    -- options: the current profile's, whole or one by its key (the second form is FAF's)
+    local Prefs = import("/lua/user/prefs.lua")
+    local profile = GetPreference("profile")
+    if profile and profile.current and profile.profiles[profile.current] then
+        local saved = Prefs.GetFromCurrentProfile("options")
+        Prefs.SetToCurrentProfile("options", {moho64ui_test_option = 7})
+        check("GetOptions() gives the profile's options", type(GetOptions()) == "table" and GetOptions().moho64ui_test_option, 7)
+        check("GetOptions(key) gives one option", GetOptions("moho64ui_test_option"), 7)
+        check("an option that is not set is nil", GetOptions("moho64ui_no_such_option"), nil)
+        Prefs.SetToCurrentProfile("options", saved)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

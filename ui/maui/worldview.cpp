@@ -511,10 +511,11 @@ class WorldView : public Control {
   }
 
   // The unit under a point of the screen (its entity id; 0xffffffff: none). Without a picture:
-  // the unit standing nearest to that place of the map, within two map units.
-  uint32_t UnitUnder(lua_State* L, float sx, float sy) {
+  // the unit standing nearest to that place of the map, within two map units. `fresh` false: the
+  // picture last drawn will do (what is on screen), so that asking every frame draws nothing.
+  uint32_t UnitUnder(lua_State* L, float sx, float sy, bool fresh = true) {
     if (miniMap) return 0xffffffffu;
-    if (!EnsurePicture(L)) {
+    if (!(!fresh && pixels_ && UserState::From(L)->config().world) && !EnsurePicture(L)) {
       float world[3];
       Unproject(L, sx, sy, world);
       return UnitNearPlace(L, world[0], world[2], 2.0f);
@@ -755,6 +756,12 @@ int l_CreatePrefetchSet(lua_State* L) {
 }
 
 }  // namespace
+
+uint32_t UnitUnderMouse(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));
+  return v ? v->UnitUnder(L, ui.mouseX, ui.mouseY, false) : 0xffffffffu;
+}
 
 void AdvanceCameras(lua_State* L, float seconds) {
   for (auto& entry : UserState::From(L)->cameras) AdvanceCamera(L, static_cast<Camera*>(entry.second.get()), seconds);
