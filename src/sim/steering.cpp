@@ -496,6 +496,21 @@ bool WillCollide(const Unit* Y, const Unit* X, const Vec3& vY, const Vec3& pY, c
     float rb = std::fabs(box[1].a0x * ax + box[1].a0z * az) * box[1].e0 + std::fabs(box[1].a1x * ax + box[1].a1z * az) * box[1].e1;
     return std::fabs(dx * ax + dz * az) > ra + rb;
   };
+  static const long dbgW = getenv("MOHO64_DEBUG_WILL") ? atol(getenv("MOHO64_DEBUG_WILL")) : -1;
+  if (dbgW >= 0 && (static_cast<long>(Y->id) == dbgW || static_cast<long>(X->id) == dbgW)) {
+    // the gap on each of the four axes (negative: the boxes overlap there by that much)
+    float gap[4];
+    int n = 0;
+    for (int i = 0; i < 2; ++i)
+      for (int a = 0; a < 2; ++a) {
+        const float ax = a ? box[i].a1x : box[i].a0x, az = a ? box[i].a1z : box[i].a0z;
+        const float ra = std::fabs(box[0].a0x * ax + box[0].a0z * az) * box[0].e0 + std::fabs(box[0].a1x * ax + box[0].a1z * az) * box[0].e1;
+        const float rb = std::fabs(box[1].a0x * ax + box[1].a0z * az) * box[1].e0 + std::fabs(box[1].a1x * ax + box[1].a1z * az) * box[1].e1;
+        gap[n++] = std::fabs(dx * ax + dz * az) - (ra + rb);
+      }
+    Logf(LogLevel::Info, "will Y %u X %u stop %.4f %.4f r %.4f %.4f centres %.4f %.4f / %.4f %.4f gaps %.5f %.5f %.5f %.5f", Y->id,
+         X->id, stop[0], stop[1], r[0], r[1], box[0].cx, box[0].cz, box[1].cx, box[1].cz, gap[0], gap[1], gap[2], gap[3]);
+  }
   for (int i = 0; i < 2; ++i) {
     if (sep(box[i].a0x, box[i].a0z)) return false;
     if (sep(box[i].a1x, box[i].a1z)) return false;
@@ -555,9 +570,13 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
         my.colLateTick = g_inSteeringStage ? 0xffffffffu : now;
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
-          Logf(LogLevel::Info, "col %u predict Y %u X %u at +%zu", now, Y->id, X->id, k);
+          Logf(LogLevel::Info, "col %u predict Y %u (point %zu of %zu, made %llu) X %u (point %zu of %zu, made %llu) at +%zu", now,
+               Y->id, my.splineIdx, my.spline.size(), static_cast<unsigned long long>(Y->entSeq), X->id, mx.splineIdx,
+               mx.spline.size(), static_cast<unsigned long long>(X->entSeq), k);
+        return;
       }
-      return;
+      // (0x597c7e: a meeting that is not nearer than the one already on record is passed over and the walk
+      // along the two point lists goes on)
     }
   }
 }
@@ -617,6 +636,19 @@ int Resolve(Sim& sim, Unit* Y) {
   const UnitMotion& mx = X->motion;
   if (mx.hasSpline && mx.splineIdx < mx.spline.size()) pX = mx.spline[mx.splineIdx].pos;
   if (Len(vX) <= 0) return clear();
+  {
+    static const long dbgR = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
+    if (dbgR >= 0 && (static_cast<long>(X->id) == dbgR || static_cast<long>(Y->id) == dbgR)) {
+      const bool sf = SameFormationLayer(Y, X);
+      const Vec3 dv = Sub(vX, vY);
+      Logf(LogLevel::Info,
+           "col %u resolve? Y %u X %u pY %.4f %.4f %.4f (idx %zu of %zu) pX %.4f %.4f %.4f (idx %zu of %zu) vY %.5f %.5f %.5f vX %.5f %.5f "
+           "%.5f will %d dv2 %.6f dot %.5f",
+           sim.tick(), Y->id, X->id, pY.x, pY.y, pY.z, my.splineIdx, my.spline.size(), pX.x, pX.y, pX.z, mx.splineIdx,
+           mx.spline.size(), vY.x, vY.y, vY.z, vX.x, vX.y, vX.z, WillCollide(Y, X, vY, pY, pX, vX, sf) ? 1 : 0, Dot(dv, dv),
+           Dot(Sub(X->position, Y->position), dv));
+    }
+  }
   if (!Approaching(Y, X, pY, vY, pX, vX)) return clear();
   const MotionBlueprint& by = *Y->motion.bp;
   const MotionBlueprint& bx = *X->motion.bp;

@@ -1170,13 +1170,15 @@ void AddImpulse(Unit* u, const Vec3& imp) {
 
 namespace {
 
-// Without a goal: the unit coasts to a stop (CUnitMotion::CalcMoveCommon, no spline).
-bool Coast(Unit* u) {
+// Without a goal: the unit coasts to a stop (CUnitMotion::CalcMoveCommon, no spline). turned: the hull turned on
+// the spot in this beat; the "nearly stopped" test is then skipped (0x6c27a1) and the formula below runs on
+// whatever velocity is left, so a unit that turns while its last crawl dies away takes one more tiny step.
+bool Coast(Unit* u, bool turned = false) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
   // v = the entity velocity (m+0x38 for a land unit, 3-D: a fresh spline point's terrain y counts too)
   float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
-  if (v2 < kStopSq) {
+  if (!turned && v2 < kStopSq) {
     m.vel = {};
     m.prevPos = u->position;
     return false;
@@ -1513,7 +1515,7 @@ void MotionTick(Sim& sim, Unit* u) {
       const float bx0 = m.bx, bz0 = m.bz, fx0 = m.fx, fz0 = m.fz;
       const bool turned = ArrivalTurn(sim, u);
       common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
-      Coast(u);
+      Coast(u, turned);
       u->position = start;
       u->orientation = q0;
       m.bx = bx0;
@@ -1569,7 +1571,7 @@ void MotionTick(Sim& sim, Unit* u) {
       // taken while the navigator is idle, which ArrivalTurn tests itself.)
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
-      moved = Coast(u);
+      moved = Coast(u, turned);
       if (turned) {
         m.needSnap = true;
         u->orientation = LookQuat(m.bx, 0.0f, m.bz);
