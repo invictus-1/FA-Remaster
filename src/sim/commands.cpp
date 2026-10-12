@@ -449,6 +449,10 @@ void ArrivalStep(Sim& sim, Unit* u) {
   }
   m.failed = false;
   SetMoving(u, false);  // the move task's dtor clears it; a following move sets it again
+  // ... and the same destructor (0x618700) calls the navigator's AbortMove when the task ends by itself
+  // (queue+0x1c is 0 then, and its table 0x618998 says "abort" for 0): an aircraft at the end of a Move order is
+  // stopped at the point one second ahead (CAiNavigatorAir::AbortMove 0x5a4f00), not held at its goal cell
+  if (keep->type == CommandType::Move && u->motion.air) AirAbort(sim, u);
   if (u->commands.empty()) return;
   StartHead(sim, u);
 }
