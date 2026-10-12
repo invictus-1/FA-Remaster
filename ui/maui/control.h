@@ -1,0 +1,172 @@
+// The control tree: the engine side of the game's interface scripts (/lua/maui/*.lua).
+//
+// A control is made by a script: the Lua class instance calls InternalCreate<Kind>(self, parent),
+// the engine makes its object, ties it to that table (`_c_object`), puts the layout LazyVars into
+// the table (Left, Right, Top, Bottom, Width, Height, Depth) and calls self:OnInit(). From then on
+// scripts drive it through the methods of moho.control_methods and of its own class table, and the
+// engine calls back: OnFrame, OnHide, OnDestroy, HandleEvent, ...
+//
+// What the original does is noted with the address where it was read in the original executable
+// ("FA exe 0x..."); what only follows from the scripts' use is marked "inferred".
+#pragma once
+#include <string>
+#include <vector>
+
+#include "maui/lazyvar.h"
+#include "script/lua.hpp"
+#include "sim/script_object.h"
+
+namespace moho::ui {
+
+class Frame;
+class UiManager;
+
+class Control : public ScriptObject {
+ public:
+  Control() = default;
+  ~Control() override = default;
+
+  // The original's constructor (0x7867b0), in its order: the seven LazyVars are made, the object
+  // is tied to the Lua table, a control with a parent joins the parent's children, takes the
+  // parent's hidden state through SetHidden (so OnHide runs once, before the LazyVars are in the
+  // table) and the parent's root frame; then the LazyVars go into the table.
+  void Create(lua_State* L, int luaObj, Control* parent);
+  // self:OnInit(), called by the Internal* creation functions after the constructor.
+  void RunInit(lua_State* L) { RunScript(L, "OnInit"); }
+
+  virtual const char* ClassName() const { return "control"; }
+  // One line of this control's own state for Dump (texture, text, ...).
+  virtual void Describe(std::string& out) const { (void)out; }
+
+  // Destroy (0x786ef0): leave the parent, join the root frame's list of dead controls (they are
+  // deleted at the end of the frame), run self:OnDestroy(), then destroy the children, newest first.
+  virtual void Destroy(lua_State* L);
+  void ClearChildren(lua_State* L);
+  // SetHidden (0x787170): self:OnHide(hidden) runs first, every time. If it returns true nothing
+  // else happens (the control keeps its state); otherwise the control and then every child,
+  // oldest first, takes the new state.
+  virtual void SetHidden(lua_State* L, bool hidden);
+  bool IsHidden() const { return hidden_; }
+  // DisableHitTest / EnableHitTest (0x787210): the flag, and with `recursive` the children's too.
+  void SetHitTestDisabled(bool disabled, bool recursive);
+  bool IsHitTestDisabled() const { return hitTestDisabled_; }
+  // HitTest (0x787270): Left <= x < Right and Top <= y < Bottom.
+  virtual bool HitTest(float x, float y) const;
+  void SetParent(Control* parent);
+  void SetAlpha(float alpha, bool children);
+
+  // self:<name>(args): the `nargs` values on top of L are the arguments. Returns true when the
+  // function exists and ran without error; then `nresults` results are on the stack. A script
+  // error is logged.
+  bool RunScript(lua_State* L, const char* name, int nargs = 0, int nresults = 0);
+
+  Control* parent() const { return parent_; }
+  Frame* root() const { return root_; }
+  const std::vector<Control*>& children() const { return children_; }  // oldest first
+  bool dead() const { return dead_; }
+
+  LazyVar left, right, top, bottom, width, height, depth;
+  std::string name;
+  float alpha = 1.0f;
+  int renderPass = 0;
+  bool needsFrameUpdate = false;
+
+ protected:
+  friend class Frame;
+  friend class UiManager;
+  // An extra LazyVar of a control class (BitmapWidth, TextAdvance, ...): made and put in the table.
+  void AddLazyVar(lua_State* L, LazyVar& var, const char* field);
+
+  Control* parent_ = nullptr;
+  Frame* root_ = nullptr;
+  std::vector<Control*> children_;
+  bool hidden_ = false;
+  bool hitTestDisabled_ = false;
+  bool dead_ = false;
+};
+
+// A group: a control with nothing of its own (moho.group_methods).
+class Group : public Control {
+ public:
+  const char* ClassName() const override { return "group"; }
+};
+
+// A control class whose own behaviour is not built yet: it lays out like any control, and its own
+// methods are still logged stubs. Border and Movie carry the two extra LazyVars their scripts read.
+class PlainControl : public Control {
+ public:
+  explicit PlainControl(const char* className) : className_(className) {}
+  const char* ClassName() const override { return className_; }
+  LazyVar extraWidth, extraHeight;  // BorderWidth/BorderHeight, MovieWidth/MovieHeight
+
+ private:
+  const char* className_;
+};
+
+// A root frame: one per head (screen). It covers the head and owns the controls on it.
+class Frame : public Control {
+ public:
+  const char* ClassName() const override { return "frame"; }
+  void Destroy(lua_State* L) override;  // a root frame is not destroyed; see ClearFrame
+  void MakeRoot() { root_ = this; }
+
+  // One frame of time (0x7965a0): every living control below the frame that asked for frame
+  // updates gets self:OnFrame(seconds), hidden or not, in depth-first order; then the controls
+  // destroyed since the last frame are deleted.
+  void Update(lua_State* L, float seconds);
+  void PurgeDeleted();
+  // The largest Depth of the controls in the frame (GetTopmostDepth).
+  float TopmostDepth() const;
+
+  int head = 0;
+  int targetHead = 0;
+
+ private:
+  friend class Control;
+  std::vector<Control*> deadList_;
+};
+
+// The interface as a whole: the root frames, the cursor, keyboard focus and input capture.
+class UiManager {
+ public:
+  ~UiManager();
+
+  // Make the root frame of each head the way the original does (0x7961b0): an instance of the
+  // script class Frame from /lua/maui/frame.lua, then Left = Top = 0, Width and Height = the
+  // head's size in pixels.
+  bool CreateRootFrames(lua_State* L, int width, int height);
+  void Resize(int width, int height);
+  Frame* GetFrame(int head) const;
+  int NumFrames() const { return static_cast<int>(frames_.size()); }
+  bool initialized() const { return !frames_.empty(); }
+
+  void Update(lua_State* L, float seconds);
+  // Log the tree of every head: one line per control with its class, name, rectangle, depth and state.
+  void Dump() const;
+  int CountControls() const;
+
+  Control* focus = nullptr;                // keyboard focus
+  std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
+  void Forget(Control* c);                 // a control died: drop it from focus and capture
+
+ private:
+  std::vector<Frame*> frames_;
+  int width_ = 0, height_ = 0;
+};
+
+// The control behind a script value. CheckControl raises the original's errors: "Expected a game
+// object...", "Game object has been destroyed", "Incorrect type of game object...".
+template <class T = Control>
+T* CheckControl(lua_State* L, int idx) {
+  return CheckObject<T>(L, idx);
+}
+
+void RegisterControlBindings(lua_State* L);  // control.cpp: moho.control_methods, groups, plain controls
+void RegisterFrameBindings(lua_State* L);    // ui_manager.cpp: frames, cursor, focus, capture
+void RegisterBitmapBindings(lua_State* L);   // bitmap.cpp
+void RegisterTextBindings(lua_State* L);     // text.cpp
+
+// The parent argument of an Internal* creation function (stack index 2): must be a living control.
+Control* CheckParent(lua_State* L);
+
+}  // namespace moho::ui

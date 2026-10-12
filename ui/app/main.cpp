@@ -3,8 +3,8 @@
 // and the log says how far the scripts came and which engine functions they missed.
 //
 //   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--stage userinit|setup|frontend]
-//            [--frames N] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
-//            [-- <the game's own arguments>]
+//            [--size 1920x1080] [--frames N] [--dump-ui] [--lua <file>] [--list-bindings]
+//            [--log out.log] [--quiet] [-- <the game's own arguments>]
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -21,6 +21,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "maui/control.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -44,6 +45,8 @@ struct Options {
 };
 
 Options* g_opts = nullptr;
+int width = 1920, height = 1080;  // --size: the head's size in pixels
+bool dumpUi = false;              // --dump-ui: log the control tree at the end
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
 // keeps them to itself for now: see ui/REQUESTS.md.
@@ -161,7 +164,15 @@ int main(int argc, char** argv) {
     else if (a == "--lua") o.luaFile = next();
     else if (a == "--list-bindings") o.listBindings = true;
     else if (a == "--quiet") o.quiet = true;
-    else if (a == "--") {
+    else if (a == "--dump-ui") dumpUi = true;
+    else if (a == "--size") {
+      std::string v = next();  // 1920x1080
+      size_t x = v.find('x');
+      if (x != std::string::npos) {
+        width = std::atoi(v.substr(0, x).c_str());
+        height = std::atoi(v.substr(x + 1).c_str());
+      }
+    } else if (a == "--") {
       while (++i < argc) o.gameArgs.push_back(argv[i]);
     } else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
@@ -170,15 +181,18 @@ int main(int argc, char** argv) {
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
   if (o.quiet) LogSetEcho(false);
-  if (o.init.empty() || (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
+  if (o.init.empty() || width < 1 || height < 1 ||
+      (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
     std::fprintf(stderr,
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
-                 "                [--frames N] [--lua file] [--list-bindings] [--log out.log] [--quiet]\n"
-                 "                [-- game arguments]\n");
+                 "                [--size 1920x1080] [--frames N] [--dump-ui] [--lua file] [--list-bindings]\n"
+                 "                [--log out.log] [--quiet] [-- game arguments]\n");
     return 2;
   }
   Vfs vfs;
   ui::UserState::Config cfg;
+  cfg.width = width;
+  cfg.height = height;
   if (!RunInit(o, vfs, cfg.hookDirs)) return 1;
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   if (!o.modsFile.empty()) {
@@ -196,13 +210,14 @@ int main(int argc, char** argv) {
   bool ok = user.Boot();
   if (ok && o.stage != "userinit") ok = user.StartMainScript();
   if (ok && o.stage == "frontend") ok = user.StartFrontEnd();
-  int done = 0;
-  for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
-  if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
-  if (!o.luaFile.empty()) {  // debugging aid: look at the state with a Lua file of your own
+  if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
     if (auto code = hostfs::ReadFile(o.luaFile)) user.RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
   }
+  int done = 0;
+  for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
+  if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
+  if (dumpUi) user.ui().Dump();
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
   return ok ? 0 : 1;

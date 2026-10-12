@@ -1,9 +1,10 @@
 // The user Lua state: the state the game's interface scripts run in (/lua/ui, /lua/maui, ...).
 //
-// The original creates it at application start, runs /lua/userInit.lua in it, then enters the
-// interface through /lua/ui/uimain.lua: SetupUI() first, then StartSplashScreen() or
-// StartFrontEndUI() (and StartGameUI() when a session starts). Script threads of this state are
-// stepped once per frame: WaitFrames is coroutine.yield.
+// The original creates it at application start and runs /lua/userInit.lua in it. Its interface
+// manager then makes the root frame of each head and enters the interface through
+// /lua/ui/uimain.lua: SetupUI() first, then StartSplashScreen() or StartFrontEndUI() (and
+// StartGameUI() when a session starts). Script threads of this state are stepped once per frame:
+// WaitFrames is coroutine.yield.
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -20,6 +21,8 @@ class ThreadScheduler;
 
 namespace moho::ui {
 
+class UiManager;
+
 class UserState {
  public:
   struct Config {
@@ -27,6 +30,7 @@ class UserState {
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file; empty = preferences live in memory only
+    int width = 1920, height = 1080;    // the head's size in pixels
   };
 
   UserState(Vfs* vfs, Config config);
@@ -35,10 +39,11 @@ class UserState {
   UserState& operator=(const UserState&) = delete;
 
   bool Boot();             // /lua/userInit.lua
-  bool StartMainScript();  // uimain.SetupUI()
+  bool StartMainScript();  // the root frames, then uimain.SetupUI()
   bool StartFrontEnd();    // uimain.StartFrontEndUI()
 
-  // One frame: the clock moves on by `seconds`, then the script threads that are due run.
+  // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
+  // script threads that are due run. (The order of those two within a frame is inferred.)
   void Frame(double seconds);
 
   // import('/lua/ui/uimain.lua').<fn>() with a traceback on error.
@@ -47,6 +52,7 @@ class UserState {
   bool RunString(const std::string& code, const std::string& chunkName);
 
   lua_State* L() const;
+  UiManager& ui() { return *ui_; }
   const Config& config() const { return config_; }
   double now() const { return now_; }      // seconds since the state was created
   uint32_t frame() const { return frame_; }
@@ -58,6 +64,7 @@ class UserState {
   Config config_;
   std::unique_ptr<ScriptState> state_;
   std::unique_ptr<ThreadScheduler> threads_;
+  std::unique_ptr<UiManager> ui_;
   double now_ = 0;
   uint32_t frame_ = 0;
   std::string uiState_ = "none";

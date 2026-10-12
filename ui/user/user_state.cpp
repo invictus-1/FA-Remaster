@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "core/vfs.h"
+#include "maui/control.h"
 #include "script/script_state.h"
 #include "script/threads.h"
 #include "user/bindings.h"
@@ -14,10 +15,15 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   lua_State* L = state_->L();
   lua_setextra(L, 1, this);
   threads_ = std::make_unique<ThreadScheduler>(L);
+  ui_ = std::make_unique<UiManager>();
   RegisterThreadBindings(L, threads_.get());
   RegisterUserClasses(L);
   RegisterPrefsBindings(L);
   RegisterBasicBindings(L);
+  RegisterControlBindings(L);
+  RegisterFrameBindings(L);
+  RegisterBitmapBindings(L);
+  RegisterTextBindings(L);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
   // Hooks of the active mods apply to the scripts of this state as well. (The original's front end
   // takes the active mods from the preferences; here they come from the host's mod list.)
@@ -25,6 +31,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  ui_.reset();  // the controls let go of their Lua tables while the state is still there
   threads_.reset();
   state_.reset();
 }
@@ -61,7 +68,18 @@ bool UserState::RunString(const std::string& code, const std::string& chunkName)
   return state_->DoString(code, chunkName);
 }
 
-bool UserState::StartMainScript() { return CallUiMain("SetupUI"); }
+// The original's interface manager (FA exe 0x84cc50): the global __EngineStats, a root frame per
+// head, then the main script.
+bool UserState::StartMainScript() {
+  lua_State* L = state_->L();
+  lua_newtable(L);
+  lua_setglobal(L, "__EngineStats");
+  if (!ui_->CreateRootFrames(L, config_.width, config_.height)) {
+    Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", 0);
+    return false;
+  }
+  return CallUiMain("SetupUI");
+}
 
 bool UserState::StartFrontEnd() {
   uiState_ = "frontend";
@@ -70,7 +88,9 @@ bool UserState::StartFrontEnd() {
 
 void UserState::Frame(double seconds) {
   now_ += seconds;
-  threads_->RunTick(++frame_);
+  ++frame_;
+  ui_->Update(state_->L(), static_cast<float>(seconds));
+  threads_->RunTick(frame_);
 }
 
 }  // namespace moho::ui

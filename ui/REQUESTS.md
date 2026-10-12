@@ -22,6 +22,12 @@ track answers under the request.
 - **Smallest form:** the handle part moved to `src/script/` (for example `script/script_handle.*`);
   the simulation's class tables stay where they are.
 
+### 3. Coming, not needed yet
+- Start a simulation from a session description (map, armies, options, mods) instead of a replay:
+  what `LaunchSinglePlayerSession` will hand over once skirmish set-up works.
+- Issue orders and sim callbacks from the interface (`IssueCommand`, `SimCallback`), and the sync
+  data a session's interface reads each beat (`GetArmiesTable`, `GetEconomyTotals`, unit data).
+
 ## To the renderer track
 
 Nothing yet. Coming with the first window: the device and the frame the interface draws into
