@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <limits>
 
+#include "lighting.h"
+
 namespace render {
 namespace {
 
@@ -25,10 +27,6 @@ const char kShader[] = R"hlsl(
 cbuffer TerrainConstants : register(b1) {
   float4 mapSize;        // width, height, 1 / width, 1 / height
   float4 params;         // x: world height of the largest height value, y: 1 for the XP look
-  float4 sunDirection;   // xyz toward the sun, w: lighting multiplier
-  float4 sunColor;
-  float4 sunAmbience;
-  float4 shadowFill;
   float4 specularColor;
   float4 albedoTile[10]; // x: repeats per world unit
   float4 normalTile[9];
@@ -124,37 +122,45 @@ float4 PS(VOut i) : SV_Target {
   float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
   float3 N = float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ));
 
-  float3 sun = sunDirection.xyz;
-  float3 toPixel = normalize(i.world - cameraPosition);
-  float sunDotN = dot(sun, N);
-  float3 diffuse = sunColor.rgb * saturate(sunDotN) + sunAmbience.rgb;
-
-  // the plain look: one specular value, strongest where the texture's alpha is low
-  float specularPlain = pow(saturate(dot(sun - 2 * sunDotN * N, toPixel)), 80) * specularColor.x * (1 - albedo.a);
-  float3 lightPlain = diffuse + specularPlain;
-  lightPlain = sunDirection.w * lightPlain + shadowFill.rgb * (1 - lightPlain);
-  float3 colorPlain = lightPlain * albedo.rgb;
-  // the XP look: coloured specular added to the albedo, strongest where the alpha is high
-  float3 specularXp = pow(saturate(dot(reflect(toPixel, N), sun)), 80) * albedo.a * specularColor.a * specularColor.rgb;
-  float3 lightXp = sunDirection.w * diffuse + shadowFill.rgb * (1 - diffuse);
-  float3 colorXp = lightXp * (albedo.rgb + specularXp);
-  float3 color = lerp(colorPlain, colorXp, xp);
-
   // under water: tinted toward the ramp's colour by depth
   float depth = waterMap.Sample(samplerLinearClamp, uv).g;
   float4 ramp = waterRamp.Sample(samplerLinearClamp, float2(depth, 0.5));
-  color = lerp(color, ramp.rgb, ramp.a);
-  return float4(color, 1);
+  float shadow = SunShadow(i.world, base);
+  // how shiny the ground is: the plain look keeps it in the albedo's alpha inverted, the XP look as it is
+  float gloss = lerp(1 - albedo.a, albedo.a, xp);
+
+  if (look > 0.5) {
+    // the modern look: the ground is a rough, non-metal surface
+    float roughness = 1 - 0.5 * gloss * saturate(specularColor.x * 2);
+    float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, 0, N, i.world, shadow);
+    // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
+    // full sunlight), so that shallows keep the map's water colours
+    float full = lightMultiplier * modern.x;
+    float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), ramp.rgb, ramp.a);
+    return float4(ToLinear(screen) * full, 1);
+  }
+
+  float3 sun = sunDirection;
+  float3 toPixel = normalize(i.world - cameraPosition);
+  float sunDotN = dot(sun, N);
+  float3 diffuse = sunColor * saturate(sunDotN) * shadow + sunAmbience;
+  // the plain look: one specular value
+  float specularPlain = pow(saturate(dot(sun - 2 * sunDotN * N, toPixel)), 80) * specularColor.x * gloss;
+  float3 lightPlain = diffuse + specularPlain;
+  lightPlain = lightMultiplier * lightPlain + shadowFill * (1 - lightPlain);
+  float3 colorPlain = lightPlain * albedo.rgb;
+  // the XP look: coloured specular added to the albedo
+  float3 specularXp = pow(saturate(dot(reflect(toPixel, N), sun)), 80) * gloss * specularColor.a * specularColor.rgb;
+  float3 lightXp = lightMultiplier * diffuse + shadowFill * (1 - diffuse);
+  float3 colorXp = lightXp * (albedo.rgb + specularXp);
+  float3 color = lerp(colorPlain, colorXp, xp);
+  return float4(lerp(color, ramp.rgb, ramp.a), 1);
 }
 )hlsl";
 
 struct TerrainConstants {
   float mapSize[4];
   float params[4];
-  float sunDirection[4];
-  float sunColor[4];
-  float sunAmbience[4];
-  float shadowFill[4];
   float specularColor[4];
   float albedoTile[10][4];
   float normalTile[9][4];
@@ -176,14 +182,22 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   const int w = map->width, h = map->height;
 
   if (!pipeline_) {
-    std::string source = std::string(kViewShaderBlock) + kShader;
+    std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
     pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
     pd.stride = 8;
+    pd.colorFormat = kSceneFormat;
     pipeline_ = device_->CreatePipeline(pd, error);
     if (!pipeline_) return false;
+    // into a shadow map: the same vertices, depth only
+    pd.name = "terrain, shadow";
+    pd.pixelSource = {};
+    pd.depthOnly = true;
+    pd.cull = gfx::Cull::None;
+    shadowPipeline_ = device_->CreatePipeline(pd, error);
+    if (!shadowPipeline_) return false;
 
     std::vector<float> vertices;
     for (int z = 0; z <= kPatchQuads; ++z)
@@ -323,8 +337,8 @@ bool Terrain::Select(const View& view, int level, int ix, int iz) {
   return true;
 }
 
-void Terrain::Draw(const View& view) {
-  drawnPatches = drawnTriangles = 0;
+void Terrain::Draw(const View& view, bool shadowPass) {
+  if (!shadowPass) drawnPatches = drawnTriangles = 0;
   if (!map_ || levels_.empty()) return;
 
   // level k is used up to the distance where its quads (2^k cells) shrink to quadPixels on screen
@@ -346,17 +360,10 @@ void Terrain::Draw(const View& view) {
   c.mapSize[3] = 1.0f / static_cast<float>(m.height);
   c.params[0] = 65535.0f * m.heightScale;
   c.params[1] = static_cast<float>(shaderKind_);
-  auto set = [](float* to, Vec3 v, float w) {
-    to[0] = v.x;
-    to[1] = v.y;
-    to[2] = v.z;
-    to[3] = w;
-  };
-  set(c.sunDirection, Normalize(m.lighting.sunDirection), m.lighting.multiplier);
-  set(c.sunColor, m.lighting.sunColor, 0);
-  set(c.sunAmbience, m.lighting.sunAmbience, 0);
-  set(c.shadowFill, m.lighting.shadowFill, 0);
-  set(c.specularColor, {m.lighting.specular.x, m.lighting.specular.y, m.lighting.specular.z}, m.lighting.specular.w);
+  c.specularColor[0] = m.lighting.specular.x;
+  c.specularColor[1] = m.lighting.specular.y;
+  c.specularColor[2] = m.lighting.specular.z;
+  c.specularColor[3] = m.lighting.specular.w;
   for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = m.albedo[i].scale > 0 ? 1.0f / m.albedo[i].scale : 0;
   for (int i = 0; i < 9; ++i) c.normalTile[i][0] = m.normal[i].scale > 0 ? 1.0f / m.normal[i].scale : 0;
   for (int k = 0; k <= top && k < 12; ++k) {
@@ -370,17 +377,19 @@ void Terrain::Draw(const View& view) {
     }
   }
 
-  device_->SetPipeline(pipeline_);
+  device_->SetPipeline(shadowPass ? shadowPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(0, heightTexture_);
-  device_->SetTexture(1, normalMap_);
-  device_->SetTexture(2, maskLow_);
-  device_->SetTexture(3, maskHigh_);
-  device_->SetTexture(4, waterMap_);
-  device_->SetTexture(5, waterRamp_);
-  for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
-  for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
+  if (!shadowPass) {
+    device_->SetTexture(1, normalMap_);
+    device_->SetTexture(2, maskLow_);
+    device_->SetTexture(3, maskHigh_);
+    device_->SetTexture(4, waterMap_);
+    device_->SetTexture(5, waterRamp_);
+    for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
+    for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
+  }
   device_->SetVertexBuffer(gridVertices_);
   device_->SetIndexBuffer(gridIndices_);
   // the shader's array is always handed over whole, so the list is padded to full batches
@@ -391,6 +400,7 @@ void Terrain::Draw(const View& view) {
     device_->SetConstants(2, patches_.data() + at, kMaxPatches * static_cast<uint32_t>(sizeof(Patch)));
     device_->DrawIndexed(gridIndexCount_, 0, 0, n);
   }
+  if (shadowPass) return;
   drawnPatches = static_cast<int>(count);
   drawnTriangles = drawnPatches * kPatchQuads * kPatchQuads * 2;
 }

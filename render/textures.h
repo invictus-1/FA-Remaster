@@ -21,6 +21,10 @@ class TextureCache {
   gfx::Texture Get(const std::string& path, gfx::Texture fallback = {});
   // A texture from .dds bytes held in memory (the ones inside a map file). Not cached.
   gfx::Texture FromDds(std::string_view file, const char* what);
+  // A cube map with a full chain of mip levels made here, each a blurrier copy of the one above
+  // (the game's sky cubes have one level only). The modern lighting reads surroundings from it:
+  // sharp levels for mirror-like surfaces, the blurriest for light from all sides.
+  gfx::Texture SkyCube(const std::string& path);
 
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)

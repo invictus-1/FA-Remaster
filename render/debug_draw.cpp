@@ -6,10 +6,6 @@ namespace render {
 namespace {
 
 const char kShader[] = R"hlsl(
-cbuffer Debug : register(b1) {
-  float3 sunDirection;
-  float pad0;
-};
 struct VIn {
   float3 position : POSITION;
   float3 normal : NORMAL;
@@ -30,7 +26,9 @@ VOut VS(VIn i) {
 float4 PS(VOut i) : SV_Target {
   float light = 1;
   if (dot(i.normal, i.normal) > 0) light = 0.25 + 0.75 * saturate(dot(normalize(i.normal), sunDirection));
-  return float4(i.color.rgb * light, i.color.a);
+  float3 c = i.color.rgb * light;
+  if (look > 0.5) c = pow(c, 2.2);  // the modern look's picture is in linear light
+  return float4(c, i.color.a);
 }
 )hlsl";
 
@@ -43,6 +41,7 @@ bool DebugDraw::Init(std::string* error) {
   pd.vertexSource = pd.pixelSource = source;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}, {"NORMAL", 0, gfx::AttrType::Float3, 12}, {"COLOR", 0, gfx::AttrType::UByte4N, 24}};
   pd.stride = sizeof(Vertex);
+  pd.colorFormat = kSceneFormat;
   solid_ = device_->CreatePipeline(pd, error);
   if (!solid_) return false;
   pd.name = "debug lines";
@@ -80,35 +79,10 @@ void DebugDraw::Box(Vec3 center, Vec3 half, uint32_t color) {
   }
 }
 
-DebugDraw::Baked DebugDraw::Bake() {
-  Baked baked;
-  if (solidVertices_.empty()) return baked;
-  gfx::BufferDesc bd;
-  bd.stride = sizeof(Vertex);
-  bd.size = static_cast<uint32_t>(solidVertices_.size() * sizeof(Vertex));
-  bd.data = solidVertices_.data();
-  baked.buffer = device_->CreateBuffer(bd);
-  baked.vertices = static_cast<uint32_t>(solidVertices_.size());
-  solidVertices_.clear();
-  return baked;
-}
-
-void DebugDraw::DrawBaked(const Baked& baked, const View& view, Vec3 sunDirection) {
-  if (!baked.buffer) return;
-  const float debug[4] = {sunDirection.x, sunDirection.y, sunDirection.z, 0};
-  device_->SetPipeline(solid_);
-  device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, debug, sizeof debug);
-  device_->SetVertexBuffer(baked.buffer);
-  device_->Draw(baked.vertices);
-}
-
-void DebugDraw::Flush(const View& view, Vec3 sunDirection) {
-  const float debug[4] = {sunDirection.x, sunDirection.y, sunDirection.z, 0};
+void DebugDraw::Flush(const View& view) {
   if (!solidVertices_.empty()) {
     device_->SetPipeline(solid_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    device_->SetConstants(1, debug, sizeof debug);
     device_->UpdateBuffer(solidBuffer_, solidVertices_.data(), static_cast<uint32_t>(solidVertices_.size() * sizeof(Vertex)));
     device_->SetVertexBuffer(solidBuffer_);
     device_->Draw(static_cast<uint32_t>(solidVertices_.size()));
@@ -117,7 +91,6 @@ void DebugDraw::Flush(const View& view, Vec3 sunDirection) {
   if (!lineVertices_.empty()) {
     device_->SetPipeline(lines_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    device_->SetConstants(1, debug, sizeof debug);
     device_->UpdateBuffer(lineBuffer_, lineVertices_.data(), static_cast<uint32_t>(lineVertices_.size() * sizeof(Vertex)));
     device_->SetVertexBuffer(lineBuffer_);
     device_->Draw(static_cast<uint32_t>(lineVertices_.size()));

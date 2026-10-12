@@ -31,6 +31,12 @@ struct ModelLod {
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
   gfx::Texture albedo, normals, specular;
+  gfx::Texture secondary;  // remastered units: ambient occlusion in red
+  // Remastered units ("LabPBR"): the specular texture holds the material itself - red: metal,
+  // green: roughness, blue: glow, alpha: team colour mask. Otherwise it is the original's spec-team
+  // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
+  // modern lighting has to translate.
+  bool labPbr = false;
   float cutoff = 0;        // used while the camera is no further away than this (the blueprint's LODCutoff)
   std::string shaderName;  // "Unit", "Aeon", "Insect", "Seraphim", "UndulatingNormalMappedAlpha", ...
   // What the shader name means for drawing (from the original's techniques of those names):

@@ -56,12 +56,14 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
+               [--look modern|original] [--noshadows]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
                [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
 Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, the middle button drags
-the ground, the right button turns and tilts. Keys: W A S D or the arrows move, F12 saves a
-screenshot, V switches vsync, Escape quits.
+the ground, the right button turns and tilts. Keys: W A S D or the arrows move, L switches between
+the modern and the original look, H switches the shadows, F12 saves a screenshot, V switches vsync,
+Escape quits.
 
 Playing a recording: make one with the engine, with the log that says which unit is which
 (`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
@@ -91,6 +93,9 @@ prints what it reports.
 | `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
 | `mesh_renderer.h` | draws models, instanced: units and props |
 | `recording.h` | a tick recording as a source of frames |
+| `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
+| `shadows.h` | the sun's shadow maps and where they are placed each frame |
+| `post.h` | the scene's own floating-point picture and the last pass that puts it on the window |
 | `debug_draw.h` | lines and plain boxes: markers and placeholders |
 | `png.h` | screenshots |
 | `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls, playback |
@@ -109,6 +114,20 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Step 3: models from `.scm` files with albedo, normal and spec-team textures, team colours, levels
   of detail by distance, drawn instanced; the map's props (trees, rocks) with their own models.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
+- Step 5 has begun with what both looks need, and a first modern look:
+  - The scene is drawn into a floating-point picture; a last pass puts it on the window.
+  - The sun casts shadows (three cascaded shadow maps of 2048 pixels, 3 x 3 soft lookups), in both
+    looks.
+  - **Two looks, switchable while running.** *Original*: the game's own light formulas. *Modern*:
+    physically based (metal and roughness per surface, a GGX highlight, light and reflections from
+    the map's sky cube, linear colour, a filmic curve at the end). Both draw the same files.
+  - Materials for the modern look. Remastered units whose blueprint says `ShaderName = 'LabPBR'`
+    carry them in their textures: specular red = metal, green = roughness, blue = glow, alpha = team
+    colour mask; `SecondaryName` red = ambient occlusion. Original units: the old spec-team texture
+    is translated (reflection strength stands for metal, highlight strength for smoothness); this
+    translation is a first one and not yet tuned per faction (white paint on Cybran and Aeon units
+    comes out too dark).
+  - The modern look's strengths (sun, sky, exposure) are constants found by eye on one map.
 
 Known gaps, to be closed in the steps they belong to:
 
@@ -121,7 +140,10 @@ Known gaps, to be closed in the steps they belong to:
 - Props do not sway, and blended far-away cards are not sorted by distance.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No shadows, no decals, no sky, no ground beyond the map's edge, no projectiles or effects.
+- No decals, no sky, no ground beyond the map's edge, no projectiles or effects.
+- The modern look still lacks: ambient occlusion in the picture, bloom, anti-aliasing, a water of its
+  own (it shows the original's water with converted colours), and sky cubes that are properly
+  pre-blurred (their mip levels are plain averages).
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
 - Layer textures repeat every `scale` world units in both directions; on a map that is not square the
   original may stretch one direction (not checked).

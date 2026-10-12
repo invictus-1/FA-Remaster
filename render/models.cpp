@@ -133,6 +133,8 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
     lod.albedo = texture("AlbedoName", "_albedo.dds", textures_->White());
     lod.normals = texture("NormalsName", "_normalsts.dds", textures_->FlatNormal());
     lod.specular = texture("SpecularName", "_specteam.dds", textures_->Black());
+    lod.labPbr = kind == "labpbr";
+    lod.secondary = entry["SecondaryName"].kind == BpValue::String ? texture("SecondaryName", "", textures_->White()) : textures_->White();
     m->lods.push_back(std::move(lod));
   }
   m->ok = true;

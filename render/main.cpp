@@ -12,11 +12,14 @@
 // --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
 // --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
 // --tick, --paused  where playback starts, and whether it stands still
+// --look    modern (the default: physically based lighting) or original (the game's own formulas)
+// --noshadows  start without the sun's shadows
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
-// Keys: W A S D or the arrows move, F12 saves a screenshot, V switches vsync, Escape quits;
+// Keys: W A S D or the arrows move, L switches the look, H the shadows, F12 saves a screenshot,
+// V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
 #include <chrono>
 #include <cmath>
@@ -40,8 +43,10 @@
 #include "mesh_renderer.h"
 #include "models.h"
 #include "png.h"
+#include "post.h"
 #include "recording.h"
 #include "scmap.h"
+#include "shadows.h"
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
@@ -60,7 +65,8 @@ const Vec3 kArmyColors[8] = {{0.26f, 0.43f, 0.93f}, {0.91f, 0.04f, 0.04f}, {0.38
 
 struct Options {
   int width = 1600, height = 900;
-  bool vsync = true, debug = false, paused = false;
+  bool vsync = true, debug = false, paused = false, shadows = true;
+  Look look = Look::Modern;
   int frames = 0;
   float lodPixels = 0;
   double tick = -1;
@@ -78,7 +84,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     if (a == "--novsync") o->vsync = false;
     else if (a == "--debug") o->debug = true;
     else if (a == "--paused") o->paused = true;
+    else if (a == "--noshadows") o->shadows = false;
     else if (!(v = value())) return false;
+    else if (a == "--look") {
+      if (!strcmp(v, "original")) o->look = Look::Original;
+      else if (!strcmp(v, "modern")) o->look = Look::Modern;
+      else return false;
+    }
     else if (a == "--rec") o->recording = v;
     else if (a == "--createlog") o->createLog = v;
     else if (a == "--tick") o->tick = atof(v);
@@ -140,7 +152,10 @@ int main(int argc, char** argv) {
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   std::string error;
-  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error);
+  // an automatic run (--frames) must give the same picture whatever the person at the machine is
+  // doing: its window stays in the background and what is typed or clicked is not acted on
+  const bool automatic = opt.frames > 0;
+  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error, automatic);
   if (!window) {
     fprintf(stderr, "render: no window: %s\n", error.c_str());
     return 1;
@@ -221,6 +236,20 @@ int main(int argc, char** argv) {
   gfx::Texture environment;
   for (const auto& cube : map.environmentCubemaps)
     if (cube.first == "<default>") environment = textures.Get(cube.second);
+
+  // the frame's passes and the light
+  Post post(device.get());
+  if (!post.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  Shadows shadows(device.get());
+  gfx::Texture sky = textures.SkyCube(haveMap ? map.skyCubemap : std::string());
+  Look look = opt.look;
+  bool shadowsOn = opt.shadows;
+  // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
+  // chosen for the original's formula)
+  float sunStrength = 1.5f, skyStrength = 1.8f, exposure = 0.9f;
   // the map's props (trees, rocks, wrecks): where each stands does not change
   struct PlacedProp {
     const Model* model;
@@ -315,6 +344,7 @@ int main(int argc, char** argv) {
     last = now;
 
     bool quit = false;
+    if (automatic) events.clear();
     for (const InputEvent& e : events) {
       switch (e.type) {
         case InputEvent::KeyDown:
@@ -328,6 +358,8 @@ int main(int argc, char** argv) {
           if (e.key == kKeyPageUp) playTick -= 100;
           if (e.key == kKeyHome) playTick = recording.FirstTick();
           if (e.key == 'F' && haveRecording) lookAtUnits();
+          if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
+          if (e.key == 'H') shadowsOn = !shadowsOn;
           break;
         case InputEvent::MouseDown:
           dragX = e.x;
@@ -364,7 +396,7 @@ int main(int argc, char** argv) {
     events.clear();
     if (quit) break;
 
-    {  // keyboard movement, along the ground in the camera's directions
+    if (!automatic) {  // keyboard movement, along the ground in the camera's directions
       Vec3 r, u, b;
       camera.Axes(&r, &u, &b);
       Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
@@ -386,13 +418,32 @@ int main(int argc, char** argv) {
     }
     if (window->Width() != device->Width() || window->Height() != device->Height()) device->Resize(window->Width(), window->Height());
 
-    const float time = std::chrono::duration<float>(now - start).count();
+    // an automatic run counts time in frames, so that its pictures can be compared
+    const float time = automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
     View view = View::Make(camera, device->Width(), device->Height(), time);
-    Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
+    {  // the light: the map's sun, in the chosen look
+      ViewConstants& c = view.constants;
+      const Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
+      auto set = [](float* to, Vec3 v) {
+        to[0] = v.x;
+        to[1] = v.y;
+        to[2] = v.z;
+      };
+      set(c.sunDirection, sun);
+      set(c.sunColor, haveMap ? map.lighting.sunColor : Vec3{1, 1, 1});
+      set(c.sunAmbience, haveMap ? map.lighting.sunAmbience : Vec3{0.2f, 0.2f, 0.2f});
+      set(c.shadowFill, haveMap ? map.lighting.shadowFill : Vec3{0.3f, 0.3f, 0.4f});
+      c.lightMultiplier = haveMap ? map.lighting.multiplier : 1;
+      c.look = look == Look::Modern ? 1.0f : 0.0f;
+      c.modern[0] = sunStrength;
+      c.modern[1] = skyStrength;
+      c.modern[2] = exposure;
+      if (haveMap && shadowsOn) shadows.Place(camera, sun, &view);
+    }
 
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
-    meshes.Begin(view);
+    meshes.Begin();
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
     if (haveRecording) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
@@ -413,15 +464,27 @@ int main(int argc, char** argv) {
         }
       }
     }
+    // the sun's shadow maps first, then the scene into its own picture, then that onto the window
+    if (haveMap && shadowsOn) {
+      for (int i = 0; i < shadows.Count(); ++i) {
+        device->BeginPass(shadows.Pass(i));
+        terrain->Draw(shadows.CascadeView(i), true);
+        meshes.Draw(shadows.CascadeView(i), environment, true);
+      }
+    }
+    post.BeginScene(device->Width(), device->Height(), clear);
+    device->SetTexture(kShadowMapSlot, shadows.Map());
+    device->SetTexture(kEnvironmentSlot, sky);
     if (haveMap) {
       terrain->Draw(view);
-      meshes.Draw(map.lighting, environment);
-      draw.Flush(view, sun);
+      meshes.Draw(view, environment);
+      draw.Flush(view);
       water->Draw(view);
     } else {
       DrawTestScene(draw);
-      draw.Flush(view, sun);
+      draw.Flush(view);
     }
+    post.Present(view);
 
     ++frameCount;
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
