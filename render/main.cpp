@@ -773,6 +773,12 @@ int main(int argc, char** argv) {
         draw.Line({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, 0xff000000u | byte(c.z) << 16 | byte(c.y) << 8 | byte(c.x));
       }
     }
+    {  // the bones of posed models, once for all the frame's passes
+      std::vector<const View*> views{&view};
+      if (haveMap && shadowsOn)
+        for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
+      meshes.Prepare(views);
+    }
     // the sun's shadow maps first, then the scene into its own picture, then that onto the window
     if (haveMap && shadowsOn) {
       for (int i = 0; i < shadows.Count(); ++i) {
@@ -824,6 +830,7 @@ int main(int argc, char** argv) {
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
+      if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;

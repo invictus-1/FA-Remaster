@@ -178,9 +178,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   one the simulation poses; other levels of detail and a previewed remastered mesh are matched to
   it by bone name. `--turn <bone>` turns a bone of placed units round and round (`--bones` lists
   the names), to look at moving parts without a game. In a game the simulation's poses are shown:
-  turrets aim, legs walk. Measured at 1080p on an RTX 4090: 10,000 Strikers at rest 1.7 ms a
-  frame, all 10,000 with a turned turret 4.3 ms (the bones' matrices are built on one core and
-  handed over once per pass: to be made cheaper).
+  turrets aim, legs walk. The bones of every posed model one of the frame's views will draw are
+  built once and handed over once for all passes. Measured at 1080p on an RTX 4090: 10,000
+  Strikers at rest 1.3 ms a frame, all 10,000 with a turned turret 3.1 ms, of which 1.3 ms is
+  building the 70,000 bone matrices on one core (several cores: to do).
 - Projectiles: one with a model in its blueprint is drawn as that model; the others are effects
   in the game, and until effects are written a short bright line along the flight stands in.
   Between beats a projectile flies on along its velocity. Beams are plain lines for now.
@@ -227,8 +228,9 @@ Known gaps, to be closed in the steps they belong to:
 - Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
   The symbol's name is read from the `.bp` file, so a change a mod's script makes to it is not seen.
 - Props do not sway, and blended far-away cards are not sorted by distance.
-- Each shadow cascade draws every caster inside it again, also those a nearer cascade already
-  covers: the shadow maps often hold more triangles than the picture.
+- Shadows: a cascade leaves out what casts wholly inside the square the cascade before it covers
+  (that map has it, and every surface its shadow can reach reads that map). What straddles the
+  edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
 - No decals, no sky, no ground beyond the map's edge, no effects (explosions, smoke, the visible

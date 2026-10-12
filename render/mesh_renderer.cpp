@@ -1,6 +1,7 @@
 #include "mesh_renderer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 
@@ -252,6 +253,27 @@ bool MeshRenderer::Init(std::string* error) {
 void MeshRenderer::Begin() {
   entries_.clear();
   rows_.clear();
+  prepared_ = false;
+}
+
+void MeshRenderer::Prepare(const std::vector<const View*>& views) {
+  const auto t0 = std::chrono::steady_clock::now();
+  for (Entry& e : entries_) {
+    if (!e.posed) continue;
+    const Vec3 r{e.radius, e.radius, e.radius};
+    bool seen = views.empty();
+    for (const View* view : views)
+      if (view->BoxVisible(e.centre - r, e.centre + r)) {
+        seen = true;
+        break;
+      }
+    if (seen) BuildRows(&e);
+  }
+  if (rows_.empty()) rows_.assign(4, 0.0f);  // the shaders' buffer is never left unset
+  device_->UpdateBuffer(boneBuffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
+  prepared_ = true;
+  const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  prepareMs = prepareMs == 0 ? ms : prepareMs * 0.95f + ms * 0.05f;
 }
 
 // The rows of a posed model's bones. A bone's matrix is: back from where the bone stands at rest,
@@ -323,6 +345,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     drawnInstances = drawnTriangles = posedInstances = 0;
     countedScene_ = true;
   }
+  if (!prepared_) Prepare({});  // (a caller that did not say which views there are: every posed model's bones)
   // What this view sees, each at the level its size on the SCREEN asks for (view.eye, fovY and height
   // are the camera's in a shadow pass too, so a model's shadow comes from a level near the one drawn).
   items_.clear();
@@ -332,6 +355,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   for (Entry& e : entries_) {
     const Vec3 r{e.radius, e.radius, e.radius};
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
+    if (shadowPass && view.CoveredByNearer(e.centre, e.radius)) continue;  // the nearer shadow map has it
     const float pixels = 2 * e.radius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
     if (pixels < smallest) continue;
     const float wanted = wish * pixels * pixels;
@@ -345,27 +369,15 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       ++level;
     const ModelLod* lod = &lods[level];
     // the far-away cards of trees are flat pictures: they cast no shadow
-    if (!(shadowPass && lod->blend)) items_.push_back({lod, &e, -1.0f});
+    if (shadowPass && lod->blend) continue;
+    items_.push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
+    if (!shadowPass && e.posed) ++posedInstances;
   }
   if (items_.empty()) return;
   // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
   std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
     return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod < b.lod;
   });
-
-  // the bones of the posed models this pass draws, in one buffer
-  passRows_.clear();
-  for (Item& item : items_) {
-    Entry* e = item.entry;
-    if (!e->posed) continue;
-    if (e->rows < 0) BuildRows(e);
-    item.bones = static_cast<float>(passRows_.size() / 4);
-    const float* from = rows_.data() + static_cast<size_t>(e->rows) * 4;
-    passRows_.insert(passRows_.end(), from, from + e->model->bones.size() * 12);
-    if (!shadowPass) ++posedInstances;
-  }
-  if (passRows_.empty()) passRows_.assign(4, 0.0f);  // the shaders' buffer is never left unset
-  device_->UpdateBuffer(boneBuffer_, passRows_.data(), static_cast<uint32_t>(passRows_.size() * sizeof(float)));
 
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
   device_->SetShaderBuffer(boneBuffer_);

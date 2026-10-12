@@ -72,6 +72,15 @@ struct View {
   float fovY = 1;
   int width = 1, height = 1;
   Vec4 planes[5];  // left, right, bottom, top, near: a point p is inside when dot(plane.xyz, p) + plane.w >= 0
+  // A shadow cascade's view only: the square of ground (seen from the sun) that the cascade before
+  // it covers. What casts wholly inside that square is in the nearer map already and every surface
+  // its shadow can fall on reads that map, so this cascade need not draw it. coveredHalf 0: none.
+  Vec3 coveredRight, coveredUp;  // the sun's sideways axes
+  float coveredX = 0, coveredY = 0, coveredHalf = 0;
+  bool CoveredByNearer(Vec3 centre, float radius) const {
+    return coveredHalf > 0 && std::fabs(Dot(centre, coveredRight) - coveredX) + radius <= coveredHalf &&
+           std::fabs(Dot(centre, coveredUp) - coveredY) + radius <= coveredHalf;
+  }
 
   // Sets the matrix everything is projected with, and the planes that bound what it shows.
   void SetMatrix(const Mat4& m) {

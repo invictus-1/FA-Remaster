@@ -32,6 +32,7 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
   const Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
   const float tilt = std::cos(camera.pitch);  // 0 looking straight down: the view is centred on the target
   float radius = std::max(8.0f, camera.distance * 0.55f);
+  float nearerX = 0, nearerY = 0, nearerHalf = 0;  // the square the cascade before this one covers
   for (int i = 0; i < count_; ++i, radius *= 3.2f) {
     Vec3 centre = camera.target + forward * (radius * 0.45f * tilt);
     // move the centre in whole texels only, so that shadow edges do not crawl when the camera moves
@@ -52,6 +53,15 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
     cv = *view;  // the camera's eye, field of view and picture size: levels of detail as in the scene
     cv.SetMatrix(lightViewProj);
     cv.constants.shadowsOn = 0;
+    cv.coveredRight = right;
+    cv.coveredUp = up;
+    cv.coveredX = nearerX;
+    cv.coveredY = nearerY;
+    cv.coveredHalf = nearerHalf;
+    // the scene's shaders read a cascade inside 0.02 .. 0.98 of its map and look a few texels around
+    nearerX = x;
+    nearerY = y;
+    nearerHalf = radius * 0.96f - 6 * texel;
     cv.constants.viewport[0] = cv.constants.viewport[1] = static_cast<float>(kShadowMapSize);
     cv.constants.viewport[2] = cv.constants.viewport[3] = 1.0f / static_cast<float>(kShadowMapSize);
 
