@@ -2948,6 +2948,11 @@ void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorO
     if (aim.x == 0 && aim.y == 0 && aim.z == 0 && !std::signbit(aim.x) && !std::signbit(aim.y) &&
         !std::signbit(aim.z)) {  // (bitwise compare with the zero vector)
       ArmStep(sim, a, {0, 0, 1}, true, true);
+      {
+        static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
+        if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady)
+          Logf(LogLevel::Info, "armdbg %u zero-target tick: on target 1 -> 0", sim.tick());
+      }
       u->armReady = false;
       a->onTarget = false;
       continue;
@@ -2968,6 +2973,11 @@ void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorO
     float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     d = len > 0 ? Mul(d, 1.0f / len) : Vec3{};
     bool on = ArmStep(sim, a, d, false, false);
+    {
+      static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
+      if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady != on)
+        Logf(LogLevel::Info, "armdbg %u tracking tick: on target %d -> %d", sim.tick(), u->armReady ? 1 : 0, on ? 1 : 0);
+    }
     a->onTarget = on;
     u->armReady = on;
   }

@@ -1269,8 +1269,17 @@ void Sim::Tick() {
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     if (u->destroyQueued) continue;
-    u->prevLastPosition = u->lastPosTick ? u->lastPosition : u->position;
-    u->lastPosition = u->position;
+    // (lastPosition = the entity's coords before this beat's motion. On a unit's first beat that is where it was
+    // CREATED: an attach in the same beat, a factory putting its new unit on the build bone, only writes the
+    // pending transform, so the entity "moved" in its first AdvanceCoords and position != previous position for
+    // one beat. CUnitRepairTask 0x5f946f ends on that: an assist begun in the unit's first beat is started again
+    // a beat later. Transports replay, tick 364.)
+    if (u->lastPosTick) {
+      u->prevLastPosition = u->lastPosition;
+      u->lastPosition = u->position;
+    } else {
+      u->prevLastPosition = u->lastPosition;
+    }
     u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;
     u->lastPosTick = tick_;
