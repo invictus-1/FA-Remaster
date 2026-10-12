@@ -354,6 +354,20 @@ class WorldView : public Control {
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
+    if (e.type == EventType::WheelRotation && e.wheelDelta != 0) {
+      // The wheel: a tenth nearer or farther per notch, towards the place under the cursor, so that
+      // zooming out, pointing and zooming in moves across the map. (First version: the original's
+      // steps and its easing are still to be read.)
+      Camera* c = GetCameraObject(L, cameraName);
+      float under[3];
+      Unproject(L, e.x, e.y, under);
+      float before = c->zoom;
+      SetZoomClamped(c, c->zoom * std::pow(0.9f, static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta)));
+      float f = before > 0 ? c->zoom / before : 1;
+      c->focus[0] = under[0] + (c->focus[0] - under[0]) * f;
+      c->focus[2] = under[2] + (c->focus[2] - under[2]) * f;
+      return true;
+    }
     if (e.type != EventType::ButtonPress) return false;
     float world[3];
     Unproject(L, e.x, e.y, world);
