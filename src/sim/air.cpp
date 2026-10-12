@@ -1335,7 +1335,8 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     if (facing) {
       s = 1;
       if (eAir && MovedThisTick(E)) {
-        QuatW q = ToW(E->orientation);
+        // (the target's committed orientation: as the beat began, also when it has turned already)
+        QuatW q = ToW(E->shapeHeld ? E->shapeOri : E->orientation);
         Vec3 Fe{2 * (q.w * q.y + q.z * q.x), 2 * (q.z * q.y - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
         if ((Fe.x * fwd.x + Fe.y * fwd.y) + Fe.z * fwd.z > 0.0f) s = 2;
       }
