@@ -1229,6 +1229,16 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   return ret;
 }
 
+// UnitWeapon::Fire 0x6d61f0: the script's OnFire, and the wait until the next shot
+void FireNow(Sim& sim, UnitWeapon* w) {
+  if (w->unit->stunned) return;
+  WeaponCall(sim, w, "OnFire");
+  ++g_fires;
+  ++w->shots;
+  const float rof = RoF(w);
+  w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
+}
+
 // CFireWeaponTask::Execute 0x6d3dc0
 void FireTick(Sim& sim, UnitWeapon* w) {
   Unit* u = w->unit;
@@ -1250,13 +1260,7 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   if (!CheckSilo(w)) return;
   if (TargetStatus(sim, w, w->target) != 0) return;
   if (w->bp->cannotAttackGround && w->target.type == 2) return;
-  // UnitWeapon::Fire 0x6d61f0
-  if (u->stunned) return;
-  WeaponCall(sim, w, "OnFire");
-  ++g_fires;
-  ++w->shots;
-  float rof = RoF(w);
-  w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
+  FireNow(sim, w);
 }
 
 }  // namespace
@@ -1902,6 +1906,7 @@ struct AttackData {
   bool firstUpdate = true;   // +0x8e
   bool listening = false;    // the attacker-event listener is linked (from the first UpdateAttacker on)
   int result = 0;            // 1 success, 2 failure (the listener's result)
+  int ocWeapon = -1;         // +0x5c: the overcharge weapon's index (an OverCharge order only)
 };
 
 namespace {
@@ -2083,7 +2088,9 @@ void AttackEvent(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 // TaskTick 0x5f34c0 for a ground (non-flying) attacker. Returns the original's task code.
 int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
-  UnitWeapon* w = u->weapons.empty() ? nullptr : TargetWeapon(sim, u, target);
+  UnitWeapon* oc = d.ocWeapon >= 0 && d.ocWeapon < static_cast<int>(u->weapons.size())
+                       ? u->weapons[static_cast<size_t>(d.ocWeapon)] : nullptr;
+  UnitWeapon* w = oc ? oc : u->weapons.empty() ? nullptr : TargetWeapon(sim, u, target);
   bool direct = BpInCategory(sim, u->blueprint, "DIRECTFIRE");
   if (!HasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
   if (!w && !d.coordinated && !direct) return -1;
@@ -2131,6 +2138,11 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         if (!any) return -1;
         u->navIgnoreFormation = true;
         UpdateAttacker(sim, u, t, target);
+        if (oc) {  // the overcharge weapon is given the target by the task itself (0x6d5f30)
+          SetTarget(sim, oc, target);
+          t.state = 4;
+          return 1;
+        }
         return -2;  // suspended; the navigator keeps driving until the weapon reports
       }
       if (w && TargetStatus(sim, w, target) == 1) {
@@ -2170,7 +2182,22 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         }
         return 10;
       }
-      return -2;
+      if (!oc) return -2;
+      // overcharge (0x5f3dc3): the weapon's script says whether it may fire (energy); a standing mobile unit
+      // whose overcharge has no firing solution goes back to chasing; otherwise fire once and end
+      if (CallMethodBool(sim, sim.L(), oc, "CanWeaponFire", 0) <= 0) return 10;
+      if (u->position.x == u->lastPosition.x && u->position.y == u->lastPosition.y &&
+          u->position.z == u->lastPosition.z && u->motion.bp && u->motion.bp->mobile() && !oc->canReach) {
+        AttackUpdate(sim, u, t, target);
+        t.state = 3;
+        return 1;
+      }
+      if (oc->enabled && CanFire(sim, oc)) {
+        FireNow(sim, oc);
+        t.state = 5;
+        return 10;
+      }
+      return 1;
     case 5:
     default:
       AbortNavigation(u);
@@ -2292,13 +2319,7 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
         if (!u->unitStates.count("Busy")) {
           if (nuke) sim.CallMethod(sim.L(), u, "OnNukeLaunched", 0);
           SetTarget(sim, w, target);
-          if (!u->stunned) {  // UnitWeapon::Fire 0x6d61f0
-            WeaponCall(sim, w, "OnFire");
-            ++g_fires;
-            ++w->shots;
-            const float rof = RoF(w);
-            w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
-          }
+          FireNow(sim, w);
           t.state = 3;
         }
         t.waitUntil = sim.tick() + 2;  // return 3
@@ -2321,6 +2342,30 @@ void EndFireAt(Sim& sim, Unit* u, BuildTask& t) {
   (void)sim;
   (void)t;
   if (!u->dead) u->unitStates.erase("Busy");
+}
+
+// An OverCharge order (DispatchTask 0x6096ad): the attack task in overcharge mode, only on an entity that is
+// not allied. The mode's weapon is the first with OverChargeWeapon; the ctor tells its script OnEnableWeapon.
+BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
+  Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  if (!e || u->weapons.empty()) return nullptr;
+  if (e->army && u->army && (e->army == u->army || IsAlly(u->army, e->army))) return nullptr;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::OverCharge;
+  t->order = "Attack";
+  t->goalId = c.targetId;
+  t->targetPoint = c.targetPoint;
+  t->site = e->position;
+  InitAttack(sim, u, *t, false);
+  for (size_t i = 0; i < u->weapons.size(); ++i)
+    if (u->weapons[i]->bp && u->weapons[i]->bp->overChargeWeapon) {
+      t->adata->ocWeapon = static_cast<int>(i);
+      WeaponCall(sim, u->weapons[i], "OnEnableWeapon");
+      break;
+    }
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
 }
 
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
@@ -2381,7 +2426,8 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 }
 
 void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
-  (void)t;
+  if (t.adata && t.adata->ocWeapon >= 0 && t.adata->ocWeapon < static_cast<int>(u->weapons.size()))
+    WeaponCall(sim, u->weapons[static_cast<size_t>(t.adata->ocWeapon)], "OnDisableWeapon");  // dtor 0x5f41e4
   // the task's teardown clears its unit states also when the unit died (seen: a killed unit's queue empties and
   // "Attacking" goes in the same beat)
   u->unitStates.erase("Attacking");

@@ -1886,6 +1886,8 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::Nuke:
     case CommandType::Tactical:
       return StartFireAtTask(sim, u, c);  // DispatchTask 0x609692 / 0x6096a9
+    case CommandType::OverCharge:
+      return StartOverchargeTask(sim, u, c);
     case CommandType::Reclaim:
       if (!u->bpData || !u->bpData->hasBuilder || !c.targetId) return nullptr;
       t->order = "Reclaim";
@@ -1930,6 +1932,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
       r = t.tdata ? TickTransportTask(sim, u, t) : TickAssistLegacy(sim, L, u, t);
       break;
     case CommandType::Attack:
+    case CommandType::OverCharge:
     case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
     case CommandType::Nuke:
     case CommandType::Tactical: r = TickFireAt(sim, u, t); break;
@@ -1979,7 +1982,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     EndFireAt(sim, u, t);
     return;
   }
-  if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {
+  if (t.type == CommandType::Attack || t.type == CommandType::FormAttack || t.type == CommandType::OverCharge) {
     EndAttack(sim, u, t);
     // ... and AbortMove (nav vt+0x10) whatever the navigator does: an idle one still rebuilds the brake spline the
     // steering holds (MakeIdle -> SetWaypoints(0, 0)), so a unit already braking brakes from its speed of now

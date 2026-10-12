@@ -317,6 +317,23 @@ void StartHead(Sim& sim, Unit* u) {
       PopHead(u);
       continue;
     }
+    // Orders the dispatcher carries out on the spot, without a task:
+    if (c.type == CommandType::KillSelf) {  // 0x60b850: the unit kills itself (instigator itself, type "Damage")
+      PopHead(u);
+      KillUnit(sim, sim.L(), u, u, "Damage", 0.0f);
+      return;
+    }
+    if (c.type == CommandType::DestroySelf) {  // 0x60a3c4: Entity::Destroy
+      PopHead(u);
+      sim.QueueDestroy(u);
+      return;
+    }
+    if (c.type == CommandType::Pause) {  // 0x608fa4: Unit::SetPaused(!paused)
+      u->paused = !u->paused;
+      sim.CallMethod(sim.L(), u, u->paused ? "OnPaused" : "OnUnpaused", 0);
+      PopHead(u);
+      continue;
+    }
     switch (c.type) {  // DispatchTask 0x608ef0: CUnitCommand::GenerateFormation (formations.md 1.2)
       case CommandType::Move:
       case CommandType::FormMove:
