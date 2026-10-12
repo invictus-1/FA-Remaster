@@ -84,6 +84,7 @@ struct LiveSim::Engine {
   std::vector<moho::UnitPose> poses;
   std::vector<moho::ProjectileView> projectiles;
   std::vector<moho::BeamView> beams;
+  std::vector<moho::EffectEvent> effects;
   std::unordered_map<uint32_t, uint32_t> poseOf;  // unit id -> index in poses, this beat
   std::unordered_map<std::string, uint32_t> nameIndex;
 };
@@ -170,6 +171,7 @@ void LiveSim::Start() { thread_ = std::thread([this] { Run(); }); }
 bool LiveSim::Load(std::string* error) {
   Engine& e = *engine_;
   e.sim = std::make_unique<moho::Sim>(&e.vfs, e.hookDirs, e.uids);
+  e.sim->collectEffects = true;  // the scripts' effect calls are kept for EffectEvents
   e.sim->sessionMods = e.session.header.mods;
   if (!e.sim->LoadRules()) {
     *error = "the game's blueprints could not be loaded (see the simulation's log)";
@@ -210,6 +212,28 @@ void LiveSim::Snapshot() {
   moho::UnitPoses(*e.sim, &e.poses);
   moho::ProjectileViews(*e.sim, &e.projectiles);
   moho::BeamViews(*e.sim, &e.beams);
+  moho::EffectEvents(*e.sim, &e.effects);
+  std::vector<FrameEffectEvent> events;
+  events.reserve(e.effects.size());
+  for (moho::EffectEvent& v : e.effects) {
+    FrameEffectEvent f;
+    f.kind = v.kind == moho::EffectEvent::Create ? FrameEffectEvent::Create
+             : v.kind == moho::EffectEvent::Call ? FrameEffectEvent::Call : FrameEffectEvent::Destroy;
+    f.tick = e.sim->tick();
+    f.id = v.id;
+    f.name = std::move(v.name);
+    f.blueprint = std::move(v.blueprint);
+    f.army = v.army;
+    f.entity = v.entity;
+    f.entity2 = v.entity2;
+    f.bone = v.bone;
+    f.bone2 = v.bone2;
+    std::memcpy(f.position, v.position, sizeof f.position);
+    f.numbers = std::move(v.numbers);
+    f.text = std::move(v.text);
+    f.text2 = std::move(v.text2);
+    events.push_back(std::move(f));
+  }
   e.poseOf.clear();
   for (uint32_t i = 0; i < e.poses.size(); ++i) e.poseOf.emplace(e.poses[i].id, i);
   Beat beat;
@@ -271,6 +295,7 @@ void LiveSim::Snapshot() {
   }
   std::lock_guard<std::mutex> lock(mutex_);
   for (std::string& n : fresh) names_.push_back(std::move(n));
+  for (FrameEffectEvent& f : events) effectEvents_.push_back(std::move(f));
   beats_.push_back(std::move(beat));
   while (beats_.size() > kBeatsKept) beats_.pop_front();
 }
@@ -382,6 +407,12 @@ bool LiveSim::FrameAt(double tick, Frame* out) {
     for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
   out->beams = a.beams;
   return true;
+}
+
+void LiveSim::TakeEffectEvents(std::vector<FrameEffectEvent>* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  out->swap(effectEvents_);
 }
 
 std::vector<Vec3> LiveSim::ArmyColors() const {

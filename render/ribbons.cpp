@@ -167,6 +167,18 @@ bool Ribbons::BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction
   return true;
 }
 
+void Ribbons::TextureBeam(const std::string& texture, Vec3 start, Vec3 end, float halfWidth) {
+  const std::string key = "texture:" + moho::Vfs::Normalize(texture);
+  std::unique_ptr<Kind>& kind = kinds_[key];
+  if (!kind) {
+    kind = std::make_unique<Kind>();
+    kind->ok = true;
+    kind->texture = textures_->Get(texture, textures_->White());
+    kind->ramp = textures_->White();
+  }
+  beams_.push_back({kind.get(), start, end, {1, 1, 1}, halfWidth});
+}
+
 void Ribbons::PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width) { beams_.push_back({&plain_, start, end, color, width * 0.5f}); }
 
 uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position) {
@@ -180,6 +192,12 @@ uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position) {
   t.points.push_back({position, now_});
   trails_.push_back(std::move(t));
   return trails_.back().id;
+}
+
+Ribbons::Trail* Ribbons::Find(uint32_t id) {
+  for (Trail& t : trails_)
+    if (t.id == id) return &t;
+  return nullptr;
 }
 
 void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {

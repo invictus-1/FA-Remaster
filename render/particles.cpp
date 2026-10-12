@@ -1,6 +1,7 @@
 #include "particles.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -171,6 +172,8 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   bp->flat = Flag(v["Flat"], false);
   bp->interpolateEmission = Flag(v["InterpolateEmission"], true);
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
+  bp->lodCutoff = Number(v["LODCutoff"], 1e9f);
+  if (bp->lodCutoff <= 0) bp->lodCutoff = 1e9f;
   bp->texturePath = v["Texture"].StringOr(std::string());
   bp->rampPath = v["RampTexture"].StringOr(std::string());
   const struct {
@@ -199,7 +202,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   return bp;
 }
 
-uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale) {
+uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt) {
   const EmitterBlueprint* bp = Blueprint(blueprint);
   if (!bp->ok) return 0;
   std::unique_ptr<Set>& set = sets_[bp];
@@ -220,28 +223,40 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.position = position;
   e.orientation = orientation;
   e.scale = scale;
-  e.started = now_;
+  e.lifetime = bp->lifetime;
+  e.started = startedAt >= 0 ? startedAt : now_;
+  index_[e.id] = emitters_.size();
   emitters_.push_back(e);
   return e.id;
 }
 
+Particles::Emitter* Particles::Find(uint32_t id) {
+  auto it = index_.find(id);
+  return it == index_.end() ? nullptr : &emitters_[it->second];
+}
+
+void Particles::SetScale(uint32_t emitter, float scale) {
+  if (Emitter* e = Find(emitter)) e->scale = scale;
+}
+
+void Particles::SetLifetime(uint32_t emitter, float ticks) {
+  if (Emitter* e = Find(emitter)) e->lifetime = ticks;
+}
+
 void Particles::Move(uint32_t emitter, Vec3 position, const Quat& orientation) {
-  for (Emitter& e : emitters_)
-    if (e.id == emitter) {
-      e.position = position;
-      e.orientation = orientation;
-    }
+  if (Emitter* e = Find(emitter)) {
+    e->position = position;
+    e->orientation = orientation;
+  }
 }
 
 void Particles::Stop(uint32_t emitter) {
-  for (Emitter& e : emitters_)
-    if (e.id == emitter) e.stopped = true;
+  if (Emitter* e = Find(emitter)) e->stopped = true;
 }
 
 bool Particles::Running(uint32_t emitter) const {
-  for (const Emitter& e : emitters_)
-    if (e.id == emitter) return !e.stopped;
-  return false;
+  auto it = index_.find(emitter);
+  return it != index_.end() && !emitters_[it->second].stopped;
 }
 
 // What an emitter throws out in one tick of its own time. All readings of the curves here are the
@@ -305,20 +320,38 @@ void Particles::Emit(Emitter* emitter, int tick) {
   }
 }
 
-void Particles::Update(double now) {
+void Particles::Update(double now, const View* view) {
+  const auto t0 = std::chrono::steady_clock::now();
   now_ = now;
+  quietEmitters = 0;
   for (Emitter& e : emitters_) {
     // every whole tick of the emitter's own time that has begun, up to its lifetime
     const int due = static_cast<int>((now - e.started) / kTick) + 1;
-    const int last = e.blueprint->lifetime < 0 ? due : std::min(due, std::max(1, static_cast<int>(std::ceil(e.blueprint->lifetime))));
+    const int last = e.lifetime < 0 ? due : std::min(due, std::max(1, static_cast<int>(std::ceil(e.lifetime))));
+    // (an emitter far behind - the game ran ahead - makes up only its last ticks: older particles would be over)
+    if (last - e.ticksDone > 100) e.ticksDone = last - 100;
+    if (view && e.ticksDone < last) {
+      const float margin = 8 * std::max(1.0f, e.scale);  // how far its particles may be from it and still be seen
+      const Vec3 r{margin, margin, margin};
+      if (Length(e.position - view->eye) > e.blueprint->lodCutoff || !view->BoxVisible(e.position - r, e.position + r)) {
+        e.ticksDone = last;  // these ticks pass without particles
+        ++quietEmitters;
+      }
+    }
     while (!e.stopped && e.ticksDone < last) Emit(&e, e.ticksDone++);
-    if (e.blueprint->lifetime >= 0 && e.ticksDone >= last && due > last) e.stopped = true;
+    if (e.lifetime >= 0 && e.ticksDone >= last && due > last) e.stopped = true;
   }
-  emitters_.erase(std::remove_if(emitters_.begin(), emitters_.end(), [](const Emitter& e) { return e.stopped; }), emitters_.end());
+  if (std::any_of(emitters_.begin(), emitters_.end(), [](const Emitter& e) { return e.stopped; })) {
+    emitters_.erase(std::remove_if(emitters_.begin(), emitters_.end(), [](const Emitter& e) { return e.stopped; }), emitters_.end());
+    index_.clear();
+    for (size_t i = 0; i < emitters_.size(); ++i) index_[emitters_[i].id] = i;
+  }
   liveEmitters = static_cast<int>(emitters_.size());
+  updateMs_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
 void Particles::Draw(const View& view) {
+  const auto t0 = std::chrono::steady_clock::now();
   // drop what is over, and gather the rest in one buffer, set after set
   const float now = static_cast<float>(now_);
   rows_.clear();
@@ -333,7 +366,10 @@ void Particles::Draw(const View& view) {
     rows_.insert(rows_.end(), from, from + ps.size() * (sizeof(Particle) / sizeof(float)));
     liveParticles += static_cast<int>(ps.size());
   }
-  if (!liveParticles) return;
+  if (!liveParticles) {
+    cpuMs = cpuMs * 0.95f + updateMs_ * 0.05f;
+    return;
+  }
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
 
   // the camera's sideways and upward directions, from the rows of the view-projection matrix
@@ -361,6 +397,8 @@ void Particles::Draw(const View& view) {
     device_->SetTexture(1, bp.ramp);
     device_->Draw(6, 0, static_cast<uint32_t>(spans[i].second));
   }
+  const float ms = updateMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  cpuMs = cpuMs == 0 ? ms : cpuMs * 0.95f + ms * 0.05f;
 }
 
 }  // namespace render
