@@ -1,4 +1,4 @@
-// The host's live mode: the interface in a window, in real time, with the mouse.
+// The host's live mode: the interface in a window, in real time, with the mouse and the keyboard.
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -11,24 +11,24 @@
 
 namespace moho::ui {
 
-// Open a window on the user state's interface and run until it is closed, or for maxFrames frames
-// when that is not 0. Each frame: input, one frame of the user state with the time that really
-// passed, the picture. Returns the number of frames shown, or -1 when no window could be opened.
-int RunWindow(UserState& user, int width, int height, int maxFrames,
+// Open a window on the interface and run until it is closed, or for maxFrames frames when that
+// is not 0. Each frame: input, one frame of the user state with the time that really passed, the
+// picture. `current` names the user state to show; it may change between frames (the front end's
+// state gives way to a game's). Returns the number of frames shown, or -1 when no window could
+// be opened.
+int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame) {
-  lua_State* L = user.L();
-  UiManager& ui = user.ui();
   auto target = std::make_unique<SoftwareTarget>(width, height);
   Window window;
   Window::Callbacks cb;
-  cb.mouseMove = [&](const UiEvent& e) { MouseMove(L, ui, e); };
-  cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) { MouseButton(L, ui, e, pressed, dbl); };
-  cb.mouseWheel = [&](const UiEvent& e) { MouseWheel(L, ui, e); };
-  cb.key = [&](const UiEvent& e) { return KeyEvent(L, ui, e); };
+  cb.mouseMove = [&](const UiEvent& e) { MouseMove(current().L(), current().ui(), e); };
+  cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) { MouseButton(current().L(), current().ui(), e, pressed, dbl); };
+  cb.mouseWheel = [&](const UiEvent& e) { MouseWheel(current().L(), current().ui(), e); };
+  cb.key = [&](const UiEvent& e) { return KeyEvent(current().L(), current().ui(), e); };
   cb.resized = [&](int w, int h) {
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);
-    ui.Resize(w, h);
+    current().ui().Resize(w, h);
   };
   if (!window.Create(width, height, "FA Remastered - interface", cb)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
@@ -42,10 +42,11 @@ int RunWindow(UserState& user, int width, int height, int maxFrames,
     auto now = Clock::now();
     double dt = std::chrono::duration<double>(now - last).count();
     last = now;
-    user.Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
+    current().Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
     auto t0 = Clock::now();
     target->Clear(0xff000000u);
-    ui.Render(L, *target, 0);
+    UserState& user = current();
+    user.ui().Render(user.L(), *target, 0);
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
     window.Present(*target);
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();

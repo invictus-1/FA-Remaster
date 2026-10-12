@@ -1,5 +1,7 @@
 #include "user/user_state.h"
 
+#include "user/keymap.h"
+
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/control.h"
@@ -31,6 +33,8 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterSimpleControlBindings(L);
   RegisterInputBindings(L);
   RegisterLobbyBindings(L);
+  RegisterKeyMapBindings(L);
+  RegisterSessionBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
@@ -40,6 +44,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  provider.reset();
   ui_.reset();  // the controls let go of their Lua tables while the state is still there
   threads_.reset();
   state_.reset();
@@ -50,8 +55,8 @@ lua_State* UserState::L() const { return state_->L(); }
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }
 
 bool UserState::Boot() {
-  bool ok = state_->DoScript("/lua/userInit.lua");
-  Logf(LogLevel::Info, "moho64ui: userInit.lua %s", ok ? "ok" : "FAILED");
+  bool ok = state_->DoScript(config_.bootScript);
+  Logf(LogLevel::Info, "moho64ui: %s %s", config_.bootScript.c_str(), ok ? "ok" : "FAILED");
   return ok;
 }
 
@@ -87,7 +92,24 @@ bool UserState::StartMainScript() {
     Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", 0);
     return false;
   }
-  return CallUiMain("SetupUI");
+  if (!CallUiMain("SetupUI")) return false;
+  // The key handler's start (FA exe 0x839690): key names and the default bindings. Inferred:
+  // that this comes after SetupUI.
+  LoadKeyMappings(L);
+  return true;
+}
+
+bool UserState::StartGame() {
+  uiState_ = "game";
+  if (!CallUiMain("StartGameUI")) return false;
+  CallProvider("StartLoadingDialog");
+  return true;
+}
+
+void UserState::GameLoaded() {
+  lua_pushboolean(state_->L(), 0);  // not a replay
+  CallProvider("CreateGameInterface", 1);
+  CallProvider("StopLoadingDialog");
 }
 
 bool UserState::StartFrontEnd() {

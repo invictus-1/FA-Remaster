@@ -27,6 +27,7 @@ struct UiEvent {
   int keyCode = 0, rawKeyCode = 0;
   bool shift = false, ctrl = false, alt = false;
   bool left = false, middle = false, right = false;
+  bool repeat = false;  // a key down that comes from the key being held
 };
 
 // self:HandleEvent(event) on one control: true when the script handled it.

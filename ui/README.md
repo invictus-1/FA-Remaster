@@ -175,10 +175,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and the keys that move the selection (`OnKeySelect`). With them the game's drop-down lists
   work: in the lobby a slot's list opens and picking "AI: Normal" puts an AI opponent into the
   slot.
-- Not real yet: key maps (the game's key bindings), the game's cursor, sound, movies, render passes,
+- Key maps (`user/keymap.*`, read from the original): the game's key bindings. At start the key
+  names (`/lua/keymap/keyNames.lua`) and the default bindings are loaded as the original loads
+  them (184 keys with the stock files); `IN_AddKeyMapTable`, `IN_RemoveKeyMapTable`,
+  `IN_ClearKeyMap`, `IsKeyDown` and the two key code conversions are built with the original's
+  tables. A bound key runs its action as a console command before the controls hear of the key;
+  nothing is bound while a control has the keyboard focus. Of the console commands only `UI_Lua`
+  is built (most bindings use it); the others are logged once as not built.
+- Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 250 of the 531 engine functions are built; the rest are logged stubs.
+- 258 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
 

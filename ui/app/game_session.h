@@ -6,6 +6,7 @@
 // world: the host only reports that the simulation runs.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,7 +15,9 @@
 #include "script/lua.hpp"
 
 namespace moho {
+class ScriptState;
 class Sim;
+class SimBlueprints;
 class Vfs;
 }  // namespace moho
 
@@ -31,6 +34,15 @@ class GameSession {
   bool Launch(lua_State* L, int config, std::string* why);
 
   bool running() const { return sim_ != nullptr; }
+  Sim* sim() const { return sim_.get(); }
+  // The session's mods by uid, in order.
+  const std::vector<std::string>& modUids() const { return modUids_; }
+  // Put the game's rules into the Lua state a session's interface runs in: the blueprints as
+  // `__blueprints`, the unit categories and the category functions, the way the simulation's own
+  // state has them. (The rules are loaded a second time for this; the simulation keeps its own.)
+  bool LoadInterfaceRules(lua_State* userState);
+  // Called with each beat's sync tables (the simulation's bytes) once set.
+  std::function<void(const std::string& sync)> onSync;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
 
@@ -45,6 +57,10 @@ class GameSession {
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
   std::unique_ptr<Sim> sim_;
+  std::vector<std::string> modUids_;
+  std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
+  std::unique_ptr<ScriptState> rules_;
+  std::unique_ptr<SimBlueprints> interfaceBlueprints_;
   std::string map_;
   size_t armies_ = 0;
   uint32_t seed_ = 0;

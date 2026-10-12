@@ -13,8 +13,10 @@
 #include <vector>
 
 #include "script/lua.hpp"
+#include "script/script_handle.h"
 
 namespace moho {
+class Sim;
 class Vfs;
 class ScriptState;
 class ThreadScheduler;
@@ -36,6 +38,11 @@ class UserState {
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
     int width = 1920, height = 1080;    // the head's size in pixels
+    // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
+    // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
+    std::string bootScript = "/lua/userInit.lua";
+    // The running simulation a session's state looks at; nullptr for the front end's state.
+    Sim* sim = nullptr;
   };
 
   UserState(Vfs* vfs, Config config);
@@ -46,6 +53,17 @@ class UserState {
   bool Boot();             // /lua/userInit.lua
   bool StartMainScript();  // the root frames, then uimain.SetupUI()
   bool StartFrontEnd();    // uimain.StartFrontEndUI()
+  // uimain.StartGameUI() in a session's state (FA exe 0x83d240): the game script makes its world
+  // interface provider, which is told at once that loading starts.
+  bool StartGame();
+  // The world is there: provider:CreateGameInterface(isReplay), then provider:StopLoadingDialog().
+  // (Inferred: that order, and that nothing lies between them.)
+  void GameLoaded();
+  // provider:<fn>(args) with the `nargs` values on top of the stack; nothing happens without a provider.
+  void CallProvider(const char* fn, int nargs = 0);
+  // A beat's sync table from the simulation (bytes as Sim::TakeSync gives them).
+  void DeliverSync(const std::string& blob);
+  std::unique_ptr<ScriptObject> provider;  // the game script's world interface provider, once made
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -80,6 +98,8 @@ void RegisterPrefsBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Time, command line, interface state, front-end data, Random (basics.cpp).
 void RegisterBasicBindings(lua_State* L);
+// The world interface provider and a running session's facts (session_bindings.cpp).
+void RegisterSessionBindings(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
 
