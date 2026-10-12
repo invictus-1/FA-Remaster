@@ -81,6 +81,23 @@ local function run()
     check("SetZoom", cam:GetZoom(), zoom / 2)
     cam:RestoreSettings(saved)
     check("RestoreSettings brings the zoom back", cam:GetZoom(), zoom)
+    -- the camera as the original's: it starts as far out as it goes (the map, 1024 wide in a 16:9
+    -- view, takes 1 / 1.4 of what would fill it), north up, looking straight down; a wheel notch
+    -- brings the target zoom nearer by 2^-0.4 and the zoom glides after it; nearer, it leans
+    check("the camera starts at its farthest", zoom, cam:GetMaxZoom())
+    check("the farthest zoom by the map and the view", math.abs(zoom - (1024 - 1 + 5) * 1.4 * 16 / 9) < 0.01, true)
+    check("the nearest zoom", cam:GetMinZoom(), 5)
+    check("heading and pitch at the start", string.format("%.2f %.2f", saved.Heading, saved.Pitch), "3.14 1.57")
+    moho64ui_MouseWheel(s.x, s.y, 1)
+    check("a wheel notch sets the target zoom", math.abs(cam:GetTargetZoom() - zoom * math.pow(2, -0.4)) < 0.01, true)
+    check("the zoom glides: not there at once", cam:GetZoom(), zoom)
+    WaitSeconds(2)
+    check("... and there after a while", cam:GetZoom(), cam:GetTargetZoom())
+    check("nearer, the camera leans", cam:SaveSettings().Pitch < saved.Pitch, true)
+    local f = cam:GetFocusPosition()
+    check("zooming in goes towards the cursor", f[1] > 512 and f[3] < 512, true)
+    cam:RestoreSettings(saved)
+    WaitSeconds(0.1)
 
     -- an order: a right click on the ground moves the selection
     s = view:Project(pos)

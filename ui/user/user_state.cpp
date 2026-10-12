@@ -138,6 +138,7 @@ void UserState::Frame(double seconds) {
   now_ += seconds;
   ++frame_;
   ui_->Update(state_->L(), static_cast<float>(seconds));
+  AdvanceCameras(state_->L(), static_cast<float>(seconds));
   threads_->RunTick(frame_);
 }
 

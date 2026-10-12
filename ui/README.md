@@ -226,19 +226,24 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
-  left click selects a unit and dragging selects a box. The camera's field of view and its
-  tilt by distance are not the original's yet. The interface hands the picture what it adds to
+  left click selects a unit and dragging selects a box. The camera follows the original's rules,
+  read from its code: it starts as far out as it goes (the map takes 1 / 1.4 of what would fill
+  the view), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
+  field of view (across the view's longer side) goes from 60 to 65 degrees; a wheel notch brings
+  the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
+  cursor when zooming in; the focus stays on the map. Turning the camera, moving it with keys,
+  the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
   where the building cannot stand. A minimap world view shows the renderer's minimap picture; a
-  left click on it moves the main camera there. The mouse wheel zooms towards the cursor. `--no-world` runs a game without the picture
+  left click on it moves the main camera there. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 370 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 161 are logged stubs. (`--list-bindings` counts
+- 387 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 144 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

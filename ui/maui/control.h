@@ -244,6 +244,7 @@ void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: borde
 void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
 void RegisterMapPreviewBindings(lua_State* L);     // mappreview.cpp
 void RegisterWorldViewBindings(lua_State* L);      // worldview.cpp: the world view control, cameras
+void AdvanceCameras(lua_State* L, float seconds);  // worldview.cpp: one frame of every camera (its zoom glides)
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);
