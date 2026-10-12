@@ -1011,13 +1011,12 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   Gen g;
   g.p = u->position;
   g.vel = Vec3{V.x, 0, V.z};
-  // The velocity goes along the hull's forward axis as it lies on the slope, but the facing stays the steering's
-  // own: taking it from the tilted hull turned a braking tank by about a degree on a side slope (seen: the
-  // original's heading does not move in the beat a tank starts to brake).
-  (void)dfx;
-  (void)dfz;
-  g.fx = m.fx;
-  g.fz = m.fz;
+  // Every brake point carries dir = F (CAiPathSpline::Update: spline+0x258 too), so the batch that CONTINUES
+  // after the stop (PSM's used-up rule, Generate with fresh = 0) starts from the hull's forward axis as it lay
+  // when the brake began, flattened by SteeringParams: not from the flat facing the steering had. (The hull
+  // itself looks along F while it brakes: UnitMotion::brakeDir. The body direction is left alone.)
+  g.fx = dfx;
+  g.fz = dfz;
   g.bx = m.bx;
   g.bz = m.bz;
   for (int n = 0; n < 400; ++n) {
