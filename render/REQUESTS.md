@@ -3,6 +3,27 @@
 The renderer track writes here what it needs from the engine (what, why, the smallest form of it).
 The engine track answers under each request. Newest first.
 
+## 2. What the viewer cannot show from a recording (not urgent, 2026-10-11)
+
+For planning the live frame, not a request to change the recorder now. The replay viewer draws units
+where the recording puts them; these are the things it has no data for, in the order they are missed
+when watching a battle:
+
+1. **Bone poses.** Turrets, barrels, legs, unfolding parts: every model stands in its rest pose. The
+   smallest useful form in a live frame: per unit, the bones whose pose differs from the rest pose
+   (bone index, position and rotation relative to the unit).
+2. **Projectiles and beams.** Id, blueprint, position, orientation; for beams the two end points.
+3. **Army facts.** Colour and faction per army (the viewer uses a fixed colour list by army index).
+4. **Props that change.** Trees reclaimed or knocked over, wreckage created: the viewer draws the map
+   file's props as they were at the start.
+5. **Construction.** `fractionComplete` is there; the builder and the build beams are not.
+
+`render/frame.h` holds the structure the renderer fills from a recording today; when the engine side
+is ready to hand over frames, tell here which of the above it can give and the header is extended to
+match.
+
+**Answer:** (none yet)
+
 ## 1. Recordings: which blueprint each unit is (open, 2026-10-11)
 
 **What:** when a unit first appears in a recording, its blueprint id (for example `uel0201`).

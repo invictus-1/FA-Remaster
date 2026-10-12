@@ -263,6 +263,22 @@ int main(int argc, char** argv) {
     camera.pitch = opt.cam[3] * kPi / 180;
     camera.heading = opt.cam[4] * kPi / 180;
   }
+  // points the camera at the recording's units as they stand at the current moment (key F)
+  auto lookAtUnits = [&]() {
+    recording.FrameAt(playTick, &frame);
+    Vec3 lo{1e30f, 0, 1e30f}, hi{-1e30f, 0, -1e30f};
+    for (const FrameUnit& u : frame.units) {
+      if (u.dead) continue;
+      lo = {std::min(lo.x, u.position[0]), 0, std::min(lo.z, u.position[2])};
+      hi = {std::max(hi.x, u.position[0]), 0, std::max(hi.z, u.position[2])};
+    }
+    if (lo.x > hi.x) return;
+    camera.target = (lo + hi) * 0.5f;
+    camera.distance = Clamp(std::max(hi.x - lo.x, hi.z - lo.z) * 1.2f, 25.0f, maxDistance);
+    camera.pitch = 50 * kPi / 180;
+    camera.heading = 0;
+  };
+  if (haveRecording && !opt.hasCam) lookAtUnits();
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
@@ -311,6 +327,7 @@ int main(int argc, char** argv) {
           if (e.key == kKeyPageDown) playTick += 100;
           if (e.key == kKeyPageUp) playTick -= 100;
           if (e.key == kKeyHome) playTick = recording.FirstTick();
+          if (e.key == 'F' && haveRecording) lookAtUnits();
           break;
         case InputEvent::MouseDown:
           dragX = e.x;

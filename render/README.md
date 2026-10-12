@@ -66,7 +66,7 @@ screenshot, V switches vsync, Escape quits.
 Playing a recording: make one with the engine, with the log that says which unit is which
 (`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
 the viewer with the replay's map. Space pauses, + and - change the speed, Page Up / Page Down jump
-ten seconds, Home starts over.
+ten seconds, Home starts over, F points the camera at the units.
 
 `--frames N --screenshot file.png` renders N frames, saves the last one, prints the time per frame and
 exits: the way to check a change without looking at the screen (`--cam` chooses the view). `--debug`
