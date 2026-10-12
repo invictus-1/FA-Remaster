@@ -3,6 +3,7 @@
 //
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
+//          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--sim-lua file]
 #include <chrono>
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
@@ -27,6 +28,7 @@
 #include "script/script_state.h"
 #include "sim/script_object.h"
 #include "sim/command_stream.h"
+#include "sim/session.h"
 #include "sim/sim.h"
 
 using namespace moho;
@@ -42,6 +44,9 @@ struct Options {
   bool rules = false;
   bool quiet = false;
   std::string replay;   // --sim <replay>: start that session headless
+  std::string session;  // --session <file>: start the session a lobby's game configuration describes
+  uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
+  bool hasSeed = false;
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
@@ -171,24 +176,19 @@ int RunRules(Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vect
   return ok ? 0 : 1;
 }
 
-int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
-  auto data = hostfs::ReadFile(o.replay);
-  if (!data) {
-    Logf(LogLevel::Error, "cannot read replay %s", o.replay.c_str());
-    return 1;
-  }
-  std::string err;
-  auto header = ReadReplayHeader(*data, &err);
-  if (!header) {
-    Logf(LogLevel::Error, "%s", err.c_str());
-    return 1;
-  }
+// Run a session headless: `stream` is the replay's bytes (its command stream starts at the header's
+// streamOffset), or null for a session launched from a game configuration, which has no commands.
+int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
+               const std::vector<std::string>& uids, const SessionDescription& session, const std::string* stream_) {
+  const ReplayHeader* header = &session.header;
+  static const std::string none;
+  const std::string* data = stream_ ? stream_ : &none;
   Sim sim(&vfs, hookDirs, uids);
   sim.sessionMods = header->mods;
   auto t0 = std::chrono::steady_clock::now();
   if (!sim.LoadRules()) return 1;
   auto t1 = std::chrono::steady_clock::now();
-  bool ok = sim.Start(*header);
+  bool ok = sim.Start(session);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
 #ifdef MOHO64_CALLGRIND
@@ -203,7 +203,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   // The command stream (sim/command_stream.cpp): the messages before each Advance are applied, then the beat
   // runs (or, while paused / after EndGame, only its end-of-beat part). --ticks counts game ticks.
   CommandStream stream(*data, header->streamOffset);
-  bool playStream = !getenv("MOHO64_NO_STREAM");
+  bool playStream = stream_ && !getenv("MOHO64_NO_STREAM");
   int done = 0, paused = 0;
   while (ok && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
@@ -222,7 +222,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
     sim.Tick();
     ++done;
   }
-  if (playStream)
+  if (stream_ && playStream)
     Logf(LogLevel::Info, "moho64: command stream: %u messages, %u beats (%d paused)%s", stream.messages(),
          stream.beats(), paused, stream.hadError() ? ", with errors" : "");
   for (auto& [what, n] : stream.unhandled())
@@ -241,6 +241,67 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   }
   ReportStubCalls();
   return ok ? 0 : 1;
+}
+
+int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
+  auto data = hostfs::ReadFile(o.replay);
+  if (!data) {
+    Logf(LogLevel::Error, "cannot read replay %s", o.replay.c_str());
+    return 1;
+  }
+  std::string err;
+  auto header = ReadReplayHeader(*data, &err);
+  if (!header) {
+    Logf(LogLevel::Error, "%s", err.c_str());
+    return 1;
+  }
+  SessionDescription session;
+  session.header = *header;
+  session.replay = true;
+  return RunSession(o, vfs, hookDirs, uids, session, &*data);
+}
+
+// --session <file>: the game configuration a lobby hands over at Launch (`GameConfig = { ... }`), started the
+// way CLobby::LaunchGame starts it (sim/session.h). The mods are the configuration's GameMods unless --mods
+// names a list.
+int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
+                  std::vector<std::string> uids) {
+  SessionDescription session;
+  {
+    ScriptState st(ScriptState::Kind::User, &vfs);
+    st.SetHookDirs(hookDirs);
+    lua_State* L = st.L();
+    std::string err;
+    if (!PushGameConfigFile(L, o.session, &err)) {
+      Logf(LogLevel::Error, "moho64: %s", err.c_str());
+      return 1;
+    }
+    LaunchParams params;
+    params.seed = o.hasSeed ? o.seed
+                            : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    if (!SessionFromGameConfig(L, -1, params, &session, &err)) {
+      Logf(LogLevel::Error, "moho64: launch failed: %s", err.c_str());
+      return 1;
+    }
+    if (o.modsFile.empty()) {
+      uids.clear();
+      lua_getfield(L, -1, "GameMods");
+      for (int i = 1; lua_istable(L, -1); ++i) {
+        lua_rawgeti(L, -1, i);
+        if (!lua_istable(L, -1)) {
+          lua_pop(L, 1);
+          break;
+        }
+        lua_getfield(L, -1, "uid");
+        if (lua_isstring(L, -1)) uids.push_back(lua_tostring(L, -1));
+        lua_pop(L, 2);
+      }
+    }
+  }
+  const ReplayHeader& h = session.header;
+  Logf(LogLevel::Info, "moho64: session %s: %zu armies, %zu command sources, focus army %d, seed %u, cheats %s",
+       h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, h.cheats ? "on" : "off");
+  return RunSession(o, vfs, hookDirs, uids, session, nullptr);
 }
 
 }  // namespace
@@ -270,7 +331,11 @@ int main(int argc, char** argv) {
     else if (a == "--quiet") o.quiet = true;
     else if (a == "--exec") o.exec.push_back(next());
     else if (a == "--sim") o.replay = next();
-    else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
+    else if (a == "--session") o.session = next();
+    else if (a == "--seed") {
+      o.seed = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 0));
+      o.hasSeed = true;
+    } else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else {
@@ -307,5 +372,6 @@ int main(int argc, char** argv) {
   if (o.checkLua) CheckLua(vfs);  // informational: some mods ship broken files
   if (o.rules) rc |= RunRules(vfs, hookDirs, uids);
   if (!o.replay.empty()) rc |= RunSim(o, vfs, hookDirs, uids);
+  if (!o.session.empty()) rc |= RunGameConfig(o, vfs, hookDirs, uids);
   return rc;
 }

@@ -35,6 +35,7 @@ class EntityGrid;
 class Platoon;
 class Navigation;
 struct UnitCommand;
+struct SessionDescription;
 
 class Army {
  public:
@@ -96,6 +97,9 @@ class Sim {
   bool LoadRules();
   // Start the session described by a replay header (no commands are played yet).
   bool Start(const ReplayHeader& replay);
+  // Start the session a lobby launch describes (sim/session.h): the same start, with the launch's focus army.
+  // As with a replay, sessionMods must hold the session's mods (description.header.mods) before LoadRules.
+  bool Start(const SessionDescription& session);
   // Advance one tick (runs the script threads that are due).
   void Tick();
   // A paused beat (AdvanceBeat steps 15-19 + Sync): destroy queue and id pools only; the game tick stays.
@@ -238,6 +242,7 @@ class Sim {
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
   int focusArmy = -1;  // 0-based, -1 = observer/replay
+  bool isReplay = true;  // false for a session launched from a game configuration (Start(SessionDescription))
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
   std::string sessionMods;

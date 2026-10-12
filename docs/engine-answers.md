@@ -3,6 +3,72 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 3: start a simulation from the lobby's game configuration — done
+
+A session can now be started from the table the lobby script hands to `CLobby:LaunchGame`, built the way
+the original builds it (FA exe 0x7c38c0, read for this). New files: `src/sim/session.h`, `session.cpp`.
+
+From the command line (headless, for checking a recorded configuration):
+
+    moho64 --init <init.lua> --session <file.lua> [--seed N] [--mods uids.txt] --ticks N [--log out.log]
+
+`<file.lua>` is what `moho64ui --session-out` writes. Without `--mods` the mods are the configuration's
+`GameMods`; without `--seed` the seed comes from the clock and is written to the log.
+
+From a host (the interface host links the simulation library, CMake target `mohocore`):
+
+    #include "sim/session.h"
+    SessionDescription session;
+    LaunchParams params;              // seed, the lobby's own peer id, whether there are network peers
+    params.seed = <a number the host picks once per game>;
+    std::string why;
+    if (!SessionFromGameConfig(L, gameConfigIndex, params, &session, &why)) -> the script's LaunchFailed(why)
+    Sim sim(&vfs, hookDirs, uids);    // uids: the uid of each GameMods entry, in order
+    sim.sessionMods = session.header.mods;
+    sim.LoadRules();                  // the blueprints, with the session's mods
+    sim.Start(session);               // map, armies, brains, props, BeginSession
+    ... then one sim.Tick() per beat (ten a second at normal speed); the script's GameLaunched() on success
+
+What `SessionFromGameConfig` does, in the original's order:
+
+- `GameOptions.ScenarioFile` is run in a fresh environment after `/lua/dataInit.lua` (in the state `L`, so
+  that state needs `doscript` and the mounted files) and its `ScenarioInfo` taken; the lobby's `GameOptions`
+  become `ScenarioInfo.Options`. A missing file or a file without `ScenarioInfo` fails with `NoConfig`.
+- The army names are the `armies` of the team named `FFA` in `Configurations.standard.teams`.
+  `PlayerOptions[slot]` becomes army number `slot` of that list: its table gets `ArmyName` (the caller's
+  table is changed, as in the original). More players than names fails with `StartSpots`. The armies are
+  in slot order; empty slots are skipped, so slots 1 and 3 give simulation armies 1 and 2 named `ARMY_1` and
+  `ARMY_3`. No players at all gives one army named `default`.
+- Unless `GameOptions.CivilianAlliance` is `none`, every name in
+  `Configurations.standard.customprops.ExtraArmies` is added after the players as
+  `{ PlayerName = 'civilian', ArmyName = <name>, Civilian = true, Human = false }`.
+- Every `Human` army's `OwnerID` gets a command source (one per owner, in order of appearance); the army
+  whose owner is the lobby's own peer id is the focus army (`params.localOwner`; left at -1 it is the first
+  human army's owner). `Observers` get a source each. Pauses are unlimited in a local game; with network
+  peers (`params.network`) `GameOptions.Timeouts` is the number of pauses per player and observers get none.
+- `CheatsEnabled == 'true'` switches cheats on. `GameSpeed` (`fast`, `adjustable`) is returned in the
+  description for whoever drives the clock; the simulation does not use it.
+- The result holds exactly what a replay's header holds (map, mods, scenario info, sources, the armies'
+  options, seed), so `Sim::Start` treats both alike. A launched session reports `SessionIsReplay() == false`
+  and `GetFocusArmy()` = the focus army in the simulation's Lua.
+
+Checked with `_scratch/ui/session_out.lua`: army 1 `ARMY_1` "Tester" (human, focus) with its commander at
+the start position, `ARMY_9` and `NEUTRAL_CIVILIAN` as civilians, 600 ticks without a script error.
+
+Three things to know:
+
+1. **The recorded file does not compile as written.** `repr` puts `-- table: <address> (<n> bytes)` after
+   every opening brace; for an empty table the closing brace lands inside that comment
+   (`GameMods = { -- table: ... (40 bytes)},`), so three braces stay open. `PushGameConfigFile` (what
+   `--session` uses) removes exactly those comments before compiling, so the file works as it is; a host
+   that passes the live table to `SessionFromGameConfig` is not affected.
+2. **Classic AI armies do not play yet.** A configuration with `AIPersonality = 'rush'` starts, but that
+   brain's set-up needs the engine's personality object (`CAiBrain:GetPersonality` and its getters such as
+   `GetAirUnitsEmphasis`), which is still a stub here, so the AI stops before it spawns its commander. Mod
+   AIs that do not use it (M28) run, as the recorded skirmish replay shows. This is on the engine's list.
+3. **Nothing reaches the simulation after the start yet**: orders, sim callbacks and the per-beat sync data
+   are ui 4. Say which you need first.
+
 ## ui 1 and ui 2: mounting as a library function; the engine-object handle outside the simulation — accepted, not done yet
 
 Both are reasonable and both move code inside `src/` without changing what it does:
@@ -15,8 +81,8 @@ They will be done together in one change on `main`, checked with the replay gate
 with the new header names. Until then the interface host's own copy of the mounting code and its link
 against `src/sim/script_object.cpp` are fine.
 
-ui 3 (start a simulation from a session description; orders and sync data for the interface) is the
-"new game" path: noted, and the larger piece of work it looks like. It comes after the two above.
+(Starting a simulation from the lobby's game configuration was done first, see ui 3 above, because it is
+what stands between the interface and a playable game.)
 
 ## render 3: the display part of blueprints as the simulation has them — done
 

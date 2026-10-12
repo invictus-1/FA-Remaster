@@ -27,6 +27,7 @@
 #include "sim/commands.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/session.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -54,6 +55,12 @@ int l_GetArmyBrain(lua_State* L) {
   Army* a = S(L)->GetArmy(L, 1);
   if (!a) return luaL_error(L, "Invalid army %s", lua_tostring(L, 1) ? lua_tostring(L, 1) : "?");
   PushObject(L, a->brain);
+  return 1;
+}
+
+// The simulation's own SessionIsReplay (score.lua asks it once an army is in focus).
+int l_SessionIsReplay(lua_State* L) {
+  lua_pushboolean(L, S(L)->isReplay);
   return 1;
 }
 
@@ -325,12 +332,14 @@ int l_SetArmyPlans(lua_State* L) {
 }
 
 // InitializeArmyAI(army): the brain's own set-up (CAiBrain::Initialize in the original) -
-// brain:OnCreateHuman(planName) or brain:OnCreateAI(planName); planName "None" if unset.
+// brain:OnCreateHuman(planName) or brain:OnCreateAI(planName). The plan name is the army's plans string as it
+// is (0x57a440: "None" stands in only for a null pointer, and the army's accessor returns its string's text), so
+// an army whose plans were never set hands over '' - which the brain scripts test for before importing a plan.
 // FAF's OnCreateArmyBrain calls this after choosing the brain's class.
 int l_InitializeArmyAI(lua_State* L) {
   Army* a = S(L)->GetArmy(L, 1);
   if (!a) return luaL_error(L, "Invalid army");
-  lua_pushstring(L, a->plans.empty() ? "None" : a->plans.c_str());
+  lua_pushstring(L, a->plans.c_str());
   S(L)->CallMethod(L, a->brain, a->human ? "OnCreateHuman" : "OnCreateAI", 1);
   return 0;
 }
@@ -492,6 +501,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "ListArmies", l_ListArmies);
   SetGlobal(L, "GetArmyBrain", l_GetArmyBrain);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
+  SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
   SetGlobal(L, "ArmyIsCivilian", l_ArmyIsCivilian);
   SetGlobal(L, "ArmyGetHandicap", l_ArmyGetHandicap);
   SetGlobal(L, "ArmyIsOutOfGame", l_ArmyIsOutOfGame);
@@ -760,6 +770,12 @@ bool Sim::Start(const ReplayHeader& replay) {
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
   return true;
+}
+
+bool Sim::Start(const SessionDescription& session) {
+  focusArmy = session.focusArmy;
+  isReplay = session.replay;
+  return Start(session.header);
 }
 
 bool Sim::CreateArmies(const ReplayHeader& replay) {
