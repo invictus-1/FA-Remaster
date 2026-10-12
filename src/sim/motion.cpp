@@ -1106,8 +1106,11 @@ void AddImpulse(Unit* u, const Vec3& imp) {
   // vertical velocity halves too)
   m.vel = {m.vel.x * 0.5f + imp.x, m.vel.y * 0.5f + imp.y, m.vel.z * 0.5f + imp.z};
   m.accel = {m.accel.x * 0.5f + imp.x, m.accel.y * 0.5f + imp.y, m.accel.z * 0.5f + imp.z};
-  // 0x6b8e60: |vel| (3-D) > u+0x594 * 0.2 -> SetLength (0x5b1c90) and accel = vel
-  float cap = (m.speedCap > 0 ? m.speedCap : m.bp->maxSpeed * m.speedMult) * 0.2f;
+  // 0x6b8e60: |vel| (3-D) > u+0x594 * 0.2 -> SetLength (0x5b1c90) and accel = vel. u+0x594 is what the unit's
+  // last UpdateInfoCache wrote; the Unit ctor leaves it 0 (0x6a567b), so a unit pushed before its first
+  // MotionTick (spawned this beat, later in the entity order than its pusher) keeps no velocity at all: it is
+  // only marked pushed
+  float cap = m.maxSpeedU594 * 0.2f;
   float l2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
   if (std::sqrt(l2) > cap && l2 > 0) {
     float k = cap / std::sqrt(l2);
