@@ -20,8 +20,8 @@ cbuffer WaterConstants : register(b1) {
   float4 surfaceColor;    // rgb, w: elevation
   float4 lerpAndFresnel;  // colour lerp min, max, fresnel bias, fresnel power
   float4 reflection;      // unit reflection, sky reflection, sun shininess, sun glow
-  float4 sunDirection;    // the direction the sun's light travels
-  float4 sunColor;
+  float4 waterSunDirection;  // the direction the sun's light travels, as the map's water settings give it
+  float4 waterSunColor;
   float4 normalRepeat;
   float4 movement[4];
 };
@@ -59,7 +59,7 @@ float4 PS(VOut i) : SV_Target {
   float3 skyColor = sky.Sample(samplerLinear, R).rgb;
   float facing = saturate(dot(-toPixel, N));
   float fresnel = saturate(lerpAndFresnel.z + (1 - lerpAndFresnel.z) * pow(1 - facing, lerpAndFresnel.w));
-  float3 sun = pow(saturate(dot(-R, sunDirection.xyz)), reflection.z) * sunColor.rgb * fresnel;
+  float3 sun = pow(saturate(dot(-R, waterSunDirection.xyz)), reflection.z) * waterSunColor.rgb * fresnel;
 
   float tint = clamp(depth, lerpAndFresnel.x, lerpAndFresnel.y);
   float k = saturate(reflection.y * saturate(depth * 10) * fresnel);
@@ -68,6 +68,8 @@ float4 PS(VOut i) : SV_Target {
   float c = (1 - water.a) * crest;
   rgb = rgb * (1 - c) + c;
   through *= 1 - c;
+  // the modern look works in linear light: the same water for now, its colours converted
+  if (look > 0.5) rgb = pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55);
   return float4(rgb, 1 - through);
 }
 )hlsl";
@@ -98,6 +100,7 @@ bool Water::Load(const MapData* map, std::string* error) {
     pd.cull = gfx::Cull::None;
     pd.depthWrite = false;
     pd.blend = gfx::Blend::Premultiplied;
+    pd.colorFormat = kSceneFormat;
     pipeline_ = device_->CreatePipeline(pd, error);
     if (!pipeline_) return false;
     const float corners[12] = {0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1};

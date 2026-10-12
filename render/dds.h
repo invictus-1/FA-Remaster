@@ -28,4 +28,8 @@ struct DdsImage {
 // `file` must outlive `out` (see DdsImage::data). False with a reason when the file cannot be used.
 bool ParseDds(std::string_view file, DdsImage* out, std::string* error);
 
+// The first (largest) image of one layer as plain RGBA, 4 bytes per pixel. Handles the compressed
+// formats DXT1 / DXT3 / DXT5 and the 32-bit ones. False for anything else.
+bool DecodeRgba(const DdsImage& image, int layer, std::vector<uint8_t>* out);
+
 }  // namespace render

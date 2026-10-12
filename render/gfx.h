@@ -8,7 +8,11 @@
 //  - Shaders are HLSL source (model 5.1), compiled when a pipeline is created.
 //    Constant buffers: registers b0..b3, set per draw with SetConstants (the data is copied).
 //    Textures: registers t0..t31. Samplers are fixed:
-//      s0 anisotropic wrap, s1 trilinear clamp, s2 point clamp, s3 trilinear wrap, s4 point wrap.
+//      s0 anisotropic wrap, s1 trilinear clamp, s2 point clamp, s3 trilinear wrap, s4 point wrap,
+//      s5 shadow comparison (1 where the given depth is nearer to the light than the stored one or
+//      equal, the four nearest results blended; outside the map: 1).
+//  - Passes: BeginFrame starts one into the window; BeginPass starts one into targets (textures made
+//    with CreateTarget) or into the window again. A pipeline says which colour format it draws into.
 //  - Handles are plain numbers; 0 means "none". Destroying is deferred until the GPU is done with them.
 //  - Buffers: a static buffer gets its data at creation. A dynamic buffer holds no data of its own:
 //    UpdateBuffer gives it this frame's contents, which last until EndFrame.
@@ -48,6 +52,7 @@ enum class Format : uint8_t {
   R16F,
   RGBA16F,
   R32F,
+  D32,  // depth; only for targets
   BC1,  // DXT1
   BC1_sRGB,
   BC2,  // DXT3
@@ -81,6 +86,27 @@ struct TextureDesc {
   size_t dataSize = 0;
 };
 
+// A texture that can be drawn into (BeginPass) and then read like any other (SetTexture).
+// Colour targets take a colour format; a depth target is Format::D32 and reads as its depth value in
+// the red channel. With several layers it is an array (a shadow map's cascades), drawn one layer at a time.
+struct TargetDesc {
+  int width = 0, height = 0;
+  int layers = 1;
+  Format format = Format::RGBA8;
+  float clearValue[4] = {0, 0, 0, 0};  // the colour it will usually be cleared to (clearing to it is fastest)
+};
+
+// What a pass draws into. Every pass has a depth buffer.
+struct PassDesc {
+  bool window = false;    // draw to the window (with the window's own depth buffer); the two below are unused
+  Texture color;          // a colour target, or none for a depth-only pass
+  Texture depth;          // a depth target
+  int depthLayer = 0;
+  bool clearColor = true;
+  float clearValue[4] = {0, 0, 0, 0};
+  bool clearDepth = true;
+};
+
 enum class AttrType : uint8_t { Float1, Float2, Float3, Float4, UByte4, UByte4N, Short2N, Short4N };
 struct VertexAttr {
   const char* semantic = nullptr;  // "POSITION", "NORMAL", "TEXCOORD", "COLOR", ...
@@ -108,6 +134,10 @@ struct PipelineDesc {
   bool depthWrite = true;
   float depthBias = 0;  // in depth-buffer units toward the camera (decals, lines on terrain)
   Blend blend = Blend::Opaque;
+  // What it draws into: the colour format of the pass (the window's is RGBA8), or no colour at all
+  // (shadow maps; the pixel shader may then be left out, or return nothing and only discard).
+  Format colorFormat = Format::RGBA8;
+  bool depthOnly = false;
 };
 
 struct DeviceDesc {
@@ -132,12 +162,17 @@ class Device {
   virtual Buffer CreateBuffer(const BufferDesc& desc) = 0;
   virtual void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) = 0;  // dynamic buffers
   virtual Texture CreateTexture(const TextureDesc& desc) = 0;
+  virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
 
+  // Starts the frame and a pass into the window, cleared to that colour.
   virtual void BeginFrame(const float clearColor[4]) = 0;
+  // Starts another pass; the targets of the pass before it become readable as textures.
+  // The viewport is the whole target. A target must not be bound as a texture in its own pass.
+  virtual void BeginPass(const PassDesc& pass) = 0;
   virtual void SetPipeline(Pipeline pipeline) = 0;
   virtual void SetConstants(int slot, const void* data, uint32_t size) = 0;
   virtual void SetTexture(int slot, Texture texture) = 0;
