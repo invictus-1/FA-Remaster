@@ -51,6 +51,7 @@ struct ViewConstants {
   float skyHorizon[4];
   float skyGlow[4];
   float skyBody[4];
+  float skyMoon[4];  // toward the moon
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -77,6 +78,7 @@ cbuffer View : register(b0) {
   float4 skyHorizon;      // rgb at the horizon; w: how much it is night
   float4 skyGlow;         // rgb around the sun or moon; w: how bright the day is
   float4 skyBody;         // toward the sun; w: 1 = the moon's light falls
+  float4 skyMoon;         // toward the moon
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -88,7 +90,7 @@ SamplerComparisonState samplerShadow : register(s5);
 // The computed sky's light from a direction (without the sun's and the moon's own disc).
 float3 ComputedSky(float3 d) {
   float3 c = lerp(skyHorizon.rgb, skyZenith.rgb, pow(saturate(d.y), 0.5));
-  float3 body = skyBody.w > 0.5 ? -skyBody.xyz : skyBody.xyz;
+  float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
   float s = saturate(dot(d, body));
   float s2 = s * s, s4 = s2 * s2, s16 = s4 * s4 * s4 * s4;
   c += skyGlow.rgb * ((s4 * s * 0.25 + s16 * s16 * s16 * 0.6) * lerp(1, 0.35, saturate(d.y)));

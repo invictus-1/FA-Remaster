@@ -252,19 +252,29 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on. Not yet:
   `SetEmitterCurveParam`, `ResizeEmitterCurve`, and particles that refract (blend mode 5) are not
   drawn.
-- A time of day (modern look), first form: `sky.h`. With `--time-of-day <hours>` (or
-  `World::timeOfDay`) the light is no longer the map's but that of an hour: where the sun stands,
-  whether the sun's or the moon's light falls (around sunrise and sunset neither: the sky alone
-  lights), its colour, the sky's colours, and the exposure, which opens as the light goes (not all
-  the way: night stays darker than day). Ground, units, decals and the sun's shadows are lit by it;
-  the sky is drawn behind everything with the sun, the moon and stars; the water mirrors it;
-  smoke and dust darken with the day. `--day-length <seconds>` lets a day pass; key T moves an
-  hour on, Y returns to the map's light. It is a simple model: colours chosen by eye and blended
-  by the sun's height, not light worked out through an atmosphere; no clouds; the moon is a plain
-  disc and the stars are points scattered by a formula. Not looked at yet: the minimap's ground
-  (drawn once, in the map's light), and how bright the game's flashes should be to an eye opened
-  for the night. The original look ignores the time of day. Cost: nothing measurable (the same
-  game and view, 2.3 ms a frame at night).
+- A time of day (modern look): `sky.h`. With `--time-of-day <hours>` (or `World::timeOfDay`) the
+  light is no longer the map's but that of an hour: where the sun and the moon stand, which of
+  the two lights the ground (around sunrise and sunset neither: the sky alone lights), its colour
+  as the air leaves it, the sky's light, and the exposure, which opens as the light goes (not all
+  the way: night stays darker than day). Ground, units, decals and the sun's shadows are lit by
+  it; the water mirrors it; smoke and dust darken with the day. `--day-length <seconds>` lets a
+  day pass; key T moves an hour on, Y returns to the map's light.
+  The sky's light is worked out: sunlight (or moonlight) scattered once on its way through an
+  atmosphere like the Earth's, by the air's molecules, by haze, and thinned by ozone; the picture's
+  sky does that sum for every pixel where nothing solid is, which gives the blue of day, the red
+  of a low sun and the band of colours at dusk without any of them being painted. What lights the
+  scene is a simpler form, three colours fitted to that sky each frame. By night there are stars
+  of several brightnesses and colours that turn with the hours, a band of faint stars and glow with
+  dark lanes across the sky, and a moon with dark plains, lit by the sun from the side the sun
+  stands on. The moon follows the sun 160 degrees behind, so it is up for all of the night but
+  the last hour before dawn.
+  Not the real thing: light scattered more than once is left out (dusk and deep night get a
+  faint light of their own instead, chosen by eye); the moon's light is far stronger against the
+  sun's than the real moon's, so that a night can be played; the stars are made by a formula and
+  are no real sky's; the moon's face is noise, not a picture; there are no clouds yet. Not looked
+  at yet: the minimap's ground (drawn once, in the map's light), and how bright the game's flashes
+  should be to an eye opened for the night. The original look ignores the time of day. Cost: none
+  that can be measured (1.3 ms a frame at 1920 x 1080 with half the picture sky, with or without).
 - Small lights (modern look). A light is a point that lights what is within its radius. Every
   frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
   the lights of the square it is over - ground, units and decals alike, with the same material

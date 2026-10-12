@@ -143,6 +143,7 @@ class World {
   AmbientOcclusion ao;
   Post post;
   Sky skyDraw;  // the computed sky behind everything
+  SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's
   Camera camera;   // this frame's
