@@ -15,10 +15,57 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"
 
+#ifdef MOHO64UI_WORLD_PICTURE
+#include "render/world_picture.h"
+#endif
+
 namespace moho::ui {
+
+// The renderer's world picture behind the interface's WorldSource.
+struct GameSession::Picture : WorldSource {
+#ifdef MOHO64UI_WORLD_PICTURE
+  render::WorldPicture picture;
+  GameSession* session = nullptr;
+
+  const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
+    render::Camera cam;
+    cam.target = {c.target[0], c.target[1], c.target[2]};
+    cam.distance = c.distance;
+    cam.heading = c.heading;
+    cam.pitch = c.pitch;
+    cam.fovY = c.fovY;
+    const std::vector<uint32_t>& pixels = picture.Draw(cam, width, height, session->PictureTick());
+    return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
+  }
+  bool Project(const float world[3], float* x, float* y) override {
+    return picture.Project({world[0], world[1], world[2]}, x, y);
+  }
+  bool GroundAt(float x, float y, float world[3]) override {
+    render::Vec3 hit;
+    if (!picture.GroundAt(x, y, &hit)) return false;
+    world[0] = hit.x, world[1] = hit.y, world[2] = hit.z;
+    return true;
+  }
+  uint32_t UnitAt(float x, float y) override { return picture.UnitAt(x, y); }
+  void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) override {
+    picture.UnitsIn(x0, y0, x1, y1, out);
+  }
+#else
+  const uint32_t* Draw(const WorldCamera&, int, int) override { return nullptr; }
+  bool Project(const float*, float*, float*) override { return false; }
+  bool GroundAt(float, float, float*) override { return false; }
+  uint32_t UnitAt(float, float) override { return 0xffffffffu; }
+  void UnitsIn(float, float, float, float, std::vector<uint32_t>*) override {}
+#endif
+};
 
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
 GameSession::~GameSession() = default;
+
+WorldSource* GameSession::world() const { return picture_.get(); }
+
+// The moment the picture shows: the simulation's tick and the part of the next beat that has passed.
+double GameSession::PictureTick() const { return sim_ ? static_cast<double>(sim_->tick()) + due_ / 0.1 : 0.0; }
 
 bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   if (config < 0) config = lua_gettop(L) + config + 1;
@@ -59,6 +106,9 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   }
   auto t1 = std::chrono::steady_clock::now();
   sim->collectSync = true;
+#ifdef MOHO64UI_WORLD_PICTURE
+  sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
+#endif
   if (!sim->Start(session)) {
     *why = "the simulation did not start";
     return false;
@@ -74,6 +124,22 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (wantPicture) {
+    auto t3 = std::chrono::steady_clock::now();
+    auto pic = std::make_unique<Picture>();
+    pic->session = this;
+    std::string error;
+    if (pic->picture.Open(vfs_, h.map, &error)) {
+      pic->picture.GameStarted(*sim_);
+      pic->picture.Beat(*sim_);
+      picture_ = std::move(pic);
+      Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
+    } else {
+      Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: %s", error.c_str());
+    }
+  }
+#endif
   return true;
 }
 
@@ -108,6 +174,7 @@ void GameSession::Advance(double seconds) {
     }
     if (sim_->Paused()) sim_->PausedBeat();
     else sim_->Tick();
+    NoteBeat();
     for (std::string& sync : sim_->TakeSync()) {
       if (onSync) onSync(sync);
       else pendingSync_.push_back(std::move(sync));
@@ -115,9 +182,16 @@ void GameSession::Advance(double seconds) {
   }
 }
 
+void GameSession::NoteBeat() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (picture_) picture_->picture.Beat(*sim_);
+#endif
+}
+
 void GameSession::RunFirstBeat() {
   if (!sim_ || sim_->tick() != 0) return;
   sim_->Tick();
+  NoteBeat();
   for (std::string& sync : sim_->TakeSync()) {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));

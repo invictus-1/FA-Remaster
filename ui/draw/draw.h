@@ -49,6 +49,9 @@ class DrawTarget {
   virtual void DrawImageTiled(const Image& image, const Rect& src, const Rect& dst, uint32_t color) = 0;
   // A glyph in `color`, its mask's top-left pixel at (x, y).
   virtual void DrawGlyph(const GlyphMask& glyph, int x, int y, uint32_t color) = 0;
+  // A block of width * height opaque pixels (0xAARRGGBB, rows from the top; alpha is not looked
+  // at), its top-left pixel at (x, y): the world's picture under the controls.
+  virtual void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) = 0;
 };
 
 // The software backend: draws into its own pixel buffer.
@@ -63,6 +66,7 @@ class SoftwareTarget : public DrawTarget {
   void DrawImage(const Image& image, const Rect& src, const Rect& dst, uint32_t color) override;
   void DrawImageTiled(const Image& image, const Rect& src, const Rect& dst, uint32_t color) override;
   void DrawGlyph(const GlyphMask& glyph, int x, int y, uint32_t color) override;
+  void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) override;
 
   void Clear(uint32_t color);
   const std::vector<uint32_t>& pixels() const { return pixels_; }  // 0xAARRGGBB rows from the top

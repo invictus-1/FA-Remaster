@@ -96,6 +96,18 @@ void SoftwareTarget::FillRect(const Rect& d, uint32_t color) {
   }
 }
 
+void SoftwareTarget::DrawPixels(const uint32_t* src, int w, int h, int x, int y) {
+  if (!src) return;
+  int x0 = std::max(cx0_, x), x1 = std::min(cx1_, x + w);
+  int y0 = std::max(cy0_, y), y1 = std::min(cy1_, y + h);
+  if (x0 >= x1) return;
+  for (int row = y0; row < y1; ++row) {
+    const uint32_t* from = src + static_cast<size_t>(row - y) * static_cast<size_t>(w) + (x0 - x);
+    uint32_t* to = &pixels_[static_cast<size_t>(row) * static_cast<size_t>(width_) + static_cast<size_t>(x0)];
+    for (int i = 0; i < x1 - x0; ++i) to[i] = from[i] | 0xff000000u;
+  }
+}
+
 void SoftwareTarget::DrawImage(const Image& img, const Rect& s, const Rect& d, uint32_t color) {
   if (!img.valid() || d.x1 <= d.x0 || d.y1 <= d.y0 || A(color) == 0) return;
   int x0 = std::max(cx0_, FirstPixel(d.x0)), x1 = std::min(cx1_, FirstPixel(d.x1));

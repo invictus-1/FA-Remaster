@@ -25,6 +25,7 @@ class ThreadScheduler;
 
 namespace moho::ui {
 
+class WorldSource;
 class UiManager;
 
 class UserState {
@@ -46,6 +47,8 @@ class UserState {
     Sim* sim = nullptr;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
+    // Where a session's world views get the world's picture from; nullptr: there is none.
+    WorldSource* world = nullptr;
   };
 
   UserState(Vfs* vfs, Config config);
@@ -122,6 +125,9 @@ void InstallUnitCategoryFunctions(lua_State* L);
 // as the command stream's bytes for the engine's ApplyCommands.
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear,
                       const std::string& blueprint = std::string());
+// Select the player's own units among these entity ids (what a click or a box in the world
+// found); with `add` they join the selection instead of replacing it.
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
 std::string TakeOrders(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);

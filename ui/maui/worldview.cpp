@@ -15,6 +15,7 @@
 
 #include "maui/control.h"
 #include "maui/input.h"
+#include "maui/world_source.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/sim.h"
@@ -27,6 +28,10 @@ namespace {
 
 // --- cameras ---
 
+// The upright field of view, in radians: the renderer's own choice, not the original's (to be read).
+const float kFovY = 0.9f;
+
+// A camera looks at a place on the map (`focus`) from a distance (`zoom`).
 class Camera : public ScriptObject {
  public:
   std::string name;
@@ -65,7 +70,8 @@ void Place(lua_State* L, Camera* c) {
   c->placed = true;
   c->focus[0] = w * 0.5f;
   c->focus[2] = h * 0.5f;
-  c->maxZoom = std::max(w, h) * 1.2f;
+  // Far enough out to see the whole map from straight above.
+  c->maxZoom = std::max(w, h) * 1.05f / (2.0f * std::tan(kFovY * 0.5f));
   c->zoom = c->targetZoom = c->maxZoom;
 }
 
@@ -241,13 +247,69 @@ class WorldView : public Control {
   bool cartographic = false, resources = false, inputLocked = false, globalCameraCommands = false, highlight = true;
   bool customRender = false;  // the script wants to draw into the world each frame (see SetCustomRender)
 
-  // World to screen, straight down: the camera's focus is at the view's middle and `zoom` world
-  // units span the view's height.
+  // The picture of the world this view shows (the main view only: the renderer has one picture,
+  // and a minimap would need a second), as it was last asked for.
+  const uint32_t* pixels_ = nullptr;
+  int pictureW_ = 0, pictureH_ = 0;
+  uint32_t pictureFrame_ = 0xffffffffu;
+  WorldCamera pictureCamera_;
+
+  // The camera as the picture's source takes it. The tilt is this version's own: straight down
+  // from far out, leaning forward when near. (The original's angles are still to be read.)
+  WorldCamera CameraFor(lua_State* L) {
+    Camera* c = GetCameraObject(L, cameraName);
+    WorldCamera w;
+    w.target[0] = c->focus[0], w.target[1] = c->focus[1], w.target[2] = c->focus[2];
+    w.distance = c->zoom;
+    w.heading = c->heading;
+    float farOut = std::max(c->maxZoom * 0.5f, c->minZoom + 1.0f);
+    float t = std::max(0.0f, std::min(1.0f, (c->zoom - c->minZoom) / (farOut - c->minZoom)));
+    w.pitch = 1.05f + (1.5707963f - 1.05f) * t;
+    w.fovY = kFovY;
+    return w;
+  }
+  // Make sure the picture is the one for this frame, this camera and this size; false when there
+  // is no picture to have.
+  bool EnsurePicture(lua_State* L) {
+    UserState* user = UserState::From(L);
+    WorldSource* source = user->config().world;
+    if (!source || miniMap) return false;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+    if (w <= 0 || h <= 0) return false;
+    WorldCamera cam = CameraFor(L);
+    Sim* sim = user->config().sim;
+    if (sim && sim->map()) cam.target[1] = sim->map()->TerrainHeight(cam.target[0], cam.target[2]);
+    bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
+                cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
+                cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
+    if (same) return true;
+    pixels_ = source->Draw(cam, w, h);
+    pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
+    return pixels_ != nullptr;
+  }
+
+  void Draw(lua_State* L, DrawTarget& target) override {
+    if (!EnsurePicture(L)) return;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+  }
+
+  // World to screen and back: the picture's own answers when there is one. Without a picture, a
+  // plain view from straight above with the camera's focus at the view's middle.
   void ProjectPoint(lua_State* L, const float world[3], float* sx, float* sy) {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    float scale = c->zoom > 0 ? (r.y1 - r.y0) / c->zoom : 1;
+    if (EnsurePicture(L)) {
+      float x = 0, y = 0;
+      if (UserState::From(L)->config().world->Project(world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
+      else *sx = *sy = -100000.0f;  // behind the camera: nowhere on screen
+      return;
+    }
+    float scale = c->zoom > 0 ? (r.y1 - r.y0) / (2.0f * c->zoom * std::tan(kFovY * 0.5f)) : 1;
     *sx = (r.x0 + r.x1) * 0.5f + (world[0] - c->focus[0]) * scale;
     *sy = (r.y0 + r.y1) * 0.5f + (world[2] - c->focus[2]) * scale;
   }
@@ -255,17 +317,40 @@ class WorldView : public Control {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / c->zoom : 1;
+    if (EnsurePicture(L) && UserState::From(L)->config().world->GroundAt(sx - r.x0, sy - r.y0, world)) return;
+    float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * c->zoom * std::tan(kFovY * 0.5f)) : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
     Sim* sim = UserState::From(L)->config().sim;
     world[1] = sim && sim->map() ? sim->map()->TerrainHeight(world[0], world[2]) : 0.0f;
   }
 
+  // Selecting with the mouse (first version): a left press starts it; let go on the spot, the unit
+  // under the cursor is selected (none: nothing is); let go elsewhere, the units in the rectangle
+  // between the two places are. With Shift they join the selection.
+  float pressX_ = 0, pressY_ = 0;
+  bool pressShift_ = false;
+  void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (!EnsurePicture(L)) return;
+    WorldSource* source = UserState::From(L)->config().world;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    std::vector<uint32_t> ids;
+    if (std::fabs(e.x - pressX_) < 4 && std::fabs(e.y - pressY_) < 4) {
+      uint32_t id = source->UnitAt(e.x - r.x0, e.y - r.y0);
+      if (id != 0xffffffffu) ids.push_back(id);
+    } else {
+      source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
+                      std::max(pressY_, e.y) - r.y0, &ids);
+    }
+    SelectUnitsById(L, ids, pressShift_);
+  }
+
   // Events: the script first, as for every control. Then the world view's own part, of which this
   // much is built: a press of the right button on the ground sends the selected units there (with
-  // Shift after what they are doing). The original decides by what is under the cursor (attack,
-  // reclaim, load, ...), which needs the world's picture; that part is still to be read.
+  // Shift after what they are doing); a left press follows the script's command mode, or selects.
+  // The original also decides a right click by what is under the cursor (attack, reclaim, load,
+  // ...); that part is still to be read.
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
@@ -298,7 +383,10 @@ class WorldView : public Control {
     lua_settop(L, top);
     if (mode == "build" || mode == "buildanchored") return IssueToSelection(L, "BuildMobile", world[0], world[1], world[2], !e.shift, name);
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
-    return false;
+    if (!mode.empty() || !UserState::From(L)->config().world || miniMap) return false;
+    pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;
+    UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+    return true;
   }
 };
 

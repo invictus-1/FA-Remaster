@@ -54,6 +54,7 @@ int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
+bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
@@ -181,6 +182,7 @@ int main(int argc, char** argv) {
     else if (a == "--session-out") sessionFile = next();
     else if (a == "--game-lua") gameLuaFile = next();
     else if (a == "--session") sessionIn = next();
+    else if (a == "--no-world") noWorld = true;
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -228,6 +230,7 @@ int main(int argc, char** argv) {
   // runs its beats beside the interface's frames.
   ui::GameSession session(&vfs, cfg.hookDirs);
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
+  session.wantPicture = !noWorld;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   ui::UserState user(&vfs, cfg);
@@ -260,6 +263,7 @@ int main(int argc, char** argv) {
     gameCfg.launchSession = nullptr;
     gameCfg.sim = session.sim();
     gameCfg.commandSource = session.commandSource();
+    gameCfg.world = session.world();
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "draw/draw.h"
+#include "maui/world_source.h"
 #include "script/lua.hpp"
 
 namespace moho {
@@ -32,6 +33,12 @@ class GameSession {
   // state: the scenario file is run there). False with the reason the original would give the
   // script's LaunchFailed ("NoConfig", "StartSpots"), or a description.
   bool Launch(lua_State* L, int config, std::string* why);
+
+  // The world's picture (the renderer's, render/world_picture.h), opened when a game is launched
+  // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
+  // renderer).
+  bool wantPicture = true;
+  WorldSource* world() const;
 
   // The random seed of the next launch; without one the clock gives it.
   bool seedGiven = false;
@@ -61,6 +68,7 @@ class GameSession {
   void Advance(double seconds);
 
   uint32_t tick() const;
+  double PictureTick() const;
   size_t unitCount() const;
   // Lines for the host to show or log: the map, the armies, the tick.
   std::vector<std::string> Status() const;
@@ -68,11 +76,14 @@ class GameSession {
   void DrawStatus(DrawTarget& target) const;
 
  private:
+  void NoteBeat();  // a beat has run: the picture hears of it
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
   std::unique_ptr<Sim> sim_;
   std::vector<std::string> modUids_;
   std::vector<std::string> pendingSync_;
+  struct Picture;
+  std::unique_ptr<Picture> picture_;
   int commandSource_ = 0;
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
   std::unique_ptr<ScriptState> rules_;

@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 960 --log out.log
+--            --frames 1020 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -104,11 +104,14 @@ local function run()
     check("the console command StartCommandMode starts the script's mode", tostring(mode[1]) .. " " .. tostring(mode[2].name), "order RULEUCC_Patrol")
     CM.StartCommandMode("build", {name = factory})
     local before = GetEconomyTotals().stored.MASS
-    s = view:Project(cdr:GetPosition())
-    moho64ui_MouseButton("Left", true, s.x + 8, s.y + 4)
-    moho64ui_MouseButton("Left", false, s.x + 8, s.y + 4)
+    -- 16 map units east of the commander: the simulation takes no site closer to the builder
+    local site = cdr:GetPosition()
+    site[1] = site[1] + 16
+    s = view:Project(site)
+    moho64ui_MouseButton("Left", true, s.x, s.y)
+    moho64ui_MouseButton("Left", false, s.x, s.y)
     check("the script hears of the order and ends its mode", CM.GetCommandMode()[1], false)
-    WaitSeconds(3)
+    WaitSeconds(4)
     check("in build mode a left click makes the commander build there", cdr:GetWorkProgress() > 0 and GetEconomyTotals().stored.MASS < before, true)
 
     SelectUnits(nil)

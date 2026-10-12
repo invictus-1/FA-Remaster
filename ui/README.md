@@ -56,7 +56,7 @@ py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
-         [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>]
+         [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
@@ -217,6 +217,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
   what is under the cursor (both need the world's picture), the build preview and snapping to
   the grid, factory queues, unit states (queues, fire state, shields, pause).
+- The world is on screen (Windows): the renderer track's code is built into the host
+  (`render/world_picture.h`) and the main world view shows its picture under the controls, as
+  its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
+  the unit under the cursor and the units in a rectangle are the picture's own answers, so a
+  left click selects a unit and dragging selects a box. The camera's field of view and its
+  tilt by distance are not the original's yet; the minimap is still empty (one picture only);
+  selected units are not marked in the world. `--no-world` runs a game without the picture
+  (no graphics device is opened); the world view then answers with a plain view from above.
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).

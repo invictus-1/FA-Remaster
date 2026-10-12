@@ -802,6 +802,22 @@ int l_ToggleScriptBit(lua_State* L) {
 
 }  // namespace
 
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
+  Sim* sim = TheSim(L);
+  if (!sim) return;
+  UnitStore& store = Store(L);
+  std::vector<UserUnit*> now;
+  if (add) now = store.selection;
+  for (uint32_t id : ids) {
+    auto it = store.units.find(id);
+    if (it == store.units.end()) continue;
+    UserUnit* u = it->second.get();
+    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
+  }
+  SetSelection(L, now);
+}
+
 // After a beat: the interface's units follow the simulation's.
 void RefreshUserUnits(lua_State* L) {
   Sim* sim = TheSim(L);
