@@ -149,6 +149,19 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
     if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());
   }
+  // a build preview's question, asked around the first unit: a land factory 10 and 15 to its east
+  std::vector<UnitView> uv;
+  UnitViews(sim, &uv);
+  if (!uv.empty()) {
+    for (float dx : {10.1f, 15.1f}) {
+      const float at[3] = {uv[0].position[0] + dx, uv[0].position[1], uv[0].position[2] + 5.3f};
+      float site[3];
+      bool ok = false;
+      if (BuildSiteOf(sim, "ueb0101", at, site, &ok))
+        Logf(LogLevel::Info, "view: ueb0101 ordered at %.1f %.1f would stand at %.1f %.2f %.1f, can build %d", at[0], at[2],
+             site[0], site[1], site[2], ok ? 1 : 0);
+    }
+  }
 }
 
 // Run a session headless: `stream` is the replay's bytes (its command stream starts at the header's

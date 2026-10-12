@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "sim/blueprints.h"
+#include "sim/build.h"
 #include "sim/commands.h"
 #include "sim/script_bits.h"
 #include "sim/sim.h"
@@ -261,6 +262,17 @@ std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army) {
     if (w < words.size() && (words[w] & (uint64_t(1) << (i & 63)))) out.push_back(bp->id);
   }
   return out;
+}
+
+bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild) {
+  const BlueprintInfo* bp = sim.blueprints().Find(blueprint);
+  if (!bp || bp->kind != BpKind::Unit) return false;
+  const Vec3 s = SnapStructurePosition(sim, *bp, Vec3{pos[0], pos[1], pos[2]});
+  site[0] = s.x;
+  site[1] = s.y;
+  site[2] = s.z;
+  if (canBuild) *canBuild = CanBuildStructureAt(sim, *bp, s.x, s.z);
+  return true;
 }
 
 }  // namespace moho

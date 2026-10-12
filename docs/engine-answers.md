@@ -3,6 +3,42 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 6: a building's site near its builder; a new commander's fire state — both are the original's
+
+**1. The site.** Nothing to do with the builder's distance. There is a mass deposit at 680.5, 350.5
+(marker `MASS_196`), and the original's placement test refuses a structure whose **skirt** would lie over
+a mass or hydrocarbon deposit unless the structure is the kind built on one (`BuildRestriction`
+`RULEUBR_OnMassDeposit` / `RULEUBR_OnHydrocarbonDeposit`). A land factory's skirt is 8 x 8, so every site
+centre from 676.5 to 684.5 in x and 346.5 to 354.5 in z is refused: your 681.6, 351.0 and 684.5, 352.5
+are inside that square, 686.1, 353.3 and 688.5, 346.5 are outside. The trees there do not block. The order
+is taken and the build task then fails at its first step, which is why the commander stays idle (the
+original does the same with an order that its interface would not have let through).
+
+The same test also refuses: ground that is not flat enough for the blueprint (`MaxGroundVariation`, over
+the footprint, or around the skirt with `FlattenSkirt`), the wrong layer (water depth), a structure on the
+footprint, and another structure's footprint inside this one's skirt.
+
+And the site is snapped: the footprint's corner goes to the nearest whole cell, so a 5 x 5 footprint ends
+on x.5, z.5 (your order at 686.1, 353.3 was built at 686.5, 353.5) and an even one on whole numbers.
+
+For the build preview there is a call in `sim/sim_view.h`:
+
+```cpp
+bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild);
+```
+
+`site` is where the structure would stand for an order at `pos` (snapped, y on the ground or the water),
+`canBuild` the placement test at that site. False: no such unit blueprint. It does not say whether the
+builder may build that blueprint (`RestrictedBlueprints`, the live caps) or can get there. It is cheap
+enough to ask every frame while the mouse moves. `--view` logs two examples.
+
+**2. Fire state 2 is right for a commander under FAF.** The engine starts every unit at 0 (return fire).
+FAF's `lua/sim/Unit.lua` (`OnCreate`, line 348) then calls `self:SetFireState(2)` for every unit in
+`STRUCTURE`, `EXPERIMENTAL` or `COMMAND` ("default to ground fire"); `StructureUnit.lua` and
+`ExternalFactoryUnit.lua` do the same. So a new commander, every building and every experimental shows
+2, and an ordinary tank shows 0. FAF's own order button has an entry for 2 (`orders.lua`,
+`retaliateStateInfo`: 0 return-fire, 1 hold-fire, 2 "stand-ground" / `HoldGround`).
+
 ## ui 5: unit states for the panels — done
 
 `sim/sim_view.h` has two more calls:

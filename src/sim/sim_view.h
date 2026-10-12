@@ -154,6 +154,13 @@ void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
 // The ids of the unit blueprints an army may not build (AddBuildRestriction), in blueprint order. army: 1-based.
 std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army);
+// For a build preview: where a structure ordered at `pos` would stand (its footprint snapped to the cell grid, y
+// on the ground or the water) and whether the placement test passes there (CAiBrain::CanBuildStructureAt: the
+// layers and flatness, no structure or other structure's skirt in the way, no mass or hydrocarbon deposit under
+// its skirt unless it is the kind built on one). False: no such unit blueprint. Not const: blueprint data is
+// read through the scripts' state. It does not say whether a given builder may build it (RestrictedBlueprints,
+// the unit's live caps) or can reach it.
+bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild);
 // The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
 // Sim::collectEffects set from before the first beat.
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);
