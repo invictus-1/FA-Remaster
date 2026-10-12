@@ -43,6 +43,8 @@ class SimFrames {
   void TakeLooks(std::vector<BlueprintLook>* out);
   // Each army's colour, by army index from 0; empty until ReadArmies.
   std::vector<Vec3> ArmyColors() const;
+  // The session's seed (the same for every player of a game and in its replay); 0 until ReadArmies.
+  uint32_t Seed() const;
 
  private:
   struct Beat_ {
@@ -61,6 +63,7 @@ class SimFrames {
                                        // (0: unknown); only grows
   std::vector<Vec3> armyColors_;
   std::vector<BlueprintLook> looks_;
+  uint32_t seed_ = 0;
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
 };

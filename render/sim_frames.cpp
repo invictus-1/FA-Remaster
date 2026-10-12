@@ -122,6 +122,12 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
   std::lock_guard<std::mutex> lock(mutex_);
   armyColors_ = std::move(colors);
   looks_ = std::move(looks);
+  seed_ = moho::SessionSeed(sim);
+}
+
+uint32_t SimFrames::Seed() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return seed_;
 }
 
 void SimFrames::TakeLooks(std::vector<BlueprintLook>* out) {

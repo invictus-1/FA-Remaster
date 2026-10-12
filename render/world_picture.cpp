@@ -70,6 +70,7 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     std::vector<BlueprintLook> looks;
     m.frames.TakeLooks(&looks);
     if (!looks.empty()) m.world->SetLooks(looks);
+    if (const uint32_t seed = m.frames.Seed()) m.world->weatherSeed = seed;  // the same weather for every player
   }
   // the moment shown lies between the last two beats known: one beat back from the newest
   const double first = static_cast<double>(m.frames.FirstTick()), last = static_cast<double>(m.frames.LastTick());
@@ -115,6 +116,10 @@ void WorldPicture::SetBuildPreviews(const std::vector<BuildPreview>& previews) {
     g.tint = p.free ? Vec3{0.3f, 1.0f, 0.4f} : Vec3{1.0f, 0.25f, 0.2f};
     ghosts.push_back(std::move(g));
   }
+}
+
+void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
+  if (impl_->world) impl_->world->borders = meshBlueprints;
 }
 
 void WorldPicture::SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings) {

@@ -13,7 +13,8 @@ State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted fo
 beams and trails by the engine's account; not yet acted on: `SetEmitterCurveParam`,
 `ResizeEmitterCurve`, `SetBeamParam`, refracting particles), 11 done and in use (`BlueprintDisplays`
 is read once the game has started; models and strategic icons take their names from it, so a
-running game needs no `--display` log any more). 12 new.
+running game needs no `--display` log any more). 12 done and in use
+(`SessionSeed` seeds the weather once a game has started).
 
 ## 12. A number every player of a game has the same: the session's seed (2026-10-12, small)
 

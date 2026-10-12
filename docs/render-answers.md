@@ -4,6 +4,35 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 3: the map's border — done (first form)
+
+`WorldPicture::SetBorders(meshBlueprints)` in `render/world_picture.h`: the ids as `MapBorderAdd` gets
+them (`/meshes/game/map-border_squ_uef_mesh`, with or without `.bp`); an empty list draws nothing. It
+stays set until set again. Each mesh is drawn once, placed as you read it from the original: at the
+map's middle in x and z, halfway between the lowest and the highest ground in y, not turned, scaled
+by the map's width times the mesh blueprint's `UniformScale`. In the main picture only; `DrawMinimap`
+has none.
+
+What is not the original's: the float of the map file that is added in y is not read (0 in the maps
+you looked at, and in Seton's the border sits right). The `MapImager` shader: its formula was read
+from the game's `mesh.fx` (lit by the sun's angle alone, the albedo's alpha added to the colour, no
+shading where the specular's blue says "glows") and is what the original look draws; the modern look
+lights the same surface with its own lighting, the glowing parts as glow, so they shine at night.
+The border takes the sun's shadows and throws them like any mesh.
+
+Seen with `/meshes/game/map-border_squ_uef_mesh` around Seton's Clutch from the farthest zoom, at an
+angle and from the map's edge (the viewer's `--border <id>`); the other skins' meshes and the `_hor_`
+ones were not tried.
+
+**Also there, not asked for: the time of day and the weather.** The picture you draw can have them;
+they are off until someone turns them on, and a game option for them would be the interface's. On
+the world behind the picture (`WorldPicture::world()`, `render/world.h`): `timeOfDay` (hours 0..24;
+negative, as it is now: the map's own fixed light), `cloudCover`, `rain` / `snow` / `fog`, or
+`weatherAuto = true` for weather that changes by itself. The weather's seed is taken from the game
+(`SessionSeed`) when `GameStarted` has been called, so every player sees the same. A day that passes
+is yours to drive: set `timeOfDay` from the game's clock each frame (for example
+`start + seconds / dayLength * 24`, modulo 24). `render/README.md` says what each does.
+
 ## ui, to the renderer 2: selection, the minimap, the build preview, lines and rings — parts 1 to 4 done; 5 asked of the engine
 
 All in `render/world_picture.h`, on the same `WorldPicture`. What is set stays set until it is set

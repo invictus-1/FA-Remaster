@@ -56,7 +56,8 @@ cbuffer MeshKind : register(b3) {
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
-                // y: 1 = leaves (ModelLod::leaves); z: 1 = a remastered level without its material texture
+                // y: 1 = leaves (ModelLod::leaves); z: 1 = a remastered level without its material texture;
+                // w: 1 = the map's border (ModelLod::border)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -196,6 +197,12 @@ float4 Shade(VOut i, bool front) {
     } else {
       occlusion = 1;
     }
+    if (kind2.w > 0.5) {  // the map's border: dark machinery, glowing where its texture says
+      base = ToLinear(saturate(albedo.rgb + albedo.a));
+      metallic = 0.4;
+      roughness = 0.55;
+      emission = base * spec.b * 2.5;
+    }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
@@ -204,6 +211,10 @@ float4 Shade(VOut i, bool front) {
     return float4(lit * built, kind.y > 0.5 ? albedo.a : cover);
   }
 
+  if (kind2.w > 0.5) {  // the map's border as the original lights it: by the sun's angle, but not where it glows
+    float shade = lerp(saturate(dot(sunDirection, N)), 1, spec.b);
+    return float4(shade * (albedo.rgb + albedo.a) + 0.02, 1);
+  }
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
   if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;
@@ -450,7 +461,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       ++n;
     }
     const float kind[8] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
-                           static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, 0};
+                           static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f};
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

@@ -65,6 +65,16 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     haveMap_ = true;
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
+    {  // the ground's lowest and highest (for what the map lies in)
+      float low = 1e30f, high = -1e30f;
+      for (int z = 0; z <= map.height; z += 2)
+        for (int x = 0; x <= map.width; x += 2) {
+          const float h = map.Height(static_cast<float>(x), static_cast<float>(z));
+          low = std::min(low, h);
+          high = std::max(high, h);
+        }
+      groundMiddle_ = (low + high) * 0.5f;
+    }
     if (map.water.present)
       particles.SetWater(map.water.elevation, [this](float x, float z) {
         return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height)));
@@ -250,6 +260,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lights.Begin(clock);
   pickables_.clear();
   for (const PlacedProp& p : props_) meshes.Add(p.model, p.world, {1, 1, 1});
+  if (haveMap_)
+    for (const std::string& border : borders) {
+      const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
+      const Model* model = models.Blueprint(whole ? border : border + ".bp");
+      if (!model->ok) continue;
+      const Vec3 middle{static_cast<float>(map.width) * 0.5f, groundMiddle_, static_cast<float>(map.height) * 0.5f};
+      meshes.Add(model, Mat4::FromTRS(middle, Quat{}, static_cast<float>(map.width) * model->scale), {1, 1, 1});
+    }
   // the interface's ghosts, lines and rings
   for (const Ghost& g : ghosts) {
     const Model* model = models.Unit(g.blueprint);

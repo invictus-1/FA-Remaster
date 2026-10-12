@@ -65,6 +65,8 @@ class LiveSim {
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   // How the blueprints look as the simulation has them, once the game has started; handed over once.
   void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
+  // The session's seed, once the game has started (0 before).
+  uint32_t Seed() const { return frames_.Seed(); }
   // Each army's colour as the game shows it, by army index from 0; empty until the game has started.
   std::vector<Vec3> ArmyColors() const;
   float MsPerTick() const;     // what a beat costs the simulation, averaged over the last ones
