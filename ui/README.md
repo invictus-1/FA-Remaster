@@ -206,7 +206,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   commander selected the game's orders panel, its construction panel with the build icons and the
   commander's avatar come up. Orders are written with the engine's command writer and applied
   before the next beat; the game script hears of each (`commandmode.OnCommandIssued`). A right
-  click in the world view sends the selected units there. A left click follows the script's
+  click in the world view gives the selected units the order that fits what is under the cursor,
+  by the original's rule (read from its code): attack an enemy, reclaim what can be reclaimed,
+  repair a unit being built, guard (help) another unit of one's own, else move there;
+  `GetRightMouseButtonOrder` gives the script the same answer for the cursor. Left out of that
+  rule so far: capture, loading into transports and ferries, whether the weapons can reach the
+  target, and wreckage and trees (the picture answers for units only). A left click follows the script's
   command mode, asked the way the original asks (`commandmode.GetCommandMode`): an order's
   button or key (move, attack ground, patrol), or a build icon, on which the commander builds
   the chosen building at the click. The console command `StartCommandMode`, which the order
@@ -214,9 +219,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
   run the finished land factory built two engineers), `SimCallback` and the unit switches
   (pause, fire state, script bits); those last two are written against the engine's command
-  writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
-  what is under the cursor (both need the world's picture), the build preview and snapping to
-  the grid.
+  writer but not checked in a game yet.
 - Unit states come from the simulation (the engine's `UnitStateOf`): a unit's command queue, what
   it builds, guards and who built it, fire state, toggles, pause, shield and fuel, its economy;
   the order buttons follow what a unit can do right now; what the army may not build is taken

@@ -589,9 +589,10 @@ std::string TakeOrders(lua_State* L) {
 
 // commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
 // engine issued for the player, as a table. First version of that table: CommandType (the
-// order's name), Clear, Target = {Type = "Position", Position}, Units, Blueprint.
+// order's name), Clear, Target = {Type = "Position", Position} or {Type = "Entity", EntityId,
+// Position}, Units, Blueprint.
 void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserUnit*>& units, float x, float y, float z,
-                         bool clear, const std::string& blueprint) {
+                         bool clear, const std::string& blueprint, uint32_t entity = 0xffffffffu) {
   int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
   lua_getglobal(L, "import");
@@ -617,8 +618,13 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
       lua_pushstring(L, "Target");
       lua_newtable(L);
       lua_pushstring(L, "Type");
-      lua_pushstring(L, "Position");
+      lua_pushstring(L, entity != 0xffffffffu ? "Entity" : "Position");
       lua_rawset(L, -3);
+      if (entity != 0xffffffffu) {
+        lua_pushstring(L, "EntityId");
+        lua_pushstring(L, std::to_string(entity).c_str());
+        lua_rawset(L, -3);
+      }
       lua_pushstring(L, "Position");
       PushVector(L, x, y, z);
       lua_rawset(L, -3);
@@ -631,18 +637,29 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
   lua_settop(L, top);
 }
 
-bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear, const std::string& blueprint) {
+namespace {
+// An order for the selected units of the player's army, with a place or a unit as its target.
+bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
+                const std::string& blueprint) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
   static const struct {
     const char* name;
     CommandType type;
-  } kOrders[] = {{"Move", CommandType::Move}, {"Attack", CommandType::Attack}, {"Patrol", CommandType::Patrol},
-                 {"AggressiveMove", CommandType::AggressiveMove}, {"BuildMobile", CommandType::BuildMobile}};
+    bool atUnit;  // takes a unit as its target only
+  } kOrders[] = {{"Move", CommandType::Move, false},
+                 {"Attack", CommandType::Attack, false},
+                 {"Patrol", CommandType::Patrol, false},
+                 {"AggressiveMove", CommandType::AggressiveMove, false},
+                 {"BuildMobile", CommandType::BuildMobile, false},
+                 {"Guard", CommandType::Guard, true},
+                 {"Repair", CommandType::Repair, true},
+                 {"Reclaim", CommandType::Reclaim, true},
+                 {"Capture", CommandType::Capture, true}};
   const char* name = nullptr;
   CommandType type = CommandType::None;
   for (const auto& o : kOrders)
-    if (order == o.name) name = o.name, type = o.type;
+    if (order == o.name && (entity != 0xffffffffu || !o.atUnit)) name = o.name, type = o.type;
   if (!name) return false;
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
@@ -651,12 +668,93 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
   if (ids.empty()) return false;
   StreamIssueData d;
   d.type = static_cast<int>(type);
-  d.target.type = 2;  // a position
+  d.target.type = entity != 0xffffffffu ? 1 : 2;  // a unit, or a position
+  d.target.entity = entity != 0xffffffffu ? entity : d.target.entity;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   d.blueprint = blueprint;
   Writer(L).IssueCommand(ids, d, clear);
-  ReportCommandIssued(L, name, units, x, y, z, clear, blueprint);
+  ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
   return true;
+}
+}  // namespace
+
+bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear, const std::string& blueprint) {
+  return IssueOrder(L, order, x, y, z, 0xffffffffu, clear, blueprint);
+}
+
+uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return 0xffffffffu;
+  uint32_t best = 0xffffffffu;
+  float bestD = radius * radius;
+  for (const auto& entry : static_cast<UnitStore&>(*user->units).units) {
+    const UnitView& v = entry.second->view;
+    if (entry.second->gone || v.dead) continue;
+    float d = (v.position[0] - x) * (v.position[0] - x) + (v.position[2] - z) * (v.position[2] - z);
+    if (d <= bestD) best = v.id, bestD = d;
+  }
+  return best;
+}
+
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(entity);
+  if (it == store.units.end() || it->second->gone) return false;
+  const float* p = it->second->view.position;
+  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string());
+}
+
+// What a right click orders (func_GetRightMouseButtonAction, FA exe 0x81ec00), by the unit under
+// the cursor and by what the selected units can do between them (their command bits together):
+//   an enemy: Attack if they can attack (and it lives);
+//   else an enemy, or a thing of no army, or one of the category RECLAIMFRIENDLY: Reclaim, if it
+//     can be reclaimed (the category RECLAIMABLE, or it is still being built) and they can;
+//   else, not an enemy: Repair a unit that is being built (a building of the categories FACTORY
+//     or SILO left out); else Guard, unless the selection is that unit alone or it is a
+//     CAMPAIGNGATE; else Repair an ally's damaged unit or one that is upgrading;
+//   else Move.
+// Left out so far: Capture (the original asks a flag of the unit, +0x69 of its attributes, that
+// the simulation's view does not give; without it engineers reclaim, as players know it), the
+// transport and ferry cases (0x81d280, 0x81d660, 0x81da20), whether the selection's weapons reach
+// the target's layer (CanAttackTarget 0x8c0d30: when they do not, the original gives no order),
+// an attack order's marker under the cursor, the option "switch_right_click_behavior", and things
+// that are not units (wreckage, trees): the picture answers for units only.
+std::string RightClickOrder(lua_State* L, uint32_t under) {
+  Sim* sim = TheSim(L);
+  if (!sim) return std::string();
+  UnitStore& store = Store(L);
+  int army = sim->focusArmy + 1;
+  uint32_t caps = 0;
+  std::vector<UserUnit*> own;
+  for (UserUnit* u : store.selection) {
+    if (u->gone || u->view.dead || u->view.army != army) continue;
+    UnitStateView state;
+    if (StateOf(L, u, &state)) caps |= state.commandCaps;
+    own.push_back(u);
+  }
+  if (own.empty()) return std::string();
+  const uint32_t kMove = 1, kAttack = 4, kGuard = 8, kRepair = 0x40, kReclaim = 0x100000;
+  const std::string move = caps & kMove ? "RULEUCC_Move" : "";
+  auto it = store.units.find(under);
+  UserUnit* e = it != store.units.end() && !it->second->gone ? it->second.get() : nullptr;
+  if (!e) return move;
+  int stance = e->view.army == army ? 2 : 0;
+  for (const ArmyView& v : ArmyViews(*sim))
+    if (v.index == e->view.army && e->view.army != army && army <= static_cast<int>(v.alliance.size()))
+      stance = v.alliance[static_cast<size_t>(army - 1)];
+  bool enemy = stance == 0, ally = stance == 2, noArmy = e->view.army <= 0;
+  if (enemy && (caps & kAttack) && !e->view.dead) return "RULEUCC_Attack";
+  bool reclaimable = InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt;
+  if ((enemy || noArmy || InCategory(L, e, "RECLAIMFRIENDLY")) && reclaimable && (caps & kReclaim)) return "RULEUCC_Reclaim";
+  if (enemy) return move;
+  if ((caps & kRepair) && e->view.beingBuilt &&
+      (InCategory(L, e, "MOBILE") || !(InCategory(L, e, "FACTORY") || InCategory(L, e, "SILO"))))
+    return "RULEUCC_Repair";
+  bool alone = own.size() == 1 && own[0] == e;
+  if ((caps & kGuard) && !InCategory(L, e, "CAMPAIGNGATE") && !alone) return "RULEUCC_Guard";
+  if ((caps & kRepair) && ((ally && e->view.maxHealth > e->view.health) || e->view.headCommand == static_cast<int>(CommandType::Upgrade)))
+    return "RULEUCC_Repair";
+  return move;
 }
 
 namespace {

@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1050 --log out.log
+--            --frames 1300 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -146,6 +146,35 @@ local function run()
     local focus = cdr:GetFocus()
     check("what it builds is its focus", focus ~= nil and focus:GetUnitId(), factory)
     check("and it uses mass for it", cdr:GetEconData().massConsumed > 0, true)
+
+    -- a right click orders by what is under the cursor
+    local here = cdr:GetPosition()
+    cam:SnapTo(here, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project({here[1] - 20, here[2], here[3]})
+    moho64ui_MouseMove(s.x, s.y)
+    check("over the ground a right click moves", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+    s = view:Project(here)
+    moho64ui_MouseMove(s.x, s.y)
+    check("over the selected unit itself too", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+    s = view:Project(focus:GetPosition())
+    moho64ui_MouseMove(s.x, s.y)
+    check("over a factory being built it guards (helps)", view:GetRightMouseButtonOrder(), "RULEUCC_Guard")
+    local enemy = GetUnitById("1048576")  -- the second army's first unit: its commander
+    check("the other army's commander is there", enemy ~= nil and enemy:GetArmy(), 2)
+    local there = enemy:GetPosition()
+    cam:SnapTo(there, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project(there)
+    moho64ui_MouseMove(s.x, s.y)
+    check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+    moho64ui_MouseButton("Right", true, s.x, s.y)
+    moho64ui_MouseButton("Right", false, s.x, s.y)
+    WaitSeconds(1)
+    queue = cdr:GetCommandQueue()
+    check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    IssueUnitCommand({cdr}, "Stop")
+    cam:RestoreSettings(saved)
 
     SelectUnits(nil)
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)

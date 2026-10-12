@@ -493,11 +493,25 @@ class WorldView : public Control {
     SelectUnitsById(L, ids, pressShift_);
   }
 
+  // The unit under a point of the screen (its entity id; 0xffffffff: none). Without a picture:
+  // the unit standing nearest to that place of the map, within two map units.
+  uint32_t UnitUnder(lua_State* L, float sx, float sy) {
+    if (miniMap) return 0xffffffffu;
+    if (!EnsurePicture(L)) {
+      float world[3];
+      Unproject(L, sx, sy, world);
+      return UnitNearPlace(L, world[0], world[2], 2.0f);
+    }
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    return UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0);
+  }
+
   // Events: the script first, as for every control. Then the world view's own part, of which this
-  // much is built: a press of the right button on the ground sends the selected units there (with
-  // Shift after what they are doing); a left press follows the script's command mode, or selects.
-  // The original also decides a right click by what is under the cursor (attack, reclaim, load,
-  // ...); that part is still to be read.
+  // much is built: a press of the right button gives the selected units the order that fits what
+  // is under the cursor (RightClickOrder: attack an enemy, reclaim, repair, guard, else move
+  // there; with Shift after what they are doing); a left press follows the script's command mode,
+  // or selects.
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
@@ -509,7 +523,15 @@ class WorldView : public Control {
     if (e.type != EventType::ButtonPress) return false;
     float world[3];
     Unproject(L, e.x, e.y, world);
-    if (e.right) return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
+    if (e.right) {
+      // (No command mode ends here: the script's own handler ends it on a right click before this.)
+      uint32_t under = UnitUnder(L, e.x, e.y);
+      std::string order = RightClickOrder(L, under);
+      if (order.rfind("RULEUCC_", 0) != 0) return false;
+      order = order.substr(8);
+      if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
+    }
     if (!e.left) return false;
     // A left press while the game script is in a command mode: an order with the place as its
     // target, or a building to build there. A building goes where the simulation would put it
@@ -588,6 +610,16 @@ int l_ViewFalse(lua_State* L) {
 int l_ViewNothing(lua_State* L) {
   View(L);
   return 0;
+}
+// GetRightMouseButtonOrder(): the order a right click would give where the mouse is now (its
+// RULEUCC name; nil for none), FA exe 0x871d40. The script picks the cursor by it.
+int l_ViewRightMouseButtonOrder(lua_State* L) {
+  WorldView* v = View(L);
+  UiManager& ui = UserState::From(L)->ui();
+  std::string order = v->HitTest(ui.mouseX, ui.mouseY) ? RightClickOrder(L, v->UnitUnder(L, ui.mouseX, ui.mouseY)) : std::string();
+  if (order.empty()) lua_pushnil(L);
+  else lua_pushstring(L, order.c_str());
+  return 1;
 }
 // ZoomScale(x, y, wheelRotation, wheelDelta): the wheel over the view, at a place of the screen
 // (FA exe 0x872630: the place becomes the camera's zoom anchor, then the wheel's function).
@@ -712,7 +744,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, view, "SetHighlightEnabled", l_ViewSet<&WorldView::highlight>);
   SetMethod(L, view, "HasHighlightCommand", l_ViewFalse);
   SetMethod(L, view, "ShowConvertToPatrolCursor", l_ViewFalse);
-  SetMethod(L, view, "GetRightMouseButtonOrder", l_ViewNothing);
+  SetMethod(L, view, "GetRightMouseButtonOrder", l_ViewRightMouseButtonOrder);
   SetMethod(L, view, "Project", l_ViewProject);
   SetMethod(L, view, "ZoomScale", l_ViewZoomScale);
   SetMethod(L, view, "CameraReset", l_ViewCameraReset);

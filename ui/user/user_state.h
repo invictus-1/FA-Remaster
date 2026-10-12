@@ -126,6 +126,14 @@ void InstallUnitCategoryFunctions(lua_State* L);
 // as the command stream's bytes for the engine's ApplyCommands.
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear,
                       const std::string& blueprint = std::string());
+// The same with a unit as the target ("Attack", "Guard", "Repair", "Reclaim", "Capture", "Move":
+// the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
+// none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+// The living unit nearest to a place of the map, no farther than `radius` (0xffffffff: none): what
+// stands in for the picture's answer when there is no picture.
+uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius);
+std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
