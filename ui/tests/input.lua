@@ -91,5 +91,35 @@ b:Destroy()
 moho64ui_MouseMove(300, 150)
 check("after its destruction the control below gets the cursor", events(), "a:MouseEnter panel:MouseEnter a:MouseMotion panel:MouseMotion")
 
+-- a dragger takes the mouse from the controls until its button is released
+local Dragger = import("/lua/maui/dragger.lua").Dragger
+local drag = {}
+a.HandleEvent = function(self, event)
+    table.insert(seen, "a:" .. event.Type)
+    if event.Type == "ButtonPress" then
+        local dragger = Dragger()
+        dragger.OnMove = function(d, x, y) table.insert(drag, "move " .. x .. "," .. y) end
+        dragger.OnRelease = function(d, x, y) table.insert(drag, "release " .. x .. "," .. y) d:Destroy() end
+        dragger.OnCancel = function(d) table.insert(drag, "cancel") d:Destroy() end
+        PostDragger(self:GetRootFrame(), event.KeyCode, dragger)
+    end
+    return true
+end
+events()
+moho64ui_MouseButton("Left", true, 150, 150)
+moho64ui_MouseMove(700, 700)
+moho64ui_MouseButton("Right", false, 150, 150)
+moho64ui_MouseButton("Left", false, 710, 720)
+check("the dragger gets the moves and the release of its own button", table.concat(drag, " | "), "move 700,700 | release 710,720")
+check("meanwhile the controls only hear of the other button", events(), "a:ButtonPress a:ButtonRelease")
+moho64ui_MouseMove(150, 150)
+check("after the release the controls get the mouse again", events(), "a:MouseMotion")
+drag = {}
+moho64ui_MouseButton("Left", true, 150, 150)
+PostDragger(root, 0, nil)
+check("posting nil cancels the dragger", table.concat(drag, " | "), "cancel")
+moho64ui_MouseButton("Left", false, 150, 150)
+events()
+
 panel:Destroy()
 LOG("TEST done: " .. failed .. " failed")

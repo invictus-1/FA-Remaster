@@ -169,6 +169,8 @@ class UiManager {
 
   Control* focus = nullptr;                // keyboard focus
   Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
+  int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
+  int draggerKey = 0;                      // the key code whose release ends it
   std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
   void Forget(Control* c);                 // a control died: drop it from focus and capture
   // Give the keyboard focus to a control (or to none). Inferred: the control that loses it gets

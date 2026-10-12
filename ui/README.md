@@ -128,11 +128,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the point), as the original's event table through the script's `HandleEvent`, and up to the
   parents until one handles it; MouseEnter / MouseExit; `uimain.OnMouseButtonPress`. Read from the
   original: the target rule, the event table, the passing up. Inferred: the order of exit and enter.
+- Draggers (`PostDragger`): while one is posted the mouse's moves and the release of its button go
+  to it instead of the controls. The game's buttons click through this, so the main menu's
+  buttons work: Options opens the options dialog (about 790 controls), Exit asks for confirmation.
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
-  drawing per frame at 1600x900. The main menu opens and its buttons light up under the cursor.
-- Not real yet: keyboard input and key maps, draggers, the game's cursor, sound, movies, render
-  passes, bitmap animation, other texture formats.
-- 221 of the 531 engine functions are built; the rest are logged stubs.
+  drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
+  open their screens.
+- Not real yet: keyboard input and key maps, the game's cursor, sound, movies, render passes,
+  bitmap animation, other texture formats, and the engine functions the screens behind the menu
+  call (their stubs are named in the log).
+- 222 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
 

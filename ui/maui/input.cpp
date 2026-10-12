@@ -137,7 +137,84 @@ Control* ControlAt(UiManager& ui, int head, float x, float y) {
   return best;
 }
 
+// --- draggers ---
+//
+// A script posts a dragger while a mouse button is held (a button being clicked, a window being
+// moved): PostDragger(originFrame, keycode, dragger). From then on (FA exe 0x7a4c00..0x7a4cb6)
+// the mouse's moves go to dragger:OnMove(x, y) instead of the controls, and the release of that
+// button to dragger:OnRelease(x, y), which ends it. Inferred: posting nil, or another dragger,
+// cancels the current one through dragger:OnCancel().
+
+namespace {
+
+// The key codes of the mouse buttons as events carry them. Inferred: the original's key code
+// names follow wxWidgets' list in order, where the buttons are 301, 302 and 304.
+int ButtonKeyCode(const UiEvent& e) { return e.left ? 301 : e.right ? 302 : e.middle ? 304 : 0; }
+
+// Push the active dragger's table; false (nothing pushed) when there is none or it was destroyed.
+bool PushDragger(lua_State* L, UiManager& ui) {
+  if (ui.draggerRef == LUA_NOREF) return false;
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ui.draggerRef);
+  if (GetObject(L, -1)) return true;
+  lua_pop(L, 1);
+  luaL_unref(L, LUA_REGISTRYINDEX, ui.draggerRef);
+  ui.draggerRef = LUA_NOREF;
+  return false;
+}
+
+// dragger:<fn>(x, y) for the table on top of the stack (popped); `args` of the two numbers are passed.
+void CallDragger(lua_State* L, const char* fn, int args, float x, float y) {
+  int self = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_pushstring(L, fn);
+  lua_gettable(L, self);
+  if (lua_isfunction(L, -1)) {
+    lua_pushvalue(L, self);
+    if (args) {
+      lua_pushnumber(L, x);
+      lua_pushnumber(L, y);
+    }
+    if (lua_pcall(L, 1 + args, 0, self + 1) != 0)
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  }
+  lua_settop(L, self - 1);
+}
+
+void EndDragger(lua_State* L, UiManager& ui) {
+  if (ui.draggerRef != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, ui.draggerRef);
+  ui.draggerRef = LUA_NOREF;
+  ui.draggerKey = 0;
+}
+
+// PostDragger(originFrame, keycode, dragger)
+int l_PostDragger(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  lua_settop(L, 3);
+  if (PushDragger(L, ui)) {
+    bool same = lua_rawequal(L, -1, 3) != 0;
+    if (same) {
+      lua_pop(L, 1);
+    } else {
+      EndDragger(L, ui);
+      CallDragger(L, "OnCancel", 0, 0, 0);
+    }
+  }
+  EndDragger(L, ui);
+  if (lua_istable(L, 3)) {
+    lua_pushvalue(L, 3);
+    ui.draggerRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    ui.draggerKey = static_cast<int>(lua_tonumber(L, 2));
+  }
+  return 0;
+}
+
+}  // namespace
+
 void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
+  if (PushDragger(L, ui)) {
+    CallDragger(L, "OnMove", 2, e.x, e.y);
+    return;
+  }
   Control* target = Target(ui, e);
   UpdateHover(L, ui, target, e);
   if (!target || target->dead()) return;
@@ -146,6 +223,12 @@ void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
 }
 
 void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doubleClick) {
+  e.keyCode = ButtonKeyCode(e);
+  if (!pressed && ui.draggerKey == e.keyCode && PushDragger(L, ui)) {
+    EndDragger(L, ui);
+    CallDragger(L, "OnRelease", 2, e.x, e.y);
+    return;
+  }
   Control* target = Target(ui, e);
   UpdateHover(L, ui, target, e);
   e.type = !pressed ? EventType::ButtonRelease : doubleClick ? EventType::ButtonDClick : EventType::ButtonPress;
@@ -199,7 +282,10 @@ int l_ControlAt(lua_State* L) {
 
 }  // namespace
 
+void SetGlobal(lua_State* L, const char* name, lua_CFunction f);  // user/bindings.h
+
 void RegisterInputBindings(lua_State* L) {
+  SetGlobal(L, "PostDragger", l_PostDragger);
   lua_register(L, "moho64ui_MouseMove", l_MouseMove);
   lua_register(L, "moho64ui_MouseButton", l_MouseButton);
   lua_register(L, "moho64ui_ControlAt", l_ControlAt);
