@@ -56,6 +56,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     return false;
   }
   auto t1 = std::chrono::steady_clock::now();
+  sim->collectSync = true;
   if (!sim->Start(session)) {
     *why = "the simulation did not start";
     return false;
@@ -63,6 +64,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", secs(t0, t1), secs(t1, t2));
   sim_ = std::move(sim);
+  pendingSync_ = sim_->TakeSync();
   modUids_ = uids;
   sessionMods_ = h.mods;
   map_ = h.map;
@@ -97,11 +99,21 @@ void GameSession::Advance(double seconds) {
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {
     due_ -= 0.1;
-    sim_->collectSync = static_cast<bool>(onSync);
     if (sim_->Paused()) sim_->PausedBeat();
     else sim_->Tick();
-    if (onSync)
-      for (const std::string& sync : sim_->TakeSync()) onSync(sync);
+    for (std::string& sync : sim_->TakeSync()) {
+      if (onSync) onSync(sync);
+      else pendingSync_.push_back(std::move(sync));
+    }
+  }
+}
+
+void GameSession::RunFirstBeat() {
+  if (!sim_ || sim_->tick() != 0) return;
+  sim_->Tick();
+  for (std::string& sync : sim_->TakeSync()) {
+    if (onSync) onSync(sync);
+    else pendingSync_.push_back(std::move(sync));
   }
 }
 

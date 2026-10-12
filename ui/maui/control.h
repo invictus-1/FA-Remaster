@@ -187,6 +187,7 @@ class UiManager {
 
   Control* focus = nullptr;                // keyboard focus
   Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
+  float mouseX = 0, mouseY = 0;            // where the mouse was last reported
   int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
   int draggerKey = 0;                      // the key code whose release ends it
   Control* engineDragger = nullptr;        // a control dragging by itself (an edit field's mouse selection)
@@ -242,6 +243,7 @@ void RegisterEditBindings(lua_State* L);           // edit.cpp
 void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: border, histogram, movie
 void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
 void RegisterMapPreviewBindings(lua_State* L);     // mappreview.cpp
+void RegisterWorldViewBindings(lua_State* L);      // worldview.cpp: the world view control, cameras
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);

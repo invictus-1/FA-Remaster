@@ -155,7 +155,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   bool playStream = stream_ && !getenv("MOHO64_NO_STREAM");
   int done = 0, paused = 0;
   sim.collectSync = o.view;
+  sim.collectEffects = o.view;
   size_t syncBeats = 0, syncBytes = 0;
+  size_t fxCount[3] = {0, 0, 0};
+  std::map<std::string, size_t> fxNames;
+  std::string fxSample;
   size_t viewMax[4] = {0, 0, 0, 0};
   std::string viewSample[3];
   std::string lastSync;
@@ -236,6 +240,19 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       UnitPoses(sim, &poses);
       ProjectileViews(sim, &shots);
       BeamViews(sim, &beamViews);
+      std::vector<EffectEvent> fx;
+      EffectEvents(sim, &fx);
+      for (const EffectEvent& ev : fx) {
+        ++fxCount[ev.kind];
+        ++fxNames[ev.name];
+        if (fxSample.empty() && ev.kind == EffectEvent::Create && ev.entity != 0xffffffff && ev.bone >= 0) {
+          char fb[320];
+          std::snprintf(fb, sizeof fb, "tick %u effect %u %s %s army %d on %#x bone %d at %.2f %.2f %.2f", sim.tick(), ev.id,
+                        ev.name.c_str(), ev.blueprint.c_str(), ev.army, ev.entity, ev.bone, ev.position[0], ev.position[1],
+                        ev.position[2]);
+          fxSample = fb;
+        }
+      }
       size_t bones = 0;
       for (const auto& up : poses) bones += up.bones.size();
       char buf[256];
@@ -273,6 +290,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
          viewMax[1], viewMax[2], viewMax[3]);
     for (const std::string& line : viewSample)
       if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
+    Logf(LogLevel::Info, "view: effect events: %zu made, %zu calls on them, %zu ended", fxCount[0], fxCount[1], fxCount[2]);
+    for (const auto& [name, n] : fxNames) Logf(LogLevel::Info, "view:   %s x%zu", name.c_str(), n);
+    if (!fxSample.empty()) Logf(LogLevel::Info, "view: %s", fxSample.c_str());
   }
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);

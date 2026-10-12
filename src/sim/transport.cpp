@@ -2454,6 +2454,104 @@ int l_TransportDetachAllUnits(lua_State* L) {
   TransportDetachAll(*S(L), *u->transport, lua_toboolean(L, 2) != 0);
   return 0;
 }
+// Sim::TransferUnit 0x7468e0: the unit is made anew in the other army (same blueprint, transform and layer,
+// complete) and takes the old one's pose and health; the old one is destroyed. A transport's stored units and
+// its mobile cargo change sides first, one by one, and are put back on the new transport. nullptr: the unit is
+// dead, or the army's unit cap refuses it (the brain's OnFailedUnitTransfer; the old unit stays, its cargo has
+// changed sides by then). Not carried over here: the custom name (this engine does not keep it yet). The
+// original walks the cargo in the order it was attached; this walks it in unit order.
+Unit* TransferUnit(Sim& sim, lua_State* L, Unit* u, Army* army) {
+  if (!u || u->dead || u->destroyQueued) return nullptr;
+  std::vector<Unit*> newStored, newCargo;
+  std::vector<int> parentBones, ownBones;
+  if (u->transport) {
+    TransportObj& T = *u->transport;
+    std::vector<Unit*> stored, cargo;
+    for (uint32_t ref : T.stored)
+      if (Unit* x = UnitRef(sim, ref)) stored.push_back(x);
+    std::sort(stored.begin(), stored.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+    for (Unit* x : stored) {
+      Vec3 p;
+      Quat q;
+      RemoveFromStorage(sim, T, x, &p, &q);
+    }
+    for (Unit* x : stored) newStored.push_back(TransferUnit(sim, L, x, army));
+    uint32_t ref = EntityRef(u);
+    for (Unit* x : sim.units()) {
+      if (x->parentId != ref || x->dead || x->destroyQueued || !(x->motion.bp && x->motion.bp->mobile())) continue;
+      cargo.push_back(x);
+      parentBones.push_back(x->parentBone);
+      ownBones.push_back(x->ownBone);
+    }
+    for (Unit* x : cargo) {
+      DetachUnitFrom(sim, x, true);
+      x->transportedBy = 0;
+    }
+    for (Unit* x : cargo) newCargo.push_back(TransferUnit(sim, L, x, army));
+  }
+  // Sim::CreateUnit 0x7489e0 without its cap callback: orientation and height kept, the old unit's layer
+  uint8_t layer = u->layer == "Land" ? kLayerLand : u->layer == "Seabed" ? kLayerSeabed : u->layer == "Sub" ? kLayerSub
+                : u->layer == "Water" ? kLayerWater : u->layer == "Air" ? kLayerAir : 0;
+  Unit* n = nullptr;
+  if (!army || army->ignoreUnitCap || army->unitCost + GetUnitBpData(L, *u->blueprint).capCost <= army->unitCap)
+    n = sim.CreateUnit(L, *u->blueprint, army, u->position, u->orientation, true, nullptr, true, layer);
+  if (!n) {
+    if (army && !army->ignoreUnitCap && army->brain) sim.CallMethod(L, army->brain, "OnFailedUnitTransfer", 0);
+    return nullptr;
+  }
+  // Unit::SetPoses 0x6abb90: the new unit shares the old one's two poses
+  n->poseQ = u->poseQ;
+  n->poseP = u->poseP;
+  n->poseBasePos = u->poseBasePos;
+  n->poseBaseOri = u->poseBaseOri;
+  n->prevPoseBasePos = u->prevPoseBasePos;
+  n->prevPoseBaseOri = u->prevPoseBaseOri;
+  if (u->health != n->health) EntityAdjustHealth(L, n, nullptr, u->health - n->health);  // Entity::SetHealth
+  if (n->transport) {
+    TransportObj& NT = *n->transport;
+    for (Unit* x : newStored)
+      if (x) AddToStorage(sim, NT, x);
+    for (size_t i = 0; i < newCargo.size(); ++i) {
+      Unit* x = newCargo[i];
+      if (!x) continue;
+      // Unit::AttachTo and the slot only: the cargo's "transported by" link stays empty (as in the original)
+      AttachUnit(sim, x, n, parentBones[i], ownBones[i]);
+      AssignSlot(sim, NT, x, parentBones[i]);
+      sim.anyAttached = true;
+      if (n->skeleton && parentBones[i] >= 0 && parentBones[i] < n->skeleton->Count()) {
+        lua_pushstring(L, BoneName(n, parentBones[i]).c_str());
+        PushObject(L, x);
+        sim.CallMethod(L, n, "OnTransportAttach", 2);
+      }
+    }
+  }
+  // (a structure: the original clears the old unit's "occupies ground" byte u+0x560 so that its end does not
+  // free the cells the new one stands on; here each structure has its own record)
+  sim.QueueDestroy(u);
+  return n;
+}
+
+// cfunc ChangeUnitArmy 0x75b650 (unit, army) -> the new unit, or nil. FAF's patch takes out the stock refusal
+// of units being built, dead or of the COMMAND category; a unit that carries a commander is still refused.
+int l_ChangeUnitArmy(lua_State* L) {
+  if (lua_gettop(L) != 2) return luaL_error(L, "%s\n  expected %d args, but got %d", "ChangeUnitArmy(unit,army)", 2, lua_gettop(L));
+  Sim& sim = *S(L);
+  Unit* u = CheckObject<Unit>(L, 1);
+  Army* a = sim.GetArmy(L, 2);
+  if (!a) return luaL_error(L, "Invalid army %d", static_cast<int>(lua_tonumber(L, 2)));
+  if (u->army == a) return luaL_error(L, "Unit already belongs to army %d", a->index - 1);
+  uint32_t ref = EntityRef(u);
+  for (Unit* x : sim.units())
+    if (x->parentId == ref && InCat(sim, x, "COMMAND")) {
+      lua_pushnil(L);
+      return 1;
+    }
+  Unit* n = TransferUnit(sim, L, u, a);
+  if (n) PushObject(L, n);
+  else lua_pushnil(L);
+  return 1;
+}
+
 // Unit::GetTransportFerryBeacon 0x6a8890: the beacon of the unit's current command
 int l_GetTransportFerryBeacon(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
@@ -2659,6 +2757,7 @@ void RegisterTransportBindings(lua_State* L) {
   SetMethod(L, "Unit", "TransportDetachAllUnits", l_TransportDetachAllUnits);
   SetMethod(L, "Unit", "GetTransportFerryBeacon", l_GetTransportFerryBeacon);
   SetGlobal(L, "IssueFerry", l_IssueFerry);
+  SetGlobal(L, "ChangeUnitArmy", l_ChangeUnitArmy);
   lua_register(L, "IssueTransportLoad", l_IssueTransportLoad);
   lua_register(L, "IssueTransportUnload", l_IssueTransportUnload);
   lua_register(L, "IssueTransportUnloadSpecific", l_IssueTransportUnloadSpecific);

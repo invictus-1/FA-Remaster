@@ -273,6 +273,7 @@ void UiManager::PostEngineDragger(lua_State* L, Control* control, int key) {
 }
 
 void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
+  ui.mouseX = e.x, ui.mouseY = e.y;
   if (ui.engineDragger) {
     ui.engineDragger->DragMove(L, e);
     return;
@@ -290,6 +291,7 @@ void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
 
 void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doubleClick) {
   e.keyCode = ButtonKeyCode(e);
+  ui.mouseX = e.x, ui.mouseY = e.y;
   if (!pressed && ui.draggerKey == e.keyCode && ui.engineDragger) {
     Control* c = ui.engineDragger;
     ui.engineDragger = nullptr;

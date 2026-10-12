@@ -1,14 +1,17 @@
 // Effects (emitters, beams, trails, decals), animation manipulators and economy events.
 //
-// The headless sim has no renderer yet, so effects and manipulators are objects that exist and
-// answer their methods (setters return the object, as the original's do, so chained calls like
-// CreateAttachedEmitter(...):ScaleEmitter(2):OffsetEmitter(0, 1, 0) work), without visuals or
-// animation. TODO(M3): manipulators drive bones once meshes and skeletons load.
+// The simulation draws nothing, so effects are objects that exist and answer their methods (setters return
+// the object, as the original's do, so chained calls like
+// CreateAttachedEmitter(...):ScaleEmitter(2):OffsetEmitter(0, 1, 0) work). What the scripts asked for is kept
+// as a list of events for a host that shows the game (Sim::collectEffects, EffectEvents in sim/sim_view.h).
 #include <cstring>
 #include <string>
 
 #include "core/log.h"
+#include "sim/combat.h"
 #include "sim/sim.h"
+#include "sim/sim_view.h"
+#include "sim/skeleton.h"
 #include "sim/units.h"
 
 namespace moho {
@@ -18,11 +21,18 @@ class EngineThing : public ScriptObject {
  public:
   explicit EngineThing(const char* c) : cls(c) {}
   const char* cls;
+  uint32_t effectId = 0;  // an effect whose calls are listed for the host (EffectEvents); 0 = not listed
 };
 
+// args: what an effect function takes, one letter per argument (the original's own help texts): e entity,
+// b a bone of it, E / B a second entity and its bone, a army, s the blueprint or texture, n a number, t another
+// string, p a position {x, y, z}, o an offset {x, y, z} (listed as three numbers). attached: the effect ends
+// with its entity (inferred from the names: the "At" emitters stay where they were made).
 struct Factory {
   const char* name;  // global function
   const char* cls;   // engine class of the object it returns
+  const char* args = nullptr;
+  bool attached = false;
 };
 const Factory kFactories[] = {
     {"CreateAimController", "CAimManipulator"},
@@ -34,34 +44,180 @@ const Factory kFactories[] = {
     {"CreateStorageManip", "CStorageManipulator"},
     {"CreateThrustController", "CThrustManipulator"},
     {"CreateSlaver", "CSlaveManipulator"},
-    {"CreateAttachedEmitter", "IEffect"},
-    {"CreateEmitterAtBone", "IEffect"},
-    {"CreateEmitterAtEntity", "IEffect"},
-    {"CreateEmitterOnEntity", "IEffect"},
-    {"CreateBeamEmitter", "IEffect"},
-    {"CreateBeamEmitterOnEntity", "IEffect"},
-    {"CreateBeamEntityToEntity", "IEffect"},
-    {"CreateBeamToEntityBone", "IEffect"},
-    {"CreateAttachedBeam", "IEffect"},
-    {"AttachBeamEntityToEntity", "IEffect"},
-    {"AttachBeamToEntity", "IEffect"},
-    {"CreateTrail", "IEffect"},
-    {"CreateDecal", "CDecalHandle"},
-    {"CreateSplat", "CDecalHandle"},
-    {"CreateSplatOnBone", "CDecalHandle"},
+    {"CreateAttachedEmitter", "IEffect", "ebas", true},
+    {"CreateEmitterAtBone", "IEffect", "ebas", false},
+    {"CreateEmitterAtEntity", "IEffect", "eas", false},
+    {"CreateEmitterOnEntity", "IEffect", "eas", true},
+    {"CreateBeamEmitter", "IEffect", "sa", false},
+    {"CreateBeamEmitterOnEntity", "IEffect", "ebas", true},
+    {"CreateBeamEntityToEntity", "IEffect", "ebEBas", true},
+    {"CreateBeamToEntityBone", "IEffect", "ebEBans", true},
+    {"CreateAttachedBeam", "IEffect", "ebanns", true},
+    {"AttachBeamEntityToEntity", "IEffect", "ebEBas", true},
+    {"CreateTrail", "IEffect", "ebas", true},
+    {"CreateDecal", "CDecalHandle", "pnsttnnnnan", false},
+    {"CreateSplat", "CDecalHandle", "pnsnnnnan", false},
+    {"CreateSplatOnBone", "CDecalHandle", "eobsnnnna", false},
     {"CreateEconomyEvent", "CEconomyEvent"},
 };
+// These return nothing: a flash that ends by itself after its lifetime (the second number)
+const Factory kLightParticle = {"CreateLightParticle", nullptr, "ebannst", false};
+const Factory kLightParticleIntel = {"CreateLightParticleIntel", nullptr, "ebannst", false};
 
 std::vector<std::unique_ptr<EngineThing>>& Things() {
   static std::vector<std::unique_ptr<EngineThing>> v;
   return v;
 }
 
+// ---- the list for the host -------------------------------------------------------------------
+
+struct LiveEffect {
+  uint32_t id, ref, ref2;  // an attached effect and the entities (references) it ends with
+};
+struct EffectLog {
+  std::vector<EffectEvent> events;
+  std::vector<std::pair<uint32_t, int>> where;  // per event: the entity and bone its position follows until taken
+  std::vector<LiveEffect> live;
+  uint32_t nextId = 0;
+};
+EffectLog& Fx() {
+  static EffectLog l;
+  return l;
+}
+bool Collecting(lua_State* L) {
+  Sim* sim = Sim::From(L);
+  return sim && sim->collectEffects;
+}
+// a bone argument, without the script errors of the entity functions: an index, a name, or none (-1)
+int BoneOf(lua_State* L, const Entity* e, int arg) {
+  if (lua_type(L, arg) == LUA_TNUMBER) return static_cast<int>(lua_tonumber(L, arg));
+  if (lua_type(L, arg) == LUA_TSTRING && e && e->skeleton) return e->skeleton->Find(lua_tostring(L, arg));
+  return -1;
+}
+bool ReadVec3(lua_State* L, int arg, float v[3]) {
+  if (!lua_istable(L, arg)) return false;
+  for (int i = 0; i < 3; ++i) {
+    lua_rawgeti(L, arg, i + 1);
+    v[i] = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  return true;
+}
+void SetPosition(EffectEvent& ev, const Entity* e, int bone) {
+  Vec3 p;
+  Quat q;
+  BoneWorld(e, bone, &p, &q);
+  ev.position[0] = p.x;
+  ev.position[1] = p.y;
+  ev.position[2] = p.z;
+}
+void AddText(EffectEvent& ev, const char* s) {
+  if (ev.text.empty()) ev.text = s;
+  else if (ev.text2.empty()) ev.text2 = s;
+}
+
+// A creating call: its arguments by the function's letters. Returns the new effect's id.
+uint32_t RecordCreate(lua_State* L, const Factory& f) {
+  EffectLog& fx = Fx();
+  EffectEvent ev;
+  ev.kind = EffectEvent::Create;
+  ev.id = ++fx.nextId;
+  ev.name = f.name;
+  Entity* e1 = nullptr;
+  Entity* e2 = nullptr;
+  bool fixed = false;
+  int arg = 1;
+  for (const char* c = f.args; *c; ++c, ++arg) {
+    switch (*c) {
+      case 'e': e1 = ToObject<Entity>(L, arg); break;
+      case 'E': e2 = ToObject<Entity>(L, arg); break;
+      case 'b': ev.bone = BoneOf(L, e1, arg); break;
+      case 'B': ev.bone2 = BoneOf(L, e2, arg); break;
+      case 'a': {
+        Army* a = lua_type(L, arg) == LUA_TSTRING ? Sim::From(L)->GetArmy(L, arg) : nullptr;
+        ev.army = a ? a->index : static_cast<int>(lua_tonumber(L, arg));
+        break;
+      }
+      case 's':
+        if (lua_type(L, arg) == LUA_TSTRING) ev.blueprint = lua_tostring(L, arg);
+        break;
+      case 't':
+        if (lua_type(L, arg) == LUA_TSTRING) AddText(ev, lua_tostring(L, arg));
+        break;
+      case 'n': ev.numbers.push_back(static_cast<float>(lua_tonumber(L, arg))); break;
+      case 'p': fixed = ReadVec3(L, arg, ev.position); break;
+      case 'o': {
+        float v[3] = {0, 0, 0};
+        ReadVec3(L, arg, v);
+        ev.numbers.insert(ev.numbers.end(), v, v + 3);
+        break;
+      }
+      default: break;
+    }
+  }
+  if (e1) ev.entity = e1->id;
+  if (e2) ev.entity2 = e2->id;
+  if (e1 && !fixed) SetPosition(ev, e1, ev.bone);
+  fx.where.push_back({e1 && !fixed ? EntityRef(e1) : 0u, ev.bone});
+  if (f.attached && (e1 || e2)) fx.live.push_back({ev.id, EntityRef(e1), EntityRef(e2)});
+  fx.events.push_back(std::move(ev));
+  return fx.nextId;
+}
+// A method call on a listed effect: its numbers and strings in order.
+EffectEvent& RecordCall(uint32_t id, const char* name) {
+  EffectLog& fx = Fx();
+  EffectEvent ev;
+  ev.kind = EffectEvent::Call;
+  ev.id = id;
+  ev.name = name;
+  fx.where.push_back({0u, -1});
+  fx.events.push_back(std::move(ev));
+  return fx.events.back();
+}
+void RecordDestroy(uint32_t id) {
+  EffectLog& fx = Fx();
+  EffectEvent ev;
+  ev.kind = EffectEvent::Destroy;
+  ev.id = id;
+  ev.name = "Destroy";
+  fx.where.push_back({0u, -1});
+  fx.events.push_back(std::move(ev));
+  for (size_t i = 0; i < fx.live.size(); ++i)
+    if (fx.live[i].id == id) {
+      fx.live.erase(fx.live.begin() + static_cast<std::ptrdiff_t>(i));
+      break;
+    }
+}
+
 int l_Factory(lua_State* L) {
-  const char* cls = lua_tostring(L, lua_upvalueindex(1));
-  auto t = std::make_unique<EngineThing>(cls);
-  CreateObject(L, t.get(), cls);
+  const Factory& f = kFactories[static_cast<size_t>(lua_tonumber(L, lua_upvalueindex(1)))];
+  auto t = std::make_unique<EngineThing>(f.cls);
+  if (f.args && Collecting(L)) t->effectId = RecordCreate(L, f);
+  CreateObject(L, t.get(), f.cls);
   Things().push_back(std::move(t));
+  return 1;
+}
+int l_LightParticle(lua_State* L) {
+  if (Collecting(L)) RecordCreate(L, lua_toboolean(L, lua_upvalueindex(1)) ? kLightParticleIntel : kLightParticle);
+  return 0;
+}
+// AttachBeamToEntity(emitter, entity, tobone, army): a beam emitter made free is put on an entity
+int l_AttachBeamToEntity(lua_State* L) {
+  auto* t = dynamic_cast<EngineThing*>(GetObject(L, 1));
+  Entity* e = ToObject<Entity>(L, 2);
+  if (t && t->effectId && Collecting(L)) {
+    EffectEvent& ev = RecordCall(t->effectId, "AttachBeamToEntity");
+    ev.bone = BoneOf(L, e, 3);
+    ev.army = static_cast<int>(lua_tonumber(L, 4));
+    if (e) {
+      ev.entity = e->id;
+      SetPosition(ev, e, ev.bone);
+      EffectLog& fx = Fx();
+      fx.where.back() = {EntityRef(e), ev.bone};
+      fx.live.push_back({t->effectId, EntityRef(e), 0u});
+    }
+  }
+  lua_settop(L, 1);
   return 1;
 }
 
@@ -84,12 +240,29 @@ int l_ChainStub(lua_State* L) {
     lua_pushboolean(L, 0);
     return 1;
   }
+  if (!std::strncmp(name, "IEffect:", 8) && Collecting(L)) {
+    auto* t = dynamic_cast<EngineThing*>(GetObject(L, 1));
+    if (t && t->effectId) {
+      const int top = lua_gettop(L);
+      EffectEvent& ev = RecordCall(t->effectId, m);
+      for (int i = 2; i <= top; ++i) {
+        if (lua_type(L, i) == LUA_TNUMBER) ev.numbers.push_back(static_cast<float>(lua_tonumber(L, i)));
+        else if (lua_type(L, i) == LUA_TSTRING) AddText(ev, lua_tostring(L, i));
+      }
+    }
+  }
   lua_settop(L, 1);
   return 1;
 }
 
 int l_Destroy(lua_State* L) {
-  if (ScriptObject* o = GetObject(L, 1)) o->UnbindLua();
+  if (ScriptObject* o = GetObject(L, 1)) {
+    if (auto* t = dynamic_cast<EngineThing*>(o); t && t->effectId) {
+      RecordDestroy(t->effectId);
+      t->effectId = 0;
+    }
+    o->UnbindLua();
+  }
   return 0;
 }
 
@@ -152,16 +325,53 @@ void RegisterEffectBindings(lua_State* L) {
   SetMethod(L, "IEffect", "Destroy", l_Destroy);
   SetMethod(L, "IAniManipulator", "Destroy", l_Destroy);
   SetMethod(L, "CDecalHandle", "Destroy", l_Destroy);
-  for (const auto& f : kFactories) {
-    lua_pushstring(L, f.name);
-    lua_pushstring(L, f.cls);
+  for (size_t i = 0; i < sizeof kFactories / sizeof kFactories[0]; ++i) {
+    lua_pushstring(L, kFactories[i].name);
+    lua_pushnumber(L, static_cast<lua_Number>(i));
     lua_pushcclosure(L, l_Factory, 1);
     lua_rawset(L, LUA_GLOBALSINDEX);
   }
+  for (int intel = 0; intel < 2; ++intel) {
+    lua_pushstring(L, intel ? "CreateLightParticleIntel" : "CreateLightParticle");
+    lua_pushboolean(L, intel);
+    lua_pushcclosure(L, l_LightParticle, 1);
+    lua_rawset(L, LUA_GLOBALSINDEX);
+  }
+  SetGlobal(L, "AttachBeamToEntity", l_AttachBeamToEntity);
   SetGlobal(L, "EconomyEventIsDone", l_EconomyEventIsDone);
   SetGlobal(L, "Warp", l_Warp);
 }
 
-void ReleaseEffectObjects() { Things().clear(); }
+void ReleaseEffectObjects() {
+  Things().clear();
+  Fx() = EffectLog();
+}
+
+void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {
+  EffectLog& fx = Fx();
+  // where the things made this beat are now
+  for (size_t i = 0; i < fx.events.size(); ++i) {
+    if (!fx.where[i].first) continue;
+    if (const Entity* e = sim.FindEntity(fx.where[i].first)) SetPosition(fx.events[i], e, fx.where[i].second);
+  }
+  // an attached effect ends with its entity
+  size_t keep = 0;
+  for (size_t i = 0; i < fx.live.size(); ++i) {
+    const LiveEffect l = fx.live[i];
+    if ((l.ref && !sim.FindEntity(l.ref)) || (l.ref2 && !sim.FindEntity(l.ref2))) {
+      EffectEvent ev;
+      ev.kind = EffectEvent::Destroy;
+      ev.id = l.id;
+      ev.name = "Destroy";
+      fx.events.push_back(std::move(ev));
+    } else {
+      fx.live[keep++] = l;
+    }
+  }
+  fx.live.resize(keep);
+  out->clear();
+  out->swap(fx.events);
+  fx.where.clear();
+}
 
 }  // namespace moho

@@ -1646,6 +1646,215 @@ bool ShouldAbort(Sim& sim, Unit* U, GuardData& g) {
 
 }  // namespace
 
+// ---- capture (CUnitCaptureTask: ctor 0x603f90, TaskTick 0x6043e0, DoCallback 0x604e10, dtor 0x6050f0) ----
+
+namespace {
+
+// DoCallback: the start (the target counts one more capturer and both scripts hear it) or its undoing, which is
+// also the failure report: when the target still lives it counts one less, stops being BeingCaptured with nobody
+// left, and both scripts hear OnFailed...
+void CaptureCallback(Sim& sim, lua_State* L, Unit* u, BuildTask& t, bool start) {
+  if (start == t.capStarted) return;
+  t.capStarted = start;
+  Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  if (!T) return;
+  if (start) {
+    T->unitStates.insert("BeingCaptured");
+    ++T->capturers;
+    PushObject(L, u);
+    sim.CallMethod(L, T, "OnStartBeingCaptured", 1);
+    PushObject(L, T);
+    sim.CallMethod(L, u, "OnStartCapture", 1);
+    return;
+  }
+  if (T->dead || T->destroyQueued) return;
+  if (T->capturers > 0) --T->capturers;
+  if (T->capturers == 0) T->unitStates.erase("BeingCaptured");
+  PushObject(L, u);
+  sim.CallMethod(L, T, "OnFailedBeingCaptured", 1);
+  PushObject(L, T);
+  sim.CallMethod(L, u, "OnFailedCapture", 1);
+}
+
+// capturer:GetCaptureCosts(target) -> time (seconds), energy, mass; false unless it gives three values
+bool CaptureCosts(Sim& sim, lua_State* L, Unit* u, Unit* T, float out[3]) {
+  int top = lua_gettop(L);
+  PushObject(L, u);
+  int obj = lua_gettop(L);
+  lua_pushstring(L, "GetCaptureCosts");
+  lua_gettable(L, obj);
+  if (!lua_isfunction(L, -1)) {
+    lua_settop(L, top);
+    return false;
+  }
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_insert(L, -2);
+  lua_pushvalue(L, obj);
+  PushObject(L, T);
+  if (lua_pcall(L, 2, 3, top + 2) != 0) {
+    LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    lua_settop(L, top);
+    return false;
+  }
+  bool ok = lua_isnumber(L, -3) && lua_isnumber(L, -2) && lua_isnumber(L, -1);
+  if (ok)
+    for (int i = 0; i < 3; ++i) out[i] = static_cast<float>(lua_tonumber(L, -3 + i));
+  lua_settop(L, top);
+  (void)sim;
+  return ok;
+}
+
+}  // namespace
+
+int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.moving) {  // the move child: the task runs again when it ends
+    if (u->motion.hasGoal) return kTaskRunning;
+    t.moving = false;
+    u->unitStates.erase("Moving");
+  } else if (sim.tick() < t.waitUntil) {
+    return kTaskRunning;
+  }
+  Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  if (e && e->destroyQueued) e = nullptr;
+  Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  if (!e || (T && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
+    PushObject(L, u);
+    sim.CallMethod(L, u, "OnStopCapture", 1);
+    return kTaskDone;
+  }
+  if (!e->army || (T && T->layer == "Air") || e->army == u->army || combat::IsAlly(u->army, e->army)) return kTaskFailed;
+  // the gap: the distance less the larger side of each footprint
+  const NamedFootprint& uf = Fp(u);
+  float tfp = 0;
+  if (T) {
+    const NamedFootprint& tf = Fp(T);
+    tfp = static_cast<float>(std::max(tf.sizeX, tf.sizeZ));
+  }
+  const float dx = e->position.x - u->position.x, dz = e->position.z - u->position.z;
+  const float gap = std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(uf.sizeX, uf.sizeZ)) - tfp;
+  if (T && T->unitStates.count("BeingCaptured") && gap > 10.0f) return kTaskFailed;
+  switch (t.state) {
+    case 0:  // within 5: stay; otherwise a move to a free spot beside the target
+      t.state = 1;
+      if (gap > 5.0f && CanMove(u)) {
+        float excl[4] = {0, 0, 0, 0};
+        if (T) SkirtRect(T, excl);
+        Vec3 a = e->position;
+        PrepareMoveFor(sim, u, &a, excl, 1);
+        int x0 = static_cast<int>(std::nearbyint(a.x - uf.sizeX * 0.5f));
+        int z0 = static_cast<int>(std::nearbyint(a.z - uf.sizeZ * 0.5f));
+        int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
+        GroundReserveRect(sim, u, rr);
+        TaskMoveToward(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});
+        u->unitStates.insert("Moving");
+        t.moving = true;
+      }
+      return kTaskRunning;
+    case 1: {
+      if (gap > 10.0f) return kTaskFailed;
+      if (!T || T->dead) return kTaskDone;
+      GroundFreeRect(sim, u);
+      float hy = T->bpData ? T->bpData->sizeY * 0.5f : 0.0f;  // the arm aims at the target's bone -1
+      Vec3 o = vm::Rotate(T->orientation, Vec3{0, hy, 0});
+      SetArmAimTarget(sim, u, Vec3{T->position.x + o.x, T->position.y + o.y, T->position.z + o.z});
+      u->unitStates.insert("Capturing");
+      t.state = 2;
+      return kTaskRunning;
+    }
+    case 2: {  // the costs: the target's, and those of the units it carries (the carried part: inferred)
+      if (!T) return kTaskDone;
+      float c[3];
+      if (!CaptureCosts(sim, L, u, T, c)) {
+        Logf(LogLevel::Warning, "Failed to get valid capture costs from the target");
+        return kTaskDone;
+      }
+      float energy = c[1], mass = c[2];
+      float ticks = c[0] * 10.0f;
+      if (1.0f > ticks) ticks = 1.0f;
+      t.capTotal = static_cast<int>(static_cast<float>(t.capTotal) + ticks);
+      for (Unit* x : sim.units()) {
+        if (x->transportedBy != EntityRef(T) || x->dead || x->destroyQueued) continue;
+        float cc[3];
+        if (!CaptureCosts(sim, L, u, x, cc)) continue;
+        float tk = cc[0] * 10.0f;
+        if (1.0f > tk) tk = 1.0f;
+        t.capTotal = static_cast<int>(static_cast<float>(t.capTotal) + tk);
+        energy += cc[1];
+        mass += cc[2];
+      }
+      if (t.capTotal < 1) t.capTotal = 1;
+      t.capPerTick[0] = (0.0f > energy ? 0.0f : energy) / static_cast<float>(t.capTotal);
+      t.capPerTick[1] = (0.0f > mass ? 0.0f : mass) / static_cast<float>(t.capTotal);
+      if (t.capRequest) t.capRequest->live = false;
+      t.capRequest = u->army ? u->army->econ.NewRequest() : nullptr;
+      if (t.capRequest) {
+        t.capRequest->requested[0] = t.capPerTick[0];
+        t.capRequest->requested[1] = t.capPerTick[1];
+      }
+      CaptureCallback(sim, L, u, t, true);
+      t.state = 3;
+      return kTaskRunning;
+    }
+    case 3: {  // a beat's worth when it is paid in full: every capturer of the target counts for each of them
+      if (!T) return kTaskDone;
+      const bool paid = !t.capRequest || (t.capRequest->granted[0] >= t.capPerTick[0] &&
+                                          t.capRequest->granted[1] >= t.capPerTick[1]);
+      if (paid) {
+        if (t.capRequest) {
+          u->consumedTick[0] += t.capRequest->granted[0];
+          u->consumedTick[1] += t.capRequest->granted[1];
+          t.capRequest->granted[0] = t.capRequest->granted[1] = 0;
+        }
+        t.capProgress = std::min(t.capTotal, t.capProgress + T->capturers);
+        u->workProgress = static_cast<float>(t.capProgress) / static_cast<float>(t.capTotal);
+      }
+      static const bool dbgCap = getenv("MOHO64_DEBUG_CAPTURE") != nullptr;
+      if (dbgCap)
+        Logf(LogLevel::Info, "capture %u unit %u: %d of %d beats, per beat E %.3f M %.3f, granted E %.3f M %.3f, capturers %d",
+             sim.tick(), u->id, t.capProgress, t.capTotal, t.capPerTick[0], t.capPerTick[1],
+             t.capRequest ? t.capRequest->granted[0] : -1.0f, t.capRequest ? t.capRequest->granted[1] : -1.0f,
+             T->capturers);
+      if (t.capProgress >= t.capTotal) t.state = 4;
+      return kTaskRunning;
+    }
+    default: {  // done: the capturer stops, the target hears it was captured (its script changes sides)
+      PushObject(L, e);
+      sim.CallMethod(L, u, "OnStopCapture", 1);
+      if (T) {
+        PushObject(L, u);
+        sim.CallMethod(L, T, "OnStopBeingCaptured", 1);
+      }
+      if (Entity* now = sim.FindEntity(t.goalId)) {
+        PushObject(L, u);
+        sim.CallMethod(L, now, "OnCaptured", 1);
+      }
+      t.completed = true;
+      return kTaskDone;
+    }
+  }
+}
+
+// dtor 0x6050f0: the focus goes, Capturing off, work progress 0, and the start is undone if it happened
+void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.capRequest) {
+    t.capRequest->live = false;
+    t.capRequest.reset();
+  }
+  if (Alive(u)) {
+    if (u->focusId == t.goalId) u->focusId = 0;
+    u->unitStates.erase("Capturing");
+    u->workProgress = 0;
+    SetArmAimTarget(sim, u, Vec3{});
+    if (t.moving) {
+      t.moving = false;
+      StopMoving(u);
+    }
+    GroundFreeRect(sim, u);
+  }
+  CaptureCallback(sim, L, u, t, false);
+}
+
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo) {
   BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
   InitRepair(sim, u, *t, target, silo);
@@ -1893,6 +2102,13 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->order = "Reclaim";
       t->goalId = c.targetId;
       break;
+    case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus
+      if (!c.targetId) return nullptr;
+      t->order = "Capture";
+      t->goalId = c.targetId;
+      u->focusId = c.targetId;
+      sim.CallMethod(sim.L(), u, "OnAssignedFocusEntity", 0);
+      break;
     case CommandType::Guard:
       return StartGuardTask(sim, u, c);
     case CommandType::AssistCommander:
@@ -1921,6 +2137,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Upgrade: r = TickUpgrade(sim, L, u, t); break;
     case CommandType::Repair: r = TickRepair(sim, L, u, t); break;
     case CommandType::Reclaim: r = TickReclaim(sim, L, u, t); break;
+    case CommandType::Capture: r = TickCapture(sim, L, u, t); break;
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
     case CommandType::TransportUnloadUnits:
@@ -1980,6 +2197,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.type == CommandType::Nuke || t.type == CommandType::Tactical) {
     EndFireAt(sim, u, t);
+    return;
+  }
+  if (t.type == CommandType::Capture) {
+    EndCapture(sim, L, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack || t.type == CommandType::OverCharge) {

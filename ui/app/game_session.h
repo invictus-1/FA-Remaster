@@ -41,8 +41,13 @@ class GameSession {
   // `__blueprints`, the unit categories and the category functions, the way the simulation's own
   // state has them. (The rules are loaded a second time for this; the simulation keeps its own.)
   bool LoadInterfaceRules(lua_State* userState);
-  // Called with each beat's sync tables (the simulation's bytes) once set.
+  // Called with each beat's sync tables (the simulation's bytes) once set. Until then the tables
+  // are kept, oldest first, for TakePendingSync: the first beats tell the interface things once only.
   std::function<void(const std::string& sync)> onSync;
+  std::vector<std::string> TakePendingSync() { return std::move(pendingSync_); }
+  // Run the simulation's first beat now if it has not run yet: the interface is made for a game
+  // that is under way, and the first beat's sync table tells it the playable area and more.
+  void RunFirstBeat();
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
 
@@ -58,6 +63,7 @@ class GameSession {
   std::vector<std::string> hookDirs_;
   std::unique_ptr<Sim> sim_;
   std::vector<std::string> modUids_;
+  std::vector<std::string> pendingSync_;
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
   std::unique_ptr<ScriptState> rules_;
   std::unique_ptr<SimBlueprints> interfaceBlueprints_;

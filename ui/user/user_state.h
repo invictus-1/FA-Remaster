@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -64,6 +65,13 @@ class UserState {
   // A beat's sync table from the simulation (bytes as Sim::TakeSync gives them).
   void DeliverSync(const std::string& blob);
   std::unique_ptr<ScriptObject> provider;  // the game script's world interface provider, once made
+  bool gameInterface = false;              // the game's interface has been created (GameLoaded ran)
+  // What a part of the engine side keeps for this state (the units of user_units.cpp).
+  struct Extra {
+    virtual ~Extra() = default;
+  };
+  std::unique_ptr<Extra> units;
+  std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -100,6 +108,11 @@ void LoadPrefs(lua_State* L, const std::string& file);
 void RegisterBasicBindings(lua_State* L);
 // The world interface provider and a running session's facts (session_bindings.cpp).
 void RegisterSessionBindings(lua_State* L);
+// Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up
+// to date with the simulation; InstallUnitCategoryFunctions goes after the rules are in the state.
+void RegisterUserUnitBindings(lua_State* L);
+void RefreshUserUnits(lua_State* L);
+void InstallUnitCategoryFunctions(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
 

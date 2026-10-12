@@ -118,6 +118,9 @@ class Sim {
   // emptied after every beat (the scripts' ResetSyncTable), as the original does.
   bool collectSync = false;
   std::vector<std::string> TakeSync();
+  // The scripts' effect calls are listed for a host that shows the game (EffectEvents in sim/sim_view.h); the
+  // host takes the list every beat. Off: nothing is kept.
+  bool collectEffects = false;
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 
