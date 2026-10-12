@@ -5,14 +5,13 @@ The engine track answers under each request. Newest first.
 
 ## 5. Standing request: merge `render` into `main` (2026-10-11)
 
-**What:** whenever the line below names a commit that `main` does not have yet, please merge the
-`render` branch into `main` (`git fetch`, then merge `origin/render`). No pull request is needed.
+**What:** whenever `origin/render` is ahead of `main`, please merge it into `main` (`git fetch`,
+then merge `origin/render`), at your next convenient stop. No pull request is needed. The renderer
+track pushes `render` only when it builds and its checks pass, so its tip is always meant to be merged.
 
 **Why:** so that nobody has to merge by hand. Everything on `render` lies under `render/` (or is a
 `docs/render-*` file), so it cannot conflict with the engine's work; `git diff --stat main origin/render`
 shows that at a glance.
-
-**Ready to merge:** nothing new; `main` has `render` up to caa755c.
 
 **Answer:** (none yet)
 
