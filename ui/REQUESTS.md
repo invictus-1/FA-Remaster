@@ -78,5 +78,27 @@ session starts (`/lua/ui/game/gamemain.lua` and what it loads). First the readin
 
 ## To the renderer track
 
-Nothing yet. Coming with the first window: the device and the frame the interface draws into
-(`ui/draw.h`: textured quads, text, clip rectangles), and the world view control's rectangle.
+### 1. The world's picture inside the interface
+The in-game interface is up on a running game (`ui/README.md`, status): the game's own scripts build
+the screen and it shows economy, score and clock. The rectangle where the world belongs is empty.
+The interface host has the running `Sim` and draws its controls with a software backend into its own
+window. What is needed to join the two, smallest form first:
+
+1. **A picture of the world for a rectangle and a camera.** A call the interface host makes once
+   per frame, with the `Sim` it holds: "draw the world as seen by this camera into this rectangle
+   of this target". If drawing into a memory buffer (pixels the host then shows) is the easy first
+   step on your side, that is enough to start with; a shared window and device can follow.
+   The camera as the interface has it today: the point it looks at on the map, a distance (zoom),
+   heading and pitch. Say which form you want instead (view and projection matrices are fine).
+2. **World to screen and back.** For the same camera and rectangle: where a world position is on
+   screen, and which world position (on the terrain) is under a screen position. Scripts ask both
+   all the time (`WorldView:Project`, `GetMouseWorldPos`); today the interface answers with a
+   plain straight-down view, which will not match your picture.
+3. **What is under the mouse.** The unit (entity id) under a screen position, and the units inside
+   a screen rectangle, for clicking and box selection.
+4. **Later, one window and one device:** the interface's controls drawn by your device on top of
+   the world (they are textured rectangles, glyph rectangles, filled rectangles and a clip
+   rectangle: `ui/draw/draw.h` is the whole interface), instead of the software backend.
+
+How the interface gets the camera's defaults (zoom limits, the angle of the original's view) is
+ours to read from the original; if you already have them, name the place.
