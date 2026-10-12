@@ -90,7 +90,8 @@ engine's log.
 A new game instead of a replay: `--init <init file> --session <game configuration> [--seed N]`,
 where the configuration is what a lobby hands over at Launch (a Lua file with `GameConfig = { ... }`).
 Its AI armies play; nobody gives orders yet. Measured with one player and seven M28 AIs on a
-20 km map, ten game-minutes in (about 1,400 units): the whole map in view takes 0.93 ms a frame
+20 km map, ten game-minutes in: the whole map in view (5,324 models drawn, about 4,700 of them the
+map's trees and rocks) takes 0.93 ms a frame
 at 1920 x 1080 while the simulation, on its own thread, takes about 29 ms a tick.
 
 Playing a recording: make one with the engine (`MOHO64_RECORD=<file>` on a replay) and give it to
