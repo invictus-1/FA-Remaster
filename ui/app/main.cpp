@@ -1,10 +1,12 @@
 // moho64ui -- the interface track's host: mount the game data the way the original does, boot the
-// user Lua state and enter the game's interface scripts. No window yet: it runs frames headless
-// and the log says how far the scripts came and which engine functions they missed.
+// user Lua state and enter the game's interface scripts. Without --window it runs frames headless
+// on its own clock: the log says how far the scripts came and which engine functions they missed,
+// and the screen can be logged (--dump-ui) or saved as a picture (--screenshot). With --window the
+// interface runs live in a window, with the mouse.
 //
 //   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--stage userinit|setup|frontend]
-//            [--size 1920x1080] [--frames N] [--dump-ui] [--lua <file>] [--list-bindings]
-//            [--log out.log] [--quiet] [-- <the game's own arguments>]
+//            [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]
+//            [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -18,6 +20,7 @@
 #include <shlobj.h>
 #endif
 
+#include "app/window.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -48,6 +51,7 @@ Options* g_opts = nullptr;
 int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
+bool windowed = false;            // --window: run live in a window until it is closed
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
 // keeps them to itself for now: see ui/REQUESTS.md.
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
     else if (a == "--quiet") o.quiet = true;
     else if (a == "--dump-ui") dumpUi = true;
     else if (a == "--screenshot") screenshot = next();
+    else if (a == "--window") windowed = true;
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -187,8 +192,8 @@ int main(int argc, char** argv) {
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
     std::fprintf(stderr,
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
-                 "                [--size 1920x1080] [--frames N] [--dump-ui] [--lua file] [--list-bindings]\n"
-                 "                [--log out.log] [--quiet] [-- game arguments]\n");
+                 "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
+                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [-- game arguments]\n");
     return 2;
   }
   Vfs vfs;
@@ -217,7 +222,12 @@ int main(int argc, char** argv) {
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
   }
   int done = 0;
-  for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
+  if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
+    done = ui::RunWindow(user, width, height, o.frames);
+    if (done < 0) ok = false;
+  } else {
+    for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
+  }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
   if (dumpUi) user.ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture

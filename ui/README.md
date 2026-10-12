@@ -54,9 +54,13 @@ So the job is two layers:
 ```
 py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip install ziglang)
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
-         [--stage userinit|setup|frontend] [--size 1920x1080] [--frames N] [--dump-ui]
-         [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
+         [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
+         [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
+         [-- <the game's own arguments>]
 ```
+- `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
+  frames). Without it the host runs headless on its own clock.
+- `--screenshot file.png` draws the head once at the end and saves the picture.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
   `uimain.SetupUI()`, `frontend` (the default) adds `uimain.StartFrontEndUI()`. `--frames N` then
   runs N frames (controls' `OnFrame`, script threads) at 60 frames per second of its own clock.
@@ -119,7 +123,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
   original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list, edit
   field, border and scrollbar draw by inference, marked in the source.
-- Not real yet: a window, input, sound, key maps, movies, render passes, other texture formats.
+- Mouse input (`maui/input.*`): an event goes to the control holding the input capture, or to the
+  control under the cursor (highest Depth among those not hidden, with hit testing on, containing
+  the point), as the original's event table through the script's `HandleEvent`, and up to the
+  parents until one handles it; MouseEnter / MouseExit; `uimain.OnMouseButtonPress`. Read from the
+  original: the target rule, the event table, the passing up. Inferred: the order of exit and enter.
+- `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
+  drawing per frame at 1600x900. The main menu opens and its buttons light up under the cursor.
+- Not real yet: keyboard input and key maps, draggers, the game's cursor, sound, movies, render
+  passes, bitmap animation, other texture formats.
 - 221 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track

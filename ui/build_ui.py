@@ -77,7 +77,7 @@ def main():
         sys.exit(f"build_ui: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64ui.exe" if windows else "moho64ui")
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
-    link += ["-lshell32", "-lgdi32", "-luser32", "-static"] if windows else ["-lm", "-lpthread"]
+    link += ["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-static"] if windows else ["-lm", "-lpthread"]
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("build_ui: link failed\n" + r.stderr)
