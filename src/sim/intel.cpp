@@ -193,6 +193,8 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
   b->army = u->army;
   b->id = sim.ReserveId(u->army, 0x3);
   b->fake = fake;
+  if (getenv("MOHO64_DEBUG_BLIP"))
+    Logf(LogLevel::Info, "blip %u id %#x of unit %#x%s", sim.tick(), b->id, u->id, fake ? " (fake)" : "");
   if (fake && u->intel) {
     const EntityIntel& ei = *u->intel;
     const uint32_t span = ei.jamMax > ei.jamMin ? ei.jamMax - ei.jamMin : 0;

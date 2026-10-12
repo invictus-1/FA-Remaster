@@ -1969,7 +1969,11 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     if (d.firstUpdate) {
       UnitWeapon* fw = TargetWeapon(sim, u, target);
       float ax = 0, az = 0;
-      if (fw && FormationAdjusted(sim, *fc, u, &ax, &az)) {
+      const bool adj = fw && FormationAdjusted(sim, *fc, u, &ax, &az);
+      if (getenv("MOHO64_DEBUG_FORM"))
+        Logf(LogLevel::Info, "attack form %u unit %u track %d has %d lastPos %.3f %.3f weapon %d adjusted %d %.3f %.3f",
+             sim.tick(), u->id, d.trackMobile ? 1 : 0, has ? 1 : 0, d.lastPos.x, d.lastPos.z, fw ? 1 : 0, adj ? 1 : 0, ax, az);
+      if (adj) {
         // SetWeaponGoal 0x5f2ce0 around the unit's adjusted place
         const int R = static_cast<int>(fw->bp->maxRadius);
         const int x0 = static_cast<int>(std::nearbyint(ax - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(az - R * 0.5f));

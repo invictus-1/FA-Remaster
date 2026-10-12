@@ -956,8 +956,9 @@ void Sim::ProcessDestroyQueue() {
     done.push_back(e);
   }
   destroyQueue_.clear();
-  for (Entity* e : done)
-    if (e->kind != Entity::Kind::Blip) ReleaseId(e->id);  // (~Entity in EntityDb::Purge)
+  // ~Entity in EntityDb::Purge: every kind gives its id back, recon blips too (the player's orders name blips
+  // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
+  for (Entity* e : done) ReleaseId(e->id);
   static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
   for (Entity* e : done) {
     if (dbg && e->kind == Entity::Kind::Unit && e->HasLuaObject()) {

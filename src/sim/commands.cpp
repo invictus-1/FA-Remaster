@@ -623,6 +623,8 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
       c.targetId = EntityRef(e);
       c.pos = e->position;
       c.hasPos = true;
+    } else if (getenv("MOHO64_DEBUG_BLIP")) {
+      Logf(LogLevel::Info, "command %u: target entity %#x does not exist", sim.tick(), t.entity);
     }
   } else if (t.type == 2) {
     c.pos = t.pos;
