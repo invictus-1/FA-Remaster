@@ -1382,6 +1382,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (army && army->pool) army->pool->units.push_back(u);
 
   u->isPod = BpInCategory(*this, u->blueprint, "POD") || BpInCategory(*this, u->blueprint, "STATIONASSISTPOD");
+  u->isEngineer = BpInCategory(*this, u->blueprint, "ENGINEER");
   // Unit ctor 0x6a5800: SetAutoMode(blueprint AI.InitialAutoMode), which tells the script either way, then
   // OnPreCreate
   u->autoMode = u->bpData && u->bpData->initialAutoMode;

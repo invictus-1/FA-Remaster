@@ -1380,7 +1380,11 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     float inv = 1.0f / lenH;
     fwdH = {Z.x * inv, inv * 0.0f, Z.z * inv};
   }
-  Vec3 vel = u->motion.lastMove;
+  const int layer0 = LayerBits(u->layer);
+  // Unit::GetVelocity 0x6a9c90 (0x6bef88): the last beat's displacement only in the Air layer; a transport
+  // hovering over its pickup point is in the Land layer and reports the motion's own vector, which the flight
+  // code leaves at rest: its horizontal event is 'Stopped' one beat after it got there
+  Vec3 vel = layer0 == kAir ? u->motion.lastMove : u->motion.vel;
   vel.y = 0;
   float hspeed = std::sqrt(vel.z * vel.z + vel.x * vel.x);
   BodySetTransform(body, T);

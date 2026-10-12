@@ -899,7 +899,9 @@ bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
 }
 
 Formation* GetFormation(Sim& sim, Unit* u) {
-  if (u->guardedId) {  // the guarded unit's guard formation (G+0x520), not while GuardBusy
+  // Unit::GetFormation 0x6a9720: an ENGINEER (u+0x689) skips the guard branch and has its command's formation
+  // only: a commander walking to the factory it assists is not in that factory's guard formation
+  if (u->guardedId && !u->isEngineer) {  // the guarded unit's guard formation (G+0x520), not while GuardBusy
     if (u->unitStates.count("GuardBusy")) return nullptr;
     Unit* G = UnitOf(sim, u->guardedId);
     return G && G->guardForm ? G->guardForm.get() : nullptr;
