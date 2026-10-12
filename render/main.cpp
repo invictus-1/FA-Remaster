@@ -759,7 +759,9 @@ int main(int argc, char** argv) {
         const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);
         if (model && model->ok) {
           const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
-          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), armyColors[p.army % armyColors.size()]);
+          // in its own colours: the original's shader multiplies a projectile's texture by a colour the
+          // program supplies, and which one that is for projectiles is not known yet (REQUESTS.md, 7)
+          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
         } else {
           const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
           draw.Line(position - velocity * 0.06f, position, 0xffc8f4ffu);
