@@ -15,6 +15,10 @@
 // --mods    a folder of mods (each in its own folder): their units and textures are found too
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
 // --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
+// --crowd <unit id>=<count>  a square block of that unit, to measure what armies cost
+// --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
+// --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
+// --detail  the models' quality setting: 1 full, 0.5 for a slower card, a huge value forces the finest level
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
@@ -37,6 +41,7 @@
 #include <thread>
 #include <vector>
 
+#include "ambient_occlusion.h"
 #include "camera.h"
 #include "core/hostfs.h"
 #include "core/log.h"
@@ -84,7 +89,9 @@ struct Options {
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
-  float lodScale = 1;  // below 1 keeps models' finer levels of detail (and the models themselves) for longer
+  int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
+  float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
+  float detail = 1;    // the models' quality setting (mesh_renderer.h): 1 full, 0.5 for a slower card, huge = finest always
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -119,7 +126,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
-    else if (a == "--lodscale") o->lodScale = static_cast<float>(atof(v));
+    else if (a == "--detail") o->detail = static_cast<float>(atof(v));
+    else if (a == "--msaa") o->msaa = atoi(v);
+    else if (a == "--ao") o->ao = static_cast<float>(atof(v));
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
@@ -194,6 +203,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
+  gSceneSamples = opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;
   std::string error;
   // an automatic run (--frames) must give the same picture whatever the person at the machine is
   // doing: its window stays in the background and what is typed or clicked is not acted on
@@ -263,7 +273,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
-  meshes.lodScale = opt.lodScale;
+  meshes.detail = opt.detail;
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -282,8 +292,10 @@ int main(int argc, char** argv) {
     if (cube.first == "<default>") environment = textures.Get(cube.second);
 
   // the frame's passes and the light
+  AmbientOcclusion ao(device.get());
+  ao.strength = opt.ao;
   Post post(device.get());
-  if (!post.Init(&error)) {
+  if (!ao.Init(&error) || !post.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
@@ -461,6 +473,7 @@ int main(int argc, char** argv) {
           if (e.key == 'F' && haveRecording) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
           if (e.key == 'H') shadowsOn = !shadowsOn;
+          if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;
         case InputEvent::MouseDown:
           dragX = e.x;
@@ -582,6 +595,12 @@ int main(int argc, char** argv) {
       terrain->Draw(view);
       meshes.Draw(view, environment);
       draw.Flush(view);
+      // ambient occlusion: from the depth of everything solid, laid over it before the water
+      if (look == Look::Modern && ao.strength > 0) {
+        ao.Compute(view, camera, post.Depth());
+        post.ContinueScene();
+        ao.Apply(view);
+      }
       water->Draw(view);
     } else {
       DrawTestScene(draw);
@@ -603,7 +622,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      printf("; models: %d drawn, %d triangles\n", meshes.drawnInstances, meshes.drawnTriangles);
+      printf("; models: %d drawn, %d triangles, %d more in shadow maps\n", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       break;
     }
 

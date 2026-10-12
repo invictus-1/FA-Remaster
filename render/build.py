@@ -88,10 +88,31 @@ def main():
     if failed:
         sys.exit(f"render/build: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64view.exe")
-    r = subprocess.run(zig("c++", *target, *common, "-o", exe, *[j[1] for j in jobs], *LIBS, "-static"),
+    fresh = os.path.join(a.out, "moho64view.new.exe")
+    r = subprocess.run(zig("c++", *target, *common, "-o", fresh, *[j[1] for j in jobs], *LIBS, "-static"),
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("render/build: link failed\n" + r.stderr)
+    # Put it in place. While a copy of the program is running, Windows refuses to overwrite its file
+    # but allows renaming it: the running copy is moved aside and cleared away by a later build.
+    for old in glob.glob(os.path.join(a.out, "moho64view.old-*.exe")):
+        try:
+            os.remove(old)
+        except OSError:
+            pass  # still running
+    try:
+        os.replace(fresh, exe)
+    except PermissionError:
+        aside = os.path.join(a.out, "moho64view.old-%d.exe" % os.getpid())
+        os.rename(exe, aside)
+        os.rename(fresh, exe)
+        print("render/build: a copy was running; it keeps running from " + os.path.basename(aside))
+    for ext in (".pdb",):  # the debug symbols follow the program's name
+        if os.path.exists(fresh[:-4] + ext):
+            try:
+                os.replace(fresh[:-4] + ext, exe[:-4] + ext)
+            except OSError:
+                pass
     print("render/build: built " + exe)
 
 

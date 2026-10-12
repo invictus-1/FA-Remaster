@@ -49,27 +49,39 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    if (color_) device_->Destroy(color_);
-    if (depth_) device_->Destroy(depth_);
+    for (gfx::Texture t : {color_, depth_, drawn_})
+      if (t) device_->Destroy(t);
+    drawn_ = {};
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
     td.format = kSceneFormat;
     std::memcpy(td.clearValue, clearColor, sizeof td.clearValue);
-    color_ = device_->CreateTarget(td);
+    color_ = device_->CreateTarget(td);  // the picture as the last pass reads it
+    td.samples = gSceneSamples;
+    if (gSceneSamples > 1) drawn_ = device_->CreateTarget(td);  // what is drawn into, several samples a pixel
     td.format = gfx::Format::D32;
     depth_ = device_->CreateTarget(td);
     width_ = width;
     height_ = height;
   }
   gfx::PassDesc pass;
-  pass.color = color_;
+  pass.color = drawn_ ? drawn_ : color_;
   pass.depth = depth_;
   std::memcpy(pass.clearValue, clearColor, sizeof pass.clearValue);
   device_->BeginPass(pass);
 }
 
+void Post::ContinueScene() {
+  gfx::PassDesc pass;
+  pass.color = drawn_ ? drawn_ : color_;
+  pass.depth = depth_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+}
+
 void Post::Present(const View& view) {
+  if (drawn_) device_->Resolve(drawn_, color_);
   gfx::PassDesc pass;
   pass.window = true;
   pass.clearColor = false;

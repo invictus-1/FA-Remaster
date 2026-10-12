@@ -150,6 +150,7 @@ bool MeshRenderer::Init(std::string* error) {
               {"BLENDINDICES", 0, gfx::AttrType::UByte4, offsetof(ScmVertex, bones)}};
   pd.stride = sizeof(ScmVertex);
   pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
   pd.name = "models, blended";
@@ -157,6 +158,7 @@ bool MeshRenderer::Init(std::string* error) {
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
   pd.name = "models, shadow";
+  pd.samples = 1;
   pd.blend = gfx::Blend::Opaque;
   pd.pixelEntry = "ShadowPS";
   pd.depthOnly = true;
@@ -191,19 +193,36 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
 }
 
 void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass) {
-  if (!shadowPass) drawnInstances = drawnTriangles = 0;
-  // what this view sees, each at the level of detail its distance from the camera asks for
+  if (shadowPass) {
+    if (countedScene_) shadowTriangles = 0;
+    countedScene_ = false;
+  } else {
+    drawnInstances = drawnTriangles = 0;
+    countedScene_ = true;
+  }
+  // What this view sees, each at the level its size on the SCREEN asks for (view.eye, fovY and height
+  // are the camera's in a shadow pass too, so a model's shadow comes from a level near the one drawn).
   items_.clear();
+  const float focal = static_cast<float>(view.height) / (2 * std::tan(view.fovY * 0.5f));
+  const float smallest = shadowPass ? shadowMinPixels : minPixels;
+  const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
   for (const Entry& e : entries_) {
     const Vec3 r{e.radius, e.radius, e.radius};
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
-    const float distance = Length(e.centre - view.eye) * lodScale;
-    for (const ModelLod& l : e.model->lods)
-      if (distance <= l.cutoff) {
-        // the far-away cards of trees are flat pictures: they cast no shadow
-        if (!(shadowPass && l.blend)) items_.push_back({&l, &e.instance});
-        break;
-      }
+    const float pixels = 2 * e.radius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
+    if (pixels < smallest) continue;
+    const float wanted = wish * pixels * pixels;
+    // the level whose triangle count is nearest to that wish (nearest by ratio: a step down is taken
+    // at the geometric mean of two neighbours, so chains with big gaps - a tree and its flat card -
+    // behave as well as even ones)
+    const std::vector<ModelLod>& lods = e.model->lods;
+    size_t level = 0;
+    while (level + 1 < lods.size() &&
+           wanted * wanted < static_cast<float>(lods[level].indexCount / 3) * static_cast<float>(lods[level + 1].indexCount / 3))
+      ++level;
+    const ModelLod* lod = &lods[level];
+    // the far-away cards of trees are flat pictures: they cast no shadow
+    if (!(shadowPass && lod->blend)) items_.push_back({lod, &e.instance});
   }
   if (items_.empty()) return;
   // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
@@ -240,9 +259,12 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     // only the instances drawn are handed over: the shader reads no further into its array
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
-    if (!shadowPass) {
+    const int triangles = static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
+    if (shadowPass) {
+      shadowTriangles += triangles;
+    } else {
       drawnInstances += static_cast<int>(n);
-      drawnTriangles += static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
+      drawnTriangles += triangles;
     }
     at += n;
   }

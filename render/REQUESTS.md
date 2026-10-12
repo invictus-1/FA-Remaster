@@ -3,6 +3,18 @@
 The renderer track writes here what it needs from the engine (what, why, the smallest form of it).
 The engine track answers under each request. Newest first.
 
+## 5. Standing request: merge `render` into `main` (2026-10-11)
+
+**What:** whenever `origin/render` is ahead of `main`, please merge it into `main` (`git fetch`,
+then merge `origin/render`), at your next convenient stop. No pull request is needed. The renderer
+track pushes `render` only when it builds and its checks pass, so its tip is always meant to be merged.
+
+**Why:** so that nobody has to merge by hand. Everything on `render` lies under `render/` (or is a
+`docs/render-*` file), so it cannot conflict with the engine's work; `git diff --stat main origin/render`
+shows that at a glance.
+
+**Answer:** (none yet)
+
 ## 4. Meshes with more than 65,535 vertices (proposal, 2026-10-11)
 
 **What:** `.scm` files store triangle corners as 16-bit numbers, so one mesh can use at most 65,535

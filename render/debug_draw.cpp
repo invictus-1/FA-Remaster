@@ -42,6 +42,7 @@ bool DebugDraw::Init(std::string* error) {
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}, {"NORMAL", 0, gfx::AttrType::Float3, 12}, {"COLOR", 0, gfx::AttrType::UByte4N, 24}};
   pd.stride = sizeof(Vertex);
   pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
   solid_ = device_->CreatePipeline(pd, error);
   if (!solid_) return false;
   pd.name = "debug lines";

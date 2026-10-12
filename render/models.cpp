@@ -108,7 +108,17 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   const BpValue& display = bp["Display"];
   const BpValue& lods = display["Mesh"]["LODs"];
   m->scale = static_cast<float>(display["UniformScale"].NumberOr(1));
-  const size_t count = std::max<size_t>(1, lods.items.size());
+  // A remastered model being tried out (the viewer's --preview): its folder, mounted at
+  // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
+  // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
+  // whatever the blueprint lists. The scale stays the blueprint's.
+  const std::string preview = "/preview/" + base + "/";
+  const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
+  size_t count = std::max<size_t>(1, lods.items.size());
+  if (previewed) {
+    count = 1;
+    while (count < 8 && vfs_->Exists(preview + base + "_lod" + std::to_string(count) + ".scm")) ++count;
+  }
   for (size_t i = 0; i < count; ++i) {
     const BpValue& entry = lods.Item(i);
     ModelLod lod;
@@ -131,11 +141,6 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
       if (given.empty()) return dir + base + standard;
       return given[0] == '/' ? given : dir + given;
     };
-    // A remastered model being tried out (the viewer's --preview): its folder, mounted at
-    // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace
-    // the blueprint's for every level. Scale and cutoffs stay the blueprint's.
-    const std::string preview = "/preview/" + base + "/";
-    const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
     const std::string meshPath = previewed ? preview + base + "_lod" + std::to_string(i) + ".scm"
                                            : file("MeshName", "_lod" + std::to_string(i) + ".scm");
     auto mesh = vfs_->ReadFile(meshPath);

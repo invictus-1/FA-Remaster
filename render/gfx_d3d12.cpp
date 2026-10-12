@@ -183,7 +183,7 @@ struct TextureRec {
   // targets only
   bool target = false, depth = false;
   bool writable = false;  // currently in its render-target / depth-write state
-  int width = 0, height = 0, layers = 1;
+  int width = 0, height = 0, layers = 1, samples = 1;
   uint32_t view = 0;      // its first render-target or depth view (index into that heap)
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 };
@@ -240,6 +240,7 @@ class D3D12Device final : public Device {
 
   void BeginFrame(const float clearColor[4]) override;
   void BeginPass(const PassDesc& pass) override;
+  void Resolve(Texture from, Texture to) override;
   void SetPipeline(Pipeline pipeline) override;
   void SetConstants(int slot, const void* data, uint32_t size) override;
   void SetTexture(int slot, Texture texture) override;
@@ -795,8 +796,9 @@ uint32_t D3D12Device::NewTextureIndex() {  // 0: no room
 Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
   const bool depth = desc.format == Format::D32;
   const DXGI_FORMAT format = depth ? DXGI_FORMAT_D32_FLOAT : ToDxgi(desc.format);
+  const int samples = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? desc.samples : 1;
   if (format == DXGI_FORMAT_UNKNOWN || IsBlockCompressed(desc.format) || desc.width <= 0 || desc.height <= 0 || desc.layers <= 0 ||
-      (!depth && desc.layers != 1))
+      (!depth && desc.layers != 1) || (samples > 1 && desc.layers != 1))
     return {};
   TextureRec rec;
   rec.used = rec.target = true;
@@ -840,8 +842,9 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
   rd.DepthOrArraySize = static_cast<UINT16>(desc.layers);
   rd.MipLevels = 1;
   rd.Format = depth ? DXGI_FORMAT_R32_TYPELESS : format;
-  rd.SampleDesc.Count = 1;
+  rd.SampleDesc.Count = static_cast<UINT>(samples);
   rd.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  rec.samples = samples;
   D3D12_CLEAR_VALUE clear = {};
   clear.Format = format;
   if (!depth) std::memcpy(clear.Color, desc.clearValue, sizeof clear.Color);
@@ -854,7 +857,9 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.Format = depth ? DXGI_FORMAT_R32_FLOAT : format;
   srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  if (desc.layers > 1) {
+  if (samples > 1) {
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;  // (a view has to exist; shaders do not read it)
+  } else if (desc.layers > 1) {
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
     srv.Texture2DArray.MipLevels = 1;
     srv.Texture2DArray.ArraySize = static_cast<UINT>(desc.layers);
@@ -866,7 +871,9 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
     for (int layer = 0; layer < desc.layers; ++layer) {
       D3D12_DEPTH_STENCIL_VIEW_DESC dv = {};
       dv.Format = DXGI_FORMAT_D32_FLOAT;
-      if (desc.layers > 1) {
+      if (samples > 1) {
+        dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS;
+      } else if (desc.layers > 1) {
         dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
         dv.Texture2DArray.FirstArraySlice = static_cast<UINT>(layer);
         dv.Texture2DArray.ArraySize = 1;
@@ -939,6 +946,13 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
       bt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
       bt.DestBlend = bt.DestBlendAlpha = D3D12_BLEND_ONE;
       break;
+    case Blend::Multiply:
+      bt.BlendEnable = TRUE;
+      bt.SrcBlend = D3D12_BLEND_ZERO;
+      bt.DestBlend = D3D12_BLEND_SRC_COLOR;
+      bt.SrcBlendAlpha = D3D12_BLEND_ZERO;
+      bt.DestBlendAlpha = D3D12_BLEND_ONE;
+      break;
   }
   pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
   pd.RasterizerState.CullMode = desc.cull == Cull::None ? D3D12_CULL_MODE_NONE
@@ -958,8 +972,10 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     pd.NumRenderTargets = 1;
     pd.RTVFormats[0] = ToDxgi(desc.colorFormat);
   }
-  pd.DSVFormat = kDepthFormat;
-  pd.SampleDesc.Count = 1;
+  pd.DSVFormat = desc.depthTarget ? kDepthFormat : DXGI_FORMAT_UNKNOWN;
+  if (!desc.depthTarget) pd.DepthStencilState.DepthEnable = FALSE;
+  pd.SampleDesc.Count = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? static_cast<UINT>(desc.samples) : 1;
+  pd.RasterizerState.MultisampleEnable = pd.SampleDesc.Count > 1;
 
   PipelineRec rec;
   rec.used = true;
@@ -1063,6 +1079,25 @@ void D3D12Device::ReleasePassTargets() {
   passColor_ = passDepth_ = 0;
 }
 
+void D3D12Device::Resolve(Texture from, Texture to) {
+  TextureRec* src = Find(from);
+  TextureRec* dst = Find(to);
+  if (!inFrame_ || !src || !dst || !src->target || !dst->target || src->depth || dst->depth || src->samples <= 1 || dst->samples != 1 ||
+      src->format != dst->format || src->width != dst->width || src->height != dst->height) {
+    fprintf(stderr, "render: Direct3D 12: Resolve needs a multi-sample colour target and an ordinary one of the same size and format\n");
+    return;
+  }
+  ReleasePassTargets();  // both are now in their readable state
+  const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  D3D12_RESOURCE_BARRIER in[2] = {Transition(src->resource.Get(), readable, D3D12_RESOURCE_STATE_RESOLVE_SOURCE),
+                                  Transition(dst->resource.Get(), readable, D3D12_RESOURCE_STATE_RESOLVE_DEST)};
+  list_->ResourceBarrier(2, in);
+  list_->ResolveSubresource(dst->resource.Get(), 0, src->resource.Get(), 0, src->format);
+  D3D12_RESOURCE_BARRIER out[2] = {Transition(src->resource.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, readable),
+                                   Transition(dst->resource.Get(), D3D12_RESOURCE_STATE_RESOLVE_DEST, readable)};
+  list_->ResourceBarrier(2, out);
+}
+
 void D3D12Device::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
   if (pass.window) {
@@ -1076,9 +1111,9 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   }
   TextureRec* color = Find(pass.color);
   TextureRec* depth = Find(pass.depth);
-  if (!depth || !depth->target || !depth->depth || pass.depthLayer < 0 || pass.depthLayer >= depth->layers ||
-      (pass.color.id && (!color || !color->target || color->depth))) {
-    fprintf(stderr, "render: Direct3D 12: BeginPass needs a depth target, and a colour target or none\n");
+  if ((!color && !depth) || (pass.color.id && (!color || !color->target || color->depth)) ||
+      (pass.depth.id && (!depth || !depth->target || !depth->depth || pass.depthLayer < 0 || pass.depthLayer >= depth->layers))) {
+    fprintf(stderr, "render: Direct3D 12: BeginPass needs a colour target, a depth target, or both\n");
     return;
   }
   // a target that stays in use (the next layer of a shadow map) keeps its state
@@ -1098,12 +1133,13 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   }
   passColor_ = pass.color.id;
   passDepth_ = pass.depth.id;
-  D3D12_CPU_DESCRIPTOR_HANDLE dsv = DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer));
+  D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth ? DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer)) : D3D12_CPU_DESCRIPTOR_HANDLE{};
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = color ? RtvHandle(color->view) : D3D12_CPU_DESCRIPTOR_HANDLE{};
-  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, &dsv);
+  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, depth ? &dsv : nullptr);
   if (color && pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
-  if (pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-  SetViewport(depth->width, depth->height);
+  if (depth && pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+  const TextureRec* sized = depth ? depth : color;
+  SetViewport(sized->width, sized->height);
 }
 
 void D3D12Device::SetPipeline(Pipeline pipeline) {

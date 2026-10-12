@@ -37,7 +37,8 @@ struct ModelLod {
   // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
   // modern lighting has to translate.
   bool labPbr = false;
-  float cutoff = 0;        // used while the camera is no further away than this (the blueprint's LODCutoff)
+  float cutoff = 0;        // the blueprint's LODCutoff: the distance the ORIGINAL game uses this level up to.
+                           // This renderer chooses levels by size on screen instead (mesh_renderer.h).
   std::string shaderName;  // "Unit", "Aeon", "Insect", "Seraphim", "UndulatingNormalMappedAlpha", ...
   // What the shader name means for drawing (from the original's techniques of those names):
   float alphaCut = 0;          // pixels whose albedo alpha is not above this are left out (foliage)

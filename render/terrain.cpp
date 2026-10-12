@@ -189,12 +189,14 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
     pd.stride = 8;
     pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
     pipeline_ = device_->CreatePipeline(pd, error);
     if (!pipeline_) return false;
     // into a shadow map: the same vertices, depth only
     pd.name = "terrain, shadow";
     pd.pixelSource = {};
     pd.depthOnly = true;
+    pd.samples = 1;
     pd.cull = gfx::Cull::None;
     shadowPipeline_ = device_->CreatePipeline(pd, error);
     if (!shadowPipeline_) return false;
