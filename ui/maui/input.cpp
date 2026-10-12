@@ -59,9 +59,17 @@ void Collect(Control* c, std::vector<Control*>& out) {
   for (Control* k : c->children()) Collect(k, out);
 }
 
-// Where a mouse event goes: the capturing control, or the one under the cursor.
+Control* TopmostIn(Control* root, float x, float y);
+
+// Where a mouse event goes (FA exe 0x7a4a77..0x7a4b12). Without input capture: the control under
+// the cursor on the frame. With it: the control under the cursor among the capturing control and
+// everything below it, and when the cursor is over none of those, the capturing control itself.
 Control* Target(UiManager& ui, const UiEvent& e) {
-  if (!ui.inputCapture.empty()) return ui.inputCapture.back();
+  if (!ui.inputCapture.empty()) {
+    Control* capture = ui.inputCapture.back();
+    Control* hit = TopmostIn(capture, e.x, e.y);
+    return hit ? hit : capture;
+  }
   return ControlAt(ui, 0, e.x, e.y);
 }
 
@@ -124,9 +132,18 @@ void PostEvent(lua_State* L, Control* c, const UiEvent& e) {
 
 Control* ControlAt(UiManager& ui, int head, float x, float y) {
   Frame* frame = ui.GetFrame(head);
-  if (!frame) return nullptr;
+  return frame ? TopmostIn(frame, x, y) : nullptr;
+}
+
+namespace {
+
+// GetTopmostControl (FA exe 0x7872e0): of `root` and everything below it, the control with the
+// highest Depth among those not hidden, with hit testing on, that contain the point; of equal
+// depths the first in tree order.
+Control* TopmostIn(Control* root, float x, float y) {
+  if (!root || root->dead()) return nullptr;
   std::vector<Control*> all;
-  Collect(frame, all);
+  Collect(root, all);
   Control* best = nullptr;
   float bestDepth = 0;
   for (Control* c : all) {
@@ -136,6 +153,8 @@ Control* ControlAt(UiManager& ui, int head, float x, float y) {
   }
   return best;
 }
+
+}  // namespace
 
 // --- draggers ---
 //
