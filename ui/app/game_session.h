@@ -6,6 +6,7 @@
 // world: the host only reports that the simulation runs.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,6 +41,8 @@ class GameSession {
   // `__blueprints`, the unit categories and the category functions, the way the simulation's own
   // state has them. (The rules are loaded a second time for this; the simulation keeps its own.)
   bool LoadInterfaceRules(lua_State* userState);
+  // Called with each beat's sync tables (the simulation's bytes) once set.
+  std::function<void(const std::string& sync)> onSync;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
 

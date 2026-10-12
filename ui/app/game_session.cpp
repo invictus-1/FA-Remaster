@@ -97,8 +97,11 @@ void GameSession::Advance(double seconds) {
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {
     due_ -= 0.1;
+    sim_->collectSync = static_cast<bool>(onSync);
     if (sim_->Paused()) sim_->PausedBeat();
     else sim_->Tick();
+    if (onSync)
+      for (const std::string& sync : sim_->TakeSync()) onSync(sync);
   }
 }
 

@@ -241,10 +241,16 @@ int main(int argc, char** argv) {
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
     gameCfg.launchSession = nullptr;
+    gameCfg.sim = session.sim();
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L()) && game->Boot() && game->StartMainScript() && game->StartGame();
     Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
     shown = game.get();
+    if (up) {
+      // The simulation is already there when the interface's state comes up, so loading ends at once.
+      game->GameLoaded();
+      session.onSync = [&game](const std::string& sync) { game->DeliverSync(sync); };
+    }
   };
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)

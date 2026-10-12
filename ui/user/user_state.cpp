@@ -34,6 +34,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterInputBindings(L);
   RegisterLobbyBindings(L);
   RegisterKeyMapBindings(L);
+  RegisterSessionBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
@@ -43,6 +44,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  provider.reset();
   ui_.reset();  // the controls let go of their Lua tables while the state is still there
   threads_.reset();
   state_.reset();
@@ -99,7 +101,15 @@ bool UserState::StartMainScript() {
 
 bool UserState::StartGame() {
   uiState_ = "game";
-  return CallUiMain("StartGameUI");
+  if (!CallUiMain("StartGameUI")) return false;
+  CallProvider("StartLoadingDialog");
+  return true;
+}
+
+void UserState::GameLoaded() {
+  lua_pushboolean(state_->L(), 0);  // not a replay
+  CallProvider("CreateGameInterface", 1);
+  CallProvider("StopLoadingDialog");
 }
 
 bool UserState::StartFrontEnd() {
