@@ -666,6 +666,9 @@ int main(int argc, char** argv) {
         else printf("render: simulation: started after %.1f s\n", live.LoadSeconds());
         std::vector<Vec3> own = live.ArmyColors();
         if (!own.empty()) armyColors = std::move(own);
+        std::vector<BlueprintLook> looks;  // how the blueprints look as the simulation has them
+        live.TakeLooks(&looks);
+        world.SetLooks(looks);
       }
       // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
       if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);

@@ -110,6 +110,21 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   auto known = kinds_.find(blueprintPath);
   if (known != kinds_.end()) return known->second.get();
   Kind* kind = kinds_.emplace(blueprintPath, std::make_unique<Kind>()).first->second.get();
+  auto said = said_.find(blueprintPath);
+  if (said != said_.end()) {  // the simulation's word for it, in place of the file's
+    const Said& s = said->second;
+    std::string name = s.icon;
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (!name.empty()) {
+      kind->icon = Icon(name);
+      if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
+    }
+    kind->priority = std::clamp(s.priority, 0, 255);
+    if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
+    if (s.selectionX > 0) kind->selectionX = s.selectionX;
+    if (s.selectionZ > 0) kind->selectionZ = s.selectionZ;
+    return kind;
+  }
   auto text = vfs_->ReadFile(blueprintPath);
   BpValue bp;
   if (!text || !ReadBlueprintFile(*text, &bp)) return kind;  // the models report a blueprint that cannot be read
@@ -124,6 +139,11 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
   kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));
   return kind;
+}
+
+void StrategicIcons::Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ) {
+  said_[blueprintPath] = {icon, priority, fadeIn, selectionX, selectionZ};
+  kinds_.erase(blueprintPath);  // read anew the next time a unit of that kind is shown
 }
 
 void StrategicIcons::Begin(const View& view) {

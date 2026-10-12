@@ -63,6 +63,8 @@ class LiveSim {
   bool FrameAt(double tick, Frame* out);
   // The effect events of the beats computed since the last call, in order (each says its beat).
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
+  // How the blueprints look as the simulation has them, once the game has started; handed over once.
+  void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
   // Each army's colour as the game shows it, by army index from 0; empty until the game has started.
   std::vector<Vec3> ArmyColors() const;
   float MsPerTick() const;     // what a beat costs the simulation, averaged over the last ones

@@ -6,9 +6,8 @@
 // through the places its emitter has been, each place fading out along a ramp texture as it ages.
 //
 // What the vertices and textures are for was read from the game's effects/particle.fx (BeamVS,
-// TrailVS and their pixel shaders). How the original fills them from the blueprints is in the
-// program, not in the game's files: marked GUESS below where this is a reading of the 111 beam and
-// 177 trail blueprints (render/REQUESTS.md, 10).
+// TrailVS and their pixel shaders). How the original fills them from the blueprints was read from
+// the original program by the engine track (docs/engine-answers.md, render 10).
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -65,7 +64,7 @@ class Ribbons {
     gfx::Texture texture, ramp;
     int blend = 2;                 // 0 alpha, 1 darkening, 2 adding, 3 premultiplied
     float startColor[4] = {1, 1, 1, 1}, endColor[4] = {1, 1, 1, 1};  // beams
-    float length = 1, halfWidth = 0.05f;
+    float length = 10, halfWidth = 0.05f;
     float repeatRate = 0;          // beams: how often the texture repeats per world unit (0: once over the beam)
     float uShift = 0, vShift = 0;  // how fast the texture slides, per second
     float life = 1;                // trails: how long a place stays, seconds
@@ -83,12 +82,14 @@ class Ribbons {
   struct TrailPoint {
     Vec3 position;
     double born;
+    float travelled;  // how far the emitter had gone since the trail began
   };
   struct Trail {
     uint32_t id = 0;
     const Kind* kind = nullptr;
     std::vector<TrailPoint> points;  // oldest first
     Vec3 head;
+    float travelled = 0;  // by the head
     double started = 0;
     bool stopped = false;
   };

@@ -6,10 +6,11 @@
 // times a "ramp" texture read along its age.
 //
 // What a particle is was read from the game's particle shader. How an emitter fills a particle from
-// the curves is in the original program, not in the game's files: what this file does there is a
-// reading of the 2,835 emitter blueprints, marked GUESS where it is one (render/REQUESTS.md, 9).
+// the curves was read from the original program by the engine track (docs/engine-answers.md,
+// render 9), and particles.cpp follows that account.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -26,30 +27,33 @@ class Vfs;
 
 namespace render {
 
-// One curve of an emitter blueprint: keys of (x: emitter time, y: value, z: random spread).
+// One curve of an emitter blueprint: keys of (x: emitter time in ticks, y: value, z: random spread).
 struct EmitterCurve {
   float xRange = 1;
   std::vector<Vec3> keys;
-  // The value and the spread at emitter time x (linear between keys, the end keys' beyond them).
+  // The value and the spread at emitter time x: both go linearly from key to key, and stay at the
+  // first key's before it and at the last key's after it. No keys: 0.
   void At(float x, float* value, float* spread) const;
 };
 
 struct EmitterBlueprint {
   bool ok = false;
-  float lifetime = 1;    // of the emitter, in ticks (GUESS); negative: until it is stopped
-  float repeatTime = 1;  // the curves are read at the emitter's age modulo this (GUESS)
+  float lifetime = 1;    // of the emitter, in ticks; negative: until it is stopped
+  float repeatTime = 1;  // the curves are read at the emitter's age modulo this
   int frameCount = 1, stripCount = 1;  // the texture: frames side by side, strips one below the other
   int blendMode = 0;     // 0 alpha, 1 darkens (what is there x (1 - colour)), 2 "modulate 2x inverse",
-                         // 3 adds, 4 premultiplied alpha, 5 refracts (GUESS, from the textures' names)
+                         // 3 adds, 4 premultiplied alpha, 5 refracts
   bool localVelocity = false, localAcceleration = false, gravity = false;
   bool alignRotation = false, alignToBone = false, flat = false, interpolateEmission = true;
+  bool emitIfVisible = true, createIfVisible = false, snapToWaterline = false, onlyEmitOnWater = false;
+  bool resistance = false;  // particles are slowed as by air (ResistanceCurve says how much)
   int sortOrder = 0;
-  float lodCutoff = 1e9f;  // farther from the camera than this, the emitter throws nothing out
+  float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
+  float longestLife = 1;    // the longest a particle of it can live, in ticks
   std::string texturePath, rampPath;
   gfx::Texture texture, ramp;
-  int rampRows = 1;  // the ramp texture's height: one colour ramp per row
   EmitterCurve xDirection, yDirection, zDirection, emitRate, particleLifetime, velocity, xAccel, yAccel, zAccel, xPos, yPos, zPos,
-      startSize, endSize, initialRotation, rotationRate, frameRate, textureSelection, rampSelection;
+      size, startSize, endSize, initialRotation, rotationRate, frameRate, textureSelection, rampSelection, resistanceCurve;
 };
 
 class Particles {
@@ -57,27 +61,31 @@ class Particles {
   Particles(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
+  // The map's water, for emitters that keep to its surface: its level, and the ground's height at a
+  // place. Without it there is no water.
+  void SetWater(float level, std::function<float(float, float)> groundHeight);
+
   // Starts an emitter of that blueprint ("/effects/emitters/x_emit.bp") there. Returns its handle;
   // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was
-  // before now (seconds, on Update's clock; negative: now).
-  uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1);
+  // before now (seconds, on Update's clock; negative: now). `attached`: it hangs on something (a
+  // unit's bone, a shot) and the caller will Move it; only such emitters mind their LODCutoff.
+  uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1,
+                 bool attached = false);
   // Where an emitter is now (one that sits on something that moves).
   void Move(uint32_t emitter, Vec3 position, const Quat& orientation);
-  // One flat glow on the ground that lives `ticks` and is coloured by `ramp` along that time: the
-  // original's "light particle", the light an explosion throws on its surroundings. `texture` and
-  // `ramp` are paths. `size` is half its edge.
-  void Flash(const std::string& texture, const std::string& ramp, Vec3 position, float size, float ticks, double startedAt = -1);
-  // What the game's scripts change on an emitter: its size (ScaleEmitter), and how long it runs,
-  // in ticks (the LIFETIME parameter; negative: until stopped).
+  // What the game's scripts change on an emitter: its size (ScaleEmitter), and one of its
+  // parameters by the engine's name for it (SetEmitterParam: LIFETIME, REPEATTIME, SCALE, LODCUTOFF,
+  // EMITIFVISIBLE; names it does not act on are ignored).
   void SetScale(uint32_t emitter, float scale);
-  void SetLifetime(uint32_t emitter, float ticks);
+  void SetParam(uint32_t emitter, const std::string& name, float value);
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
 
   // Moves time on to `now` (seconds): emitters throw out what is due, and end. With `view`, an
-  // emitter that is out of the picture, or farther from the camera than its blueprint's LODCutoff,
-  // throws nothing out meanwhile (as in the original; what it would have thrown is not made up later).
+  // emitter whose blueprint says EmitIfVisible throws nothing out while it is out of the picture
+  // (or, hanging on something, farther away than its LODCutoff); when it is seen again it makes up
+  // the last ticks it missed.
   void Update(double now, const View* view = nullptr);
   // Draws every living particle into the current pass, which must be the scene's.
   void Draw(const View& view);
@@ -97,7 +105,7 @@ class Particles {
     float velocity[3], rotationRate;      // per second
     float acceleration[3], startTime;     // per second squared; seconds
     float lifetime, size, sizeRate, frameRate;
-    float stripV, rampV, stripHeight, frameSize;
+    float stripV, rampV, drag, unused;    // drag: how fast it is slowed, per second (0: not at all)
   };
   struct Set {  // the particles of one blueprint: one texture, one ramp, one way of blending
     const EmitterBlueprint* blueprint = nullptr;
@@ -107,10 +115,12 @@ class Particles {
     uint32_t id = 0;
     const EmitterBlueprint* blueprint = nullptr;
     Set* set = nullptr;
-    Vec3 position;
+    Vec3 position, positionBefore;  // now, and at the tick before (emission is spread between the two)
     Quat orientation;
     float scale = 1;
-    float lifetime = 1;  // the blueprint's, or what a script set
+    float lifetime = 1, repeatTime = 1, lodCutoff = 0;  // the blueprint's, or what a script set
+    bool emitIfVisible = true;
+    bool attached = false;
     double started = 0;
     int ticksDone = 0;   // of its own time, in tenths of a second
     float carry = 0;     // the fraction of a particle left over from the last tick
@@ -136,6 +146,9 @@ class Particles {
   uint32_t seed_ = 0x2545f491u;
   double now_ = 0;
   float updateMs_ = 0;
+  bool haveWater_ = false;
+  float waterLevel_ = 0;
+  std::function<float(float, float)> groundHeight_;
 };
 
 }  // namespace render

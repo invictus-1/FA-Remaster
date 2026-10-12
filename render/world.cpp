@@ -63,6 +63,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     haveMap_ = true;
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
+    if (map.water.present)
+      particles.SetWater(map.water.elevation, [this](float x, float z) {
+        return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height)));
+      });
     if (map.water.present) decals.SetWater(terrain.WaterMap(), terrain.WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     if (options.mapDecals != "off") {
@@ -118,6 +122,17 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     selectionRing_ = device_->CreateTexture(td);
   }
   return true;
+}
+
+void World::SetLooks(const std::vector<BlueprintLook>& looks) {
+  int units = 0;
+  for (const BlueprintLook& look : looks) {
+    models.SetLook(look);
+    if (look.kind != 0) continue;
+    icons.Define(models.UnitBlueprintPath(look.id), look.icon, look.iconPriority, look.iconFadeIn, look.selectionX, look.selectionZ);
+    ++units;
+  }
+  if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);
 }
 
 float World::GroundHeight(float x, float z) const {

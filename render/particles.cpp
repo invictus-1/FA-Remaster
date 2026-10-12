@@ -1,6 +1,7 @@
 #include "particles.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -8,23 +9,24 @@
 
 #include "bp_reader.h"
 #include "core/vfs.h"
-#include "dds.h"
 
 namespace render {
 namespace {
 
-constexpr float kTick = 0.1f;  // seconds: the emitter blueprints count time in simulation ticks (GUESS)
+constexpr float kTick = 0.1f;  // seconds: the emitter blueprints count time in simulation ticks
 
 // A particle's place, size and turn from its start values and its age; its colour from its texture
 // (one frame of one strip) times its ramp read along its age. Written after the game's
-// effects/particle.fx (WorldVS, WorldVSAlign, WorldPS).
+// effects/particle.fx (WorldVS, WorldVSAlign, WorldPS), with times in seconds.
 const char kShader[] = R"hlsl(
 cbuffer ParticleSet : register(b1) {
   float4 cameraRight;   // w: the time now, seconds
-  float4 cameraUp;      // w: 1 = lies flat on the ground, 2 = stretched along its flight, 0 = faces the camera
-  float4 options;       // x: first row of the set's particles, y: 1 = the texture has frames,
+  float4 cameraUp;      // w: how it lies - 0 faces the camera, 1 flat on the ground, 2 stretched along its
+                        // flight, 3 stretched along its start direction without moving (aligned to a bone)
+  float4 options;       // x: first row of the set's particles, y: 1 = the texture has frames or strips,
                         // z: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied),
                         // w: brightness of what glows in the modern look
+  float4 sheet;         // x: 1 / frames, y: 1 / strips, z: 1 = particles are slowed as by air
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
@@ -49,11 +51,22 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
 
   const float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(1, 1), float2(-1, -1), float2(1, 1), float2(-1, 1)};
   float2 corner = corners[vertex];
-  float3 position = p0.xyz + p1.xyz * t + 0.5 * p2.xyz * t * t;
+  // where it is and which way it flies: thrown, pulled by its acceleration, and (some) slowed as by air
+  float3 position = p0.xyz, flight = p1.xyz;
+  if (cameraUp.w < 2.5) {
+    if (sheet.z > 0.5 && p4.z > 0) {
+      float r = p4.z, fade = exp(-r * t);
+      position += (p2.xyz / (r * r) - p1.xyz / r) * (fade - 1) + p2.xyz * (t / r);
+      flight = (p1.xyz - p2.xyz / r) * fade + p2.xyz / r;
+    } else {
+      position += p1.xyz * t + 0.5 * p2.xyz * t * t;
+      flight = p1.xyz + p2.xyz * t;
+    }
+  }
   float size = p3.y + p3.z * t;
   if (cameraUp.w > 1.5) {
     // stretched along its flight: across by what is square to the flight and to the line of sight
-    float3 along = normalize(p1.xyz + p2.xyz * t + float3(0, 1e-5, 0));
+    float3 along = normalize(flight + float3(0, 1e-5, 0));
     float3 across = normalize(cross(along, cameraPosition - position));
     position += (across * corner.x + along * corner.y) * size;
   } else {
@@ -66,8 +79,8 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.position = mul(viewProj, float4(position, 1));
   o.uv = (corner + 1) * 0.5;
   if (options.y > 0.5) {
-    o.uv.x = (o.uv.x + floor(p3.w * t)) * p4.w;
-    o.uv.y = o.uv.y * p4.z + p4.x;
+    o.uv.x = (o.uv.x + floor(p3.w * t)) * sheet.x;
+    o.uv.y = o.uv.y * sheet.y + p4.x;
   }
   o.rampUv = float2(age, p4.y);
   return o;
@@ -141,6 +154,12 @@ bool Particles::Init(std::string* error) {
   return true;
 }
 
+void Particles::SetWater(float level, std::function<float(float, float)> groundHeight) {
+  haveWater_ = true;
+  waterLevel_ = level;
+  groundHeight_ = std::move(groundHeight);
+}
+
 float Particles::Random() {
   seed_ ^= seed_ << 13;
   seed_ ^= seed_ >> 17;
@@ -171,9 +190,13 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   bp->alignToBone = Flag(v["AlignToBone"], false);
   bp->flat = Flag(v["Flat"], false);
   bp->interpolateEmission = Flag(v["InterpolateEmission"], true);
+  bp->emitIfVisible = Flag(v["EmitIfVisible"], true);
+  bp->createIfVisible = Flag(v["CreateIfVisible"], false);
+  bp->snapToWaterline = Flag(v["SnapToWaterline"], false);
+  bp->onlyEmitOnWater = Flag(v["OnlyEmitOnWater"], false);
+  bp->resistance = Flag(v["ParticleResistance"], false);
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
-  bp->lodCutoff = Number(v["LODCutoff"], 1e9f);
-  if (bp->lodCutoff <= 0) bp->lodCutoff = 1e9f;
+  bp->lodCutoff = std::max(0.0f, Number(v["LODCutoff"], 0));
   bp->texturePath = v["Texture"].StringOr(std::string());
   bp->rampPath = v["RampTexture"].StringOr(std::string());
   const struct {
@@ -183,26 +206,20 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
                 {"EmitRateCurve", &bp->emitRate}, {"LifetimeCurve", &bp->particleLifetime}, {"VelocityCurve", &bp->velocity},
                 {"XAccelCurve", &bp->xAccel}, {"YAccelCurve", &bp->yAccel}, {"ZAccelCurve", &bp->zAccel},
                 {"XPosCurve", &bp->xPos}, {"YPosCurve", &bp->yPos}, {"ZPosCurve", &bp->zPos},
-                {"StartSizeCurve", &bp->startSize}, {"EndSizeCurve", &bp->endSize},
+                {"SizeCurve", &bp->size}, {"StartSizeCurve", &bp->startSize}, {"EndSizeCurve", &bp->endSize},
                 {"InitialRotationCurve", &bp->initialRotation}, {"RotationRateCurve", &bp->rotationRate},
                 {"FrameRateCurve", &bp->frameRate}, {"TextureSelectionCurve", &bp->textureSelection},
-                {"RampSelectionCurve", &bp->rampSelection}};
+                {"RampSelectionCurve", &bp->rampSelection}, {"ResistanceCurve", &bp->resistanceCurve}};
   for (const auto& c : curves) ReadCurve(v[c.name], c.curve);
+  bp->longestLife = 1;
+  for (const Vec3& key : bp->particleLifetime.keys) bp->longestLife = std::max(bp->longestLife, key.y + std::fabs(key.z) * 0.5f);
   bp->texture = textures_->Get(bp->texturePath, textures_->White());
-  bp->ramp = textures_->White();
-  if (!bp->rampPath.empty()) {
-    bp->ramp = textures_->Get(bp->rampPath, textures_->White());
-    // how many ramps the ramp texture holds: its height
-    DdsImage image;
-    std::string error;
-    auto file = vfs_->ReadFile(moho::Vfs::Normalize(bp->rampPath));
-    if (file && ParseDds(*file, &image, &error)) bp->rampRows = std::max(1, image.height);
-  }
+  bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(bp->rampPath, textures_->White());
   bp->ok = true;
   return bp;
 }
 
-uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt) {
+uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt, bool attached) {
   const EmitterBlueprint* bp = Blueprint(blueprint);
   if (!bp->ok) return 0;
   std::unique_ptr<Set>& set = sets_[bp];
@@ -220,45 +237,18 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.id = nextId_++;
   e.blueprint = bp;
   e.set = set.get();
-  e.position = position;
+  e.position = e.positionBefore = position;
   e.orientation = orientation;
   e.scale = scale;
   e.lifetime = bp->lifetime;
+  e.repeatTime = bp->repeatTime;
+  e.lodCutoff = bp->lodCutoff;
+  e.emitIfVisible = bp->emitIfVisible;
+  e.attached = attached;
   e.started = startedAt >= 0 ? startedAt : now_;
   index_[e.id] = emitters_.size();
   emitters_.push_back(e);
   return e.id;
-}
-
-void Particles::Flash(const std::string& texture, const std::string& ramp, Vec3 position, float size, float ticks, double startedAt) {
-  if (ticks <= 0 || size <= 0) return;
-  // a blueprint of its own for every pair of textures: flat, adding its light
-  const std::string key = "light:" + moho::Vfs::Normalize(texture) + "|" + moho::Vfs::Normalize(ramp);
-  std::unique_ptr<EmitterBlueprint>& bp = blueprints_[key];
-  if (!bp) {
-    bp = std::make_unique<EmitterBlueprint>();
-    bp->ok = true;
-    bp->flat = true;
-    bp->blendMode = 3;
-    bp->texture = vfs_->Exists(texture) ? textures_->Get(texture, textures_->White()) : textures_->White();
-    bp->ramp = vfs_->Exists(ramp) ? textures_->Get(ramp, textures_->White()) : textures_->White();
-  }
-  std::unique_ptr<Set>& set = sets_[bp.get()];
-  if (!set) {
-    set = std::make_unique<Set>();
-    set->blueprint = bp.get();
-    order_.push_back(set.get());
-  }
-  Particle p{};
-  p.position[0] = position.x;
-  p.position[1] = position.y;
-  p.position[2] = position.z;
-  p.startTime = static_cast<float>(startedAt >= 0 ? startedAt : now_);
-  p.lifetime = ticks * kTick;
-  p.size = size;
-  p.stripHeight = p.frameSize = 1;
-  p.rampV = 0.5f;
-  set->particles.push_back(p);
 }
 
 Particles::Emitter* Particles::Find(uint32_t id) {
@@ -270,8 +260,16 @@ void Particles::SetScale(uint32_t emitter, float scale) {
   if (Emitter* e = Find(emitter)) e->scale = scale;
 }
 
-void Particles::SetLifetime(uint32_t emitter, float ticks) {
-  if (Emitter* e = Find(emitter)) e->lifetime = ticks;
+void Particles::SetParam(uint32_t emitter, const std::string& name, float value) {
+  Emitter* e = Find(emitter);
+  if (!e) return;
+  std::string n = name;
+  for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (n == "LIFETIME") e->lifetime = value;
+  else if (n == "REPEATTIME") e->repeatTime = value;
+  else if (n == "SCALE") e->scale = value;
+  else if (n == "LODCUTOFF") e->lodCutoff = std::max(0.0f, value);
+  else if (n == "EMITIFVISIBLE") e->emitIfVisible = value > 0;
 }
 
 void Particles::Move(uint32_t emitter, Vec3 position, const Quat& orientation) {
@@ -290,14 +288,19 @@ bool Particles::Running(uint32_t emitter) const {
   return it != index_.end() && !emitters_[it->second].stopped;
 }
 
-// What an emitter throws out in one tick of its own time. All readings of the curves here are the
-// GUESSES of render/REQUESTS.md, 9: time in ticks; a key's z is the width of a random spread around
-// its y; so many particles a tick; the start velocity is the direction (as given, not made unit
-// length) times the speed, per tick; rotations in degrees; sizes are half the quad's edge.
+// What an emitter throws out in one tick of its own time, as the original does it
+// (docs/engine-answers.md, render 9): the curves are read at the emitter's age modulo its repeat
+// time, each reading with its own random spread; so many particles a tick, the fraction carried on;
+// with InterpolateEmission the tick's particles are spread over the tick, in time and along the
+// emitter's way.
 void Particles::Emit(Emitter* emitter, int tick) {
   const EmitterBlueprint& bp = *emitter->blueprint;
-  const float age = static_cast<float>(tick);
-  const float x = bp.repeatTime > 0 ? std::fmod(age, bp.repeatTime) : age;
+  auto curveTime = [&](float age) {
+    if (emitter->repeatTime <= 0) return age;
+    const float x = std::fmod(age, emitter->repeatTime);
+    return x < 0 ? x + emitter->repeatTime : x;
+  };
+  float x = curveTime(static_cast<float>(tick));
   auto read = [&](const EmitterCurve& curve) {
     float value, spread;
     curve.At(x, &value, &spread);
@@ -307,48 +310,70 @@ void Particles::Emit(Emitter* emitter, int tick) {
   const int count = static_cast<int>(wanted);
   emitter->carry = wanted - static_cast<float>(count);
   const double tickStart = emitter->started + static_cast<double>(tick) * kTick;
-  // an emitter that runs on spreads a tick's particles over the tick; a burst throws them at once
-  const bool spreadOut = bp.interpolateEmission && (bp.lifetime < 0 || bp.lifetime > 1);
+  const float scale = emitter->scale;
+  const Vec3 forward = Rotate(emitter->orientation, {0, 0, 1});
+  const bool animated = bp.frameCount > 1 || bp.stripCount > 1;
   for (int i = 0; i < count; ++i) {
+    const float fraction = bp.interpolateEmission ? static_cast<float>(i) / static_cast<float>(count) : 0;
+    x = curveTime(static_cast<float>(tick) + fraction);
     const float life = read(bp.particleLifetime) * kTick;
     if (life <= 0) continue;
-    Vec3 offset{read(bp.xPos), read(bp.yPos), read(bp.zPos)};
-    Vec3 velocity = Vec3{read(bp.xDirection), read(bp.yDirection), read(bp.zDirection)} * (read(bp.velocity) / kTick);
-    Vec3 acceleration = Vec3{read(bp.xAccel), read(bp.yAccel), read(bp.zAccel)} * (1 / (kTick * kTick));
-    if (bp.localVelocity) {
-      offset = Rotate(emitter->orientation, offset);
-      velocity = Rotate(emitter->orientation, velocity);
+    // where it starts: its place in the emitter's own frame, then anywhere on the emitter's disc
+    // (a level disc, denser toward the middle)
+    const Vec3 origin = bp.interpolateEmission ? Lerp(emitter->positionBefore, emitter->position, fraction) : emitter->position;
+    Vec3 position = origin + Rotate(emitter->orientation, Vec3{read(bp.xPos), read(bp.yPos), read(bp.zPos)} * scale);
+    const float disc = read(bp.size) * scale;
+    if (disc != 0) {
+      const Vec3 way = Normalize(Vec3{Random() - 0.5f, 0, Random() - 0.5f});
+      position += way * ((Random() - 0.5f) * disc);
     }
+    Vec3 direction = Vec3{read(bp.xDirection), read(bp.yDirection), read(bp.zDirection)} * scale;  // (not made unit length)
+    if (bp.localVelocity) direction = Rotate(emitter->orientation, direction);
+    Vec3 velocity = direction * (read(bp.velocity) / kTick);
+    Vec3 acceleration = Vec3{read(bp.xAccel), read(bp.yAccel), read(bp.zAccel)} * scale;
     if (bp.localAcceleration) acceleration = Rotate(emitter->orientation, acceleration);
-    if (bp.gravity) acceleration.y -= 4.9f;
-    const float scale = emitter->scale;
+    if (bp.gravity) acceleration.y -= 0.02f;  // per tick squared
+    acceleration = acceleration * (1 / (kTick * kTick));
+    float rotation = read(bp.initialRotation) * (3.14159265f / 180);
+    if (bp.alignToBone && !bp.alignRotation) {
+      if (bp.flat) rotation = std::atan2(-forward.x, forward.z);  // lying flat, turned as the bone is
+      else velocity = forward;                                    // standing along the bone, where it is
+    }
+    // the water's surface
+    if (haveWater_) {
+      if (bp.onlyEmitOnWater) {
+        if (groundHeight_ && groundHeight_(position.x, position.z) > waterLevel_) continue;
+        position.y = waterLevel_ + 0.01f;
+      } else if (bp.snapToWaterline) {
+        if (bp.sortOrder < -101) position.y = std::min(position.y, waterLevel_ - 0.01f);
+        else position.y = std::max(position.y, waterLevel_ + 0.01f);
+      }
+    }
     const float size0 = read(bp.startSize) * scale, size1 = read(bp.endSize) * scale;
-    const Vec3 position = emitter->position + offset * scale;
     Particle p;
     p.position[0] = position.x;
     p.position[1] = position.y;
     p.position[2] = position.z;
-    p.rotation = read(bp.initialRotation) * (3.14159265f / 180);
-    p.velocity[0] = velocity.x * scale;
-    p.velocity[1] = velocity.y * scale;
-    p.velocity[2] = velocity.z * scale;
+    p.rotation = rotation;
+    p.velocity[0] = velocity.x;
+    p.velocity[1] = velocity.y;
+    p.velocity[2] = velocity.z;
     p.rotationRate = read(bp.rotationRate) * (3.14159265f / 180) / kTick;
-    p.acceleration[0] = acceleration.x * scale;
-    p.acceleration[1] = acceleration.y * scale;
-    p.acceleration[2] = acceleration.z * scale;
-    p.startTime = static_cast<float>(tickStart + (spreadOut ? static_cast<double>(Random() * kTick) : 0.0));
+    p.acceleration[0] = acceleration.x;
+    p.acceleration[1] = acceleration.y;
+    p.acceleration[2] = acceleration.z;
+    p.startTime = static_cast<float>(tickStart + static_cast<double>(fraction * kTick));
     p.lifetime = life;
     p.size = size0;
     p.sizeRate = (size1 - size0) / life;
     p.frameRate = read(bp.frameRate) / kTick;
-    const float strips = static_cast<float>(bp.stripCount);
-    p.stripHeight = 1 / strips;
-    p.stripV = std::floor(Clamp(read(bp.textureSelection), 0, strips - 1)) / strips;
-    const float rows = static_cast<float>(bp.rampRows);
-    p.rampV = Clamp((std::floor(read(bp.rampSelection)) + 0.5f) / rows, 0.5f / rows, 1 - 0.5f / rows);
-    p.frameSize = 1 / static_cast<float>(bp.frameCount);
+    p.stripV = animated ? std::floor(read(bp.textureSelection)) / static_cast<float>(bp.stripCount) : 0;
+    p.rampV = read(bp.rampSelection);  // (as it is: the ramp texture is read at this height, held at its edges)
+    p.drag = bp.resistance ? std::max(0.0f, read(bp.resistanceCurve)) / kTick : 0;
+    p.unused = 0;
     emitter->set->particles.push_back(p);
   }
+  emitter->positionBefore = emitter->position;
 }
 
 void Particles::Update(double now, const View* view) {
@@ -359,14 +384,18 @@ void Particles::Update(double now, const View* view) {
     // every whole tick of the emitter's own time that has begun, up to its lifetime
     const int due = static_cast<int>((now - e.started) / kTick) + 1;
     const int last = e.lifetime < 0 ? due : std::min(due, std::max(1, static_cast<int>(std::ceil(e.lifetime))));
-    // (an emitter far behind - the game ran ahead - makes up only its last ticks: older particles would be over)
-    if (last - e.ticksDone > 100) e.ticksDone = last - 100;
-    if (view && e.ticksDone < last) {
+    // one that is behind makes up only its last ticks: at most 24, and no more than a particle lives
+    const int makeUp = std::min(24, static_cast<int>(std::ceil(e.blueprint->longestLife)));
+    if (last - e.ticksDone > makeUp + 1) e.ticksDone = last - makeUp - 1;
+    if (view && e.emitIfVisible && e.ticksDone < last) {
       const float margin = 8 * std::max(1.0f, e.scale);  // how far its particles may be from it and still be seen
       const Vec3 r{margin, margin, margin};
-      if (Length(e.position - view->eye) > e.blueprint->lodCutoff || !view->BoxVisible(e.position - r, e.position + r)) {
-        e.ticksDone = last;  // these ticks pass without particles
+      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) > e.lodCutoff;
+      if (tooFar || !view->BoxVisible(e.position - r, e.position + r)) {
         ++quietEmitters;
+        if (e.blueprint->createIfVisible && e.ticksDone == 0) e.stopped = true;  // never seen: never there
+        if (e.lifetime >= 0 && due > last) e.stopped = true;                     // its time ran out unseen
+        continue;  // (its ticks wait; the last of them are made up when it is seen again)
       }
     }
     while (!e.stopped && e.ticksDone < last) Emit(&e, e.ticksDone++);
@@ -419,10 +448,12 @@ void Particles::Draw(const View& view) {
       device_->SetShaderBuffer(buffer_);
       bound = kind;
     }
-    const float shape = bp.alignRotation || bp.alignToBone ? 2.0f : bp.flat ? 1.0f : 0.0f;
-    const float constants[12] = {right.x, right.y, right.z, now,
+    // which of the original's vertex paths: Align, else AlignToBone (Flat with Flat), else Flat, else plain
+    const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
+    const float constants[16] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
-                                 static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow};
+                                 static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
+                                 1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, 0};
     device_->SetConstants(1, constants, sizeof constants);
     device_->SetTexture(0, bp.texture);
     device_->SetTexture(1, bp.ramp);

@@ -65,6 +65,9 @@ class World {
   // Builds the shaders and loads the map ("/maps/x/x.scmap"; empty: no map, a test scene).
   bool Open(const std::string& mapPath, const Options& options, std::string* error);
   bool HaveMap() const { return haveMap_; }
+  // How the blueprints look as the simulation has them (a running game hands this over once it has
+  // started): models and strategic icons then take their names from it instead of from .bp files.
+  void SetLooks(const std::vector<BlueprintLook>& looks);
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 

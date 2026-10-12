@@ -91,8 +91,43 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
     else if (a.civilian) c = {0.87f, 0.72f, 0.53f};  // the list's CivilianArmyColor, "BurlyWood"
     colors.push_back(c);
   }
+  // how the blueprints look (src/sim/sim_view.h, BlueprintDisplays)
+  std::vector<moho::BlueprintDisplay> displays;
+  moho::BlueprintDisplays(sim, &displays);
+  std::vector<BlueprintLook> looks;
+  looks.reserve(displays.size());
+  for (moho::BlueprintDisplay& d : displays) {
+    BlueprintLook look;
+    look.id = std::move(d.id);
+    look.kind = d.kind;
+    look.scale = d.uniformScale;
+    for (moho::DisplayLod& l : d.lods) {
+      BlueprintLook::Level level;
+      level.mesh = std::move(l.mesh);
+      level.albedo = std::move(l.albedo);
+      level.normals = std::move(l.normals);
+      level.specular = std::move(l.specular);
+      level.secondary = std::move(l.secondary);
+      level.shader = std::move(l.shader);
+      level.cutoff = l.cutoff;
+      look.levels.push_back(std::move(level));
+    }
+    look.icon = std::move(d.icon);
+    look.iconPriority = d.iconSortPriority;
+    look.iconFadeIn = d.iconFadeInZoom;
+    look.selectionX = d.selectionSizeX;
+    look.selectionZ = d.selectionSizeZ;
+    looks.push_back(std::move(look));
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   armyColors_ = std::move(colors);
+  looks_ = std::move(looks);
+}
+
+void SimFrames::TakeLooks(std::vector<BlueprintLook>* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  out->swap(looks_);
 }
 
 // Copies what the renderer needs of the beat just computed.
