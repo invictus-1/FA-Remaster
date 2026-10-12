@@ -30,6 +30,7 @@ using namespace vm;
 namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 bool IsAlly(const Army* a, const Army* b);
+bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 }
 
 // The transport tasks' own state (kept with the BuildTask).
@@ -625,8 +626,26 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   };
   float prev = P0.y - surf(P0.x, P0.z);
   float tHit = -1;
+  // CalcMoveBallistic 0x6c0290: the step as a segment (0x4fe130) against the terrain (STIMap::Intersection
+  // 0x476f30, the line test the projectiles use); the unit lands ON the point it returns and the step's scale is
+  // the hit distance over the segment's length (0x6c0896). Where the point is under water (0x577bc0 then takes
+  // the water plane) the march below still does it.
+  bool exact = false;
+  Vec3 hitP{};
+  {
+    const Vec3 E{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
+    float d = 0;
+    Vec3 h{};
+    if (combat::TerrainSegmentHit(map, P0, E, &d, &h) && (amph || !(map && map->hasWater) || h.y >= water)) {
+      const Vec3 hv{(E.x - P0.x) * 0.5f, (E.y - P0.y) * 0.5f, (E.z - P0.z) * 0.5f};
+      const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+      exact = true;
+      hitP = h;
+      tHit = d / (ext * 2.0f);
+    }
+  }
   const int N = 16;
-  for (int i = 1; i <= N; ++i) {
+  for (int i = 1; i <= N && !exact; ++i) {
     float t = static_cast<float>(i) / N;
     float dfy = (P0.y + v2.y * t) - surf(P0.x + v2.x * t, P0.z + v2.z * t);
     if (dfy <= 0) {
@@ -639,7 +658,7 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   if (prev <= 0 && tHit < 0) tHit = 0;  // already under the surface
   Vec3 P1{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
   if (tHit >= 0) {
-    P1 = {P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
+    P1 = exact ? hitP : Vec3{P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
     float terr = Elev(map, P1.x, P1.z);
     std::string layer = water < terr ? "Land" : (amph ? "Seabed" : "Water");
     u->position = P1;
