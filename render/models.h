@@ -69,6 +69,10 @@ struct Model {
   // every level follow these bones by index (a level whose file lists its bones in another order,
   // or a remastered mesh tried out in the blueprint's place, is matched to them by name at loading).
   std::vector<ModelBone> bones;
+  // For a model built to the four-level standard (a remastered unit's export for this engine): the
+  // size on screen, in pixels, down to which each level but the last is used - the sizes its levels
+  // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
+  std::vector<float> levelPixels;
 };
 
 class ModelCache {
