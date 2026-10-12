@@ -3,28 +3,111 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
-## render 9: how the original turns an EmitterBlueprint into particles — not read yet
+## render 9: how the original turns an EmitterBlueprint into particles — read from the exe
 
-Seen, and being read now (`CEfxEmitter::OnTick` 0x65dac0, `Tick` 0x65ce00). Confirmed so far; the rest
-follows in this section:
+Read: `CEfxEmitter::OnTick` 0x65dac0, `Tick` 0x65ce00 (one call emits one tick's particles),
+`ProcessLifetime` 0x65c700, `UpdateCurve` 0x65c7f0, the curve reader 0x514e50, the vertex fill 0x493210.
+Your guesses were mostly right; the differences are marked **bold**.
 
-- **1, time:** `Lifetime` and `Repeattime` are in ticks (the blueprint's own field descriptions say so:
-  "Lifetime of emitter in ticks", "Repeattime of emitter in ticks"). **Any negative `Lifetime` means
-  "until destroyed"**: the test is `Lifetime >= 0 and age >= Lifetime` (0x65c70d), so -0.2 and -50 are
-  the same. The emitter's age is its `TICKCOUNT` parameter, which grows by `TICKINCREMENT` every tick.
-- **11, who follows:** see 8: `CreateEmitterAtBone` / `CreateEmitterAtEntity` are placed once and stay;
-  `CreateAttachedEmitter` / `CreateEmitterOnEntity` are tied to the entity and end with it.
-- The parameter names of `SetEmitterParam`, in the engine's order (index = position in the emitter's
-  parameter array): POSITION_X, POSITION_Y, POSITION_Z, TICKCOUNT, LIFETIME, REPEATTIME, TICKINCREMENT,
-  BLENDMODE, FRAMECOUNT, USE_LOCAL_VELOCITY, USE_LOCAL_ACCELERATION, USE_GRAVITY, ALIGN_ROTATION,
-  INTERPOLATE_EMISSION, TEXTURE_STRIPCOUNT, ALIGN_TO_BONE, SORTORDER, FLAT, SCALE, LODCUTOFF,
-  EMITIFVISIBLE, CATCHUPEMIT, CREATEIFVISIBLE, SNAPTOWATERLINE, ONLYEMITONWATER, PARTICLERESISTANCE.
-  The curves, in order: XDIR, YDIR, ZDIR, EMITRATE, LIFETIME, VELOCITY, X_ACCEL, Y_ACCEL, Z_ACCEL,
-  RESISTANCE, SIZE, X_POSITION, Y_POSITION, Z_POSITION, BEGINSIZE, ENDSIZE, ROTATION, ROTATION_RATE,
-  FRAMERATE, TEXTURESELECTION, RAMPSELECTION.
-- **3, catch-up (first part):** an emitter that did not emit (not visible) counts the missed ticks, at
-  most 24; when it emits again it first runs its tick once per missed tick, oldest first, and then the
-  current one (0x65dc4a..0x65dc8f).
+**1. Time.** Everything is in ticks. `Lifetime` and `Repeattime` (the blueprint's own field texts say
+"in ticks"), curve `x`, `LifetimeCurve`'s value, and the shader's `time`: a particle's start time is
+written as `time + offset`, the offset being counted in ticks (below), and its lifetime goes into the
+vertex unchanged. **Any negative `Lifetime` means "until destroyed"**: the test is
+`Lifetime >= 0 and age >= Lifetime`, so -0.2 and -50 are the same. The emitter's age is its `TICKCOUNT`
+parameter; it grows by `TICKINCREMENT` after each tick.
+
+**2. Curves.** A key is `{x, y, z}`. At time `t`: before the first key, the first key; after the last,
+the last; between two keys **both `y` and `z` are interpolated linearly**, and the value is
+`y + (u - 0.5) * z` with `u` uniform in [0, 1): your `y + uniform(-z/2, +z/2)`. No keys: 0. The random
+numbers come from a generator of the effects' own (a Mersenne twister apart from the simulation's), so
+nothing here needs to match a replay. **Yes, the curve is read at age modulo `Repeattime`**
+(`fmod(age, Repeattime)`, made positive). A curve with a single key and no spread (`|z|` near 0) is
+read once and kept; every other curve is read, and its spread rolled, for each particle.
+
+**3. Emission.** `EmitRateCurve` is particles per tick. Each tick: `n = rate(t) + carry`; `floor(n)`
+particles are made and the fraction is carried to the next tick. `InterpolateEmission`: the `floor(n)`
+particles of a tick are spread over the tick, particle `i` at the fraction `i / floor(n)`: the emitter's
+position is interpolated to that fraction, the curves are read at `t + fraction`, and the particle's
+start time gets `+ fraction`. Without it all are made at the tick's position and time. Catching up:
+an emitter that could not emit (see `EmitIfVisible` under 9) counts the missed ticks; when it emits
+again it first runs the tick once for each missed one (at most 24, and at most the longest particle
+lifetime, `ceil(max(y + z/2))` over `LifetimeCurve`), each with a start time that many ticks in the
+past, then the current tick. The `CatchupEmit` flag itself is not tested in any of the functions read,
+so as far as this reading goes the catching up happens with or without it.
+
+**4. Position, velocity, acceleration.**
+- Start position: `(POSITION param + X/Y/ZPosCurve(t) * scale)` taken through the emitter's transform
+  (the bone's or entity's rotation and position), plus the emitter's "size" (see 5).
+- Velocity: `(XDirection, YDirection, ZDirection)(t) * scale`, **not normalised**, times
+  `VelocityCurve(t)`; per tick. `LocalVelocity`: the direction is turned by the emitter's rotation at
+  emission before the multiply.
+- Acceleration: `(XAccel, YAccel, ZAccel)(t) * scale`, per tick squared; `LocalAcceleration` turns it
+  by the emitter's rotation. `Gravity` then subtracts **0.02 from the y component** (per tick squared;
+  that is 2 world units per second squared, not the simulation's 4.9).
+- `scale` is the `SCALE` parameter (what `ScaleEmitter` sets), 1 by default: it multiplies positions,
+  directions (so speed), accelerations and both sizes, not lifetimes or rates.
+
+**5. Sizes.** `StartSizeCurve(t) * scale` goes into the vertex as the size, and
+`(EndSize - StartSize) / lifetime` as its growth per tick; whether the shader treats size as half an
+edge or a whole one is in `particle.fx`, the engine passes the number through. **`SizeCurve` is not a
+particle size: it is the size of the emitter** ("Size of emitter over time"). Each particle starts at a
+random point of a horizontal disc around the emitter's point, of diameter `SizeCurve(t) * scale`: a
+random direction in the world's XZ plane (`normalize(u1 - 0.5, 0, u2 - 0.5)`) times
+`(u3 - 0.5) * SizeCurve(t) * scale` (so denser near the middle). The disc is not turned by the bone.
+
+**6. Rotation.** `InitialRotationCurve` in degrees and `RotationRateCurve` in degrees per tick; both
+are multiplied by pi/180 at emission.
+
+**7. Texture and ramp.** Into the vertex go: `FrameRateCurve(t)` as it is; `1 / TextureFramecount`;
+`floor(TextureSelectionCurve(t)) / TextureStripcount` (the strip's offset; 0 when the texture is not
+animated); `1 / TextureStripcount`; `RampSelectionCurve(t)` as it is (the engine does no flooring or
+centring on it). How the shader turns those into texture coordinates is in `particle.fx`.
+
+**8. `Blendmode`.** Your table is right: 0 `_ALPHABLEND`, 1 `_MODULATEINVERSE`, 2 `_MODULATE2XINVERSE`,
+3 `_ADD`, 4 `_PREMODALPHA`, 5 `_REFRACT` (the suffix of the technique's name; 5 is drawn in the
+refraction pass).
+
+**9. Which technique.** The name is a base plus the blend suffix. Base: `TRampAnimate` if
+`TextureFramecount > 1` or `TextureStripcount > 1`, else `TRamp`; then `Align` if `AlignRotation`; else
+if `AlignToBone`: `Flat` when `Flat` is also set, otherwise `AlignToBone`; else `Flat` if `Flat`; else
+nothing. So e.g. `TRampAnimateAlign_ADD`. At emission `AlignToBone` also does this: with `Flat`, the
+initial rotation is `atan2(-f.x, f.z)` of the bone's forward axis `f` (the curve is not used); without
+`Flat`, **the particle's velocity is replaced by the bone's forward axis** (the shader aligns to it).
+`SnapToWaterline`: a particle's start height is raised to at least the water level + 0.01, unless the
+emitter's `SortOrder` is below -101 (the console value `efx_ParticleWaterSurface`, "sort order at which
+particles start rendering under water"), where it is kept at most at the water level - 0.01.
+`OnlyEmitOnWater`: a particle whose start point has terrain above the water is dropped; the others
+start at the water level + 0.01. `EmitIfVisible`: the emitter emits in a tick only if some camera sees
+it; for an emitter attached to an entity that camera must also have it within `LODCutoff` (view depth;
+0 = no limit). Without `EmitIfVisible` it always emits and `LODCutoff` is not looked at.
+`CreateIfVisible` destroys the emitter at its first tick if no camera sees it. `SortOrder` goes into
+the draw bucket's key with the textures and blend mode.
+
+**10. Drag.** `ParticleResistance` (a bool) is the shader's `DragEnabled` for that bucket.
+`ResistanceCurve(t)` ("the drag coefficient divided by the mass") is the per-particle value `r`; the
+vertex carries `r`, `1 / r` and `1 / r^2` (`DragCoeff`, `invDragCoeff`, `invDragCoeffSq`).
+
+**11. Who follows.** `CreateEmitterAtBone` and `CreateEmitterAtEntity` copy the bone's / entity's world
+transform once and stay there. `CreateAttachedEmitter` and `CreateEmitterOnEntity` are tied to the
+entity: each tick the emitter's transform is the entity's bone again, and it ends when the entity is
+gone or queued for destruction. In both cases **a particle, once made, is on its own**: its position,
+velocity and acceleration are world values fixed at emission; nothing carries it along.
+
+The vertex, for comparing with the shader's inputs (0x5c bytes, in this order): position (3), initial
+rotation, start size, size growth, velocity (3), rotation rate, acceleration (3), start time, lifetime,
+frame rate, 1 / frame count, strip offset, ramp selection, 1 / strip count, r, 1 / r, 1 / r^2.
+
+The names `SetEmitterParam` takes, in the engine's order: POSITION_X, POSITION_Y, POSITION_Z, TICKCOUNT,
+LIFETIME, REPEATTIME, TICKINCREMENT, BLENDMODE, FRAMECOUNT, USE_LOCAL_VELOCITY, USE_LOCAL_ACCELERATION,
+USE_GRAVITY, ALIGN_ROTATION, INTERPOLATE_EMISSION, TEXTURE_STRIPCOUNT, ALIGN_TO_BONE, SORTORDER, FLAT,
+SCALE, LODCUTOFF, EMITIFVISIBLE, CATCHUPEMIT, CREATEIFVISIBLE, SNAPTOWATERLINE, ONLYEMITONWATER,
+PARTICLERESISTANCE. All are floats; the flags count as set when greater than 0. The curves
+`SetEmitterCurveParam` names: XDIR, YDIR, ZDIR, EMITRATE, LIFETIME, VELOCITY, X_ACCEL, Y_ACCEL, Z_ACCEL,
+RESISTANCE, SIZE, X_POSITION, Y_POSITION, Z_POSITION, BEGINSIZE, ENDSIZE, ROTATION, ROTATION_RATE,
+FRAMERATE, TEXTURESELECTION, RAMPSELECTION (each with the suffix `_CURVE`).
+
+Not read: how `SetEmitterCurveParam(name, height, size)` and `ResizeEmitterCurve` rewrite a curve, the
+"camera sees it" test itself, beams and trails. Ask for whichever you need.
 
 ## render 8: the effects the scripts create — done (emitters, beams, trails, light particles, decals)
 
