@@ -276,8 +276,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   distance from the camera's eye (`Distance`) and by how far out the camera is
   (`CameraDistance`), and sits between the ears by where it is on screen (that last part is
   ours). A running sound follows its unit and plays only while it can be heard. Whose sounds:
-  the player's and the allies' always; another army's only where the player has a unit near (a
-  stand-in until the engine tells what an army sees: `ui/REQUESTS.md`, engine 8).
+  the player's and the allies' always; anything else only when the player's army sees it now
+  (the simulation's own recon, the engine's `ReconOf` / `ReconAt`); what is only on radar or
+  sonar stays silent, so a sound gives away no more than the picture should.
   `MOHO64UI_SOUND_LOG=1` logs every sound of the world with its loudness. Not built: the second
   ("rumble") sound of a running sound, the files' other curves (attack and release times, the
   angle), ducking the other sounds under a voice, effects, fading as the files set it. How the

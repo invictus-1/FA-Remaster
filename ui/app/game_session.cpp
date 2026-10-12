@@ -19,6 +19,7 @@
 #include "render/world_picture.h"
 #endif
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "sim/sim_view.h"
@@ -244,11 +245,11 @@ void GameSession::NoteBeat() {
 // The world's sounds of the beat (the engine's SoundEvents): one-shots at their place, and the
 // entities' running sounds, which then follow their units. (The second, "rumble" sound of a
 // running sound is left out.)
-// Whose sounds: the player's own and the allies', and what belongs to no army (fires, trees),
-// always; another army's only where the player has a unit near enough to see it. That last part
-// is a stand-in of ours (a fixed distance instead of what the army really sees), so that a hidden
-// enemy is not given away by its noise; the original's rule is not read, and the engine is asked
-// for what an army sees.
+// Whose sounds: the player's own and the allies' always; anything else only when the player's
+// army sees it now (the simulation's own recon, the engine's ReconOf for a unit and ReconAt for a
+// place: what belongs to no army, and a unit that is gone by now). What is only on radar or sonar
+// is not heard: so a sound gives away no more than the picture does. (That choice is ours; what
+// the original's sound manager does with unseen units is not read.)
 void GameSession::PlayBeatSounds() {
   if (!sounds) return;
   std::vector<SoundEvent> events;
@@ -263,26 +264,26 @@ void GameSession::PlayBeatSounds() {
     friendly[static_cast<size_t>(a.index - 1)] = a.index == focus || ally;
   }
   auto isFriendly = [&](int army) { return army >= 1 && army <= static_cast<int>(friendly.size()) && friendly[static_cast<size_t>(army - 1)]; };
-  std::vector<UnitView> units;
+  std::vector<UnitView> units;  // in entity-id order
   UnitViews(*sim_, &units);
-  const float kSight = 60.0f;  // map units; about what a small unit sees
-  auto seen = [&](const float p[3]) {
-    for (const UnitView& u : units) {
-      if (u.dead || !isFriendly(u.army)) continue;
-      float dx = u.position[0] - p[0], dz = u.position[2] - p[2];
-      if (dx * dx + dz * dz <= kSight * kSight) return true;
-    }
-    return false;
+  auto isUnit = [&](uint32_t id) {
+    auto it = std::lower_bound(units.begin(), units.end(), id, [](const UnitView& u, uint32_t v) { return u.id < v; });
+    return it != units.end() && it->id == id;
+  };
+  auto seen = [&](uint32_t entity, const float place[3]) {
+    if (focus < 1) return true;  // no army to ask for: an observer hears all
+    uint32_t recon = isUnit(entity) ? ReconOf(*sim_, focus, entity) : ReconAt(*sim_, focus, place);
+    return (recon & kReconSeenNow) != 0;
   };
   const bool log = std::getenv("MOHO64UI_SOUND_LOG") != nullptr;
   for (const SoundEvent& e : events) {
-    bool ours = e.army <= 0 || isFriendly(e.army);
+    bool ours = isFriendly(e.army);
     if (log)
       Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s", static_cast<unsigned>(sim_->tick()),
            e.kind == SoundEvent::Play ? "play" : "loop", static_cast<unsigned>(e.entity), e.army, e.position[0], e.position[1],
            e.position[2], e.bank.c_str(), e.cue.c_str());
     if (e.kind == SoundEvent::Play) {
-      if (ours || seen(e.position)) sounds->PlayAt(e.bank, e.cue, e.position);
+      if (ours || seen(e.entity, e.position)) sounds->PlayAt(e.bank, e.cue, e.position);
     } else if (ours) {
       sounds->SetLoop(e.entity, e.bank, e.cue, e.position);
     } else if (e.bank.empty() || e.cue.empty()) {  // another army's running sound ends
@@ -303,7 +304,7 @@ void GameSession::PlayBeatSounds() {
     sounds->MoveLoop(u.id, u.position);
   }
   for (auto& entry : foreignLoops_) {
-    bool hear = seen(entry.second.position), heard = heardLoops_.count(entry.first) != 0;
+    bool hear = seen(entry.first, entry.second.position), heard = heardLoops_.count(entry.first) != 0;
     if (hear && !heard) {
       sounds->SetLoop(entry.first, entry.second.bank, entry.second.cue, entry.second.position);
       heardLoops_.insert(entry.first);

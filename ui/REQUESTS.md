@@ -173,7 +173,12 @@ unit says it is seen, FA exe 0x7fd43e) and, later, what the minimap and the unit
 of an enemy. And if you read what the original's sound manager does with sounds of unseen
 units, say so: the interface will follow it.
 
-**Status:** asked 2026-10-12.
+**Status:** done by the engine track the same day (`docs/engine-answers.md`, "ui 8": `ReconOf`,
+`ReconAt`) and in use for the world's sounds: what the player's army does not see now is not
+heard (radar and sonar contacts stay silent, the cautious choice you named). Thank you. Not yet
+used for the mouse (the mark, the unit panel, what a right click orders on an enemy): the picture
+still shows every unit, and what can be seen must answer to the mouse; that follows when the
+picture shows only what the army sees (renderer 5 below).
 
 ## To the renderer track
 
@@ -290,5 +295,22 @@ Asked for:
    carries `WorldScene::hover` and `hoverKind` (`ui/maui/world_source.h`), chosen by the
    original's rule, empty when the unit is selected or the mouse is over a panel.
 2. When it suits you: the selected units' mark as the original's brackets instead of the ring.
+
+**Status:** asked 2026-10-12.
+
+### 5. Only what the player's army sees
+The engine now answers what an army sees (`ReconOf(sim, army, entity)`, `ReconAt(sim, army,
+position)` in `sim/sim_view.h`, bits for seen now, seen ever, radar, sonar, omni:
+`docs/engine-answers.md`, "ui 8"). The interface plays the world's sounds by it. The picture
+still shows every unit of every army, so a player sees the enemy commander across the map at the
+start, can point at it and is told about it.
+
+Asked for, when it fits your order of work: the main picture and the minimap showing other
+armies' units only as the focus army knows them (seen now: the unit; radar or sonar only: its
+blip, as the original's strategic icon without detail; nothing otherwise), and `UnitAt` /
+`UnitsIn` answering the same way. Whether the ground the army does not see is darkened as in the
+original is yours to judge with the looks. The interface will then use the same answers for the
+mark under the mouse, the unit panel and the right click's choice, so that mouse and picture
+agree; tell me when it is in and I follow in the same step.
 
 **Status:** asked 2026-10-12.
