@@ -759,6 +759,11 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> ids;
         for (size_t i = 0; i < frame.units.size(); i += 3) ids.push_back(frame.units[i].id);
         picture.SetSelection(ids);
+        // and marks as under the mouse: the first three units not selected, one of each kind in turn
+        if (!frame.units.empty()) {
+          const size_t which = 1 + 3 * ((frameCount / 2) % 3);
+          if (which < frame.units.size()) picture.SetHover(frame.units[which].id, 1 + static_cast<int>((frameCount / 2) % 3));
+        }
         Vec3 spot;
         if (picture.Draw(camera, w, h, playTick + 1).size() && picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.75f, &spot)) {
           WorldPicture::BuildPreview free{"ueb0101", {spot.x, spot.y, spot.z}, 0, true}, blocked{"ueb1101", {spot.x + 8, spot.y, spot.z}, 0.6f, false};
