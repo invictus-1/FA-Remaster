@@ -339,6 +339,14 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
     the ALBEDO's alpha and a dim detail picture in its colour, the surface being metal throughout.
     The weights were set by eye on a few units of each faction and await a look by someone who
     knows the game well.
+  - `ShaderName = 'LabPBRAlpha'`: the same material with holes, for ferns, grass tufts, needles and
+    the like. The ALBEDO's alpha says where the surface is (cut at one half); the holes' edges are
+    a pixel wide and smoothed by the picture's several samples a pixel (alpha to coverage), so
+    nothing is blended or sorted. The surface is seen from both sides and lit as facing whoever
+    looks, so a leaf needs one face only. There is no team colour: the specular texture's alpha is
+    instead how much light comes through from the far side (0 none, 1 much; leaves glow against the
+    sun). It casts and takes shadows with its holes. A level of either material without a specular
+    texture is drawn rough, without metal or glow. Not yet: wind.
   - The original look has each faction's formula too (shader names `Unit`, `Aeon`, `Insect`,
     `Seraphim` and their `...Navy` forms), with two stand-ins: the Cybran highlight and the
     Seraphim reflection's view-angle ramp come from lookup textures that are not read yet.

@@ -303,6 +303,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
       lod.teamMask = false;
+    } else if (kind == "labpbralpha") {  // remastered foliage and the like
+      lod.alphaCut = 0.5f;
+      lod.leaves = true;
+      lod.teamMask = false;
     } else if (kind.find("alpha") != std::string::npos) {  // NormalMappedAlpha and its relatives: alpha test above 0x80
       lod.alphaCut = 128.0f / 255;
       lod.teamMask = false;
@@ -325,9 +329,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     };
     lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White());
     lod.normals = texture(s.normals, s.normalsNamed, textures_->FlatNormal());
-    lod.specular = texture(s.specular, s.specularNamed, textures_->Black());
+    lod.specular = texture(s.specular, s.specularNamed, gfx::Texture{});  // (none: black, or see plainMaterial below)
     lod.secondary = texture(s.secondary, s.secondaryNamed, textures_->White());
-    lod.labPbr = kind == "labpbr";
+    lod.labPbr = kind == "labpbr" || kind == "labpbralpha";
     // Remastered textures from outside the blueprint: a previewed model's own, for every level; or,
     // when the names were read from a .bp file (which does not show what mods' scripts change), the
     // lab's LabVisuals mod's for the finest level, as that mod's script would set them.
@@ -342,6 +346,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.labPbr = true;
       lod.shaderName = "LabPBR";
     }
+    if (!lod.labPbr && !lod.specular) lod.specular = textures_->Black();
+    lod.plainMaterial = lod.labPbr && !lod.specular;
+    if (lod.plainMaterial) lod.specular = textures_->Black();
     m->lods.push_back(std::move(lod));
   }
   m->ok = !m->lods.empty();

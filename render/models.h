@@ -47,12 +47,16 @@ struct ModelLod {
   // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
   // modern lighting has to translate.
   bool labPbr = false;
+  bool plainMaterial = false;  // a remastered level without that texture: rough, no metal, no glow
   float cutoff = 0;        // the blueprint's LODCutoff: the distance the ORIGINAL game uses this level up to.
                            // This renderer chooses levels by size on screen instead (mesh_renderer.h).
   std::string shaderName;  // "Unit", "Aeon", "Insect", "Seraphim", "UndulatingNormalMappedAlpha", ...
   // What the shader name means for drawing (from the original's techniques of those names):
   float alphaCut = 0;          // pixels whose albedo alpha is not above this are left out (foliage)
   bool blend = false;          // drawn blended over what is behind, by the albedo's alpha
+  bool leaves = false;         // "LabPBRAlpha": a remastered surface with holes: seen from both sides (lit as
+                               // facing whoever looks), its holes' edges smoothed, and its specular texture's
+                               // alpha is how much light comes through from the far side (no team colour)
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
                                // otherwise the colour multiplies the albedo

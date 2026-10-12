@@ -933,6 +933,7 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
   pd.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
   if (hasPixelShader) pd.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
   pd.SampleMask = 0xffffffffu;
+  pd.BlendState.AlphaToCoverageEnable = desc.alphaToCoverage && desc.samples > 1;
   D3D12_RENDER_TARGET_BLEND_DESC& bt = pd.BlendState.RenderTarget[0];
   bt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
   bt.BlendOp = bt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
