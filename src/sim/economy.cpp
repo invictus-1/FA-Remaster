@@ -307,6 +307,9 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   PushField(L, t, "General");
   d.capCost = GetNum(L, lua_gettop(L), "CapCost", 1);
   lua_settop(L, t);
+  PushField(L, t, "AI");
+  d.initialAutoMode = lua_istable(L, -1) && GetBool(L, lua_gettop(L), "InitialAutoMode");
+  lua_settop(L, t);
   PushField(L, t, "Defense");
   d.regenRate = GetNum(L, lua_gettop(L), "RegenRate", 0);
   d.maxHealth = GetNum(L, lua_gettop(L), "MaxHealth", 1);

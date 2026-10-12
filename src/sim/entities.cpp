@@ -1373,6 +1373,10 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (u->isFactoryBuilder) SetUpInitialRally(*this, u);  // Unit ctor end (0x6a6413)
   if (army && army->pool) army->pool->units.push_back(u);
 
+  // Unit ctor 0x6a5800: SetAutoMode(blueprint AI.InitialAutoMode), which tells the script either way, then
+  // OnPreCreate
+  u->autoMode = u->bpData && u->bpData->initialAutoMode;
+  CallMethod(L, u, u->autoMode ? "OnAutoModeOn" : "OnAutoModeOff", 0);
   CallMethod(L, u, "OnPreCreate", 0);
   u->layer = LayerName(startLayer);
   lua_pushstring(L, u->layer.c_str());

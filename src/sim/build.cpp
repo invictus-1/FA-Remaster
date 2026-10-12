@@ -2714,8 +2714,10 @@ SiloState* GetSilo(Sim& sim, Unit* u) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, u->weapons[i]->bpRef);
     int w = lua_gettop(L);
     if (lua_istable(L, w) && FieldBool(L, w, "CountedProjectile")) {
+      // SiloUpdateProjectileBlueprint 0x5cee40: every counted weapon with a projectile takes the slot of its
+      // kind in turn, so the last one holds it
       int kind = FieldBool(L, w, "NukeWeapon") ? 1 : 0;
-      if (s->weapon[kind] < 0) {
+      if (u->weapons[i]->projBp) {
         s->weapon[kind] = static_cast<int>(i);
         s->maxStore[kind] = static_cast<int>(FieldNum(L, w, "MaxProjectileStorage", 0));
       }
@@ -2749,8 +2751,11 @@ float CallNumber(Sim& sim, lua_State* L, Unit* u, const char* method, float def)
 }
 
 bool SiloAddBuild(Sim& sim, Unit* u, int kind) {
+  // CAiSiloBuildImpl::SiloAddBuild 0x5cefc0: the kind needs its weapon, and the weapon must be ENABLED (w+0xac):
+  // a commander whose missile launcher waits for its upgrade builds nothing, auto mode or not
   SiloState* s = GetSilo(sim, u);
   if (s->weapon[kind] < 0) return false;
+  if (!u->weapons[static_cast<size_t>(s->weapon[kind])]->enabled) return false;
   int pending = 0;
   for (int k : s->queue)
     if (k == kind) ++pending;
@@ -2767,6 +2772,11 @@ void CallWeaponMethod(Sim& sim, lua_State* L, Unit* u, const char* method, int w
 }
 
 }  // namespace
+
+// The silo builder's "add one" (CAiSiloBuildImpl vt+0x20; the interface's build-missile button sends it as the
+// info pair SiloBuildTactical / SiloBuildNuke = "add"): kind 0 tactical, 1 nuke. False if the unit has no such
+// silo or its store is full.
+bool SiloQueueAmmo(Sim& sim, Unit* u, int kind) { return SiloAddBuild(sim, u, kind); }
 
 void SiloRelease(Unit* u) {
   if (u->silo && u->silo->request) {
@@ -2911,9 +2921,8 @@ int l_StopSiloBuild(lua_State* L) {
 int l_SetAutoMode(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   bool on = lua_toboolean(L, 2) != 0;
-  bool was = u->autoMode;
-  u->autoMode = on;
-  if (on != was) S(L)->CallMethod(L, u, on ? "OnAutoModeOn" : "OnAutoModeOff", 0);
+  u->autoMode = on;  // Unit::SetAutoMode 0x6a73a0: the script is told whether or not it changed
+  S(L)->CallMethod(L, u, on ? "OnAutoModeOn" : "OnAutoModeOff", 0);
   return 0;
 }
 int l_SetPaused(lua_State* L) {
