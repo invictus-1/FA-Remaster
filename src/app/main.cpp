@@ -149,6 +149,24 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
     if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());
   }
+  {  // the display part of the blueprints
+    std::vector<BlueprintDisplay> bd;
+    BlueprintDisplays(sim, &bd);
+    size_t lods = 0, kinds[3] = {0, 0, 0};
+    for (const BlueprintDisplay& d : bd) {
+      lods += d.lods.size();
+      ++kinds[d.kind];
+    }
+    Logf(LogLevel::Info, "view: %zu blueprint displays (%zu units, %zu projectiles, %zu props), %zu levels", bd.size(), kinds[0],
+         kinds[1], kinds[2], lods);
+    for (const BlueprintDisplay& d : bd)
+      if (d.kind == 0 && !d.lods.empty()) {
+        Logf(LogLevel::Info, "view: %s scale %.3f, %zu levels, first %s / %s / %s cutoff %.0f; icon %s priority %d fade %.0f, selection %.2f x %.2f",
+             d.id.c_str(), d.uniformScale, d.lods.size(), d.lods[0].mesh.c_str(), d.lods[0].albedo.c_str(), d.lods[0].shader.c_str(),
+             d.lods[0].cutoff, d.icon.c_str(), d.iconSortPriority, d.iconFadeInZoom, d.selectionSizeX, d.selectionSizeZ);
+        break;
+      }
+  }
   // a build preview's question, asked around the first unit: a land factory 10 and 15 to its east
   std::vector<UnitView> uv;
   UnitViews(sim, &uv);

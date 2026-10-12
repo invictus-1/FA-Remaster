@@ -154,6 +154,26 @@ void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
 // The ids of the unit blueprints an army may not build (AddBuildRestriction), in blueprint order. army: 1-based.
 std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army);
+// The display part of the blueprints as the simulation has them, i.e. after the game's blueprint scripts and the
+// mods changed them (what tools/dump_display.lua writes to a log, as a call). Read it once after Start().
+struct DisplayLod {
+  std::string mesh, albedo, normals, specular, secondary, lookup, shader;  // the game's virtual paths; "" = not set
+  float cutoff = 0;                                                        // LODCutoff (0: not set)
+};
+struct BlueprintDisplay {
+  std::string id;          // as UnitView::blueprint and ProjectileView::blueprint name it (a prop: its .bp path)
+  int kind = 0;            // 0 unit, 1 projectile, 2 prop
+  float uniformScale = 1;  // Display.UniformScale (1 when not set)
+  std::vector<DisplayLod> lods;  // the mesh blueprint's LODs, in the blueprint's order (nearest first)
+  // units only; "" / 0 when the blueprint does not set them:
+  std::string icon;        // StrategicIconName
+  int iconSortPriority = 0;      // StrategicIconSortPriority
+  float iconFadeInZoom = 0;      // Display.Mesh.IconFadeInZoom
+  float selectionSizeX = 0, selectionSizeZ = 0;
+};
+// Every unit, projectile and prop blueprint whose Display.MeshBlueprint names a mesh blueprint with LODs, in
+// blueprint order.
+void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out);
 // For a build preview: where a structure ordered at `pos` would stand (its footprint snapped to the cell grid, y
 // on the ground or the water) and whether the placement test passes there (CAiBrain::CanBuildStructureAt: the
 // layers and flatness, no structure or other structure's skirt in the way, no mass or hydrocarbon deposit under

@@ -3,6 +3,38 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 11: the display part of blueprints, handed over in the program — done
+
+`sim/sim_view.h`:
+
+```cpp
+struct DisplayLod {
+  std::string mesh, albedo, normals, specular, secondary, lookup, shader;  // virtual paths; "" = not set
+  float cutoff = 0;                                                        // LODCutoff (0: not set)
+};
+struct BlueprintDisplay {
+  std::string id;          // as UnitView::blueprint and ProjectileView::blueprint name it (a prop: its .bp path)
+  int kind = 0;            // 0 unit, 1 projectile, 2 prop
+  float uniformScale = 1;  // Display.UniformScale (1 when not set)
+  std::vector<DisplayLod> lods;
+  std::string icon; int iconSortPriority = 0; float iconFadeInZoom = 0;   // units only
+  float selectionSizeX = 0, selectionSizeZ = 0;                           // units only
+};
+void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out);
+```
+
+It is your struct with three additions: `kind`, since the three kinds share the list; `lookup` (the dump
+has it); and "not set" is `""` or 0 where the dump wrote "-". It reads the same tables as
+`tools/dump_display.lua` (`__blueprints[id].Display.MeshBlueprint` → that mesh blueprint's `LODs`), so
+what the scripts and the mods changed after loading is in it, and it lists the same blueprints: with the
+lab's mods 1400 of them (671 units, 165 projectiles, 564 props) with 2278 levels, the dump's own count.
+The unit fields are `StrategicIconName`, `StrategicIconSortPriority`, `Display.Mesh.IconFadeInZoom`,
+`SelectionSizeX` and `SelectionSizeZ` as the blueprint has them (0 or `""` when it does not set one; the
+engine's own default for a missing value was not looked up).
+
+Call it once after `Start()`; the blueprints do not change afterwards. `--view` logs the counts and one
+unit's line.
+
 ## ui 6: a building's site near its builder; a new commander's fire state — both are the original's
 
 **1. The site.** Nothing to do with the builder's distance. There is a mass deposit at 680.5, 350.5

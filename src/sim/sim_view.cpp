@@ -264,6 +264,95 @@ std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army) {
   return out;
 }
 
+namespace {
+// field `key` of the table at `idx` as a string ("" when it is not one) / a number (`def` when it is not one)
+std::string StrField(lua_State* L, int idx, const char* key) {
+  lua_pushstring(L, key);
+  lua_rawget(L, idx);
+  std::string s = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+  lua_pop(L, 1);
+  return s;
+}
+float NumField(lua_State* L, int idx, const char* key, float def) {
+  lua_pushstring(L, key);
+  lua_rawget(L, idx);
+  float v = lua_type(L, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, -1)) : def;
+  lua_pop(L, 1);
+  return v;
+}
+}  // namespace
+
+void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
+  out->clear();
+  lua_State* L = sim.L();
+  const SimBlueprints& bps = sim.blueprints();
+  const int top = lua_gettop(L);
+  lua_pushstring(L, "__blueprints");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  const int all = lua_gettop(L);
+  if (!lua_istable(L, all)) {
+    lua_settop(L, top);
+    return;
+  }
+  for (int i = 0; i < bps.EntityCount(); ++i) {
+    const BlueprintInfo* bp = bps.ByEntityIndex(i);
+    if (!bp || (bp->kind != BpKind::Unit && bp->kind != BpKind::Projectile && bp->kind != BpKind::Prop)) continue;
+    lua_settop(L, all);
+    bps.PushTable(L, *bp);
+    const int t = lua_gettop(L);
+    if (!lua_istable(L, t)) continue;
+    lua_pushstring(L, "Display");
+    lua_rawget(L, t);
+    const int disp = lua_gettop(L);
+    if (!lua_istable(L, disp)) continue;
+    const std::string meshId = StrField(L, disp, "MeshBlueprint");
+    if (meshId.empty()) continue;
+    lua_pushstring(L, meshId.c_str());
+    lua_rawget(L, all);
+    const int mesh = lua_gettop(L);
+    if (!lua_istable(L, mesh)) continue;
+    lua_pushstring(L, "LODs");
+    lua_rawget(L, mesh);
+    const int lods = lua_gettop(L);
+    if (!lua_istable(L, lods)) continue;
+    BlueprintDisplay d;
+    d.id = bp->id;
+    d.kind = bp->kind == BpKind::Unit ? 0 : bp->kind == BpKind::Projectile ? 1 : 2;
+    d.uniformScale = NumField(L, disp, "UniformScale", 1.0f);
+    for (int k = 1;; ++k) {
+      lua_rawgeti(L, lods, k);
+      if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      const int lod = lua_gettop(L);
+      DisplayLod x;
+      x.mesh = StrField(L, lod, "MeshName");
+      x.albedo = StrField(L, lod, "AlbedoName");
+      x.normals = StrField(L, lod, "NormalsName");
+      x.specular = StrField(L, lod, "SpecularName");
+      x.secondary = StrField(L, lod, "SecondaryName");
+      x.lookup = StrField(L, lod, "LookupName");
+      x.shader = StrField(L, lod, "ShaderName");
+      x.cutoff = NumField(L, lod, "LODCutoff", 0.0f);
+      d.lods.push_back(std::move(x));
+      lua_pop(L, 1);
+    }
+    if (bp->kind == BpKind::Unit) {
+      d.icon = StrField(L, t, "StrategicIconName");
+      d.iconSortPriority = static_cast<int>(NumField(L, t, "StrategicIconSortPriority", 0.0f));
+      d.selectionSizeX = NumField(L, t, "SelectionSizeX", 0.0f);
+      d.selectionSizeZ = NumField(L, t, "SelectionSizeZ", 0.0f);
+      lua_pushstring(L, "Mesh");
+      lua_rawget(L, disp);
+      if (lua_istable(L, -1)) d.iconFadeInZoom = NumField(L, lua_gettop(L), "IconFadeInZoom", 0.0f);
+      lua_pop(L, 1);
+    }
+    out->push_back(std::move(d));
+  }
+  lua_settop(L, top);
+}
+
 bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild) {
   const BlueprintInfo* bp = sim.blueprints().Find(blueprint);
   if (!bp || bp->kind != BpKind::Unit) return false;
