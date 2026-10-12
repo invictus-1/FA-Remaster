@@ -151,7 +151,13 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
   // (only near what the camera looks at: a lamp lights a few units of ground)
   if (Length(position - camera.target) > camera.distance * 2 + 80) return;
+  // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
+  // most first): about 6,000 lights in all, by the number of units of the frame before
+  ++lampUnits_;
+  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 2, 16));
+  size_t lit = 0;
   for (const ModelLight& light : model->lights) {
+    if (lit++ >= most) break;
     Vec3 bonePlace{0, 0, 0};
     Quat boneTurn;
     if (light.bone >= 0) {
@@ -175,12 +181,25 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       boneTurn = Nlerp(qa, qb, blend);
     }
     const Vec3 at = position + Rotate(orientation, bonePlace + Rotate(boneTurn, light.place * model->scale));
+    // where units stand close together not every lamp is lit: a small square of ground takes three
+    // beams and two other lamps (more would only pile light on light, and a pixel looks at 48 at most)
+    {
+      const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
+                              static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
+      uint32_t& count = lampSquares_[square];
+      const uint32_t beams = count & 0xffffu, others = count >> 16;
+      if (light.cone > 0 ? beams >= 3 : others >= 2) continue;
+      count += light.cone > 0 ? 1u : 0x10000u;
+    }
     float on = lampsOn_ * light.strength * 0.5f;  // (1 in the list: a strong lamp to an eye opened for the night)
     if (light.blink > 0) {  // (each lamp on its own beat, by where it is)
       const float beat = time_ / light.blink + position.x * 0.37f + position.z * 0.53f;
       if (beat - std::floor(beat) > 0.5f) on *= 0.12f;
     }
-    lights.Add(at, light.radius * model->scale, light.color * on);
+    if (light.cone > 0)
+      lights.AddBeam(at, light.radius * model->scale, light.color * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
+    else
+      lights.Add(at, light.radius * model->scale, light.color * on);
   }
 }
 
@@ -214,6 +233,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[2] = exposure;
   c.modern[3] = reflection;
   lampsOn_ = 0;
+  lampUnitsBefore_ = lampUnits_;
+  lampUnits_ = 0;
+  lampSquares_.clear();
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {

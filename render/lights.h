@@ -34,6 +34,11 @@ class Lights {
   // A light for this frame. `color` is linear, as bright as the surface it lights fully would be
   // (1, 1, 1: about as the sun lights it).
   void Add(Vec3 position, float radius, Vec3 color);
+  // A beam: light within `coneDegrees` (the whole opening angle) about `direction`, full to seven
+  // tenths of the way out from its middle and fading to nothing at its edge, reaching `radius`
+  // along the beam; and `glow` of it to all sides within a fifth of the radius, so that the lamp's
+  // own surroundings are not left dark.
+  void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far).
@@ -53,6 +58,9 @@ class Lights {
     Vec3 position;
     float radius;
     Vec3 color;
+    float glow = 1;       // a beam: the share that still shines to all sides close to the lamp
+    Vec3 direction;       // a beam: where it points
+    float cosEdge = -2;   // a beam: the cosine of half its opening angle; below -1: it shines to all sides
   };
   struct FlashLight {
     const std::vector<Vec3>* ramp;  // colour x alpha along its time

@@ -102,7 +102,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       for (uint s = 0; s < n; ++s) {
         uint at = first + s;
         uint light = uint(lightData[at >> 2][at & 3]);
-        float4 where = lightData[uint(lightGridSize.z) + light * 2];
+        float4 where = lightData[uint(lightGridSize.z) + light * 3];
         float3 toLight = where.xyz - world;
         float far2 = dot(toLight, toLight) / (where.w * where.w);
         if (far2 >= 1) continue;
@@ -110,12 +110,24 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
         float nl = saturate(dot(N, l));
         // full at the light, nothing at its radius
         float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        float4 tint = lightData[uint(lightGridSize.z) + light * 3 + 1];
+        float4 beam = lightData[uint(lightGridSize.z) + light * 3 + 2];
+        if (beam.w > -1.5) {
+          // a beam: how far off its middle this place is (0 in the middle, 1 at its edge); it reaches
+          // farther than a light to all sides, and a share of it stays around the lamp
+          float off = sqrt(saturate((1 - dot(-l, beam.xyz)) / max(1 - beam.w, 1e-4)));
+          float inside = 1 - smoothstep(0.7, 1.0, off);
+          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside + fade * tint.w * saturate(1 - far2 * 25);
+          // (a lamp low on a unit shines along the ground, which by the angle alone would hardly be lit:
+          // within the beam the ground takes light as if the air scattered some of it down)
+          nl = saturate(dot(N, l) + 0.6 * inside);
+        }
         float3 h = normalize(V + l);
         float nh = saturate(dot(N, h));
         float dl = nh * nh * (a2 - 1) + 1;
         float3 fl = f0 + (1 - f0) * pow(1 - saturate(dot(V, h)), 5);
         float visl = 0.25 / ((nl * (1 - k) + k) * (nDotV * (1 - k) + k));
-        small += (diffuseColor / 3.14159265 + a2 / (3.14159265 * dl * dl) * visl * fl * modern.w) * lightData[uint(lightGridSize.z) + light * 2 + 1].rgb *
+        small += (diffuseColor / 3.14159265 + a2 / (3.14159265 * dl * dl) * visl * fl * modern.w) * tint.rgb *
                  (nl * fade * 3.14159265);
       }
     }

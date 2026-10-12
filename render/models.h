@@ -46,6 +46,9 @@ struct ModelLight {
   float radius = 1.5f;   // how far it lights, model units
   float strength = 1;
   float blink = 0;       // seconds for one on-and-off; 0: steady
+  Vec3 direction;        // a beam: where it points, in the bone's frame
+  float cone = 0;        // a beam: its whole opening angle, degrees; 0: it shines to all sides
+  float glow = 0.15f;    // a beam: the share that still shines to all sides close to the lamp
 };
 
 struct ModelLod {

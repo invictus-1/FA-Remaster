@@ -10,7 +10,7 @@ namespace render {
 namespace {
 
 constexpr int kMaxCellsAcross = 96;  // the grid is at most this many squares each way
-constexpr float kSmallestCell = 6;   // world units
+constexpr float kSmallestCell = 3;   // world units (about a unit's lamp's reach)
 
 }  // namespace
 
@@ -28,7 +28,16 @@ void Lights::Begin(double now) {
 }
 
 void Lights::Add(Vec3 position, float radius, Vec3 color) {
-  if (radius > 0) lights_.push_back({position, radius, color});
+  if (radius > 0) lights_.push_back(Light{position, radius, color, 1, {}, -2});
+}
+
+void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow) {
+  if (radius <= 0) return;
+  Light light{position, radius, color, 1, {}, -2};
+  light.glow = glow;
+  light.direction = Normalize(direction);
+  light.cosEdge = std::cos(std::clamp(coneDegrees, 1.0f, 179.0f) * 0.5f * 3.14159265f / 180);
+  lights_.push_back(light);
 }
 
 // A ramp texture's colours along its length (its middle row), each multiplied by its alpha: what a
@@ -70,7 +79,7 @@ void Lights::Build(View* view) {
     const float t = static_cast<float>((now_ - f.born) / static_cast<double>(f.seconds)) * static_cast<float>(ramp.size() - 1);
     const size_t i = std::min(static_cast<size_t>(t), ramp.size() - 1), j = std::min(i + 1, ramp.size() - 1);
     const Vec3 color = Lerp(ramp[i], ramp[j], t - static_cast<float>(i)) * strength;
-    if (color.x + color.y + color.z > 0.003f) lights_.push_back({f.position, f.size * reach, color});
+    if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, f.size * reach, color, 1, {}, -2});
   }
   count = static_cast<int>(lights_.size());
   ViewConstants& c = view->constants;
@@ -124,18 +133,33 @@ void Lights::Build(View* view) {
         indices_[cellFirst_[at] + cellCount_[at]++] = n;
       }
   }
+  // a square with more lights than a pixel looks at (48, lighting.h): the ones nearest its middle
+  // come first, so that what is left out is what reaches the square least, and not whichever
+  // lights were named last (which showed as stripes across a crowd)
+  for (int z = 0; z < rows; ++z)
+    for (int x = 0; x < cols; ++x) {
+      const size_t at = static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x);
+      if (cellCount_[at] <= 48) continue;
+      const float mx = x0 + (static_cast<float>(x) + 0.5f) * cell, mz = z0 + (static_cast<float>(z) + 0.5f) * cell;
+      auto away = [&](uint32_t n) {
+        const float dx = lights_[n].position.x - mx, dz = lights_[n].position.z - mz;
+        return dx * dx + dz * dz;
+      };
+      uint32_t* list = indices_.data() + cellFirst_[at];
+      std::nth_element(list, list + 48, list + cellCount_[at], [&](uint32_t a, uint32_t b) { return away(a) < away(b); });
+    }
   // the buffer, in rows of four numbers: one row per square (where its list begins, how long it
-  // is), then the lists (four light numbers a row), then two rows per light
+  // is), then the lists (four light numbers a row), then three rows per light
   const size_t listRows = (total + 3) / 4;
   const size_t firstList = cells, firstLight = cells + listRows;
-  rows_.assign((firstLight + lights_.size() * 2) * 4, 0.0f);
+  rows_.assign((firstLight + lights_.size() * 3) * 4, 0.0f);
   for (size_t i = 0; i < cells; ++i) {
     rows_[i * 4] = static_cast<float>(firstList * 4 + cellFirst_[i]);  // counted in numbers, not rows
     rows_[i * 4 + 1] = static_cast<float>(cellCount_[i]);
   }
   for (uint32_t i = 0; i < total; ++i) rows_[firstList * 4 + i] = static_cast<float>(indices_[i]);
   for (size_t n = 0; n < lights_.size(); ++n) {
-    float* p = &rows_[(firstLight + n * 2) * 4];
+    float* p = &rows_[(firstLight + n * 3) * 4];
     p[0] = lights_[n].position.x;
     p[1] = lights_[n].position.y;
     p[2] = lights_[n].position.z;
@@ -143,6 +167,11 @@ void Lights::Build(View* view) {
     p[4] = lights_[n].color.x;
     p[5] = lights_[n].color.y;
     p[6] = lights_[n].color.z;
+    p[7] = lights_[n].glow;
+    p[8] = lights_[n].direction.x;
+    p[9] = lights_[n].direction.y;
+    p[10] = lights_[n].direction.z;
+    p[11] = lights_[n].cosEdge;
   }
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
   c.lightGrid[0] = x0;

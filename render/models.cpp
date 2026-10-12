@@ -313,6 +313,12 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       light.radius = static_cast<float>(entry["Radius"].NumberOr(1.5));
       light.strength = static_cast<float>(entry["Strength"].NumberOr(1));
       light.blink = static_cast<float>(entry["Blink"].NumberOr(0));
+      // a beam: Direction is the lamp's facing in the mesh's coordinates at rest, and turns with the bone
+      const Vec3 facing = three("Direction", {0, 0, 0});
+      light.cone = static_cast<float>(entry["Cone"].NumberOr(0));
+      if (Length(facing) < 0.01f || light.cone >= 179) light.cone = 0;
+      light.direction = light.bone >= 0 ? Rotate(Conjugate(m->bones[static_cast<size_t>(light.bone)].rotation), facing) : facing;
+      light.glow = static_cast<float>(entry["Glow"].NumberOr(0.15));
       m->lights.push_back(light);
     }
   }
