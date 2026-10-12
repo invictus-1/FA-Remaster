@@ -470,6 +470,8 @@ bool Approaching(const Unit* A, const Unit* B, const Vec3& pA, const Vec3& vA, c
   return Dot(Sub(B->position, A->position), dv) < 0;
 }
 
+bool g_inSteeringStage = false;  // SteeringTickAll is running (see UnitMotion::colLateTick)
+
 // Predict 0x597800: X has the right of way, Y yields; the record goes to Y.
 void Predict(Sim& sim, Unit* X, Unit* Y) {
   UnitMotion& mx = X->motion;
@@ -508,6 +510,7 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
         my.colPos = pX;
         my.colUnit = EntityRef(X);
         my.colTick = now + static_cast<uint32_t>(k);
+        my.colLateTick = g_inSteeringStage ? 0xffffffffu : now;
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
           Logf(LogLevel::Info, "col %u predict Y %u X %u at +%zu", now, Y->id, X->id, k);
@@ -665,7 +668,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
   if (m.colType == 5) {
     if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
     else m.colType = 0;
-  } else if (m.colType == 1 && sim.tick() >= m.colTick) {
+  } else if (m.colType == 1 && sim.tick() >= m.colTick && m.colLateTick != sim.tick()) {
     Resolve(sim, u);
     switch (m.colType) {
       case 0:
@@ -714,13 +717,20 @@ void SteeringTick(Sim& sim, Unit* u) {
 
 }  // namespace
 
+// (for SetWaypoints(0, 0) in motion.cpp: the prediction that follows the brake spline)
+void SteeringCheckCollisions(Sim& sim, Unit* u) {
+  if (HasSteering(u)) CheckCollisions(sim, u);
+}
+
 void SteeringTickAll(Sim& sim) {
   const auto& all = sim.units();
+  g_inSteeringStage = true;
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->destroyQueued) continue;
     SteeringTick(sim, u);
   }
+  g_inSteeringStage = false;
 }
 
 }  // namespace moho

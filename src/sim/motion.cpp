@@ -1071,6 +1071,10 @@ void SteeringClearWaypoints(Sim& sim, Unit* u) {
   m.colTick = 0xffffffffu;
   m.sideStep = {};
   if (!u->dead && !u->destroyQueued && m.bp) BrakeSpline(sim, u, 3);
+  // 0x5d29c0: "notify neighbours" = CheckCollisions with the brake spline, before the hand-out. A unit that is
+  // told to stop while another one is heading for its path puts the record on that one at once (seen: a flak
+  // brakes hard the beat after the unit crossing in front of it was stopped by its attack order).
+  SteeringCheckCollisions(sim, u);
   if (m.splineIdx < m.spline.size()) {
     m.point = m.spline[m.splineIdx++];
     m.pointNow = true;

@@ -130,6 +130,9 @@ struct UnitMotion {
   Vec3 steerTarget;        // st+0x90: the current waypoint target
   bool pointNow = false;   // a point was handed this tick (motion+4)
   uint32_t handOutTick = 0xffffffffu;  // a point was handed outside the steering stage (SetWaypoints(0,0))
+  // The beat a collision record was written OUTSIDE the steering stage (a stop in the command or script stage):
+  // the original's steering stage has already run by then, so the record is first looked at a beat later.
+  uint32_t colLateTick = 0xffffffffu;
   SplinePoint point{};
   // SCollisionInfo (st+0x64): the unit it expects to meet, where, and when; type 0 none, 1 predicted,
   // 2 side-step, 4 brake and wait, 5 brake for a side-stepper
@@ -189,6 +192,8 @@ const Vec3& UnitVelocity(const Unit* u);
 // CAiSteeringImpl::SetWaypoints(nullptr, 0) 0x5d29c0: no waypoint; a unit still on a spline gets a brake spline
 // and its first point at once (engine-ref move_handoff.md).
 void SteeringClearWaypoints(Sim& sim, Unit* u);
+// CAiSteeringImpl::CheckCollisions 0x5d3740 for one unit (sim/steering.cpp).
+void SteeringCheckCollisions(Sim& sim, Unit* u);
 // Navigator interface (sim/landnav.cpp): a move starts (no waypoint yet: it coasts), the steering
 // gets a waypoint (through: drive through it, else brake to it), the move ended.
 void MotionNavBegin(Unit* u);
