@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ class SimFrames {
   // Once the game has started: reads the armies' colours as the game shows them (the game's list
   // of colours is /lua/gamecolors.lua in `vfs`) and how every blueprint looks. On the simulation's thread.
   void ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs);
+  // The army the picture is for (the engine's number, from 1): from the next beat on every unit
+  // and projectile says what that army knows of it (FrameUnit::recon). 0: no one army, as at first.
+  void SetFocusArmy(int army) { focus_.store(army); }
   // After every beat, on the simulation's thread. For the scripts' effects the simulation must have
   // had `collectEffects` set from before its first beat.
   void Beat(const moho::Sim& sim);
@@ -64,6 +68,7 @@ class SimFrames {
   std::vector<Vec3> armyColors_;
   std::vector<BlueprintLook> looks_;
   uint32_t seed_ = 0;
+  std::atomic<int> focus_{0};
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
 };

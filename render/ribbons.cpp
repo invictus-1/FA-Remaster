@@ -47,7 +47,7 @@ float4 PS(VOut i) : SV_Target {
   if (options.z > 0.5 && (i.rampUv.x <= 0 || i.rampUv.x >= 1)) discard;
   float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
   if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
-  if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y : 1);
+  if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y * (falling.w > 0 ? falling.w : 1) : 1);
   if (options.w > 0.5) c.a = 1;  // (the device's adding blend weighs by alpha)
   return c;
 }

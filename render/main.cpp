@@ -58,6 +58,8 @@
 //           (from noon when the map's light was on), Y: the map's own light again.
 // --border <mesh blueprint>  what the map lies in, as the game's MapBorderAdd names it (may be given twice),
 //           for example /meshes/game/map-border_squ_uef_mesh
+// --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
+//           only as it knows them (seen, a blip on radar, or not at all)
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
@@ -136,6 +138,7 @@ struct Options {
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
+  int focus = 0;                        // --focus
   std::string weather, climate;         // --weather, --climate
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
@@ -226,6 +229,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
+    else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
@@ -348,6 +352,8 @@ int main(int argc, char** argv) {
     setup.replay = opt.sim;
     setup.session = opt.session;
     setup.seed = opt.seed;
+    live.SetFocusArmy(opt.focus);
+    picture.SetFocusArmy(opt.focus);
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
       fprintf(stderr, "render: simulation: %s\n", error.c_str());
@@ -890,7 +896,7 @@ int main(int argc, char** argv) {
         pose.nowCount = pose.nextCount = u.bones.size();
       }
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
-      world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr);
+      world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame

@@ -23,6 +23,11 @@ struct FrameUnit {
   uint64_t states = 0;                  // the original's unit-state bits
   bool dead = false;
   bool beingBuilt = false;
+  // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,
+  // 8 seen now, 0x10 seen at some time, ...). 0xff: the picture is for no one army, everything shows.
+  uint8_t recon = 0xff;
+  bool Seen() const { return (recon & 8) != 0; }
+  bool Blip() const { return (recon & 8) == 0 && (recon & 7) != 0; }  // known by radar, sonar or omni only
   // Its bones that do not stand at rest, as spans of Frame::bones: at this frame's beat, and at the
   // beat after it (the picture shows the pose Frame::blend of the way from one to the other).
   // Both empty: the unit stands in its model's rest pose.
@@ -47,6 +52,7 @@ struct FrameProjectile {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
+  bool seen = true;               // by the army the picture is for
 };
 
 // A weapon's beam while it is on.

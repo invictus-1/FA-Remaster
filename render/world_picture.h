@@ -54,6 +54,12 @@ class WorldPicture {
   // --- what the interface shows in the world; each stays as set until it is set again ---
   // The selected units, by entity id: a ring on the ground under each, its strategic icon in the
   // selected form.
+  // The army the picture is for (the engine's number, from 1; 0: no one army, everything shows, as
+  // at first). From the next beat on, other armies' units show as that army knows them (the
+  // engine's ReconOf): the unit while it is seen, its blip (the strategic icon without detail, at
+  // any distance) while it is on radar, sonar or omni alone, nothing otherwise; their shots only
+  // where the army sees. The minimap, UnitAt and UnitsIn go by the same.
+  void SetFocusArmy(int army);
   void SetSelection(const std::vector<uint32_t>& ids);
   // The unit under the mouse: marked with the original's brackets of that kind (1 the player's own
   // or an ally's, 2 an enemy's, 3 anyone else's). Kind 0 or an id that is no unit's: no mark. A

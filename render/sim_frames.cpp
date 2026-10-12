@@ -179,9 +179,11 @@ void SimFrames::Beat(const moho::Sim& sim) {
     }
     return it->second;
   };
+  const int focus = focus_.load();
   for (const moho::UnitView& v : e.views) {
     FrameUnit u;
     u.id = v.id;
+    if (focus > 0) u.recon = static_cast<uint8_t>(moho::ReconOf(sim, focus, v.id) & 0x7f);
     u.blueprint = nameOf(v.blueprint);
     std::memcpy(u.position, v.position, sizeof u.position);
     std::memcpy(u.orientation, v.orientation, sizeof u.orientation);
@@ -210,6 +212,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     p.id = v.id;
     p.blueprint = v.blueprint.empty() ? 0 : nameOf(v.blueprint);
     p.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
+    if (focus > 0) p.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0;  // (a projectile: its place's answer)
     std::memcpy(p.position, v.position, sizeof p.position);
     std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);

@@ -51,6 +51,7 @@ class Lights {
 
   float strength = 3.0f;      // how bright a flash of full ramp colour is
   float reach = 3.0f;         // a flash's radius, in sizes of its glow
+  float night = 1;            // what flashes are multiplied by this frame (the night's dimming of the game's effects)
   int count = 0;              // lights in the last Build
 
  private:

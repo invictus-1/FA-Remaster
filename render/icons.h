@@ -33,6 +33,8 @@ class StrategicIcons {
     float fadeIn = 130;  // the distance from the camera at which the symbol is fully there
     int priority = 128;  // 0 lies on top, 255 at the bottom
     int iconSelected = -1;  // the symbol of a selected unit (<name>_selected.dds; -1: the plain one)
+    int iconBlip = -1;      // the symbol without its detail ("icon_land2_generic" for "icon_land2_directfire"):
+                            // what a unit known by radar alone shows; -1: the plain one
     // the ring under a selected unit: half its extent along the unit's own x and z (the blueprint's
     // SelectionSizeX, SelectionSizeZ)
     float selectionX = 0.5f, selectionZ = 0.5f;
@@ -40,6 +42,8 @@ class StrategicIcons {
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.
   const Kind* ForBlueprint(const std::string& blueprintPath);
+  // The symbol of that name without its detail, or -1 when the game's files have none.
+  int BlipIcon(const std::string& name);
   // Says what the kind of that blueprint file shows, in place of reading the file (the values the
   // simulation has). `icon` empty: none; `fadeIn`, `selectionX`, `selectionZ` 0: not said.
   void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ);
@@ -49,10 +53,11 @@ class StrategicIcons {
   // A unit of that kind at that place in the world, of an army with that colour (rgb in 0..1).
   // Nothing is listed while the unit is nearer than its kind's distance, or out of the picture.
   // `selected`: its selected form, where the game's files have one.
-  void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false);
+  // `blip`: the unit is known by radar alone: its symbol without detail, at any distance.
+  void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false);
   // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
   // middle at (x, y): for pictures made without the graphics card (a minimap).
-  void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height) const;
+  void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false) const;
   // Draws the list into the current pass, which must be the window's.
   void Draw();
 

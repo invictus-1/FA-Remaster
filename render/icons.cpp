@@ -106,6 +106,13 @@ int StrategicIcons::Icon(const std::string& name, const char* suffix) {
   return index;
 }
 
+int StrategicIcons::BlipIcon(const std::string& name) {
+  const size_t under = name.rfind('_');
+  if (under == std::string::npos) return -1;
+  const std::string plain = name.substr(0, under) + "_generic";
+  return vfs_->Exists(kIconFolder + plain + "_rest.dds") ? Icon(plain) : -1;
+}
+
 const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blueprintPath) {
   auto known = kinds_.find(blueprintPath);
   if (known != kinds_.end()) return known->second.get();
@@ -118,6 +125,7 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     if (!name.empty()) {
       kind->icon = Icon(name);
       if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
+      kind->iconBlip = BlipIcon(name);
     }
     kind->priority = std::clamp(s.priority, 0, 255);
     if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
@@ -135,6 +143,7 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   if (!name.empty()) {
     kind->icon = Icon(name);
     if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
+    kind->iconBlip = BlipIcon(name);
   }
   kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
   kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));
@@ -152,8 +161,8 @@ void StrategicIcons::Begin(const View& view) {
   pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
 }
 
-void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height) const {
-  const int icon = selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
+void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height, bool blip) const {
+  const int icon = blip && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
   if (icon < 0) return;
   const Rect& r = rects_[static_cast<size_t>(icon)];
   auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -179,13 +188,14 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected) {
+void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip) {
   if (kind->icon < 0) return;
-  const int icon = selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
+  const int icon = blip && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
   // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on
   const float distance = Length(position - view_.eye);
   const float from = kind->fadeIn * (1 - fadeShare);
   float alpha = kind->fadeIn > from ? (distance - from) / (kind->fadeIn - from) : (distance >= from ? 1.0f : 0.0f);
+  if (blip) alpha = 1;  // (a blip is all there is to see of the unit)
   if (alpha <= 0) return;
   alpha = std::min(alpha, 1.0f);
   const Mat4& m = view_.constants.viewProj;

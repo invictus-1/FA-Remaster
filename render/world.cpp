@@ -200,15 +200,18 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, float 
   }
 }
 
-void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose) {
+void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
   // (only near what the camera looks at: a lamp lights a few units of ground)
   if (Length(position - camera.target) > camera.distance * 2 + 80) return;
   // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
   // most first): about 6,000 lights in all, by the number of units of the frame before
   ++lampUnits_;
-  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 2, 16));
+  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 3, 16));
   size_t lit = 0;
+  uint64_t taken[16];
+  bool takenBeam[16];
+  size_t takenCount = 0;
   for (const ModelLight& light : model->lights) {
     if (lit++ >= most) break;
     Vec3 bonePlace{0, 0, 0};
@@ -239,21 +242,34 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     {
       const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
                               static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
-      uint32_t& count = lampSquares_[square];
+      // (by the lamps of the units before this one: a unit's own lamps do not cut each other)
+      const auto found = lampSquares_.find(square);
+      const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
       const uint32_t beams = count & 0xffffu, others = count >> 16;
       if (light.cone > 0 ? beams >= 3 : others >= 2) continue;
-      count += light.cone > 0 ? 1u : 0x10000u;
+      if (takenCount < 16) {
+        taken[takenCount] = square;
+        takenBeam[takenCount++] = light.cone > 0;
+      }
     }
     float on = lampsOn_ * light.strength * 0.5f;  // (1 in the list: a strong lamp to an eye opened for the night)
     if (light.blink > 0) {  // (each lamp on its own beat, by where it is)
       const float beat = time_ / light.blink + position.x * 0.37f + position.z * 0.53f;
       if (beat - std::floor(beat) > 0.5f) on *= 0.12f;
     }
+    // the unit's own glow: in its army's colour (as light, its strongest part 1), so that one sees
+    // at night whose it is
+    Vec3 tint = light.color;
+    if (light.hull && armyColor) {
+      tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
+      tint = tint * (1 / std::max({tint.x, tint.y, tint.z, 0.05f}));
+    }
     if (light.cone > 0)
-      lights.AddBeam(at, light.radius * model->scale, light.color * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
+      lights.AddBeam(at, light.radius * model->scale, tint * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
     else
-      lights.Add(at, light.radius * model->scale, light.color * on);
+      lights.Add(at, light.radius * model->scale, tint * on);
   }
+  for (size_t i = 0; i < takenCount; ++i) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
 }
 
 float World::GroundHeight(float x, float z) const {
@@ -286,6 +302,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[2] = exposure;
   c.modern[3] = reflection;
   lampsOn_ = 0;
+  lights.night = 1;
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
   lampSquares_.clear();
@@ -319,6 +336,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.falling[0] = rain;
     c.falling[1] = snow;
     c.falling[2] = flash;
+    // the game's glowing effects and their flashes of light were made for the day's exposure
+    c.falling[3] = std::pow(1 / skyLight.exposure, 0.65f);
+    lights.night = c.falling[3];
     c.weather[0] = wet;
     c.weather[1] = snowLying;
     // (rain and snow thicken the air a little; the air never hides all of a far thing, or the
@@ -372,6 +392,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   for (const FrameUnit& u : frame.units) {
     if (u.dead) continue;
+    // of another army's unit only what the army the picture is for knows: the unit when it is seen,
+    // its blip when it is on radar, sonar or omni alone, nothing otherwise
+    const bool blip = u.Blip();
+    if (!u.Seen() && !blip) continue;
     const Vec3 position{u.position[0], u.position[1], u.position[2]};
     const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
     const Vec3 color = colorOf(u.Army());
@@ -381,7 +405,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
-      icons.Add(kind, position, color, isSelected);
+      icons.Add(kind, position, color, isSelected, blip);
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
@@ -391,10 +415,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         AddBrackets(hoverKind, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       }
     }
-    const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
+    const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
     float radius = 0.5f;
     Vec3 centre = position + Vec3{0, 0.4f, 0};
-    if (model && model->ok) {
+    if (blip) {
+      // (its blip alone, which can be pointed at)
+    } else if (model && model->ok) {
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -402,7 +428,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
-      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose);
+      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose, &color);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour
@@ -414,6 +440,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
   for (const FrameProjectile& p : frame.projectiles) {
+    if (!p.seen) continue;
     const Vec3 position{p.position[0], p.position[1], p.position[2]};
     const std::string& blueprint = (*frame.blueprints)[p.blueprint];
     const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);

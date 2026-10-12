@@ -73,7 +73,9 @@ class World {
   // The lamps of a unit drawn this frame (a remastered unit's list of lights): lit while the light
   // of the computed sky is low, each where its bone is. AddFrame calls it for a game's units; a
   // host that adds models itself calls it beside `meshes.Add`.
-  void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr);
+  // `armyColor` (as armies' colours are given, screen values): what a unit's own glow (a light of
+  // Kind 'hull') is drawn in; without it, in the list's colour.
+  void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr, const Vec3* armyColor = nullptr);
   // The unit under the mouse, marked with brackets of a kind: 1 the player's own or an ally's,
   // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
   uint32_t hover = 0xffffffffu;

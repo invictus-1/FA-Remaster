@@ -60,6 +60,9 @@ struct ViewConstants {
   // most of a far thing the air may hide.
   float weather[4];
   // What falls just now: x how hard it rains, y how hard it snows (0..1), z a lightning's flash.
+  // w: what the game's own glowing effects are multiplied by under a computed sky (0: by nothing).
+  // They were made for the day's exposure; to an eye opened for the night they would be many
+  // times brighter, and a faint ring of dust a white arc.
   float falling[4];
 };
 
@@ -90,7 +93,7 @@ cbuffer View : register(b0) {
   float4 skyMoon;         // toward the moon
   float4 skyClouds;       // the cloud layer: x cover 0..1; y, z its drift (world units); w its change
   float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
-  float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash
+  float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash; w: the night's dimming of glowing effects (0: none)
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
