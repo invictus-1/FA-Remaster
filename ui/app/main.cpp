@@ -52,6 +52,7 @@ int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
+std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
 // keeps them to itself for now: see ui/REQUESTS.md.
@@ -172,6 +173,7 @@ int main(int argc, char** argv) {
     else if (a == "--dump-ui") dumpUi = true;
     else if (a == "--screenshot") screenshot = next();
     else if (a == "--window") windowed = true;
+    else if (a == "--session-out") sessionFile = next();
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -212,6 +214,7 @@ int main(int argc, char** argv) {
   }
   cfg.gameArgs = o.gameArgs;
   cfg.prefsFile = o.prefsFile;
+  cfg.sessionFile = sessionFile;
 
   ui::UserState user(&vfs, cfg);
   bool ok = user.Boot();

@@ -137,6 +137,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - Draggers (`PostDragger`): while one is posted the mouse's moves and the release of its button go
   to it instead of the controls. The game's buttons click through this, so the main menu's
   buttons work: Options opens the options dialog (about 790 controls), Exit asks for confirmation.
+- The lobby object (`user/lobby.cpp`) in its local form: it hosts (the host gets the id 0, as in
+  the original), has no peers and sends nothing. With it Skirmish goes from the main menu through
+  the game's tutorial question to the game's lobby screen in single-player form (about 2,900
+  controls: slots, colours, factions, game options, the map's markers). Joining a game and
+  launching one are not built: `LaunchGame` records the game configuration the script hands over
+  (to the log, or to the file named by `--session-out`) and tells the script the launch failed,
+  in words, in the lobby's chat.
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
   drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
   open their screens.
