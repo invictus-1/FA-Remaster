@@ -50,6 +50,9 @@ bool Recording::Load(const std::string& hostPath, std::string* error) {
   const bool ours = (flags & 1) != 0;  // the engine stores quaternions x y z w; the original game's recorder w x y z
   ticks_.clear();
   units_.clear();
+  created_.clear();
+  named_ = 0;
+  std::vector<std::pair<uint32_t, uint32_t>> named;  // unit id, blueprint: 'U' records since the last tick
   size_t off = 16;
   const size_t n = d.size();
   while (off + 12 <= n) {
@@ -64,9 +67,20 @@ bool Recording::Load(const std::string& hostPath, std::string* error) {
       off += 56;
     } else if (type == 'R') {
       off += 32;
+    } else if (type == 'U') {  // which blueprint a unit is: before the first 'T' that lists it
+      const size_t length = d[off + 1];
+      if (off + 8 + length > n) break;
+      const uint32_t id = Get<uint32_t>(d, off + 4);
+      std::string name(reinterpret_cast<const char*>(d.data()) + off + 8, length);
+      while (!name.empty() && name.back() == '\0') name.pop_back();
+      named.emplace_back(id, BlueprintIndex(name));
+      off += 8 + (length + 3) / 4 * 4;
     } else if (type == 'T') {
       Tick t;
       t.tick = Get<uint32_t>(d, off + 4);
+      for (const auto& u : named) created_[u.first].push_back({t.tick, u.second});
+      named_ += static_cast<int>(named.size());
+      named.clear();
       t.count = Get<uint32_t>(d, off + 8);
       t.first = units_.size();
       off += 12;
@@ -108,7 +122,16 @@ bool Recording::Load(const std::string& hostPath, std::string* error) {
   return true;
 }
 
+uint32_t Recording::BlueprintIndex(const std::string& name) {
+  auto it = blueprintIndex_.find(name);
+  if (it != blueprintIndex_.end()) return it->second;
+  blueprintIndex_.emplace(name, static_cast<uint32_t>(blueprints_.size()));
+  blueprints_.push_back(name);
+  return static_cast<uint32_t>(blueprints_.size() - 1);
+}
+
 int Recording::LoadCreateLog(const std::string& hostPath) {
+  if (named_ > 0) return 0;  // the recording says it itself
   std::ifstream in(hostPath);
   std::string line;
   int found = 0;
@@ -117,12 +140,7 @@ int Recording::LoadCreateLog(const std::string& hostPath) {
     unsigned tick = 0, id = 0;
     char bp[64];
     if (at == std::string::npos || sscanf(line.c_str() + at, "create %u unit %u bp %63s", &tick, &id, bp) != 3) continue;
-    auto it = blueprintIndex_.find(bp);
-    if (it == blueprintIndex_.end()) {
-      it = blueprintIndex_.emplace(bp, static_cast<uint32_t>(blueprints_.size())).first;
-      blueprints_.push_back(bp);
-    }
-    created_[id].push_back({tick, it->second});
+    created_[id].push_back({tick, BlueprintIndex(bp)});
     ++found;
   }
   return found;

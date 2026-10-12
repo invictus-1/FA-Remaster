@@ -67,8 +67,25 @@ class ModelCache {
   bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp").
   const Model* Blueprint(const std::string& blueprintPath, bool original = false);
+  // Reads the mesh and texture names of blueprints as the simulation has them after the game's
+  // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models
+  // listed there take their names from it instead of from the .bp file. Returns the levels read.
+  int LoadDisplayTable(const std::string& hostPath);
 
  private:
+  struct LodSource {
+    float cutoff = 1e9f;
+    std::string shader = "Unit";
+    std::string mesh, albedo, normals, specular, secondary;  // virtual paths; empty: none
+    bool albedoNamed = false, normalsNamed = false, specularNamed = false, secondaryNamed = false;
+  };
+  struct DisplayEntry {
+    float scale = 1;
+    std::vector<LodSource> lods;
+  };
+  const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry);
+  void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged);
+  std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;

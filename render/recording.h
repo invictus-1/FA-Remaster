@@ -1,9 +1,10 @@
 // A tick recording (the engine's MOHO64_RECORD file, or the same format written inside the original
 // game) as a source of frames: what every unit's pose was at every tick.
 //
-// The format is described at the top of src/sim/recorder.cpp. A recording does not say which blueprint
-// a unit is (render/REQUESTS.md, request 1); until it does, that comes from the engine's log of the
-// same run made with MOHO64_DEBUG_CREATE=1 ("create <tick> unit <id> bp <blueprint> ...").
+// The format is described at the top of src/sim/recorder.cpp. The engine's recordings say which
+// blueprint each unit is ('U' records). Older ones, and the original game's, do not: for those it
+// comes from the engine's log of the same run made with MOHO64_DEBUG_CREATE=1
+// ("create <tick> unit <id> bp <blueprint> ...").
 #pragma once
 #include <cstdint>
 #include <string>
@@ -17,7 +18,10 @@ namespace render {
 class Recording {
  public:
   bool Load(const std::string& hostPath, std::string* error);
-  // Reads the "create" lines of an engine log. Returns how many it found.
+  // How many units the recording names itself ('U' records; the engine writes them since 2026-10-12).
+  int NamedUnits() const { return named_; }
+  // For recordings without them: reads the "create" lines of an engine log made with
+  // MOHO64_DEBUG_CREATE=1. Returns how many it found; does nothing when the recording has names.
   int LoadCreateLog(const std::string& hostPath);
 
   int TickCount() const { return static_cast<int>(ticks_.size()); }
@@ -38,6 +42,8 @@ class Recording {
     uint32_t blueprint;
   };
   uint32_t BlueprintOf(uint32_t id, uint32_t tick) const;
+  uint32_t BlueprintIndex(const std::string& name);
+  int named_ = 0;
 
   std::vector<Tick> ticks_;
   std::vector<FrameUnit> units_;  // all ticks, one after the other; `blueprint` is filled in by FrameAt
