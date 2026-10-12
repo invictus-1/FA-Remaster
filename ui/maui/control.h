@@ -207,6 +207,15 @@ class UiManager {
  private:
   std::vector<Frame*> frames_;
   int width_ = 0, height_ = 0;
+
+ public:
+  int width() const { return width_; }
+  int height() const { return height_; }
+  // The mouse at the screen's edge moves the view (set by a host whose window fills the screen
+  // and keeps the mouse inside; in a window on the desktop the mouse just leaves).
+  bool edgeScroll = false;
+
+ private:
 };
 
 // The control behind a script value. CheckControl raises the original's errors: "Expected a game

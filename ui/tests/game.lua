@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1650 --log out.log
+--            --frames 1750 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -125,6 +125,14 @@ local function run()
     WaitSeconds(0.3)
     moho64ui_Key(317, "", "up")
     check("the up arrow moves it north", cam:GetFocusPosition()[3] < g[3] - 1, true)
+    -- dragging with the middle button moves the view with the mouse: the ground stays under the pointer
+    local d0 = cam:GetFocusPosition()
+    moho64ui_MouseButton("Middle", true, 900, 500)
+    moho64ui_MouseMove(880, 500)
+    moho64ui_MouseButton("Middle", false, 880, 500)
+    local d1 = cam:GetFocusPosition()
+    local shown = cam:GetZoom() / view.Width()  -- map units per pixel
+    check("a middle-button drag 20 pixels to the left moves the view east by as much", math.abs((d1[1] - d0[1]) - 20 * shown) < 0.01 and math.abs(d1[3] - d0[3]) < 0.01, true)
     cam:RestoreSettings(saved)
     WaitSeconds(0.1)
 
@@ -249,6 +257,21 @@ local function run()
 
     SelectUnits(nil)
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)
+    -- clicks in the world: a click on a unit selects it, a double click all of its kind on screen
+    here = cdr:GetPosition()
+    cam:SnapTo(here, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project(here)
+    moho64ui_MouseButton("Left", true, s.x, s.y)
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    sel = GetSelectedUnits()
+    check("a click on the commander selects it", sel ~= nil and sel[1] == cdr, true)
+    SelectUnits(nil)
+    moho64ui_MouseButton("Left", true, s.x, s.y, "Double")
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    sel = GetSelectedUnits()
+    check("a double click selects its kind on screen (here: the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    SelectUnits(nil)
     LOG("TEST done: " .. failed .. " failed")
 end
 

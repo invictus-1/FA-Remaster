@@ -1295,6 +1295,23 @@ void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
   SetSelection(L, now);
 }
 
+bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  UnitStore& store = Store(L);
+  auto it = store.units.find(unit);
+  if (it == store.units.end() || it->second->gone || it->second->view.army != sim->focusArmy + 1) return false;
+  const std::string kind = it->second->view.blueprint;
+  std::vector<uint32_t> same;
+  for (uint32_t id : among) {
+    auto other = store.units.find(id);
+    if (other != store.units.end() && !other->second->gone && other->second->view.blueprint == kind) same.push_back(id);
+  }
+  if (std::find(same.begin(), same.end(), unit) == same.end()) same.push_back(unit);
+  SelectUnitsById(L, same, add);
+  return true;
+}
+
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);

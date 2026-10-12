@@ -108,6 +108,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_ERASEBKGND:
       return 1;  // every frame covers the whole window
+    case WM_ACTIVATE:  // in front: the mouse stays inside a window that fills the screen; behind: it is free
+      if (w->fullScreen) w->KeepMouseInside(LOWORD(wp) != WA_INACTIVE);
+      break;
     case WM_SETCURSOR:
       if (LOWORD(lp) == HTCLIENT) {  // inside the window: the interface's pointer
         SetCursor(static_cast<HCURSOR>(w->pointer()));
@@ -123,6 +126,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }  // namespace
 
 Window::~Window() {
+  if (fullScreen) ClipCursor(nullptr);
   if (hwnd_) DestroyWindow(static_cast<HWND>(hwnd_));
   for (auto& entry : pointers_)
     if (entry.second) DestroyIcon(static_cast<HICON>(entry.second));
@@ -180,8 +184,29 @@ void Window::HidePointer(bool hidden) {
   SetPointer(nullptr, 0, 0, 0, 0);  // (drops the image: the host sets it again when it is shown)
 }
 
-bool Window::Create(int width, int height, const char* title, Callbacks cb) {
+bool Window::ScreenSize(int* width, int* height) {
+  SetProcessDPIAware();
+  *width = GetSystemMetrics(SM_CXSCREEN), *height = GetSystemMetrics(SM_CYSCREEN);
+  return *width > 0 && *height > 0;
+}
+
+void Window::KeepMouseInside(bool keep) {
+  if (!keep || !hwnd_) {
+    ClipCursor(nullptr);
+    return;
+  }
+  RECT rc;
+  GetClientRect(static_cast<HWND>(hwnd_), &rc);
+  POINT a{rc.left, rc.top}, b{rc.right, rc.bottom};
+  ClientToScreen(static_cast<HWND>(hwnd_), &a);
+  ClientToScreen(static_cast<HWND>(hwnd_), &b);
+  RECT clip{a.x, a.y, b.x, b.y};
+  ClipCursor(&clip);
+}
+
+bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full) {
   callbacks = std::move(cb);
+  fullScreen = full;
   SetProcessDPIAware();  // one interface pixel is one screen pixel
   timeBeginPeriod(1);    // sleeps of a millisecond, so the frame loop can keep 60 frames per second
   HINSTANCE inst = GetModuleHandleW(nullptr);
@@ -192,13 +217,13 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb) {
   wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
   wc.lpszClassName = L"moho64ui";
   RegisterClassW(&wc);
-  DWORD style = WS_OVERLAPPEDWINDOW;
+  DWORD style = full ? WS_POPUP : WS_OVERLAPPEDWINDOW;  // no frame when it fills the screen
   RECT rc{0, 0, width, height};
   AdjustWindowRect(&rc, style, FALSE);
   wchar_t wtitle[256];
   MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
-  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left,
-                              rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
+  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, full ? 0 : CW_USEDEFAULT, full ? 0 : CW_USEDEFAULT,
+                              rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
   arrow_ = wc.hCursor;
@@ -237,7 +262,9 @@ void Window::Present(const SoftwareTarget& target) {
 
 namespace moho::ui {
 Window::~Window() {}
-bool Window::Create(int, int, const char*, Callbacks) { return false; }
+bool Window::Create(int, int, const char*, Callbacks, bool) { return false; }
+bool Window::ScreenSize(int*, int*) { return false; }
+void Window::KeepMouseInside(bool) {}
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }

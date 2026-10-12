@@ -510,16 +510,33 @@ class WorldView : public Control {
   // between the two places are. With Shift they join the selection.
   float pressX_ = 0, pressY_ = 0;
   bool pressShift_ = false;
-  void DragRelease(lua_State* L, const UiEvent& e) override {
-    if (!EnsurePicture(L)) return;
-    WorldSource* source = UserState::From(L)->config().world;
+  // Dragging with the middle button moves the view with the mouse: the ground stays under the
+  // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
+  // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
+  // that the drag has no end at the screen's edge; here the pointer moves.
+  bool cameraDrag_ = false;
+  float lastX_ = 0, lastY_ = 0;
+  void DragMove(lua_State* L, const UiEvent& e) override {
+    if (!cameraDrag_) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    PanCamera(GetCameraObject(L, cameraName), e.x - lastX_, e.y - lastY_, r.x1 - r.x0);
+    lastX_ = e.x, lastY_ = e.y;
+  }
+  void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (cameraDrag_) {
+      cameraDrag_ = false;
+      return;
+    }
     std::vector<uint32_t> ids;
     if (std::fabs(e.x - pressX_) < 4 && std::fabs(e.y - pressY_) < 4) {
-      uint32_t id = source->UnitAt(e.x - r.x0, e.y - r.y0);
+      uint32_t id = UnitUnder(L, e.x, e.y);
       if (id != 0xffffffffu) ids.push_back(id);
     } else {
+      if (!EnsurePicture(L)) return;
+      WorldSource* source = UserState::From(L)->config().world;
+      Rect r;
+      GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
       source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
                       std::max(pressY_, e.y) - r.y0, &ids);
     }
@@ -554,7 +571,15 @@ class WorldView : public Control {
       ZoomByWheel(GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
       return true;
     }
-    if (e.type != EventType::ButtonPress) return false;
+    // (A second press soon after the first comes as a double click: it is a press too.)
+    if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return false;
+    if (e.middle) {
+      if (miniMap) return false;
+      cameraDrag_ = true;
+      lastX_ = e.x, lastY_ = e.y;
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
+    }
     float world[3];
     Unproject(L, e.x, e.y, world);
     if (e.right) {
@@ -586,7 +611,19 @@ class WorldView : public Control {
       return true;
     }
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
-    if (!mode.empty() || !UserState::From(L)->config().world || miniMap) return false;
+    if (!mode.empty() || miniMap) return false;
+    if (e.type == EventType::ButtonDClick) {
+      // A double click on one of the player's units selects all of its kind that are on screen
+      // (with Shift: adds them). As players know it from the original; its code for it is not read.
+      uint32_t under = UnitUnder(L, e.x, e.y);
+      if (under != 0xffffffffu) {
+        Rect r;
+        GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+        std::vector<uint32_t> onScreen;
+        if (EnsurePicture(L)) UserState::From(L)->config().world->UnitsIn(0, 0, r.x1 - r.x0, r.y1 - r.y0, &onScreen);
+        if (SelectSameKind(L, under, onScreen, e.shift)) return true;
+      }
+    }
     pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;
     UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
     return true;
@@ -694,6 +731,22 @@ WorldView* ViewOf(Control* c, const std::string& camera) {
   return nullptr;
 }
 
+// An option of the player's profile that is a switch (0 or 1, or "off" / "on"); `fallback` when
+// the profile does not have it.
+bool ProfileOption(lua_State* L, const char* key, bool fallback) {
+  int top = lua_gettop(L);
+  bool on = fallback;
+  lua_getglobal(L, "GetOptions");
+  lua_pushstring(L, key);
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0) {
+    if (lua_isnumber(L, -1)) on = lua_tonumber(L, -1) != 0;
+    else if (lua_isboolean(L, -1)) on = lua_toboolean(L, -1) != 0;
+    else if (lua_isstring(L, -1)) on = std::string(lua_tostring(L, -1)) != "off" && std::string(lua_tostring(L, -1)) != "Off";
+  }
+  lua_settop(L, top);
+  return on;
+}
+
 // One frame of a camera (FA exe 0x7a95f0). The zoom goes towards its target by its logarithm
 // (base 2): per second cam_ZoomSpeedSmall plus cam_ZoomSpeedLarge times what is left, so a long
 // way goes fast and the end is soft. Zooming in, the focus goes towards the ground under the
@@ -726,13 +779,26 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     c->focus[0] = under[0] + (c->focus[0] - under[0]) * f;
     c->focus[2] = under[2] + (c->focus[2] - under[2]) * f;
   }
-  // The arrow keys move the view that takes the camera's commands; Alt holds it still. (Of the
-  // original's frame function this much is built; not the screen's edges, which it follows only
-  // on a full screen, nor turning with Insert and Delete or with Space and the mouse.)
+  // The arrow keys and the screen's edges move the view that takes the camera's commands; Alt
+  // holds it still. (Of the original's frame function this much is built; not turning with
+  // Insert and Delete or with Space and the mouse.)
   if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt)) {
     float rate = kKeyPan * (KeyIsDown(L, kKeyCtrl) ? kKeyPanFast : 1.0f) * kPanFramesPerSecond * seconds;
-    float dx = (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
-    float dy = (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
+    float dx = 0, dy = 0;
+    // The mouse at the screen's edge (the original: its switch 0xf57a8c, the option
+    // "screen_edge_pans_main_view", and only on a screen the game fills).
+    UiManager& ui = UserState::From(L)->ui();
+    if (ui.edgeScroll && ProfileOption(L, "screen_edge_pans_main_view", true)) {
+      if (ui.mouseX <= 0) dx += rate;
+      if (ui.mouseY <= 0) dy += rate;
+      if (ui.mouseX >= static_cast<float>(ui.width() - 1)) dx -= rate;
+      if (ui.mouseY >= static_cast<float>(ui.height() - 1)) dy -= rate;
+    }
+    // The arrow keys (its switch 0xf57887, the option "arrow_keys_pan_main_view").
+    if (ProfileOption(L, "arrow_keys_pan_main_view", true)) {
+      dx += (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
+      dy += (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
+    }
     Rect r;
     v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);

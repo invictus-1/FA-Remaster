@@ -19,7 +19,7 @@ namespace moho::ui {
 // state gives way to a game's). Returns the number of frames shown, or -1 when no window could
 // be opened.
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
-              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame) {
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen) {
   auto target = std::make_unique<SoftwareTarget>(width, height);
   Window window;
   Window::Callbacks cb;
@@ -32,7 +32,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     target = std::make_unique<SoftwareTarget>(w, h);
     current().ui().Resize(w, h);
   };
-  if (!window.Create(width, height, "FA Remastered - interface", cb)) {
+  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
@@ -69,6 +69,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     auto now = Clock::now();
     double dt = std::chrono::duration<double>(now - last).count();
     last = now;
+    current().ui().edgeScroll = fullScreen;  // the mouse cannot leave: the screen's edge moves the view
     current().Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
     auto t0 = Clock::now();
     target->Clear(0xff000000u);

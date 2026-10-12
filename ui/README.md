@@ -57,7 +57,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
-         [--no-sound]
+         [--no-sound] [--fullscreen]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
@@ -234,7 +234,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
-  left click selects a unit and dragging selects a box. The camera follows the original's rules,
+  left click selects a unit and dragging selects a box; a double click on one of the player's
+  units selects all of its kind on screen. The camera follows the original's rules,
   read from its code: its zoom is the width of world the view shows (the eye stands at zoom /
   (2 tan(fov / 2))); it starts as far out as it goes (the map takes 1 / 1.4 of the view: 0.7083
   of the height here, 0.7087 on a screenshot of the original), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
@@ -242,8 +243,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
   cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four
   times as fast, Alt holds it), at the original's amount per frame taken at 60 frames a second,
-  so that the speed does not go with the frame rate as the original's does. Turning the camera,
-  moving it with the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
+  so that the speed does not go with the frame rate as the original's does. Dragging with the
+  middle button moves the view with the mouse (the ground stays under the pointer; the original
+  also holds the pointer in place meanwhile, which is not built). With `--fullscreen` the window
+  fills the main screen without a frame and keeps the mouse inside while it is in front; the
+  mouse at the screen's edge then moves the view, as in the original. The profile's options
+  `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. Turning the camera
+  and timed moves are not built. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent

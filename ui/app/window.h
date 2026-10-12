@@ -24,7 +24,11 @@ class Window {  // (the host's one window)
 
   ~Window();
   // Open a window whose inside is width x height pixels. False when there is no window system.
-  bool Create(int width, int height, const char* title, Callbacks callbacks);
+  // `fullScreen`: without a frame, over the whole main screen (give that screen's size, see
+  // ScreenSize), and the mouse is kept inside while the window is the one in front.
+  bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false);
+  // The main screen's size in pixels; false when there is no window system.
+  static bool ScreenSize(int* width, int* height);
   // Handle the waiting window messages (the callbacks run from here). False once the window is closed.
   bool Pump();
   // Show the target's pixels.
@@ -47,6 +51,10 @@ class Window {  // (the host's one window)
   std::map<std::pair<const uint32_t*, int>, void*> pointers_;  // those made so far, by image and hot spot; ours to destroy
   void* arrow_ = nullptr;    // the system's
   bool pointerHidden_ = false;
+
+ public:
+  bool fullScreen = false;
+  void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
 };
 
 class UserState;
@@ -55,7 +63,8 @@ class UserState;
 // between frames. `eachFrame` (may be empty) is called once per frame after
 // the interface has drawn, with the real time that passed and the picture before it is shown.
 // Returns the frames shown, or -1 when no window opened.
+// `fullScreen`: the window fills the main screen (width and height are then that screen's).
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
-              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame);
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false);
 
 }  // namespace moho::ui

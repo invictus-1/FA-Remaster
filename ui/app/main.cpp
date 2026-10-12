@@ -56,6 +56,7 @@ bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
 bool noSound = false;             // --no-sound: a live window without the sound device
+bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -186,6 +187,7 @@ int main(int argc, char** argv) {
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
     else if (a == "--no-sound") noSound = true;
+    else if (a == "--fullscreen") fullScreen = windowed = true;
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -208,9 +210,10 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [-- game arguments]\n");
+                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
     return 2;
   }
+  if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
   Vfs vfs;
   ui::UserState::Config cfg;
   cfg.width = width;
@@ -308,7 +311,8 @@ int main(int argc, char** argv) {
                            listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            startGameInterface();
-                         });
+                         },
+                         fullScreen);
     if (done < 0) ok = false;
   } else {
     for (; done < o.frames; ++done) {

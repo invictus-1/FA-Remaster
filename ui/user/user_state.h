@@ -158,6 +158,9 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// Select the player's units of the same kind (blueprint) as `unit` among those entity ids; with
+// `add` they join the selection. False when `unit` is not one of the player's.
+bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);
 // For the world's picture: the selected units' entity ids, and the lines of their orders (from
 // each unit to where its orders take it, coloured by the kind of order).
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);
