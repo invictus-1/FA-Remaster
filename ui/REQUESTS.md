@@ -296,7 +296,9 @@ Asked for:
    original's rule, empty when the unit is selected or the mouse is over a panel.
 2. When it suits you: the selected units' mark as the original's brackets instead of the ring.
 
-**Status:** asked 2026-10-12.
+**Status:** both done by the renderer track (`docs/render-answers.md`, "ui 4": `SetHover`, and the
+brackets for selected units) and in use. Thank you. The corner arithmetic of `0x7fc820` is not
+read out yet; said in the handoff as a thing to do when the marks are compared with the original.
 
 ### 5. Only what the player's army sees
 The engine now answers what an army sees (`ReconOf(sim, army, entity)`, `ReconAt(sim, army,
@@ -313,4 +315,8 @@ original is yours to judge with the looks. The interface will then use the same 
 mark under the mouse, the unit panel and the right click's choice, so that mouse and picture
 agree; tell me when it is in and I follow in the same step.
 
-**Status:** asked 2026-10-12.
+**Status:** units, blips, shots, the minimap and picking are done by the renderer track
+(`docs/render-answers.md`, "ui 5": `SetFocusArmy`) and in use: the picture is the player's, and the
+mouse follows it (a unit the army knows nothing of is not under the mouse; a blip tells whose it
+is, not what it is). Thank you. Still yours as you listed them: the ground the army does not
+see, and what was seen once.

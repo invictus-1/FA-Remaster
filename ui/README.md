@@ -296,6 +296,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
   (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the
   farthest zoom the map lies in its machinery with the frame around it, as in the original.
+- The picture is the player's: the renderer is told the player's army (`SetFocusArmy`) and shows
+  other armies' units as that army knows them (the unit while it is seen, a blip while it is on
+  radar or sonar alone, nothing otherwise), and the mouse follows it: a unit the army knows
+  nothing of is not under the mouse, a blip tells whose it is and not what it is. The unit under
+  the mouse gets the original's brackets (`SetHover`: the player's and allies' highlighted, an
+  enemy's red, others neutral), by the original's rule for which.
 - `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
   blueprint, health, economy, what it works on, its army and colour; the fields as the original
   writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by

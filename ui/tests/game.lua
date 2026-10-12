@@ -1,7 +1,8 @@
 -- The in-game interface on a running game, checked from the script side of a launched game's
 -- state: the session's facts, units, selection, the panels' data, the world view and a move order.
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
--- the lobby) with the player in the first slot:
+-- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
+-- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
 --            --frames 1650 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -210,21 +211,39 @@ local function run()
     WaitSeconds(0.3)
     s = view:Project(there)
     moho64ui_MouseMove(s.x, s.y)
-    check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
-    -- the mouse pointer: the world view's script chooses it every frame while the mouse is over it
     WaitSeconds(0.2)
-    local pointer = moho64ui_Cursor()
-    check("the pointer over an enemy is the attack pointer", string.find(pointer or "", "/cursors/attack", 1, true) ~= nil, true)
-    moho64ui_MouseMove(s.x - 300, s.y)
-    WaitSeconds(0.2)
-    pointer = moho64ui_Cursor()
-    check("over the ground it is the plain one again", string.find(pointer or "", "/cursors/attack", 1, true), nil)
-    moho64ui_MouseMove(s.x, s.y)
-    moho64ui_MouseButton("Right", true, s.x, s.y)
-    moho64ui_MouseButton("Right", false, s.x, s.y)
-    WaitSeconds(1)
-    queue = cdr:GetCommandQueue()
-    check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    local pointer
+    if SessionGetScenarioInfo().Options.FogOfWar == "none" then
+        -- a game without fog of war: the enemy across the map is seen, and the mouse is told of it
+        check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+        local info = GetRolloverInfo()
+        check("the info under the mouse is the enemy commander's", info ~= nil and info.entityId, "1048576")
+        -- the mouse pointer: the world view's script chooses it every frame while the mouse is over it
+        pointer = moho64ui_Cursor()
+        check("the pointer over an enemy is the attack pointer", string.find(pointer or "", "/cursors/attack", 1, true) ~= nil, true)
+        moho64ui_MouseMove(s.x - 300, s.y)
+        WaitSeconds(0.2)
+        pointer = moho64ui_Cursor()
+        check("over the ground it is the plain one again", string.find(pointer or "", "/cursors/attack", 1, true), nil)
+        moho64ui_MouseMove(s.x, s.y)
+        moho64ui_MouseButton("Right", true, s.x, s.y)
+        moho64ui_MouseButton("Right", false, s.x, s.y)
+        WaitSeconds(1)
+        queue = cdr:GetCommandQueue()
+        check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    else
+        -- with fog of war the player's army knows nothing of a commander across the map: it is not
+        -- under the mouse, nothing is told of it, and a right click there is a move
+        check("an enemy the army does not see is not attacked by a right click", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+        check("nothing is told of it", GetRolloverInfo(), nil)
+        pointer = moho64ui_Cursor()
+        check("and the pointer stays the plain one", string.find(pointer or "", "/cursors/attack", 1, true), nil)
+        moho64ui_MouseButton("Right", true, s.x, s.y)
+        moho64ui_MouseButton("Right", false, s.x, s.y)
+        WaitSeconds(1)
+        queue = cdr:GetCommandQueue()
+        check("the right click there is a move order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Move")
+    end
     IssueUnitCommand({cdr}, "Stop")
     cam:RestoreSettings(saved)
 

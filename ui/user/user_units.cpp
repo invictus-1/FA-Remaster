@@ -682,6 +682,15 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
   return IssueOrder(L, order, x, y, z, 0xffffffffu, clear, blueprint);
 }
 
+// What the player's army knows of a unit now (the engine's ReconOf bits; its own and its allies'
+// units: everything). The picture shows a unit by the same answer: the unit while it is seen, a
+// blip while it is on radar, sonar or omni alone, nothing otherwise.
+uint32_t ReconBitsOf(lua_State* L, const UserUnit* u) {
+  Sim* sim = TheSim(L);
+  if (!sim || sim->focusArmy < 0) return 0xf;
+  return ReconOf(*sim, sim->focusArmy + 1, u->view.id);
+}
+
 int HoverKindOf(lua_State* L, uint32_t entity) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
@@ -707,6 +716,7 @@ uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius) {
   for (const auto& entry : static_cast<UnitStore&>(*user->units).units) {
     const UnitView& v = entry.second->view;
     if (entry.second->gone || v.dead) continue;
+    if (ReconBitsOf(L, entry.second.get()) == 0) continue;  // the player's army knows nothing of it
     float d = (v.position[0] - x) * (v.position[0] - x) + (v.position[2] - z) * (v.position[2] - z);
     if (d <= bestD) best = v.id, bestD = d;
   }
@@ -1113,7 +1123,26 @@ int l_GetRolloverInfo(lua_State* L) {
   UnitStore& store = Store(L);
   auto it = store.units.find(UnitUnderMouse(L));
   if (it == store.units.end() || it->second->gone || it->second->view.dead) return 0;
-  PushRollover(L, it->second.get(), true);
+  UserUnit* u = it->second.get();
+  uint32_t recon = ReconBitsOf(L, u);
+  if (recon == 0) return 0;
+  if (!(recon & kReconSeenNow)) {
+    // A blip (radar or sonar alone): the player is told whose it is, not what it is. (The
+    // original's table for an entity without a blueprint, 0x8426f0: blueprintId "unknown",
+    // teamColor, armyIndex. That a blip is such an entity there is inferred.)
+    lua_newtable(L);
+    lua_pushstring(L, "blueprintId");
+    lua_pushstring(L, "unknown");
+    lua_rawset(L, -3);
+    lua_pushstring(L, "teamColor");
+    lua_pushstring(L, ArmyColorOf(L, u->view.army).c_str());
+    lua_rawset(L, -3);
+    lua_pushstring(L, "armyIndex");
+    lua_pushnumber(L, u->view.army - 1);
+    lua_rawset(L, -3);
+    return 1;
+  }
+  PushRollover(L, u, true);
   return 1;
 }
 

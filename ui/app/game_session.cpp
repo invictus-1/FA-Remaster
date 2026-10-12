@@ -77,8 +77,7 @@ struct GameSession::Picture : WorldSource {
     }
     picture.SetShapes(lines, {});
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
-    // scene.hover / hoverKind (the mark on the unit under the mouse) waits for the renderer:
-    // ui/REQUESTS.md, renderer 4.
+    picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
@@ -185,6 +184,8 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     std::string error;
     if (pic->picture.Open(vfs_, h.map, &error)) {
       pic->picture.GameStarted(*sim_);
+      // The picture is the player's: other armies' units show as the player's army knows them.
+      pic->picture.SetFocusArmy(sim_->focusArmy + 1);
       pic->picture.Beat(*sim_);
       picture_ = std::move(pic);
       Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
