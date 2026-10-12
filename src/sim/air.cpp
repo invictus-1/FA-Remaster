@@ -1216,9 +1216,17 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   Vec3 pos = u->position;
   Vec3 tp = TargetPosNow(sim, tgt);
   Vec3 diff{tp.x - pos.x, tp.y - pos.y, tp.z - pos.z};
-  float d3 = std::sqrt((diff.x * diff.x + diff.y * diff.y) + diff.z * diff.z);
-  float d2 = std::sqrt(diff.x * diff.x + diff.z * diff.z);
-  Vec3 dir3 = Normalized(diff);
+  // the squares are summed (x^2 + z^2) + y^2 here, for the distance and again for the direction (0x6bce66,
+  // 0x6bcf02: inline code, not the vector helpers); the direction is the difference times 1 / length. Summed in
+  // another order the direction times the distance misses the difference by a last bit or two, which is a last
+  // bit in the desired velocity and, beats later, the other side of a comparison
+  float d3 = std::sqrt((diff.x * diff.x + diff.z * diff.z) + diff.y * diff.y);
+  float d2 = std::sqrt(diff.z * diff.z + diff.x * diff.x);
+  Vec3 dir3{};
+  if (d3 > 0.0f) {
+    const float inv = 1.0f / d3;
+    dir3 = {inv * diff.x, diff.y * inv, diff.z * inv};
+  }
   float trig = u->motion.breakOffTriggerMult * b.breakOffTrigger;
   float brk = u->motion.breakOffDistanceMult * b.breakOffDistance;
   int s = a.combatState;
@@ -1239,9 +1247,27 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         } else {
           out = {dir3.x * d3, dir3.y * d3, dir3.z * d3};
         }
+        const Vec3 raw = out;
         out.y = elev(out);
+        const Vec3 lifted = out;
         if (s == 2 && eAir && MovedThisTick(E)) SetLength(out, std::max(d3, b.minAirspeed));
         else SetLength(out, speed);
+        {
+          static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+          if (dbgId >= 0 && static_cast<long>(u->id) == dbgId && E && E->kind == Entity::Kind::Unit) {
+            const Unit* tu = static_cast<const Unit*>(E);
+            const PhysBody* tb = tu->motion.air ? &tu->motion.air->body : nullptr;
+            Logf(LogLevel::Info, "tactics %u out: state %d raw %.9g %.9g %.9g y %.9g len %.9g -> %.9g %.9g %.9g | target held "
+                 "%d pos %.9g %.9g %.9g held %.9g %.9g %.9g vel now %.9g %.9g %.9g committed %.9g %.9g %.9g q %.9g %.9g "
+                 "%.9g %.9g L %.9g %.9g %.9g invI %.9g %.9g %.9g",
+                 now, s, raw.x, raw.y, raw.z, lifted.y, (s == 2 && eAir && MovedThisTick(E)) ? std::max(d3, b.minAirspeed) : speed,
+                 out.x, out.y, out.z, static_cast<int>(tu->shapeHeld), tu->position.x, tu->position.y, tu->position.z,
+                 tu->shapePos.x, tu->shapePos.y, tu->shapePos.z, tu->motion.lastMove.x, tu->motion.lastMove.y,
+                 tu->motion.lastMove.z, tu->motion.velCommitted.x, tu->motion.velCommitted.y, tu->motion.velCommitted.z,
+                 tb ? tb->q.w : 0, tb ? tb->q.x : 0, tb ? tb->q.y : 0, tb ? tb->q.z : 0, tb ? tb->L.x : 0, tb ? tb->L.y : 0,
+                 tb ? tb->L.z : 0, tb ? tb->invI[0] : 0, tb ? tb->invI[1] : 0, tb ? tb->invI[2] : 0);
+          }
+        }
         break;
       }
       case 3:
@@ -1249,6 +1275,12 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         ++a.combatCounter;
         out = {dir3.x * d3, dir3.y * d3, dir3.z * d3};
         out.y = elev(out);
+        {
+          static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+          if (dbgId >= 0 && static_cast<long>(u->id) == dbgId)
+            Logf(LogLevel::Info, "tactics %u out: state %d diff %.9g %.9g %.9g dir3 %.9g %.9g %.9g d3 %.9g lifted %.9g %.9g %.9g to %.9g",
+                 now, s, diff.x, diff.y, diff.z, dir3.x, dir3.y, dir3.z, d3, out.x, out.y, out.z, b.minAirspeed);
+        }
         SetLength(out, b.minAirspeed);
         break;
       case 5:
@@ -1991,11 +2023,17 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   Vec3 w{};
   if (u->motion.air) {
     const PhysBody& pb = A(u).body;
-    // world angular velocity: R * (invI (.) R^T L)
-    QuatW conj{pb.q.w, -pb.q.x, -pb.q.y, -pb.q.z};
-    Vec3 lb = MultQuadVec(conj, pb.L);
-    Vec3 wb{lb.x * pb.invI[0], lb.y * pb.invI[1], lb.z * pb.invI[2]};
-    w = MultQuadVec(pb.q, wb);
+    // world angular velocity 0x697e70: R * (invI (.) R^T L), through the axes of the orientation (VAxes3), each
+    // sum in the original's order: the prediction below turns ten times by it, and a last bit here is a last
+    // bit in an attacker's desired velocity
+    const Axes ax = VAxes3(pb.q);
+    const Vec3& L = pb.L;
+    const float la = (L.x * ax.X.x + L.y * ax.X.y) + L.z * ax.X.z;
+    const float lb = (L.z * ax.Y.z + L.y * ax.Y.y) + L.x * ax.Y.x;
+    const float lc = (L.z * ax.Z.z + L.y * ax.Z.y) + L.x * ax.Z.x;
+    const float wa = pb.invI[0] * la, wb = pb.invI[1] * lb, wc = pb.invI[2] * lc;
+    w = {(ax.Z.x * wc + ax.Y.x * wb) + wa * ax.X.x, (ax.Z.y * wc + ax.Y.y * wb) + wa * ax.X.y,
+         (ax.Z.z * wc + ax.Y.z * wb) + wa * ax.X.z};
   }
   // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
   // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
@@ -2003,7 +2041,7 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   Vec3 v = u->layer == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : u->motion.vel;
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
-  QuatW q{c, 0, s, 0};
+  QuatW q{c, 0.0f * s, 1.0f * s, 0.0f * s};  // 0x570750: the axis (0, 1, 0) times the sine
   float n = t * 10.0f;
   while (n > 0.0f) {
     v = MultQuadVec(q, v);
