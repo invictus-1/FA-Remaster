@@ -834,8 +834,8 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   u->unitStates.erase("ProblemGettingToGoal");
   MotionNavBegin(u);
   if (Dbg())
-    Logf(LogLevel::Info, "nav: tick %u unit %u goal (%d,%d) from (%.3f,%.3f)", sim.tick(), u->id, gc.x, gc.z,
-         u->position.x, u->position.z);
+    Logf(LogLevel::Info, "nav: tick %u unit %u goal (%d,%d) from (%.3f,%.3f) asked (%d,%d)..(%d,%d)", sim.tick(), u->id,
+         gc.x, gc.z, u->position.x, u->position.z, x0, z0, x1, z1);
 }
 
 void LandNavStop(Sim& sim, Unit* u) {

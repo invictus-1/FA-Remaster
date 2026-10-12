@@ -402,6 +402,8 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
       Vec3 mn, mx;
       ShapeBounds(ws, &mn, &mx);
       if (mx.x < x0 || mn.x > x1 || mx.z < z0 || mn.z > z1) return;
+      // (and before that the entity grid's cells: boxes that only touch on a multiple of 4 do not meet)
+      if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
     } else {
       const MotionBlueprint* b = e->motion.bp;
       float hx = b ? b->sizeX * 0.5f : 0.5f, hz = b ? b->sizeZ * 0.5f : 0.5f;
