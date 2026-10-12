@@ -244,6 +244,7 @@ int main(int argc, char** argv) {
     gameCfg.modUids = session.modUids();
     gameCfg.launchSession = nullptr;
     gameCfg.sim = session.sim();
+    gameCfg.commandSource = session.commandSource();
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());
@@ -262,6 +263,7 @@ int main(int argc, char** argv) {
         else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());
       }
       session.onSync = [&game](const std::string& sync) { game->DeliverSync(sync); };
+      session.takeOrders = [&game]() { return ui::TakeOrders(game->L()); };
     }
   };
   int done = 0;

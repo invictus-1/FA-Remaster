@@ -9,9 +9,11 @@
 #include "maui/font.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/command_writer.h"
 #include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
+#include "sim/terrain.h"
 
 namespace moho::ui {
 
@@ -65,6 +67,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", secs(t0, t1), secs(t1, t2));
   sim_ = std::move(sim);
   pendingSync_ = sim_->TakeSync();
+  if (session.focusArmy >= 0 && session.focusArmy < static_cast<int>(h.armies.size())) commandSource_ = h.armies[session.focusArmy].source;
   modUids_ = uids;
   sessionMods_ = h.mods;
   map_ = h.map;
@@ -99,6 +102,10 @@ void GameSession::Advance(double seconds) {
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {
     due_ -= 0.1;
+    if (takeOrders) {
+      std::string orders = takeOrders();
+      if (!orders.empty() && !ApplyCommands(*sim_, orders)) Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
+    }
     if (sim_->Paused()) sim_->PausedBeat();
     else sim_->Tick();
     for (std::string& sync : sim_->TakeSync()) {
@@ -117,6 +124,10 @@ void GameSession::RunFirstBeat() {
   }
 }
 
+float GameSession::TerrainHeight(float x, float z) const {
+  return sim_ && sim_->map() ? sim_->map()->TerrainHeight(x, z) : 0.0f;
+}
+
 uint32_t GameSession::tick() const { return sim_ ? sim_->tick() : 0; }
 size_t GameSession::unitCount() const { return sim_ ? sim_->units().size() : 0; }
 
@@ -125,7 +136,7 @@ std::vector<std::string> GameSession::Status() const {
   if (!sim_) return lines;
   char buf[200];
   uint32_t t = sim_->tick();
-  lines.push_back("The simulation is running. The in-game interface and the world view are not built yet.");
+  lines.push_back("The simulation is running.");
   std::snprintf(buf, sizeof buf, "Map %s, %zu armies, seed %u", map_.c_str(), armies_, seed_);
   lines.push_back(buf);
   std::snprintf(buf, sizeof buf, "Game time %u:%02u (tick %u), %zu units", t / 600, (t / 10) % 60, t, sim_->units().size());

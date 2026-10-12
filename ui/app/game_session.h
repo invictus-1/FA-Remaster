@@ -48,6 +48,11 @@ class GameSession {
   // Run the simulation's first beat now if it has not run yet: the interface is made for a game
   // that is under way, and the first beat's sync table tells it the playable area and more.
   void RunFirstBeat();
+  // The player's orders since the last beat, as the command stream's bytes; asked before each beat.
+  std::function<std::string()> takeOrders;
+  // The command source the player speaks for, and the ground's height at a place of the map.
+  int commandSource() const { return commandSource_; }
+  float TerrainHeight(float x, float z) const;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
 
@@ -64,6 +69,7 @@ class GameSession {
   std::unique_ptr<Sim> sim_;
   std::vector<std::string> modUids_;
   std::vector<std::string> pendingSync_;
+  int commandSource_ = 0;
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
   std::unique_ptr<ScriptState> rules_;
   std::unique_ptr<SimBlueprints> interfaceBlueprints_;

@@ -198,8 +198,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`gamemain.OnSelectionChanged`); `GetUnitCommandData` gives the orders, toggles and buildable
   category from the blueprints; commanders, idle engineers and factories are found. With the
   commander selected the game's orders panel, its construction panel with the build icons and the
-  commander's avatar come up. Not there yet: selecting with the mouse (needs the world's
-  picture), orders into the simulation, unit states (queues, fire state, shields, pause).
+  commander's avatar come up. The first order works: a right click in the world view sends the
+  selected units there (written with the engine's command writer, applied before the next
+  beat); the commander walks. Not there yet: selecting with the mouse and the orders that
+  depend on what is under the cursor (both need the world's picture), the order buttons, building,
+  unit states (queues, fire state, shields, pause).
   `--game-lua file` runs a Lua file of yours in a launched game's state.
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu

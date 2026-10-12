@@ -18,6 +18,7 @@
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/command_writer.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "user/bindings.h"
@@ -38,6 +39,7 @@ struct UnitStore : UserState::Extra {
   std::map<uint32_t, std::unique_ptr<UserUnit>> units;
   std::vector<UserUnit*> selection;
   bool reporting = false;  // inside OnSelectionChanged
+  std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
 };
 
 UnitStore& Store(lua_State* L) {
@@ -522,6 +524,39 @@ int l_UnitNothing(lua_State* L) {
 }
 
 }  // namespace
+
+// --- orders ---
+//
+// The player's orders are written as the command stream's messages (the engine's CommandWriter)
+// and handed to the host, which applies them before the next beat.
+
+CommandWriter& Writer(lua_State* L) {
+  UnitStore& store = Store(L);
+  if (!store.writer) store.writer = std::make_unique<CommandWriter>(UserState::From(L)->config().commandSource);
+  return *store.writer;
+}
+
+std::string TakeOrders(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return std::string();
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  return store.writer ? store.writer->Take() : std::string();
+}
+
+bool IssueMoveToSelection(lua_State* L, float x, float y, float z, bool clear) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  std::vector<uint32_t> ids;
+  for (UserUnit* u : Store(L).selection)
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id);
+  if (ids.empty()) return false;
+  StreamIssueData d;
+  d.type = static_cast<int>(CommandType::Move);
+  d.target.type = 2;  // a position
+  d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
+  Writer(L).IssueCommand(ids, d, clear);
+  return true;
+}
 
 // After a beat: the interface's units follow the simulation's.
 void RefreshUserUnits(lua_State* L) {

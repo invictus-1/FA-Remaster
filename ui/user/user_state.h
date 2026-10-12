@@ -44,6 +44,8 @@ class UserState {
     std::string bootScript = "/lua/userInit.lua";
     // The running simulation a session's state looks at; nullptr for the front end's state.
     Sim* sim = nullptr;
+    // The command source the player's orders are written for (the focus army's first source).
+    int commandSource = 0;
   };
 
   UserState(Vfs* vfs, Config config);
@@ -113,6 +115,11 @@ void RegisterSessionBindings(lua_State* L);
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);
+// Orders (user_units.cpp): a move order for the selected units of the player's army to a place
+// (false when none is selected); and the orders written since the last call, as the command
+// stream's bytes for the engine's ApplyCommands.
+bool IssueMoveToSelection(lua_State* L, float x, float y, float z, bool clear);
+std::string TakeOrders(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
 

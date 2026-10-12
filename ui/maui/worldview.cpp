@@ -14,8 +14,11 @@
 #include <string>
 
 #include "maui/control.h"
+#include "maui/input.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
+#include "sim/sim.h"
+#include "sim/terrain.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
 
@@ -254,8 +257,24 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / c->zoom : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
-    world[1] = 0;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
+    Sim* sim = UserState::From(L)->config().sim;
+    world[1] = sim && sim->map() ? sim->map()->TerrainHeight(world[0], world[2]) : 0.0f;
+  }
+
+  // Events: the script first, as for every control. Then the world view's own part, of which this
+  // much is built: a press of the right button on the ground sends the selected units there (with
+  // Shift after what they are doing). The original decides by what is under the cursor (attack,
+  // reclaim, load, ...), which needs the world's picture; that part is still to be read.
+  bool HandleEvent(lua_State* L, const UiEvent& e) override {
+    if (Control::HandleEvent(L, e)) return true;
+    if (dead() || inputLocked) return false;
+    if (e.type == EventType::ButtonPress && e.right) {
+      float world[3];
+      Unproject(L, e.x, e.y, world);
+      return IssueMoveToSelection(L, world[0], world[1], world[2], !e.shift);
+    }
+    return false;
   }
 };
 
