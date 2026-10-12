@@ -1630,6 +1630,18 @@ bool ShouldAbort(Sim& sim, Unit* U, GuardData& g) {
 
 }  // namespace
 
+BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo) {
+  BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
+  InitRepair(sim, u, *t, target, silo);
+  return t;
+}
+BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target) {
+  (void)u;
+  BuildTask* t = NewChild(sim, CommandType::Reclaim, "Reclaim");
+  t->goalId = EntityRef(target);
+  return t;
+}
+
 BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   if (!c.targetId && !c.hasPos) return nullptr;  // no target: Stop
   if (c.targetId && !FindUnit(sim, c.targetId) && !c.hasPos) return nullptr;
@@ -1862,8 +1874,10 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       break;
     case CommandType::Guard:
       return StartGuardTask(sim, u, c);
-    case CommandType::BuildAssist:
     case CommandType::AssistCommander:
+      if (u->isPod) return StartPodTask(sim, u, c);  // DispatchTask 0x609ab8: CUnitPodAssist
+      [[fallthrough]];
+    case CommandType::BuildAssist:
       if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
       t->order = "Repair";
       t->goalId = c.targetId;
@@ -1893,7 +1907,9 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Ferry: r = TickTransportTask(sim, u, t); break;
     case CommandType::Guard: r = t.gdata ? TickGuard(sim, L, u, t) : kTaskFailed; break;
     case CommandType::BuildAssist:
-    case CommandType::AssistCommander: r = TickAssistLegacy(sim, L, u, t); break;
+    case CommandType::AssistCommander:
+      r = t.tdata ? TickTransportTask(sim, u, t) : TickAssistLegacy(sim, L, u, t);
+      break;
     case CommandType::Attack:
     case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
     case CommandType::Patrol:

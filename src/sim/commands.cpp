@@ -834,6 +834,18 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target) 
   return c;
 }
 
+std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u) {
+  if (!IsAlive(u)) return nullptr;
+  auto c = std::make_shared<UnitCommand>();
+  c->id = sim.nextCommandId++;
+  c->type = CommandType::AssistCommander;
+  sim.commandsById[c->id] = c;
+  u->commands.push_back(c);
+  c->units.insert(u);
+  AirSpeedThroughEvent(sim, u);  // queue event 0
+  return c;
+}
+
 namespace {
 
 // Issue<Type>(units, position or entity target)

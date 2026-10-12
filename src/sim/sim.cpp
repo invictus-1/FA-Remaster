@@ -1284,6 +1284,12 @@ void Sim::Tick() {
         Vec3 bp;
         Quat bq;
         BoneWorld(p, u->parentBone, &bp, &bq);
+        // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform
+        // 0x6aa637): a drone's guard dummy, AttachTo(drone, -1), rides there
+        if (u->parentBone == -1 && p->kind == Entity::Kind::Unit) {
+          const Unit* pu = static_cast<const Unit*>(p);
+          if (pu->motion.bp) bp = vm::Add(bp, vm::RotateM(bq, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f}));
+        }
         u->position = bp;
         u->orientation = bq;
       }
@@ -1313,6 +1319,8 @@ void Sim::Tick() {
     if (!u->builderArms.empty()) BuilderArmsTick(*this, u, u->lastPosition, prevOri);
     UnitAimTick(*this, u);
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
+    // ... and a pod with an empty queue orders itself to assist (0x6a921a; pod_assist.md 1)
+    if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
   }
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   if (anyAttached) {
