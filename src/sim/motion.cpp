@@ -1473,12 +1473,18 @@ void MotionTick(Sim& sim, Unit* u) {
       // as it was when the brake began (CAiPathSpline::Update mode 3: `dir = F (unchanged)`, tilt included), so
       // the look direction there is not flat: a braking tank's heading stays put on a steady slope and moves by
       // hundredths of a degree where the slope changes, as the original's does.
-      if (m.hasSpline && (m.splineMode == 3 || m.splineMode == 4)) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
-      else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
+      const bool brakePoint = m.hasSpline && (m.splineMode == 3 || m.splineMode == 4);
       m.fx = q.fx;
       m.fz = q.fz;
-      m.bx = q.bx;
-      m.bz = q.bz;
+      if (b.motionType == kMotionHover) {
+        // (a hover unit's hull turns toward its weapon's target or the point's direction: HoverPointTurn)
+        HoverPointTurn(sim, u, brakePoint ? m.brakeDir.x : q.fx, brakePoint ? m.brakeDir.z : q.fz);
+      } else {
+        if (brakePoint) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
+        else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
+        m.bx = q.bx;
+        m.bz = q.bz;
+      }
       // CalcMoveCommon returns 1 on this path whether or not the point moved the unit (0x6c2a33), so
       // CalcMoveLand 0x6c3180 snaps: a unit whose point is its own position keeps its terrain tilt (it was
       // flattened by the facing above and not re-tilted: probe unit 0x90002f at ticks 142-143)
