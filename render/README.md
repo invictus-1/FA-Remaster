@@ -40,9 +40,9 @@ So: build it against recordings, combine later by swapping the source of the fra
 3. Units as meshes: `.scm` loader (skeleton reading already exists in `src/sim/skeleton.*`), `.dds`
    textures, the unit shader's inputs (albedo, normal, spec-team map), team colours.
 4. The replay viewer: play a recording on its map with a free camera and the strategic zoom.
-5. The original look first ("legacy": match the game's lighting and water closely enough that
-   screenshots compare), then the modern path (PBR-style lighting, shadows, better water) as a second,
-   switchable mode.
+5. The two looks: the original's ("legacy": the game's own light formulas, kept as a switch) and the
+   modern one (physically based lighting, shadows, better water). The modern look is where the work
+   goes; matching the original picture for picture is not a goal.
 6. Effects and the rest: emitters, beams, decals, projectiles, shields, fog of war, strategic icons.
 
 ## Build and run
@@ -113,6 +113,15 @@ prints what it reports.
 
 Shaders are written for this renderer and live as text in the `.cpp` that uses them. The game's own
 shader files are read for what they compute, not copied.
+
+## The target
+
+A full game at normal speed with 5,000 to 10,000 units on screen at 60 frames a second or more on a
+top graphics card (measured on an RTX 4090), and playable on an RTX 3060 with the same files at
+lower settings. Measured at 1920 x 1080 with shadows (`--crowd <unit>=<count>`): 10,000 models of
+about 470 triangles take 3.0 ms; 10,000 models of 27,000 triangles take 73 ms. Cost follows
+triangles (about 0.27 ms per million), so the target stands on levels of detail chosen by a unit's
+size on screen. That choice is not built yet: today a level is used up to its blueprint's distance.
 
 ## Where it stands
 
