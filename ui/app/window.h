@@ -32,7 +32,8 @@ class Window {  // (the host's one window)
   // The mouse pointer over the window: an image (0xAARRGGBB, rows from the top) with its hot
   // spot, shown by the system itself so that it moves with the mouse whatever the frame rate is.
   // No image: the system's arrow. Hidden: none.
-  void SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY);
+  // (False when the system could not make a pointer of the image: its arrow shows then.)
+  bool SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY);
   void HidePointer(bool hidden);
   void* pointer() const { return pointerHidden_ ? nullptr : pointer_ ? pointer_ : arrow_; }
 

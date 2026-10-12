@@ -383,6 +383,14 @@ class WorldView : public Control {
     WorldScene scene;
     SelectionForWorld(L, &scene.selection, &scene.lines);
     scene.borders = user->mapBorders;
+    // The unit under the mouse gets its mark (by the picture before this one), unless the script
+    // has switched highlighting off or the mouse is over something else.
+    UiManager& mouse = user->ui();
+    if (highlight && pixels_ && ControlAt(mouse, 0, mouse.mouseX, mouse.mouseY) == this) {
+      uint32_t under = source->UnitAt(mouse.mouseX - r.x0, mouse.mouseY - r.y0);
+      int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
+      if (kind) scene.hover = under, scene.hoverKind = kind;
+    }
     std::string mode, name;
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();

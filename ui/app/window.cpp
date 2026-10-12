@@ -128,7 +128,7 @@ Window::~Window() {
     if (entry.second) DestroyIcon(static_cast<HICON>(entry.second));
 }
 
-void Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY) {
+bool Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY) {
   HCURSOR made = nullptr;
   // An image seen before (images live as long as the run): its pointer is kept, so an animated
   // pointer does not make a new one for every step.
@@ -171,6 +171,7 @@ void Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX,
   if (hwnd_ && GetCursorPos(&p) && WindowFromPoint(p) == static_cast<HWND>(hwnd_) &&
       SendMessageW(static_cast<HWND>(hwnd_), WM_NCHITTEST, 0, MAKELPARAM(p.x, p.y)) == HTCLIENT)
     SetCursor(static_cast<HCURSOR>(pointer()));
+  return made != nullptr || !pixels;
 }
 
 void Window::HidePointer(bool hidden) {
@@ -239,7 +240,7 @@ Window::~Window() {}
 bool Window::Create(int, int, const char*, Callbacks) { return false; }
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
-void Window::SetPointer(const uint32_t*, int, int, int, int) {}
+bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }
 void Window::HidePointer(bool) {}
 }  // namespace moho::ui
 

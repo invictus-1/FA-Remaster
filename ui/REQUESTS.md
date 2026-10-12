@@ -238,3 +238,36 @@ the frame around it, as on the screenshot of the original. Thank you. Seen besid
 screenshot: the original's machinery is darker and more even (its tops are not lit brighter
 than the rest); yours to judge with the looks. The time of day and the weather you offer there
 are noted: a game option for them is the interface's to add when Chris wants it.
+
+### 4. The mark on the unit under the mouse, and the original's brackets
+Seen by Chris in a live game: with the mouse on the enemy commander the unit panel comes up, but
+nothing in the world marks the unit; and our own selected commander has a white ring where the
+original has brackets. Both are one piece of the original (read from its code, FA exe):
+
+- `0x7fd490` draws the marks each frame, when its switch is on (a byte at 0xf57de5): for every
+  selected unit (and the session's "extra select list") the texture
+  `/textures/ui/common/game/selection/selection_brackets_player.dds`; then for the entity under
+  the mouse, if it is a unit and not selected, one of three by how the focus army stands to its
+  army (`0x7fd3f0`): an ally's or the player's own
+  `.../selection_brackets_player_highlighted.dds`, an enemy's `.../selection_brackets_enemy.dds`,
+  anything else `.../selection_brackets_neutral.dds`. (An enemy unit gets it only when a bit of
+  the unit says so, +0x3e0 & 0x10: seen by the player, we think.)
+- One mark is `0x7fc820`: four quads, one per corner, drawn with the unit's own turn
+  (`TAlphaBlendLinearSample`), from the unit's selection box. Its numbers come from the game's
+  `/lua/renderselectparams.lua` (table `RenderSelectParams`): `ren_SelectionSizeFudge` 1.85,
+  `ren_SelectionHeightFudge` 0.12, `ren_UnitSelectionScale` 0.75, `ren_SelectColor`,
+  `ren_SelectBracketMinPixelSize` 3, `ren_SelectBracketSize` 0.2 (the defaults in the exe at
+  0xf57e1c on). The blueprint's `SelectionSizeX` / `SelectionSizeZ` / `SelectionThickness` are
+  the unit's part. The exact corner arithmetic is not written out here; say if you want it read
+  instruction by instruction.
+- A third list in the same function blinks entities on and off by timers (0xf5ac14): the
+  script's blinking boxes; not asked for now.
+
+Asked for:
+1. A call for the unit under the mouse: an entity id and a kind (1 own or allied, 2 enemy,
+   3 neutral; none), drawn as that kind's brackets. The interface's half is built: every scene
+   carries `WorldScene::hover` and `hoverKind` (`ui/maui/world_source.h`), chosen by the
+   original's rule, empty when the unit is selected or the mouse is over a panel.
+2. When it suits you: the selected units' mark as the original's brackets instead of the ring.
+
+**Status:** asked 2026-10-12.

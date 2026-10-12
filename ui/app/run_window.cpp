@@ -37,7 +37,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     return -1;
   }
   // The mouse pointer: the texture the scripts last set, as the system's own pointer.
-  std::string pointerTexture;
+  std::string pointerTexture, pointersShown;
   int pointerX = 0, pointerY = 0;
   bool pointerHidden = false, pointerKnown = false;
   auto updatePointer = [&](UserState& user) {
@@ -51,8 +51,15 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (hidden) return;
     static const Image none;
     const Image& image = texture.empty() ? none : LoadTexture(ScriptState::From(user.L())->vfs(), texture);
-    if (image.valid()) window.SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY);
-    else window.SetPointer(nullptr, 0, 0, 0, 0);
+    bool made = image.valid() && window.SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY);
+    if (!made) window.SetPointer(nullptr, 0, 0, 0, 0);
+    // For the log: which pointers the run showed (an animated one counts once, by its first picture).
+    std::string name = texture.substr(texture.find_last_of('/') + 1);
+    size_t dash = name.find_last_of('-');
+    if (dash != std::string::npos) name = name.substr(0, dash);
+    else if (name.size() > 4) name = name.substr(0, name.size() - 4);
+    if (!made) name += " (not shown)";
+    if (pointersShown.find(name) == std::string::npos) pointersShown += (pointersShown.empty() ? "" : ", ") + name;
   };
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
@@ -79,6 +86,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   if (frames)
     Logf(LogLevel::Info, "moho64ui: window: %d frames in %.1f s, drawing %.2f ms per frame", frames, total,
          drawSeconds * 1000.0 / frames);
+  if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
   return frames;
 }
 

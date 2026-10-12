@@ -143,6 +143,10 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
 uint32_t UnitUnderMouse(lua_State* L);
 std::string ArmyColorOf(lua_State* L, int army);
+// How the unit under the mouse is to be marked (the original's choice of bracket, FA exe
+// 0x7fd3f0): 0 not at all (no such unit, or it is selected and has its mark already), 1 the
+// player's own or an ally's, 2 an enemy's, 3 a neutral's.
+int HoverKindOf(lua_State* L, uint32_t entity);
 // The living unit nearest to a place of the map, no farther than `radius` (0xffffffff: none): what
 // stands in for the picture's answer when there is no picture.
 uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius);

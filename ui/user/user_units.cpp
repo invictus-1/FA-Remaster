@@ -682,6 +682,23 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
   return IssueOrder(L, order, x, y, z, 0xffffffffu, clear, blueprint);
 }
 
+int HoverKindOf(lua_State* L, uint32_t entity) {
+  Sim* sim = TheSim(L);
+  UserState* user = UserState::From(L);
+  if (!sim || !user->units) return 0;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  auto it = store.units.find(entity);
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return 0;
+  UserUnit* u = it->second.get();
+  if (std::find(store.selection.begin(), store.selection.end(), u) != store.selection.end()) return 0;
+  int army = sim->focusArmy + 1;
+  if (u->view.army == army) return 1;
+  int stance = 1;  // neutral unless the armies say otherwise
+  for (const ArmyView& v : ArmyViews(*sim))
+    if (v.index == u->view.army && army >= 1 && army <= static_cast<int>(v.alliance.size())) stance = v.alliance[static_cast<size_t>(army - 1)];
+  return stance == 2 ? 1 : stance == 0 ? 2 : 3;
+}
+
 uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius) {
   UserState* user = UserState::From(L);
   if (!user->units) return 0xffffffffu;
