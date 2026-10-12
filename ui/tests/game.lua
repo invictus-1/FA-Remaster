@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1020 --log out.log
+--            --frames 1050 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -89,6 +89,8 @@ local function run()
     WaitSeconds(3)
     local now = cdr:GetPosition()
     check("the commander walks towards a right click", now[1] > pos[1] + 2, true)
+    local queue = cdr:GetCommandQueue()
+    check("its queue holds the move order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Move")
     check("an order's command name", GetUnitCommandFromCommandCap("RULEUCC_Stop"), "UNITCOMMAND_Stop")
     IssueUnitCommand({cdr}, "Stop")
     WaitSeconds(1)
@@ -96,6 +98,17 @@ local function run()
     WaitSeconds(1)
     local b = cdr:GetPosition()
     check("Stop halts it", math.abs(a[1] - b[1]) < 0.01 and math.abs(a[3] - b[3]) < 0.01, true)
+    check("and empties its queue", table.getn(cdr:GetCommandQueue()), 0)
+
+    -- switches: set through the simulation, read back from it
+    local fire = GetFireState({cdr})
+    check("the fire state is one of the three", fire == 0 or fire == 1 or fire == 2, true)
+    local other = math.mod(fire + 1, 3)
+    SetFireState({cdr}, other)
+    WaitSeconds(0.3)
+    check("SetFireState reaches the simulation and comes back", GetFireState({cdr}), other)
+    SetFireState({cdr}, fire)
+    check("nothing is paused", GetIsPaused({cdr}), false)
 
     -- command modes: the script's mode decides what a left click in the world does
     local CM = import("/lua/ui/game/commandmode.lua")
@@ -113,6 +126,9 @@ local function run()
     check("the script hears of the order and ends its mode", CM.GetCommandMode()[1], false)
     WaitSeconds(4)
     check("in build mode a left click makes the commander build there", cdr:GetWorkProgress() > 0 and GetEconomyTotals().stored.MASS < before, true)
+    local focus = cdr:GetFocus()
+    check("what it builds is its focus", focus ~= nil and focus:GetUnitId(), factory)
+    check("and it uses mass for it", cdr:GetEconData().massConsumed > 0, true)
 
     SelectUnits(nil)
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)

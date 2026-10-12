@@ -102,6 +102,23 @@ unit's state whatever the unit does. In the order the panels need them:
 Smallest form: more fields on `UnitView` (or a second view call for the queue, which is the big
 one), and a list of restricted blueprint ids per army.
 
+**Status:** done by the engine track (`docs/engine-answers.md`, "ui 5") and in use: the command
+queue, focus, guarded unit and creator, the switches, the meters, the live caps behind the order
+buttons, the factory queue display, and the army's restrictions taken off the construction panel.
+Thank you.
+
+### 6. Two things seen while using it (questions, no hurry)
+1. **A building's site near its builder.** A `BuildMobile` order (type 8, a blueprint and a
+   position) for the commander is carried out at some places and not at others close by: with the
+   commander at 672.5, 346.5 on Seton's Clutch, a land factory (ueb0101) at 686.1, 353.3 and at
+   688.5, 346.5 is built, at 681.6, 351.0 and at 684.5, 352.5 the commander stays idle. Is that the
+   original's rule (the builder inside the footprint or skirt), a grid the position must lie on,
+   or something the interface must do first (the original's interface snaps a site to the grid and
+   shows whether it is free)? If there is a "can this be built here, and where exactly" question
+   the interface should ask before it sends the order, that is what the build preview needs.
+2. **A new commander's fire state is 2** in `UnitStateView` (hold ground), where the order button
+   expects 0 (return fire) for a unit nobody touched. Is 2 what the original has for it?
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -128,3 +145,19 @@ window. What is needed to join the two, smallest form first:
 
 How the interface gets the camera's defaults (zoom limits, the angle of the original's view) is
 ours to read from the original; if you already have them, name the place.
+
+**Status:** parts 1 to 3 are done by the renderer track (`docs/render-answers.md`) and in use:
+`render::WorldPicture` is built into the interface host, the main world view shows its picture
+under the controls, and a click or a box in the world selects through `UnitAt` / `UnitsIn`. Thank
+you. Part 4 (one window, one device) when the read-back becomes the bottleneck.
+
+### 2. Next, in the order the interface misses them
+1. **Selected units marked in the world** (the original: a ring under the unit, the strategic
+   icon highlighted). Smallest form: a list of entity ids given before `Draw`.
+2. **A second view** for the minimap (straight down, the whole map, icons only): today the
+   minimap's rectangle is empty because there is one picture.
+3. **The build preview:** a blueprint's model drawn at a place, tinted (free / blocked), while the
+   player chooses a site.
+4. **Lines and shapes in the world** for orders (the waypoint lines of a selected unit's queue,
+   range rings). FAF's scripts also draw their own shapes through a per-frame call; that can wait.
+5. Models and textures from the simulation's merged blueprints (you named it under "not yet").

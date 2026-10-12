@@ -216,7 +216,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (pause, fire state, script bits); those last two are written against the engine's command
   writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
   what is under the cursor (both need the world's picture), the build preview and snapping to
-  the grid, factory queues, unit states (queues, fire state, shields, pause).
+  the grid.
+- Unit states come from the simulation (the engine's `UnitStateOf`): a unit's command queue, what
+  it builds, guards and who built it, fire state, toggles, pause, shield and fuel, its economy;
+  the order buttons follow what a unit can do right now; what the army may not build is taken
+  off the construction panel; a factory's queue is shown and changed
+  (`SetCurrentFactoryForQueueDisplay`, `gamemain.OnQueueChanged`).
 - The world is on screen (Windows): the renderer track's code is built into the host
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,

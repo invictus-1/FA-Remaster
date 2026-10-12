@@ -41,6 +41,8 @@ struct UnitStore : UserState::Extra {
   std::vector<UserUnit*> selection;
   bool reporting = false;  // inside OnSelectionChanged
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
+  uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
+  std::string queueKey;                   // that queue as it was last handed to the script
 };
 
 UnitStore& Store(lua_State* L) {
@@ -49,6 +51,7 @@ UnitStore& Store(lua_State* L) {
   return static_cast<UnitStore&>(*user->units);
 }
 Sim* TheSim(lua_State* L) { return UserState::From(L)->config().sim; }
+bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out);  // further down: a unit's state from the simulation
 
 // The unit behind a script value; nullptr for anything else.
 UserUnit* ToUnit(lua_State* L, int idx) {
@@ -262,8 +265,14 @@ int l_GetUnitCommandData(lua_State* L) {
       lua_pop(L, 1);
       continue;
     }
-    collect("CommandCaps", 2, kOrders, 24);
-    collect("ToggleCaps", 3, kToggles, 9);
+    UnitStateView state;
+    if (StateOf(L, u, &state)) {  // what the unit can do right now
+      masks[2] |= state.commandCaps;
+      masks[3] |= state.toggleCaps;
+    } else {
+      collect("CommandCaps", 2, kOrders, 24);
+      collect("ToggleCaps", 3, kToggles, 9);
+    }
     lua_pushstring(L, "Economy");
     lua_gettable(L, -2);
     if (lua_istable(L, -1)) {
@@ -317,6 +326,19 @@ int l_GetUnitCommandData(lua_State* L) {
     lua_pushstring(L, "");
     if (lua_pcall(L, 1, 1, 0) == 0) lua_replace(L, 4);
     else lua_pop(L, 1);
+  }
+  // What the player's army may not build is taken off (the engine's list of restricted blueprints).
+  if (Sim* sim = TheSim(L)) {
+    for (const std::string& id : RestrictedBlueprints(*sim, sim->focusArmy + 1)) {
+      if (!lua_getmetatable(L, 4)) break;
+      lua_pushstring(L, "__sub");
+      lua_rawget(L, -2);
+      lua_pushvalue(L, 4);
+      lua_getglobal(L, "ParseEntityCategory");
+      lua_pushstring(L, id.c_str());
+      if (lua_pcall(L, 1, 1, 0) == 0 && lua_pcall(L, 2, 1, 0) == 0) lua_replace(L, 4);
+      lua_settop(L, 4);
+    }
   }
   lua_settop(L, 4);
   return 3;
@@ -800,6 +822,246 @@ int l_ToggleScriptBit(lua_State* L) {
   return 0;
 }
 
+
+// --- unit states (the engine's UnitStateOf, sim/sim_view.h) ---
+//
+// What the panels show of a unit beyond where it is: its queue, what it works on, its switches
+// and meters. Asked of the simulation when a script asks, for the units it asks about.
+
+bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
+  Sim* sim = TheSim(L);
+  return sim && u && !u->gone && UnitStateOf(*sim, u->view.id, out);
+}
+
+void PushUnitById(lua_State* L, uint32_t id) {
+  UnitStore& store = Store(L);
+  auto it = id == 0xffffffffu ? store.units.end() : store.units.find(id);
+  if (it == store.units.end() || it->second->gone) lua_pushnil(L);
+  else PushObject(L, it->second.get());
+}
+
+const char* CommandName(int type) {
+  for (const auto& c : kCommandNames)
+    if (static_cast<int>(c.type) == type) return c.name;
+  return "None";
+}
+
+// unit:GetCommandQueue(): the unit's orders, first to last, each {ID, type, position}.
+int l_GetCommandQueue(lua_State* L) {
+  UnitStateView s;
+  lua_newtable(L);
+  if (!StateOf(L, CheckUnit(L, 1), &s)) return 1;
+  int n = 0;
+  for (const CommandView& c : s.queue) {
+    lua_newtable(L);
+    lua_pushstring(L, "ID");
+    lua_pushnumber(L, static_cast<lua_Number>(c.id));
+    lua_rawset(L, -3);
+    lua_pushstring(L, "type");
+    lua_pushstring(L, CommandName(c.type));
+    lua_rawset(L, -3);
+    if (c.hasPosition) {
+      lua_pushstring(L, "position");
+      PushVector(L, c.position[0], c.position[1], c.position[2]);
+      lua_rawset(L, -3);
+    }
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+template <uint32_t UnitStateView::*Field>
+int l_UnitEntity(lua_State* L) {
+  UnitStateView s;
+  if (StateOf(L, CheckUnit(L, 1), &s)) PushUnitById(L, s.*Field);
+  else lua_pushnil(L);
+  return 1;
+}
+template <bool UnitStateView::*Field>
+int l_UnitSwitch(lua_State* L) {
+  UnitStateView s;
+  lua_pushboolean(L, StateOf(L, CheckUnit(L, 1), &s) && s.*Field);
+  return 1;
+}
+int l_GetShieldRatioNow(lua_State* L) {
+  UnitStateView s;
+  lua_pushnumber(L, StateOf(L, CheckUnit(L, 1), &s) ? s.shieldRatio : 0);
+  return 1;
+}
+int l_GetFuelRatioNow(lua_State* L) {
+  UnitStateView s;
+  lua_pushnumber(L, StateOf(L, CheckUnit(L, 1), &s) ? s.fuelRatio : -1);
+  return 1;
+}
+int l_GetBuildRateNow(lua_State* L) {
+  UnitStateView s;
+  if (!StateOf(L, CheckUnit(L, 1), &s)) return l_GetBuildRate(L);
+  lua_pushnumber(L, s.buildRate);
+  return 1;
+}
+// unit:GetEconData(): what the unit makes and uses, per second.
+int l_GetEconDataNow(lua_State* L) {
+  UnitStateView s;
+  StateOf(L, CheckUnit(L, 1), &s);
+  lua_newtable(L);
+  auto set = [&](const char* key, float v) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  set("energyProduced", s.produced[0]);
+  set("energyConsumed", s.consumed[0]);
+  set("energyRequested", s.consumptionPerSecond[0]);
+  set("massProduced", s.produced[1]);
+  set("massConsumed", s.consumed[1]);
+  set("massRequested", s.consumptionPerSecond[1]);
+  return 1;
+}
+int l_GetMissileInfoNow(lua_State* L) {
+  UnitStateView s;
+  StateOf(L, CheckUnit(L, 1), &s);
+  lua_newtable(L);
+  auto set = [&](const char* key, int v) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  set("nukeSiloStorageCount", s.nukeSiloCount);
+  set("tacticalSiloStorageCount", s.tacticalSiloCount);
+  for (const char* key : {"nukeSiloBuildCount", "nukeSiloMaxStorageCount", "tacticalSiloBuildCount", "tacticalSiloMaxStorageCount"}) set(key, 0);
+  return 1;
+}
+
+// The switches of a list of units, as the order buttons ask. GetFireState(units): the state they
+// share, -1 when they differ. The others: true when any of them has it on.
+int l_GetFireStateNow(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  int state = -2;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    state = state == -2 || state == s.fireState ? s.fireState : -1;
+  }
+  lua_pushnumber(L, state == -2 ? 0 : state);
+  return 1;
+}
+template <bool UnitStateView::*Field>
+int l_AnySwitch(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  bool any = false;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    any = any || (StateOf(L, u, &s) && s.*Field);
+  }
+  lua_pushboolean(L, any);
+  return 1;
+}
+// GetScriptBit(units, bit): whether any of them has the toggle on
+int l_GetScriptBitNow(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  int bit = static_cast<int>(luaL_checknumber(L, 2));
+  bool any = false;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    any = any || (StateOf(L, u, &s) && bit >= 0 && bit < 32 && (s.scriptBits >> bit & 1u));
+  }
+  lua_pushboolean(L, any);
+  return 1;
+}
+
+// --- a factory's queue as the construction panel shows it ---
+//
+// SetCurrentFactoryForQueueDisplay(unit) names the factory and returns its build queue as
+// {{id = blueprint, count = n}, ...}; while one is named, the game script hears of a change
+// (gamemain.OnQueueChanged(queue), which the original calls by name, FA exe 0x836270);
+// ClearCurrentFactoryForQueueDisplay() ends that. DecreaseBuildCountInQueue(index, count) and
+// IncreaseBuildCountInQueue(index, count) change an entry (counted from 1).
+
+void BuildQueue(lua_State* L, const UserUnit* factory, std::vector<CommandView>* out) {
+  UnitStateView s;
+  if (!StateOf(L, factory, &s)) return;
+  for (const CommandView& c : s.queue)
+    if (c.type == static_cast<int>(CommandType::BuildFactory) || c.type == static_cast<int>(CommandType::BuildMobile) ||
+        c.type == static_cast<int>(CommandType::Upgrade))
+      if (!c.blueprint.empty()) out->push_back(c);
+}
+void PushBuildQueue(lua_State* L, const std::vector<CommandView>& queue) {
+  lua_newtable(L);
+  int n = 0;
+  for (const CommandView& c : queue) {
+    lua_newtable(L);
+    lua_pushstring(L, "id");
+    lua_pushstring(L, c.blueprint.c_str());
+    lua_rawset(L, -3);
+    lua_pushstring(L, "count");
+    lua_pushnumber(L, c.count);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+}
+std::string QueueKey(const std::vector<CommandView>& queue) {
+  std::string key;
+  for (const CommandView& c : queue) key += c.blueprint + "*" + std::to_string(c.count) + ",";
+  return key;
+}
+int l_SetCurrentFactoryForQueueDisplay(lua_State* L) {
+  UnitStore& store = Store(L);
+  UserUnit* u = ToUnit(L, 1);
+  store.queueFactory = u ? u->view.id : 0xffffffffu;
+  std::vector<CommandView> queue;
+  BuildQueue(L, u, &queue);
+  store.queueKey = QueueKey(queue);
+  PushBuildQueue(L, queue);
+  return 1;
+}
+int l_ClearCurrentFactoryForQueueDisplay(lua_State* L) {
+  Store(L).queueFactory = 0xffffffffu;
+  return 0;
+}
+int ChangeBuildCount(lua_State* L, bool more) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(store.queueFactory);
+  if (it == store.units.end()) return 0;
+  std::vector<CommandView> queue;
+  BuildQueue(L, it->second.get(), &queue);
+  int index = static_cast<int>(luaL_checknumber(L, 1)), count = static_cast<int>(luaL_optnumber(L, 2, 1));
+  if (index < 1 || index > static_cast<int>(queue.size())) return 0;
+  if (more) Writer(L).IncreaseCommandCount(queue[static_cast<size_t>(index - 1)].id, count);
+  else Writer(L).DecreaseCommandCount(queue[static_cast<size_t>(index - 1)].id, count);
+  return 0;
+}
+int l_IncreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, true); }
+int l_DecreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, false); }
+
+// After a beat: tell the game script when the shown factory's queue is not what it was.
+void ReportQueueChange(lua_State* L) {
+  UnitStore& store = Store(L);
+  if (store.queueFactory == 0xffffffffu || !UserState::From(L)->gameInterface) return;
+  auto it = store.units.find(store.queueFactory);
+  if (it == store.units.end()) return;
+  std::vector<CommandView> queue;
+  BuildQueue(L, it->second.get(), &queue);
+  std::string key = QueueKey(queue);
+  if (key == store.queueKey) return;
+  store.queueKey = key;
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/gamemain.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "OnQueueChanged");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      PushBuildQueue(L, queue);
+      if (lua_pcall(L, 1, 0, top + 1) != 0)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/game/gamemain.lua:OnQueueChanged': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+}
+
 }  // namespace
 
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
@@ -853,6 +1115,7 @@ void RefreshUserUnits(lua_State* L) {
       ++it;
     }
   }
+  ReportQueueChange(L);
 }
 
 void RegisterUserUnitBindings(lua_State* L) {
@@ -910,6 +1173,29 @@ void RegisterUserUnitBindings(lua_State* L) {
                            "HasUnloadCommandQueuedUp", "CanAttackTarget"})
     SetMethod(L, cls, name, l_UnitFalse);
   SetMethod(L, cls, "ProcessInfo", l_UnitNothing);
+
+  // The unit's state from the simulation.
+  SetMethod(L, cls, "GetCommandQueue", l_GetCommandQueue);
+  SetMethod(L, cls, "GetFocus", l_UnitEntity<&UnitStateView::focus>);
+  SetMethod(L, cls, "GetGuardedEntity", l_UnitEntity<&UnitStateView::guarded>);
+  SetMethod(L, cls, "GetCreator", l_UnitEntity<&UnitStateView::creator>);
+  SetMethod(L, cls, "IsAutoMode", l_UnitSwitch<&UnitStateView::autoMode>);
+  SetMethod(L, cls, "IsAutoSurfaceMode", l_UnitSwitch<&UnitStateView::autoSurfaceMode>);
+  SetMethod(L, cls, "IsRepeatQueue", l_UnitSwitch<&UnitStateView::repeatQueue>);
+  SetMethod(L, cls, "GetShieldRatio", l_GetShieldRatioNow);
+  SetMethod(L, cls, "GetFuelRatio", l_GetFuelRatioNow);
+  SetMethod(L, cls, "GetBuildRate", l_GetBuildRateNow);
+  SetMethod(L, cls, "GetEconData", l_GetEconDataNow);
+  SetMethod(L, cls, "GetMissileInfo", l_GetMissileInfoNow);
+  SetGlobal(L, "GetFireState", l_GetFireStateNow);
+  SetGlobal(L, "GetScriptBit", l_GetScriptBitNow);
+  SetGlobal(L, "GetIsPaused", l_AnySwitch<&UnitStateView::paused>);
+  SetGlobal(L, "GetIsAutoMode", l_AnySwitch<&UnitStateView::autoMode>);
+  SetGlobal(L, "GetIsAutoSurfaceMode", l_AnySwitch<&UnitStateView::autoSurfaceMode>);
+  SetGlobal(L, "SetCurrentFactoryForQueueDisplay", l_SetCurrentFactoryForQueueDisplay);
+  SetGlobal(L, "ClearCurrentFactoryForQueueDisplay", l_ClearCurrentFactoryForQueueDisplay);
+  SetGlobal(L, "IncreaseBuildCountInQueue", l_IncreaseBuildCountInQueue);
+  SetGlobal(L, "DecreaseBuildCountInQueue", l_DecreaseBuildCountInQueue);
 }
 
 // In front of the engine's category functions: call this once those are registered.
