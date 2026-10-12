@@ -890,7 +890,7 @@ int main(int argc, char** argv) {
         pose.nowCount = pose.nextCount = u.bones.size();
       }
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
-      world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr);
+      world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame

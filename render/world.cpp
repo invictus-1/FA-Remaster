@@ -200,7 +200,7 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, float 
   }
 }
 
-void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose) {
+void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
   // (only near what the camera looks at: a lamp lights a few units of ground)
   if (Length(position - camera.target) > camera.distance * 2 + 80) return;
@@ -249,10 +249,17 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       const float beat = time_ / light.blink + position.x * 0.37f + position.z * 0.53f;
       if (beat - std::floor(beat) > 0.5f) on *= 0.12f;
     }
+    // the unit's own glow: in its army's colour (as light, its strongest part 1), so that one sees
+    // at night whose it is
+    Vec3 tint = light.color;
+    if (light.hull && armyColor) {
+      tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
+      tint = tint * (1 / std::max({tint.x, tint.y, tint.z, 0.05f}));
+    }
     if (light.cone > 0)
-      lights.AddBeam(at, light.radius * model->scale, light.color * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
+      lights.AddBeam(at, light.radius * model->scale, tint * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
     else
-      lights.Add(at, light.radius * model->scale, light.color * on);
+      lights.Add(at, light.radius * model->scale, tint * on);
   }
 }
 
@@ -402,7 +409,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
-      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose);
+      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose, &color);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour

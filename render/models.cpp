@@ -319,6 +319,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       if (Length(facing) < 0.01f || light.cone >= 179) light.cone = 0;
       light.direction = light.bone >= 0 ? Rotate(Conjugate(m->bones[static_cast<size_t>(light.bone)].rotation), facing) : facing;
       light.glow = static_cast<float>(entry["Glow"].NumberOr(0.15));
+      light.hull = Lower(entry["Kind"].StringOr(std::string())) == "hull";
       m->lights.push_back(light);
     }
   }

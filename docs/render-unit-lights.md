@@ -46,7 +46,7 @@ One entry per light:
 | `Direction` | Makes the light a beam: where the lamp faces, `{ x, y, z }`, in the mesh's coordinates with the unit at rest, like `Position`; it turns with the `Bone`. Needs `Cone`. | it shines to all sides |
 | `Cone` | The beam's whole opening angle in degrees (70 for a head lamp). The light is full to seven tenths of the way from the beam's middle to its edge and fades to nothing at the edge. It reaches `Radius` along the beam, and farther along it than a light to all sides does. 179 and more: no beam. | it shines to all sides |
 | `Glow` | For a beam: the share of the lamp that still shines to all sides, within a fifth of `Radius`, so that the unit's own hull near the lamp is not left dark. | 0.15 |
-| `Kind` | A word for what the light is (`'head'`, `'work'`, `'beacon'`, `'window'`, `'engine'`, `'hull'`, ...). Not used yet. | |
+| `Kind` | A word for what the light is (`'head'`, `'work'`, `'beacon'`, `'window'`, `'engine'`, `'hull'`, ...). One is used: `'hull'`, the unit's own faint glow, is drawn in the unit's ARMY's colour, whatever `Color` says (Chris, 2026-10-12: for now, to be judged in a game), so that one sees at night whose a unit is. Keep `Color` as the faction's: it is what is drawn where no army is known. | |
 
 Lines starting with `--` are comments. Fields the renderer does not know are ignored, so more can be
 added later without breaking older builds.
@@ -65,6 +65,6 @@ ahead of the unit shows.
 - The beam lights surfaces; it is not seen in the air (no shaft of light through dust, rain or fog).
 - A light is not switched by what the unit does (moving, firing; being built is the exception: a
   unit under construction has no lights). `Kind` is meant for that.
-- A light's colour is the file's; it is not tinted by the army's colour.
+- But for `'hull'` lights, a light's colour is the file's; it is not tinted by the army's colour.
 - Lights throw no shadows and do not light the water or particles.
 - Lights are only lit near what the camera looks at, and only with a time of day (the computed sky).
