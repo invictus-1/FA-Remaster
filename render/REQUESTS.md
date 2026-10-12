@@ -7,7 +7,79 @@ Newest first.
 State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
 3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted,
 6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 answered
-(white for everything that is not a unit; that is what the renderer draws).
+(white for everything that is not a unit; that is what the renderer draws), 8 and 9 new.
+
+## 9. Questions: how the original turns an EmitterBlueprint into particles (2026-10-12)
+
+**Why:** the renderer is writing the particle effects. What a particle IS can be read from the game's
+`effects/particle.fx` (start position and rotation, velocity and rotation rate, acceleration, start
+time, lifetime, start size and growth, frame rate, texture strip, ramp row, drag); how the emitter
+fills those from the blueprint's curves is in the exe. The renderer goes ahead on the guesses below
+(from the 2,835 emitter files) and corrects what you can confirm or refute. Any subset helps.
+
+1. Units of time: `Lifetime`, `Repeattime`, a curve's `XRange` and key `x`, `LifetimeCurve`'s value,
+   and the shader's `time`. Guess: all in ticks (tenths of a second). `Lifetime < 0`: until destroyed
+   (what do -0.2 and -50 mean then?).
+2. A curve key `{x, y, z}`: value `y` at emitter time `x`, linear between keys; `z` a random spread.
+   Guess: value = y + uniform(-z/2, +z/2). Is the curve read at age modulo `Repeattime`?
+3. `EmitRateCurve`: particles per tick? How are fractions carried, and what do `CatchupEmit` and
+   `InterpolateEmission` do?
+4. Start velocity. Guess: (XDirection, YDirection, ZDirection) x Velocity, NOT normalised, per tick.
+   `XAccelCurve` etc. per tick squared? What does `Gravity` add? `LocalVelocity` /
+   `LocalAcceleration`: turned by the bone's or entity's orientation at emission?
+5. `StartSizeCurve` / `EndSizeCurve`: half the quad's edge or the whole edge, in world units? What
+   does `SizeCurve` do (a scale on both, over the emitter's time)? How does `ScaleEmitter` enter?
+6. `InitialRotationCurve`, `RotationRateCurve`: degrees or radians, per tick?
+7. `RampSelectionCurve`, `TextureSelectionCurve`: which row of the ramp texture / which strip
+   (`TextureStripcount`)? Guess: floor(value), row centre. `FrameRateCurve` with
+   `TextureFramecount`: frames per tick, starting at frame 0?
+8. `Blendmode` numbers. Guess from texture names: 0 alpha blend, 1 modulate inverse, 2 modulate 2x
+   inverse, 3 add, 4 premultiplied alpha, 5 refract.
+9. `Flat`, `AlignRotation`, `AlignToBone`: which of the shader's vertex paths each selects.
+   `SnapToWaterline`, `OnlyEmitOnWater`, `LODCutoff`, `SortOrder`: what they do.
+10. The drag terms (`dragCoeff` in the shader): from which blueprint fields?
+11. Which emitters follow their entity after emission (particles carried along) and which leave
+    their particles in the world.
+
+## 8. The effects the scripts create, for the live frame (2026-10-12)
+
+**What:** `src/sim/effects.cpp` answers the effect calls with objects that keep nothing. The renderer
+now wants what those calls said, per beat. In the order it will use them:
+
+1. **Emitters:** `CreateAttachedEmitter`, `CreateEmitterAtBone`, `CreateEmitterAtEntity`,
+   `CreateEmitterOnEntity`, and on the returned object `ScaleEmitter`, `OffsetEmitter`,
+   `SetEmitterParam`, `SetEmitterCurveParam`, `Destroy`.
+2. **Beams:** `CreateBeamEmitter`, `CreateBeamEmitterOnEntity`, `AttachBeamEntityToEntity`,
+   `CreateBeamEntityToEntity`, `AttachBeamToEntity`, `CreateAttachedBeam`, `CreateBeamToEntityBone`,
+   with `SetBeamParam` and `Destroy`.
+3. Later, in this order: `CreateTrail`; `CreateLightParticle` / `CreateLightParticleIntel`;
+   `CreateDecal`, `CreateSplat`, `CreateSplatOnBone`.
+
+**Smallest form that would do:** beside the views in `sim_view.h`, a list drained once per beat,
+`EffectEvents(sim, &list)`, in the order the scripts made the calls:
+
+    struct EffectEvent {
+      enum Kind { Create, Call, Destroy } kind;
+      uint32_t id;              // the effect object's own id, stable for its life
+      std::string name;         // the function ("CreateEmitterAtBone") or the method ("ScaleEmitter")
+      std::string blueprint;    // Create: the emitter / beam / trail blueprint or texture given
+      int army;                 // Create
+      uint32_t entity, entity2; // Create: what it is on (and, for a beam between two, the other end)
+      int bone, bone2;          //   with the bones given (-1: the entity itself)
+      float position[3];        // Create: where that attach point is at this beat's end (see below)
+      std::vector<float> numbers; // the call's other numbers, in order
+      std::string text;           // the call's other string (a parameter's name)
+    };
+
+`Destroy` also when an effect ends because what it was attached to is destroyed (a trash bag, the
+entity's death), so the renderer need not guess. The renderer places attached effects itself from
+the frame (unit position x bone pose; projectile position). For an effect on an entity that is
+neither a unit nor a projectile (a prop, a shield, a script-made entity) it has nothing to go by:
+`position` at creation covers the ones that do not move; say if some move, and those get a view of
+their own.
+
+**Why:** explosions, muzzle flashes, exhaust, smoke, the visible part of beams and of shots without
+a model: today a fight shows units, bare projectile models and stand-in lines.
 
 ## 7. A question: which colour does the original give a projectile's mesh? (2026-10-12, small)
 
