@@ -119,6 +119,7 @@ bool Recording::Load(const std::string& hostPath, std::string* error) {
     *error = "the recording holds no ticks";
     return false;
   }
+  ResolveBlueprints();
   return true;
 }
 
@@ -143,6 +144,7 @@ int Recording::LoadCreateLog(const std::string& hostPath) {
     created_[id].push_back({tick, BlueprintIndex(bp)});
     ++found;
   }
+  ResolveBlueprints();
   return found;
 }
 
@@ -168,28 +170,13 @@ void Recording::FrameAt(double tick, Frame* out) const {
   const Tick* b = next != ticks_.end() ? &*next : nullptr;
   const float t = b ? static_cast<float>((tick - a.tick) / static_cast<double>(b->tick - a.tick)) : 0;
   out->tick = a.tick;
-  out->units.reserve(a.count);
-  size_t j = 0;
-  for (size_t i = 0; i < a.count; ++i) {
-    FrameUnit u = units_[a.first + i];
-    u.blueprint = BlueprintOf(u.id, a.tick);
-    if (b && t > 0) {
-      while (j < b->count && units_[b->first + j].id < u.id) ++j;
-      if (j < b->count && units_[b->first + j].id == u.id && BlueprintOf(u.id, b->tick) == u.blueprint) {
-        const FrameUnit& v = units_[b->first + j];
-        for (int k = 0; k < 3; ++k) u.position[k] += (v.position[k] - u.position[k]) * t;
-        Quat q = Nlerp({u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
-                       {v.orientation[0], v.orientation[1], v.orientation[2], v.orientation[3]}, t);
-        u.orientation[0] = q.x;
-        u.orientation[1] = q.y;
-        u.orientation[2] = q.z;
-        u.orientation[3] = q.w;
-        u.fractionComplete += (v.fractionComplete - u.fractionComplete) * t;
-        u.health += (v.health - u.health) * t;
-      }
-    }
-    out->units.push_back(u);
-  }
+  BlendUnits(units_.data() + a.first, a.count, b ? units_.data() + b->first : nullptr, b ? b->count : 0, t, &out->units);
+}
+
+// Writes into every stored unit which blueprint it is (ids are reused, so that depends on the tick).
+void Recording::ResolveBlueprints() {
+  for (const Tick& t : ticks_)
+    for (size_t i = 0; i < t.count; ++i) units_[t.first + i].blueprint = BlueprintOf(units_[t.first + i].id, t.tick);
 }
 
 }  // namespace render

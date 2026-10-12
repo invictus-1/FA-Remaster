@@ -34,4 +34,9 @@ struct Frame {
   const std::vector<std::string>* blueprints = nullptr;
 };
 
+// Fills `out` with the units of beat `a`, each moved the share `t` (0..1) of the way to where the
+// same unit is in the next beat `b` (both in entity-id order; `b` may be null). A unit that is not
+// in `b`, or is another unit there (ids are reused), stays as it is in `a`.
+void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out);
+
 }  // namespace render

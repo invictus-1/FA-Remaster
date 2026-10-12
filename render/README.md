@@ -55,6 +55,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
 
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
+               [--init <init file> --sim <replay> [--mod-uids <file>]]
                [--rec <recording>] [--display <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
@@ -78,6 +79,13 @@ several times for one unit to gather its files from several folders, the first f
 beside it (to its east) in the same light, and frames both. `--at x,z` says where (choose flat
 ground), `--heading` and `--pitch` from which side. Meshes may be `.scm` version 5 or version 6
 (version 5 with 32-bit indices, for models of more than 65,535 vertices).
+
+Running a replay live: `--init <the game's init file> --sim <replay> [--mod-uids <file>]`. The
+viewer links the engine as a library; the simulation plays the replay on a thread of its own and
+the renderer draws each beat, blended with the next. The game's files are mounted by running the
+init file, the map is the replay's, army colours are the game's. Space pauses, + and - change the
+speed, `--tick N` runs ahead to a tick; there is no going back. `--simlog <file>` keeps the
+engine's log.
 
 Playing a recording: make one with the engine (`MOHO64_RECORD=<file>` on a replay) and give it to
 the viewer with the replay's map; the recording says which blueprint each unit is. To draw units
@@ -110,6 +118,7 @@ prints what it reports.
 | `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
 | `mesh_renderer.h` | draws models, instanced: units and props |
 | `recording.h` | a tick recording as a source of frames |
+| `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
 | `shadows.h` | the sun's shadow maps and where they are placed each frame |
 | `post.h` | the scene's own floating-point picture and the last pass that puts it on the window |
@@ -150,6 +159,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Step 3: models from `.scm` files with albedo, normal and spec-team textures, team colours, levels
   of detail by distance, drawn instanced; the map's props (trees, rocks) with their own models.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
+- The live frame, first form: the viewer runs the simulation itself (`--sim`) and fills the same
+  frame from the engine's `sim/sim_view.h` after every beat. Units and army colours only: bone
+  poses and projectiles are asked for (REQUESTS.md, 6). Only replays so far, no orders.
 - Step 5 has begun with what both looks need, and a first modern look:
   - The scene is drawn into a floating-point picture; a last pass puts it on the window.
   - The sun casts shadows (three cascaded shadow maps of 2048 pixels, 3 x 3 soft lookups), in both
