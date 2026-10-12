@@ -85,6 +85,26 @@ struct BeamView {
   float end[3] = {0, 0, 0};
 };
 
+// What the scripts did with effects in a beat (emitters, beams, trails, light particles, decals), in the order
+// of their calls. Listed only while Sim::collectEffects is set. Create: one of the Create... / AttachBeam...
+// functions; Call: a method on an effect made earlier (ScaleEmitter, OffsetEmitter, SetEmitterParam,
+// SetEmitterCurveParam, ResizeEmitterCurve, SetBeamParam) or AttachBeamToEntity; Destroy: the script destroyed
+// it, or the entity an attached effect was on is gone.
+struct EffectEvent {
+  enum Kind { Create, Call, Destroy } kind = Create;
+  uint32_t id = 0;          // the effect's own number, from 1, never reused
+  std::string name;         // the function ("CreateEmitterAtBone") or the method ("ScaleEmitter")
+  std::string blueprint;    // Create: the emitter / beam / trail blueprint, or the texture
+  int army = 0;             // Create: as the script gave it (1-based, or -1)
+  uint32_t entity = 0xffffffff, entity2 = 0xffffffff;  // entity ids: what it is on, and a beam's other end
+  int bone = -1, bone2 = -1;                            // the bones given (-1: the entity itself)
+  // Create: where that point is when the list is taken (the entity's bone in this beat's pose; where it was at
+  // the call if the entity is gone by then), or the position given (decals)
+  float position[3] = {0, 0, 0};
+  std::vector<float> numbers;  // the call's other numbers, in order
+  std::string text, text2;     // the call's other strings, in order (a parameter's name; a second texture)
+};
+
 std::vector<ArmyView> ArmyViews(const Sim& sim);
 // army: 1-based; an army that does not exist gives zeros.
 EconomyTotals EconomyTotalsOf(const Sim& sim, int army);
@@ -97,6 +117,9 @@ void UnitPoses(const Sim& sim, std::vector<UnitPose>* out);
 // The projectiles in flight (creation order) and the beams that are on.
 void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
 void BeamViews(const Sim& sim, std::vector<BeamView>* out);
+// The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
+// Sim::collectEffects set from before the first beat.
+void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);
 // (The scenario info for SessionGetScenarioInfo is Sim::sessionScenario: the launched table as bytes.)
 
 }  // namespace moho

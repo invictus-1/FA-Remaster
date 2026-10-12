@@ -3,6 +3,85 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 9: how the original turns an EmitterBlueprint into particles — not read yet
+
+Seen, and being read now (`CEfxEmitter::OnTick` 0x65dac0, `Tick` 0x65ce00). Confirmed so far; the rest
+follows in this section:
+
+- **1, time:** `Lifetime` and `Repeattime` are in ticks (the blueprint's own field descriptions say so:
+  "Lifetime of emitter in ticks", "Repeattime of emitter in ticks"). **Any negative `Lifetime` means
+  "until destroyed"**: the test is `Lifetime >= 0 and age >= Lifetime` (0x65c70d), so -0.2 and -50 are
+  the same. The emitter's age is its `TICKCOUNT` parameter, which grows by `TICKINCREMENT` every tick.
+- **11, who follows:** see 8: `CreateEmitterAtBone` / `CreateEmitterAtEntity` are placed once and stay;
+  `CreateAttachedEmitter` / `CreateEmitterOnEntity` are tied to the entity and end with it.
+- The parameter names of `SetEmitterParam`, in the engine's order (index = position in the emitter's
+  parameter array): POSITION_X, POSITION_Y, POSITION_Z, TICKCOUNT, LIFETIME, REPEATTIME, TICKINCREMENT,
+  BLENDMODE, FRAMECOUNT, USE_LOCAL_VELOCITY, USE_LOCAL_ACCELERATION, USE_GRAVITY, ALIGN_ROTATION,
+  INTERPOLATE_EMISSION, TEXTURE_STRIPCOUNT, ALIGN_TO_BONE, SORTORDER, FLAT, SCALE, LODCUTOFF,
+  EMITIFVISIBLE, CATCHUPEMIT, CREATEIFVISIBLE, SNAPTOWATERLINE, ONLYEMITONWATER, PARTICLERESISTANCE.
+  The curves, in order: XDIR, YDIR, ZDIR, EMITRATE, LIFETIME, VELOCITY, X_ACCEL, Y_ACCEL, Z_ACCEL,
+  RESISTANCE, SIZE, X_POSITION, Y_POSITION, Z_POSITION, BEGINSIZE, ENDSIZE, ROTATION, ROTATION_RATE,
+  FRAMERATE, TEXTURESELECTION, RAMPSELECTION.
+- **3, catch-up (first part):** an emitter that did not emit (not visible) counts the missed ticks, at
+  most 24; when it emits again it first runs its tick once per missed tick, oldest first, and then the
+  current one (0x65dc4a..0x65dc8f).
+
+## render 8: the effects the scripts create — done (emitters, beams, trails, light particles, decals)
+
+`sim/sim_view.h` has `EffectEvent` and `EffectEvents(sim, &list)`; the simulation keeps the list only
+while `sim.collectEffects` is set (set it before the first beat, with `collectSync`). Call it once per
+beat after `Tick()`; it hands over the events since the last call, in the order the scripts made them.
+
+The struct is your proposal with three small changes:
+
+- `text` and `text2`: a decal has two textures and a type, a light particle a texture and a ramp, so
+  there are two "other strings", in call order.
+- `entity` / `entity2` are entity ids as in `UnitView::id`, and **none is 0xffffffff**, not 0: id 0 is a
+  real unit (the first unit of army 1).
+- `army` is what the script passed (1-based, or -1).
+
+What each function fills (the argument order is the original's own help text, read from the exe):
+
+| function | entity, bone | entity2, bone2 | blueprint | numbers | text |
+|---|---|---|---|---|---|
+| `CreateAttachedEmitter`, `CreateEmitterAtBone`, `CreateTrail`, `CreateBeamEmitterOnEntity` | yes | | the blueprint | | |
+| `CreateEmitterAtEntity`, `CreateEmitterOnEntity` | entity, bone -1 | | the blueprint | | |
+| `CreateBeamEmitter(blueprint, army)` | none | | the blueprint | | |
+| `CreateBeamEntityToEntity`, `AttachBeamEntityToEntity` | yes | yes | the blueprint | | |
+| `CreateAttachedBeam` | yes | | the texture | length, thickness | |
+| `CreateBeamToEntityBone` | yes | yes | the texture | thickness | |
+| `CreateLightParticle`, `CreateLightParticleIntel` | yes | | the texture | size, lifetime | the ramp |
+| `CreateDecal` | none; `position` given | | texture 1 | heading, sizeX, sizeZ, lod, duration, fidelity | texture 2, then the type in `text2` |
+| `CreateSplat` | none; `position` given | | the texture | heading, sizeX, sizeZ, lod, duration, fidelity | |
+| `CreateSplatOnBone(entity, offset, bone, ...)` | yes | | the texture | offset x, y, z, sizeX, sizeZ, lod, duration | |
+
+`Call` events carry the method's name, its numbers and its strings: `ScaleEmitter`, `OffsetEmitter`,
+`SetEmitterParam` (`text` = the parameter), `SetEmitterCurveParam`, `ResizeEmitterCurve`, `SetBeamParam`,
+and `AttachBeamToEntity(emitter, entity, bone, army)`, which is a call on the emitter that
+`CreateBeamEmitter` made (with `entity`, `bone`, `army` and `position` filled).
+
+`Destroy` comes when the script destroys the effect (its own `Destroy`, or a trash bag's) and, at the
+beat's end, when the entity it is attached to is gone. "Attached" is decided by the function:
+`CreateAttachedEmitter`, `CreateEmitterOnEntity`, `CreateTrail`, every beam function and
+`AttachBeamToEntity` are; `CreateEmitterAtBone` and `CreateEmitterAtEntity` are not (they are what an
+explosion uses on the entity that is about to vanish), nor are light particles and decals, which end by
+their own lifetime. For emitters this split is read from the exe: `CreateEmitterAtBone` and
+`CreateEmitterAtEntity` copy the bone's / entity's world transform into the emitter once (0x659390,
+0x659300) and never set its entity; the attached kinds go through `CEffectImpl::SetEntity` (0x6592d0),
+which sets the "attached" byte, and `CEfxEmitter::ProcessLifetime` (0x65c700) ends an attached emitter
+when its entity is gone or queued for destruction. For beams and trails it is still an inference. An
+effect whose blueprint has a lifetime simply runs out: no event.
+
+`position` of a `Create` is the attach point (the entity's bone in this beat's pose) when the list is
+taken; if the entity is gone by then, where it was at the call. Effects on entities that are neither
+units nor projectiles: the common one is a weapon's collision beam (bone 0 its start, 1 and 2 its end),
+which you have in `BeamViews` by the same id; shields and script-made entities do move with their unit
+and have no view yet. Say when you meet one that matters.
+
+`moho64 --session <file> --ticks N --view` logs the counts by function and one sample. For scale: the
+recorded skirmish's set-up (seven M28 armies) makes 8,535 effects in its first 1,500 beats, with 12,957
+calls on them (10,285 of them `ScaleEmitter`) and 4,542 ends.
+
 ## render 7: the colour of a projectile's mesh — white (read from the exe)
 
 The mesh instance's colour is an argument of `MeshRenderer::CreateMeshInstance` (0x7df530), and the
