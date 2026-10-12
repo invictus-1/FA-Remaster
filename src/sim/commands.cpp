@@ -830,7 +830,9 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
       // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
       const bool hadCommands = !u->commands.empty();
+      u->clearKeepsMove = keep;
       ForgetUnitCommands(u);
+      u->clearKeepsMove = false;
       if (!keep && hadCommands) MotionStop(u);
       SetMoving(u, false);
       at = -1;

@@ -1238,7 +1238,10 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   if (d.k < 10.0f) u->motion.needSnap = true;  // NotifyDetached: back on the ground
   Unit* T = UnitRef(sim, d.transport);
   if (T && !T->dead && T->transport) RemovePickupUnit(sim, *T->transport, u, true);
-  if (u->motion.hasGoal) MotionStop(u);
+  // (the walk to the pickup place is a move child: its destructor's abort rule. A unit whose load order is given
+  // again keeps walking until the new task sets its goal: seen in the original's navigator log, status 2 with the
+  // old goal for two beats after the order.)
+  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
 }
 
 // --- unload (CUnitUnloadUnits 0x625ee0 / 0x626390) ---------------------------------------------
