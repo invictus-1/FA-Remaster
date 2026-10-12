@@ -38,6 +38,9 @@ struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
   std::vector<WorldLine> lines;
+  // The map's border: the mesh blueprints the game script named with MapBorderAdd (the machinery
+  // around the map, by the interface's skin), to be drawn around the map as the original does.
+  std::vector<std::string> borders;
 };
 
 class WorldSource {

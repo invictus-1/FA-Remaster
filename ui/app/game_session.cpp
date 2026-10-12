@@ -70,6 +70,7 @@ struct GameSession::Picture : WorldSource {
       lines.push_back(o);
     }
     picture.SetShapes(lines, {});
+    // scene.borders (the map's border meshes) waits for the renderer: ui/REQUESTS.md, renderer 3.
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);

@@ -172,3 +172,34 @@ selection ring and the order lines of the selected units, the ghost of a buildin
 (green or red by the engine's `BuildSiteOf`), and the minimap picture in a minimap world view.
 Thank you. Seen so far: order lines one pixel wide read well from close by; from far out they are
 hard to see, so wider or always-on-top lines would help when you get to it.
+
+### 3. The map's border: the machinery the map lies in
+Seen by Chris on a screenshot of the original from its farthest zoom: the map lies in a dark field
+of machinery with a frame around it. Ours shows the map on an empty ground. It is part of the
+world, not of the interface's controls: a mesh, drawn by the engine around the map.
+
+What the original does (read from its code, FA exe):
+- The game script names the meshes: `MapBorderClear()`, then `MapBorderAdd(blueprintId)` once or
+  twice (`/lua/ui/uiutil.lua`, `UpdateWorldBorderState`: by the interface's skin and the map's
+  shape, e.g. `/meshes/game/map-border_squ_uef_mesh` for a square map with the UEF skin, a
+  second "details" mesh for some skins, the `_hor_` ones for maps twice as wide as high; nothing
+  for other shapes; switched by the option `world_border`). The interface side of this is built:
+  the list arrives in `WorldScene::borders` (`ui/maui/world_source.h`) with every scene.
+- `MapImager::AddBorder` (0x7d9c10) makes one mesh instance of each blueprint through the mesh
+  renderer: position = the middle of the height field's bounds in all three axes (x and z: the
+  map's middle; y: halfway between the lowest and the highest ground), plus in y a float of the
+  map file (the one read after the cartographic colours from version 57 on, 0x8a205a; 0 in the
+  maps looked at); not turned; uniform scale = (the bounds' width in x) * the mesh blueprint's
+  `UniformScale` (1/512 in these blueprints: the meshes are made for a map 512 wide).
+- The mesh blueprints are ordinary ones (`/meshes/game/map-border_*_mesh.bp`: one LOD, shader
+  `MapImager`, `IconFadeInZoom = 10000`), their `.scm` and textures (albedo, normals, SpecTeam)
+  beside them in the game's files.
+
+Asked for: a call on `render::WorldPicture` that takes the list of mesh blueprint ids (empty: no
+border) and draws them so, in the main picture (the minimap has none in the original). What the
+`MapImager` shader does is yours to read; a first form with the mesh under your usual lighting
+is welcome. One thing that touches it: the camera can now go as far out as the original's (the
+map takes 1 / 1.4 of the view from the farthest zoom), so what lies around the map is on screen
+at every game's start.
+
+**Status:** asked 2026-10-12.

@@ -382,6 +382,7 @@ class WorldView : public Control {
     // picture before this one), green where it can stand.
     WorldScene scene;
     SelectionForWorld(L, &scene.selection, &scene.lines);
+    scene.borders = user->mapBorders;
     std::string mode, name;
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();
@@ -745,6 +746,31 @@ int l_GetMouseScreenPos(lua_State* L) {
   return 1;
 }
 
+// MapBorderAdd(blueprintId), MapBorderClear() (FA exe 0x8482e0, 0x848450): the meshes drawn around
+// the map: the machinery the map lies in, different for each skin of the interface. The game
+// script names them (uiutil.UpdateWorldBorderState, by the option `world_border`); the original
+// (MapImager::AddBorder 0x7d9c10) makes one mesh of each: at the middle of the height field's
+// bounds, not turned, scaled by the map's width times the mesh blueprint's UniformScale. Here the
+// list goes to the picture's source with the scene.
+int l_MapBorderAdd(lua_State* L) {
+  UserState::From(L)->mapBorders.push_back(luaL_checkstring(L, 1));
+  return 0;
+}
+int l_MapBorderClear(lua_State* L) {
+  UserState::From(L)->mapBorders.clear();
+  return 0;
+}
+// moho64ui_MapBorders() -> the list as it stands (for tests)
+int l_MapBorders(lua_State* L) {
+  lua_newtable(L);
+  int n = 0;
+  for (const std::string& b : UserState::From(L)->mapBorders) {
+    lua_pushstring(L, b.c_str());
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 // The prefetcher: the original reads textures and models ahead of their first use. Here files are
 // read when they are first needed, so the object only takes the lists.
 int l_PrefetchNothing(lua_State*) { return 0; }
@@ -817,6 +843,9 @@ void RegisterWorldViewBindings(lua_State* L) {
     SetMethod(L, cam, name, l_CamNothing);
 
   SetGlobal(L, "GetMouseWorldPos", l_GetMouseWorldPos);
+  SetGlobal(L, "MapBorderAdd", l_MapBorderAdd);
+  SetGlobal(L, "MapBorderClear", l_MapBorderClear);
+  lua_register(L, "moho64ui_MapBorders", l_MapBorders);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);
   PushPrefetchSet(L);

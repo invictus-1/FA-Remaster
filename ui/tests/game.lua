@@ -73,6 +73,11 @@ local function run()
     local factory = string.sub(cdr:GetUnitId(), 1, 2) .. "b0101"  -- the faction's first land factory
     check("a commander can build its land factory", EntityCategoryContains(buildable, factory), true)
 
+    -- the map's border: the game script names the machinery's mesh for the skin and the map's shape
+    local borders = moho64ui_MapBorders()
+    check("the script names one border mesh for a square map", table.getn(borders), 1)
+    check("it is a map-border mesh blueprint", string.find(borders[1] or "", "/meshes/game/map-border_squ_", 1, true), 1)
+
     -- the world view and the camera
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     local s = view:Project(pos)

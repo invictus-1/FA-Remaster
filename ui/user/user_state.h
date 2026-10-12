@@ -83,6 +83,7 @@ class UserState {
   };
   std::unique_ptr<Extra> units;
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
+  std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
