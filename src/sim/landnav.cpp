@@ -285,7 +285,8 @@ void ResetPathState(Sim& sim, LandNav& n) {
   n.path.clear();
   n.state = 0;
   n.wait = 0;
-  n.spliced = -1;
+  // (0x5ad9c0 leaves the splice count +0x5c alone: only ConsumePathPrefix 0x5ad830 and the splice itself write
+  // it, so a move dropped with spliced cells ahead hands the count to the next goal's first waypoints)
 }
 
 // RequestContinuationPath 0x5aec70
