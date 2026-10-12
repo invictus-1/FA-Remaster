@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1300 --log out.log
+--            --frames 1400 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -96,6 +96,18 @@ local function run()
     check("nearer, the camera leans", cam:SaveSettings().Pitch < saved.Pitch, true)
     local f = cam:GetFocusPosition()
     check("zooming in goes towards the cursor", f[1] > 512 and f[3] < 512, true)
+    -- the arrow keys move the view while they are held: left is west, up is north
+    moho64ui_Key(316, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(316, "", "up")
+    local g = cam:GetFocusPosition()
+    check("the left arrow moves the view west", g[1] < f[1] - 1 and math.abs(g[3] - f[3]) < 0.01, true)
+    WaitSeconds(0.2)
+    check("and it stands when the key is let go", cam:GetFocusPosition()[1], g[1])
+    moho64ui_Key(317, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(317, "", "up")
+    check("the up arrow moves it north", cam:GetFocusPosition()[3] < g[3] - 1, true)
     cam:RestoreSettings(saved)
     WaitSeconds(0.1)
 

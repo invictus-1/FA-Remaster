@@ -22,6 +22,7 @@
 #include "sim/sim_view.h"
 #include "sim/terrain.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -35,6 +36,12 @@ namespace {
 const float kNearZoom = 5.0f, kNearFov = 65.0f, kFarFov = 60.0f, kNearPitch = 40.0f, kFarPitch = 89.9f;
 const float kZoomAmount = 0.4f, kZoomSpeedSmall = 0.5f, kZoomSpeedLarge = 5.0f;
 const float kDegrees = 0.0174533f, kPi = 3.14159265f;
+// Moving the view with the arrow keys (the world view's frame function, FA exe 0x871140): 90 a
+// frame, four times that with Ctrl, in the units of the camera's pan (cam_PanSpeed 1: a view's
+// width of them moves the focus by the zoom). The original moves by frame, so its speed goes with
+// the frame rate; here it is by time, at what the original does at 60 frames a second.
+const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
+const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
 
 // A camera looks at a place on the map (`focus`) from a distance (`zoom`). The zoom glides to
 // `targetZoom`; how far the camera leans and how wide it sees follow from the zoom.
@@ -181,6 +188,16 @@ int l_GetCamera(lua_State* L) {
 }
 
 void SetZoomClamped(Camera* c, float z) { c->zoom = c->targetZoom = ClampZoom(c, z); }
+
+// Pan (FA exe 0x7a6f00): the focus moves over the ground, to the view's left by dx and up the
+// view by dy, in parts of the zoom per width of the view. (Right and forward as the picture's
+// source has them for our heading.)
+void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
+  if (viewWidth <= 0) return;
+  float k = c->zoom / viewWidth * kPanSpeed, turn = c->heading - kPi, sh = std::sin(turn), ch = std::cos(turn);
+  c->focus[0] += -ch * k * dx - sh * k * dy;
+  c->focus[2] += sh * k * dx - ch * k * dy;
+}
 
 // The wheel (FA exe 0x7a8260): each notch away from the user brings the target zoom nearer by the
 // factor 2^-cam_ZoomAmount; the zoom itself glides after it (AdvanceCamera).
@@ -616,7 +633,9 @@ int l_ViewNothing(lua_State* L) {
 int l_ViewRightMouseButtonOrder(lua_State* L) {
   WorldView* v = View(L);
   UiManager& ui = UserState::From(L)->ui();
-  std::string order = v->HitTest(ui.mouseX, ui.mouseY) ? RightClickOrder(L, v->UnitUnder(L, ui.mouseX, ui.mouseY)) : std::string();
+  std::string mode, name, order;
+  v->CommandMode(L, &mode, &name);  // none while the script is in a command mode, as the original
+  if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) order = RightClickOrder(L, v->UnitUnder(L, ui.mouseX, ui.mouseY));
   if (order.empty()) lua_pushnil(L);
   else lua_pushstring(L, order.c_str());
   return 1;
@@ -689,6 +708,17 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     float f = c->zoom / before;
     c->focus[0] = under[0] + (c->focus[0] - under[0]) * f;
     c->focus[2] = under[2] + (c->focus[2] - under[2]) * f;
+  }
+  // The arrow keys move the view that takes the camera's commands; Alt holds it still. (Of the
+  // original's frame function this much is built; not the screen's edges, which it follows only
+  // on a full screen, nor turning with Insert and Delete or with Space and the mouse.)
+  if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt)) {
+    float rate = kKeyPan * (KeyIsDown(L, kKeyCtrl) ? kKeyPanFast : 1.0f) * kPanFramesPerSecond * seconds;
+    float dx = (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
+    float dy = (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
+    Rect r;
+    v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);
   }
   ClampFocus(c);
 }

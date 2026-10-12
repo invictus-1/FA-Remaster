@@ -234,8 +234,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the view), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
   field of view (across the view's longer side) goes from 60 to 65 degrees; a wheel notch brings
   the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
-  cursor when zooming in; the focus stays on the map. Turning the camera, moving it with keys,
-  the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
+  cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four
+  times as fast, Alt holds it), at the original's amount per frame taken at 60 frames a second,
+  so that the speed does not go with the frame rate as the original's does. Turning the camera,
+  moving it with the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent

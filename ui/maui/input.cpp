@@ -367,10 +367,22 @@ int l_ControlAt(lua_State* L) {
 // moho64ui_Key(code [, modifiers]): one key pressed and let go. `code` is a character ("a"), or
 // a key code as events carry it (13 Enter, 27 Escape, 8 Backspace, 127 Delete, 314 End, 315 Home,
 // 316 Left, 318 Right, 324 Insert); modifiers is a string naming any of Shift, Ctrl, Alt.
+// moho64ui_Key(code, modifiers, "down" or "up"): only that half, for a key that is held.
 int l_Key(lua_State* L) {
   int code = lua_type(L, 1) == LUA_TSTRING ? static_cast<unsigned char>(lua_tostring(L, 1)[0])
                                            : static_cast<int>(luaL_checknumber(L, 1));
   std::string mods = luaL_optstring(L, 2, "");
+  std::string half = luaL_optstring(L, 3, "");
+  if (half == "down" || half == "up") {
+    UiEvent e;
+    e.shift = mods.find("Shift") != std::string::npos, e.ctrl = mods.find("Ctrl") != std::string::npos,
+    e.alt = mods.find("Alt") != std::string::npos;
+    e.keyCode = code >= 'a' && code <= 'z' ? code - 32 : code;
+    e.rawKeyCode = KeycodeMauiToMSW(e.keyCode);
+    e.type = half == "down" ? EventType::KeyDown : EventType::KeyUp;
+    KeyEvent(L, UserState::From(L)->ui(), e);
+    return 0;
+  }
   KeyPress(L, UserState::From(L)->ui(), code, mods.find("Shift") != std::string::npos,
            mods.find("Ctrl") != std::string::npos, mods.find("Alt") != std::string::npos);
   return 0;
