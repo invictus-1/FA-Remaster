@@ -29,6 +29,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterItemListBindings(L);
   RegisterEditBindings(L);
   RegisterSimpleControlBindings(L);
+  RegisterInputBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
   // Hooks of the active mods apply to the scripts of this state as well. (The original's front end

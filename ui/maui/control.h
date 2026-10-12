@@ -168,6 +168,7 @@ class UiManager {
   int CountControls() const;
 
   Control* focus = nullptr;                // keyboard focus
+  Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
   std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
   void Forget(Control* c);                 // a control died: drop it from focus and capture
   // Give the keyboard focus to a control (or to none). Inferred: the control that loses it gets
@@ -211,6 +212,7 @@ void RegisterScrollbarBindings(lua_State* L);      // scrollbar.cpp
 void RegisterItemListBindings(lua_State* L);       // itemlist.cpp
 void RegisterEditBindings(lua_State* L);           // edit.cpp
 void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: border, histogram, movie
+void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);

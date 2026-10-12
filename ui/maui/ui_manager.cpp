@@ -129,6 +129,7 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
 
 void UiManager::Forget(Control* c) {
   if (focus == c) focus = nullptr;
+  if (hover == c) hover = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());
 }
 
