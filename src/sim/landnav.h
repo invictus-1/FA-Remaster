@@ -51,6 +51,7 @@ struct LandNav {
   bool startedThisTick = false;
   Vec3 prevPos;
   bool targetChanged = false;
+  bool targetPending = false;  // a target change the steering has not been told of yet (the goal still waited)
   // formation following (formations.md 9): +0x90 inFormation, +0x91 waiting for the leader,
   // +0x92 following the slot, +0x7c cached leader, +0x84 last followed slot, +0x78 last failed follow
   bool inFormation = false, waiting = false, following = false;

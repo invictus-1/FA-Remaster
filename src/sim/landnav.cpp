@@ -628,11 +628,16 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     PathCell t = n.target;
     float dd = Dist(n.cur, t);
     if (dd > look) {
-      float k = look / dd;
-      t = {n.cur.x + static_cast<int>(std::nearbyint((t.x - n.cur.x) * k)),
-           n.cur.z + static_cast<int>(std::nearbyint((t.z - n.cur.z) * k))};
+      // 0x5ae170: the point `look` along the way, each part cut toward zero (cvttss2si at 0x5ae1f3), not rounded
+      const float dx = static_cast<float>(t.x - n.cur.x), dz = static_cast<float>(t.z - n.cur.z);
+      const float k = look / std::sqrt(dz * dz + dx * dx);
+      t = {n.cur.x + static_cast<int>(dx * k), n.cur.z + static_cast<int>(dz * k)};
     }
-    if (!Reach(sim, u, n.cur, t) || !UnitClear(sim, u, n, t)) {
+    const bool reach = Reach(sim, u, n.cur, t), clear = reach && UnitClear(sim, u, n, t);
+    if (Dbg())
+      Logf(LogLevel::Info, "nav: tick %u unit %u look ahead %.3f from (%d,%d) to (%d,%d) of target (%d,%d): reach %d clear %d",
+           sim.tick(), u->id, look, n.cur.x, n.cur.z, t.x, t.z, n.target.x, n.target.z, reach ? 1 : 0, clear ? 1 : 0);
+    if (!clear) {
       force = true;
       ok = false;
     } else if (b.turnRadius > b.turnRate && sim.tick() > n.lastAdvance + 10) {
@@ -683,7 +688,11 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
   n.targetChanged = false;
   UpdateCurrentPosition(sim, u, n);
   n.prevPos = u->position;
-  if (n.targetChanged && n.active) {
+  // 0x5a4342: while the goal still waits for its search (path state 2: a formation's path delay, the thinking
+  // beat) the steering is told nothing; the navigator stays "thinking" and hands the target over afterwards
+  if (n.targetChanged && n.active && n.state == 2) n.targetPending = true;
+  if ((n.targetChanged || n.targetPending) && n.active && n.state != 2) {
+    n.targetPending = false;
     bool inGoal = InGoal(n, n.target);
     bool f9e = n.thinking ? false : n.spliced < 0;
     bool through = inGoal ? n.speedThroughGoal : f9e;
@@ -801,6 +810,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   n.goal[3] = single ? gc.z + 1 : z1;
   n.speedThroughGoal = speedThrough;
   n.thinking = true;
+  n.targetPending = false;
   n.problem = false;
   n.retries = n.replans = 0;
   n.hasDeadEnd = false;
