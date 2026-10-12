@@ -27,7 +27,10 @@ class EngineThing : public ScriptObject {
 // args: what an effect function takes, one letter per argument (the original's own help texts): e entity,
 // b a bone of it, E / B a second entity and its bone, a army, s the blueprint or texture, n a number, t another
 // string, p a position {x, y, z}, o an offset {x, y, z} (listed as three numbers). attached: the effect ends
-// with its entity (inferred from the names: the "At" emitters stay where they were made).
+// with its (first) entity: CEffectImpl::SetEntity 0x6592d0 sets the "attached" byte, and the emitter, beam and
+// trail ticks destroy an attached effect whose entity is gone (0x65c700, 0x654f30, 0x6717e0). The "At" emitters
+// copy the transform once (0x659390, 0x659300) and stay. A beam between two entities whose OTHER end is gone
+// lives on (the original then draws it along the first bone, 0x655087).
 struct Factory {
   const char* name;  // global function
   const char* cls;   // engine class of the object it returns
@@ -72,7 +75,7 @@ std::vector<std::unique_ptr<EngineThing>>& Things() {
 // ---- the list for the host -------------------------------------------------------------------
 
 struct LiveEffect {
-  uint32_t id, ref, ref2;  // an attached effect and the entities (references) it ends with
+  uint32_t id, ref;  // an attached effect and the entity (reference) it ends with
 };
 struct EffectLog {
   std::vector<EffectEvent> events;
@@ -159,7 +162,7 @@ uint32_t RecordCreate(lua_State* L, const Factory& f) {
   if (e2) ev.entity2 = e2->id;
   if (e1 && !fixed) SetPosition(ev, e1, ev.bone);
   fx.where.push_back({e1 && !fixed ? EntityRef(e1) : 0u, ev.bone});
-  if (f.attached && (e1 || e2)) fx.live.push_back({ev.id, EntityRef(e1), EntityRef(e2)});
+  if (f.attached && e1) fx.live.push_back({ev.id, EntityRef(e1)});
   fx.events.push_back(std::move(ev));
   return fx.nextId;
 }
@@ -214,7 +217,7 @@ int l_AttachBeamToEntity(lua_State* L) {
       SetPosition(ev, e, ev.bone);
       EffectLog& fx = Fx();
       fx.where.back() = {EntityRef(e), ev.bone};
-      fx.live.push_back({t->effectId, EntityRef(e), 0u});
+      fx.live.push_back({t->effectId, EntityRef(e)});
     }
   }
   lua_settop(L, 1);
@@ -358,7 +361,7 @@ void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {
   size_t keep = 0;
   for (size_t i = 0; i < fx.live.size(); ++i) {
     const LiveEffect l = fx.live[i];
-    if ((l.ref && !sim.FindEntity(l.ref)) || (l.ref2 && !sim.FindEntity(l.ref2))) {
+    if (!sim.FindEntity(l.ref)) {
       EffectEvent ev;
       ev.kind = EffectEvent::Destroy;
       ev.id = l.id;

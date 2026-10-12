@@ -3,6 +3,67 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 10: beams and trails — read from the exe
+
+Read: `CEfxBeam::OnTick` 0x655350 and `Update` 0x654f30, the beam's quad 0x491760, the beam draw
+0x491e40, `RBeamBlueprint`'s fields and defaults (0x50eef0), `CEfxTrailEmitter::Tick` 0x671850 and
+`OnTick` 0x671d90, the trail blueprint's fields (0x50f330).
+
+**1. Colours.** Yes: red, green, blue, alpha, as floats ("RGBA start color of beam"). They go into the
+vertices unchanged, `StartColor` on the two corners at the beam's start and `EndColor` on the two at
+its end. Default for both: (1, 1, 1, 0).
+
+**2. Thickness / Size.** The engine does no arithmetic on either. A beam's four corners each carry the
+`Thickness` and the beam's direction, with the direction's sign flipped on the two sides; a trail
+segment carries `Size` ("Startsize"). Whether the vertex shader pushes each side out by the whole value
+(so it is half the width) is in the game's fx file, not in the exe.
+
+**3. Length and Lifetime.**
+- A beam on one entity runs from its `POSITION` parameter to `POSITION + (0, 0, LENGTH)` in the frame of
+  the bone it is on (the entity's own frame for bone -1): along the bone's +Z, so a negative `Length`
+  points backwards. Default 10.
+- A beam between two entities ignores `Length`: its ends are the two bones (the `POSITION` and
+  `ENDPOSITION` parameters are offsets in each bone's frame). If the second entity is gone the original
+  does not end the beam: it falls back to the one-entity form above until the script destroys it. So
+  the effect events (8) now end a beam only with its first entity.
+- A free beam (`CreateBeamEmitter`, before `AttachBeamToEntity`) runs from `POSITION` to `ENDPOSITION`
+  in world space.
+- I found no special value in this code, 2000 included: a `Length` is used as it is. How a weapon's
+  collision beam gives the emitters attached to it their real length was not read (the game's own
+  scripts do not call `SetBeamParam('LENGTH', ...)` for it, so it is on the engine's side); for those
+  beams `BeamViews` has the start and the end.
+- `Lifetime` is in ticks and counts down by one each tick **only while the beam is not attached to an
+  entity**; when it reaches 0 the beam is destroyed (a start value of 0 or less never ends). An
+  attached beam ignores it and lives until its entity is gone or the script destroys it. Default 1.
+
+**4. Texture.** **v runs along the beam** (your guess): 0 at the start, `n` at the end; u is 0 on one
+side and 1 on the other. `n` is 1 when `RepeatRate` is 0 (the texture stretched once over the beam),
+otherwise `length * RepeatRate`: `RepeatRate` is per world unit ("how often the texture repeats per
+ogrid"), not per tick. `UShift` and `VShift` are handed to every vertex unchanged as a second pair;
+what the shader multiplies them by is in the fx file. The positions are interpolated between the
+entity's last and current transform for the frame.
+
+**5. Blend mode.** A beam without `Blendmode` is **3, add** (the blueprint's default). The numbers are
+those of particles, 0 to 4 (no refraction). The technique is `TBeam_OneTexture_<mode>`, or
+`TBeam_TwoTexture_<mode>` when the beam has a second texture. Other defaults: `LODCutoff` 200,
+`UShift` / `VShift` / `RepeatRate` 0.
+
+**6. Trails.** **One segment per tick**, from where the emitter was at the tick's start to where it is
+at its end (the entity's bone, moved by the `POSITION` parameter). A segment carries both ends, the
+previous segment's direction and its own (for the join), its texture coordinates, `Size`, `SortOrder`,
+the two textures, the blend mode, and the technique `TPolyTrail`.
+- `TrailLength`: yes, the time a place of the trail stays, in ticks (the buffer keeps a segment for
+  `TrailLength` + 2 ticks; start times are counted as for particles).
+- `TextureRepeatRate` is **per world unit** ("texture repeat rate in units"): the coordinate along the
+  trail is `TextureRepeatRate * distance travelled since the trail began`, at each end of a segment.
+- `Lifetime`: ticks; negative = until destroyed. An attached trail ends when its entity is gone.
+- A trail that could not emit (not visible) replays the missed ticks, at most `min(TrailLength, 24)`;
+  with more than that it starts afresh (no join to the old part).
+
+`SetBeamParam` names, in the engine's order: POSITION_X/Y/Z, ENDPOSITION_X/Y/Z, LENGTH, LIFETIME,
+STARTCOLOR_R/G/B/A, ENDCOLOR_R/G/B/A, THICKNESS, USHIFT, VSHIFT, REPEATRATE, LODCUTOFF. A trail has
+POSITION_X/Y/Z, LIFETIME, LENGTH, SCALE.
+
 ## render 9: how the original turns an EmitterBlueprint into particles — read from the exe
 
 Read: `CEfxEmitter::OnTick` 0x65dac0, `Tick` 0x65ce00 (one call emits one tick's particles),
@@ -152,8 +213,10 @@ their own lifetime. For emitters this split is read from the exe: `CreateEmitter
 `CreateEmitterAtEntity` copy the bone's / entity's world transform into the emitter once (0x659390,
 0x659300) and never set its entity; the attached kinds go through `CEffectImpl::SetEntity` (0x6592d0),
 which sets the "attached" byte, and `CEfxEmitter::ProcessLifetime` (0x65c700) ends an attached emitter
-when its entity is gone or queued for destruction. For beams and trails it is still an inference. An
-effect whose blueprint has a lifetime simply runs out: no event.
+when its entity is gone or queued for destruction. Beams and trails do the same (`CEfxBeam::Update`
+0x654f30, the trail's 0x6717e0), with one exception: a beam between two entities ends only with its
+FIRST entity (see render 10, point 3). An effect whose blueprint has a lifetime simply runs out: no
+event.
 
 `position` of a `Create` is the attach point (the entity's bone in this beat's pose) when the list is
 taken; if the entity is gone by then, where it was at the call. Effects on entities that are neither
