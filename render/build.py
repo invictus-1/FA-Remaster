@@ -6,14 +6,14 @@
     py render/build.py --jobs 32
     py render/build.py --no-debug      (leave out -g)
 
-Compiles every .cpp in render/ plus the parts of the engine the renderer reads through (listed in
-ENGINE_SOURCES; nothing there is changed). Incremental: an object is rebuilt when its source or a
-header it included last time is newer.
+Compiles every .cpp in render/ and links it with the engine as a library: src/core, src/script and
+src/sim with Lua, mimalloc and zlib, built here with the flags tools/build_zig.py uses (the viewer
+runs the simulation itself; nothing in src/ is changed). Incremental: an object is rebuilt when its
+source or a header it included last time is newer.
 """
 import argparse, concurrent.futures as cf, glob, os, subprocess, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-ENGINE_SOURCES = ["src/core/log.cpp", "src/core/hostfs.cpp", "src/core/zip.cpp", "src/core/vfs.cpp"]
 ZLIB = ["adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"]
 LIBS = ["-ld3d12", "-ldxgi", "-ld3dcompiler_47", "-luser32", "-lgdi32", "-lshell32"]
 
@@ -63,12 +63,19 @@ def main():
         cmd = zig("c++" if cxx else "cc", *target, *common, *flags, "-MMD", "-MF", obj + ".d", "-c", src, "-o", obj)
         jobs.append((src, obj, cmd))
 
+    mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]
+    std_c = ["-std=c99", "-w"]
+    add(os.path.join(ROOT, "third_party", "mimalloc", "src", "static.c"),
+        std_c + mi_inc + ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"], False)
+    for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
+        add(f, std_c + includes + mi_inc + ["-DMOHO64_MIMALLOC=1"], False)
     for n in ZLIB:
-        add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), ["-std=c99", "-w", *includes], False)
-    # the engine's files keep the engine's floating-point flags (the renderer's own need none); their
-    # warnings belong to the engine's build, not this one
-    for f in ENGINE_SOURCES:
-        add(os.path.join(ROOT, *f.split("/")), ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
+        add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + includes, False)
+    # The engine's files keep the engine's floating-point flags: the simulation must compute the same
+    # here as in the engine's own program. Their warnings belong to the engine's build, not this one.
+    for d in ("core", "script", "sim"):
+        for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
+            add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
     for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
         add(f, ["-std=c++20", "-Wall", "-Wextra", *includes], True)
 

@@ -12,6 +12,9 @@
 // --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
 // --createlog  only for recordings that do not name their units (older ones): the engine's log of the
 //           same run made with MOHO64_DEBUG_CREATE=1
+// --init <init file> --sim <replay> [--mod-uids <file>] [--simlog <file>]
+//           the simulation itself plays the replay inside the viewer (no recording needed): the game's
+//           files are mounted by running its init file, the map is the replay's; --tick runs ahead to a tick
 // --display the log written by the engine's tools/dump_display.lua: models take their mesh and texture
 //           names from the simulation's blueprints (mods' changes included) instead of from .bp files
 // --tick, --paused  where playback starts, and whether it stands still
@@ -49,6 +52,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "script/mount.h"
 #include "debug_draw.h"
 #include "frame.h"
 #include "gfx.h"
@@ -58,6 +62,7 @@
 #include "models.h"
 #include "png.h"
 #include "post.h"
+#include "live_sim.h"
 #include "recording.h"
 #include "scmap.h"
 #include "shadows.h"
@@ -91,6 +96,7 @@ struct Options {
   bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog, display;
+  std::string init, sim, modUids, simLog;  // the simulation run in the viewer (--init, --sim, --mod-uids, --simlog)
   std::vector<std::string> data, mods, maps, previews, place, crowd;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -117,6 +123,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rec") o->recording = v;
     else if (a == "--createlog") o->createLog = v;
     else if (a == "--display") o->display = v;
+    else if (a == "--init") o->init = v;
+    else if (a == "--sim") o->sim = v;
+    else if (a == "--mod-uids") o->modUids = v;
+    else if (a == "--simlog") o->simLog = v;
     else if (a == "--tick") o->tick = atof(v);
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
@@ -161,6 +171,11 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
         if (vfs->Mount(folder + "/" + name, "/")) ++n;
     if (!n) fprintf(stderr, "render: no .nx2 or .scd archives in %s\n", folder.c_str());
   };
+  // --init: what the game itself mounts (its archives, maps and mods), by running its init file
+  if (!o.init.empty()) {
+    std::vector<std::string> hooks;
+    if (!moho::MountFromInitFile(o.init, {}, *vfs, hooks)) fprintf(stderr, "render: --init %s: the init file could not be run\n", o.init.c_str());
+  }
   for (const std::string& folder : o.data) archives(folder);
   // --maps: a folder of map folders (maps being worked on); mounted before the game's own maps, so
   // a map of the same name there is the one that is found
@@ -239,6 +254,28 @@ int main(int argc, char** argv) {
   if (!draw.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
+  }
+
+  // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
+  LiveSim live;
+  const bool haveLive = !opt.sim.empty();
+  if (haveLive) {
+    if (opt.init.empty()) {
+      fprintf(stderr, "render: --sim needs --init <the game's init file>\n");
+      return 1;
+    }
+    if (!opt.simLog.empty()) moho::LogOpenFile(opt.simLog);
+    LiveSim::Setup setup;
+    setup.initFile = opt.init;
+    setup.replay = opt.sim;
+    setup.modUids = opt.modUids;
+    if (!live.Open(setup, &error)) {
+      fprintf(stderr, "render: --sim: %s\n", error.c_str());
+      return 1;
+    }
+    if (opt.map.empty()) opt.map = live.MapPath();
+    printf("render: simulation: %s on %s, loading ...\n", opt.sim.c_str(), live.MapPath().c_str());
+    live.Start();
   }
 
   MapData map;
@@ -332,6 +369,16 @@ int main(int argc, char** argv) {
     placedProps.push_back({model, world});
   }
   Frame frame;
+  // where the frames come from: a recording, or the running simulation
+  const bool havePlay = haveRecording || haveLive;
+  auto firstTick = [&]() { return haveLive ? live.FirstTick() : recording.FirstTick(); };
+  auto lastTick = [&]() { return haveLive ? live.LastTick() : recording.LastTick(); };
+  auto frameAt = [&](double tick, Frame* out) {
+    if (haveLive) live.FrameAt(tick, out);
+    else recording.FrameAt(tick, out);
+  };
+  std::vector<Vec3> armyColors(std::begin(kArmyColors), std::end(kArmyColors));  // replaced by the game's own
+  bool liveReported = false, framedLive = false, liveBusy = false;  // busy: loading, or running ahead to --tick
   double playTick = haveRecording ? (opt.tick >= 0 ? opt.tick : recording.FirstTick()) : 0;
   double playSpeed = 1;  // 1: ten ticks a second, as the game runs at normal speed
   bool paused = opt.paused;
@@ -359,7 +406,7 @@ int main(int argc, char** argv) {
   }
   // points the camera at the recording's units as they stand at the current moment (key F)
   auto lookAtUnits = [&]() {
-    recording.FrameAt(playTick, &frame);
+    frameAt(playTick, &frame);
     Vec3 lo{1e30f, 0, 1e30f}, hi{-1e30f, 0, -1e30f};
     for (const FrameUnit& u : frame.units) {
       if (u.dead) continue;
@@ -480,8 +527,8 @@ int main(int argc, char** argv) {
           if (e.key == kKeyMinus) playSpeed = std::max(playSpeed / 2, 0.125);
           if (e.key == kKeyPageDown) playTick += 100;
           if (e.key == kKeyPageUp) playTick -= 100;
-          if (e.key == kKeyHome) playTick = recording.FirstTick();
-          if (e.key == 'F' && haveRecording) lookAtUnits();
+          if (e.key == kKeyHome && haveRecording) playTick = recording.FirstTick();
+          if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
           if (e.key == 'H') shadowsOn = !shadowsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
@@ -572,15 +619,40 @@ int main(int argc, char** argv) {
     meshes.Begin();
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
     for (const PlacedUnit& u : placedUnits) meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
-    if (haveRecording) {
+    if (haveLive) {
+      const LiveSim::State state = live.GetState();
+      if (state != LiveSim::State::Loading && !liveReported) {
+        liveReported = true;
+        if (state == LiveSim::State::Failed) fprintf(stderr, "render: simulation: %s\n", live.Problem().c_str());
+        else printf("render: simulation: started after %.1f s\n", live.LoadSeconds());
+        std::vector<Vec3> own = live.ArmyColors();
+        if (!own.empty()) armyColors = std::move(own);
+      }
+      // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
+      if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);
+      // --tick: run ahead to that tick as fast as the simulation goes, showing its newest beat on the way
+      liveBusy = state == LiveSim::State::Loading;
+      if (state == LiveSim::State::Running && opt.tick > playTick) {
+        live.RunTo(static_cast<uint32_t>(opt.tick) + 2);
+        playTick = std::min(static_cast<double>(live.LastTick()), opt.tick);
+        liveBusy = playTick < opt.tick;
+      } else if (state != LiveSim::State::Loading) {
+        opt.tick = -1;  // reached, or the game ended before it
+      }
+    }
+    if (havePlay && (!haveLive || live.GetState() != LiveSim::State::Loading)) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
-      playTick = std::clamp(playTick, static_cast<double>(recording.FirstTick()), static_cast<double>(recording.LastTick()));
-      recording.FrameAt(playTick, &frame);
+      playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
+      frameAt(playTick, &frame);
+      if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
+        framedLive = true;
+        lookAtUnits();
+      }
       for (const FrameUnit& u : frame.units) {
         if (u.dead) continue;
         const Vec3 position{u.position[0], u.position[1], u.position[2]};
         const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
-        const Vec3 color = kArmyColors[u.Army() % 8];
+        const Vec3 color = armyColors[u.Army() % armyColors.size()];
         const std::string& blueprint = (*frame.blueprints)[u.blueprint];
         const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
         if (model && model->ok) {
@@ -619,7 +691,7 @@ int main(int argc, char** argv) {
     }
     post.Present(view);
 
-    ++frameCount;
+    if (!(automatic && liveBusy)) ++frameCount;  // an automatic run counts its frames from where it was asked to look
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
     const bool shoot = wantScreenshot || (lastFrame && !opt.screenshot.empty());
     device->EndFrame(shoot ? &capture : nullptr);
@@ -633,7 +705,9 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      printf("; models: %d drawn, %d triangles, %d more in shadow maps\n", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
+      printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
+      if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      printf("\n");
       break;
     }
 
@@ -645,10 +719,16 @@ int main(int argc, char** argv) {
                        device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? "" : " - vsync off");
       if (haveMap && n > 0 && n < static_cast<int>(sizeof title))
         n += snprintf(title + n, sizeof title - static_cast<size_t>(n), " - ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      if (haveRecording && n > 0 && n < static_cast<int>(sizeof title)) {
+      if (havePlay && n > 0 && n < static_cast<int>(sizeof title)) {
         const int seconds = static_cast<int>(playTick / 10);
-        snprintf(title + n, sizeof title - static_cast<size_t>(n), " - %d:%02d (tick %d) x%g%s - %d units, %d triangles", seconds / 60, seconds % 60,
-                 static_cast<int>(playTick), playSpeed, paused ? " paused" : "", meshes.drawnInstances, meshes.drawnTriangles);
+        n += snprintf(title + n, sizeof title - static_cast<size_t>(n), " - %d:%02d (tick %d) x%g%s - %d units, %d triangles", seconds / 60, seconds % 60,
+                      static_cast<int>(playTick), playSpeed, paused ? " paused" : "", meshes.drawnInstances, meshes.drawnTriangles);
+        if (haveLive && n > 0 && n < static_cast<int>(sizeof title)) {
+          const LiveSim::State state = live.GetState();
+          snprintf(title + n, sizeof title - static_cast<size_t>(n), " - simulation %s, %.1f ms a tick",
+                   state == LiveSim::State::Loading ? "loading" : state == LiveSim::State::Running ? "running" : state == LiveSim::State::Ended ? "ended" : "FAILED",
+                   live.MsPerTick());
+        }
       }
       window->SetTitle(title);
       titleTime = 0;

@@ -43,10 +43,11 @@ class Recording {
   };
   uint32_t BlueprintOf(uint32_t id, uint32_t tick) const;
   uint32_t BlueprintIndex(const std::string& name);
+  void ResolveBlueprints();
   int named_ = 0;
 
   std::vector<Tick> ticks_;
-  std::vector<FrameUnit> units_;  // all ticks, one after the other; `blueprint` is filled in by FrameAt
+  std::vector<FrameUnit> units_;  // all ticks, one after the other
   std::vector<std::string> blueprints_{""};  // index 0: unknown
   std::unordered_map<std::string, uint32_t> blueprintIndex_;
   std::unordered_map<uint32_t, std::vector<Created>> created_;  // by unit id, in tick order (ids are reused)
