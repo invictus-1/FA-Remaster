@@ -959,6 +959,13 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
       bt.SrcBlendAlpha = D3D12_BLEND_ZERO;
       bt.DestBlendAlpha = D3D12_BLEND_ONE;
       break;
+    case Blend::InverseModulate:
+      bt.BlendEnable = TRUE;
+      bt.SrcBlend = D3D12_BLEND_ZERO;
+      bt.DestBlend = D3D12_BLEND_INV_SRC_COLOR;
+      bt.SrcBlendAlpha = D3D12_BLEND_ZERO;
+      bt.DestBlendAlpha = D3D12_BLEND_ONE;
+      break;
   }
   pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
   pd.RasterizerState.CullMode = desc.cull == Cull::None ? D3D12_CULL_MODE_NONE

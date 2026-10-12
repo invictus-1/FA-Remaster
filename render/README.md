@@ -60,6 +60,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
+               [--emit <emitter>]... [--emit-scale 1]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -126,6 +127,7 @@ prints what it reports.
 | `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
 | `mesh_renderer.h` | draws models, instanced: units and props |
 | `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
+| `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
@@ -185,6 +187,17 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Projectiles: one with a model in its blueprint is drawn as that model; the others are effects
   in the game, and until effects are written a short bright line along the flight stands in.
   Between beats a projectile flies on along its velocity. Beams are plain lines for now.
+- Particle effects, first form (step 6). The game's emitters (`/effects/emitters/*_emit.bp`: fire,
+  smoke, flashes, debris, sparks) are played: an emitter reads a particle's start values from its
+  blueprint's curves, and from then on the graphics card works out where the particle is, how big
+  and how turned, and colours it by its texture times its ramp texture along its age - what the
+  game's `effects/particle.fx` does, written anew. Particles facing the camera, lying flat, or
+  stretched along their flight; alpha, adding, darkening and premultiplied blending; textures with
+  frames and strips. `--emit <name>` plays emitters over and over at a spot, to look at them.
+  NOT yet in games: the simulation does not hand over which effects the scripts start (asked for,
+  REQUESTS.md, 8). How an emitter turns its curves into particles is in the original program, not
+  in the game's files; `particles.cpp` marks what it guesses (time in ticks, a key's z as a random
+  spread, rates per tick, degrees, sizes as half an edge), and REQUESTS.md, 9 asks.
 - Strategic icons (from step 6, brought forward: without them armies cannot be seen from far away).
   A unit farther from the camera than its blueprint's `Display.Mesh.IconFadeInZoom` shows the symbol
   its blueprint names (`StrategicIconName`), coloured as the original's shader colours it and
@@ -233,8 +246,9 @@ Known gaps, to be closed in the steps they belong to:
   edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No decals, no sky, no ground beyond the map's edge, no effects (explosions, smoke, the visible
-  part of beams and of projectiles that have no model).
+- No decals, no sky, no ground beyond the map's edge. Effects play only on request (`--emit`), not
+  yet in games; no beam or trail effects; particles are not sorted by distance, do not refract
+  (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
 - Ambient occlusion (modern look, `--ao 0..1`, key O) is computed from the picture's depth and

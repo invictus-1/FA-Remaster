@@ -121,7 +121,9 @@ struct VertexAttr {
 
 enum class Topology : uint8_t { Triangles, Lines };
 enum class Cull : uint8_t { None, Back, Front };
-enum class Blend : uint8_t { Opaque, Alpha, Premultiplied, Additive, Multiply };  // Multiply: what is there x what is drawn
+// Additive: what is there + what is drawn x its alpha. Multiply: what is there x what is drawn.
+// InverseModulate: what is there x (1 - what is drawn), a darkening (smoke that dims what is behind it).
+enum class Blend : uint8_t { Opaque, Alpha, Premultiplied, Additive, Multiply, InverseModulate };
 
 struct PipelineDesc {
   const char* name = "";         // for error messages
