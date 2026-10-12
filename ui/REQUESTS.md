@@ -124,6 +124,36 @@ as in the original; `BuildSiteOf` gives the snapped site and whether it is free,
 asks it for the build preview and before it sends a build order. Fire state 2 is FAF's own start
 value for commanders and structures. Thank you.
 
+### 7. The world's sounds, and three small facts about a unit
+Sound is built on the interface's side (`ui/sound/`, `ui/README.md`): the game's sound banks are
+read, cues play, the menu, the music, voices and the unit-select sounds are heard. Silent so far:
+everything the simulation's scripts play in the world (weapons firing, units moving, explosions,
+building), because nothing tells the interface about it.
+
+1. **The sounds of a beat.** What the simulation's scripts asked for since the last list was
+   taken, in the order of the calls, in the manner of `collectEffects`: off unless switched on.
+   Per entry, the smallest form:
+   - a one-shot: `Entity:PlaySound(params)`, `UnitWeapon:PlaySound(params)` and whatever else
+     plays a sound once: the sound's bank and cue (as `GetCueBank` gives them), the entity id it
+     was played on (or none), and where that entity is at the call;
+   - a loop: `Entity:SetAmbientSound(sound, rumble)`: the entity id and the bank and cue of each
+     of the two, empty for "off" (the script stops a loop by passing nil); and the loop ending
+     with its entity when the entity is destroyed.
+   What the original sends its user side for these, and what it leaves out (sounds of units the
+   focus army does not see?), is yours to read; say what you found, the interface will follow it.
+   The interface plays them by distance from the camera's focus and by the sound's category.
+2. **Three facts for the panels and the mouse**, where `UnitStateOf` (or `UnitView`) has room:
+   - kills: the unit's `KILLS` statistic (the original's `GetRolloverInfo` reads that stat by
+     name, FA exe 0x8422aa); the unit panel shows 0 today;
+   - the silo's numbers beside the stored count: the missiles being built and the room
+     (`tacticalSiloBuildCount` / `MaxStorageCount`, the same for nukes), 0 today;
+   - whether the unit may be captured and reclaimed as it stands now (what the scripts'
+     `SetCapturable` / `SetReclaimable` leave): the right click's choice between capture and
+     reclaim asks it (FA exe 0x81ec00 reads a byte of the unit's variable data, +0x69).
+   No hurry with these.
+
+**Status:** asked 2026-10-12.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
