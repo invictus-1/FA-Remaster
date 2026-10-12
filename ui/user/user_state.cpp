@@ -36,6 +36,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterKeyMapBindings(L);
   RegisterWorldViewBindings(L);
   RegisterSessionBindings(L);
+  RegisterSoundBindings(L);
   RegisterUserUnitBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);

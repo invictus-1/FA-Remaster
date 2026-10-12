@@ -28,6 +28,9 @@ namespace moho::ui {
 class WorldSource;
 struct WorldLine;
 class UiManager;
+namespace sound {
+class SoundSystem;
+}
 
 class UserState {
  public:
@@ -50,6 +53,8 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // What plays the sounds the scripts ask for (the host's, one for all states); nullptr: nothing does.
+    sound::SoundSystem* sound = nullptr;
   };
 
   UserState(Vfs* vfs, Config config);
@@ -118,6 +123,8 @@ void RegisterSessionBindings(lua_State* L);
 // to date with the simulation; InstallUnitCategoryFunctions goes after the rules are in the state.
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
+// PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
+void RegisterSoundBindings(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);
 // Orders (user_units.cpp): an order with a place as its target for the selected units of the
 // player's army ("Move", "Attack", "Patrol", "AggressiveMove", or "BuildMobile" with the

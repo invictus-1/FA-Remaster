@@ -57,6 +57,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
+         [--no-sound]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
@@ -93,6 +94,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   destruction, the `moho.control_methods`), `ui_manager.cpp` (root frames, frame updates, cursor,
   input capture, the dump), `lazyvar.*` (the engine's handle to a script LazyVar), `bitmap.cpp`,
   `text.cpp`, `texture_info.*` (a texture's size from its file header), `font.h` (text measures).
+- `sound/`: the game's sounds. `xact.*` reads the game's sound files (wave banks `.xwb`, sound
+  banks `.xsb` with their cues, the categories of `SupCom.xgs`), `mixer.*` adds the playing
+  sounds up, `device_win.cpp` hands the result to Windows' sound output, `sound_system.*` plays a
+  cue of a bank and keeps the categories' volumes.
 - `app/main.cpp`: the host `moho64ui`.
 - `tests/`: Lua tests run in the user state.
 - `tools/`: generators and scanners.
@@ -244,11 +249,25 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   where the building cannot stand. A minimap world view shows the renderer's minimap picture; a
   left click on it moves the main camera there. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
-- Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
+- Sound: the scripts' `PlaySound(Sound({Bank, Cue}))` plays the cue from the game's own sound
+  files in `/sounds` (read by the files' own layout: every sound entry of every bank of the game
+  is consumed to its last byte; all 1,737 waves are plain 16-bit sound). A cue picks one of its
+  sounds, a sound one of its waves, with the files' volumes, pitch ranges, loops and categories;
+  the music is read from its file as it plays, and a new piece takes the place of the playing
+  one, as its category says. `StartSound`, `StopSound`, `StopAllSounds`, `SoundIsPrepared`,
+  `SetVolume` / `GetVolume` by category (a category stands inside another: Global holds all),
+  `PauseSound`, `PlayVoice` (the voices' banks by language, `AudioSetLanguage`) are built. A live
+  window plays through Windows' sound output in pieces of a hundredth of a second; `--no-sound`
+  leaves the device closed, and runs without a window mix only when a test asks
+  (`ui/tests/sound.lua`). Not built: the world's sounds (units, weapons: they need the
+  simulation's sound events and a place in the world), ducking the other sounds under a voice,
+  the volume curves and effects of the sound files, fading as the files set it. How the
+  original's own sound manager limits and fades is not read from its code.
+- Not real yet: the other console commands, the game's cursor, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 387 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 144 are logged stubs. (`--list-bindings` counts
+- 401 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 130 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track
