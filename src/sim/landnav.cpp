@@ -143,6 +143,9 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     float hx = static_cast<float>(Fp(u).sizeX) * 0.5f, hz = static_cast<float>(Fp(u).sizeZ) * 0.5f;
     if (ShapeOverlapsAABox(s, Vec3{cx - hx, -1000.0f, cz - hz}, Vec3{cx + hx, 1000.0f, cz + hz})) blocked = true;
   });
+  static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
+  if (blocked && dbgClear == static_cast<long>(u->id))
+    Logf(LogLevel::Info, "clear %u unit %u cell (%d,%d) flags %d: blocked", sim.tick(), u->id, x, z, flags);
   return blocked;
 }
 
@@ -173,6 +176,10 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
                            !BlocksFor(u, e, flags))
                          return;
                        blocked = true;
+                       static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
+                       if (dbgClear == static_cast<long>(u->id))
+                         Logf(LogLevel::Info, "clear %u unit %u line (%.4f,%.4f)-(%.4f,%.4f) half width %.4f: unit %u at %.4f %.4f in the way",
+                              sim.tick(), u->id, ax, az, bx, bz, hw, e->id, e->position.x, e->position.z);
                      });
   return blocked;
 }
@@ -444,7 +451,10 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
   for (int i = hi; i >= lo; --i) {
     if (!(Dist(n.path[i], n.cur) < LookAhead() || i == lo)) continue;
     bool ok1 = Reach(sim, u, n.cur, n.path[i]);
-    bool ok2 = Manhattan(n.path[i], n.cur) <= 1 ? UnitClear(sim, u, n, n.path[i]) : UnitClearTo(sim, u, n, n.path[i]);
+    // (0x5af946: for a neighbouring cell UnitClear 0x5af670 gets the cell twice, which is the test of the cell
+    // itself, not of the way from the current cell to it; further cells get the line from the unit's position)
+    bool ok2 = Manhattan(n.path[i], n.cur) <= 1 ? !UnitInWay(sim, u, n.path[i], n.path[i], n.attackVariant ? 2 : 1)
+                                                : UnitClearTo(sim, u, n, n.path[i]);
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u advance? i %d (%d,%d) from (%d,%d) reach %d clear %d fits %d lo %d hi %d",
            sim.tick(), u->id, i, n.path[i].x, n.path[i].z, n.cur.x, n.cur.z, ok1 ? 1 : 0, ok2 ? 1 : 0, n.fits ? 1 : 0, lo, hi);
