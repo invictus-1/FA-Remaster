@@ -496,6 +496,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "ArmyGetHandicap", l_ArmyGetHandicap);
   SetGlobal(L, "ArmyIsOutOfGame", l_ArmyIsOutOfGame);
   SetGlobal(L, "SetArmyOutOfGame", l_SetArmyOutOfGame);
+  SetGlobal(L, "GetCueBank", l_GetCueBank);
   SetGlobal(L, "GetGameTick", l_GetGameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSystemTimeSecondsOnlyForProfileUse", l_GetSystemTimeSecondsOnlyForProfileUse);

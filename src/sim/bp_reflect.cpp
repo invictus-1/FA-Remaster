@@ -202,6 +202,25 @@ void PushSound(lua_State* L, int t) {
   lua_setmetatable(L, -2);
 }
 
+// GetCueBank(sound) -> cue, bank: the two names a sound object was made from (aibrain.lua's PlayVOSound sends
+// them to the user side). The original's function was not read: the order of the results is the script's.
+int l_GetCueBank(lua_State* L) {
+  std::string cue, bank;
+  if (lua_type(L, 1) == LUA_TUSERDATA) {
+    const int32_t id = *static_cast<const int32_t*>(lua_touserdata(L, 1));
+    if (id >= 0 && static_cast<size_t>(id) < Sounds().size()) {
+      cue = Sounds()[static_cast<size_t>(id)].cue;
+      bank = Sounds()[static_cast<size_t>(id)].bank;
+    }
+  } else if (lua_istable(L, 1)) {
+    cue = Field(L, 1, "Cue");
+    bank = Field(L, 1, "Bank");
+  }
+  lua_pushstring(L, cue.c_str());
+  lua_pushstring(L, bank.c_str());
+  return 2;
+}
+
 namespace {
 
 // Replace every table value of t[key] (a sound table set) by sound handles.

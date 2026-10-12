@@ -135,6 +135,7 @@ class Unit : public Entity {
   uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
   uint32_t scriptBits = 0;         // u+0x498: the toggle buttons' state (sim/script_bits.cpp)
   int64_t toggleCaps = -1;         // u+0x48c: live toggle caps (-1 = not yet read from the blueprint)
+  int64_t commandCaps = -1;        // u+0x488: live command caps (-1 = still the blueprint's General.CommandCaps)
   bool attachFull = false;         // carried by a transport: full attach transform, parent's layer
   std::shared_ptr<struct TransportObj> transport;  // transports (sim/transport.cpp)
   uint32_t transportedBy = 0;      // the transport carrying it (entity ref)

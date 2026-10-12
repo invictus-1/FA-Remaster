@@ -82,6 +82,7 @@ void CarryOverEngineFields(lua_State* L, int to, int from, BpKind kind);
 
 // A sound object from the sound parameter table at t ({ Bank, Cue, LodCutoff }).
 void PushSound(lua_State* L, int t);
+int l_GetCueBank(lua_State* L);  // GetCueBank(sound) -> cue, bank
 
 // Entity category value: push a new category set (all bits clear) and get its words.
 uint64_t* PushCategory(lua_State* L);

@@ -69,6 +69,8 @@ BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
 Unit* FindPlatform(Sim& sim, Unit* plane);
 // Command caps of a unit's blueprint (RULEUCC_* bits).
 uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp);
+// The unit's caps as they are now (scripts change them: Unit:AddCommandCap / RemoveCommandCap).
+uint32_t LiveCommandCaps(lua_State* L, const Unit* u);
 
 // Command dispatch (sim/build.cpp StartBuildTask/TickBuildTask/EndBuildTask call these).
 BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c);

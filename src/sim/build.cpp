@@ -2552,7 +2552,7 @@ int l_IssueFactoryRallyPoint(lua_State* L) {
   Sim& sim = *S(L);
   std::vector<Unit*> units;
   for (Unit* u : UnitList(L, 1))
-    if (UnitCommandCaps(L, *u->blueprint) & 0x1u) units.push_back(u);  // RULEUCC_Move
+    if (LiveCommandCaps(L, u) & 0x1u) units.push_back(u);  // RULEUCC_Move
   Vec3 p;
   uint32_t target = 0;
   if (Entity* e = ToObject<Entity>(L, 2)) {

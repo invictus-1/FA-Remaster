@@ -876,7 +876,7 @@ int l_IssueFactoryAssist(lua_State* L) {
   TargetPointDraw(sim, e);  // UpdateTarget 0x5d55b0 on the target arg
   std::shared_ptr<UnitCommand> c;
   for (Unit* u : UnitsArg(L, 1)) {
-    if (!(UnitCommandCaps(L, *u->blueprint) & 0x8u) || !u->isFactoryBuilder || u->dead) continue;  // RULEUCC_Guard
+    if (!(LiveCommandCaps(L, u) & 0x8u) || !u->isFactoryBuilder || u->dead) continue;  // RULEUCC_Guard
     if (!c) {
       c = std::make_shared<UnitCommand>();
       c->id = sim.nextCommandId++;
@@ -975,6 +975,15 @@ int l_IsCommandDone(lua_State* L) {
 // ---- Unit ----------------------------------------------------------------------------------
 
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
+
+// Unit:IsMoving 0x6cc200: the unit's position differs from the one it had a beat before (12-byte compare of
+// u+0xb4 and u+0xd0); nothing about orders or the navigator.
+int l_IsMoving(lua_State* L) {
+  Unit* u = U(L);
+  lua_pushboolean(L, u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
+                         u->position.z != u->lastPosition.z);
+  return 1;
+}
 
 int l_GetCommandQueue(lua_State* L) {
   // a destroyed unit: the original's own message (probe v9)
@@ -1320,6 +1329,7 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "GetUnitsInRect", l_GetUnitsInRect);
 
   SetMethod(L, "Unit", "GetCommandQueue", l_GetCommandQueue);
+  SetMethod(L, "Unit", "IsMoving", l_IsMoving);
   SetMethod(L, "Unit", "IsIdleState", l_IsIdleState);
   SetMethod(L, "Unit", "GetVelocity", l_GetVelocity);
   SetMethod(L, "Unit", "GetCurrentMoveLocation", l_GetCurrentMoveLocation);

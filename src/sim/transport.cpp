@@ -689,10 +689,55 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
   return v;
 }
 
+// The unit's command caps as they are now (attributes+0x60 = u+0x488): the blueprint's until a script changes
+// them with AddCommandCap / RemoveCommandCap.
+uint32_t LiveCommandCaps(lua_State* L, const Unit* u) {
+  if (u->commandCaps >= 0) return static_cast<uint32_t>(u->commandCaps);
+  return u->blueprint ? UnitCommandCaps(L, *u->blueprint) : 0;
+}
+
+namespace {
+// one RULEUCC_ name -> its bit (0: not a command cap)
+uint32_t CommandCapBit(const char* s) {
+  static const char* const names[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard",
+                                      "RULEUCC_Patrol", "RULEUCC_RetaliateToggle", "RULEUCC_Repair",
+                                      "RULEUCC_Capture", "RULEUCC_Transport", "RULEUCC_CallTransport",
+                                      "RULEUCC_Nuke", "RULEUCC_Tactical", "RULEUCC_Teleport", "RULEUCC_Ferry",
+                                      "RULEUCC_SiloBuildTactical", "RULEUCC_SiloBuildNuke", "RULEUCC_Sacrifice",
+                                      "RULEUCC_Pause", "RULEUCC_Overcharge", "RULEUCC_Dive", "RULEUCC_Reclaim",
+                                      "RULEUCC_SpecialAction", "RULEUCC_Dock", "RULEUCC_Script"};
+  for (int i = 0; i < static_cast<int>(sizeof(names) / sizeof(names[0])); ++i)
+    if (s && !strcmp(s, names[i])) return 1u << i;
+  return 0;
+}
+// Unit:AddCommandCap(cap) 0x6c85e0: caps |= bit, sync flag (u+0xa2). RemoveCommandCap is its mirror.
+int l_AddCommandCap(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  u->commandCaps = LiveCommandCaps(L, u) | CommandCapBit(luaL_checkstring(L, 2));
+  return 0;
+}
+int l_RemoveCommandCap(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  u->commandCaps = LiveCommandCaps(L, u) & ~CommandCapBit(luaL_checkstring(L, 2));
+  return 0;
+}
+// (not read: taken from their names and FAF's use) RestoreCommandCaps: back to the blueprint's;
+// TestCommandCaps(cap): whether the unit has it now
+int l_RestoreCommandCaps(lua_State* L) {
+  CheckObject<Unit>(L, 1)->commandCaps = -1;
+  return 0;
+}
+int l_TestCommandCaps(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  lua_pushboolean(L, (LiveCommandCaps(L, u) & CommandCapBit(luaL_checkstring(L, 2))) != 0);
+  return 1;
+}
+}  // namespace
+
 void TransportCreate(Sim& sim, Unit* u) {
   lua_State* L = sim.L();
   if (!u->blueprint) return;
-  if (!(UnitCommandCaps(L, *u->blueprint) & kCapTransport) && !InCat(sim, u, "PODSTAGINGPLATFORM")) return;
+  if (!(LiveCommandCaps(L, u) & kCapTransport) && !InCat(sim, u, "PODSTAGINGPLATFORM")) return;
   auto T = std::make_shared<TransportObj>();
   T->owner = u;
   T->isAirStaging = InCat(sim, u, "AIRSTAGINGPLATFORM") || InCat(sim, u, "PODSTAGINGPLATFORM");
@@ -2234,7 +2279,7 @@ void Append(Unit* u, const std::shared_ptr<UnitCommand>& c) {
 bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
   if (u->dead || u->transportedBy || InCat(sim, u, "PODS")) return false;
   if (T) {
-    if ((T != u && !(UnitCommandCaps(L, *u->blueprint) & kCapCallTransport)) || T->layer == "Seabed") return false;
+    if ((T != u && !(LiveCommandCaps(L, u) & kCapCallTransport)) || T->layer == "Seabed") return false;
     bool special = InCat(sim, T, "FERRYBEACON") ||
                    (InCat(sim, T, "FACTORY") && !InCat(sim, T, "AIRSTAGINGPLATFORM") && !InCat(sim, T, "TELEPORTATION"));
     if (special) {  // a ferry beacon or a factory: any mobile non-transport unit may wait there
@@ -2289,7 +2334,7 @@ int IssueUnload(lua_State* L, bool specific) {
   Sim& sim = *S(L);
   std::vector<Unit*> set;
   for (Unit* u : UnitList(L, 1))
-    if (UnitCommandCaps(L, *u->blueprint) & kCapTransport) set.push_back(u);
+    if (LiveCommandCaps(L, u) & kCapTransport) set.push_back(u);
   if (set.empty()) {
     lua_pushnil(L);
     return 1;
@@ -2355,7 +2400,7 @@ int l_IssueFerry(lua_State* L) {
     return luaL_error(L, "IssueFerry: Passed in an invalid target point.");
   std::vector<Unit*> set;
   for (Unit* u : UnitList(L, 1))
-    if (UnitCommandCaps(L, *u->blueprint) & 0x2000) set.push_back(u);
+    if (LiveCommandCaps(L, u) & 0x2000) set.push_back(u);
   if (set.empty()) return 0;
   auto c = NewCommand(sim, CommandType::Ferry);
   c->targetId = tid;
@@ -2375,6 +2420,10 @@ int l_IssueTransportUnloadSpecific(lua_State* L) { return IssueUnload(L, true); 
 
 void RegisterTransportBindings(lua_State* L) {
   g_L = L;
+  SetMethod(L, "Unit", "AddCommandCap", l_AddCommandCap);
+  SetMethod(L, "Unit", "RemoveCommandCap", l_RemoveCommandCap);
+  SetMethod(L, "Unit", "RestoreCommandCaps", l_RestoreCommandCaps);
+  SetMethod(L, "Unit", "TestCommandCaps", l_TestCommandCaps);
   SetMethod(L, "Unit", "GetCargo", l_GetCargo);
   SetMethod(L, "Unit", "AddUnitToStorage", l_AddUnitToStorage);
   SetMethod(L, "Unit", "TransportHasSpaceFor", l_TransportHasSpaceFor);
@@ -2451,7 +2500,7 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
   lua_State* L = sim.L();
   if (!GetAirBp(L, *plane->blueprint).canFly) return nullptr;
   if (plane->fuelRatio < 0) return nullptr;
-  if (!(UnitCommandCaps(L, *plane->blueprint) & 0x400000u)) return nullptr;  // RULEUCC_Dock
+  if (!(LiveCommandCaps(L, plane) & 0x400000u)) return nullptr;  // RULEUCC_Dock
   bool need = 0.2f > plane->fuelRatio || 0.75f > plane->health / plane->maxHealth;
   if (!need) return nullptr;
   std::vector<Unit*> ps;
