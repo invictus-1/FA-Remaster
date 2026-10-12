@@ -697,6 +697,7 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 
 bool Sim::Start(const ReplayHeader& replay) {
   rng_.seed(replay.seed);
+  sessionSeed_ = replay.seed;
   hasGauss_ = false;
   rngTrace_ = getenv("MOHO64_DEBUG_RNG") != nullptr;
   RecorderOpen();

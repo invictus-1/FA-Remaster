@@ -282,6 +282,8 @@ float NumField(lua_State* L, int idx, const char* key, float def) {
 }
 }  // namespace
 
+uint32_t SessionSeed(const Sim& sim) { return sim.sessionSeed(); }
+
 void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
   out->clear();
   lua_State* L = sim.L();

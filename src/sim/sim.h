@@ -127,6 +127,7 @@ class Sim {
   lua_State* L() const;
   Vfs* vfs() const { return vfs_; }
   uint32_t tick() const { return tick_; }
+  uint32_t sessionSeed() const { return sessionSeed_; }
   Army* GetArmy(lua_State* L, int idx);  // army by 1-based index or name
   const std::vector<std::unique_ptr<Army>>& armies() const { return armies_; }
   const SimBlueprints& blueprints() const { return bps_; }
@@ -319,6 +320,7 @@ class Sim {
   SimBlueprints bps_;
   std::vector<std::unique_ptr<Army>> armies_;
   std::mt19937 rng_;
+  uint32_t sessionSeed_ = 0;  // what rng_ was seeded with (the replay header's / the lobby's seed)
   float gauss_ = 0;
   bool hasGauss_ = false;
   uint32_t tick_ = 0;

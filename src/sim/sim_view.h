@@ -154,6 +154,10 @@ void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
 // The ids of the unit blueprints an army may not build (AddBuildRestriction), in blueprint order. army: 1-based.
 std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army);
+// The seed the simulation's random stream was started with: the same for every player of a game and in its
+// replay (the replay header holds it), different from game to game. For things that are only seen and must look
+// the same to everyone (weather). Valid after Start(). Reading it draws nothing from the stream.
+uint32_t SessionSeed(const Sim& sim);
 // The display part of the blueprints as the simulation has them, i.e. after the game's blueprint scripts and the
 // mods changed them (what tools/dump_display.lua writes to a log, as a call). Read it once after Start().
 struct DisplayLod {

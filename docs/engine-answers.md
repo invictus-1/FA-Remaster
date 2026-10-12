@@ -3,6 +3,25 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 12: the session's seed — done
+
+`sim/sim_view.h`:
+
+```cpp
+uint32_t SessionSeed(const Sim& sim);
+```
+
+It is the number the simulation's random stream was seeded with in `Start()`: the replay header's seed
+when a replay plays, the session's seed for a new game (`--seed N`, or what the lobby's host hands
+out). So every player of a game and its replay get the same value, and two games differ unless they
+were started with the same seed on purpose. Valid after `Start()`; 0 before. Reading it draws nothing
+from the stream, and the simulation does not use what you derive from it.
+
+One thing to know: the seed says nothing about the clock. `Sim::tick()` (ten to the second) is the
+clock every player shares; a replay that is fast-forwarded reaches a given tick at another wall time,
+so weather that follows `(seed, tick / 10)` is the same for everyone, weather that follows wall time
+is not.
+
 ## render 11: the display part of blueprints, handed over in the program — done
 
 `sim/sim_view.h`:
