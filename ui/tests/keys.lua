@@ -183,6 +183,40 @@ check("a press on another control: the edit field gives the focus up and hears b
 -- the caret's alpha cycles while frames pass (looked at through the frame update only: no error)
 check("frame updates are on for an edit field", edit:NeedsFrameUpdate(), true)
 
+-- key maps: bindings from key names to console commands
+check("the game's default bindings are loaded at start", moho64ui_KeyMapAction("Esc") ~= nil or moho64ui_KeyMapAction("F1") ~= nil
+    or moho64ui_KeyMapAction("Enter") ~= nil, true)
+IN_ClearKeyMap()
+check("IN_ClearKeyMap unbinds every key", tostring(moho64ui_KeyMapAction("F1")) .. tostring(moho64ui_KeyMapAction("Enter")), "nilnil")
+rawset(_G, "keyRan", {})
+IN_AddKeyMapTable({
+    ["F5"] = {action = "UI_Lua table.insert(keyRan, 'f5' .. tostring(IsKeyDown('F5')))"},
+    ["Ctrl-Shift-K"] = {action = "ui_lua table.insert(keyRan, 'csk')", keyRepeat = true},
+    ["NoSuchKey"] = {action = "UI_Lua table.insert(keyRan, 'never')"},
+})
+check("a binding is found by its key name with modifiers in any order", moho64ui_KeyMapAction("Shift-Ctrl-K"), "ui_lua table.insert(keyRan, 'csk')")
+moho64ui_Key(346)  -- F5
+check("a bound key runs its action as a console command; the key counts as down meanwhile", table.concat(keyRan, " "), "f5true")
+check("and as up afterwards", IsKeyDown("F5"), false)
+moho64ui_Key("k", "Ctrl Shift")
+moho64ui_Key("k")
+moho64ui_Key("k", "Ctrl")
+check("modifiers are part of the binding", table.concat(keyRan, " "), "f5true csk")
+child:AcquireKeyboardFocus(true)
+moho64ui_Key(346)
+check("no binding runs while a control has the keyboard focus", table.getn(keyRan), 2)
+child:AbandonKeyboardFocus()
+IN_RemoveKeyMapTable({["F5"] = {action = ""}})
+moho64ui_Key(346)
+moho64ui_Key("k", "Shift Ctrl")
+check("IN_RemoveKeyMapTable unbinds the table's keys", table.concat(keyRan, " "), "f5true csk csk")
+ConExecute("UI_Lua table.insert(keyRan, 'console')")
+check("ConExecute runs a console command", keyRan[4], "console")
+check("an unknown console command is no error", pcall(ConExecute, "no_such_command 1 2"), true)
+check("key codes: Windows to the engine's", KeycodeMSWToMaui(35) .. " " .. KeycodeMSWToMaui(46) .. " " .. KeycodeMSWToMaui(112) .. " " .. KeycodeMSWToMaui(65), "314 127 342 0")
+check("key codes: the engine's to Windows", KeycodeMauiToMSW(314) .. " " .. KeycodeMauiToMSW(127) .. " " .. KeycodeMauiToMSW(342) .. " " .. KeycodeMauiToMSW(65), "35 46 112 65")
+rawset(_G, "keyRan", nil)
+
 parent:Destroy()
 edit:Destroy()
 LOG("TEST done: " .. failed .. " failed")

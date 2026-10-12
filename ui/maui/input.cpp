@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "maui/control.h"
 #include "script/script_state.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -128,6 +129,9 @@ bool SendEvent(lua_State* L, Control* c, const UiEvent& e) { return c->HandleEve
 
 bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e) {
   e.x = e.y = -1;
+  // The key map comes first and never keeps the key from the controls (FA exe 0x838d10).
+  if (e.type == EventType::KeyDown) KeyMapKeyDown(L, e.rawKeyCode, e.shift, e.ctrl, e.alt, e.repeat);
+  else if (e.type == EventType::KeyUp) KeyMapKeyUp(L, e.rawKeyCode);
   if (ui.focus && !ui.focus->dead()) return ui.focus->HandleEvent(L, e);
   if (ui.inputCapture.empty()) return false;
   Control* c = ui.inputCapture.back();
@@ -138,14 +142,15 @@ bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e) {
 void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt) {
   UiEvent e;
   e.shift = shift, e.ctrl = ctrl, e.alt = alt;
-  e.keyCode = e.rawKeyCode = charCode >= 'a' && charCode <= 'z' ? charCode - 32 : charCode;
+  e.keyCode = charCode >= 'a' && charCode <= 'z' ? charCode - 32 : charCode;
+  e.rawKeyCode = KeycodeMauiToMSW(e.keyCode);
   e.type = EventType::KeyDown;
   if (!KeyEvent(L, ui, e)) {
     e.keyCode = ctrl && e.keyCode >= 'A' && e.keyCode <= 'Z' ? e.keyCode - 64 : charCode;
     e.type = EventType::Char;
     KeyEvent(L, ui, e);
   }
-  e.keyCode = e.rawKeyCode;
+  e.keyCode = charCode >= 'a' && charCode <= 'z' ? charCode - 32 : charCode;
   e.type = EventType::KeyUp;
   KeyEvent(L, ui, e);
 }

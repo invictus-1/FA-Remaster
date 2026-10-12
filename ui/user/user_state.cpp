@@ -1,5 +1,7 @@
 #include "user/user_state.h"
 
+#include "user/keymap.h"
+
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/control.h"
@@ -31,6 +33,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterSimpleControlBindings(L);
   RegisterInputBindings(L);
   RegisterLobbyBindings(L);
+  RegisterKeyMapBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
@@ -87,7 +90,11 @@ bool UserState::StartMainScript() {
     Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", 0);
     return false;
   }
-  return CallUiMain("SetupUI");
+  if (!CallUiMain("SetupUI")) return false;
+  // The key handler's start (FA exe 0x839690): key names and the default bindings. Inferred:
+  // that this comes after SetupUI.
+  LoadKeyMappings(L);
+  return true;
 }
 
 bool UserState::StartFrontEnd() {
