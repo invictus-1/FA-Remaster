@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1750 --log out.log
+--            --frames 1850 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -272,6 +272,32 @@ local function run()
     sel = GetSelectedUnits()
     check("a double click selects its kind on screen (here: the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
     SelectUnits(nil)
+    -- turning the camera: Space held and the mouse (a full turn for a view's width, the lean with
+    -- the mouse's height); it swings back when Space is let go
+    local turn0 = cam:SaveSettings()
+    moho64ui_Key(32, "", "down")
+    moho64ui_MouseMove(900, 500)
+    moho64ui_MouseMove(1100, 440)
+    local turn1 = cam:SaveSettings()
+    check("Space and the mouse turn the camera", math.abs((turn0.Heading - turn1.Heading) - 200 * 2 * math.pi / view.Width()) < 0.001, true)
+    check("and lean it", turn1.Pitch < turn0.Pitch - 0.1, true)
+    moho64ui_Key(32, "", "up")
+    WaitSeconds(0.5)
+    local turn2 = cam:SaveSettings()
+    check("it swings back when Space is let go", math.abs(turn2.Heading - turn0.Heading) < 0.001 and math.abs(turn2.Pitch - turn0.Pitch) < 0.001, true)
+    moho64ui_Key(324, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(324, "", "up")
+    local turn3 = cam:SaveSettings().Heading
+    WaitSeconds(0.3)
+    check("Insert turns it, and it stays turned", turn3 < turn0.Heading - 0.2 and cam:SaveSettings().Heading == turn3, true)
+    cam:Reset()
+    check("Reset brings north up again", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+    moho64ui_Key(32, "", "down")
+    moho64ui_MouseMove(900, 500)
+    moho64ui_MouseMove(1100, 440)
+    moho64ui_Key(32, "", "up")
+    check("from far out Space and the mouse do not turn it", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
     LOG("TEST done: " .. failed .. " failed")
 end
 

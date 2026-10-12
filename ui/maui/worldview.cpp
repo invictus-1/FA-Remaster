@@ -42,6 +42,10 @@ const float kDegrees = 0.0174533f, kPi = 3.14159265f;
 // the frame rate; here it is by time, at what the original does at 60 frames a second.
 const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
 const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
+// Turning with the keys (the same frame function): Insert and Delete, 10 a frame, twice that with
+// Ctrl; with Space and the mouse only below a zoom of 125 (0xf57aa0).
+const int kKeySpace = 32, kKeyInsert = 324, kKeyDelete = 127;
+const float kKeyTurn = 10.0f, kKeyTurnFast = 2.0f, kSpinBelowZoom = 125.0f;
 
 // A camera looks at a place on the map (`focus`). Its `zoom` is how much of the world it shows
 // across the longer side of its view, in map units (so the nearest zoom, 5, shows a strip five
@@ -58,6 +62,11 @@ class Camera : public ScriptObject {
   float aspect = 16.0f / 9.0f;    // width / height of the view that shows it
   float anchorX = 0, anchorY = 0; // the place on screen a zoom goes towards (the wheel's)
   bool anchored = false;
+  // Turned by hand (Space and the mouse, Insert and Delete): the lean is then `turnedPitch` and no
+  // longer follows the zoom; `swingBack`: it is on its way back to north up (the original's bytes
+  // +0x33d and +0x33e).
+  bool turned = false, swingBack = false;
+  float turnedPitch = 0;
   bool placed = false;  // false until the map's size or a script put it somewhere
 };
 
@@ -74,7 +83,8 @@ float ZoomBlend(const Camera* c) {
   return (std::log(ClampZoom(c, c->zoom)) - lnNear) / (lnFar - lnNear);
 }
 // The lean: 40 degrees above the ground when nearest, straight down when farthest (0x7a995c).
-float PitchOf(const Camera* c) { return (kNearPitch + ZoomBlend(c) * (kFarPitch - kNearPitch)) * kDegrees; }
+float ZoomPitchOf(const Camera* c) { return (kNearPitch + ZoomBlend(c) * (kFarPitch - kNearPitch)) * kDegrees; }
+float PitchOf(const Camera* c) { return c->turned ? c->turnedPitch : ZoomPitchOf(c); }
 // The upright field of view. The original's angle (65 degrees nearest, 60 farthest) is across the
 // longer side of the view (its projection, FA exe 0x4efdd0, shrinks the other side by the aspect).
 // The eye's distance from the focus (FA exe 0x7aa33f: zoom / (2 tan(fov / 2)), kept at +0x35c).
@@ -128,7 +138,26 @@ void Place(lua_State* L, Camera* c) {
   c->focus[0] = (w - 1) * 0.5f;
   c->focus[2] = (h - 1) * 0.5f;
   c->heading = kPi;
+  c->turned = c->swingBack = false;
   c->zoom = c->targetZoom = MaxZoom(c);
+}
+
+// Turning by hand (FA exe 0x7a6ce0): the heading by dx, the lean by dy, both at cam_SpinSpeed (360
+// degrees) for a view's width of them; the lean stays between cam_MinSpinPitch (0.1) and almost
+// straight down. Letting go (0x7a6e40) starts the way back.
+const float kSpinSpeed = 360.0f, kMinSpinPitch = 0.1f, kMaxSpinPitch = 1.5608f;
+void SpinCamera(Camera* c, float dx, float dy, float viewWidth) {
+  if (viewWidth <= 0) return;
+  float k = kSpinSpeed / viewWidth * kDegrees;
+  if (!c->turned) c->turnedPitch = ZoomPitchOf(c);
+  c->heading -= dx * k;
+  while (c->heading < -kPi) c->heading += 2 * kPi;
+  while (c->heading > kPi) c->heading -= 2 * kPi;
+  c->turnedPitch = std::max(kMinSpinPitch, std::min(c->turnedPitch + dy * k, kMaxSpinPitch));
+  c->turned = true, c->swingBack = false;
+}
+void RevertCamera(Camera* c) {
+  if (c->turned) c->swingBack = true;
 }
 
 // The camera of a name; made on first use, with a script table whose methods are moho.CameraImpl's.
@@ -374,7 +403,7 @@ class WorldView : public Control {
     Sim* sim = user->config().sim;
     if (sim && sim->map()) cam.target[1] = sim->map()->TerrainHeight(cam.target[0], cam.target[2]);
     bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
-                cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
+                cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
     // What the picture shows beside the world: marks under the selected units, the lines of their
@@ -487,7 +516,7 @@ class WorldView : public Control {
   bool PictureIsCurrent(lua_State* L) {
     if (!pixels_) return false;
     WorldCamera cam = CameraFor(L);
-    return cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
+    return cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
            cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
   }
   // `fresh` false: the picture last drawn will do when it is of the camera as it is now (the
@@ -516,6 +545,9 @@ class WorldView : public Control {
   // that the drag has no end at the screen's edge; here the pointer moves.
   bool cameraDrag_ = false;
   float lastX_ = 0, lastY_ = 0;
+  // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
+  bool spinning_ = false;
+  float spinX_ = 0, spinY_ = 0;
   void DragMove(lua_State* L, const UiEvent& e) override {
     if (!cameraDrag_) return;
     Rect r;
@@ -566,6 +598,24 @@ class WorldView : public Control {
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
+    if (e.type == EventType::MouseMotion && !miniMap) {
+      // With Space held the mouse turns the camera, from near only (a zoom under 125) as in the
+      // original (0x870970); letting Space go lets it swing back.
+      Camera* c = GetCameraObject(L, cameraName);
+      if (KeyIsDown(L, kKeySpace) && c->zoom < kSpinBelowZoom) {
+        if (spinning_) {
+          Rect r;
+          GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+          SpinCamera(c, e.x - spinX_, e.y - spinY_, r.x1 - r.x0);
+        }
+        spinning_ = true;
+        spinX_ = e.x, spinY_ = e.y;
+      } else if (spinning_) {
+        spinning_ = false;
+        RevertCamera(c);
+      }
+      return false;
+    }
     if (e.type == EventType::WheelRotation && e.wheelDelta != 0) {
       // The wheel zooms, towards the place under the cursor when it zooms in (see AdvanceCamera).
       ZoomByWheel(GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
@@ -802,6 +852,28 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     Rect r;
     v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);
+    // Insert and Delete turn the camera; it stays turned (nothing swings it back but Space let go
+    // or a reset, as in the original).
+    float turn = kKeyTurn * (KeyIsDown(L, kKeyCtrl) ? kKeyTurnFast : 1.0f) * kPanFramesPerSecond * seconds;
+    if (KeyIsDown(L, kKeyInsert)) SpinCamera(c, turn, 0, r.x1 - r.x0);
+    else if (KeyIsDown(L, kKeyDelete)) SpinCamera(c, -turn, 0, r.x1 - r.x0);
+  }
+  // Space let go while the mouse stands still: the turn swings back.
+  if (v && v->spinning_ && !KeyIsDown(L, kKeySpace)) {
+    v->spinning_ = false;
+    RevertCamera(c);
+  }
+  // The way back (0x7a99eb): heading and lean go towards north up and the zoom's lean by a tenth
+  // of a radian a frame (here: as much in a sixtieth of a second), and it is over when both are there.
+  if (c->swingBack) {
+    float step = 0.1f * kPanFramesPerSecond * seconds;
+    float wanted = ZoomPitchOf(c), north = c->heading > 0 ? kPi : -kPi;
+    c->turnedPitch = std::max(c->turnedPitch - step, std::min(wanted, c->turnedPitch + step));
+    c->heading = std::max(c->heading - step, std::min(north, c->heading + step));
+    if (std::fabs(c->heading - north) < 0.1f && std::fabs(c->turnedPitch - wanted) < 0.1f) {
+      c->heading = kPi;
+      c->turned = c->swingBack = false;
+    }
   }
   ClampFocus(c);
 }

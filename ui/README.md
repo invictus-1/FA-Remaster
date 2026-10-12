@@ -248,8 +248,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   also holds the pointer in place meanwhile, which is not built). With `--fullscreen` the window
   fills the main screen without a frame and keeps the mouse inside while it is in front; the
   mouse at the screen's edge then moves the view, as in the original. The profile's options
-  `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. Turning the camera
-  and timed moves are not built. The interface hands the picture what it adds to
+  `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. The camera turns
+  as the original's: with Space held the mouse turns and leans it (from near only, a zoom under
+  125; a full turn for a view's width) and it swings back to north up when Space is let go;
+  Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
+  turns the world is not checked against the original. Timed moves are not built. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
