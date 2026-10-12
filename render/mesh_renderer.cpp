@@ -18,13 +18,23 @@ constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader'
 //
 // Original look, after what the game's "Unit" shader computes, written anew:
 //   colour = albedo * (light + glow + 2 * reflected environment * spec.r) + highlight * spec.g
-// with glow = 2 * spec.b and highlight = (0.6, 0.8, 0.9) * (R.V)^2. Every unit is drawn with this
-// formula for now; the Aeon, Cybran and Seraphim variants differ in their highlights.
+// with glow = 2 * spec.b and highlight = (0.6, 0.8, 0.9) * (R.V)^2.
+// The other factions' textures were painted for other formulas, and the game's shaders for them say
+// what their channels mean:
+//   Aeon: as above, but the light is dimmer (0.6 of the map's multiplier), the reflected environment
+//     counts once, and the highlight is (0.8, 0.85, 1.1) * (R.V)^3: a bright hull that lives from
+//     what it mirrors.
+//   Cybran ("Insect"): the sun counts twice in the light; the highlight comes from a lookup texture
+//     (not read yet: a plain power stands in) and, like the faint reflection, is absent on team colour.
+//   Seraphim: the albedo texture's ALPHA is the team mask, and its colour a dim detail picture: the
+//     surface is made of reflection (spec.r, by a view-angle ramp from a lookup texture not read yet)
+//     and of team colour that is added, stronger toward the silhouette; the sun only adds a highlight.
 //
 // Modern look: the surface as a material (metal, roughness, glow, occlusion) for lighting.h.
 //   Remastered units carry the material in their textures (see ModelLod::labPbr).
-//   Original units: the old texture is translated - reflection strength stands for metal, highlight
-//   strength for smoothness. This is a first translation, to be tuned per faction.
+//   Original units: the old texture is translated, per faction (FactionSurface below): reflection
+//   strength stands for metal, highlight strength for smoothness, with each faction's own weights;
+//   Seraphim surfaces are metal throughout, coloured by a light alloy plus their detail picture.
 //   Props are plain rough surfaces.
 // A unit under construction is simply darker (the build effects are not written yet).
 //
@@ -44,6 +54,7 @@ cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only,
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
+  float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -110,7 +121,12 @@ float4 PS(VOut i) : SV_Target {
   float3 N = kind.y > 0.5 ? vertexNormal : normalize(n.x * normalize(i.binormal) + n.y * normalize(i.tangent) + n.z * vertexNormal);
   float shadow = SunShadow(i.world, vertexNormal);
   float built = 0.3 + 0.7 * i.color.a;
-  float teamMask = kind.z > 0.5 ? 0 : spec.a;
+  int faction = int(kind2.x + 0.5);
+  float teamMask = kind.z > 0.5 ? 0 : (faction == 3 ? albedo.a : spec.a);
+  float3 toCamera = normalize(cameraPosition - i.world);
+  // toward the silhouette (0 facing the camera, 1 edge on), and the Seraphim team colour's strength by it
+  float edge = pow(1 - saturate(dot(toCamera, N)), 0.6);
+  float rim = 2 * pow(edge, 6) - 2 * edge + 1.5;
 
   if (look > 0.5) {
     float3 base = ToLinear(albedo.rgb);
@@ -127,10 +143,38 @@ float4 PS(VOut i) : SV_Target {
       roughness = spec.g;
       emission = base * spec.b * 1.5;
     } else if (kind.z < 0.5) {
-      metallic = saturate(spec.r * 1.2) * 0.7 * (1 - teamMask);
-      roughness = lerp(0.75, 0.35, saturate(spec.g * 1.5));
-      emission = base * spec.b * 3;
       occlusion = 1;
+      if (faction == 1) {
+        // Aeon: a light, smooth hull. Its paint is dark in the texture and was lifted by what it
+        // mirrored; here the paint itself is lifted and only part of it is metal.
+        float full = saturate(teamMask * 2.5);
+        float mirror = saturate(spec.r * 2);
+        // (the team colour at half strength: at full strength, lit, the last pass's curve bleaches it)
+        base = lerp(ToLinear(saturate(albedo.rgb * (0.85 + 0.6 * mirror))), tint * 0.5, full);
+        metallic = 0.5 * mirror * (1 - full);
+        roughness = lerp(lerp(0.6, 0.25, saturate(spec.g * 1.6)), 0.5, full);
+        emission = base * spec.b * 3 + tint * teamMask * 0.08;
+      } else if (faction == 2) {
+        // Cybran: armour painted very dark (the original lit it with the sun counted twice); both
+        // reflection and highlight strength mark the metal. The paint is lifted before it is read
+        // as linear colour, or it stays black whatever lights it.
+        metallic = saturate(spec.r + max(spec.g - 0.1, 0) * 0.9 - teamMask * 2) * 0.6;
+        base = lerp(ToLinear(saturate(albedo.rgb * (2.2 + 1.5 * metallic))), tint * 0.8, teamMask);
+        roughness = lerp(0.8, 0.3, saturate(spec.g * 1.3));
+        emission = base * sqrt(max(spec.b - 0.04, 0)) * 2;
+      } else if (faction == 3) {
+        // Seraphim: metal throughout, a light alloy plus the detail picture; team colour sits on
+        // top and glows, more toward the silhouette
+        float3 alloy = float3(0.20, 0.24, 0.31) + ToLinear(albedo.rgb) * 1.2;
+        base = lerp(saturate(alloy), tint, teamMask * 0.8);
+        metallic = 0.9 * (1 - teamMask * 0.6);
+        roughness = clamp(0.85 - sqrt(spec.g) * 0.6, 0.15, 0.85);
+        emission = tint * teamMask * rim * 0.25 + saturate(spec.b - 0.1) * 1.2;
+      } else {
+        metallic = saturate(spec.r * 1.2) * 0.7 * (1 - teamMask);
+        roughness = lerp(0.75, 0.35, saturate(spec.g * 1.5));
+        emission = base * spec.b * 3;
+      }
     } else {
       occlusion = 1;
     }
@@ -140,10 +184,27 @@ float4 PS(VOut i) : SV_Target {
 
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
   if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
-  float3 toCamera = normalize(cameraPosition - i.world);
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;
-  albedo.rgb = kind.z > 0.5 ? albedo.rgb * i.color.rgb : lerp(i.color.rgb, albedo.rgb, 1 - spec.a);
   float highlight = saturate(dot(reflect(-sunDirection, N), toCamera));
+  if (kind.z < 0.5 && faction == 3) {  // Seraphim
+    float3 ambience = sunAmbience + (1 - sunAmbience) * shadowFill;
+    float3 seraphim = albedo.rgb * ambience + environment * spec.r * lerp(0.35, 1, edge) +
+                      float3(0.5, 0.6, 0.7) * pow(highlight, 9) * spec.g + i.color.rgb * rim * albedo.a;
+    return float4(seraphim * built, 1);
+  }
+  albedo.rgb = kind.z > 0.5 ? albedo.rgb * i.color.rgb : lerp(i.color.rgb, albedo.rgb, 1 - spec.a);
+  if (kind.z < 0.5 && faction == 1) {  // Aeon
+    float3 sun = sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
+    float3 aeonLight = 0.6 * lightMultiplier * sun + (1 - sun) * shadowFill;
+    float3 aeon = albedo.rgb * (2 * spec.b + aeonLight + spec.r * environment) + float3(0.8, 0.85, 1.1) * pow(highlight, 3) * spec.g;
+    return float4(aeon * built, 1);
+  }
+  if (kind.z < 0.5 && faction == 2) {  // Cybran
+    float3 sun = 2 * sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
+    float3 cybranLight = lightMultiplier * sun + (1 - sun) * shadowFill;
+    float3 sheen = (pow(highlight, 6) * spec.g + 0.05 * spec.r * environment) * (1 - spec.a);
+    return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built, 1);
+  }
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
   float3 color = albedo.rgb * (2 * spec.b + light + 2 * environment * spec.r) + additive;
   return float4(color * built, 1);
@@ -324,7 +385,8 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    const float kind[4] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f};
+    const float kind[8] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+                           static_cast<float>(lod->faction), 0, 0, 0};
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

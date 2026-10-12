@@ -55,6 +55,9 @@ struct ModelLod {
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
                                // otherwise the colour multiplies the albedo
+  // Whose look the textures were painted for (the channels mean different things, mesh_renderer.cpp):
+  // 0 the UEF's "Unit" and everything else, 1 Aeon, 2 Cybran ("Insect"), 3 Seraphim.
+  int faction = 0;
 };
 
 struct Model {

@@ -277,6 +277,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     lod.cutoff = s.cutoff;
     lod.shaderName = s.shader;
     const std::string kind = Lower(lod.shaderName);
+    if (kind.compare(0, 4, "aeon") == 0) lod.faction = 1;
+    else if (kind == "insect" || kind.compare(0, 6, "cybran") == 0) lod.faction = 2;
+    else if (kind.compare(0, 8, "seraphim") == 0) lod.faction = 3;
     if (kind == "vertexnormal") {  // the far-away cards of trees: alpha test above 0x23, blended
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;

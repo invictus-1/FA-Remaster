@@ -6,7 +6,8 @@ Newest first.
 
 State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
 3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted,
-6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 new (a question).
+6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 answered
+(white for everything that is not a unit; that is what the renderer draws).
 
 ## 7. A question: which colour does the original give a projectile's mesh? (2026-10-12, small)
 
