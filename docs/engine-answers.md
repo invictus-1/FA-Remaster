@@ -3,6 +3,46 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 5: unit states for the panels — done
+
+`sim/sim_view.h` has two more calls:
+
+- `UnitStateOf(sim, unitId, &state)` fills a `UnitStateView` (false: no such unit). Ask for the units a
+  panel shows, not for every unit every beat.
+- `RestrictedBlueprints(sim, army)` gives the ids of the unit blueprints that army may not build
+  (`AddBuildRestriction`), in blueprint order; `army` is 1-based.
+
+What `UnitStateView` holds, by your five points:
+
+1. **`queue`**, first to last: per entry `id` (the command's id, what `CommandWriter`'s
+   `RemoveCommandFromQueue`, `SetCommandTarget`, `IncreaseCommandCount` and the others take), `type`
+   (the engine's command numbers: 2 Move, 7 BuildFactory, 8 BuildMobile, 10 Attack, 15 Guard, 16 Patrol,
+   19 Reclaim, 20 Repair, 21 Capture, 22 / 24 transport load / unload, 27 Upgrade, ...), `hasPosition`
+   and `position`, `entity` (the target's entity id, 0xffffffff = none), `blueprint` (a build's
+   blueprint id) and `count`.
+2. **`focus`, `guarded`, `creator`**: entity ids, 0xffffffff = none. `guarded` is the unit whose guard
+   order it is carrying out.
+3. **Switches:** `fireState` (0 return fire, 1 hold fire, 2 hold ground), `scriptBits` (bit n = toggle n
+   on), `paused`, `repeatQueue`, `autoMode`, `autoSurfaceMode`, and `commandCaps` / `toggleCaps`: the
+   RULEUCC_ and RULEUTC_ bits as they are now (the blueprint's, as `AddCommandCap`, `RemoveCommandCap`,
+   `AddToggleCap` ... changed them), so a button can follow an upgrade.
+4. **Meters:** `shieldRatio` (what the shield's script last gave `SetShieldRatio`; 0 = none or down),
+   `fuelRatio` (-1 = the unit uses no fuel), `tacticalSiloCount` / `nukeSiloCount` (missiles in store),
+   and the economy, [0] energy and [1] mass, all per second: `productionPerSecond` and
+   `consumptionPerSecond` (what the unit's scripts ask for), `produced` and `consumed` (what the last
+   beat really gave and took), and `buildRate` as it is now.
+5. **Restrictions:** `RestrictedBlueprints` above. (What a commander cannot build before an upgrade is
+   not a restriction: it is in the blueprint's build categories, and the unit's own allowed set changes
+   with `AddBuildRestriction` / `RemoveBuildRestriction` on the unit; say if you want that set too.)
+
+Two honest limits: `repeatQueue` and `autoSurfaceMode` are kept as the player set them (the info pairs
+`SetRepeatQueue` / `SetAutoSurfaceMode`) but the engine does not act on them yet (a factory does not
+repeat its queue; a submarine does not surface by itself); and `shieldRatio` is the script's number,
+so it moves only when the shield's script updates it.
+
+`moho64 --session <file> --ticks N --view` logs the state of the first three units that have orders and
+each army's restriction count.
+
 ## render 10: beams and trails — read from the exe
 
 Read: `CEfxBeam::OnTick` 0x655350 and `Update` 0x654f30, the beam's quad 0x491760, the beam draw

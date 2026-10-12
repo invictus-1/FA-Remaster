@@ -85,6 +85,38 @@ struct BeamView {
   float end[3] = {0, 0, 0};
 };
 
+// One entry of a unit's command queue, first to last.
+struct CommandView {
+  uint32_t id = 0;                // the command's id (what CommandWriter::RemoveCommandFromQueue and the others take)
+  int type = 0;                   // the engine's command numbers (2 Move, 7 BuildFactory, 8 BuildMobile, ...)
+  bool hasPosition = false;
+  float position[3] = {0, 0, 0};  // its target position, when it has one
+  uint32_t entity = 0xffffffff;   // its target entity's id, 0xffffffff = none
+  std::string blueprint;          // a build's blueprint id
+  int count = 1;                  // how many (factory builds)
+};
+
+// What the panels show of one unit beyond UnitView. Entity ids as in UnitView; 0xffffffff = none.
+struct UnitStateView {
+  uint32_t id = 0;
+  std::vector<CommandView> queue;
+  uint32_t focus = 0xffffffff;    // what it builds, repairs, reclaims, captures (GetFocus)
+  uint32_t guarded = 0xffffffff;  // the unit it guards (GetGuardedEntity)
+  uint32_t creator = 0xffffffff;  // the factory, engineer or upgrading unit that made it (GetCreator)
+  int fireState = 0;              // 0 return fire, 1 hold fire, 2 hold ground
+  uint32_t scriptBits = 0;        // bit n set = toggle n is on
+  bool paused = false, repeatQueue = false, autoMode = false, autoSurfaceMode = false;
+  // what it can do right now: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since)
+  uint32_t commandCaps = 0, toggleCaps = 0;
+  float shieldRatio = 0;          // as the shield's script last set it (0: none or down)
+  float fuelRatio = -1;           // -1: the unit uses no fuel
+  int tacticalSiloCount = 0, nukeSiloCount = 0;  // missiles in store
+  // economy, [0] energy, [1] mass, per second: what its scripts ask for, and what last beat gave and took
+  float productionPerSecond[2] = {0, 0}, consumptionPerSecond[2] = {0, 0};
+  float produced[2] = {0, 0}, consumed[2] = {0, 0};
+  float buildRate = 0;            // as it is now
+};
+
 // What the scripts did with effects in a beat (emitters, beams, trails, light particles, decals), in the order
 // of their calls. Listed only while Sim::collectEffects is set. Create: one of the Create... / AttachBeam...
 // functions; Call: a method on an effect made earlier (ScaleEmitter, OffsetEmitter, SetEmitterParam,
@@ -117,6 +149,11 @@ void UnitPoses(const Sim& sim, std::vector<UnitPose>* out);
 // The projectiles in flight (creation order) and the beams that are on.
 void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
 void BeamViews(const Sim& sim, std::vector<BeamView>* out);
+// One unit's state for the panels (false: no such unit). Not const: the live caps are read through the scripts'
+// state. Ask for the units on screen, not for all of them every beat.
+bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
+// The ids of the unit blueprints an army may not build (AddBuildRestriction), in blueprint order. army: 1-based.
+std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army);
 // The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
 // Sim::collectEffects set from before the first beat.
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);

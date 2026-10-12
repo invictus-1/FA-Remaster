@@ -2,8 +2,11 @@
 
 #include <cmath>
 
+#include "sim/blueprints.h"
 #include "sim/commands.h"
+#include "sim/script_bits.h"
 #include "sim/sim.h"
+#include "sim/transport.h"
 #include "sim/skeleton.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -189,6 +192,75 @@ void BeamViews(const Sim& sim, std::vector<BeamView>* out) {
     v.end[2] = end.z;
     out->push_back(std::move(v));
   }
+}
+
+bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
+  Entity* e = sim.FindEntityById(unitId);
+  if (!e || e->kind != Entity::Kind::Unit || e->destroyQueued) return false;
+  Unit* u = static_cast<Unit*>(e);
+  auto idOf = [&](uint32_t ref) {
+    const Entity* t = ref ? sim.FindEntity(ref) : nullptr;
+    return t ? t->id : 0xffffffffu;
+  };
+  UnitStateView v;
+  v.id = u->id;
+  v.queue.reserve(u->commands.size());
+  for (const auto& c : u->commands) {
+    CommandView q;
+    q.id = c->id;
+    q.type = static_cast<int>(c->type);
+    q.hasPosition = c->hasPos;
+    q.position[0] = c->pos.x;
+    q.position[1] = c->pos.y;
+    q.position[2] = c->pos.z;
+    q.entity = idOf(c->targetId);
+    q.blueprint = c->blueprintId;
+    q.count = c->count;
+    v.queue.push_back(std::move(q));
+  }
+  v.focus = idOf(u->focusId);
+  v.guarded = idOf(u->guardedId);
+  v.creator = idOf(u->creatorId);
+  v.fireState = u->fireState;
+  v.scriptBits = u->scriptBits;
+  v.paused = u->paused;
+  v.repeatQueue = u->repeatQueue;
+  v.autoMode = u->autoMode;
+  v.autoSurfaceMode = u->autoSurfaceMode;
+  lua_State* L = sim.L();
+  v.commandCaps = LiveCommandCaps(L, u);
+  v.toggleCaps = UnitToggleCaps(sim, u);
+  if (u->HasLuaObject()) {  // the ratio the shield's script keeps on the unit (Unit:SetShieldRatio)
+    PushObjectValue(L, u, "SetShieldRatio");
+    if (lua_isnumber(L, -1)) v.shieldRatio = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  v.fuelRatio = u->fuelRatio;
+  v.tacticalSiloCount = u->siloAmmo[0];
+  v.nukeSiloCount = u->siloAmmo[1];
+  for (int i = 0; i < 2; ++i) {
+    v.productionPerSecond[i] = u->production[i];
+    v.consumptionPerSecond[i] = u->consumption[i];
+    v.produced[i] = u->producedTick[i] * 10.0f;
+    v.consumed[i] = u->consumedTick[i] * 10.0f;
+  }
+  v.buildRate = u->buildRate;
+  *out = std::move(v);
+  return true;
+}
+
+std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army) {
+  std::vector<std::string> out;
+  if (army < 1 || army > static_cast<int>(sim.armies().size())) return out;
+  const auto& words = sim.armies()[army - 1]->buildRestricted;
+  const SimBlueprints& bps = sim.blueprints();
+  for (int i = 0; i < bps.EntityCount(); ++i) {
+    const BlueprintInfo* bp = bps.ByEntityIndex(i);
+    if (!bp || bp->kind != BpKind::Unit) continue;
+    const size_t w = static_cast<size_t>(i) >> 6;
+    if (w < words.size() && (words[w] & (uint64_t(1) << (i & 63)))) out.push_back(bp->id);
+  }
+  return out;
 }
 
 }  // namespace moho

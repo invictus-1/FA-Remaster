@@ -130,6 +130,8 @@ class Unit : public Entity {
   int siloAmmo[2] = {0, 0};  // tactical, nuke missiles in store
   struct SiloState* silo = nullptr;  // missile production (sim/build.cpp)
   bool autoMode = false;
+  // set by the info pairs SetRepeatQueue / SetAutoSurfaceMode (kept for a host's panels; not acted on yet)
+  bool repeatQueue = false, autoSurfaceMode = false;
   Vec3 rallyPoint;
   bool hasRallyPoint = false;
   struct BuildTask* task = nullptr;   // the build-like command it is carrying out

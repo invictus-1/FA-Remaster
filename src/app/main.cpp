@@ -123,6 +123,32 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
          u.blueprint.c_str(), u.army, u.position[0], u.position[1], u.position[2], u.health, u.maxHealth,
          u.fractionComplete, u.queueLength, u.selectable ? "" : " unselectable", u.dead ? " dead" : "");
   }
+  // the panels' state of the first three units that have orders, and each army's build restrictions
+  int shown = 0;
+  for (const UnitView& u : units) {
+    if (!u.queueLength || shown >= 3) continue;
+    UnitStateView s;
+    if (!UnitStateOf(sim, u.id, &s)) continue;
+    ++shown;
+    std::string q;
+    for (const CommandView& c : s.queue) {
+      char b[160];
+      std::snprintf(b, sizeof b, " [%#x type %d%s%s%s x%d]", c.id, c.type, c.hasPosition ? " pos" : "",
+                    c.entity != 0xffffffff ? " entity" : "", c.blueprint.empty() ? "" : (" " + c.blueprint).c_str(), c.count);
+      q += b;
+    }
+    Logf(LogLevel::Info,
+         "view: state %#x focus %#x guarded %#x creator %#x fire %d bits %#x%s%s%s%s caps %#x toggles %#x shield %.2f fuel %.2f "
+         "silo %d/%d E +%.1f -%.1f M +%.2f -%.2f build rate %.1f queue%s",
+         s.id, s.focus, s.guarded, s.creator, s.fireState, s.scriptBits, s.paused ? " paused" : "", s.repeatQueue ? " repeat" : "",
+         s.autoMode ? " auto" : "", s.autoSurfaceMode ? " autosurface" : "", s.commandCaps, s.toggleCaps, s.shieldRatio,
+         s.fuelRatio, s.tacticalSiloCount, s.nukeSiloCount, s.produced[0], s.consumed[0], s.produced[1], s.consumed[1],
+         s.buildRate, q.c_str());
+  }
+  for (const ArmyView& a : ArmyViews(sim)) {
+    const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
+    if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());
+  }
 }
 
 // Run a session headless: `stream` is the replay's bytes (its command stream starts at the header's

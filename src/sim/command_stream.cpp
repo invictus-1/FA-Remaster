@@ -366,6 +366,8 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       } else if (!strcasecmp(k, "SetAutoMode") || !strcasecmp(k, "SetAutoSurfaceMode") ||
                  !strcasecmp(k, "SetRepeatQueue") || !strcasecmp(k, "SetPaused")) {
         if (value != "true" && value != "false") break;
+        if (!strcasecmp(k, "SetRepeatQueue")) u->repeatQueue = value == "true";
+        if (!strcasecmp(k, "SetAutoSurfaceMode")) u->autoSurfaceMode = value == "true";
         lua_pushboolean(L, value == "true");
         CallUnitBinding(sim, u, key.c_str(), 1);
       } else if (!strcasecmp(k, "SiloBuildTactical") || !strcasecmp(k, "SiloBuildNuke")) {
