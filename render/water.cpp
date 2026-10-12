@@ -60,6 +60,15 @@ float4 PS(VOut i) : SV_Target {
   float facing = saturate(dot(-toPixel, N));
   float fresnel = saturate(lerpAndFresnel.z + (1 - lerpAndFresnel.z) * pow(1 - facing, lerpAndFresnel.w));
   float3 sun = pow(saturate(dot(-R, waterSunDirection.xyz)), reflection.z) * waterSunColor.rgb * fresnel;
+  float daylight = 1;
+  if (look > 0.5 && skyZenith.w > 0.5) {
+    // the computed sky: it is what the water mirrors, and the glint is the falling light's. (The
+    // water's own colours are the map's, made for daylight: all of it is dimmed by how bright the
+    // day is in the last line, so the mirrored sky is first brought up by as much.)
+    daylight = skyGlow.w;
+    skyColor = pow(saturate(ComputedSky(R) / (daylight * lightMultiplier * modern.x * 0.55)), 1 / 2.2);
+    sun = pow(saturate(dot(R, sunDirection)), reflection.z) * sunColor * fresnel;
+  }
 
   float tint = clamp(depth, lerpAndFresnel.x, lerpAndFresnel.y);
   float k = saturate(reflection.y * saturate(depth * 10) * fresnel);
@@ -69,7 +78,7 @@ float4 PS(VOut i) : SV_Target {
   rgb = rgb * (1 - c) + c;
   through *= 1 - c;
   // the modern look works in linear light: the same water for now, its colours converted
-  if (look > 0.5) rgb = pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55);
+  if (look > 0.5) rgb = pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight);
   return float4(rgb, 1 - through);
 }
 )hlsl";

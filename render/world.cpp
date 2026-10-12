@@ -24,13 +24,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       draw(device),
       ao(device),
       post(device),
+      skyDraw(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -164,7 +165,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[1] = sky;
   c.modern[2] = exposure;
   c.modern[3] = reflection;
-  if (haveMap_ && shadowsOn) shadows.Place(camera, sunDirection, &view);
+  // a time of day: the computed sky's light in place of the map's (modern look)
+  Vec3 lightDirection = sunDirection;
+  if (timeOfDay >= 0 && look == Look::Modern) {
+    const SkyLight light = SkyAt(timeOfDay);
+    SetSky(light, &c);
+    lightDirection = light.direction;
+  }
+  if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
 
   meshes.Begin();
   icons.Begin(view);
@@ -281,6 +289,7 @@ void World::Render() {
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
+  skyDraw.Draw(view, camera);
   device_->SetTexture(kEnvironmentSlot, sky_);
   lights.Bind();
   if (haveMap_) {

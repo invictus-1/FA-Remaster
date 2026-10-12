@@ -53,6 +53,9 @@
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --noshadows  start without the sun's shadows
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
+// --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
+//           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
+//           (from noon when the map's light was on), Y: the map's own light again.
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
@@ -124,6 +127,7 @@ struct Options {
   // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
   // chosen for the original's formula)
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
+  float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
   bool hasAt = false;
@@ -208,6 +212,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
+    else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
+    else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
     else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
@@ -367,6 +373,8 @@ int main(int argc, char** argv) {
   world.sun = opt.sun;
   world.sky = opt.sky;
   world.exposure = opt.exposure;
+  world.timeOfDay = opt.timeOfDay;
+  if (opt.dayLength > 0 && world.timeOfDay < 0) world.timeOfDay = 12;
   world.reflection = opt.reflection;
   world.hide = opt.hide;
   world.meshes.detail = opt.detail;
@@ -387,6 +395,8 @@ int main(int argc, char** argv) {
   DebugDraw& draw = world.draw;
   AmbientOcclusion& ao = world.ao;
   Look& look = world.look;
+  float dayShift = 0;  // hours added with T
+  bool dayOn = opt.timeOfDay >= 0 || opt.dayLength > 0;  // a time of day lights (T), or the map's own light (Y)
   bool& shadowsOn = world.shadowsOn;
   bool& iconsOn = world.iconsOn;
   std::vector<FrameEffectEvent> effectEvents;
@@ -594,6 +604,11 @@ int main(int argc, char** argv) {
           if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
           if (e.key == 'H') shadowsOn = !shadowsOn;
+          if (e.key == 'T') {
+            if (dayOn) dayShift += 1;
+            dayOn = true;
+          }
+          if (e.key == 'Y') dayOn = false;
           if (e.key == 'I') iconsOn = !iconsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;
@@ -767,6 +782,11 @@ int main(int argc, char** argv) {
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
     // effects run on the game's clock while a game plays (so they stand still when it is paused)
+    {  // the time of day: where it started, what T added, and what has passed of a running day
+      float hours = (opt.timeOfDay >= 0 ? opt.timeOfDay : 12) + dayShift;
+      if (opt.dayLength > 0) hours += time / opt.dayLength * 24;
+      world.timeOfDay = dayOn ? std::fmod(hours, 24.0f) : -1;
+    }
     world.Begin(camera, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
 
     // --emit: every emitter is started again once all have ended and three seconds have passed
