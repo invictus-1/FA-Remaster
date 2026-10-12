@@ -308,5 +308,8 @@ void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // nil 
 void RegisterEntityBindings(lua_State* L);
 void RegisterEffectBindings(lua_State* L);
 void ReleaseEffectObjects();
+// A script played a sound once on e (the sound object at stack index arg): listed for the host while
+// Sim::collectSounds is set (sim/effects.cpp).
+void RecordPlaySound(lua_State* L, const Entity* e, int arg);
 
 }  // namespace moho

@@ -2744,7 +2744,7 @@ int l_w_WeaponHasTarget(lua_State* L) {
   return 1;
 }
 int l_w_PlaySound(lua_State* L) {
-  (void)L;
+  if (UnitWeapon* w = ToObject<UnitWeapon>(L, 1)) RecordPlaySound(L, w->unit, 2);
   return 0;
 }
 

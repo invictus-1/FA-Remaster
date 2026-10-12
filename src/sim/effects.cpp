@@ -8,6 +8,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "sim/blueprints.h"
 #include "sim/combat.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
@@ -309,9 +310,87 @@ const char* kChainClasses[] = {"IEffect", "IAniManipulator", "CAimManipulator", 
 
 }  // namespace
 
+// ---- sounds for the host ----------------------------------------------------------------------
+// The simulation plays nothing. What the scripts asked for is listed while Sim::collectSounds is set
+// (SoundEvents in sim/sim_view.h), as the effects are.
+namespace {
+struct SoundLog {
+  std::vector<SoundEvent> events;
+  std::vector<std::pair<uint32_t, uint32_t>> loops;  // the entities with a loop on: reference, id
+};
+SoundLog& Snd() {
+  static SoundLog l;
+  return l;
+}
+bool CollectingSounds(lua_State* L) {
+  Sim* sim = Sim::From(L);
+  return sim && sim->collectSounds;
+}
+SoundEvent SoundOn(const Entity* e, SoundEvent::Kind kind) {
+  SoundEvent ev;
+  ev.kind = kind;
+  ev.entity = e->id;
+  ev.army = e->army ? e->army->index : 0;
+  ev.position[0] = e->position.x;
+  ev.position[1] = e->position.y;
+  ev.position[2] = e->position.z;
+  return ev;
+}
+int l_e_PlaySound(lua_State* L) {
+  RecordPlaySound(L, ToObject<Entity>(L, 1), 2);
+  return 0;
+}
+// Entity:SetAmbientSound(sound, rumble): either may be nil; both nil stops the loop
+int l_e_SetAmbientSound(lua_State* L) {
+  Entity* e = ToObject<Entity>(L, 1);
+  if (!e || !CollectingSounds(L)) return 0;
+  SoundEvent ev = SoundOn(e, SoundEvent::Loop);
+  SoundNames(L, 2, &ev.bank, &ev.cue);
+  SoundNames(L, 3, &ev.rumbleBank, &ev.rumbleCue);
+  SoundLog& s = Snd();
+  const uint32_t ref = EntityRef(e);
+  const bool on = !ev.cue.empty() || !ev.rumbleCue.empty();
+  size_t at = 0;
+  while (at < s.loops.size() && s.loops[at].first != ref) ++at;
+  if (on && at == s.loops.size()) s.loops.push_back({ref, e->id});
+  else if (!on && at < s.loops.size()) s.loops.erase(s.loops.begin() + static_cast<std::ptrdiff_t>(at));
+  else if (!on) return 0;  // (off while nothing ran: nothing to tell)
+  s.events.push_back(std::move(ev));
+  return 0;
+}
+}  // namespace
+
+void RecordPlaySound(lua_State* L, const Entity* e, int arg) {
+  if (!e || !CollectingSounds(L)) return;
+  SoundEvent ev = SoundOn(e, SoundEvent::Play);
+  if (!SoundNames(L, arg, &ev.bank, &ev.cue)) return;
+  Snd().events.push_back(std::move(ev));
+}
+
+void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out) {
+  SoundLog& s = Snd();
+  // a loop ends with its entity
+  size_t keep = 0;
+  for (size_t i = 0; i < s.loops.size(); ++i) {
+    if (!sim.FindEntity(s.loops[i].first)) {
+      SoundEvent ev;
+      ev.kind = SoundEvent::Loop;
+      ev.entity = s.loops[i].second;
+      s.events.push_back(std::move(ev));
+    } else {
+      s.loops[keep++] = s.loops[i];
+    }
+  }
+  s.loops.resize(keep);
+  out->clear();
+  out->swap(s.events);
+}
+
 // Replace the plain stubs of effect/manipulator classes by chaining stubs, and register the
 // factory functions. Must run after RegisterSimClasses and before simInit.lua.
 void RegisterEffectBindings(lua_State* L) {
+  SetMethod(L, "Entity", "PlaySound", l_e_PlaySound);
+  SetMethod(L, "Entity", "SetAmbientSound", l_e_SetAmbientSound);
   for (const char* cls : kChainClasses) {
     PushClassTable(L, cls);
     int t = lua_gettop(L);
@@ -354,6 +433,7 @@ void RegisterEffectBindings(lua_State* L) {
 void ReleaseEffectObjects() {
   Things().clear();
   Fx() = EffectLog();
+  Snd() = SoundLog();
 }
 
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {

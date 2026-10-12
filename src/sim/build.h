@@ -111,6 +111,9 @@ BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo);
 BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target);
 void SiloAssist(Sim& sim, Unit* u, const float amount[2]);  // a helper's resources for the missile being built
 bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);
+// For the panels, [0] tactical, [1] nuke: the missiles asked for and not finished yet (the one being built
+// among them), and the silo's room (MaxProjectileStorage; 0 = the unit has no such silo).
+void SiloNumbers(Sim& sim, const Unit* u, int building[2], int room[2]);
 bool SiloIsBusy(Sim& sim, Unit* u, int kind);
 bool SiloIsFull(Sim& sim, Unit* u, int kind);  // one more missile: 0 tactical, 1 nuke
 void SiloRelease(Unit* u);

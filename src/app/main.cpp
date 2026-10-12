@@ -213,6 +213,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   int done = 0, paused = 0;
   sim.collectSync = o.view;
   sim.collectEffects = o.view;
+  sim.collectSounds = o.view;
+  size_t sndCount[3] = {0, 0, 0};
+  std::string sndSample[2];
   size_t syncBeats = 0, syncBytes = 0;
   size_t fxCount[3] = {0, 0, 0};
   std::map<std::string, size_t> fxNames;
@@ -310,6 +313,18 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
           fxSample = fb;
         }
       }
+      std::vector<SoundEvent> snd;
+      SoundEvents(sim, &snd);
+      for (const SoundEvent& ev : snd) {
+        ++sndCount[ev.kind == SoundEvent::Play ? 0 : (ev.cue.empty() && ev.rumbleCue.empty() ? 2 : 1)];
+        if (sndSample[ev.kind].empty() && !ev.cue.empty()) {
+          char sb[320];
+          std::snprintf(sb, sizeof sb, "tick %u %s %s / %s on %#x (army %d) at %.1f %.1f %.1f", sim.tick(),
+                        ev.kind == SoundEvent::Play ? "sound" : "loop", ev.bank.c_str(), ev.cue.c_str(), ev.entity, ev.army,
+                        ev.position[0], ev.position[1], ev.position[2]);
+          sndSample[ev.kind] = sb;
+        }
+      }
       size_t bones = 0;
       for (const auto& up : poses) bones += up.bones.size();
       char buf[256];
@@ -350,6 +365,10 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     Logf(LogLevel::Info, "view: effect events: %zu made, %zu calls on them, %zu ended", fxCount[0], fxCount[1], fxCount[2]);
     for (const auto& [name, n] : fxNames) Logf(LogLevel::Info, "view:   %s x%zu", name.c_str(), n);
     if (!fxSample.empty()) Logf(LogLevel::Info, "view: %s", fxSample.c_str());
+    Logf(LogLevel::Info, "view: sound events: %zu played once, %zu loops set, %zu loops ended", sndCount[0], sndCount[1],
+         sndCount[2]);
+    for (const std::string& line : sndSample)
+      if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
   }
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);

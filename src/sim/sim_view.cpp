@@ -239,6 +239,25 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
   v.fuelRatio = u->fuelRatio;
   v.tacticalSiloCount = u->siloAmmo[0];
   v.nukeSiloCount = u->siloAmmo[1];
+  {
+    int building[2], room[2];
+    SiloNumbers(sim, u, building, room);
+    v.tacticalSiloBuildCount = building[0];
+    v.nukeSiloBuildCount = building[1];
+    v.tacticalSiloMaxStorage = room[0];
+    v.nukeSiloMaxStorage = room[1];
+  }
+  if (u->HasLuaObject()) {  // values the scripts keep on the unit
+    PushObjectValue(L, u, "stat:KILLS");
+    if (lua_isnumber(L, -1)) v.kills = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    PushObjectValue(L, u, "SetCapturable");
+    if (!lua_isnil(L, -1)) v.capturable = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    PushObjectValue(L, u, "SetReclaimable");
+    if (!lua_isnil(L, -1)) v.reclaimable = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+  }
   for (int i = 0; i < 2; ++i) {
     v.productionPerSecond[i] = u->production[i];
     v.consumptionPerSecond[i] = u->consumption[i];

@@ -111,6 +111,13 @@ struct UnitStateView {
   float shieldRatio = 0;          // as the shield's script last set it (0: none or down)
   float fuelRatio = -1;           // -1: the unit uses no fuel
   int tacticalSiloCount = 0, nukeSiloCount = 0;  // missiles in store
+  // missiles asked for and not finished yet (the one being built among them), and the store's room
+  // (MaxProjectileStorage; 0 = no such silo)
+  int tacticalSiloBuildCount = 0, nukeSiloBuildCount = 0;
+  int tacticalSiloMaxStorage = 0, nukeSiloMaxStorage = 0;
+  int kills = 0;                  // the unit's KILLS statistic, as its scripts last set it
+  // what SetCapturable / SetReclaimable left (both true until a script says otherwise)
+  bool capturable = true, reclaimable = true;
   // economy, [0] energy, [1] mass, per second: what its scripts ask for, and what last beat gave and took
   float productionPerSecond[2] = {0, 0}, consumptionPerSecond[2] = {0, 0};
   float produced[2] = {0, 0}, consumed[2] = {0, 0};
@@ -135,6 +142,20 @@ struct EffectEvent {
   float position[3] = {0, 0, 0};
   std::vector<float> numbers;  // the call's other numbers, in order
   std::string text, text2;     // the call's other strings, in order (a parameter's name; a second texture)
+};
+
+// What the scripts did with sounds in a beat, in the order of their calls. Listed only while Sim::collectSounds
+// is set. Play: Entity:PlaySound(sound) or UnitWeapon:PlaySound(sound), a sound heard once. Loop:
+// Entity:SetAmbientSound(sound, rumble), the entity's running sound from now on; both names empty = it stops
+// (the script passed nil, or the entity is gone). The simulation plays nothing and leaves nothing out: every
+// call of every army is listed, and the host decides what its player may hear.
+struct SoundEvent {
+  enum Kind { Play, Loop } kind = Play;
+  uint32_t entity = 0xffffffff;       // the entity it was called on (a weapon: its unit)
+  int army = 0;                       // that entity's army, 1-based, 0 = none
+  std::string bank, cue;              // the sound (as GetCueBank names them)
+  std::string rumbleBank, rumbleCue;  // Loop: the second sound of the call
+  float position[3] = {0, 0, 0};      // where the entity stood at the call
 };
 
 std::vector<ArmyView> ArmyViews(const Sim& sim);
@@ -188,6 +209,9 @@ bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], flo
 // The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
 // Sim::collectEffects set from before the first beat.
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);
+// The sounds since the last call (and the loops that ended with their entity); the list is then empty again.
+// Take it once per beat, after Tick(), with Sim::collectSounds set from before the first beat.
+void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out);
 // (The scenario info for SessionGetScenarioInfo is Sim::sessionScenario: the launched table as bytes.)
 
 }  // namespace moho

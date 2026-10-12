@@ -221,6 +221,32 @@ int l_GetCueBank(lua_State* L) {
   return 2;
 }
 
+bool SoundNames(lua_State* L, int arg, std::string* bank, std::string* cue) {
+  bank->clear();
+  cue->clear();
+  if (lua_type(L, arg) == LUA_TUSERDATA) {
+    // (only a sound handle: an engine object passed by mistake is no sound)
+    bool isSound = false;
+    if (lua_getmetatable(L, arg)) {
+      PushClassTable(L, "Sound");
+      isSound = lua_rawequal(L, -1, -2) != 0;
+      lua_pop(L, 2);
+    }
+    if (!isSound) return false;
+    const int32_t id = *static_cast<const int32_t*>(lua_touserdata(L, arg));
+    if (id < 0 || static_cast<size_t>(id) >= Sounds().size()) return false;
+    *bank = Sounds()[static_cast<size_t>(id)].bank;
+    *cue = Sounds()[static_cast<size_t>(id)].cue;
+    return true;
+  }
+  if (lua_istable(L, arg)) {
+    *bank = Field(L, arg, "Bank");
+    *cue = Field(L, arg, "Cue");
+    return !cue->empty();
+  }
+  return false;
+}
+
 namespace {
 
 // Replace every table value of t[key] (a sound table set) by sound handles.

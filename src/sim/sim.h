@@ -121,6 +121,8 @@ class Sim {
   // The scripts' effect calls are listed for a host that shows the game (EffectEvents in sim/sim_view.h); the
   // host takes the list every beat. Off: nothing is kept.
   bool collectEffects = false;
+  // The same for the sounds the scripts play in the world (SoundEvents in sim/sim_view.h).
+  bool collectSounds = false;
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 

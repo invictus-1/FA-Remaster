@@ -3262,6 +3262,27 @@ bool SiloIsFull(Sim& sim, Unit* u, int kind) {
 // silo or its store is full.
 bool SiloQueueAmmo(Sim& sim, Unit* u, int kind) { return SiloAddBuild(sim, u, kind); }
 
+void SiloNumbers(Sim& sim, const Unit* u, int building[2], int room[2]) {
+  building[0] = building[1] = room[0] = room[1] = 0;
+  if (const SiloState* s = u->silo) {
+    for (int kind : s->queue)
+      if (kind == 0 || kind == 1) ++building[kind];
+    room[0] = s->maxStore[0];
+    room[1] = s->maxStore[1];
+    return;
+  }
+  // (no missile was asked for yet: the room is what the counted weapons' blueprints say, as GetSilo reads them)
+  lua_State* L = sim.L();
+  const int top = lua_gettop(L);
+  for (const UnitWeapon* w : u->weapons) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, w->bpRef);
+    const int t = lua_gettop(L);
+    if (lua_istable(L, t) && FieldBool(L, t, "CountedProjectile") && w->projBp)
+      room[FieldBool(L, t, "NukeWeapon") ? 1 : 0] = static_cast<int>(FieldNum(L, t, "MaxProjectileStorage", 0));
+    lua_settop(L, top);
+  }
+}
+
 void SiloRelease(Unit* u) {
   if (u->silo && u->silo->request) {
     u->silo->request->live = false;

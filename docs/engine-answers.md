@@ -3,6 +3,67 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 7: the world's sounds, and three facts about a unit — done
+
+**1. The sounds of a beat.** `sim/sim_view.h`:
+
+```cpp
+struct SoundEvent {
+  enum Kind { Play, Loop } kind = Play;
+  uint32_t entity = 0xffffffff;       // the entity it was called on (a weapon: its unit)
+  int army = 0;                       // that entity's army, 1-based, 0 = none
+  std::string bank, cue;              // the sound (as GetCueBank names them)
+  std::string rumbleBank, rumbleCue;  // Loop: the second sound of the call
+  float position[3] = {0, 0, 0};      // where the entity stood at the call
+};
+void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out);
+```
+
+Off unless `sim.collectSounds = true` (set it before the first beat); take the list once per beat after
+`Tick()`, it is empty again afterwards. In the order of the calls:
+
+- `Play`: `Entity:PlaySound(sound)` and `UnitWeapon:PlaySound(sound)` (the entity is then the weapon's
+  unit). Those two are every one-shot the simulation's scripts have; projectiles, props and shields
+  are entities and come the same way.
+- `Loop`: `Entity:SetAmbientSound(sound, rumble)`: from now on this is the entity's running sound.
+  Either name pair may be empty (the script passed nil for it); **both empty = the loop stops**. When
+  an entity with a running loop is gone, the list holds a `Loop` with both empty for its id (the same
+  rule as an attached effect's `Destroy`), so a loop never has to be timed out. A "stop" for an entity
+  that had no loop is not listed.
+
+A sound that is not a sound object (a script passing nil to `PlaySound`) is left out.
+
+**What is left out: nothing.** Every call of every army is listed, with the army of the entity, and
+the simulation does not ask who can see what. What the original sends its user side, and whether it
+drops sounds of units the focus army does not see, I have **not read** (the calls go to the sim's sound
+manager at sim+0x8c4; `UnitWeapon:PlaySound` is 0x6d7c50). Until that is read, the sensible rule on
+your side is the one the eye already has: play what belongs to an entity the focus army sees
+(`UnitView` is there for units; for projectiles and props, play by distance). Say if you want the
+original's rule read; it is a contained piece of work.
+
+Seen with `--view` on the LAND test replay, 600 ticks: 548 sounds played once, 19 loops set, 17
+ended; the log shows the totals and the first of each (`view: sound events: ...`).
+
+**2. Three facts**, in `UnitStateView` (`UnitStateOf`):
+
+```cpp
+int tacticalSiloBuildCount = 0, nukeSiloBuildCount = 0;  // asked for and not finished (the one being built among them)
+int tacticalSiloMaxStorage = 0, nukeSiloMaxStorage = 0;  // MaxProjectileStorage; 0 = no such silo
+int kills = 0;                                           // the unit's KILLS statistic
+bool capturable = true, reclaimable = true;              // what SetCapturable / SetReclaimable left
+```
+
+- `kills` is the value the scripts keep with `SetStat('KILLS', n)` (FAF: `UpdateStat('KILLS', ...)`,
+  for example `lua/sim/Projectile.lua:309`), read the way `GetStat` reads it; 0 until a script sets it.
+- The build count is the silo's queue: every missile asked for by the button or by auto mode that is
+  not in the store yet, the one in work included. The room is the counted weapon's
+  `MaxProjectileStorage`, known before the first missile is asked for.
+- `capturable` / `reclaimable` are what the scripts last passed to `SetCapturable` / `SetReclaimable`,
+  true before any call. They are the unit's own switches only: whether a given unit may capture or
+  reclaim it (allies, a unit being built, the caps of the one asking) is not in them.
+
+The thirteen test replays keep their marks (the list is only kept when asked for).
+
 ## visuals (relayed by Chris, 2026-10-12): scenery under a new building — it is already removed, by FAF's script
 
 No engine change is needed, and none would be right: the game's own script does it, and the engine runs
