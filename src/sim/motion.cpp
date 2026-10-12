@@ -1537,7 +1537,11 @@ void MotionTick(Sim& sim, Unit* u) {
       // flattened by the facing above and not re-tilted: probe unit 0x90002f at ticks 142-143)
       moved = true;
       common = true;
-    } else if (!m.hasGoal && !m.pushed) {
+    } else if (!m.pushed) {
+      // (no spline point: standing, coasting to a stop, or with a goal the navigator is still thinking about. A
+      // hull with a weapon slaved to it turns toward that weapon's target in all of these: a launcher re-ordered
+      // every other beat turned 9 degrees in the one beat it had no spline. The formation's forward vector is
+      // only taken while the navigator is idle, which ArrivalTurn tests itself.)
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
       moved = Coast(u);
