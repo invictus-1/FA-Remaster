@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1050 --log out.log
+--            --frames 1400 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -81,6 +81,35 @@ local function run()
     check("SetZoom", cam:GetZoom(), zoom / 2)
     cam:RestoreSettings(saved)
     check("RestoreSettings brings the zoom back", cam:GetZoom(), zoom)
+    -- the camera as the original's: it starts as far out as it goes (the map, 1024 wide in a 16:9
+    -- view, takes 1 / 1.4 of what would fill it), north up, looking straight down; a wheel notch
+    -- brings the target zoom nearer by 2^-0.4 and the zoom glides after it; nearer, it leans
+    check("the camera starts at its farthest", zoom, cam:GetMaxZoom())
+    check("the farthest zoom by the map and the view", math.abs(zoom - (1024 - 1 + 5) * 1.4 * 16 / 9) < 0.01, true)
+    check("the nearest zoom", cam:GetMinZoom(), 5)
+    check("heading and pitch at the start", string.format("%.2f %.2f", saved.Heading, saved.Pitch), "3.14 1.57")
+    moho64ui_MouseWheel(s.x, s.y, 1)
+    check("a wheel notch sets the target zoom", math.abs(cam:GetTargetZoom() - zoom * math.pow(2, -0.4)) < 0.01, true)
+    check("the zoom glides: not there at once", cam:GetZoom(), zoom)
+    WaitSeconds(2)
+    check("... and there after a while", cam:GetZoom(), cam:GetTargetZoom())
+    check("nearer, the camera leans", cam:SaveSettings().Pitch < saved.Pitch, true)
+    local f = cam:GetFocusPosition()
+    check("zooming in goes towards the cursor", f[1] > 512 and f[3] < 512, true)
+    -- the arrow keys move the view while they are held: left is west, up is north
+    moho64ui_Key(316, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(316, "", "up")
+    local g = cam:GetFocusPosition()
+    check("the left arrow moves the view west", g[1] < f[1] - 1 and math.abs(g[3] - f[3]) < 0.01, true)
+    WaitSeconds(0.2)
+    check("and it stands when the key is let go", cam:GetFocusPosition()[1], g[1])
+    moho64ui_Key(317, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(317, "", "up")
+    check("the up arrow moves it north", cam:GetFocusPosition()[3] < g[3] - 1, true)
+    cam:RestoreSettings(saved)
+    WaitSeconds(0.1)
 
     -- an order: a right click on the ground moves the selection
     s = view:Project(pos)
@@ -129,6 +158,44 @@ local function run()
     local focus = cdr:GetFocus()
     check("what it builds is its focus", focus ~= nil and focus:GetUnitId(), factory)
     check("and it uses mass for it", cdr:GetEconData().massConsumed > 0, true)
+
+    -- a right click orders by what is under the cursor
+    local here = cdr:GetPosition()
+    cam:SnapTo(here, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project({here[1] - 20, here[2], here[3]})
+    moho64ui_MouseMove(s.x, s.y)
+    check("over the ground a right click moves", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+    s = view:Project(here)
+    moho64ui_MouseMove(s.x, s.y)
+    check("over the selected unit itself too", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+    -- what the mouse is over, for the game's unit panel
+    local info = GetRolloverInfo()
+    check("the info under the mouse is the commander's", info ~= nil and info.blueprintId, cdr:GetUnitId())
+    check("with the unit itself, its id and its army from 0", tostring(info.userUnit == cdr) .. " " .. info.entityId .. " " .. info.armyIndex, "true " .. cdr:GetEntityId() .. " 0")
+    check("its health and its army's colour", info.health > 0 and info.health <= info.maxHealth and string.len(info.teamColor), 8)
+    check("and what it works on", info.focus ~= nil and info.focus.blueprintId, factory)
+    moho64ui_MouseMove(s.x - 300, s.y)
+    check("over the ground: nothing", GetRolloverInfo(), nil)
+    moho64ui_MouseMove(s.x, s.y)
+    s = view:Project(focus:GetPosition())
+    moho64ui_MouseMove(s.x, s.y)
+    check("over a factory being built it guards (helps)", view:GetRightMouseButtonOrder(), "RULEUCC_Guard")
+    local enemy = GetUnitById("1048576")  -- the second army's first unit: its commander
+    check("the other army's commander is there", enemy ~= nil and enemy:GetArmy(), 2)
+    local there = enemy:GetPosition()
+    cam:SnapTo(there, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project(there)
+    moho64ui_MouseMove(s.x, s.y)
+    check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+    moho64ui_MouseButton("Right", true, s.x, s.y)
+    moho64ui_MouseButton("Right", false, s.x, s.y)
+    WaitSeconds(1)
+    queue = cdr:GetCommandQueue()
+    check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    IssueUnitCommand({cdr}, "Stop")
+    cam:RestoreSettings(saved)
 
     SelectUnits(nil)
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)

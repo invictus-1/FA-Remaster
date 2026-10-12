@@ -124,6 +124,9 @@ class Unit : public Entity {
   int capturers = 0;               // u+0x690: capture tasks at work on this unit
   bool isPod = false;              // u+0x688: in category POD or STATIONASSISTPOD (pod_assist.md)
   bool isEngineer = false;         // u+0x689: in category ENGINEER (ctor 0x6a6a0a): never in a guard formation
+  // set while the queue is cleared for a new order under which CUnitMoveTask's destructor (0x618700, the table
+  // 0x618998) does NOT abort the navigator: a task whose move child is torn down then leaves the move running
+  bool clearKeepsMove = false;
   bool isFactoryBuilder = false;
   uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id
   std::vector<uint64_t> buildAllowed;  // per-unit build restrictions removed from "all"

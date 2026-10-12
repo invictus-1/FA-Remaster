@@ -1,0 +1,88 @@
+// Mixing: every sound that plays is a voice; the mixer adds the voices up into one stereo stream
+// for the sound device. Our own: the original hands this to its sound library.
+#pragma once
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace moho::ui::sound {
+
+// A wave's samples (16 bits, channels interleaved).
+class WaveData {
+ public:
+  virtual ~WaveData() = default;
+  int channels = 1, rate = 32000;
+  int64_t frames = 0;
+  // `count` frames from `frame` on into `out`; past the end, silence.
+  virtual void Read(int64_t frame, int count, int16_t* out) = 0;
+};
+// Held in memory (the short sounds).
+class MemoryWave : public WaveData {
+ public:
+  std::vector<int16_t> samples;
+  void Read(int64_t frame, int count, int16_t* out) override;
+};
+// Read from its file as it plays (the music: tens of megabytes a piece).
+class FileWave : public WaveData {
+ public:
+  FileWave(const std::string& hostPath, uint64_t offset);
+  ~FileWave() override;
+  bool ok() const { return file_ != nullptr; }
+  void Read(int64_t frame, int count, int16_t* out) override;
+
+ private:
+  std::FILE* file_ = nullptr;
+  uint64_t offset_ = 0;
+  std::vector<int16_t> buffer_;  // a piece of the file
+  int64_t bufferFrame_ = 0, bufferFrames_ = 0;
+};
+
+class Mixer {
+ public:
+  static const int kRate = 48000;  // what goes to the device: 48000 frames a second, stereo, 16 bits
+
+  // A new voice; it waits until it is started. `gain` is its own loudness (1 = as recorded),
+  // `pitch` a factor on its speed, `loops` how often it plays again (-1: without end),
+  // `delayMs` how long after its start it begins to sound. Returns its number (never 0).
+  int Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs);
+  void Start(int voice);
+  // Fading out over a moment (a tenth of a second), or at once (still a few milliseconds, so that
+  // nothing clicks).
+  void Stop(int voice, bool immediate);
+  void StopAll();
+  bool Alive(int voice);
+  // How many voices of a category sound or wait, and the oldest of them (0: none).
+  int CountOf(int category, int* oldest);
+
+  // The loudness and the pause of each category, as the sound system worked them out.
+  void SetCategories(const std::vector<float>& gains, const std::vector<bool>& paused);
+
+  // The next `frames` frames (stereo: 2 * frames values).
+  void Mix(int16_t* out, int frames);
+  int64_t framesMixed() const { return framesMixed_; }
+
+ private:
+  struct Voice {
+    int id = 0, category = 0;
+    std::shared_ptr<WaveData> wave;
+    double position = 0, step = 1;  // in the wave's frames
+    float gain = 1;
+    int loops = 0;
+    int64_t delay = 0;       // output frames before it sounds
+    bool started = false;
+    float fade = 1, fadeStep = 0;  // going down to 0 when it is being stopped
+  };
+  std::mutex mutex_;
+  std::vector<Voice> voices_;
+  std::vector<float> gains_;
+  std::vector<bool> paused_;
+  std::vector<float> sum_;
+  std::vector<int16_t> piece_;
+  int nextId_ = 1;
+  int64_t framesMixed_ = 0;
+};
+
+}  // namespace moho::ui::sound

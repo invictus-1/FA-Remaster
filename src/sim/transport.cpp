@@ -30,6 +30,7 @@ using namespace vm;
 namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 bool IsAlly(const Army* a, const Army* b);
+bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 }
 
 // The transport tasks' own state (kept with the BuildTask).
@@ -611,7 +612,9 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   if (!m.ballistic) return false;
   const TerrainMap* map = sim.map();
   Vec3 P0 = u->position;
-  Vec3 v = m.lastMove;
+  // Unit::GetVelocity: the entity's last displacement, i.e. the difference of two (rounded) positions, not a
+  // velocity carried along: the fall's last bits follow from that
+  Vec3 v = u->lastPosTick ? Sub(u->position, u->prevLastPosition) : m.lastMove;
   const float c = 0.0100000007f;
   Vec3 v2{v.x, v.y + -4.9f * c, v.z};
   float water = map && map->hasWater ? map->waterElevation : -10000.0f;
@@ -623,8 +626,26 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   };
   float prev = P0.y - surf(P0.x, P0.z);
   float tHit = -1;
+  // CalcMoveBallistic 0x6c0290: the step as a segment (0x4fe130) against the terrain (STIMap::Intersection
+  // 0x476f30, the line test the projectiles use); the unit lands ON the point it returns and the step's scale is
+  // the hit distance over the segment's length (0x6c0896). Where the point is under water (0x577bc0 then takes
+  // the water plane) the march below still does it.
+  bool exact = false;
+  Vec3 hitP{};
+  {
+    const Vec3 E{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
+    float d = 0;
+    Vec3 h{};
+    if (combat::TerrainSegmentHit(map, P0, E, &d, &h) && (amph || !(map && map->hasWater) || h.y >= water)) {
+      const Vec3 hv{(E.x - P0.x) * 0.5f, (E.y - P0.y) * 0.5f, (E.z - P0.z) * 0.5f};
+      const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+      exact = true;
+      hitP = h;
+      tHit = d / (ext * 2.0f);
+    }
+  }
   const int N = 16;
-  for (int i = 1; i <= N; ++i) {
+  for (int i = 1; i <= N && !exact; ++i) {
     float t = static_cast<float>(i) / N;
     float dfy = (P0.y + v2.y * t) - surf(P0.x + v2.x * t, P0.z + v2.z * t);
     if (dfy <= 0) {
@@ -637,12 +658,17 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   if (prev <= 0 && tHit < 0) tHit = 0;  // already under the surface
   Vec3 P1{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
   if (tHit >= 0) {
-    P1 = {P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
+    P1 = exact ? hitP : Vec3{P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
     float terr = Elev(map, P1.x, P1.z);
     std::string layer = water < terr ? "Land" : (amph ? "Seabed" : "Water");
     u->position = P1;
     float scale = std::max(0.001f, tHit);
     m.lastMove = {(P1.x - P0.x) / scale, (P1.y - P0.y) / scale, (P1.z - P0.z) / scale};
+    // The landing sets motion+0x90 (as a push or a warp onto land does): the beat after, the unit's contacts are
+    // worked out although it is at rest, so cargo dropped side by side is pushed apart. Its own vector
+    // (motion+0x38) is zero then: the push it gives is not raised by the speed of its fall (seen: two Strikers
+    // 0.59 apart get 0.275 each = half of max(depth, half the longer side), nothing added).
+    m.surfaceNext = true;
     SetUnitLayer(sim, u, layer);
     m.ballistic = false;
     lua_State* L = sim.L();
@@ -826,8 +852,62 @@ void AttachedUnitsTick(Sim& sim) {
       Vec3 Cp;
       Quat Cq;
       BoneLocal(u, u->ownBone, &Cp, &Cq);
-      Quat q = QNorm(QMul(Pq, Conj(Cq)));
-      Vec3 pos = Sub(Pp, Rotate(q, Cp));
+      if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
+        // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
+        // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
+        // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
+        // they change with where the unit is.
+        Vec3 Wp;
+        Quat Wq;
+        BoneWorld(u, u->ownBone, &Wp, &Wq);
+        const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
+        const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
+        const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
+        const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
+        Cq = ComposeQ(iq, Wq);
+        const Vec3 r = RotateM(iq, Wp);
+        Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
+      }
+      // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
+      // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
+      // the child's own bone transform (0x676850), in the original's order of operations; the position is rotated
+      // with the quaternion BEFORE it is normalised (0x4edaa0). The last bits matter: a unit let go in the air
+      // starts its fall with the last step it made here.
+      const float cx = -0.0f - Cq.x, cy = -0.0f - Cq.y, cz = -0.0f - Cq.z;
+      Quat q;
+      q.w = ((Pq.w * Cq.w - Pq.x * cx) - Pq.y * cy) - Pq.z * cz;
+      q.x = ((Pq.y * cz + Pq.w * cx) + Pq.x * Cq.w) - Pq.z * cy;
+      q.y = ((Pq.z * cx + Pq.w * cy) + Pq.y * Cq.w) - Pq.x * cz;
+      q.z = ((Pq.x * cy + Pq.w * cz) + Pq.z * Cq.w) - Pq.y * cx;
+      const Vec3 rv = RotateM(q, Vec3{-0.0f - Cp.x, -0.0f - Cp.y, -0.0f - Cp.z});
+      Vec3 pos{rv.x + Pp.x, Pp.y + rv.y, Pp.z + rv.z};
+      {
+        const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+        if (len > 9.99999997e-07f) {
+          const float inv = 1.0f / len;
+          q = {q.x * inv, inv * q.y, inv * q.z, q.w * inv};
+        } else {
+          q = {0, 0, 0, 0};
+        }
+      }
+      {  // MOHO64_DEBUG_ATTACH=<unit id>: the attach step's inputs and result as bits
+        static const long dbg = getenv("MOHO64_DEBUG_ATTACH") ? atol(getenv("MOHO64_DEBUG_ATTACH")) : -1;
+        if (dbg >= 0 && static_cast<long>(u->id) == dbg) {
+          auto b = [](float f) {
+            uint32_t v;
+            std::memcpy(&v, &f, 4);
+            return v;
+          };
+          const Unit* pu = p->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p) : nullptr;
+          Logf(LogLevel::Info,
+               "attach %u bone %d own %d P.q(wxyz) %08x %08x %08x %08x P.pos %08x %08x %08x C.q %08x %08x %08x %08x C.pos %08x %08x "
+               "%08x -> q %08x %08x %08x %08x pos %08x %08x %08x | parent q %08x %08x %08x %08x pos %08x %08x %08x posed %d",
+               sim.tick(), u->parentBone, u->ownBone, b(Pq.w), b(Pq.x), b(Pq.y), b(Pq.z), b(Pp.x), b(Pp.y), b(Pp.z), b(Cq.w), b(Cq.x),
+               b(Cq.y), b(Cq.z), b(Cp.x), b(Cp.y), b(Cp.z), b(q.w), b(q.x), b(q.y), b(q.z), b(pos.x), b(pos.y), b(pos.z),
+               b(p->orientation.w), b(p->orientation.x), b(p->orientation.y), b(p->orientation.z), b(p->position.x), b(p->position.y),
+               b(p->position.z), pu && pu->poseSet ? 1 : 0);
+        }
+      }
       u->orientation = q;
       u->position = pos;
       u->motion.lastMove = Sub(pos, before);
@@ -1158,7 +1238,10 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   if (d.k < 10.0f) u->motion.needSnap = true;  // NotifyDetached: back on the ground
   Unit* T = UnitRef(sim, d.transport);
   if (T && !T->dead && T->transport) RemovePickupUnit(sim, *T->transport, u, true);
-  if (u->motion.hasGoal) MotionStop(u);
+  // (the walk to the pickup place is a move child: its destructor's abort rule. A unit whose load order is given
+  // again keeps walking until the new task sets its goal: seen in the original's navigator log, status 2 with the
+  // old goal for two beats after the order.)
+  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
 }
 
 // --- unload (CUnitUnloadUnits 0x625ee0 / 0x626390) ---------------------------------------------

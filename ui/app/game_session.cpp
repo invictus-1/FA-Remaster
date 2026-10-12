@@ -50,7 +50,50 @@ struct GameSession::Picture : WorldSource {
   void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) override {
     picture.UnitsIn(x0, y0, x1, y1, out);
   }
+  void SetScene(const WorldScene& scene) override {
+    picture.SetSelection(scene.selection);
+    std::vector<render::WorldPicture::BuildPreview> previews;
+    for (const WorldGhost& g : scene.ghosts) {
+      render::WorldPicture::BuildPreview p;
+      p.blueprint = g.blueprint;
+      p.position[0] = g.position[0], p.position[1] = g.position[1], p.position[2] = g.position[2];
+      p.heading = g.heading;
+      p.free = g.free;
+      previews.push_back(p);
+    }
+    picture.SetBuildPreviews(previews);
+    std::vector<render::WorldPicture::Line> lines;
+    for (const WorldLine& l : scene.lines) {
+      render::WorldPicture::Line o;
+      for (int i = 0; i < 3; ++i) o.a[i] = l.a[i], o.b[i] = l.b[i];
+      o.color = l.color;
+      lines.push_back(o);
+    }
+    picture.SetShapes(lines, {});
+  }
+  const uint32_t* DrawMinimap(int width, int height) override {
+    const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
+    return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
+  }
+  bool MapSize(float* width, float* height) override {
+    picture.MapSize(width, height);
+    return *width > 0 && *height > 0;
+  }
+  bool MinimapProject(const float world[3], float* x, float* y) override {
+    return picture.MinimapProject({world[0], world[1], world[2]}, x, y);
+  }
+  bool MinimapGroundAt(float x, float y, float world[3]) override {
+    render::Vec3 hit;
+    if (!picture.MinimapGroundAt(x, y, &hit)) return false;
+    world[0] = hit.x, world[1] = hit.y, world[2] = hit.z;
+    return true;
+  }
 #else
+  void SetScene(const WorldScene&) override {}
+  const uint32_t* DrawMinimap(int, int) override { return nullptr; }
+  bool MapSize(float*, float*) override { return false; }
+  bool MinimapProject(const float*, float*, float*) override { return false; }
+  bool MinimapGroundAt(float, float, float*) override { return false; }
   const uint32_t* Draw(const WorldCamera&, int, int) override { return nullptr; }
   bool Project(const float*, float*, float*) override { return false; }
   bool GroundAt(float, float, float*) override { return false; }

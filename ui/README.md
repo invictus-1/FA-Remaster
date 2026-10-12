@@ -57,6 +57,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
+         [--no-sound]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
@@ -93,6 +94,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   destruction, the `moho.control_methods`), `ui_manager.cpp` (root frames, frame updates, cursor,
   input capture, the dump), `lazyvar.*` (the engine's handle to a script LazyVar), `bitmap.cpp`,
   `text.cpp`, `texture_info.*` (a texture's size from its file header), `font.h` (text measures).
+- `sound/`: the game's sounds. `xact.*` reads the game's sound files (wave banks `.xwb`, sound
+  banks `.xsb` with their cues, the categories of `SupCom.xgs`), `mixer.*` adds the playing
+  sounds up, `device_win.cpp` hands the result to Windows' sound output, `sound_system.*` plays a
+  cue of a bank and keeps the categories' volumes.
 - `app/main.cpp`: the host `moho64ui`.
 - `tests/`: Lua tests run in the user state.
 - `tools/`: generators and scanners.
@@ -206,7 +211,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   commander selected the game's orders panel, its construction panel with the build icons and the
   commander's avatar come up. Orders are written with the engine's command writer and applied
   before the next beat; the game script hears of each (`commandmode.OnCommandIssued`). A right
-  click in the world view sends the selected units there. A left click follows the script's
+  click in the world view gives the selected units the order that fits what is under the cursor,
+  by the original's rule (read from its code): attack an enemy, reclaim what can be reclaimed,
+  repair a unit being built, guard (help) another unit of one's own, else move there;
+  `GetRightMouseButtonOrder` gives the script the same answer for the cursor. Left out of that
+  rule so far: capture, loading into transports and ferries, whether the weapons can reach the
+  target, and wreckage and trees (the picture answers for units only). A left click follows the script's
   command mode, asked the way the original asks (`commandmode.GetCommandMode`): an order's
   button or key (move, attack ground, patrol), or a build icon, on which the commander builds
   the chosen building at the click. The console command `StartCommandMode`, which the order
@@ -214,9 +224,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
   run the finished land factory built two engineers), `SimCallback` and the unit switches
   (pause, fire state, script bits); those last two are written against the engine's command
-  writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
-  what is under the cursor (both need the world's picture), the build preview and snapping to
-  the grid.
+  writer but not checked in a game yet.
 - Unit states come from the simulation (the engine's `UnitStateOf`): a unit's command queue, what
   it builds, guards and who built it, fire state, toggles, pause, shield and fuel, its economy;
   the order buttons follow what a unit can do right now; what the army may not build is taken
@@ -226,15 +234,44 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
-  left click selects a unit and dragging selects a box. The camera's field of view and its
-  tilt by distance are not the original's yet; the minimap is still empty (one picture only);
-  selected units are not marked in the world. `--no-world` runs a game without the picture
+  left click selects a unit and dragging selects a box. The camera follows the original's rules,
+  read from its code: it starts as far out as it goes (the map takes 1 / 1.4 of what would fill
+  the view), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
+  field of view (across the view's longer side) goes from 60 to 65 degrees; a wheel notch brings
+  the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
+  cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four
+  times as fast, Alt holds it), at the original's amount per frame taken at 60 frames a second,
+  so that the speed does not go with the frame rate as the original's does. Turning the camera,
+  moving it with the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
+  the world: the selected units (a ring under each), the lines of their orders, and the ghost of
+  a building being placed where the mouse points, green where the engine says it can stand
+  (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
+  where the building cannot stand. A minimap world view shows the renderer's minimap picture; a
+  left click on it moves the main camera there. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
-- Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
+- Sound: the scripts' `PlaySound(Sound({Bank, Cue}))` plays the cue from the game's own sound
+  files in `/sounds` (read by the files' own layout: every sound entry of every bank of the game
+  is consumed to its last byte; all 1,737 waves are plain 16-bit sound). A cue picks one of its
+  sounds, a sound one of its waves, with the files' volumes, pitch ranges, loops and categories;
+  the music is read from its file as it plays, and a new piece takes the place of the playing
+  one, as its category says. `StartSound`, `StopSound`, `StopAllSounds`, `SoundIsPrepared`,
+  `SetVolume` / `GetVolume` by category (a category stands inside another: Global holds all),
+  `PauseSound`, `PlayVoice` (the voices' banks by language, `AudioSetLanguage`) are built. A live
+  window plays through Windows' sound output in pieces of a hundredth of a second; `--no-sound`
+  leaves the device closed, and runs without a window mix only when a test asks
+  (`ui/tests/sound.lua`). Not built: the world's sounds (units, weapons: they need the
+  simulation's sound events and a place in the world), ducking the other sounds under a voice,
+  the volume curves and effects of the sound files, fading as the files set it. How the
+  original's own sound manager limits and fades is not read from its code.
+- Not real yet: the other console commands, the game's cursor, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 370 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 161 are logged stubs. (`--list-bindings` counts
+- `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
+  blueprint, health, economy, what it works on, its army and colour; the fields as the original
+  writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by
+  its key as FAF's scripts ask.
+- 403 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 128 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

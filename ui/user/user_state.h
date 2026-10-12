@@ -26,7 +26,11 @@ class ThreadScheduler;
 namespace moho::ui {
 
 class WorldSource;
+struct WorldLine;
 class UiManager;
+namespace sound {
+class SoundSystem;
+}
 
 class UserState {
  public:
@@ -49,6 +53,8 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // What plays the sounds the scripts ask for (the host's, one for all states); nullptr: nothing does.
+    sound::SoundSystem* sound = nullptr;
   };
 
   UserState(Vfs* vfs, Config config);
@@ -117,6 +123,8 @@ void RegisterSessionBindings(lua_State* L);
 // to date with the simulation; InstallUnitCategoryFunctions goes after the rules are in the state.
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
+// PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
+void RegisterSoundBindings(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);
 // Orders (user_units.cpp): an order with a place as its target for the selected units of the
 // player's army ("Move", "Attack", "Patrol", "AggressiveMove", or "BuildMobile" with the
@@ -125,9 +133,25 @@ void InstallUnitCategoryFunctions(lua_State* L);
 // as the command stream's bytes for the engine's ApplyCommands.
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear,
                       const std::string& blueprint = std::string());
+// The same with a unit as the target ("Attack", "Guard", "Repair", "Reclaim", "Capture", "Move":
+// the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
+// none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+// The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
+// something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
+// colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
+uint32_t UnitUnderMouse(lua_State* L);
+std::string ArmyColorOf(lua_State* L, int army);
+// The living unit nearest to a place of the map, no farther than `radius` (0xffffffff: none): what
+// stands in for the picture's answer when there is no picture.
+uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius);
+std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// For the world's picture: the selected units' entity ids, and the lines of their orders (from
+// each unit to where its orders take it, coloured by the kind of order).
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);
 std::string TakeOrders(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);

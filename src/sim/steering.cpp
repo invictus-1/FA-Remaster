@@ -228,7 +228,10 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
   float mSelf = Mass(b);
   float vPush = std::min(Len(UnitVelocity(self)), b.maxSpeed * 0.1f);
   UnitCommand* c = Current(self);
-  Vec3 prev = Sub(self->position, self->motion.lastMove);  // the position before its last move (u+0xd0)
+  // the position before its last move (u+0xd0), as stored: "position - last move" is not it to the bit, and not
+  // at all after a step that was cut short (a falling unit's landing step, whose last move is the step over its
+  // scale)
+  Vec3 prev = self->lastPosTick == sim.tick() ? self->prevLastPosition : Sub(self->position, self->motion.lastMove);
   // u+0xd0 is the entity's transform before its last AdvanceCoords. A unit in a transport's beam is advanced a
   // second time each beat, by its task (CUnitCallTransport state 3), so there it is where the unit stood when
   // the last beat ended: last beat's beam position plus last beat's coast.

@@ -144,6 +144,21 @@ std::string GameColor(lua_State* L, const char* list, int index) {
 }
 
 // GetArmiesTable(): {numArmies, focusArmy, armiesTable = {[army] = {name, nickname, faction, human,
+// An army's two colours as "aarrggbb" strings: the player's and the icons'.
+void ArmyColors(lua_State* L, const ArmyView& a, std::string* color, std::string* icon) {
+  if (a.rgb[0] >= 0) {
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "ff%02x%02x%02x", a.rgb[0] & 255, a.rgb[1] & 255, a.rgb[2] & 255);
+    *color = *icon = buf;
+    return;
+  }
+  if (a.playerColor > 0) *color = GameColor(L, "PlayerColors", a.playerColor);
+  if (a.armyColor > 0) *icon = GameColor(L, "ArmyColors", a.armyColor);
+  if (color->empty()) *color = *icon;
+  if (icon->empty()) *icon = *color;
+  if (color->empty()) *color = *icon = "ff808080";
+}
+
 // civilian, color, iconColor, showScore, outOfGame, authorizedCommandSources}}}. Field names as the
 // game's scripts read them; an army's colours are the lobby's choices looked up in the game's colour
 // lists. (Inferred: which list `color` and which `iconColor` takes.)
@@ -165,17 +180,7 @@ int l_GetArmiesTable(lua_State* L) {
     SetField(L, "showScore", a.showScore);
     SetField(L, "outOfGame", a.outOfGame);
     std::string color, icon;
-    if (a.rgb[0] >= 0) {
-      char buf[16];
-      std::snprintf(buf, sizeof buf, "ff%02x%02x%02x", a.rgb[0] & 255, a.rgb[1] & 255, a.rgb[2] & 255);
-      color = icon = buf;
-    } else {
-      if (a.playerColor > 0) color = GameColor(L, "PlayerColors", a.playerColor);
-      if (a.armyColor > 0) icon = GameColor(L, "ArmyColors", a.armyColor);
-      if (color.empty()) color = icon;
-      if (icon.empty()) icon = color;
-      if (color.empty()) color = icon = "ff808080";
-    }
+    ArmyColors(L, a, &color, &icon);
     SetField(L, "color", color);
     SetField(L, "iconColor", icon);
     lua_pushstring(L, "authorizedCommandSources");
@@ -344,6 +349,13 @@ void UserState::DeliverSync(const std::string& blob) {
     }
   }
   lua_settop(L, top);
+}
+
+std::string ArmyColorOf(lua_State* L, int army) {
+  std::string color, icon;
+  for (const ArmyView& a : ArmyViews(*TheSim(L)))
+    if (a.index == army) ArmyColors(L, a, &color, &icon);
+  return color.empty() ? "ff808080" : color;
 }
 
 void RegisterSessionBindings(lua_State* L) {

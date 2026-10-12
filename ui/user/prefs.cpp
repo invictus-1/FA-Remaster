@@ -92,6 +92,41 @@ int l_GetPreference(lua_State* L) {
   return 1;
 }
 
+// GetOptions() (FA exe 0x8c9490): the current profile's options table; nil without a profile.
+// GetOptions(key): one option of it. Not in the original: FAF's patched game takes the key, and
+// its preferences script asks every option this way (falling back to the option's default when
+// the answer is nil).
+int l_GetOptions(lua_State* L) {
+  bool one = lua_isstring(L, 1) != 0;
+  std::string key = one ? lua_tostring(L, 1) : "";
+  lua_settop(L, 0);
+  PushPrefs(L);
+  // profile.current names the profile: an index into profile.profiles
+  lua_pushstring(L, "profile");
+  lua_rawget(L, -2);
+  if (!lua_istable(L, -1)) return 0;
+  lua_pushstring(L, "current");
+  lua_rawget(L, -2);
+  lua_pushstring(L, "profiles");
+  lua_rawget(L, -3);
+  if (!lua_istable(L, -1) || lua_isnil(L, -2)) return 0;
+  lua_pushvalue(L, -2);
+  lua_rawget(L, -2);
+  if (!lua_istable(L, -1)) return 0;
+  lua_pushstring(L, "options");
+  lua_rawget(L, -2);
+  if (!lua_istable(L, -1)) return 0;
+  if (!one) {
+    PushCopy(L, lua_gettop(L));
+    return 1;
+  }
+  lua_pushstring(L, key.c_str());
+  lua_rawget(L, -2);
+  if (lua_isnil(L, -1)) return 0;
+  PushCopy(L, lua_gettop(L));
+  return 1;
+}
+
 int l_SetPreference(lua_State* L) {
   std::string key = luaL_checkstring(L, 1);
   lua_settop(L, 2);
@@ -276,6 +311,7 @@ void LoadPrefs(lua_State* L, const std::string& file) {
 void RegisterPrefsBindings(lua_State* L) {
   SetGlobal(L, "GetPreference", l_GetPreference);
   SetGlobal(L, "SetPreference", l_SetPreference);
+  SetGlobal(L, "GetOptions", l_GetOptions);
   SetGlobal(L, "SavePreferences", l_SavePreferences);
 }
 

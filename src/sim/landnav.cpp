@@ -628,6 +628,7 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   n.lastAdvance = sim.tick();
   if (TryAdvance(sim, u, n)) {
     n.advanceDist = 0.5f * Dist(n.cur, n.target);
+    n.poke = false;  // 0x5aebaa: a target taken clears the steering's push report (else it forces one every beat)
     return;
   }
   if (n.stuck > 30) {

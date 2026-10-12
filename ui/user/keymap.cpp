@@ -262,9 +262,7 @@ int l_ClearKeyMap(lua_State* L) {
 // way. The original asks Windows for the key's state; we keep the states from the key events.
 int l_IsKeyDown(lua_State* L) {
   int code = lua_type(L, 1) == LUA_TSTRING ? MauiCodeByName(lua_tostring(L, 1)) : static_cast<int>(luaL_checknumber(L, 1));
-  UiManager& ui = UserState::From(L)->ui();
-  bool blocked = ui.focus && ui.focusBlocksKeyDown;
-  lua_pushboolean(L, !blocked && code >= 0 && Map(L).down.count(KeycodeMauiToMSW(code)) != 0);
+  lua_pushboolean(L, KeyIsDown(L, code));
   return 1;
 }
 
@@ -396,6 +394,12 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   KeyMap& map = Map(L);
   if (map.unbuilt.insert(Upper(name)).second)
     Logf(LogLevel::Debug, "moho64ui: console command not built: %s", name.c_str());
+}
+
+bool KeyIsDown(lua_State* L, int mauiCode) {
+  UiManager& ui = UserState::From(L)->ui();
+  bool blocked = ui.focus && ui.focusBlocksKeyDown;
+  return !blocked && mauiCode >= 0 && Map(L).down.count(KeycodeMauiToMSW(mauiCode)) != 0;
 }
 
 void RegisterKeyMapBindings(lua_State* L) {

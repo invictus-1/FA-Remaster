@@ -36,6 +36,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterKeyMapBindings(L);
   RegisterWorldViewBindings(L);
   RegisterSessionBindings(L);
+  RegisterSoundBindings(L);
   RegisterUserUnitBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
@@ -138,6 +139,7 @@ void UserState::Frame(double seconds) {
   now_ += seconds;
   ++frame_;
   ui_->Update(state_->L(), static_cast<float>(seconds));
+  AdvanceCameras(state_->L(), static_cast<float>(seconds));
   threads_->RunTick(frame_);
 }
 

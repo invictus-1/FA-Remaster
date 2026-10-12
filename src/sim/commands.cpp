@@ -123,6 +123,21 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
   UnitCommand& c = *u->commands.front();
   Vec3 goal = TargetPos(sim, c, u);
+  // CUnitMoveTask's constructor 0x6180e0 (the test 0x618a00, then 0x618344): a Move that came from a factory (a
+  // rally point: cmd+0x142), is the unit's last command, the unit not TransportLoading, Teleporting or Guarding,
+  // has its target rounded to whole numbers and put through PrepareMove (0x62b780, spacing 0, no exclusion). So
+  // the second unit out of a factory does not head for the cell the first one stands on: it gets the nearest free
+  // spot of the ring two footprints out.
+  if (c.type == CommandType::Move && c.factoryIssued && u->commands.size() == 1 && u->motion.bp &&
+      !u->unitStates.count("TransportLoading") && !u->unitStates.count("Teleporting") && !u->unitStates.count("Guarding")) {
+    Vec3 p{std::nearbyint(goal.x), goal.y, std::nearbyint(goal.z)};
+    if (p.x != 0.0f || p.y != 0.0f || p.z != 0.0f) {
+      const float none[4] = {0, 0, 0, 0};
+      if (u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+      else GroundPrepareMove(sim, u, &p, none, 0);
+      goal = {p.x, goal.y, p.z};
+    }
+  }
   std::vector<Vec3> path;
   bool ok = true;
   path.push_back(goal);  // land units: the navigator plans (sim/landnav.cpp)
@@ -815,7 +830,9 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
       // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
       const bool hadCommands = !u->commands.empty();
+      u->clearKeepsMove = keep;
       ForgetUnitCommands(u);
+      u->clearKeepsMove = false;
       if (!keep && hadCommands) MotionStop(u);
       SetMoving(u, false);
       at = -1;

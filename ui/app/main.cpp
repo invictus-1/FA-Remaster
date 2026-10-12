@@ -28,6 +28,7 @@
 #include "maui/control.h"
 #include "script/script_state.h"
 #include "sim/session.h"
+#include "sound/sound_system.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
 
@@ -54,6 +55,7 @@ int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
+bool noSound = false;             // --no-sound: a live window without the sound device
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -183,6 +185,7 @@ int main(int argc, char** argv) {
     else if (a == "--game-lua") gameLuaFile = next();
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
+    else if (a == "--no-sound") noSound = true;
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -205,7 +208,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [-- game arguments]\n");
+                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [-- game arguments]\n");
     return 2;
   }
   Vfs vfs;
@@ -225,6 +228,12 @@ int main(int argc, char** argv) {
   cfg.gameArgs = o.gameArgs;
   cfg.prefsFile = o.prefsFile;
   cfg.sessionFile = sessionFile;
+
+  // The game's sounds, for the front end's state and a game's alike. Only a live window plays
+  // them aloud; a run without a window mixes them when a test asks.
+  ui::sound::SoundSystem sounds(&vfs);
+  cfg.sound = &sounds;
+  if (windowed && !noSound && !sounds.OpenDevice()) Logf(LogLevel::Warning, "moho64ui: no sound device: the run is silent");
 
   // A game launched from the lobby: the simulation starts from the game configuration and the host
   // runs its beats beside the interface's frames.
