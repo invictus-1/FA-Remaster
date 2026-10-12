@@ -28,13 +28,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       post(device),
       skyDraw(device),
       falling(device),
+      sight(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -515,6 +516,10 @@ void World::Render() {
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   if (hide.find("particles") == std::string::npos) particles.Draw(view);
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
+  if (haveMap_ && sight.On()) {  // the fog of war: what is not seen, darkened
+    post.BeginColorOnly();
+    sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
+  }
   post.Present(view);
   if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 }

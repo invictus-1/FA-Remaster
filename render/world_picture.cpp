@@ -49,7 +49,9 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
   m.world = std::make_unique<World>(m.device.get(), vfs);
-  return m.world->Open(mapPath, World::Options{}, error);
+  if (!m.world->Open(mapPath, World::Options{}, error)) return false;
+  m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
+  return true;
 }
 
 void WorldPicture::GameStarted(const moho::Sim& sim) { impl_->frames.ReadArmies(sim, *impl_->vfs); }
@@ -71,6 +73,9 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     m.frames.TakeLooks(&looks);
     if (!looks.empty()) m.world->SetLooks(looks);
     if (const uint32_t seed = m.frames.Seed()) m.world->weatherSeed = seed;  // the same weather for every player
+    std::vector<uint8_t> seen;  // what the focus army sees, when it has been worked out anew
+    int cells = 0;
+    if (m.frames.TakeSight(&seen, &cells)) m.world->sight.Set(seen, cells);
   }
   // the moment shown lies between the last two beats known: one beat back from the newest
   const double first = static_cast<double>(m.frames.FirstTick()), last = static_cast<double>(m.frames.LastTick());

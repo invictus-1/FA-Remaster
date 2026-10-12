@@ -67,6 +67,9 @@ class LiveSim {
   void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
   // The army the picture is for (from 1; 0: none, everything shows): see SimFrames::SetFocusArmy.
   void SetFocusArmy(int army) { frames_.SetFocusArmy(army); }
+  // The grid of what the focus army sees (SimFrames::SetSightGrid, TakeSight).
+  void SetSightGrid(float mapWidth, float mapHeight) { frames_.SetSightGrid(mapWidth, mapHeight); }
+  bool TakeSight(std::vector<uint8_t>* grid, int* cells) { return frames_.TakeSight(grid, cells); }
   // The session's seed, once the game has started (0 before).
   uint32_t Seed() const { return frames_.Seed(); }
   // Each army's colour as the game shows it, by army index from 0; empty until the game has started.

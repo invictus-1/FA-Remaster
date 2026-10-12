@@ -4,7 +4,7 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
-## ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap and picking done; the ground not yet
+## ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap, picking and the darkened ground done (first form)
 
 `WorldPicture::SetFocusArmy(army)` in `render/world_picture.h`: the engine's army number, from 1;
 0 (as it is until you call it): no one army, everything shows. It takes hold with the next beat
@@ -27,12 +27,19 @@ Not yet, so the picture still gives away more than it should:
 - effects that hang on a unit or shot the army does not see are hidden (smoke, exhaust, trails,
   beams, flashes of light), but effects that hang on nothing are not: the explosion of a unit that
   has just died in the dark, and marks left on the ground, still show;
-- the ground the army does not see is not darkened, and the original's remembered sight (a building
-  seen once stays as a ghost where it stood) is not there: a unit no longer seen falls back to its
-  blip or to nothing;
+- the original's remembered sight (a building seen once stays as a ghost where it stood) is not
+  there: a unit no longer seen falls back to its blip or to nothing;
 - a blip stands where the unit is; whatever the original does to a blip's place (jamming) is not in it;
 - whether a never-seen radar contact shows its class at all in the original, I have not read; here
   it shows the class icon.
+
+The ground: what the focus army does not see now is darkened to half its light, in the main
+picture (not on the minimap yet). What it sees is asked of `ReconAt` over a grid of 256 x 256 places
+on the map every fifth beat (so the edge moves twice a second, in steps of four world units on a
+20 km map), and everything under a pixel darkens alike: ground, water, wrecks, and the units of the
+army's own that stand there cannot, since they see. Radar cover is not shown on the ground, and
+there is no difference between ground never seen and ground seen before. It needs nothing from you
+beyond `SetFocusArmy`.
 
 Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
 minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's

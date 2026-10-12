@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "sight.h"
 #include "sky.h"
 #include "weather.h"
 #include "camera.h"
@@ -174,6 +175,7 @@ class World {
   Post post;
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
+  SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's
