@@ -123,6 +123,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
   original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list, edit
   field, border and scrollbar draw by inference, marked in the source.
+- Checked against the original: a lossless screenshot of the original game's main menu (3840x2160,
+  the game's UI scale at 150%) compared with our picture of the same set-up. Every part compared
+  (logo, profile name, button labels, button ends, brackets, bottom borders) sits at the same
+  pixel position, and the text is the same to the pixel in practice (mean difference per colour
+  value 0.02 to 4 of 255). What still differs is what we do not draw yet: the background movie and
+  the moving glows behind the buttons.
 - Mouse input (`maui/input.*`): an event goes to the control holding the input capture, or to the
   control under the cursor (highest Depth among those not hidden, with hit testing on, containing
   the point), as the original's event table through the script's `HandleEvent`, and up to the
