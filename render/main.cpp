@@ -25,6 +25,9 @@
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
 // --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
 // --crowd <unit id>=<count>  a square block of that unit, to measure what armies cost
+// --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
+//           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
+// --emit-scale <n>  the size those emitters are played at
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
 //           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
@@ -68,6 +71,7 @@
 #include "linalg.h"
 #include "mesh_renderer.h"
 #include "models.h"
+#include "particles.h"
 #include "png.h"
 #include "post.h"
 #include "live_sim.h"
@@ -109,6 +113,8 @@ struct Options {
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
   std::string turn;    // --turn: the bone placed units turn
+  std::vector<std::string> emit;  // --emit: emitters played over and over
+  float emitScale = 1;
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -157,6 +163,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
     else if (a == "--turn") o->turn = v;
+    else if (a == "--emit") o->emit.push_back(v);
+    else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
     else if (a == "--msaa") o->msaa = atoi(v);
     else if (a == "--ao") o->ao = static_cast<float>(atof(v));
@@ -341,6 +349,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   meshes.detail = opt.detail;
+  Particles particles(device.get(), &vfs, &textures);
+  if (!particles.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
   StrategicIcons icons(device.get(), &vfs);
   if (!icons.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
@@ -527,6 +540,10 @@ int main(int argc, char** argv) {
       camera.pitch = opt.pitch * kPi / 180;
     }
   }
+  // --emit: where the emitters play, and when each was last started
+  const Vec3 emitAt = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
+  std::vector<uint32_t> emitHandles(opt.emit.size(), 0);
+  float emitStarted = -1e9f;
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
@@ -664,6 +681,20 @@ int main(int argc, char** argv) {
       if (haveMap && shadowsOn) shadows.Place(camera, sun, &view);
     }
 
+    // --emit: every emitter is started again once all have ended and three seconds have passed
+    if (!opt.emit.empty()) {
+      bool running = false;
+      for (uint32_t h : emitHandles) running = running || particles.Running(h);
+      if (!running && time - emitStarted > 3) {
+        emitStarted = time;
+        for (size_t i = 0; i < opt.emit.size(); ++i) {
+          const std::string& name = opt.emit[i];
+          const std::string path = name.find('/') != std::string::npos ? name : "/effects/emitters/" + name + "_emit.bp";
+          emitHandles[i] = particles.Start(path, {emitAt.x, groundHeight(emitAt.x, emitAt.z) + 0.25f * opt.emitScale, emitAt.z}, Quat{}, opt.emitScale);
+        }
+      }
+    }
+    particles.Update(static_cast<double>(time));
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
     meshes.Begin();
@@ -805,6 +836,7 @@ int main(int argc, char** argv) {
       DrawTestScene(draw);
       draw.Flush(view);
     }
+    particles.Draw(view);  // over everything solid and the water, by the scene's depth
     post.Present(view);
     if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 
@@ -829,6 +861,7 @@ int main(int argc, char** argv) {
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
+      if (particles.liveParticles || particles.liveEmitters) printf("; %d particles of %d emitters", particles.liveParticles, particles.liveEmitters);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
