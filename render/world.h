@@ -193,6 +193,8 @@ class World {
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
   float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
+  int lampUnits_ = 0, lampUnitsBefore_ = 0;  // units whose lamps were lit this frame, and the frame before
+  std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
   double clock_ = 0;
 };

@@ -43,16 +43,28 @@ One entry per light:
 | `Radius` | How far the light reaches, in the mesh's units (as `Position`). The light is full at its place and falls to nothing at this distance. For a sense of size: the Striker is 13 long in these units; a headlamp with `Radius = 45` reaches three and a half Striker lengths, and the pool of light one sees is about that wide across, since the light fades toward its edge. | 1.5 |
 | `Strength` | How bright. 1 is a strong lamp (a headlamp); 0.3 a marker light; 3 a floodlight. | 1 |
 | `Blink` | Seconds for one on-and-off (half on, half nearly off). Units of one kind do not blink together. | steady |
+| `Direction` | Makes the light a beam: where the lamp faces, `{ x, y, z }`, in the mesh's coordinates with the unit at rest, like `Position`; it turns with the `Bone`. Needs `Cone`. | it shines to all sides |
+| `Cone` | The beam's whole opening angle in degrees (70 for a head lamp). The light is full to seven tenths of the way from the beam's middle to its edge and fades to nothing at the edge. It reaches `Radius` along the beam, and farther along it than a light to all sides does. 179 and more: no beam. | it shines to all sides |
+| `Glow` | For a beam: the share of the lamp that still shines to all sides, within a fifth of `Radius`, so that the unit's own hull near the lamp is not left dark. | 0.15 |
+| `Kind` | A word for what the light is (`'head'`, `'work'`, `'beacon'`, `'window'`, `'engine'`, `'hull'`, ...). Not used yet. | |
 
 Lines starting with `--` are comments. Fields the renderer does not know are ignored, so more can be
 added later without breaking older builds.
 
+**Put the lights that matter most first.** When many units are lit at once, each unit lights only
+the first of its list (down to two with some thousands of units), and where units stand close
+together a small square of ground (2.5 world units) takes three beams and two other lamps; the
+rest there stay dark. So: head lamps first, then the unit's own glow, then the rest.
+
+A beam from a lamp low on a unit runs along the ground and would by the angle alone hardly light
+it; within a beam the ground takes light as if the air scattered some of it down, so the pool
+ahead of the unit shows.
+
 ## What it does not do yet
 
-- A light shines to all sides; there is no direction or cone. If the Blender source has one, write it
-  as `Direction = { x, y, z }` and `Cone = <degrees>` already: it is ignored now and will be used.
-- A light is not switched by what the unit does (moving, firing, being built is the exception: a
-  unit under construction has no lights). `Kind = '...'` may say what the light is (`'head'`,
-  `'beacon'`, `'window'`, `'engine'`, `'work'`); ignored now, meant for that.
+- The beam lights surfaces; it is not seen in the air (no shaft of light through dust, rain or fog).
+- A light is not switched by what the unit does (moving, firing; being built is the exception: a
+  unit under construction has no lights). `Kind` is meant for that.
+- A light's colour is the file's; it is not tinted by the army's colour.
 - Lights throw no shadows and do not light the water or particles.
 - Lights are only lit near what the camera looks at, and only with a time of day (the computed sky).
