@@ -45,6 +45,36 @@ So: build it against recordings, combine later by swapping the source of the fra
    switchable mode.
 6. Effects and the rest: emitters, beams, decals, projectiles, shields, fog of war, strategic icons.
 
+## Build and run
+
+    py -m pip install ziglang     (once; the compiler the engine's tools/build_zig.py uses too)
+    py render/build.py            -> build-render/moho64view.exe
+
+Nothing else is needed on Windows: the Direct3D 12 headers come with the compiler, and shaders are
+compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
+
+    moho64view [--size 1600x900] [--novsync] [--debug] [--frames N] [--screenshot file.png]
+
+`--frames N --screenshot file.png` renders N frames, saves the last one and exits: the way to check a
+change without looking at the screen. `--debug` turns on Direct3D's validation layer (when the
+Windows "Graphics Tools" feature is installed) and prints what it reports.
+
+## The files
+
+| File | What it is |
+|---|---|
+| `gfx.h` | the thin device interface: buffers, textures, pipelines, draws. The only thing a second backend implements |
+| `gfx_d3d12.cpp` | its Direct3D 12 backend (chosen first: no SDK to install on Windows; Vulkan can follow for other systems) |
+| `window.h`, `window_win32.cpp` | the window and its input |
+| `linalg.h`, `camera.h` | vectors, matrices, the game camera |
+| `frame.h` | the frame: what the renderer is given to draw |
+| `png.h`, `png.cpp` | screenshots |
+| `main.cpp` | `moho64view`: the frame loop |
+
+## Where it stands
+
+Step 1 of the order of work is done: window, device, frame loop, a test scene (grid and boxes).
+
 ## Asking the engine track
 
 Write requests into `render/REQUESTS.md` (what is needed, why, the smallest form of it). The engine
