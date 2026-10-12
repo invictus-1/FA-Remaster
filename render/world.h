@@ -74,6 +74,10 @@ class World {
   // of the computed sky is low, each where its bone is. AddFrame calls it for a game's units; a
   // host that adds models itself calls it beside `meshes.Add`.
   void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr);
+  // The unit under the mouse, marked with brackets of a kind: 1 the player's own or an ally's,
+  // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
+  uint32_t hover = 0xffffffffu;
+  int hoverKind = 0;
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 
@@ -193,6 +197,12 @@ class World {
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
   float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
+  // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the
+  // kinds of `hoverKind`; corners in the picture's order: top left, top right, bottom left, bottom right.
+  gfx::Texture brackets_[4][4];
+  bool haveBrackets_ = false;
+  void LoadBrackets();
+  void AddBrackets(int kind, Vec3 position, const Quat& orientation, float halfX, float halfZ);
   int lampUnits_ = 0, lampUnitsBefore_ = 0;  // units whose lamps were lit this frame, and the frame before
   std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground

@@ -118,6 +118,12 @@ void WorldPicture::SetBuildPreviews(const std::vector<BuildPreview>& previews) {
   }
 }
 
+void WorldPicture::SetHover(uint32_t entity, int kind) {
+  if (!impl_->world) return;
+  impl_->world->hover = entity;
+  impl_->world->hoverKind = kind;
+}
+
 void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
   if (impl_->world) impl_->world->borders = meshBlueprints;
 }

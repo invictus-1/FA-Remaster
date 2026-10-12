@@ -55,6 +55,10 @@ class WorldPicture {
   // The selected units, by entity id: a ring on the ground under each, its strategic icon in the
   // selected form.
   void SetSelection(const std::vector<uint32_t>& ids);
+  // The unit under the mouse: marked with the original's brackets of that kind (1 the player's own
+  // or an ally's, 2 an enemy's, 3 anyone else's). Kind 0 or an id that is no unit's: no mark. A
+  // selected unit keeps its selection brackets.
+  void SetHover(uint32_t entity, int kind);
   // Buildings shown as ghosts while their site is chosen: green where the site is free, red where not.
   struct BuildPreview {
     std::string blueprint;  // the unit's blueprint id ("ueb0101")

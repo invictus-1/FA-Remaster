@@ -1,5 +1,7 @@
 #include "world.h"
 
+#include "dds.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -132,6 +134,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     td.data = pixels.data();
     td.dataSize = pixels.size();
     selectionRing_ = device_->CreateTexture(td);
+    LoadBrackets();
   }
   return true;
 }
@@ -145,6 +148,56 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
     ++units;
   }
   if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);
+}
+
+void World::LoadBrackets() {
+  static const char* const kFiles[4] = {"player", "player_highlighted", "enemy", "neutral"};
+  haveBrackets_ = true;
+  for (int k = 0; k < 4; ++k) {
+    const std::string path = std::string("/textures/ui/common/game/selection/selection_brackets_") + kFiles[k] + ".dds";
+    auto file = vfs_->ReadFile(path);
+    DdsImage image;
+    std::vector<uint8_t> pixels;
+    std::string error;
+    if (!file || !ParseDds(*file, &image, &error) || !DecodeRgba(image, 0, &pixels) || image.width < 2 || image.height < 2) {
+      haveBrackets_ = false;
+      return;
+    }
+    // the picture holds all four corners: each quarter of it is one
+    const int w = image.width / 2, h = image.height / 2;
+    std::vector<uint8_t> corner(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+    for (int c = 0; c < 4; ++c) {
+      const int x0 = (c & 1) * w, y0 = (c >> 1) * h;
+      for (int y = 0; y < h; ++y)
+        std::memcpy(&corner[static_cast<size_t>(y) * static_cast<size_t>(w) * 4],
+                    &pixels[(static_cast<size_t>(y0 + y) * static_cast<size_t>(image.width) + static_cast<size_t>(x0)) * 4], static_cast<size_t>(w) * 4);
+      gfx::TextureDesc td;
+      td.width = w;
+      td.height = h;
+      td.format = gfx::Format::RGBA8;
+      td.data = corner.data();
+      td.dataSize = corner.size();
+      brackets_[k][c] = device_->CreateTexture(td);
+    }
+  }
+}
+
+// Four corner pieces about a unit's box on the ground. A piece is as large as nine tenths of the
+// box's shorter half side, and never so small that its line is thinner than three pixels (the
+// game's ren_SelectBracketMinPixelSize; its line is about a ninth of a piece).
+void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, float halfX, float halfZ) {
+  const Vec3 eye = camera.target + (camera.PixelRay(view.width * 0.5f, view.height * 0.5f, static_cast<float>(view.width), static_cast<float>(view.height)).direction * -camera.distance);
+  const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(position - eye);
+  const float piece = std::max(std::min(halfX, halfZ) * 0.9f, 27 * perPixel);
+  halfX = std::max(halfX, piece);
+  halfZ = std::max(halfZ, piece);
+  const Vec3 forward = Rotate(orientation, {0, 0, 1});
+  const float heading = std::atan2(forward.x, forward.z);
+  for (int c = 0; c < 4; ++c) {
+    const float sx = (c & 1) ? 1.0f : -1.0f, sz = (c >> 1) ? 1.0f : -1.0f;  // (a mark's picture has its top at the unit's back)
+    const Vec3 at = position + Rotate(orientation, {sx * (halfX - piece * 0.5f), 0, sz * (halfZ - piece * 0.5f)});
+    decals.AddMark(brackets_[kind][c], at, piece, piece, heading);
+  }
 }
 
 void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose) {
@@ -329,9 +382,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       icons.Add(kind, position, color, isSelected);
-      if (isSelected) {  // the ring on the ground under it, turned as the unit is
+      if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
+        AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
+      } else if (isSelected) {  // (the game's pictures are not there: a ring)
         const Vec3 forward = Rotate(orientation, {0, 0, 1});
         decals.AddMark(selectionRing_, position, kind->selectionX * 2.2f, kind->selectionZ * 2.2f, std::atan2(forward.x, forward.z));
+      } else if (u.id == hover && hoverKind >= 1 && hoverKind <= 3 && haveBrackets_) {
+        AddBrackets(hoverKind, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       }
     }
     const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);

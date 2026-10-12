@@ -4,6 +4,30 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 4: the mark on the unit under the mouse, and the original's brackets — both done (first form)
+
+**1. The unit under the mouse:** `WorldPicture::SetHover(entity, kind)` in `render/world_picture.h`;
+kind 1 the player's own or an ally's (`selection_brackets_player_highlighted.dds`), 2 an enemy's
+(`..._enemy.dds`), 3 anyone else's (`..._neutral.dds`); kind 0, or an id that is no unit's: no mark.
+It stays set until set again; a unit that is also selected keeps its selection brackets.
+
+**2. Selected units** now get the original's brackets (`selection_brackets_player.dds`) in place of
+the white ring. The ring is still what is drawn if the game's bracket pictures cannot be read.
+
+How a mark is drawn, and where it is not the original's: each of the four pictures holds all four
+corners; a mark is four pieces, one corner each, lying on the ground about the unit's box and turned
+as the unit is. The box is the blueprint's `SelectionSizeX` / `SelectionSizeZ` times 1.1 as half
+sides (the factor the ring had, set by eye); a piece is nine tenths of the box's shorter half side,
+and never so small that its line is under three pixels (`ren_SelectBracketMinPixelSize`). The corner
+arithmetic of `0x7fc820`, `ren_SelectionSizeFudge`, `ren_SelectionHeightFudge`,
+`ren_UnitSelectionScale`, `ren_SelectBracketSize`, `ren_SelectColor` and `SelectionThickness` are not
+used: if you read the arithmetic out, I will follow it. Two limits of lying on the ground: under an
+aircraft the mark is on the ground below it, and a mark under a wide unit is partly hidden by it.
+The blinking boxes are not drawn.
+
+Seen through `WorldPicture` on the LAND replay (the viewer's `--picture` selects every third unit and
+puts each kind of mark on one unit in turn).
+
 ## ui, to the renderer 3: the map's border — done (first form)
 
 `WorldPicture::SetBorders(meshBlueprints)` in `render/world_picture.h`: the ids as `MapBorderAdd` gets
