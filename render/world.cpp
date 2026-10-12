@@ -28,13 +28,15 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       post(device),
       skyDraw(device),
       falling(device),
+      sight(device),
+      shafts(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -264,10 +266,17 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
       tint = tint * (1 / std::max({tint.x, tint.y, tint.z, 0.05f}));
     }
-    if (light.cone > 0)
-      lights.AddBeam(at, light.radius * model->scale, tint * on, Rotate(orientation, Rotate(boneTurn, light.direction)), light.cone, light.glow);
-    else
+    if (light.cone > 0) {
+      const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
+      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow);
+      // the beam in the air: faint in clear night air, plainer in rain, snow and fog
+      const float air = 0.03f + 0.16f * fog + 0.08f * rain + 0.09f * snow;
+      const float reach = light.radius * model->scale * 0.75f;
+      const float wide = std::tan(std::min(light.cone, 120.0f) * 0.5f * 0.45f * 3.14159265f / 180) * reach;  // (its bright middle only)
+      shafts.Add(at, at + along * reach, 0.03f * model->scale, wide, tint * (on * air));
+    } else {
       lights.Add(at, light.radius * model->scale, tint * on);
+    }
   }
   for (size_t i = 0; i < takenCount; ++i) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
 }
@@ -303,6 +312,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[3] = reflection;
   lampsOn_ = 0;
   lights.night = 1;
+  shafts.Begin();
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
   lampSquares_.clear();
@@ -513,8 +523,13 @@ void World::Render() {
   }
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
+  shafts.Draw(view);
   if (hide.find("particles") == std::string::npos) particles.Draw(view);
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
+  if (haveMap_ && sight.On()) {  // the fog of war: what is not seen, darkened
+    post.BeginColorOnly();
+    sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
+  }
   post.Present(view);
   if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 }

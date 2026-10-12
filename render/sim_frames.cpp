@@ -125,6 +125,22 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
   seed_ = moho::SessionSeed(sim);
 }
 
+void SimFrames::SetSightGrid(float mapWidth, float mapHeight, int cells) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  sightWidth_ = mapWidth;
+  sightHeight_ = mapHeight;
+  sightCells_ = cells;
+}
+
+bool SimFrames::TakeSight(std::vector<uint8_t>* grid, int* cells) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!sightNew_) return false;
+  sightNew_ = false;
+  *grid = sight_;
+  *cells = sight_.empty() ? 0 : sightCells_;
+  return true;
+}
+
 uint32_t SimFrames::Seed() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return seed_;
@@ -180,6 +196,36 @@ void SimFrames::Beat(const moho::Sim& sim) {
     return it->second;
   };
   const int focus = focus_.load();
+  // what the focus army sees over the map, every fifth beat (and once more, empty, when there is no such army any more)
+  {
+    float mapWidth, mapHeight;
+    int cells;
+    bool wasOn;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      mapWidth = sightWidth_;
+      mapHeight = sightHeight_;
+      cells = sightCells_;
+      wasOn = sightWasOn_;
+    }
+    if (focus > 0 && cells > 0 && sightBeat_++ % 5 == 0) {
+      sightWork_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells));
+      for (int z = 0; z < cells; ++z)
+        for (int x = 0; x < cells; ++x) {
+          const float at[3] = {(static_cast<float>(x) + 0.5f) * mapWidth / static_cast<float>(cells), 0, (static_cast<float>(z) + 0.5f) * mapHeight / static_cast<float>(cells)};
+          sightWork_[static_cast<size_t>(z) * static_cast<size_t>(cells) + static_cast<size_t>(x)] = (moho::ReconAt(sim, focus, at) & moho::kReconSeenNow) ? 255 : 0;
+        }
+      std::lock_guard<std::mutex> lock(mutex_);
+      sight_ = sightWork_;
+      sightNew_ = sightWasOn_ = true;
+    } else if (focus <= 0 && wasOn) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      sight_.clear();
+      sightNew_ = true;
+      sightWasOn_ = false;
+      sightBeat_ = 0;
+    }
+  }
   for (const moho::UnitView& v : e.views) {
     FrameUnit u;
     u.id = v.id;

@@ -313,8 +313,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   detail, at any distance) while it is on radar, sonar or omni alone, and not at all otherwise,
   by the engine's `ReconOf` read with every beat; shots only where the army sees; the minimap and
   what is under the mouse go by the same, and effects that hang on an unseen unit or shot are
-  hidden. Not yet: effects that hang on nothing (a unit's explosion) show everywhere, and unseen
-  ground is not darkened.
+  hidden, and the ground the army does not see is darkened (`sight.h`: a grid of what it sees,
+  asked of the engine twice a second, and one pass over the picture). Not yet: effects that hang
+  on nothing (a unit's explosion) show everywhere; the minimap's ground is not darkened; ground
+  seen before looks like ground never seen.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader
@@ -324,6 +326,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   lights (`<id>_lights.bp`; the form is in `docs/render-unit-lights.md`): points of light that ride
   on its bones. From dusk to dawn they are lit, as small lights (next point), for the units near
   what the camera looks at. Tried with a hand-made list on the Striker; no unit ships one yet.
+- A lamp's beam in the air (`shafts.h`): each beam of a unit's lamps also shows as a faint shaft of
+  light, plainer the thicker the air (rain, snow, fog). One flat shape per beam, turned toward the
+  camera, adding its light; it lights nothing itself. Right from above; from low at the side it
+  looks like an upright wedge.
 - Small lights (modern look). A light is a point that lights what is within its radius. Every
   frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
   the lights of the square it is over - ground, units and decals alike, with the same material

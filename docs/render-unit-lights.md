@@ -63,7 +63,9 @@ ahead of the unit shows.
 
 ## What it does not do yet
 
-- The beam lights surfaces; it is not seen in the air (no shaft of light through dust, rain or fog).
+- The beam is seen in the air as a faint shaft, plainer in rain, snow and fog: one flat shape turned
+  toward the camera along the beam's bright middle (`render/shafts.h`). It is made for the game's view
+  from above; seen from low down at the side it stands like an upright wedge.
 - A light is not switched by what the unit does (moving, firing; being built is the exception: a
   unit under construction has no lights). `Kind` is meant for that.
 - But for `'hull'` lights, a light's colour is the file's; it is not tinted by the army's colour.

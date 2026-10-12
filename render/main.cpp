@@ -734,6 +734,12 @@ int main(int argc, char** argv) {
         live.TakeLooks(&looks);
         world.SetLooks(looks);
         if (live.Seed()) world.weatherSeed = live.Seed();  // the weather every player of this game sees
+        live.SetSightGrid(static_cast<float>(world.map.width), static_cast<float>(world.map.height));
+      }
+      {  // what the focus army sees, when it has been worked out anew
+        std::vector<uint8_t> seen;
+        int cells = 0;
+        if (live.TakeSight(&seen, &cells)) world.sight.Set(seen, cells);
       }
       // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
       if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);
