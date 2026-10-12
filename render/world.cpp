@@ -168,7 +168,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
-    skyLight = SkyAt(timeOfDay);
+    skyLight = SkyAt(timeOfDay, cloudCover);
     SetSky(skyLight, &c);
     lightDirection = skyLight.direction;
   }

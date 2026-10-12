@@ -124,6 +124,7 @@ class World {
   // The time of day, in hours (0..24; 6 sunrise, 12 noon, 18 sunset): the modern look's light is
   // then the computed sky's (sky.h). Negative: the map's own light, as the original has it.
   float timeOfDay = -1;
+  float cloudCover = 0.3f;  // with a time of day: how much of the sky clouds cover, 0 (none) .. 1 (overcast)
   std::string hide;  // kinds of effect left out: any of "particles", "bands", "decals"
 
   // --- the parts, for hosts that add to a frame or read its numbers ---

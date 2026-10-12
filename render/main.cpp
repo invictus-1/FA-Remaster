@@ -56,6 +56,7 @@
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
 //           (from noon when the map's light was on), Y: the map's own light again.
+// --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
@@ -128,6 +129,7 @@ struct Options {
   // chosen for the original's formula)
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
+  float clouds = 0.3f;                  // --clouds
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
   bool hasAt = false;
@@ -214,6 +216,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
+    else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
     else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
@@ -374,6 +377,7 @@ int main(int argc, char** argv) {
   world.sky = opt.sky;
   world.exposure = opt.exposure;
   world.timeOfDay = opt.timeOfDay;
+  world.cloudCover = opt.clouds;
   if (opt.dayLength > 0 && world.timeOfDay < 0) world.timeOfDay = 12;
   world.reflection = opt.reflection;
   world.hide = opt.hide;
@@ -609,6 +613,7 @@ int main(int argc, char** argv) {
             dayOn = true;
           }
           if (e.key == 'Y') dayOn = false;
+          if (e.key == 'C') world.cloudCover = world.cloudCover >= 0.95f ? 0 : std::min(world.cloudCover + 0.25f, 1.0f);
           if (e.key == 'I') iconsOn = !iconsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;

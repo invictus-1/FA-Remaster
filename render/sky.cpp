@@ -33,6 +33,7 @@ cbuffer SkyPicture : register(b1) {
   float4 sunDisc;     // the sun's disc as seen through the air; w: how much of the night's own faint light there is
   float4 moonPlace;   // toward the moon
   float4 starAxis;    // what the stars turn about
+  float4 cloudLight;  // the falling light on the clouds
 };
 
 struct VOut {
@@ -189,12 +190,29 @@ float4 PS(VOut i) : SV_Target {
     float3 shown = ground * (lit * 0.9 + 0.012) * disc * overHorizon;
     c = c * (1 - disc * overHorizon * 0.9) + shown;
   }
+  // the clouds: a layer over the ground (the same that shadows it), bent down toward the horizon
+  [branch] if (skyClouds.x > 0 && d.y > 0.02) {
+    float2 q = cameraPosition.xz + d.xz * (max(150 - cameraPosition.y, 40) / (d.y + 0.1));
+    float field = CloudField(q) + (Cloudy(float3(q * 0.03, skyClouds.w * 3)) - 0.47) * 0.10;
+    float cloud = CloudFrom(field);
+    [branch] if (cloud > 0) {
+      float3 body = skyBody.w > 0.5 ? moon : sun;
+      // thicker toward the light: that side is in the cloud's own shade
+      float toward = CloudField(q + normalize(body.xz + 1e-4) * 45);
+      float shade = saturate((toward - field) * 3.5 + 0.45) * cloud;
+      float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
+      float3 lit = cloudLight.rgb * (1 - 0.8 * shade) * 0.6;
+      float through = pow(saturate(dot(d, body)), 10) * (1 - cloud) * 1.6;  // light coming through thin edges
+      float3 color = around * (0.5 + 0.3 * (1 - cloud)) + lit + cloudLight.rgb * through;
+      c = lerp(c, color, cloud * smoothstep(0.02, 0.15, d.y));
+    }
+  }
   return float4(c * rayForward.w, 1);
 }
 )hlsl";
 
 struct PictureConstants {
-  float forward[4], right[4], up[4], sunSky[4], moonSky[4], sunDisc[4], moonPlace[4], starAxis[4];
+  float forward[4], right[4], up[4], sunSky[4], moonSky[4], sunDisc[4], moonPlace[4], starAxis[4], cloudLight[4];
 };
 
 float Smooth(float from, float to, float x) {
@@ -351,7 +369,7 @@ float GroundLight(const SkyLight& s) {
 
 }  // namespace
 
-SkyLight SkyAt(float hours) {
+SkyLight SkyAt(float hours, float cloudCover) {
   // once: the strength at which the noon sky overhead is as bright as the picture is made for, what
   // the air leaves of the noon sun, and how much light there is at noon
   static const Vec3 noonSun = OnCircle(kPi * 0.5f, kSunTilt);
@@ -359,6 +377,15 @@ SkyLight SkyAt(float hours) {
   static const Vec3 noonReach = Reaches(noonSun);
   static const float noon = GroundLight(Parts(12, strength, noonReach));
   SkyLight s = Parts(hours, strength, noonReach);
+  // clouds: white in the falling light; the more of them, the more the sky's light is theirs, grey
+  s.cover = std::clamp(cloudCover, 0.0f, 1.0f);
+  s.cloudLight = s.color * 1.25f;
+  if (s.cover > 0) {
+    const float grey = Brightness(s.zenith * 0.5f + s.horizon * 0.5f) + Brightness(s.color) * 0.12f;
+    const float share = s.cover * s.cover * 0.9f;
+    s.zenith = s.zenith * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
+    s.horizon = s.horizon * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
+  }
   s.daylight = std::clamp(GroundLight(s) / noon, 0.0f, 1.0f);
   // the eye opens as the light goes, but not all the way: dusk and night stay darker than day
   s.exposure = std::pow(1 / std::max(s.daylight, kDarkest), 0.72f);
@@ -386,6 +413,11 @@ void SetSky(const SkyLight& s, ViewConstants* c) {
   set(c->skyGlow, s.glow, s.daylight);
   set(c->skyBody, s.body, s.moon ? 1.0f : 0.0f);
   set(c->skyMoon, s.moonPlace, 0);
+  // the clouds drift with the wind and change slowly (by the view's clock)
+  c->skyClouds[0] = s.cover;
+  c->skyClouds[1] = 5.0f * c->time;
+  c->skyClouds[2] = 2.2f * c->time;
+  c->skyClouds[3] = 0.012f * c->time;
 }
 
 bool Sky::Init(std::string* error) {
@@ -434,6 +466,7 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky) {
   four(pc.sunDisc, sky.sunDisc, sky.faint);
   four(pc.moonPlace, sky.moonPlace, 0);
   four(pc.starAxis, axis, 0);
+  four(pc.cloudLight, sky.cloudLight, 0);
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &pc, sizeof pc);

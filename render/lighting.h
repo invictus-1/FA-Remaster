@@ -58,6 +58,7 @@ float3 EnvironmentBrdf(float3 f0, float roughness, float nDotV) {
 // The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
+  shadow *= CloudShadow(world);  // (a computed sky's clouds)
   float3 V = normalize(cameraPosition - world);
   float3 L = sunDirection;
   float3 H = normalize(V + L);

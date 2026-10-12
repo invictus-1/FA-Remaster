@@ -268,10 +268,18 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   dark lanes across the sky, and a moon with dark plains, lit by the sun from the side the sun
   stands on. The moon follows the sun 160 degrees behind, so it is up for all of the night but
   the last hour before dawn.
+  Clouds (`--clouds <0..1>`, `World::cloudCover`, 0.3 unless set; key C): one layer of layered
+  noise over the map that drifts and slowly changes, from a few clouds to overcast. In the sky it
+  is lit by the falling light (white by day, dark against a sunset, silver in moonlight), shaded
+  on the side away from it; on the ground the same layer dims the falling light where a cloud
+  stands between, so the shadows move over the land with the clouds; and the more clouds, the
+  greyer the sky's light. It is a flat layer, not clouds with a body; the water is not shadowed by
+  it; seen from above the layer (a camera high up) the clouds themselves are not drawn, only
+  their shadows.
   Not the real thing: light scattered more than once is left out (dusk and deep night get a
   faint light of their own instead, chosen by eye); the moon's light is far stronger against the
   sun's than the real moon's, so that a night can be played; the stars are made by a formula and
-  are no real sky's; the moon's face is noise, not a picture; there are no clouds yet. Not looked
+  are no real sky's; the moon's face is noise, not a picture. Not looked
   at yet: the minimap's ground (drawn once, in the map's light), and how bright the game's flashes
   should be to an eye opened for the night. The original look ignores the time of day. Cost: none
   that can be measured (1.3 ms a frame at 1920 x 1080 with half the picture sky, with or without).

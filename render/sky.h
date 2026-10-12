@@ -39,12 +39,16 @@ struct SkyLight {
   Vec3 sunDisc;          // the sun's disc as seen through the air
   float starTurn = 0;    // how far the stars have turned, radians
   float faint = 0;       // how much of the night's own faint light there is (0 by day, 1 from dusk to dawn)
+  float cover = 0;       // how much of the sky the clouds cover, 0..1
+  Vec3 cloudLight;       // the falling light on the clouds
 };
 
 // The light at that hour (0..24; 6 sunrise, 12 noon, 18 sunset). The sun rises in the east (+x)
 // and stands in the south (+z) at noon, 55 degrees high. The moon follows 160 degrees behind it: it
-// rises some time after sunset, nearly full.
-SkyLight SkyAt(float hours);
+// rises some time after sunset, nearly full. `cloudCover`: how much of the sky a layer of clouds
+// covers (0 none, 1 all): they drift, are lit by the falling light, throw shadows on the ground,
+// and the more there are the greyer the sky's light is.
+SkyLight SkyAt(float hours, float cloudCover = 0);
 // Puts that light into a view's values in place of the map's: the light's direction and colour,
 // the sky's values, the exposure.
 void SetSky(const SkyLight& sky, ViewConstants* constants);
