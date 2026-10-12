@@ -60,7 +60,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
-               [--emit <emitter>]... [--emit-scale 1]
+               [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -128,6 +128,7 @@ prints what it reports.
 | `mesh_renderer.h` | draws models, instanced: units and props |
 | `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
 | `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
+| `ribbons.h` | beams and trails: bands of texture that face the camera, from the game's beam and trail blueprints |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
@@ -185,8 +186,14 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   Strikers at rest 1.3 ms a frame, all 10,000 with a turned turret 3.1 ms, of which 1.3 ms is
   building the 70,000 bone matrices on one core (several cores: to do).
 - Projectiles: one with a model in its blueprint is drawn as that model; the others are effects
-  in the game, and until effects are written a short bright line along the flight stands in.
-  Between beats a projectile flies on along its velocity. Beams are plain lines for now.
+  in the game, and until the simulation says which, a short soft glowing band along the flight
+  stands in. Between beats a projectile flies on along its velocity. A weapon's beam is a plain
+  glowing band in a lightened army colour, for the same reason.
+- Beams and trails (step 6): the game's `BeamBlueprint`s (a band from start to end, its texture
+  sliding along, its colour running from a start to an end colour) and `TrailEmitterBlueprint`s
+  (a band through where the emitter has been, fading along a ramp texture) are drawn, facing the
+  camera. `--beam <name>` and `--trail <name>` show one. In games they wait for the same
+  hand-over as the particle emitters (REQUESTS.md, 8); what is guessed is asked in 10.
 - Particle effects, first form (step 6). The game's emitters (`/effects/emitters/*_emit.bp`: fire,
   smoke, flashes, debris, sparks) are played: an emitter reads a particle's start values from its
   blueprint's curves, and from then on the graphics card works out where the particle is, how big
@@ -247,7 +254,7 @@ Known gaps, to be closed in the steps they belong to:
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
 - No decals, no sky, no ground beyond the map's edge. Effects play only on request (`--emit`), not
-  yet in games; no beam or trail effects; particles are not sorted by distance, do not refract
+  yet in games; particles are not sorted by distance, do not refract
   (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
