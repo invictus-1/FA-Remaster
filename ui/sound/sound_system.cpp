@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "core/log.h"
@@ -30,6 +31,7 @@ SoundSystem::SoundSystem(const Vfs* vfs) : vfs_(vfs) {
   if (auto data = vfs_->ReadFile("/sounds/supcom.xgs")) {
     if (!ParseGlobalSettings(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &categories_))
       Logf(LogLevel::Warning, "moho64ui: sound: /sounds/supcom.xgs is not read (another layout)");
+    ParseCurves(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &curves_);
   } else {
     Logf(LogLevel::Info, "moho64ui: sound: no /sounds/supcom.xgs: no sound categories");
   }
@@ -152,6 +154,38 @@ std::shared_ptr<WaveData> SoundSystem::GetWave(WaveBank* bank, int index) {
 }
 
 int SoundSystem::Play(const std::string& bankName, const std::string& cueName, bool prepareOnly) {
+  return PlayCue(bankName, cueName, prepareOnly, nullptr);
+}
+
+// The quietest a world sound is still played at (decibels by its curves alone).
+const float kHeardFrom = -60.0f;
+
+float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float position[3], float* left, float* right) const {
+  if (!listening_) {
+    *left = *right = 0;
+    return -96.0f;
+  }
+  float d[3] = {position[0] - eye_[0], position[1] - eye_[1], position[2] - eye_[2]};
+  float distance = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
+  float eyeDistance = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+  float decibels = 0;
+  for (uint32_t offset : curves) {
+    auto it = curves_.find(offset);
+    if (it == curves_.end() || it->second.parameter != 0) continue;
+    if (it->second.variable == "Distance") decibels += it->second.At(distance);
+    else if (it->second.variable == "CameraDistance") decibels += it->second.At(eyeDistance);
+  }
+  // Between the ears by where it is on screen: at the screen's edge about two thirds to one side. (Ours.)
+  float side = ((position[0] - focus_[0]) * right_[0] + (position[2] - focus_[2]) * right_[2]) / std::max(1.0f, zoom_ * 0.5f);
+  side = std::max(-1.0f, std::min(1.0f, side));
+  float gain = Linear(decibels);
+  *left = gain * (1.0f - std::max(0.0f, side) * 0.65f);
+  *right = gain * (1.0f + std::min(0.0f, side) * 0.65f);
+  return decibels;
+}
+
+int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName, bool prepareOnly, const float* position) {
   auto complain = [&](const char* what) {
     std::string key = Lower(bankName) + "/" + Lower(cueName);
     if (!complained_[key]) Logf(LogLevel::Warning, "moho64ui: sound: %s (bank %s, cue %s)", what, bankName.c_str(), cueName.c_str());
@@ -177,6 +211,14 @@ int SoundSystem::Play(const std::string& bankName, const std::string& cueName, b
   };
   const SoundDef& sound = bank->info.sounds[static_cast<size_t>(cue.sounds[pick(cue.weights)])];
   int category = sound.category < static_cast<int>(categories_.size()) ? sound.category : -1;
+  // A sound of the world that cannot be heard from here is not played at all.
+  float left = 1, right = 1;
+  float heard = position ? Heard(sound.curves, position, &left, &right) : 0;
+  if (position && std::getenv("MOHO64UI_SOUND_LOG"))  // a look at what the world plays and how loud
+    Logf(LogLevel::Info, "moho64ui: sound: world %s/%s: %.1f dB by its %d curves, its own %.1f dB, category %s", bankName.c_str(),
+         cueName.c_str(), heard, static_cast<int>(sound.curves.size()), sound.volume,
+         category >= 0 ? categories_[static_cast<size_t>(category)].name.c_str() : "-");
+  if (position && heard < kHeardFrom) return 0;
 
   // A category that is full: the new sound takes the oldest one's place, or is not played.
   if (category >= 0) {
@@ -204,6 +246,7 @@ int SoundSystem::Play(const std::string& bankName, const std::string& cueName, b
     float cents = static_cast<float>(sound.pitch) + between(static_cast<float>(e.pitchMin), static_cast<float>(e.pitchMax));
     int voice = mixer_.Add(wave, Linear(decibels), std::pow(2.0f, cents / 1200.0f), e.loops == 255 ? -1 : e.loops, category, e.timeMs);
     if (!voice) continue;
+    if (position) mixer_.Place(voice, left, right);
     voices.push_back(voice);
     lastWave_ = waves->info.name + "#" + std::to_string(choice.wave);
   }
@@ -217,8 +260,86 @@ int SoundSystem::Play(const std::string& bankName, const std::string& cueName, b
   }
   int handle = nextHandle_++;
   handles_[handle] = voices;
+  if (position) {
+    Placed& p = placed_[handle];
+    p.position[0] = position[0], p.position[1] = position[1], p.position[2] = position[2];
+    p.curves = sound.curves;
+    ++worldPlayed_;
+  }
   if (!prepareOnly) Start(handle);
   return handle;
+}
+
+void SoundSystem::SetListener(const float eye[3], const float focus[3], const float right[3], float zoom) {
+  for (int i = 0; i < 3; ++i) eye_[i] = eye[i], focus_[i] = focus[i], right_[i] = right[i];
+  zoom_ = zoom;
+  listening_ = true;
+  UpdateWorld();
+}
+
+int SoundSystem::PlayAt(const std::string& bank, const std::string& cue, const float position[3]) {
+  return PlayCue(bank, cue, false, position);
+}
+
+void SoundSystem::SetLoop(uint32_t entity, const std::string& bank, const std::string& cue, const float position[3]) {
+  auto it = loops_.find(entity);
+  if (it != loops_.end() && it->second.handle) Stop(it->second.handle, false);
+  if (bank.empty() || cue.empty()) {
+    if (it != loops_.end()) loops_.erase(it);
+    return;
+  }
+  Loop& loop = loops_[entity];
+  loop.bank = bank, loop.cue = cue, loop.handle = 0;
+  loop.position[0] = position[0], loop.position[1] = position[1], loop.position[2] = position[2];
+}
+
+void SoundSystem::MoveLoop(uint32_t entity, const float position[3]) {
+  auto it = loops_.find(entity);
+  if (it == loops_.end()) return;
+  for (int i = 0; i < 3; ++i) it->second.position[i] = position[i];
+  auto placed = placed_.find(it->second.handle);
+  if (placed != placed_.end())
+    for (int i = 0; i < 3; ++i) placed->second.position[i] = position[i];
+}
+
+void SoundSystem::StopWorld() {
+  for (auto& entry : placed_) Stop(entry.first, true);
+  placed_.clear();
+  loops_.clear();
+  listening_ = false;
+}
+
+// Every playing sound of the world gets its loudness and its side again; a running sound that has
+// come into hearing starts, one that has gone out of it ends.
+void SoundSystem::UpdateWorld() {
+  for (auto it = placed_.begin(); it != placed_.end();) {
+    auto voices = handles_.find(it->first);
+    bool alive = false;
+    float left = 1, right = 1;
+    float decibels = Heard(it->second.curves, it->second.position, &left, &right);
+    if (voices != handles_.end())
+      for (int v : voices->second) {
+        if (!mixer_.Alive(v)) continue;
+        alive = true;
+        mixer_.Place(v, left, right);
+      }
+    (void)decibels;
+    it = alive ? std::next(it) : placed_.erase(it);
+  }
+  for (auto& entry : loops_) {
+    Loop& loop = entry.second;
+    auto placed = placed_.find(loop.handle);
+    if (placed == placed_.end()) {
+      loop.handle = PlayCue(loop.bank, loop.cue, false, loop.position);  // 0 while it cannot be heard
+      continue;
+    }
+    float left = 1, right = 1;
+    if (Heard(placed->second.curves, loop.position, &left, &right) < kHeardFrom) {
+      Stop(loop.handle, false);
+      placed_.erase(placed);
+      loop.handle = 0;
+    }
+  }
 }
 
 void SoundSystem::Start(int handle) {

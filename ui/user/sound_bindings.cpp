@@ -128,7 +128,8 @@ int l_AudioSetLanguage(lua_State* L) {
 // played yet, so there is nothing to switch.
 int l_Nothing(lua_State*) { return 0; }
 
-// moho64ui_SoundInfo() -> {played = cues played so far, wave = the last one's wave ("Interface#11")}
+// moho64ui_SoundInfo() -> {played = cues played so far, wave = the last one's wave ("Interface#11"),
+// world = how many of them were sounds of the world}
 int l_SoundInfo(lua_State* L) {
   sound::SoundSystem* s = System(L);
   lua_newtable(L);
@@ -138,6 +139,31 @@ int l_SoundInfo(lua_State* L) {
   lua_pushstring(L, "wave");
   lua_pushstring(L, s ? s->lastWave().c_str() : "");
   lua_rawset(L, -3);
+  lua_pushstring(L, "world");
+  lua_pushnumber(L, s ? s->worldPlayed() : 0);
+  lua_rawset(L, -3);
+  return 1;
+}
+// moho64ui_SoundListener(eyeX, eyeY, eyeZ, focusX, focusY, focusZ, zoom): where the world's sounds
+// are heard from (a game tells this itself, from its camera); the screen's right is the map's east.
+int l_SoundListener(lua_State* L) {
+  float eye[3], focus[3], right[3] = {1, 0, 0};
+  for (int i = 0; i < 3; ++i) eye[i] = static_cast<float>(luaL_checknumber(L, 1 + i)), focus[i] = static_cast<float>(luaL_checknumber(L, 4 + i));
+  if (sound::SoundSystem* s = System(L)) s->SetListener(eye, focus, right, static_cast<float>(luaL_checknumber(L, 7)));
+  return 0;
+}
+// moho64ui_SoundVoices() -> a text: one line for every voice that plays or waits
+int l_SoundVoices(lua_State* L) {
+  sound::SoundSystem* s = System(L);
+  lua_pushstring(L, s ? s->mixer().Describe().c_str() : "");
+  return 1;
+}
+// moho64ui_SoundAt(bank, cue, x, y, z) -> true when the sound is heard from where the listener is
+int l_SoundAt(lua_State* L) {
+  float position[3];
+  for (int i = 0; i < 3; ++i) position[i] = static_cast<float>(luaL_checknumber(L, 3 + i));
+  sound::SoundSystem* s = System(L);
+  lua_pushboolean(L, s && s->PlayAt(luaL_checkstring(L, 1), luaL_checkstring(L, 2), position) != 0);
   return 1;
 }
 // moho64ui_SoundMix(milliseconds [, file]) -> the loudest sample (0..1) of that much sound, mixed
@@ -183,6 +209,9 @@ void RegisterSoundBindings(lua_State* L) {
   SetGlobal(L, "DisableWorldSounds", l_Nothing);
   SetGlobal(L, "EnableWorldSounds", l_Nothing);
   lua_register(L, "moho64ui_SoundInfo", l_SoundInfo);
+  lua_register(L, "moho64ui_SoundListener", l_SoundListener);
+  lua_register(L, "moho64ui_SoundAt", l_SoundAt);
+  lua_register(L, "moho64ui_SoundVoices", l_SoundVoices);
   lua_register(L, "moho64ui_SoundMix", l_SoundMix);
 }
 

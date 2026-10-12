@@ -19,6 +19,11 @@
 #include "render/world_picture.h"
 #endif
 
+#include <cstdlib>
+
+#include "sim/sim_view.h"
+#include "sound/sound_system.h"
+
 namespace moho::ui {
 
 // The renderer's world picture behind the interface's WorldSource.
@@ -154,6 +159,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   sim->collectSync = true;
 #ifdef MOHO64UI_WORLD_PICTURE
   sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
+  sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
 #endif
   if (!sim->Start(session)) {
     *why = "the simulation did not start";
@@ -232,6 +238,80 @@ void GameSession::NoteBeat() {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (picture_) picture_->picture.Beat(*sim_);
 #endif
+  PlayBeatSounds();
+}
+
+// The world's sounds of the beat (the engine's SoundEvents): one-shots at their place, and the
+// entities' running sounds, which then follow their units. (The second, "rumble" sound of a
+// running sound is left out.)
+// Whose sounds: the player's own and the allies', and what belongs to no army (fires, trees),
+// always; another army's only where the player has a unit near enough to see it. That last part
+// is a stand-in of ours (a fixed distance instead of what the army really sees), so that a hidden
+// enemy is not given away by its noise; the original's rule is not read, and the engine is asked
+// for what an army sees.
+void GameSession::PlayBeatSounds() {
+  if (!sounds) return;
+  std::vector<SoundEvent> events;
+  SoundEvents(*sim_, &events);
+  if (events.empty() && foreignLoops_.empty() && !sounds->HasLoops()) return;
+  const int focus = sim_->focusArmy + 1;
+  std::vector<bool> friendly;  // by army - 1
+  for (const ArmyView& a : ArmyViews(*sim_)) {
+    if (a.index < 1) continue;
+    if (friendly.size() < static_cast<size_t>(a.index)) friendly.resize(static_cast<size_t>(a.index), false);
+    bool ally = focus >= 1 && focus <= static_cast<int>(a.alliance.size()) && a.alliance[static_cast<size_t>(focus - 1)] == 2;
+    friendly[static_cast<size_t>(a.index - 1)] = a.index == focus || ally;
+  }
+  auto isFriendly = [&](int army) { return army >= 1 && army <= static_cast<int>(friendly.size()) && friendly[static_cast<size_t>(army - 1)]; };
+  std::vector<UnitView> units;
+  UnitViews(*sim_, &units);
+  const float kSight = 60.0f;  // map units; about what a small unit sees
+  auto seen = [&](const float p[3]) {
+    for (const UnitView& u : units) {
+      if (u.dead || !isFriendly(u.army)) continue;
+      float dx = u.position[0] - p[0], dz = u.position[2] - p[2];
+      if (dx * dx + dz * dz <= kSight * kSight) return true;
+    }
+    return false;
+  };
+  const bool log = std::getenv("MOHO64UI_SOUND_LOG") != nullptr;
+  for (const SoundEvent& e : events) {
+    bool ours = e.army <= 0 || isFriendly(e.army);
+    if (log)
+      Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s", static_cast<unsigned>(sim_->tick()),
+           e.kind == SoundEvent::Play ? "play" : "loop", static_cast<unsigned>(e.entity), e.army, e.position[0], e.position[1],
+           e.position[2], e.bank.c_str(), e.cue.c_str());
+    if (e.kind == SoundEvent::Play) {
+      if (ours || seen(e.position)) sounds->PlayAt(e.bank, e.cue, e.position);
+    } else if (ours) {
+      sounds->SetLoop(e.entity, e.bank, e.cue, e.position);
+    } else if (e.bank.empty() || e.cue.empty()) {  // another army's running sound ends
+      foreignLoops_.erase(e.entity);
+      if (heardLoops_.erase(e.entity)) sounds->SetLoop(e.entity, "", "", e.position);
+    } else {
+      ForeignLoop& loop = foreignLoops_[e.entity];
+      if (heardLoops_.erase(e.entity)) sounds->SetLoop(e.entity, "", "", e.position);  // it changes: start again below
+      loop.bank = e.bank, loop.cue = e.cue;
+      for (int i = 0; i < 3; ++i) loop.position[i] = e.position[i];
+    }
+  }
+  // Running sounds follow their units; another army's start and end as it comes into sight and leaves it.
+  for (const UnitView& u : units) {
+    auto it = foreignLoops_.find(u.id);
+    if (it != foreignLoops_.end())
+      for (int i = 0; i < 3; ++i) it->second.position[i] = u.position[i];
+    sounds->MoveLoop(u.id, u.position);
+  }
+  for (auto& entry : foreignLoops_) {
+    bool hear = seen(entry.second.position), heard = heardLoops_.count(entry.first) != 0;
+    if (hear && !heard) {
+      sounds->SetLoop(entry.first, entry.second.bank, entry.second.cue, entry.second.position);
+      heardLoops_.insert(entry.first);
+    } else if (!hear && heard) {
+      sounds->SetLoop(entry.first, "", "", entry.second.position);
+      heardLoops_.erase(entry.first);
+    }
+  }
 }
 
 void GameSession::RunFirstBeat() {

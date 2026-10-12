@@ -76,4 +76,32 @@ StopAllSounds()
 moho64ui_SoundMix(50)
 check("StopAllSounds: silent", moho64ui_SoundMix(100), 0)
 
+-- the world's sounds: heard from where the listener is, by the sound's own curves in the game's files
+moho64ui_SoundMix(500)
+local step = {"UEL", "UEL0001_Move_Step"}
+check("before there is a listener nothing of the world is heard", moho64ui_SoundAt(step[1], step[2], 100, 0, 100), false)
+moho64ui_SoundListener(100, 40, 100, 100, 0, 100, 60)
+check("near the listener a unit's step is heard", moho64ui_SoundAt(step[1], step[2], 100, 0, 100), true)
+local near = moho64ui_SoundMix(300)
+moho64ui_SoundMix(3000)
+moho64ui_SoundListener(100, 600, 100, 100, 0, 100, 700)
+check("from farther off it still plays", moho64ui_SoundAt(step[1], step[2], 100, 0, 100), true)
+local mid = moho64ui_SoundMix(300)
+check("and is much softer", mid > 0 and mid < near * 0.5, true)
+moho64ui_SoundMix(3000)
+moho64ui_SoundListener(100, 6000, 100, 100, 0, 100, 6000)
+check("from very far it is not played at all", moho64ui_SoundAt(step[1], step[2], 100, 0, 100), false)
+check("two sounds of the world were heard", moho64ui_SoundInfo().world, 2)
+-- a sound to one side is louder in that ear: mix a step far to the east and compare the ears through the file
+moho64ui_SoundListener(100, 40, 100, 100, 0, 100, 60)
+check("a playing sound follows the listener: moving away silences it", (function()
+    moho64ui_SoundAt(step[1], step[2], 100, 0, 100)
+    local a = moho64ui_SoundMix(100)
+    moho64ui_SoundListener(100, 6000, 100, 100, 0, 100, 6000)
+    local b = moho64ui_SoundMix(100)
+    return a > 0 and b == 0
+end)(), true)
+StopAllSounds()
+moho64ui_SoundMix(100)
+
 LOG("TEST done: " .. failed .. " failed")

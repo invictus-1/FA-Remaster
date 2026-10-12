@@ -174,9 +174,14 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
       e.waves.push_back(w);
       def.events.push_back(e);
     }
-    if (flags & 0x0e) {
+    if (flags & 0x0e) {  // the block of curves: its length, then (bit 1) a count and the sound's curves
       size_t mark = s.o;
-      s.o = mark + s.U16();
+      size_t length = s.U16();
+      if (flags & 0x02) {
+        int n = s.U8();
+        for (int j = 0; j < n && !s.bad; ++j) def.curves.push_back(s.U32());
+      }
+      s.o = mark + length;
     }
     if (flags & 0x10) {
       size_t mark = s.o;
@@ -340,6 +345,65 @@ bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>
     out->push_back(cat);
   }
   return true;
+}
+
+}  // namespace moho::ui::sound
+
+namespace moho::ui::sound {
+
+float Curve::At(float x) const {
+  if (points.empty()) return 0;
+  if (x <= points.front().first) return points.front().second / 100.0f;
+  for (size_t i = 1; i < points.size(); ++i) {
+    if (x > points[i].first) continue;
+    float span = points[i].first - points[i - 1].first;
+    float t = span > 0 ? (x - points[i - 1].first) / span : 1;
+    return (points[i - 1].second + (points[i].second - points[i - 1].second) * t) / 100.0f;
+  }
+  return points.back().second / 100.0f;
+}
+
+// In the global settings (the head as in ParseGlobalSettings): the variables at the second offset,
+// 13 bytes each, their names at the eighth; the curves at the ninth, one after the other: the
+// variable's index, the count of points, the parameter, then per point x, y and a byte for the
+// kind of line. The count of curves is the fifth of the head's counts.
+bool ParseCurves(const uint8_t* data, size_t size, std::map<uint32_t, Curve>* out) {
+  if (size < 0x4d || std::memcmp(data, "XGSF", 4) != 0) return false;
+  Reader r(data, size, 4 + 2 + 2 + 2 + 8 + 1);
+  r.U16();
+  uint32_t variables = r.U16();
+  r.U16(), r.U16();
+  uint32_t count = r.U16();
+  r.U16(), r.U16();
+  uint32_t offsets[11];
+  for (uint32_t& o : offsets) o = r.U32();
+  if (r.bad || variables > 4096 || count > 4096) return false;
+  std::vector<std::string> names;
+  for (size_t p = offsets[7]; names.size() < variables && p < size;) {
+    size_t len = 0;
+    while (p + len < size && data[p + len]) ++len;
+    names.emplace_back(reinterpret_cast<const char*>(data + p), len);
+    p += len + 1;
+  }
+  out->clear();
+  Reader c(data, size, offsets[8]);
+  for (uint32_t i = 0; i < count && !c.bad; ++i) {
+    uint32_t at = static_cast<uint32_t>(c.o);
+    Curve curve;
+    uint32_t variable = c.U16();
+    int points = c.U8();
+    curve.parameter = c.U16();
+    if (variable < names.size()) curve.variable = names[variable];
+    for (int j = 0; j < points && !c.bad; ++j) {
+      uint32_t xb = c.U32(), yb = c.U32();
+      c.U8();
+      float x, y;
+      std::memcpy(&x, &xb, 4), std::memcpy(&y, &yb, 4);
+      curve.points.push_back({x, y});
+    }
+    if (!c.bad) (*out)[at] = curve;
+  }
+  return !c.bad;
 }
 
 }  // namespace moho::ui::sound

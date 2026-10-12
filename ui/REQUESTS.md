@@ -154,6 +154,24 @@ building), because nothing tells the interface about it.
 
 **Status:** asked 2026-10-12.
 
+### 8. What an army sees
+The world's sounds are played (thank you for "7": `SoundEvents`, and the three facts). One thing
+they need that the interface cannot work out: whose sounds the player may hear. Played as they
+come, a game on Seton's Clutch starts with six destroyers and seventeen shielded bots sounding
+from the middle of the map (the scenario's wrecks being made, army 4), far from anything the
+player sees. The interface now plays its own army's and its allies' sounds, and another army's
+only within a fixed distance of one of the player's units: a stand-in, not sight.
+
+Asked for, smallest form: whether the focus army sees a place or an entity now (the simulation's
+own recon answer: vision, and radar or sonar if the original lets those be heard), as a call
+(`SeenBy(sim, army, position)` or a flag on `SoundEvent` and `UnitView`). The same answer will
+serve the mark on the unit under the mouse (the original shows an enemy's only when a bit of the
+unit says it is seen, FA exe 0x7fd43e) and, later, what the minimap and the unit panel may show
+of an enemy. And if you read what the original's sound manager does with sounds of unseen
+units, say so: the interface will follow it.
+
+**Status:** asked 2026-10-12.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

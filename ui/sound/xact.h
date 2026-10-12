@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace moho::ui::sound {
@@ -51,6 +52,7 @@ struct SoundDef {
   int pitch = 0;
   int priority = 0;
   std::vector<PlayEvent> events;
+  std::vector<uint32_t> curves;  // the volume curves it follows: their offsets in the global settings
 };
 struct CueDef {
   std::string name;
@@ -73,6 +75,17 @@ struct Category {
   bool replaceOldest = false;  // at the limit a new sound takes the oldest one's place (else it is not played)
 };
 bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>* out);
+
+// A curve of the global settings: a sound's loudness (hundredths of a decibel) by a variable the
+// game sets, such as "Distance" (from the listener to the sound). Straight lines between points.
+struct Curve {
+  std::string variable;
+  int parameter = 0;  // 0: volume
+  std::vector<std::pair<float, float>> points;
+  float At(float x) const;  // in decibels
+};
+// The curves by their offset in the file (sounds name them so).
+bool ParseCurves(const uint8_t* data, size_t size, std::map<uint32_t, Curve>* out);
 
 // The files' volume byte in decibels (0 = -96, 180 = 0, 255 = +6). A curve fitted to the sound
 // tool's own table, as other readers of these files use it.

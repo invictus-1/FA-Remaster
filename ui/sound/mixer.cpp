@@ -85,6 +85,12 @@ void Mixer::StopAll() {
   voices_.erase(std::remove_if(voices_.begin(), voices_.end(), [](const Voice& v) { return !v.started || v.delay > 0; }), voices_.end());
 }
 
+void Mixer::Place(int voice, float left, float right) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (Voice& v : voices_)
+    if (v.id == voice) v.left = left, v.right = right;
+}
+
 bool Mixer::Alive(int voice) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (const Voice& v : voices_)
@@ -101,6 +107,21 @@ int Mixer::CountOf(int category, int* oldest) {
     if (n++ == 0 && oldest) *oldest = v.id;
   }
   return n;
+}
+
+std::string Mixer::Describe() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::string out;
+  char line[160];
+  for (const Voice& v : voices_) {
+    size_t cat = static_cast<size_t>(v.category);
+    float c = v.category >= 0 && cat < gains_.size() ? gains_[cat] : 1.0f;
+    std::snprintf(line, sizeof line, "voice %d category %d own %.3f category's %.3f place %.3f %.3f loops %d at %.1f of %.1f s%s\n", v.id,
+                  v.category, v.gain, c, v.left, v.right, v.loops, v.position / v.wave->rate, static_cast<double>(v.wave->frames) / v.wave->rate,
+                  v.started ? "" : " (waiting)");
+    out += line;
+  }
+  return out;
 }
 
 void Mixer::SetCategories(const std::vector<float>& gains, const std::vector<bool>& paused) {
@@ -156,8 +177,8 @@ void Mixer::Mix(int16_t* out, int frames) {
             g = 0;
           }
         }
-        sum_[static_cast<size_t>(at + i) * 2] += l * g;
-        sum_[static_cast<size_t>(at + i) * 2 + 1] += r * g;
+        sum_[static_cast<size_t>(at + i) * 2] += l * g * v.left;
+        sum_[static_cast<size_t>(at + i) * 2 + 1] += r * g * v.right;
       }
       v.position += v.step * n;
       at += n;

@@ -798,6 +798,24 @@ int l_CreatePrefetchSet(lua_State* L) {
 
 }  // namespace
 
+bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], float* zoom) {
+  UserState* user = UserState::From(L);
+  auto it = user->cameras.find("WorldCamera");
+  if (it == user->cameras.end()) return false;
+  const Camera* c = static_cast<const Camera*>(it->second.get());
+  if (!c->placed) return false;
+  Sim* sim = user->config().sim;
+  focus[0] = c->focus[0], focus[2] = c->focus[2];
+  focus[1] = sim && sim->map() ? sim->map()->TerrainHeight(focus[0], focus[2]) : c->focus[1];
+  // (The eye by the picture's source's rule: back from the focus by heading and pitch.)
+  float turn = c->heading - kPi, pitch = PitchOf(c), distance = EyeDistance(c);
+  float sh = std::sin(turn), ch = std::cos(turn), sp = std::sin(pitch), cp = std::cos(pitch);
+  eye[0] = focus[0] + sh * cp * distance, eye[1] = focus[1] + sp * distance, eye[2] = focus[2] + ch * cp * distance;
+  right[0] = ch, right[1] = 0, right[2] = -sh;
+  *zoom = c->zoom;
+  return true;
+}
+
 uint32_t UnitUnderMouse(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));

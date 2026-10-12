@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1450 --log out.log
+--            --frames 1650 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -134,6 +134,12 @@ local function run()
     WaitSeconds(3)
     local now = cdr:GetPosition()
     check("the commander walks towards a right click", now[1] > pos[1] + 2, true)
+    -- the world's sounds: from far out its steps are too soft to play; near, they are heard
+    local heardFar = moho64ui_SoundInfo().world
+    cam:SnapTo(now, nil, 60)
+    WaitSeconds(2.5)
+    check("near the walking commander its steps are heard", moho64ui_SoundInfo().world > heardFar, true)
+    cam:RestoreSettings(saved)
     local queue = cdr:GetCommandQueue()
     check("its queue holds the move order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Move")
     check("an order's command name", GetUnitCommandFromCommandCap("RULEUCC_Stop"), "UNITCOMMAND_Stop")

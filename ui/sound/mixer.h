@@ -54,6 +54,9 @@ class Mixer {
   void Stop(int voice, bool immediate);
   void StopAll();
   bool Alive(int voice);
+  // A voice's place among the listener's ears: a factor for the left and one for the right, on
+  // top of its own loudness (a sound of the world, as the listener moves; 1 and 1 at first).
+  void Place(int voice, float left, float right);
   // How many voices of a category sound or wait, and the oldest of them (0: none).
   int CountOf(int category, int* oldest);
 
@@ -63,6 +66,8 @@ class Mixer {
   // The next `frames` frames (stereo: 2 * frames values).
   void Mix(int16_t* out, int frames);
   int64_t framesMixed() const { return framesMixed_; }
+  // For a look at what is playing: one line per voice (its category, loudness, place, how far in).
+  std::string Describe();
 
  private:
   struct Voice {
@@ -74,6 +79,7 @@ class Mixer {
     int64_t delay = 0;       // output frames before it sounds
     bool started = false;
     float fade = 1, fadeStep = 0;  // going down to 0 when it is being stopped
+    float left = 1, right = 1;     // its place (Place)
   };
   std::mutex mutex_;
   std::vector<Voice> voices_;

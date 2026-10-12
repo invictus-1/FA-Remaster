@@ -270,9 +270,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   first device, the old wave output with small buffers, had 187 holes of silence in 7.5 s,
   heard as static; the session has none, in the menu and in a game). `MOHO64UI_SOUND=waveout`
   takes the old wave output with larger buffers, as the host does by itself where the session
-  cannot be opened. Not built: the world's sounds (units, weapons: they need the
-  simulation's sound events and a place in the world), ducking the other sounds under a voice,
-  the volume curves and effects of the sound files, fading as the files set it. How the
+  cannot be opened. The world's sounds: what the simulation's scripts play (the engine's
+  `SoundEvents` of every beat: steps, engines, weapons, fires) is played at its place and heard
+  from the camera: each sound follows its own curves from the game's files, loudness by the
+  distance from the camera's eye (`Distance`) and by how far out the camera is
+  (`CameraDistance`), and sits between the ears by where it is on screen (that last part is
+  ours). A running sound follows its unit and plays only while it can be heard. Whose sounds:
+  the player's and the allies' always; another army's only where the player has a unit near (a
+  stand-in until the engine tells what an army sees: `ui/REQUESTS.md`, engine 8).
+  `MOHO64UI_SOUND_LOG=1` logs every sound of the world with its loudness. Not built: the second
+  ("rumble") sound of a running sound, the files' other curves (attack and release times, the
+  angle), ducking the other sounds under a voice, effects, fading as the files set it. How the
   original's own sound manager limits and fades is not read from its code.
 - The mouse pointer is the game's own: the texture the scripts set (`GetCursor():SetTexture`,
   animated ones step through their pictures) is made into the system's pointer in a live window,

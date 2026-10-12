@@ -138,6 +138,10 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
 // none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
 bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+// Where the main camera listens from, for the world's sounds (worldview.cpp): its eye, the place
+// it looks at, the direction to the screen's right along the ground, and its zoom. False before
+// the camera is placed.
+bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], float* zoom);
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).

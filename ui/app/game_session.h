@@ -7,6 +7,8 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,6 +26,10 @@ class Vfs;
 
 namespace moho::ui {
 
+namespace sound {
+class SoundSystem;
+}
+
 class GameSession {
  public:
   GameSession(Vfs* vfs, std::vector<std::string> hookDirs);
@@ -38,6 +44,10 @@ class GameSession {
   // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
   // renderer).
   bool wantPicture = true;
+  // What plays the world's sounds (the host's sound system); nullptr: the simulation is not asked
+  // for them. Set before a game is launched.
+  sound::SoundSystem* sounds = nullptr;
+  void PlayBeatSounds();  // the simulation's sounds of the beat just run (called by the session itself)
   WorldSource* world() const;
 
   // The random seed of the next launch; without one the clock gives it.
@@ -76,6 +86,14 @@ class GameSession {
   void DrawStatus(DrawTarget& target) const;
 
  private:
+  // Running sounds of other armies' units, by entity: bank, cue and where; and those of them the
+  // player hears at the moment (see PlayBeatSounds).
+  struct ForeignLoop {
+    std::string bank, cue;
+    float position[3] = {0, 0, 0};
+  };
+  std::map<uint32_t, ForeignLoop> foreignLoops_;
+  std::set<uint32_t> heardLoops_;
   void NoteBeat();  // a beat has run: the picture hears of it
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;

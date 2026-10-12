@@ -238,6 +238,7 @@ int main(int argc, char** argv) {
   // A game launched from the lobby: the simulation starts from the game configuration and the host
   // runs its beats beside the interface's frames.
   ui::GameSession session(&vfs, cfg.hookDirs);
+  session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.wantPicture = !noWorld;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
@@ -294,11 +295,17 @@ int main(int argc, char** argv) {
       session.takeOrders = [&game]() { return ui::TakeOrders(game->L()); };
     }
   };
+  // The world's sounds are heard from where the game's camera is.
+  auto listen = [&]() {
+    float eye[3], focus[3], right[3], zoom = 0;
+    if (game && ui::CameraListener(game->L(), eye, focus, right, &zoom)) sounds.SetListener(eye, focus, right, zoom);
+  };
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.Advance(seconds);
+                           listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            startGameInterface();
                          });
@@ -307,6 +314,7 @@ int main(int argc, char** argv) {
     for (; done < o.frames; ++done) {
       shown->Frame(1.0 / 60.0);
       session.Advance(1.0 / 60.0);
+      listen();
       startGameInterface();
     }
   }
