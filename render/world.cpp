@@ -137,6 +137,43 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
   if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);
 }
 
+void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose) {
+  if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
+  // (only near what the camera looks at: a lamp lights a few units of ground)
+  if (Length(position - camera.target) > camera.distance * 2 + 80) return;
+  for (const ModelLight& light : model->lights) {
+    Vec3 bonePlace{0, 0, 0};
+    Quat boneTurn;
+    if (light.bone >= 0) {
+      const ModelBone& rest = model->bones[static_cast<size_t>(light.bone)];
+      auto posed = [&](const FrameBone* bones, uint32_t count, Vec3* p, Quat* q) {
+        *p = rest.position * model->scale;
+        *q = rest.rotation;
+        for (uint32_t i = 0; bones && i < count; ++i)
+          if (bones[i].bone == static_cast<uint32_t>(light.bone)) {
+            *p = {bones[i].position[0], bones[i].position[1], bones[i].position[2]};
+            *q = {bones[i].orientation[0], bones[i].orientation[1], bones[i].orientation[2], bones[i].orientation[3]};
+            return;
+          }
+      };
+      Vec3 pa, pb;
+      Quat qa, qb;
+      posed(pose ? pose->now : nullptr, pose ? pose->nowCount : 0, &pa, &qa);
+      posed(pose ? pose->next : nullptr, pose ? pose->nextCount : 0, &pb, &qb);
+      const float blend = pose ? pose->blend : 0;
+      bonePlace = Lerp(pa, pb, blend);
+      boneTurn = Nlerp(qa, qb, blend);
+    }
+    const Vec3 at = position + Rotate(orientation, bonePlace + Rotate(boneTurn, light.place * model->scale));
+    float on = lampsOn_ * light.strength * 0.5f;  // (1 in the list: a strong lamp to an eye opened for the night)
+    if (light.blink > 0) {  // (each lamp on its own beat, by where it is)
+      const float beat = time_ / light.blink + position.x * 0.37f + position.z * 0.53f;
+      if (beat - std::floor(beat) > 0.5f) on *= 0.12f;
+    }
+    lights.Add(at, light.radius * model->scale, light.color * on);
+  }
+}
+
 float World::GroundHeight(float x, float z) const {
   if (!haveMap_) return 0;
   const float y = map.Height(x, z);
@@ -166,6 +203,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[1] = sky;
   c.modern[2] = exposure;
   c.modern[3] = reflection;
+  lampsOn_ = 0;
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
@@ -192,6 +230,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       skyLight.zenith += bolt;
       skyLight.horizon += bolt * 0.6f;
     }
+    lampsOn_ = std::clamp((0.30f - skyLight.daylight) / 0.18f, 0.0f, 1.0f);
     c.falling[0] = rain;
     c.falling[1] = snow;
     c.falling[2] = flash;
@@ -266,6 +305,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
+      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour

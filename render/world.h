@@ -70,6 +70,10 @@ class World {
   // How the blueprints look as the simulation has them (a running game hands this over once it has
   // started): models and strategic icons then take their names from it instead of from .bp files.
   void SetLooks(const std::vector<BlueprintLook>& looks);
+  // The lamps of a unit drawn this frame (a remastered unit's list of lights): lit while the light
+  // of the computed sky is low, each where its bone is. AddFrame calls it for a game's units; a
+  // host that adds models itself calls it beside `meshes.Add`.
+  void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr);
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 
@@ -184,6 +188,7 @@ class World {
   std::vector<Pickable> pickables_;
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
+  float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
   double clock_ = 0;
 };
 

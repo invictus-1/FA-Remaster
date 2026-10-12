@@ -146,6 +146,9 @@ struct PipelineDesc {
   Format colorFormat = Format::RGBA8;
   bool depthOnly = false;
   int samples = 1;  // the samples per pixel of the targets it draws into
+  // With several samples per pixel: the alpha the pixel shader returns says how many of them the
+  // pixel covers (smooth edges on surfaces with holes, without blending or sorting).
+  bool alphaToCoverage = false;
   bool depthTarget = true;  // false for a pass that has a colour target only (full-screen work)
 };
 
