@@ -53,6 +53,7 @@ int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
+std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
@@ -175,6 +176,7 @@ int main(int argc, char** argv) {
     else if (a == "--screenshot") screenshot = next();
     else if (a == "--window") windowed = true;
     else if (a == "--session-out") sessionFile = next();
+    else if (a == "--game-lua") gameLuaFile = next();
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -243,7 +245,9 @@ int main(int argc, char** argv) {
     gameCfg.launchSession = nullptr;
     gameCfg.sim = session.sim();
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
-    bool up = session.LoadInterfaceRules(game->L()) && game->Boot() && game->StartMainScript() && game->StartGame();
+    bool up = session.LoadInterfaceRules(game->L());
+    if (up) ui::InstallUnitCategoryFunctions(game->L());
+    up = up && game->Boot() && game->StartMainScript() && game->StartGame();
     session.RunFirstBeat();
     // What the simulation told its interface before there was one (the first beats).
     if (up)
@@ -253,6 +257,10 @@ int main(int argc, char** argv) {
     if (up) {
       // The simulation is already there when the interface's state comes up, so loading ends at once.
       game->GameLoaded();
+      if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
+        if (auto code = hostfs::ReadFile(gameLuaFile)) game->RunString(*code, "@" + gameLuaFile);
+        else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());
+      }
       session.onSync = [&game](const std::string& sync) { game->DeliverSync(sync); };
     }
   };

@@ -36,6 +36,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterKeyMapBindings(L);
   RegisterWorldViewBindings(L);
   RegisterSessionBindings(L);
+  RegisterUserUnitBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
@@ -45,6 +46,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  units.reset();
   provider.reset();
   cameras.clear();
   ui_.reset();  // the controls let go of their Lua tables while the state is still there
@@ -120,6 +122,7 @@ void UserState::GameLoaded() {
   // The loading screen goes: the script that made it never removes it, so the engine must.
   // (Inferred: that the root frames are cleared here.)
   for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
+  RefreshUserUnits(state_->L());
   lua_pushboolean(state_->L(), 0);  // not a replay
   CallProvider("CreateGameInterface", 1);
   gameInterface = true;

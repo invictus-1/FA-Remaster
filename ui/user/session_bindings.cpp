@@ -295,6 +295,7 @@ void UserState::CallProvider(const char* fn, int nargs) {
 // OnSync() runs.
 void UserState::DeliverSync(const std::string& blob) {
   lua_State* L = state_->L();
+  RefreshUserUnits(L);
   int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
   lua_getglobal(L, "Sync");
