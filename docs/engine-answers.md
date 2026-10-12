@@ -3,6 +3,36 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 5: standing request to merge `render` into `main` — accepted
+
+Chris confirmed it (2026-10-12): the engine track merges `origin/render` into `main` at its convenient
+stops, without a pull request, after checking that only `render/` and `docs/render-*` paths differ. The
+interface track merges its own branch. (The first attempt was stopped by the desktop app's permission
+check for merges; until Chris allows that, a merge may lag behind by a day.)
+
+## render 4: `.scm` version 6 = version 5 with 32-bit indices — agreed
+
+`src/sim/skeleton.cpp` reads the header's bone offsets and the bones, checks only the `MODL` mark and
+never the version or the index data, so it takes such a file today. No version check is planned; if one
+is ever added it will accept 5 and 6.
+
+## ui 1 and ui 2: mounting as a library function; the engine-object handle outside the simulation — done
+
+1. `src/script/mount.h`: `bool MountFromInitFile(const std::string& initFile, const std::map<std::string,
+   std::string>& folders, Vfs&, std::vector<std::string>& hookDirs)`, exactly the proposed form. It runs the
+   init file (with `InitFileDir` and `SHGetFolderPath`; `folders` replaces the system's answer per name),
+   mounts its `path` table and appends its `hook` table. `src/app/main.cpp` calls it; the interface host can
+   drop its copy.
+2. `src/script/script_handle.h` / `.cpp`: `ScriptObject`, `BindObject`, `PushObject`, `GetObject`,
+   `CheckAnyObject`, `CheckObject<T>`, `ToObject<T>`, the `ScriptTypeOf<T>` hook for fast type tests, and
+   `RegisterObjectHandle(L)` (creates the `moho64.cobject` metatable; call it once per state instead of
+   creating the metatable by name). `src/script/threads.cpp` includes only this. `src/sim/script_object.h`
+   keeps the simulation's class tables and stubs and includes the handle, so existing includes keep working.
+
+The interface build was checked against this as it is (`ui/build_ui.py`, which globs `src/script`): it
+builds unchanged. It can now stop linking `src/sim/script_object.cpp` and include
+`script/script_handle.h` where it included `sim/script_object.h`. The replay gate is unchanged.
+
 ## ui 3: start a simulation from the lobby's game configuration — done
 
 A session can now be started from the table the lobby script hands to `CLobby:LaunchGame`, built the way
@@ -68,21 +98,6 @@ Three things to know:
    AIs that do not use it (M28) run, as the recorded skirmish replay shows. This is on the engine's list.
 3. **Nothing reaches the simulation after the start yet**: orders, sim callbacks and the per-beat sync data
    are ui 4. Say which you need first.
-
-## ui 1 and ui 2: mounting as a library function; the engine-object handle outside the simulation — accepted, not done yet
-
-Both are reasonable and both move code inside `src/` without changing what it does:
-
-1. `MountFromInitFile(...)` out of `src/app/main.cpp` into a library both hosts call.
-2. The `_c_object` handle (`ScriptObject`, `BindObject`, `GetObject`) out of `src/sim/script_object.*`
-   into `src/script/`, the simulation's class tables staying where they are.
-
-They will be done together in one change on `main`, checked with the replay gate, and announced here
-with the new header names. Until then the interface host's own copy of the mounting code and its link
-against `src/sim/script_object.cpp` are fine.
-
-(Starting a simulation from the lobby's game configuration was done first, see ui 3 above, because it is
-what stands between the interface and a playable game.)
 
 ## render 3: the display part of blueprints as the simulation has them — done
 

@@ -4,7 +4,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
-#include "sim/script_object.h"
+#include "script/script_handle.h"
 
 extern "C" {
 extern void (*lua_gpg_resume_error_hook)(lua_State* L, int status);

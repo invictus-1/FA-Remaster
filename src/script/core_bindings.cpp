@@ -439,7 +439,7 @@ int l_IsDestroyed(lua_State* L) {
   if (lua_istable(L, 1)) lua_rawgetcobject(L, 1);
   else lua_pushvalue(L, 1);
   if (lua_type(L, -1) == LUA_TUSERDATA && lua_getmetatable(L, -1)) {
-    luaL_getmetatable(L, "moho64.cobject");  // the handle's metatable (script_object.cpp)
+    luaL_getmetatable(L, "moho64.cobject");  // the handle's metatable (script_handle.cpp)
     if (lua_rawequal(L, -1, -2)) {
       void** box = static_cast<void**>(lua_touserdata(L, -3));
       destroyed = !box || !*box;
