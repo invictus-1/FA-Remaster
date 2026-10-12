@@ -98,8 +98,17 @@ void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
   c.units.erase(u);
   if (!c.units.empty() || !c.beaconRef) return;
   Sim& sim = *Sim::From(u->luaState());
-  if (Entity* b = sim.FindEntity(c.beaconRef))
-    if (!b->destroyQueued) sim.QueueDestroy(b);
+  if (Entity* b = sim.FindEntity(c.beaconRef)) {
+    static const bool dbg = getenv("MOHO64_DEBUG_TASKS") != nullptr;
+    if (dbg)
+      Logf(LogLevel::Info, "beacon %u of command %u (type %d) goes at tick %u: unit %u let the command go (in a beat: %d)", b->id,
+           c.id, static_cast<int>(c.type), sim.tick(), u->id, sim.RecorderTick() != 0xffffffffu ? 1 : 0);
+    // The beacon dies in the command object's destructor (0x6e8500), and the original deletes an emptied
+    // command a beat's end later than its last holder lets go (seen twice in the Transports replay: a player's
+    // order clears the transport's queue after tick T, the beacon is still listed after tick T + 1 and gone
+    // after T + 2). Where the deletion is decided was not found in the exe: this is the observed timing.
+    if (!b->destroyQueued) sim.QueueDestroyAfterBeat(b);
+  }
   c.beaconRef = 0;
 }
 
@@ -818,6 +827,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
         }
     }
     if (!c) c = MakeStreamCommand(sim, d);  // CommandDatabase::AddIssueData: one CUnitCommand per message
+    {
+      static const bool dbg = getenv("MOHO64_DEBUG_TASKS") != nullptr;
+      if (dbg)
+        Logf(LogLevel::Info, "order after tick %u: type %d for unit %u, clear %d, its queue held %zu", sim.tick(), d.type, u->id,
+             clear ? 1 : 0, u->commands.size());
+    }
     if (clear) {  // queue+0x1c = type; ClearCommandQueue 0x6ee2d0
       // CUnitMoveTask's destructor 0x618700 (read again 2026-10-11): queue+0x1c holds the NEW command's type while
       // the queue is cleared for it. A type outside the table 0x618998 aborts the move; one inside it aborts only

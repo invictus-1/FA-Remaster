@@ -230,6 +230,9 @@ class Sim {
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
   Entity* FindEntity(uint32_t id) const;
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
+  // For what dies with a command object (a ferry beacon): the original deletes an emptied command only after
+  // the beat's destroy queue has run, so the entity is queued then and goes at the end of the beat after.
+  void QueueDestroyAfterBeat(Entity* e);
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
@@ -366,6 +369,8 @@ class Sim {
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
   void ProcessDestroyQueue();
+  std::vector<uint32_t> lateDestroy_;  // entity references (QueueDestroyAfterBeat)
+  void QueueLateDestroys();
 
   // Push the script class for a blueprint: bp.ScriptModule/ScriptClass, else
   // <dir>/<name>_script.lua's TypeClass, else the default module's class.

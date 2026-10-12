@@ -954,6 +954,14 @@ void Sim::QueueDestroy(Entity* e) {
   destroyQueue_.push_back(e);
 }
 
+void Sim::QueueDestroyAfterBeat(Entity* e) { lateDestroy_.push_back(EntityRef(e)); }
+
+void Sim::QueueLateDestroys() {
+  for (uint32_t ref : lateDestroy_)
+    if (Entity* e = FindEntity(ref)) QueueDestroy(e);
+  lateDestroy_.clear();
+}
+
 // Entities destroyed by script: OnDestroy, then they leave the world (FA exe Entity::Destroy queues,
 // Entity::OnDestroy runs the script callback later).
 // The original (Sim::AdvanceBeat) drains the queue calling each entity's OnDestroy; the engine
@@ -1245,6 +1253,7 @@ void Sim::PausedBeat() {
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
+  QueueLateDestroys();
   UpdateIdPools();
   SyncStep();
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
@@ -1449,6 +1458,7 @@ void Sim::Tick() {
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   g_prof.Lap(1);
   ProcessDestroyQueue();
+  QueueLateDestroys();
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
   SyncStep();
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
