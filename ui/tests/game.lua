@@ -59,6 +59,12 @@ local function run()
     SelectUnits({cdr})
     local sel = GetSelectedUnits()
     check("SelectUnits selects", tostring(sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr), "true")
+    -- selecting a unit plays its select sound: the blueprint's sound object, of the interface's bank
+    SelectUnits(nil)
+    local cues = moho64ui_SoundInfo().played
+    SelectUnits({cdr})
+    check("selecting the commander plays one cue", moho64ui_SoundInfo().played, cues + 1)
+    check("its select sound is a wave of its faction's select bank", string.find(moho64ui_SoundInfo().wave, "Select#", 1, true) ~= nil, true)
     local orders, toggles, buildable = GetUnitCommandData(sel)
     local has = {}
     for _, o in orders do has[o] = true end

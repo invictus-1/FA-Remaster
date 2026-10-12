@@ -13,6 +13,7 @@
 
 #include "core/log.h"
 #include "script/lua.hpp"
+#include "sim/blueprints.h"
 #include "sound/sound_system.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -24,8 +25,20 @@ const char* const kHandle = "moho64ui.sound";
 
 sound::SoundSystem* System(lua_State* L) { return UserState::From(L)->config().sound; }
 
-// A sound parameters object: the table Sound{} was given (Bank, Cue; any case of the names).
+// A sound parameters object. In scripts of the interface's own it is the table Sound{} was given
+// (Bank, Cue; any case of the names). In a blueprint it is the engine's sound object: the game's
+// rules are copied into a session's state with their sounds made into objects (a unit's
+// Audio.UISelection, played when it is selected); the engine tells its two names.
 bool ReadParams(lua_State* L, int idx, std::string* bank, std::string* cue) {
+  if (lua_type(L, idx) == LUA_TUSERDATA) {
+    lua_pushcfunction(L, l_GetCueBank);
+    lua_pushvalue(L, idx);
+    lua_call(L, 1, 2);
+    if (lua_isstring(L, -2)) *cue = lua_tostring(L, -2);
+    if (lua_isstring(L, -1)) *bank = lua_tostring(L, -1);
+    lua_pop(L, 2);
+    return !bank->empty() && !cue->empty();
+  }
   if (!lua_istable(L, idx)) return false;
   for (const char* name : {"Bank", "bank"}) {
     lua_pushstring(L, name);

@@ -254,7 +254,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   is consumed to its last byte; all 1,737 waves are plain 16-bit sound). A cue picks one of its
   sounds, a sound one of its waves, with the files' volumes, pitch ranges, loops and categories;
   the music is read from its file as it plays, and a new piece takes the place of the playing
-  one, as its category says. `StartSound`, `StopSound`, `StopAllSounds`, `SoundIsPrepared`,
+  one, as its category says. A blueprint's sounds reach a game's state as the engine's sound
+  objects, not as tables: `PlaySound` takes both (a unit's select sound is such an object). When
+  the sounds together would go over what the output holds, the whole is turned down for that
+  moment rather than cut off at the top. `StartSound`, `StopSound`, `StopAllSounds`, `SoundIsPrepared`,
   `SetVolume` / `GetVolume` by category (a category stands inside another: Global holds all),
   `PauseSound`, `PlayVoice` (the voices' banks by language, `AudioSetLanguage`) are built. A live
   window plays through Windows' sound session (WASAPI, shared mode: the system asks for sound

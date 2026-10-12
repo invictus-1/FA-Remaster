@@ -83,6 +83,7 @@ class Mixer {
   std::vector<int16_t> piece_;
   int nextId_ = 1;
   int64_t framesMixed_ = 0;
+  float limit_ = 1;  // below 1 while the sum of the sounds would go over the top
 };
 
 }  // namespace moho::ui::sound

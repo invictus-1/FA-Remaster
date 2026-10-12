@@ -168,10 +168,18 @@ void Mixer::Mix(int16_t* out, int frames) {
     }
   }
   voices_.erase(std::remove_if(voices_.begin(), voices_.end(), [](const Voice& v) { return !v.wave; }), voices_.end());
-  for (size_t i = 0; i < sum_.size(); ++i) {
-    float s = sum_[i];
-    s = s > 1.0f ? 1.0f : s < -1.0f ? -1.0f : s;
-    out[i] = static_cast<int16_t>(s * 32767.0f);
+  // Many sounds at once can add up to more than the output holds (the game's files make its
+  // Global category louder than recorded, and a loud select sound over the music goes over).
+  // Cutting the tops off is heard as crackle, so the whole is turned down for that moment
+  // instead: at once when a frame would go over, back up over a fifth of a second.
+  const float kCeiling = 0.98f, kBack = 1.0f / (0.2f * kRate);
+  for (int i = 0; i < frames; ++i) {
+    float l = sum_[static_cast<size_t>(i) * 2], r = sum_[static_cast<size_t>(i) * 2 + 1];
+    float top = std::max(std::fabs(l), std::fabs(r));
+    if (top * limit_ > kCeiling) limit_ = kCeiling / top;
+    else if (limit_ < 1.0f) limit_ = std::min(1.0f, limit_ + kBack);
+    out[i * 2] = static_cast<int16_t>(l * limit_ * 32767.0f);
+    out[i * 2 + 1] = static_cast<int16_t>(r * limit_ * 32767.0f);
   }
   framesMixed_ += frames;
 }
