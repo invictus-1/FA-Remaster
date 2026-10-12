@@ -1257,14 +1257,18 @@ void Sim::Tick() {
   g_prof.Lap(0);
   LandNavTickAll(*this);
   g_prof.Lap(9);
+  // CArmyImpl::OnTick 0x6ffd70: the brain's stages in this order: navigators (brain+0xa8), steering (brain+0xac,
+  // CAiSteeringImpl::OnTick 0x5d32b0), attackers and weapons (brain+0xb0); only then the sim's command stage. So
+  // a waypoint the navigator set this beat already has its spline when a command task stops the unit in the same
+  // beat, and the stop turns it into a brake spline (the unit slows down along its hull) instead of a coast.
+  SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
+  g_prof.Lap(3);
   WeaponsTick(*this);
   g_prof.Lap(8);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
   g_prof.Lap(2);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   g_prof.Lap(10);
-  SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
-  g_prof.Lap(3);
   const std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: motion may create or destroy nothing)
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
