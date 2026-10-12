@@ -1195,6 +1195,19 @@ void Sim::Tick() {
       u->motion.vel = {};
     } else {
       MotionTick(*this, u);
+      // CUnitMotion::MoveTo 0x6b92e0 (after every CalcMove*) first brings the transform's quaternion back to unit
+      // length (0x4edaa0). Without it a hovering unit's orientation, re-tilted from itself every beat, creeps off.
+      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt) {
+        Quat& q = u->orientation;
+        const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+        if (len > 9.99999997e-07f) {
+          const float inv = 1.0f / len;
+          q.w *= inv;
+          q.x *= inv;
+          q.y *= inv;
+          q.z *= inv;
+        }
+      }
     }
     if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
         u->position.z != u->lastPosition.z)
