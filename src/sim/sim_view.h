@@ -158,6 +158,26 @@ struct SoundEvent {
   float position[3] = {0, 0, 0};      // where the entity stood at the call
 };
 
+// What an army knows now, as the simulation's own recon has it. Bits: 1 on radar, 2 on sonar, 4 on omni, 8 seen
+// (vision; water vision for what is under water). army: 1-based. Allies' intel counts as the army's own, as it
+// does for the simulation.
+enum ReconBits : uint32_t {
+  kReconRadar = 1, kReconSonar = 2, kReconOmni = 4, kReconSeenNow = 8,
+  kReconSeenEver = 0x10,   // (units only) it was seen at some time
+  kReconKnownFake = 0x20,  // (units only) the army knows this blip is a jammer's
+  kReconMaybeDead = 0x40,  // (units only) the unit is gone, the army has not found out yet
+  kReconHeld = 0x80,       // (units only) the army holds a blip of it at all
+};
+// Of a place: what the army's intel grids say there now. water: 0 = for something on land or in the air, 1 = on
+// the water's surface (sonar counts), 2 = under water. 0 outside the map. Without fog of war everything is seen.
+uint32_t ReconAt(const Sim& sim, int army, const float position[3], int water = 0);
+// Of an entity. A unit of the army or of an ally: radar, sonar, omni and seen, all set. Another army's unit:
+// the flags the army's recon holds on it (its blip), which is what the simulation's own weapons and scripts go
+// by; they are renewed when the army's recon runs (armies take turns, one a beat), so they can be a few beats
+// old; 0 = the army has no blip of it. Anything that is not a unit (a projectile, a prop, a shield): ReconAt its
+// position. 0 if there is no such entity.
+uint32_t ReconOf(const Sim& sim, int army, uint32_t entityId);
+
 std::vector<ArmyView> ArmyViews(const Sim& sim);
 // army: 1-based; an army that does not exist gives zeros.
 EconomyTotals EconomyTotalsOf(const Sim& sim, int army);

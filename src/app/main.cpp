@@ -149,6 +149,25 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
     if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());
   }
+  {  // what each army knows of the others' units
+    std::vector<UnitView> uv;
+    UnitViews(sim, &uv);
+    for (const ArmyView& a : ArmyViews(sim)) {
+      size_t others = 0, held = 0, seen = 0, radar = 0;
+      for (const UnitView& u : uv) {
+        if (u.army == a.index) continue;
+        const uint32_t r = ReconOf(sim, a.index, u.id);
+        if (r == 0xF) continue;  // (an ally's)
+        ++others;
+        if (r & kReconHeld) ++held;
+        if (r & kReconSeenNow) ++seen;
+        if (r & (kReconRadar | kReconSonar | kReconOmni)) ++radar;
+      }
+      if (others)
+        Logf(LogLevel::Info, "view: army %d knows of %zu of %zu other units (%zu seen now, %zu on radar, sonar or omni)", a.index,
+             held, others, seen, radar);
+    }
+  }
   {  // the display part of the blueprints
     std::vector<BlueprintDisplay> bd;
     BlueprintDisplays(sim, &bd);

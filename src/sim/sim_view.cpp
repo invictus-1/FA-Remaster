@@ -5,6 +5,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/commands.h"
+#include "sim/intel.h"
 #include "sim/script_bits.h"
 #include "sim/sim.h"
 #include "sim/transport.h"
@@ -302,6 +303,14 @@ float NumField(lua_State* L, int idx, const char* key, float def) {
 }  // namespace
 
 uint32_t SessionSeed(const Sim& sim) { return sim.sessionSeed(); }
+
+uint32_t ReconAt(const Sim& sim, int army, const float position[3], int water) {
+  return ReconAtPoint(sim, army - 1, Vec3{position[0], position[1], position[2]}, water);
+}
+uint32_t ReconOf(const Sim& sim, int army, uint32_t entityId) {
+  const Entity* e = sim.FindEntityById(entityId);
+  return e && !e->destroyQueued ? ReconOfEntity(sim, army - 1, e) : 0;
+}
 
 void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
   out->clear();

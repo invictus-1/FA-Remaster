@@ -455,6 +455,44 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
 
 bool ArmyHasBlip(const Unit* u, int a) { return a >= 0 && a < 16 && (u->recon[a] & kReconInUse) != 0; }
 
+// For a host: what army a's grids (its own and its allies', with its counter-intel fields) say of a point now.
+// The grid rules of CanDetect without an entity: `water` 0 = something on land or in the air, 1 = on the water's
+// surface (sonar counts too), 2 = under water (water vision instead of vision, sonar, no radar).
+uint32_t ReconAtPoint(const Sim& sim, int a, Vec3 p, int water) {
+  const auto& armies = sim.armies();
+  if (a < 0 || static_cast<size_t>(a) >= armies.size() || static_cast<size_t>(a) >= g_armies.size()) return 0;
+  const TerrainMap* m = sim.map();
+  if (m && (p.x < 0 || p.z < 0 || p.x > m->width() || p.z > m->height())) return 0;
+  auto of = [&](const ArmyIntel& db) {
+    uint8_t f = 0;
+    if (!db.fog || !db.g[0]) f = 8;
+    else if (water == 2 ? (db.g[1] && db.g[1]->Visible(p)) : db.g[0]->Visible(p)) f = 8;
+    if (water != 0 && db.g[3] && db.g[3]->Visible(p)) f |= 2;
+    if (water != 2 && db.g[2] && db.g[2]->Visible(p)) f |= 1;
+    if (db.g[4] && db.g[4]->Visible(p)) f |= 4;
+    return f;
+  };
+  const Army* us = armies[static_cast<size_t>(a)].get();
+  const ArmyIntel& db = g_armies[static_cast<size_t>(a)];
+  uint8_t f = of(db);
+  for (size_t j = 0; j < armies.size() && j < g_armies.size(); ++j)
+    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) f |= of(g_armies[j]);
+  if (f == 0 || (f & 4)) return f;
+  if (db.g[5] && db.g[5]->Visible(p)) f &= static_cast<uint8_t>(~1);
+  if (db.g[6] && db.g[6]->Visible(p)) f &= static_cast<uint8_t>(~2);
+  if (db.g[7] && db.g[7]->Visible(p)) f &= static_cast<uint8_t>(~8);
+  return f;
+}
+
+uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e) {
+  const auto& armies = sim.armies();
+  if (!e || a < 0 || static_cast<size_t>(a) >= armies.size() || a >= 16) return 0;
+  const Army* us = armies[static_cast<size_t>(a)].get();
+  if (e->army && (e->army == us || combat::Relation(e->army, us) == 2)) return 0xF;
+  if (e->kind == Entity::Kind::Unit) return static_cast<const Unit*>(e)->recon[a];
+  return ReconAtPoint(sim, a, e->position, 0);
+}
+
 void InitIntelGrids(Sim& sim, lua_State* L) {
   g_armies.clear();
   g_sources.clear();

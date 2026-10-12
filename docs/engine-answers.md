@@ -3,6 +3,52 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 8: what an army sees — done
+
+`sim/sim_view.h`:
+
+```cpp
+enum ReconBits : uint32_t {
+  kReconRadar = 1, kReconSonar = 2, kReconOmni = 4, kReconSeenNow = 8,
+  kReconSeenEver = 0x10, kReconKnownFake = 0x20, kReconMaybeDead = 0x40, kReconHeld = 0x80,  // units only
+};
+uint32_t ReconAt(const Sim& sim, int army, const float position[3], int water = 0);
+uint32_t ReconOf(const Sim& sim, int army, uint32_t entityId);
+```
+
+Both are the simulation's own recon, read only: nothing new is computed for the host, and the
+simulation's weapons and scripts go by the same answers. `army` is 1-based. An ally's intel counts as
+the army's own, as it does in the simulation.
+
+- **`ReconOf`, an entity.** A unit of the army or of an ally: 0xF (radar, sonar, omni, seen). Another
+  army's unit: the flags the army holds on it, i.e. its blip: `kReconHeld` = there is a blip at all;
+  `kReconSeenNow` = in sight (vision, or water vision for a unit under water, cloak and cloak fields
+  taken off); radar / sonar / omni with the stealth rules applied; `kReconSeenEver` stays once seen;
+  `kReconKnownFake` and `kReconMaybeDead` as the blip scripts know them (`IsKnownFake`,
+  `IsMaybeDead`). 0 = the army knows nothing of it. These flags are renewed when the army's recon
+  runs: the armies take turns, one a beat (civilians included), so with N armies an answer can be up to
+  N - 1 beats old. That is the original's own pace (weapons wait for it too), not a shortcut of ours.
+  Anything that is not a unit (a projectile, a prop, a shield): the answer of its place.
+- **`ReconAt`, a place.** The army's grids at that point now: vision cells are 2 units wide, the others
+  4. `water`: 0 for something on land or in the air (vision, radar, omni), 1 on the water's surface
+  (sonar counts too), 2 under water (water vision instead of vision, sonar, no radar). The army's own
+  radar-stealth, sonar-stealth and cloak fields are taken off as for a unit; a unit's own stealth or
+  cloak is not in a place's answer. Without fog of war `kReconSeenNow` is always set. 0 outside the map.
+
+For the sounds: `ReconOf(sim, focusArmy, ev.entity) & kReconSeenNow` for an entity that still exists,
+`ReconAt(sim, focusArmy, ev.position)` when it is gone by the time you take the list (an explosion's
+unit usually is). For the mark under the mouse and the panel, `kReconSeenNow` is the bit the original's
+`IsSeenNow` gives its scripts; whether the byte the exe tests at 0x7fd43e is that same bit I have not
+read.
+
+**Not read:** what the original's sound manager does with sounds of unseen units. So this gives you
+sight; the rule for radar-only contacts (heard or not) is still yours to choose until that is read.
+Hearing what is seen and not what is only on radar is the cautious choice: it cannot give away more
+than the picture does.
+
+`--view` logs per army how many of the others' units it knows of, sees now, and has on radar, sonar or
+omni. The thirteen test replays keep their marks.
+
 ## ui 7: the world's sounds, and three facts about a unit — done
 
 **1. The sounds of a beat.** `sim/sim_view.h`:
