@@ -1367,6 +1367,10 @@ bool RunChild(Sim& sim, Unit* u, BuildTask& parent, TransportTaskData& d) {
     if (u->motion.hasGoal) return true;
     d.childMove = false;
     SetState(u, "Moving", false);  // its dtor clears it
+    // ... and, the move task having ended by itself, calls the navigator's AbortMove (0x618700: queue+0x1c is
+    // 0 and the table 0x618998 says "abort" for 0): an aircraft's motion target becomes the point one second
+    // ahead and its drive-through flag goes, until the ferry task gives it the next leg
+    if (CanFly(u) && u->motion.arrived) AirAbort(sim, u);
   }
   return false;
 }
@@ -1550,7 +1554,9 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         cd->kind = kUnload;
         cd->goal = CmdPos(sim, *c);
         SetState(T, "TransportUnloading", true);
-        if (T->motion.hasGoal) MotionStop(T);
+        // (the unload task's AbortMove comes whether or not a move is on: an aircraft that was already stopped at
+        // "one second ahead" by the leg's end gets a new such point from where it is now)
+        if (T->motion.hasGoal || CanFly(T)) MotionStop(T);
         PushChild(sim, d, cd, 0, "UnloadUnits");
         t.state = 3;
         return kTaskRunning;
