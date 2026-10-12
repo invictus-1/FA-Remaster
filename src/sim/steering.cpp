@@ -765,7 +765,7 @@ void SteeringCheckCollisions(Sim& sim, Unit* u) {
 }
 
 void SteeringTickAll(Sim& sim) {
-  const auto& all = sim.units();
+  const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xac: creation order inside each army)
   g_inSteeringStage = true;
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];

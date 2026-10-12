@@ -883,7 +883,7 @@ void LandNavTickAll(Sim& sim) {
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   double t0 = prof ? NowS() : 0;
   ++g_navProf.n;
-  const auto& all = sim.units();
+  const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xa8: creation order inside each army)
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     LandNav* n = Nav(u);

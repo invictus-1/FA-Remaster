@@ -1288,7 +1288,9 @@ void FireTick(Sim& sim, UnitWeapon* w) {
 }  // namespace
 
 void WeaponsTick(Sim& sim) {
-  const auto& units = sim.units();
+  // the armies' attacker stages (brain+0xb0): units in creation order inside each army, not in id order (an id
+  // used a second time belongs to a younger unit). A copy: a script fired from here may create units.
+  const std::vector<Unit*> units = sim.ArmyStageOrder();
   static const bool dbg = getenv("MOHO64_DEBUG_COMBAT") != nullptr;
   if (dbg && sim.tick() % 300 == 0) {
     int withTarget = 0, weapons = 0;

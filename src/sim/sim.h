@@ -237,6 +237,10 @@ class Sim {
   // Stage sim+0x930 (Entity::TaskTick -> Unit::MotionTick): FIFO by creation, stable across beats
   // (beat_order.md 2.6); entity ids are army-major, so this is not id order.
   const std::vector<Unit*>& MotionOrder();
+  // The armies' own stages (brain+0xa8 navigators, +0xac steering, +0xb0 attackers; CArmyImpl::OnTick): army by
+  // army, and inside an army the units in the order they were created, which is not id order once an id has
+  // been used a second time.
+  const std::vector<Unit*>& ArmyStageOrder();
   void ResumeCommandThread(Unit* u);
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
   // Units within [x0,x1] x [z0,z1] by position (a 16-unit grid rebuilt when units moved, were
@@ -335,6 +339,8 @@ class Sim {
   std::vector<Unit*> motionOrder_;
   uint64_t entSeqNext_ = 0;
   bool motionOrderDirty_ = true;
+  std::vector<Unit*> armyOrder_;
+  bool armyOrderDirty_ = true;
   std::vector<std::vector<Unit*>> grid_;
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;

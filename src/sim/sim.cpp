@@ -1071,6 +1071,18 @@ const std::vector<Unit*>& Sim::MotionOrder() {
   }
   return motionOrder_;
 }
+const std::vector<Unit*>& Sim::ArmyStageOrder() {
+  if (armyOrderDirty_) {
+    armyOrder_ = units_;
+    // (an entity id holds its army above bit 20, so id order already goes army by army)
+    std::sort(armyOrder_.begin(), armyOrder_.end(), [](const Unit* a, const Unit* b) {
+      const uint32_t aa = a->id >> 20, ab = b->id >> 20;
+      return aa != ab ? aa < ab : a->entSeq < b->entSeq;
+    });
+    armyOrderDirty_ = false;
+  }
+  return armyOrder_;
+}
 void Sim::ResumeCommandThread(Unit* u) {
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
@@ -1082,6 +1094,7 @@ void Sim::AddUnitToLists(Unit* u) {
   cmdOrderDirty_ = true;
   u->entSeq = ++entSeqNext_;
   motionOrderDirty_ = true;
+  armyOrderDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
 }
@@ -1089,6 +1102,7 @@ void Sim::RemoveUnitFromLists(Unit* u) {
   gridDirty_ = true;
   cmdOrderDirty_ = true;
   motionOrderDirty_ = true;
+  armyOrderDirty_ = true;
   EraseById(units_, u);
   if (u->army) EraseById(u->army->units, u);
 }
