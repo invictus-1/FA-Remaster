@@ -61,7 +61,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
                [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
-               [--hide particles,bands,decals]
+               [--hide particles,bands,decals] [--map-decals off|albedo|normals] [--decal-filter <name part>]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -130,7 +130,7 @@ prints what it reports.
 | `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
 | `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
 | `ribbons.h` | beams and trails: bands of texture that face the camera, from the game's beam and trail blueprints |
-| `decals.h` | pictures laid on the ground (scorch marks, markers) and the light explosions throw on it, by the scene's depth |
+| `decals.h` | what is laid on the ground by the scene's depth: the map's decals, scorch marks and markers, the light of explosions |
 | `effects.h` | a running game's effects: the scripts' effect calls turned into emitters, beams and trails, kept on what they hang on |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
@@ -273,8 +273,16 @@ Known gaps, to be closed in the steps they belong to:
   edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- The MAP's own decals are read but not drawn yet (their normal decals need the ground's lighting
-  to take them in). No sky, no ground beyond the map's edge. Effects: only albedo decals; no
+- The map's decals are drawn (Seton's Clutch: 1,233 albedo and 1,003 normal ones): albedo decals
+  as pictures over the ground, tinted under water as the ground is; normal decals - the sculpting
+  of cliffs and erosion - by multiplying the lit ground with (the light it would take with the
+  decal's tilt) / (the light it took), since the ground is already lit when decals are drawn; each
+  up to its own distance from the camera, coming in over the last fifth of it. Cost at 1080p on
+  an RTX 4090: 0.15 ms close to the ground. Inferred, not known: that a decal's position in the
+  map file is its centre (as a centre 97% of the erosion decals lie on land, as a corner about
+  85%); which way its heading turns; that the other two rotation numbers do nothing. The map
+  editor's other decal kinds (glow, water masks) are not drawn.
+- No sky, no ground beyond the map's edge. Effects: only albedo decals; no
   splats on bones; explosion light falls on the ground only; scripts' changes to emitter curves
   are ignored; particles are not sorted by distance, do not refract
   (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.

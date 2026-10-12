@@ -6,8 +6,10 @@
 // blended over the ground, lit as the ground under it. So a decal follows the ground exactly, at
 // whatever level of detail the ground was drawn, and never climbs onto a unit.
 //
-// Only albedo decals so far (a picture over the ground's colour). The map editor's other kinds -
-// above all normal decals, which shape how the ground takes the light - are still to come.
+// Three kinds: albedo decals (a picture over the ground's colour); normal decals, which tilt how the
+// ground takes the light and so sculpt cliffs and erosion into it - here by multiplying the lit
+// ground with (the light it would take tilted) / (the light it took); and lights (a glow added).
+// The map editor's remaining kinds (glow, water masks) are not drawn.
 #pragma once
 #include <string>
 #include <vector>
@@ -36,12 +38,23 @@ class Decals {
   // `born`, `seconds`: when it was made and how long it stays (seconds <= 0: for good); it fades
   // out over its last five seconds. Returns false when the texture is not there.
   bool Add(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born = 0, float seconds = 0);
+  // The same for a normal decal (its texture: the tilt along its own x in alpha, along its own z in
+  // green, how much of it to apply in red).
+  bool AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born = 0, float seconds = 0);
   // A glow on the ground that adds its light for `seconds`, coloured by `ramp` along that time:
   // the light an explosion throws on its surroundings (the original's "light particle", there a
   // flat sheet drawn over everything; here it lies on the ground). `texture` and `ramp` are paths;
   // `size` is half its edge.
   bool AddLight(const std::string& texture, const std::string& ramp, Vec3 centre, float size, double born, float seconds);
 
+  // The map's water: its depth picture and colour ramp (Terrain::WaterMap, WaterRamp) and the map's
+  // size in world units. Pictures lying under water are then tinted as the ground there is.
+  void SetWater(gfx::Texture waterMap, gfx::Texture waterRamp, float mapWidth, float mapHeight) {
+    waterMap_ = waterMap;
+    waterRamp_ = waterRamp;
+    mapWidth_ = mapWidth;
+    mapHeight_ = mapHeight;
+  }
   // Draws the decals into the current pass, which must be the scene's colour alone (no depth
   // target); `sceneDepth` is the scene's depth with the ground in it.
   void Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now);
@@ -57,22 +70,26 @@ class Decals {
     float halfX, halfZ, heading, cutoff;
     double born;
     float seconds;
+    bool normal = false;
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
     float halfX, halfZ, cosHeading, sinHeading;
-    float alpha, age, light, glow;  // age: 0..1 of a light's time; light: 1 = adds its light
+    float alpha, age, light, glow;  // age: 0..1 of a light's time; light: 1 = adds its light, 2 = a normal decal
   };
   gfx::Texture Resolve(const std::string& texture);
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;
-  gfx::Pipeline pipeline_, lights_;
+  gfx::Pipeline pipeline_, lights_, normals_;
   gfx::Buffer cube_;
+  gfx::Texture waterMap_, waterRamp_;
+  float mapWidth_ = 0, mapHeight_ = 0;
   std::vector<Decal> decals_;
   struct Visible {
     uint32_t texture, ramp;
+    int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights
     Instance instance;
   };
   std::vector<Visible> visible_;

@@ -28,6 +28,9 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
+// --map-decals centre|corner|off, --decal-turn 1|-1, --decal-range <n>  the map's decals: off, or (for finding
+//           out what the map file means) what a decal's position is and which way its heading turns; and a
+//           factor on the distance up to which decals are drawn
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -124,6 +127,9 @@ struct Options {
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
+  std::string mapDecals = "centre";
+  float decalTurn = 1, decalRange = 1;
+  std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -175,6 +181,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--map-decals") o->mapDecals = v;
+    else if (a == "--decal-filter") o->decalFilter = v;
+    else if (a == "--decal-turn") o->decalTurn = static_cast<float>(atof(v));
+    else if (a == "--decal-range") o->decalRange = static_cast<float>(atof(v));
     else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
@@ -375,6 +385,28 @@ int main(int argc, char** argv) {
   if (!decals.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
+  }
+  if (haveMap && map.water.present) decals.SetWater(terrain->WaterMap(), terrain->WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
+  // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
+  if (haveMap && opt.mapDecals != "off") {
+    int laid = 0;
+    for (const MapDecal& d : map.decals) {
+      if (d.type != 1 && d.type != 2) continue;
+      if (!opt.decalFilter.empty() && d.textures[0].find(opt.decalFilter) == std::string::npos) continue;
+      if ((opt.mapDecals == "albedo" && d.type != 1) || (opt.mapDecals == "normals" && d.type != 2)) continue;  // one kind alone, to look at it
+      const float heading = d.rotation.y * opt.decalTurn;
+      Vec3 centre = d.position;
+      if (opt.mapDecals == "corner") {  // the position as the corner the decal is turned about
+        const float c = std::cos(heading), s = std::sin(heading), hx = d.scale.x * 0.5f, hz = d.scale.z * 0.5f;
+        centre.x += hx * c + hz * s;
+        centre.z += -hx * s + hz * c;
+      }
+      centre.y = map.Height(Clamp(centre.x, 0, static_cast<float>(map.width)), Clamp(centre.z, 0, static_cast<float>(map.height)));
+      const bool ok = d.type == 2 ? decals.AddNormal(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange)
+                                  : decals.Add(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange);
+      if (ok) ++laid;
+    }
+    printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
   }
   Effects effects(&particles, &ribbons, &decals, &models);
   effects.verbose = opt.debug;

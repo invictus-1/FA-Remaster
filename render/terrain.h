@@ -28,6 +28,10 @@ class Terrain {
 
   // On-screen size, in pixels, that one quad of the mesh should have: smaller means more triangles.
   float quadPixels = 6;
+  // The map's water depth picture and the colour ramp the ground under water is tinted with
+  // (decals lying under water take the same tint).
+  gfx::Texture WaterMap() const { return waterMap_; }
+  gfx::Texture WaterRamp() const { return waterRamp_; }
   // Numbers from the last Draw.
   int drawnPatches = 0;
   int drawnTriangles = 0;

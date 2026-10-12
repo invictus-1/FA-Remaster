@@ -26,12 +26,15 @@ cbuffer DecalCamera : register(b1) {
   float4 cameraRight;  // w: tan(half the field of view)
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
+  float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water
 };
 cbuffer Instances : register(b2) {
   Instance instances[1024];
 };
 Texture2D decalTexture : register(t0);
 Texture2D rampTexture : register(t2);
+Texture2D waterMap : register(t3);
+Texture2D waterRamp : register(t4);
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
@@ -75,6 +78,20 @@ float4 PS(VOut i) : SV_Target {
   float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
+  if (i.options.z > 1.5) {
+    // a normal decal: the ground's own slope (from how its place changes from pixel to pixel)
+    // tilted by the decal's, and the picture multiplied by how much more or less light that takes
+    float3 ground = normalize(cross(ddy(world), ddx(world)));
+    if (ground.y < 0) ground = -ground;
+    float2 tilt = c.ag * 2 - 1;
+    float3 inDecal = float3(tilt.x, sqrt(saturate(1 - dot(tilt, tilt))), tilt.y);
+    float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
+    float3 tilted = normalize(ground + turned - float3(0, 1, 0));
+    float shade = SunShadow(world, ground);
+    float3 before = OriginalLight(dot(sunDirection, ground), shade), after = OriginalLight(dot(sunDirection, tilted), shade);
+    float3 change = clamp(after / max(before, 0.03), 0.35, 2.5);
+    return float4(lerp(float3(1, 1, 1), change, saturate(c.r * i.options.x)), 1);
+  }
   if (i.options.z > 0.5) {  // a light: its glow times its ramp along its time, added
     c *= rampTexture.Sample(samplerLinearClamp, float2(i.options.y, 0.5));
     if (look > 0.5) c.rgb = ToLinear(c.rgb) * i.options.w;
@@ -86,8 +103,16 @@ float4 PS(VOut i) : SV_Target {
   float3 N = normalize(cross(ddy(world), ddx(world)));
   if (N.y < 0) N = -N;
   float shadow = SunShadow(world, N);
-  if (look > 0.5) return float4(ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow), c.a);
-  return float4(c.rgb * OriginalLight(dot(sunDirection, N), shadow), c.a);
+  // under water: tinted toward the water ramp's colour by depth, as the ground is (terrain.cpp)
+  float4 tint = 0;
+  if (mapInfo.z > 0.5) tint = waterRamp.Sample(samplerLinearClamp, float2(waterMap.Sample(samplerLinearClamp, world.xz * mapInfo.xy).g, 0.5));
+  if (look > 0.5) {
+    float3 lit = ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow);
+    float full = max(lightMultiplier * modern.x, 0.01);
+    float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), tint.rgb, tint.a);
+    return float4(ToLinear(screen) * full, c.a);
+  }
+  return float4(lerp(c.rgb * OriginalLight(dot(sunDirection, N), shadow), tint.rgb, tint.a), c.a);
 }
 )hlsl";
 
@@ -112,6 +137,10 @@ bool Decals::Init(std::string* error) {
   pd.blend = gfx::Blend::Additive;
   lights_ = device_->CreatePipeline(pd, error);
   if (!lights_) return false;
+  pd.name = "normal decals";
+  pd.blend = gfx::Blend::Multiply;
+  normals_ = device_->CreatePipeline(pd, error);
+  if (!normals_) return false;
   // a cube from -1 to 1, its faces wound counter-clockwise seen from outside
   std::vector<float> v;
   const Vec3 axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -148,8 +177,14 @@ gfx::Texture Decals::Resolve(const std::string& texture) {
 
 bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
   const gfx::Texture t = Resolve(texture);
-  if (!t || sizeX <= 0 || sizeZ <= 0) return false;
+  if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
+  return true;
+}
+
+bool Decals::AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
+  if (!Add(texture, centre, sizeX, sizeZ, heading, cutoff, born, seconds)) return false;
+  decals_.back().normal = true;
   return true;
 }
 
@@ -169,15 +204,18 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
                 decals_.end());
   visible_.clear();
   for (const Decal& d : decals_) {
-    const float reach = std::max(d.halfX, d.halfZ) * 1.5f;
+    const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
     // the ground under a decal may rise and fall across it: the box is tall for its width
     const float halfHeight = reach * 0.7f + 1.5f;
     const Vec3 r{reach, halfHeight, reach};
-    if (d.cutoff > 0 && Length(d.centre - view.eye) > d.cutoff) continue;
+    const float distance = Length(d.centre - view.eye);
+    if (d.cutoff > 0 && distance > d.cutoff) continue;
     if (!view.BoxVisible(d.centre - r, d.centre + r)) continue;
     if (now < d.born) continue;  // (a light whose beat the picture has not reached)
     float alpha = 1;
     if (d.seconds > 0) alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / 5.0f, 0, 1);
+    // it comes in over the last fifth of its distance (the original's DecalAlpha; how wide its fade is, is a GUESS)
+    if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
     Instance n{};
     n.centre[0] = d.centre.x;
     n.centre[1] = d.centre.y;
@@ -189,36 +227,42 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.sinHeading = std::sin(d.heading);
     n.alpha = alpha;
     n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
-    n.light = d.ramp ? 1.0f : 0.0f;
+    n.light = d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
     n.glow = glow;
-    visible_.push_back({d.texture.id, d.ramp.id, n});
+    visible_.push_back({d.texture.id, d.ramp.id, d.ramp ? 2 : d.normal ? 1 : 0, n});
   }
   if (visible_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
   std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
-    if ((a.ramp != 0) != (b.ramp != 0)) return a.ramp == 0;
+    if (a.kind != b.kind) return a.kind < b.kind;
     return a.texture != b.texture ? a.texture < b.texture : a.ramp < b.ramp;
   });
 
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
-  const float cameraConstants[12] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+  const bool water = waterMap_ && waterRamp_ && mapWidth_ > 0 && mapHeight_ > 0;
+  const float cameraConstants[16] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                      up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
-                                     back.x, back.y, back.z, camera.zNear};
+                                     back.x, back.y, back.z, camera.zNear,
+                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, 0};
   int bound = -1;
   for (size_t at = 0; at < visible_.size();) {
     const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp;
+    const int kind = visible_[at].kind;
     size_t n = 0;
-    while (at + n < visible_.size() && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && n < kMaxInstances) {
+    while (at + n < visible_.size() && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && visible_[at + n].kind == kind &&
+           n < kMaxInstances) {
       batch_[n] = visible_[at + n].instance;
       ++n;
     }
-    if (bound != (ramp != 0)) {
-      bound = ramp != 0;
-      device_->SetPipeline(bound ? lights_ : pipeline_);
+    if (bound != kind) {
+      bound = kind;
+      device_->SetPipeline(kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
       device_->SetTexture(1, sceneDepth);
+      device_->SetTexture(3, water ? waterMap_ : textures_->Black());
+      device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
       device_->SetVertexBuffer(cube_);
     }
     device_->SetTexture(0, gfx::Texture{texture});
