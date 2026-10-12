@@ -6,6 +6,7 @@
 
 #include "maui/control.h"
 #include "maui/font.h"
+#include "maui/input.h"
 #include "user/bindings.h"
 
 namespace moho::ui {
@@ -58,7 +59,7 @@ class ItemList : public Control {
 
   std::vector<std::string> items;
   int selection = -1;
-  int mouseover = -1;  // the row under the mouse; set by the list's own mouse handling (not built yet)
+  int mouseover = -1;  // the row under the mouse while the mouse-over row is shown
   int top = 0;  // the first row shown
   std::string family;
   int size = 0;
@@ -111,6 +112,106 @@ class ItemList : public Control {
     SetTop(top + static_cast<int>(std::nearbyint(pages * static_cast<float>(LinesVisible()))));
   }
   void ScrollSetTop(lua_State*, int, float t) override { SetTop(static_cast<int>(std::nearbyint(t))); }
+
+  // The row at a height on screen (FA exe 0x79a0b0): -1 outside the rows, and in the strip the
+  // external leading leaves under a row's text.
+  int RowAt(float y) {
+    if (family.empty() || items.empty()) return -1;
+    FontMetrics m = GetFontMetrics(family, size);
+    float row = m.height + m.externalLeading;
+    if (row <= 0) return -1;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    float rel = y - r.y0;
+    int index = static_cast<int>(rel / row) + this->top;
+    if (index < 0 || index >= Count()) return -1;
+    return m.height <= std::fmod(rel, row) ? -1 : index;
+  }
+  void Select(int row) { selection = row >= 0 && row < Count() ? row : -1; }  // 0x799a10
+  // ShowItem (0x79a8c0): a row outside the shown ones becomes the first shown row.
+  void ShowItem(lua_State* L, int row) {
+    int lines = LinesVisible();
+    if (row < this->top || row >= this->top + lines) ScrollSetTop(L, 0, static_cast<float>(row));
+  }
+  void CallWithRow(lua_State* L, const char* fn, int row) {
+    lua_pushnumber(L, static_cast<lua_Number>(row));
+    RunScript(L, fn, 1, 0);
+  }
+
+  // Events (FA exe 0x79a160). The script's HandleEvent comes first; when it does not handle the
+  // event the list does its own work: the row under the mouse (OnMouseoverItem(row), -1 when the
+  // mouse leaves), a press or double click on a row (OnClick / OnDoubleClick(row, event)), the
+  // wheel (one row per notch), and the keys that move the selection (OnKeySelect(row)), which
+  // arrive as character events.
+  bool HandleEvent(lua_State* L, const UiEvent& e) override {
+    if (Control::HandleEvent(L, e)) return true;
+    if (dead()) return true;
+    switch (e.type) {
+      case EventType::MouseMotion: {
+        if (!showMouseover) return false;
+        int old = mouseover;
+        mouseover = RowAt(e.y);
+        if (old != mouseover) CallWithRow(L, "OnMouseoverItem", mouseover);
+        return true;
+      }
+      case EventType::MouseExit:
+        if (mouseover != -1) {
+          mouseover = -1;
+          CallWithRow(L, "OnMouseoverItem", -1);
+        }
+        return true;
+      case EventType::ButtonPress:
+      case EventType::ButtonDClick: {
+        int row = RowAt(e.y);
+        if (row >= 0) {
+          lua_pushnumber(L, static_cast<lua_Number>(row));
+          PushEventTable(L, this, e);
+          RunScript(L, e.type == EventType::ButtonPress ? "OnClick" : "OnDoubleClick", 2, 0);
+        }
+        return true;
+      }
+      case EventType::WheelRotation:
+        ScrollLines(L, 0, e.wheelRotation <= 0 ? 1.0f : -1.0f);
+        return true;
+      case EventType::Char: {
+        int oldTop = this->top, offset = selection - this->top;
+        switch (e.keyCode) {
+          case 317:  // Up
+            Select(std::max(selection - 1, 0));
+            ShowItem(L, selection);
+            break;
+          case 319:  // Down
+            Select(std::min(selection + 1, Count() - 1));
+            ShowItem(L, selection);
+            break;
+          case 312:
+          case 368:  // Page up: the selection keeps its place among the shown rows
+            ScrollPages(L, 0, -1.0f);
+            Select(this->top == oldTop ? 0 : offset + this->top);
+            break;
+          case 313:
+          case 369:  // Page down
+            ScrollPages(L, 0, 1.0f);
+            Select(this->top == oldTop ? Count() - 1 : std::min(offset + this->top, Count() - 1));
+            break;
+          case 315:  // Home
+            ScrollSetTop(L, 0, 0.0f);
+            Select(0);
+            break;
+          case 314:  // End
+            SetTop(Count());
+            Select(Count() - 1);
+            break;
+          default:
+            return true;
+        }
+        CallWithRow(L, "OnKeySelect", selection);
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
 };
 
 int l_InternalCreateItemList(lua_State* L) {
@@ -220,13 +321,10 @@ int l_ScrollToBottom(lua_State* L) {
   c->SetTop(c->Count());
   return 0;
 }
-// ShowItem(index): scroll just far enough that the row is shown (inferred).
+// ShowItem(index): a row that is not shown becomes the first shown row
 int l_ShowItem(lua_State* L) {
   ItemList* c = Self(L);
-  int row = static_cast<int>(luaL_checknumber(L, 2));
-  int lines = c->LinesVisible();
-  if (row < c->top) c->SetTop(row);
-  else if (row >= c->top + lines) c->SetTop(row - lines + 1);
+  c->ShowItem(L, static_cast<int>(luaL_checknumber(L, 2)));
   return 0;
 }
 

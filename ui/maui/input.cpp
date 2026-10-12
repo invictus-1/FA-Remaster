@@ -342,6 +342,15 @@ int l_MouseButton(lua_State* L) {
   return 0;
 }
 
+// moho64ui_MouseWheel(x, y, notches): the wheel turned at a place; positive is away from the user
+int l_MouseWheel(lua_State* L) {
+  UiEvent e = EventAt(L, 1);
+  e.wheelDelta = 120;
+  e.wheelRotation = static_cast<int>(luaL_checknumber(L, 3)) * 120;
+  MouseWheel(L, UserState::From(L)->ui(), e);
+  return 0;
+}
+
 int l_ControlAt(lua_State* L) {
   UiEvent e = EventAt(L, 1);
   PushObject(L, ControlAt(UserState::From(L)->ui(), 0, e.x, e.y));
@@ -376,6 +385,7 @@ void RegisterInputBindings(lua_State* L) {
   lua_register(L, "moho64ui_MouseMove", l_MouseMove);
   lua_register(L, "moho64ui_MouseButton", l_MouseButton);
   lua_register(L, "moho64ui_ControlAt", l_ControlAt);
+  lua_register(L, "moho64ui_MouseWheel", l_MouseWheel);
   lua_register(L, "moho64ui_Key", l_Key);
   lua_register(L, "moho64ui_Type", l_Type);
 }

@@ -170,6 +170,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   blinks its caret, and asks its script on Enter, Escape, characters and other keys. In the
   lobby's map dialog, typing into the name filter narrows the map list. In the window the real
   keyboard is connected.
+- The item list's own events (read from the original): the row under the mouse
+  (`OnMouseoverItem`), a press or double click on a row (`OnClick`, `OnDoubleClick`), the wheel,
+  and the keys that move the selection (`OnKeySelect`). With them the game's drop-down lists
+  work: in the lobby a slot's list opens and picking "AI: Normal" puts an AI opponent into the
+  slot.
 - Not real yet: key maps (the game's key bindings), the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).

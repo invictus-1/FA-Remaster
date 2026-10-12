@@ -60,7 +60,7 @@ check("scroll to the bottom", top(), 6)
 list:ShowItem(1)
 check("show a row above", top(), 1)
 list:ShowItem(7)
-check("show a row below", top(), 4)
+check("a row below the shown ones becomes the first shown row, as far as the list goes", top(), 6)
 list:ScrollToTop()
 check("scroll to the top", top(), 0)
 
@@ -130,5 +130,63 @@ inner.Left:Set(100) inner.Top:Set(100) inner.Width:Set(50) inner.Height:Set(40)
 border:LayoutAroundControl(inner)
 check("a border laid out around a control", border.Left() .. "," .. border.Top() .. " " .. border.Right() .. "," .. border.Bottom(),
     (100 - vw) .. "," .. (100 - hh) .. " " .. (150 + vw) .. "," .. (140 + hh))
+
+-- the item list's own events: the row under the mouse, clicks, the wheel, the selection keys
+edit:Destroy() bar:Destroy()  -- they were never laid out, and the mouse must not ask them where they are
+local picks = ItemList(root, "picklist")
+picks:SetFont("Arial", 14)
+picks.Left:Set(600) picks.Top:Set(300) picks.Width:Set(200) picks.Height:Set(row * 4)
+picks.Depth:Set(500)
+for i = 0, 9 do picks:AddItem("row " .. i) end
+local log = {}
+picks.OnClick = function(self, r, event) table.insert(log, "click" .. r .. event.Type) end
+picks.OnDoubleClick = function(self, r, event) table.insert(log, "double" .. r) end
+picks.OnMouseoverItem = function(self, r) table.insert(log, "over" .. r) end
+picks.OnKeySelect = function(self, r) table.insert(log, "key" .. r) end
+local function rowY(r) return 300 + row * r + 2 end
+moho64ui_MouseMove(650, rowY(1))
+check("no mouse-over row unless it is asked for", table.concat(log, " "), "")
+picks:ShowMouseoverItem(true)
+moho64ui_MouseMove(650, rowY(2))
+moho64ui_MouseMove(651, rowY(2))
+moho64ui_MouseMove(650, rowY(3))
+check("OnMouseoverItem(row) when the row under the mouse changes", table.concat(log, " "), "over2 over3")
+log = {}
+moho64ui_MouseButton("Left", true, 650, rowY(1))
+moho64ui_MouseButton("Left", false, 650, rowY(1))
+check("a press on a row calls OnClick(row, event)", table.concat(log, " "), "click1ButtonPress")
+check("the selection is the script's to set", picks:GetSelection(), -1)
+log = {}
+moho64ui_MouseWheel(650, rowY(1), -1)
+check("the wheel towards the user scrolls one row down", string.find(moho64ui_Describe(picks), "top 1,", 1, true) ~= nil, true)
+moho64ui_MouseButton("Left", true, 650, rowY(1))
+moho64ui_MouseButton("Left", false, 650, rowY(1))
+check("rows count from the first shown row", log[table.getn(log)], "click2ButtonPress")
+moho64ui_MouseWheel(650, rowY(1), 1)
+moho64ui_MouseWheel(650, rowY(1), 1)
+check("the wheel away from the user scrolls up and stops at the top", string.find(moho64ui_Describe(picks), "top 0,", 1, true) ~= nil, true)
+log = {}
+moho64ui_MouseMove(10, 900)
+check("OnMouseoverItem(-1) when the mouse leaves", table.concat(log, " "), "over-1")
+-- the selection keys reach the list as characters while it has the keyboard focus
+picks:AcquireKeyboardFocus(true)
+picks:SetSelection(0)
+log = {}
+moho64ui_Key(319) moho64ui_Key(319)
+check("Down moves the selection and calls OnKeySelect(row)", picks:GetSelection() .. " " .. table.concat(log, " "), "2 key1 key2")
+moho64ui_Key(317)
+check("Up", picks:GetSelection(), 1)
+moho64ui_Key(314)
+check("End selects the last row and shows it", picks:GetSelection() .. tostring(string.find(moho64ui_Describe(picks), "top 6,", 1, true) ~= nil), "9true")
+moho64ui_Key(312)
+check("Page up keeps the selection's place among the shown rows", picks:GetSelection() .. tostring(string.find(moho64ui_Describe(picks), "top 2,", 1, true) ~= nil), "5true")
+moho64ui_Key(315)
+check("Home selects the first row", picks:GetSelection() .. tostring(string.find(moho64ui_Describe(picks), "top 0,", 1, true) ~= nil), "0true")
+moho64ui_Key(313)
+check("Page down", picks:GetSelection() .. tostring(string.find(moho64ui_Describe(picks), "top 4,", 1, true) ~= nil), "4true")
+picks:ShowItem(9)
+check("ShowItem makes a row that is not shown the first shown row, as far as the list goes", string.find(moho64ui_Describe(picks), "top 6,", 1, true) ~= nil, true)
+picks:AbandonKeyboardFocus()
+picks:Destroy()
 
 LOG("TEST done: " .. failed .. " failed")

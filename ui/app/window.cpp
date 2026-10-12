@@ -111,8 +111,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};  // screen coordinates for the wheel
       ScreenToClient(hwnd, &p);
       UiEvent e = MouseEvent(GET_KEYSTATE_WPARAM(wp), MAKELPARAM(p.x, p.y));
-      e.wheelDelta = GET_WHEEL_DELTA_WPARAM(wp);
-      e.wheelRotation = e.wheelDelta;
+      e.wheelRotation = GET_WHEEL_DELTA_WPARAM(wp);  // signed: away from the user is positive
+      e.wheelDelta = WHEEL_DELTA;                    // the size of one notch
       if (w->callbacks.mouseWheel) w->callbacks.mouseWheel(e);
       return 0;
     }
