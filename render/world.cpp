@@ -516,7 +516,17 @@ void World::Render() {
       ao.Apply(view);
     }
     skyDraw.Draw(view, camera, skyLight);  // where nothing solid is
-    water.Draw(view);
+    // the water: the modern look's sees through to a copy of the picture as it is now
+    if (look == Look::Modern && map.water.present && post.CopyBehind()) {
+      post.BeginColorOnly();
+      lights.Bind();
+      device_->SetTexture(kShadowMapSlot, shadows.Map());
+      water.DrawModern(view, camera, post.Behind(), post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    } else {
+      water.Draw(view);
+    }
   } else {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight);
@@ -526,7 +536,7 @@ void World::Render() {
   shafts.Draw(view);
   if (hide.find("particles") == std::string::npos) particles.Draw(view);
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
-  if (haveMap_ && sight.On()) {  // the fog of war: what is not seen, darkened
+  if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }

@@ -27,6 +27,10 @@ struct WorldPicture::Impl {
   double lastTick = 0;
   // the minimap: the ground as drawn once, the camera it was drawn with, and the picture handed out
   std::vector<uint32_t> mapGround, mapPixels;
+  float mapHour = -100, mapWeather = -100;  // the light the ground was drawn in
+  float mapX0 = 0, mapY0 = 0, mapX1 = 1, mapY1 = 1;  // where the map's corners (0, 0) and (width, height) are on it
+  std::vector<uint8_t> seen;  // what the focus army sees (SimFrames::TakeSight); empty: no focus army
+  int seenCells = 0;
   int mapWidth = 0, mapHeight = 0;
   Camera mapCamera;
   Mat4 mapMatrix{};
@@ -75,7 +79,11 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     if (const uint32_t seed = m.frames.Seed()) m.world->weatherSeed = seed;  // the same weather for every player
     std::vector<uint8_t> seen;  // what the focus army sees, when it has been worked out anew
     int cells = 0;
-    if (m.frames.TakeSight(&seen, &cells)) m.world->sight.Set(seen, cells);
+    if (m.frames.TakeSight(&seen, &cells)) {
+      m.world->sight.Set(seen, cells);
+      m.seen.swap(seen);
+      m.seenCells = cells;
+    }
   }
   // the moment shown lies between the last two beats known: one beat back from the newest
   const double first = static_cast<double>(m.frames.FirstTick()), last = static_cast<double>(m.frames.LastTick());
@@ -158,8 +166,14 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     return m.mapPixels;
   }
   World& w = *m.world;
-  if (m.mapWidth != width || m.mapHeight != height || m.mapGround.empty()) {
-    // the ground, once: from so far above with so narrow a view that it is as good as a map
+  // the ground is drawn anew when the light has changed: the hour by a quarter, or the weather
+  const float hourNow = w.timeOfDay < 0 ? -1 : w.timeOfDay;
+  const float weatherNow = w.timeOfDay < 0 ? 0 : w.cloudCover + w.wet * 2 + w.snowLying * 4 + w.fog * 8;
+  if (m.mapWidth != width || m.mapHeight != height || m.mapGround.empty() || std::fabs(hourNow - m.mapHour) > 0.25f ||
+      std::fabs(weatherNow - m.mapWeather) > 0.2f) {
+    m.mapHour = hourNow;
+    m.mapWeather = weatherNow;
+    // the ground: from so far above with so narrow a view that it is as good as a map
     const float mw = static_cast<float>(w.map.width), mh = static_cast<float>(w.map.height);
     Camera c;
     c.target = {mw * 0.5f, 0, mh * 0.5f};
@@ -178,6 +192,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     rings.swap(w.rings);
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
+    w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
@@ -185,6 +200,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.device->EndFrame(&m.capture);
     w.iconsOn = icons;
     w.shadowsOn = shadows;
+    w.sightShown = true;
     ghosts.swap(w.ghosts);
     lines.swap(w.lines);
     rings.swap(w.rings);
@@ -192,13 +208,31 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.mapMatrix = w.view.constants.viewProj;
     m.mapWidth = width;
     m.mapHeight = height;
+    MinimapProject({0, c.target.y, 0}, &m.mapX0, &m.mapY0);
+    MinimapProject({mw, c.target.y, mh}, &m.mapX1, &m.mapY1);
     m.mapGround.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
     const size_t count = std::min(m.mapGround.size(), m.capture.size() / 4);
     const uint8_t* p = m.capture.data();
     for (size_t i = 0; i < count; ++i, p += 4) m.mapGround[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
   }
-  // every unit's icon on it
   m.mapPixels = m.mapGround;
+  // what the focus army does not see, darkened as in the main picture
+  if (!m.seen.empty() && m.seenCells > 0 && m.mapX1 != m.mapX0 && m.mapY1 != m.mapY0) {
+    const float sx = static_cast<float>(m.seenCells) / (m.mapX1 - m.mapX0), sy = static_cast<float>(m.seenCells) / (m.mapY1 - m.mapY0);
+    for (int y = 0; y < height; ++y) {
+      const int cz = static_cast<int>((static_cast<float>(y) + 0.5f - m.mapY0) * sy);
+      if (cz < 0 || cz >= m.seenCells) continue;
+      const uint8_t* row = &m.seen[static_cast<size_t>(cz) * static_cast<size_t>(m.seenCells)];
+      uint32_t* out = &m.mapPixels[static_cast<size_t>(y) * static_cast<size_t>(width)];
+      for (int x = 0; x < width; ++x) {
+        const int cx = static_cast<int>((static_cast<float>(x) + 0.5f - m.mapX0) * sx);
+        if (cx < 0 || cx >= m.seenCells || row[cx]) continue;
+        const uint32_t p = out[x];
+        out[x] = (p & 0xff000000u) | ((p >> 1) & 0x007f7f7fu);  // half its light
+      }
+    }
+  }
+  // every unit's icon on it
   if (m.frame.blueprints) {
     for (const FrameUnit& u : m.frame.units) {
       if (u.dead || (!u.Seen() && !u.Blip())) continue;

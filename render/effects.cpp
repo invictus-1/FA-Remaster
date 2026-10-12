@@ -130,6 +130,12 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
 
   // Create
   const std::string& f = event.name;
+  // what is made at a place and stays there (an explosion, a flash of light, a mark on the ground)
+  // is not made where the army the picture is for does not see; what hangs on a unit or a shot is
+  // made all the same and hidden while that is not seen (Update)
+  if (!event.seen && (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
+                      f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone"))
+    return;
   if (verbose && (f == "CreateLightParticle" || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
     std::string what = f + " " + event.blueprint + " | " + event.text + " | " + event.text2;
     if (!said_[what]++) {

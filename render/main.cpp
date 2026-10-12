@@ -352,6 +352,7 @@ int main(int argc, char** argv) {
     setup.replay = opt.sim;
     setup.session = opt.session;
     setup.seed = opt.seed;
+    setup.maps = opt.maps;
     live.SetFocusArmy(opt.focus);
     picture.SetFocusArmy(opt.focus);
     setup.modUids = opt.modUids;

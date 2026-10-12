@@ -24,13 +24,18 @@ class Post {
   // Begins a pass into the scene's colour alone, keeping what was drawn: for work that reads the
   // scene's depth while it changes the colour (decals). ContinueScene afterwards.
   void BeginColorOnly();
+  // Copies the picture as it is now into a texture that can be read (one sample a pixel), for
+  // what looks through to what is behind it (water). False when the scene has one sample a
+  // pixel (then there is no copy). It ends the pass: begin one again.
+  bool CopyBehind();
+  gfx::Texture Behind() const { return behind_; }
   // Begins the window's pass and draws the scene's picture into it. More may be drawn on top after.
   void Present(const View& view);
 
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_;
-  gfx::Texture color_, depth_, drawn_;
+  gfx::Texture color_, depth_, drawn_, behind_;
   int width_ = 0, height_ = 0;
 };
 

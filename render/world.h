@@ -177,6 +177,7 @@ class World {
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
+  bool sightShown = true; // (off for a picture that is darkened by other means: the minimap's ground)
   Shafts shafts;          // lamps' beams seen in the air
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;

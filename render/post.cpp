@@ -49,15 +49,17 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    for (gfx::Texture t : {color_, depth_, drawn_})
+    for (gfx::Texture t : {color_, depth_, drawn_, behind_})
       if (t) device_->Destroy(t);
     drawn_ = {};
+    behind_ = {};
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
     td.format = kSceneFormat;
     std::memcpy(td.clearValue, clearColor, sizeof td.clearValue);
     color_ = device_->CreateTarget(td);  // the picture as the last pass reads it
+    if (gSceneSamples > 1) behind_ = device_->CreateTarget(td);  // a copy taken on the way (CopyBehind)
     td.samples = gSceneSamples;
     if (gSceneSamples > 1) drawn_ = device_->CreateTarget(td);  // what is drawn into, several samples a pixel
     td.format = gfx::Format::D32;
@@ -78,6 +80,12 @@ void Post::ContinueScene() {
   pass.depth = depth_;
   pass.clearColor = pass.clearDepth = false;
   device_->BeginPass(pass);
+}
+
+bool Post::CopyBehind() {
+  if (!drawn_ || !behind_) return false;
+  device_->Resolve(drawn_, behind_);
+  return true;
 }
 
 void Post::BeginColorOnly() {
