@@ -2,7 +2,8 @@
 //  - the sun's shadow (cascaded shadow maps),
 //  - the original game's light formula,
 //  - the modern one: physically based (metalness / roughness), sun plus sky light from the map's
-//    sky cube, in linear colour with values beyond 1 kept for the last pass to map to the screen.
+//    sky cube, plus the small lights near the surface (lights.h), in linear colour with values
+//    beyond 1 kept for the last pass to map to the screen.
 // A shader computes its surface (colour, normal, material) and asks one of the two for the result,
 // by the `look` value of the View block.
 #pragma once
@@ -12,6 +13,7 @@ namespace render {
 inline const char kLightingShaderBlock[] = R"hlsl(
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
+StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
 
 // 1 in sunlight, 0 in shadow. `normal` is the surface's (the lookup is moved a little along it, which
 // keeps a lit surface from shadowing itself).
@@ -74,6 +76,34 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float k = a * 0.5;
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
+  float3 small = 0;
+  // the small lights of the square of ground this place is over
+  [branch] if (lightGrid.w > 0.5) {
+    float2 g = (world.xz - lightGrid.xy) * lightGrid.z;
+    [branch] if (all(g >= 0) && all(g < lightGridSize.xy)) {
+      float4 square = lightData[uint(g.y) * uint(lightGridSize.x) + uint(g.x)];
+      uint first = uint(square.x), n = min(uint(square.y), 48u);
+      for (uint s = 0; s < n; ++s) {
+        uint at = first + s;
+        uint light = uint(lightData[at >> 2][at & 3]);
+        float4 where = lightData[uint(lightGridSize.z) + light * 2];
+        float3 toLight = where.xyz - world;
+        float far2 = dot(toLight, toLight) / (where.w * where.w);
+        if (far2 >= 1) continue;
+        float3 l = normalize(toLight);
+        float nl = saturate(dot(N, l));
+        // full at the light, nothing at its radius
+        float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        float3 h = normalize(V + l);
+        float nh = saturate(dot(N, h));
+        float dl = nh * nh * (a2 - 1) + 1;
+        float3 fl = f0 + (1 - f0) * pow(1 - saturate(dot(V, h)), 5);
+        float visl = 0.25 / ((nl * (1 - k) + k) * (nDotV * (1 - k) + k));
+        small += (diffuseColor / 3.14159265 + a2 / (3.14159265 * dl * dl) * visl * fl * modern.w) * lightData[uint(lightGridSize.z) + light * 2 + 1].rgb *
+                 (nl * fade * 3.14159265);
+      }
+    }
+  }
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
   // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
   // dark paint of middling roughness shows more sheen than colour)
@@ -88,7 +118,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
   // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)
   color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV) * modern.w) * (modern.y * occlusion);
-  return color + emission;
+  return color + small + emission;
 }
 )hlsl";
 

@@ -28,6 +28,15 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
+// --map-decals normals|all|albedo|off|corner  which of the map's decals are drawn: normals (the default: only
+//           the sculpting of cliffs and erosion), all (also the painted ground details, which as drawn
+//           today make the ground too busy), albedo (those alone), off; corner: all, with a decal's position
+//           taken as its corner (for finding out what the map file means)
+// --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
+//           to which the map's decals are drawn
+// --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
+// --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
+//           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
 //           trail (behind a point circling it); a name such as phalanx_munition_beam_01, or a path
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
@@ -66,11 +75,13 @@
 #include "core/vfs.h"
 #include "script/mount.h"
 #include "debug_draw.h"
+#include "decals.h"
 #include "effects.h"
 #include "frame.h"
 #include "gfx.h"
 #include "ground.h"
 #include "icons.h"
+#include "lights.h"
 #include "linalg.h"
 #include "mesh_renderer.h"
 #include "models.h"
@@ -120,6 +131,11 @@ struct Options {
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
+  std::string hide;    // --hide: kinds of effect left out
+  int testLights = 0;  // --lights
+  std::string mapDecals = "normals";  // --map-decals
+  float decalTurn = 1, decalRange = 1;
+  std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -170,6 +186,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--turn") o->turn = v;
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
+    else if (a == "--hide") o->hide = v;
+    else if (a == "--lights") o->testLights = atoi(v);
+    else if (a == "--map-decals") o->mapDecals = v;
+    else if (a == "--decal-filter") o->decalFilter = v;
+    else if (a == "--decal-turn") o->decalTurn = static_cast<float>(atof(v));
+    else if (a == "--decal-range") o->decalRange = static_cast<float>(atof(v));
     else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
@@ -366,7 +388,36 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
-  Effects effects(&particles, &ribbons, &models);
+  Decals decals(device.get(), &vfs, &textures);
+  if (!decals.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  if (haveMap && map.water.present) decals.SetWater(terrain->WaterMap(), terrain->WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
+  // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
+  if (haveMap && opt.mapDecals != "off") {
+    int laid = 0;
+    for (const MapDecal& d : map.decals) {
+      if (d.type != 1 && d.type != 2) continue;
+      if (!opt.decalFilter.empty() && d.textures[0].find(opt.decalFilter) == std::string::npos) continue;
+      if ((opt.mapDecals == "albedo" && d.type != 1) || (opt.mapDecals == "normals" && d.type != 2)) continue;  // one kind alone, to look at it
+      const float heading = d.rotation.y * opt.decalTurn;
+      Vec3 centre = d.position;
+      if (opt.mapDecals == "corner") {  // the position as the corner the decal is turned about
+        const float c = std::cos(heading), s = std::sin(heading), hx = d.scale.x * 0.5f, hz = d.scale.z * 0.5f;
+        centre.x += hx * c + hz * s;
+        centre.z += -hx * s + hz * c;
+      }
+      centre.y = map.Height(Clamp(centre.x, 0, static_cast<float>(map.width)), Clamp(centre.z, 0, static_cast<float>(map.height)));
+      const bool ok = d.type == 2 ? decals.AddNormal(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange)
+                                  : decals.Add(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange);
+      if (ok) ++laid;
+    }
+    printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
+  }
+  Lights lights(device.get(), &vfs);
+  Effects effects(&particles, &ribbons, &decals, &lights, &models);
+  effects.verbose = opt.debug;
   std::vector<FrameEffectEvent> effectEvents;
   StrategicIcons icons(device.get(), &vfs);
   if (!icons.Init(&error)) {
@@ -829,11 +880,20 @@ int main(int argc, char** argv) {
         ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
       }
     }
+    lights.Build(&view);  // (after the effects have said what flashes; before any pass reads the view)
     {  // the bones of posed models, once for all the frame's passes
       std::vector<const View*> views{&view};
       if (haveMap && shadowsOn)
         for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
       meshes.Prepare(views);
+    }
+    lights.Begin(havePlay ? playTick * 0.1 : static_cast<double>(time));
+    for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour
+      const float ring = 3 + 2.5f * static_cast<float>(i / 12), angle = time * (0.5f + 0.07f * static_cast<float>(i % 5)) + static_cast<float>(i) * 0.83f;
+      const Vec3 at{emitAt.x + std::cos(angle) * ring, 0, emitAt.z + std::sin(angle) * ring};
+      const float hue = static_cast<float>(i) * 2.4f;
+      lights.Add({at.x, groundHeight(at.x, at.z) + 1.2f, at.z}, 6,
+                 Vec3{0.5f + 0.5f * std::cos(hue), 0.5f + 0.5f * std::cos(hue + 2.1f), 0.5f + 0.5f * std::cos(hue + 4.2f)} * 3.0f);
     }
     if (haveLive) {  // what the scripts did with effects in the beats since the last frame
       live.TakeEffectEvents(&effectEvents);
@@ -855,8 +915,17 @@ int main(int argc, char** argv) {
     post.BeginScene(device->Width(), device->Height(), clear);
     device->SetTexture(kShadowMapSlot, shadows.Map());
     device->SetTexture(kEnvironmentSlot, sky);
+    lights.Bind();
     if (haveMap) {
       terrain->Draw(view);
+      // decals on the ground, before anything stands on it: they read the ground's depth
+      if (decals.Count() && opt.hide.find("decals") == std::string::npos) {
+        post.BeginColorOnly();
+        lights.Bind();
+        decals.Draw(view, camera, post.Depth(), havePlay ? playTick * 0.1 : static_cast<double>(time));
+        post.ContinueScene();
+        lights.Bind();
+      }
       meshes.Draw(view, environment);
       draw.Flush(view);
       // ambient occlusion: from the depth of everything solid, laid over it before the water
@@ -870,8 +939,9 @@ int main(int argc, char** argv) {
       DrawTestScene(draw);
       draw.Flush(view);
     }
-    ribbons.Draw(view);    // beams and trails, then particles: over everything solid and the water, by the scene's depth
-    particles.Draw(view);
+    // beams and trails, then particles: over everything solid and the water, by the scene's depth
+    if (opt.hide.find("bands") == std::string::npos) ribbons.Draw(view);
+    if (opt.hide.find("particles") == std::string::npos) particles.Draw(view);
     post.Present(view);
     if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 
@@ -900,9 +970,10 @@ int main(int argc, char** argv) {
         printf("; %d particles of %d emitters (%d quiet), %.2f ms", particles.liveParticles, particles.liveEmitters, particles.quietEmitters, particles.cpuMs);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
+      if (lights.count) printf("; %d lights", lights.count);
       if (haveLive)
-        printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms", effects.live, effects.started, effects.notShown,
-               ribbons.drawnBands, effects.cpuMs);
+        printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
+               effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;

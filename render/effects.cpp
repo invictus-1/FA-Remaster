@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 
 namespace render {
 namespace {
@@ -116,6 +117,14 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
 
   // Create
   const std::string& f = event.name;
+  if (verbose && (f == "CreateLightParticle" || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
+    std::string what = f + " " + event.blueprint + " | " + event.text + " | " + event.text2;
+    if (!said_[what]++) {
+      printf("render: effects: %s; numbers", what.c_str());
+      for (float n : event.numbers) printf(" %g", n);
+      printf("\n");
+    }
+  }
   Effect e;
   e.entity = event.entity;
   e.entity2 = event.entity2;
@@ -149,8 +158,24 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     } else if (!n.empty()) {
       e.halfWidth = n[0];
     }
+  } else if (f == "CreateLightParticle" || f == "CreateLightParticleIntel") {
+    // numbers: size, lifetime in ticks; the texture and the ramp are names in /textures/particles
+    const std::vector<float>& n = event.numbers;
+    // the modern look gets a light; the original look the glow on the ground the original draws
+    if (n.size() >= 2 && !event.blueprint.empty()) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
+    if (n.size() >= 2 && !event.blueprint.empty())
+      decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
+    return;
+  } else if (f == "CreateDecal" || f == "CreateSplat") {
+    // numbers: heading, sizeX, sizeZ, lod, duration (seconds - a GUESS), fidelity; a decal's kind is text2
+    const std::vector<float>& n = event.numbers;
+    std::string kind = event.text2;
+    for (char& c : kind) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return;
+    ++notShown;
+    return;
   } else {
-    ++notShown;  // light particles, decals, splats
+    ++notShown;  // splats on bones, anything new
     return;
   }
   if (e.attached) ++hanging_[e.entity];
