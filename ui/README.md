@@ -216,8 +216,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- About 320 of the 531 engine functions are built (some 40 of them, the world view's and the
-  cameras', as a first version); the rest are logged stubs.
+- 370 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 161 are logged stubs. (`--list-bindings` counts
+  them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track
 
