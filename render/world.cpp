@@ -392,6 +392,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   for (const FrameUnit& u : frame.units) {
     if (u.dead) continue;
+    // of another army's unit only what the army the picture is for knows: the unit when it is seen,
+    // its blip when it is on radar, sonar or omni alone, nothing otherwise
+    const bool blip = u.Blip();
+    if (!u.Seen() && !blip) continue;
     const Vec3 position{u.position[0], u.position[1], u.position[2]};
     const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
     const Vec3 color = colorOf(u.Army());
@@ -401,7 +405,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
-      icons.Add(kind, position, color, isSelected);
+      icons.Add(kind, position, color, isSelected, blip);
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
@@ -411,10 +415,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         AddBrackets(hoverKind, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       }
     }
-    const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
+    const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
     float radius = 0.5f;
     Vec3 centre = position + Vec3{0, 0.4f, 0};
-    if (model && model->ok) {
+    if (blip) {
+      // (its blip alone, which can be pointed at)
+    } else if (model && model->ok) {
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -434,6 +440,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
   for (const FrameProjectile& p : frame.projectiles) {
+    if (!p.seen) continue;
     const Vec3 position{p.position[0], p.position[1], p.position[2]};
     const std::string& blueprint = (*frame.blueprints)[p.blueprint];
     const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);

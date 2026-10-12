@@ -4,6 +4,39 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 5: only what the player's army sees — units, shots, minimap and picking done; effects and the ground not yet
+
+`WorldPicture::SetFocusArmy(army)` in `render/world_picture.h`: the engine's army number, from 1;
+0 (as it is until you call it): no one army, everything shows. It takes hold with the next beat
+(what an army knows is read with each beat, on the simulation's thread, by `ReconOf`; so it is as
+old as the beat shown, and as the engine says up to N - 1 beats older for N armies).
+
+From then on, for every unit, by the bits `ReconOf` gives for the focus army (its own and its
+allies' units come back as seen):
+- seen now (`kReconSeenNow`): the unit, as before;
+- not seen, but radar, sonar or omni: its blip, which is the unit's strategic icon without its detail
+  (`icon_land2_generic` for `icon_land2_directfire`; the game's files have such a one for every
+  class), in the army's colour, at ANY distance, with no model. A selected or pointed-at blip gets
+  its brackets;
+- nothing of the three: not drawn.
+A projectile is drawn where the focus army sees its place. `DrawMinimap` goes by the same rule
+(blips as the plain icons), and so do `UnitAt` and `UnitsIn`: a unit that is not drawn cannot be
+hit, a blip can (within about ten pixels, like any icon).
+
+Not yet, so the picture still gives away more than it should:
+- the game's effects are not hidden: the smoke, trails, beams and flashes of units the army does
+  not see are drawn (they hang on entities by id; next step on my side);
+- the ground the army does not see is not darkened, and the original's remembered sight (a building
+  seen once stays as a ghost where it stood) is not there: a unit no longer seen falls back to its
+  blip or to nothing;
+- a blip stands where the unit is; whatever the original does to a blip's place (jamming) is not in it;
+- whether a never-seen radar contact shows its class at all in the original, I have not read; here
+  it shows the class icon.
+
+Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
+minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's
+usual test game has `FogOfWar = "none"`, where every unit comes back as seen.
+
 ## ui, to the renderer 4: the mark on the unit under the mouse, and the original's brackets — both done (first form)
 
 **1. The unit under the mouse:** `WorldPicture::SetHover(entity, kind)` in `render/world_picture.h`;
