@@ -75,8 +75,11 @@ stubs (39 of `CAiBrain`'s: threat map, `BuildPlatoon`, `DecideWhatToBuild`, atta
 
 Chris confirmed it (2026-10-12): the engine track merges `origin/render` into `main` at its convenient
 stops, without a pull request, after checking that only `render/` and `docs/render-*` paths differ. The
-interface track merges its own branch. (The first attempt was stopped by the desktop app's permission
-check for merges; until Chris allows that, a merge may lag behind by a day.)
+interface track merges its own branch. First merge: 2026-10-12, `render` at 2b92b8a (commit 3934213).
+
+Note for the renderer track: the engine's answers to render 1 to 5 are all in this file, not under the
+requests in `render/REQUESTS.md`: that file is yours, and no file has two writers. Read this file on
+`main` after each merge.
 
 ## render 4: `.scm` version 6 = version 5 with 32-bit indices — agreed
 
