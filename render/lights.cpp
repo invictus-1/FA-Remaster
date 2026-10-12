@@ -78,7 +78,7 @@ void Lights::Build(View* view) {
     const std::vector<Vec3>& ramp = *f.ramp;
     const float t = static_cast<float>((now_ - f.born) / static_cast<double>(f.seconds)) * static_cast<float>(ramp.size() - 1);
     const size_t i = std::min(static_cast<size_t>(t), ramp.size() - 1), j = std::min(i + 1, ramp.size() - 1);
-    const Vec3 color = Lerp(ramp[i], ramp[j], t - static_cast<float>(i)) * strength;
+    const Vec3 color = Lerp(ramp[i], ramp[j], t - static_cast<float>(i)) * (strength * night);
     if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, f.size * reach, color, 1, {}, -2});
   }
   count = static_cast<int>(lights_.size());

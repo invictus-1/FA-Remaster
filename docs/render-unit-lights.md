@@ -52,9 +52,10 @@ Lines starting with `--` are comments. Fields the renderer does not know are ign
 added later without breaking older builds.
 
 **Put the lights that matter most first.** When many units are lit at once, each unit lights only
-the first of its list (down to two with some thousands of units), and where units stand close
-together a small square of ground (2.5 world units) takes three beams and two other lamps; the
-rest there stay dark. So: head lamps first, then the unit's own glow, then the rest.
+the first of its list (down to three with some thousands of units), and where units stand close
+together a small square of ground (2.5 world units) takes three beams and two other lamps from
+the units before; the rest there stay dark (a unit's own lamps never cut each other). So: the
+main pair of lamps first, then the unit's own glow, then the rest, as the lists have it.
 
 A beam from a lamp low on a unit runs along the ground and would by the angle alone hardly light
 it; within a beam the ground takes light as if the air scattered some of it down, so the pool

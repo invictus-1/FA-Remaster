@@ -207,8 +207,11 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
   // most first): about 6,000 lights in all, by the number of units of the frame before
   ++lampUnits_;
-  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 2, 16));
+  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 3, 16));
   size_t lit = 0;
+  uint64_t taken[16];
+  bool takenBeam[16];
+  size_t takenCount = 0;
   for (const ModelLight& light : model->lights) {
     if (lit++ >= most) break;
     Vec3 bonePlace{0, 0, 0};
@@ -239,10 +242,15 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     {
       const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
                               static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
-      uint32_t& count = lampSquares_[square];
+      // (by the lamps of the units before this one: a unit's own lamps do not cut each other)
+      const auto found = lampSquares_.find(square);
+      const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
       const uint32_t beams = count & 0xffffu, others = count >> 16;
       if (light.cone > 0 ? beams >= 3 : others >= 2) continue;
-      count += light.cone > 0 ? 1u : 0x10000u;
+      if (takenCount < 16) {
+        taken[takenCount] = square;
+        takenBeam[takenCount++] = light.cone > 0;
+      }
     }
     float on = lampsOn_ * light.strength * 0.5f;  // (1 in the list: a strong lamp to an eye opened for the night)
     if (light.blink > 0) {  // (each lamp on its own beat, by where it is)
@@ -261,6 +269,7 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     else
       lights.Add(at, light.radius * model->scale, tint * on);
   }
+  for (size_t i = 0; i < takenCount; ++i) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
 }
 
 float World::GroundHeight(float x, float z) const {
@@ -293,6 +302,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.modern[2] = exposure;
   c.modern[3] = reflection;
   lampsOn_ = 0;
+  lights.night = 1;
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
   lampSquares_.clear();
@@ -326,6 +336,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.falling[0] = rain;
     c.falling[1] = snow;
     c.falling[2] = flash;
+    // the game's glowing effects and their flashes of light were made for the day's exposure
+    c.falling[3] = std::pow(1 / skyLight.exposure, 0.65f);
+    lights.night = c.falling[3];
     c.weather[0] = wet;
     c.weather[1] = snowLying;
     // (rain and snow thicken the air a little; the air never hides all of a far thing, or the

@@ -92,7 +92,7 @@ float4 PS(VOut i) : SV_Target {
   if (look > 0.5) {
     // the modern look's picture is linear light; what adds its light is given more of it, to glow
     // (what does not add light, smoke and dust, is lit by the day: darker in a computed night)
-    c.rgb = pow(max(c.rgb, 0), 2.2) * (options.z > 1.5 && options.z < 2.5 ? options.w : skyZenith.w > 0.5 ? skyGlow.w : 1);
+    c.rgb = pow(max(c.rgb, 0), 2.2) * (options.z > 1.5 && options.z < 2.5 ? options.w * (falling.w > 0 ? falling.w : 1) : skyZenith.w > 0.5 ? skyGlow.w : 1);
   }
   return c;
 }
