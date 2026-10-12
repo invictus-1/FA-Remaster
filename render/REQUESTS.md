@@ -5,7 +5,8 @@ The engine track answers in `docs/engine-answers.md` on `main` (so that no file 
 Newest first.
 
 State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
-3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted, 6 new.
+3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted,
+6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame).
 
 ## 6. The live frame: bone poses and projectiles first (2026-10-12)
 
