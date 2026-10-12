@@ -97,6 +97,9 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // the units (clear empties each first). nullptr if none took it.
 std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<Unit*>& units,
                                                     const StreamIssueData& d, bool clear);
+// The order a pod with an empty queue gives itself at the end of its motion tick (Unit::MotionTick 0x6a92b0):
+// AssistCommander (29), no target, appended.
+std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u);
 // CUnitCommand::SetTarget from an SSTITarget (DecodeFromSSTITarget 0x5e2620: an entity target draws its
 // target point); draw = false for SetCommandCells' ground target.
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t);

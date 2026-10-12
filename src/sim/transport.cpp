@@ -15,6 +15,7 @@
 #include "sim/build.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
+#include "sim/entity_grid.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/skeleton.h"
@@ -28,6 +29,7 @@ using namespace vm;
 
 namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
+bool IsAlly(const Army* a, const Army* b);
 }
 
 // The transport tasks' own state (kept with the BuildTask).
@@ -71,6 +73,9 @@ struct TransportTaskData {
   float dy = 0;                      // +0x40
   Vec3 bonePos, fwd, approach;       // +0x44, +0x50, +0x5c
   bool isCarrier = false;            // CUnitRefuel+0x39: the platform is a carrier
+  // pod assist (CUnitPodAssist): the owner is `transport`; the assist task it started and that task's first beat
+  BuildTask* work = nullptr;
+  uint32_t workFrom = 0;
 };
 
 namespace {
@@ -2032,6 +2037,198 @@ int TickCarrierLaunch(Sim& sim, Unit* C, BuildTask& t, TransportTaskData& d) {
   return kTaskRunning;
 }
 
+// --- pods (pod_assist.md): CUnitPodAssist, the task of an AssistCommander order ---------------------
+
+enum { kPod = 10 };
+
+bool PodMobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
+
+// CUnitPodAssist::Kill 0x61d820: leave the dock (or give the reserved spot back) before doing something else; a
+// drone whose creator is gone dies
+void PodLeave(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (!PodMobile(u)) return;
+  Unit* creator = UnitRef(sim, u->creatorId);
+  if (!creator || creator->dead) {
+    if (!u->dead) KillUnit(sim, sim.L(), u, nullptr, "", 0.0f);
+  } else {
+    Unit* owner = UnitRef(sim, d.transport);
+    if (owner && !owner->dead) {
+      if (owner->transport) {
+        if (u->transportedBy == EntityRef(owner)) TransportDetach(sim, *owner->transport, u);
+        else RemovePickupUnit(sim, *owner->transport, u, true);
+      }
+    } else {
+      d.transport = EntityRef(creator);
+    }
+  }
+  if (!u->dead) {
+    MotionStop(u);  // CUnitMotion::Stop 0x6b8460
+    AirSetLandHeight(u, std::numeric_limits<float>::infinity());
+  }
+  d.slotHeld = false;
+  t.state = 0;
+}
+
+void PodStartWork(Sim& sim, TransportTaskData& d, BuildTask* work) {
+  d.work = work;
+  d.workFrom = sim.tick() + 1;  // the pod task returned 1: the new task runs next beat
+}
+
+// TryIssueFocusedAssistTask 0x61de50: a commander's drone does what its owner does
+bool PodFocused(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* owner) {
+  if (!u->autoMode || !owner) return false;
+  if (State(owner, "Enhancing")) {
+    PodLeave(sim, u, t, d);
+    PodStartWork(sim, d, MakeRepairChild(sim, u, owner, false));
+    return true;
+  }
+  Entity* F = owner->focusId ? sim.FindEntity(owner->focusId) : nullptr;
+  if (!F) return false;
+  Unit* FU = F->kind == Entity::Kind::Unit ? static_cast<Unit*>(F) : nullptr;
+  if (FU && FU->silo && State(FU, "SiloBuildingAmmo")) {
+    PodLeave(sim, u, t, d);
+    PodStartWork(sim, d, MakeRepairChild(sim, u, FU, true));
+    return true;
+  }
+  if ((FU && State(owner, "Repairing")) || State(owner, "Building")) {
+    PodLeave(sim, u, t, d);
+    PodStartWork(sim, d, MakeRepairChild(sim, u, FU, false));
+    return true;
+  }
+  if (State(owner, "Reclaiming")) {
+    PodLeave(sim, u, t, d);
+    PodStartWork(sim, d, MakeReclaimChild(sim, u, F));
+    return true;
+  }
+  return false;
+}
+
+// TryIssueNearbyAssistTask 0x61da00: an assist station (a Hive, a Kennel's drone) helps the nearest unit in its
+// build range that is being built, damaged, or working on something
+bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (!u->autoMode) return false;
+  if (InCat(sim, u, "STATIONASSISTPOD") && ((u->scriptBits >> 4) & 1)) return false;
+  const float R = u->bpData ? u->bpData->maxBuildDistance : 0.0f;
+  const Vec3 p = u->position;
+  std::vector<Entity*> cand;  // COGrid::ForAllEntitiesIterator 0x721fb0: the grid cells under the range's box
+  sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &cand);
+  Unit* best = nullptr;
+  float bestD2 = std::numeric_limits<float>::max();
+  for (Entity* e : cand) {
+    if (!e || e->kind != Entity::Kind::Unit) continue;
+    Unit* c = static_cast<Unit*>(e);
+    if (c->dead || c == u) continue;
+    // (not built: STIMap::IsWithin, the playable-area test)
+    if (c->position.x != c->lastPosition.x || c->position.y != c->lastPosition.y || c->position.z != c->lastPosition.z)
+      continue;  // it moved
+    if (c->army != u->army && !(c->army && u->army && combat::IsAlly(u->army, c->army))) continue;
+    if (State(c, "BeingReclaimed")) continue;
+    Unit* T = c;
+    if (!c->beingBuilt && c->health >= c->maxHealth) {
+      Entity* f = c->focusId ? sim.FindEntity(c->focusId) : nullptr;
+      if (f && f->kind == Entity::Kind::Unit) T = static_cast<Unit*>(f);
+      else if (!State(c, "Enhancing") && !State(c, "SiloBuildingAmmo")) continue;
+    }
+    const float dx = p.x - T->position.x, dy = p.y - T->position.y, dz = p.z - T->position.z;
+    const float d2 = dx * dx + dy * dy + dz * dz;
+    if (bestD2 > d2) {
+      bestD2 = d2;
+      best = T;
+    }
+  }
+  if (!best) return false;
+  if (best->silo && State(best, "SiloBuildingAmmo")) {
+    PodLeave(sim, u, t, d);
+    PodStartWork(sim, d, MakeRepairChild(sim, u, best, true));
+    return true;
+  }
+  PodLeave(sim, u, t, d);
+  if (State(best, "BeingReclaimed")) PodStartWork(sim, d, MakeReclaimChild(sim, u, best));
+  else PodStartWork(sim, d, MakeRepairChild(sim, u, best, false));
+  return true;
+}
+
+// CUnitPodAssist::TaskTick 0x61e020
+int TickPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (d.work) {  // the assist task it started runs above it; when that ends this one goes on in the same beat
+    if (sim.tick() < d.workFrom) return kTaskRunning;
+    if (TickBuildTask(sim, u, *d.work) == kTaskRunning) return kTaskRunning;
+    d.work = nullptr;
+  }
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  if (u->dead || u->destroyQueued) return kTaskDone;
+  const bool mobile = PodMobile(u);
+  Unit* owner = UnitRef(sim, d.transport);
+  if (mobile && (!owner || owner->dead || !owner->transport)) return kTaskDone;
+  if (u->commands.size() >= 2 && u->commands[1]) return kTaskDone;  // HasNextCommand 0x61d9c0
+  if (InCat(sim, u, "STATIONASSISTPOD")) {
+    if (!mobile) {  // a station looks every beat
+      PodNearby(sim, u, t, d);
+      return kTaskRunning;
+    }
+    if (t.state != 0 && PodNearby(sim, u, t, d)) return kTaskRunning;
+  } else if (t.state != 0 && PodFocused(sim, u, t, d, owner)) {
+    return kTaskRunning;
+  }
+  for (int guard = 0; guard < 4; ++guard) {
+    switch (t.state) {
+      case 0:
+        t.state = 1;
+        t.waitUntil = sim.tick() + 2;  // return 3
+        return kTaskRunning;
+      case 1: {  // a spot on the owner
+        TransportObj& O = *owner->transport;
+        if (!AssignSlot(sim, O, u, -1)) {
+          d.transport = 0;
+          return kTaskDone;
+        }
+        AddPickupUnits(sim, O, {u}, owner->position.x, owner->position.z);
+        d.slotHeld = true;
+        t.state = 2;
+        continue;
+      }
+      case 2: {  // fly to the spot, leading the owner by a second of its motion
+        TransportObj& O = *owner->transport;
+        const Vec3 pos = GetAttachBonePosition(O, u);
+        const Vec3 facing = AttachFacing(O, u);
+        if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) return kTaskDone;
+        const Vec3 v = owner->motion.vel;  // Entity vt+0x3c (inferred: the motion's velocity per beat)
+        const Vec3 lead{pos.x + v.x * 10.0f, pos.y + v.y * 10.0f, pos.z + v.z * 10.0f};
+        AirSetGoal(sim, u, lead, sim.tick(), 1, false);  // CUnitMotion 0x6b85e0(target, facing, 1)
+        AirSetFacing(u, facing);
+        AirSetLandHeight(u, pos.y);
+        const float dx = pos.x - u->position.x, dy = pos.y - u->position.y, dz = pos.z - u->position.z;
+        if (0.5f > std::sqrt(dx * dx + dy * dy + dz * dz) || u->layer == "Land") {
+          t.state = 3;
+          continue;
+        }
+        return kTaskRunning;
+      }
+      case 3:  // dock
+        TransportAttach(sim, *owner->transport, u);
+        d.slotHeld = false;
+        AirSetFacing(u, Vec3{});  // CUnitMotion 0x6b8590(zero)
+        AirSetLandHeight(u, std::numeric_limits<float>::infinity());
+        t.state = 4;
+        return kTaskRunning;
+      default:
+        t.waitUntil = sim.tick() + 9;  // return 10
+        return kTaskRunning;
+    }
+  }
+  return kTaskRunning;
+}
+
+// dtor 0x61d4f0
+void EndPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (d.work) {
+    EndBuildTask(sim, u, *d.work, false);
+    d.work = nullptr;
+  }
+  PodLeave(sim, u, t, d);
+  SetState(u, "AssistingCommander", false);
+}
+
 int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
   if (!t.tdata) return kTaskFailed;
   TransportTaskData& d = *t.tdata;
@@ -2045,6 +2242,7 @@ int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
     case kCarrierLand: return TickCarrierLand(sim, u, t, d);
     case kCarrierRetrieve: return u->transport ? TickCarrierRetrieve(sim, u, t, d) : kTaskFailed;
     case kCarrierLaunch: return u->transport ? TickCarrierLaunch(sim, u, t, d) : kTaskFailed;
+    case kPod: return TickPod(sim, u, t, d);
     default: return kTaskFailed;
   }
 }
@@ -2190,6 +2388,7 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     case kCarrierLand: EndCarrierLand(sim, u, d); break;
     case kCarrierRetrieve: EndCarrierRetrieve(sim, u, d); break;
     case kCarrierLaunch: EndChild(sim, u, d); SetState(u, "TransportUnloading", false); break;
+    case kPod: EndPod(sim, u, t, d); break;
     default: break;
   }
 }
@@ -2418,7 +2617,16 @@ int l_IssueTransportUnloadSpecific(lua_State* L) { return IssueUnload(L, true); 
 
 }  // namespace
 
+// Unit:SetCreator(creator) 0x6c3c80: the unit's creator (u+0x4b8); a drone's owner
+int l_SetCreator(lua_State* L) {
+  Unit* u = CheckObject<Unit>(L, 1);
+  Unit* c = ToObject<Unit>(L, 2);
+  if (u && c) u->creatorId = EntityRef(c);
+  return 0;
+}
+
 void RegisterTransportBindings(lua_State* L) {
+  SetMethod(L, "Unit", "SetCreator", l_SetCreator);
   g_L = L;
   SetMethod(L, "Unit", "AddCommandCap", l_AddCommandCap);
   SetMethod(L, "Unit", "RemoveCommandCap", l_RemoveCommandCap);
@@ -2478,6 +2686,23 @@ BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G) {
 }
 
 // IssueRefuelTask 0x622110 (from the guard task's FindPlatform).
+// CUnitPodAssist ctor 0x61d3b0: AssistingCommander on; the owner is the creator when that is a pod staging
+// platform (a commander, a support commander, a Kennel); state 1
+BuildTask* StartPodTask(Sim& sim, Unit* u, const UnitCommand& c) {
+  (void)c;
+  auto t = std::make_unique<BuildTask>();
+  t->type = CommandType::AssistCommander;
+  t->order = "PodAssist";
+  t->state = 1;
+  auto d = std::make_shared<TransportTaskData>();
+  d->kind = kPod;
+  SetState(u, "AssistingCommander", true);
+  Unit* creator = UnitRef(sim, u->creatorId);
+  if (creator && InCat(sim, creator, "PODSTAGINGPLATFORM")) d->transport = EntityRef(creator);
+  t->tdata = d;
+  return static_cast<BuildTask*>(sim.Own(std::move(t)));
+}
+
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P) {
   if (!P || P->dead || P->beingBuilt || !P->transport || !P->transport->isAirStaging) return nullptr;
   auto t = std::make_unique<BuildTask>();

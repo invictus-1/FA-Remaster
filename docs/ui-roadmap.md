@@ -60,7 +60,8 @@ world's picture (renderer) and the stock AI opponents (engine; the mod AI M28 al
 
 - **P** Open slots: adding and removing AI opponents, their faction, colour and team.
 - **P** The mods manager, so that AI mods and other mods can be switched on for the game.
-- The map selection dialog (list, filters, preview, map options), game options, presets.
+- The map selection dialog (list, filters, preview, map options), game options, presets. It opens and
+  looks like the original; choosing in it needs the list clicks and drop-down lists of stage 1.
 - The lobby's chat line and its smaller dialogs (rules, CPU benchmark, "Load").
 - The changelog dialog only once per version (it follows the preferences).
 
@@ -133,9 +134,9 @@ connection (GPGNet), observers, disconnect and desync dialogs.
 ## Running through all stages
 
 - **Proof against the original.** Wherever possible a screen is compared with a screenshot of the
-  original at the same settings. Wanted next: the lobby, the options dialog and an in-game screen.
-- **Inferred behaviour to confirm**, marked in the source: how the item list, edit field, border and
-  scrollbar draw; the order of mouse exit and enter; dragger cancel rules; mouse button key codes;
+  original at the same settings. Done so far: the main menu, the options dialog, the lobby and the
+  lobby's Game Options dialog, all on the same pixels. Wanted next: an in-game screen.
+- **Inferred behaviour to confirm**, marked in the source: the order of mouse exit and enter; dragger cancel rules; mouse button key codes;
   re-parenting; keyboard focus callbacks.
 - **Tests.** Each built piece gets checks in `ui/tests` (111 today), run on every change.
 - **Housekeeping with the engine's answers:** use the shared mounting function and the engine-object
@@ -148,9 +149,12 @@ connection (GPGNet), observers, disconnect and desync dialogs.
 - Renderer: the shared window and device, the world's picture inside a rectangle with a camera given by
   the interface, picking (what is under the mouse in the world), and drawing the interface's quads.
 
-## Decisions wanted
+## Decisions
 
-1. Preferences: take over the player's existing game profile (name, options, key bindings) on first
-   start, or begin fresh?
-2. The front-end background: decode the original movie, or make the new background first?
-3. After the playable skirmish: sound first, or replays and the score screen first?
+Taken 2026-10-12:
+
+1. Preferences: the player's existing game profile (name, options, key bindings) is taken over once, on
+   first start. The original's file is only read, never written.
+2. The front-end background: the new background is made first. Decoding the original movie can follow
+   later.
+3. After the playable skirmish, sound comes before replays and the score screen.

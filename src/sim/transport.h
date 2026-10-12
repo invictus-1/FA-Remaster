@@ -66,6 +66,8 @@ bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
 BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
+// The task of an AssistCommander order: CUnitPodAssist, a drone or assist station (pod_assist.md).
+BuildTask* StartPodTask(Sim& sim, Unit* u, const UnitCommand& c);
 Unit* FindPlatform(Sim& sim, Unit* plane);
 // Command caps of a unit's blueprint (RULEUCC_* bits).
 uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp);
