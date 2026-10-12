@@ -21,6 +21,7 @@
 
 #include "ambient_occlusion.h"
 #include "sky.h"
+#include "weather.h"
 #include "camera.h"
 #include "debug_draw.h"
 #include "decals.h"
@@ -125,6 +126,13 @@ class World {
   // then the computed sky's (sky.h). Negative: the map's own light, as the original has it.
   float timeOfDay = -1;
   float cloudCover = 0.3f;  // with a time of day: how much of the sky clouds cover, 0 (none) .. 1 (overcast)
+  // The weather, with a time of day: how hard it rains or snows and how thick the air is, each
+  // 0 (not at all) .. 1. Rain and snow bring their clouds with them. `wet` and `snowLying` say
+  // what the weather has done to surfaces so far (0..1): they follow the rain and the snow in
+  // time (wet in a quarter of a minute, dry in two minutes; snow lies in a minute, is gone in
+  // three), and a host may set them.
+  float rain = 0, snow = 0, fog = 0;
+  float wet = 0, snowLying = 0;
   std::string hide;  // kinds of effect left out: any of "particles", "bands", "decals"
 
   // --- the parts, for hosts that add to a frame or read its numbers ---
@@ -144,6 +152,7 @@ class World {
   AmbientOcclusion ao;
   Post post;
   Sky skyDraw;  // the computed sky behind everything
+  Precipitation falling;  // rain and snow
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's
@@ -167,6 +176,7 @@ class World {
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet
   std::vector<Pickable> pickables_;
   float time_ = 0;
+  float weatherTime_ = -1;  // when wet and snowLying were last moved on
   double clock_ = 0;
 };
 

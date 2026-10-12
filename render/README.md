@@ -276,6 +276,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   greyer the sky's light. It is a flat layer, not clouds with a body; the water is not shadowed by
   it; seen from above the layer (a camera high up) the clouds themselves are not drawn, only
   their shadows.
+  Weather, first form (`--weather clear|rain|storm|snow|fog`, key R; `World::rain`, `snow`, `fog`,
+  each 0..1): rain and snow fall as streaks and flakes in a box of air around what the camera
+  looks at (`weather.h`: every drop's place follows from its number and the time, nothing is kept
+  or moved on the processor; the box is as large as the camera is far, so it is a picture of rain,
+  not a count of drops). They bring their clouds. Surfaces get wet in a quarter of a minute of rain
+  (darker and shinier) and dry in two; snow lies after a minute on what faces up (on units and
+  trees half as much as on the ground, so that they can be told apart) and is gone in three. Fog,
+  and a little of it with rain and snow, is the air taking the colour of the sky's light with
+  distance, never all of it, or the map seen from high up would be gone. All of this is in the
+  light every surface shares, so nothing about a model or a map needs to be made for it. Not yet:
+  splashes and puddles, snow that builds up as a layer, lightning, wind on the trees, sound, and
+  weather that changes by itself during a game (a host sets it). Cost: none that can be measured
+  (1.4 to 1.5 ms a frame at 1920 x 1080, clear, storm or snow alike).
   Not the real thing: light scattered more than once is left out (dusk and deep night get a
   faint light of their own instead, chosen by eye); the moon's light is far stronger against the
   sun's than the real moon's, so that a night can be played; the stars are made by a formula and

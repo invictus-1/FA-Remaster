@@ -55,6 +55,10 @@ struct ViewConstants {
   // The cloud layer: x how much of the sky it covers (0 none .. 1 all of it); y, z how far it has
   // drifted (world units); w how far its shapes have changed.
   float skyClouds[4];
+  // The weather on surfaces and in the air (with a computed sky): x how wet things are, y how much
+  // snow lies (both 0..1), z how thick the air is (the share of light lost per world unit), w the
+  // most of a far thing the air may hide.
+  float weather[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -83,6 +87,7 @@ cbuffer View : register(b0) {
   float4 skyBody;         // toward the sun; w: 1 = the moon's light falls
   float4 skyMoon;         // toward the moon
   float4 skyClouds;       // the cloud layer: x cover 0..1; y, z its drift (world units); w its change
+  float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -124,6 +129,12 @@ float CloudShadow(float3 world) {
   if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
   float2 q = world.xz + sunDirection.xz * ((150 - world.y) / max(sunDirection.y, 0.2));
   return 1 - 0.75 * CloudFrom(CloudField(q));
+}
+// The colour of thick air, and a colour seen through `distance` of it.
+float3 AirColor() { return skyZenith.rgb * 0.45 + skyHorizon.rgb * 0.75; }
+float3 ThroughAir(float3 color, float distance) {
+  if (weather.z <= 0) return color;
+  return lerp(color, AirColor(), min(1 - exp(-distance * weather.z), weather.w));
 }
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {

@@ -207,6 +207,8 @@ float4 PS(VOut i) : SV_Target {
       c = lerp(c, color, cloud * smoothstep(0.02, 0.15, d.y));
     }
   }
+  // thick air: the sky low down is its colour
+  if (weather.z > 0) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600) * saturate(1 - d.y * 2.5));
   return float4(c * rayForward.w, 1);
 }
 )hlsl";
