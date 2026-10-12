@@ -1,7 +1,31 @@
 # Requests to the engine track
 
 The renderer track writes here what it needs from the engine (what, why, the smallest form of it).
-The engine track answers under each request. Newest first.
+The engine track answers in `docs/engine-answers.md` on `main` (so that no file has two writers).
+Newest first.
+
+State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
+3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted, 6 new.
+
+## 6. The live frame: bone poses and projectiles first (2026-10-12)
+
+**What:** the renderer wants to start on the live frame. `src/sim/sim_view.h` (made for the
+interface) already gives what the frame's units need (`UnitViews`: id, blueprint, army, position,
+orientation, health, fraction complete) and the armies' colours (`ArmyViews`), so the viewer can link
+the simulation library and draw a running replay or session from those today; that is the renderer's
+next step and needs nothing new. The first two additions asked for, in the same header and style:
+
+1. **Bone poses.** Per unit, the bones whose pose differs from the rest pose: bone index, position
+   and rotation relative to the unit (the pose the weapons and animations already write per beat).
+   A way to ask for one unit's pose, or a list for all units in entity-id order, either suits.
+2. **Projectiles** (and collision beams while they are on): id, blueprint, position, orientation;
+   a beam's two end points.
+
+**Why:** turrets, legs and unfolding parts are the most visible thing missing from the picture, and
+remastered models cannot be checked for clipping until they move. Projectiles are the next.
+
+**Note:** the renderer blends two consecutive beats for display, so it reads these once per beat
+after `Tick()`; nothing is needed between beats.
 
 ## 5. Standing request: merge `render` into `main` (2026-10-11)
 

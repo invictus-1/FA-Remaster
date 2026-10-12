@@ -55,7 +55,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
 
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
-               [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
+               [--rec <recording>] [--display <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--detail 1] [--msaa 4] [--ao 1]
@@ -79,9 +79,12 @@ beside it (to its east) in the same light, and frames both. `--at x,z` says wher
 ground), `--heading` and `--pitch` from which side. Meshes may be `.scm` version 5 or version 6
 (version 5 with 32-bit indices, for models of more than 65,535 vertices).
 
-Playing a recording: make one with the engine, with the log that says which unit is which
-(`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
-the viewer with the replay's map. Space pauses, + and - change the speed, Page Up / Page Down jump
+Playing a recording: make one with the engine (`MOHO64_RECORD=<file>` on a replay) and give it to
+the viewer with the replay's map; the recording says which blueprint each unit is. To draw units
+as the game with its mods has them, also give `--display` the log of
+`moho64 ... --ticks 1 --sim-lua tools/dump_display.lua --log <file>`: the mesh and texture names
+then come from the simulation's merged blueprints instead of from the `.bp` files (which do not
+show what mods' scripts change). Space pauses, + and - change the speed, Page Up / Page Down jump
 ten seconds, Home starts over, F points the camera at the units.
 
 `--frames N --screenshot file.png` renders N frames, saves the last one, prints the time per frame and

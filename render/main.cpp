@@ -2,7 +2,7 @@
 // camera and plays a tick recording on it; without a map, a test scene.
 //
 //   moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]
-//              [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
+//              [--rec <recording>] [--display <engine log>] [--tick N] [--paused]
 //              [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
 //              [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 //
@@ -10,7 +10,10 @@
 // --data    a folder of .nx2 / .scd archives used before the game's own (a patched game's files);
 //           may be given several times, the first folder wins
 // --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
-// --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
+// --createlog  only for recordings that do not name their units (older ones): the engine's log of the
+//           same run made with MOHO64_DEBUG_CREATE=1
+// --display the log written by the engine's tools/dump_display.lua: models take their mesh and texture
+//           names from the simulation's blueprints (mods' changes included) instead of from .bp files
 // --tick, --paused  where playback starts, and whether it stands still
 // --mods    a folder of mods (each in its own folder): their units and textures are found too
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
@@ -87,7 +90,7 @@ struct Options {
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
   bool hasAt = false;
   double tick = -1;
-  std::string screenshot, fa, map, recording, createLog;
+  std::string screenshot, fa, map, recording, createLog, display;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -113,6 +116,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--rec") o->recording = v;
     else if (a == "--createlog") o->createLog = v;
+    else if (a == "--display") o->display = v;
     else if (a == "--tick") o->tick = atof(v);
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
@@ -197,7 +201,7 @@ int main(int argc, char** argv) {
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
     fprintf(stderr, "usage: moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]\n"
-                    "                  [--rec <recording> --createlog <engine log>] [--tick N] [--paused]\n"
+                    "                  [--rec <recording>] [--display <engine log>] [--tick N] [--paused]\n"
                     "                  [--size WxH] [--novsync] [--debug] [--lod <pixels>]\n"
                     "                  [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]\n");
     return 2;
@@ -268,6 +272,11 @@ int main(int argc, char** argv) {
 
   // the recording played on the map
   ModelCache models(device.get(), &vfs, &textures);
+  if (!opt.display.empty()) {
+    const int levels = models.LoadDisplayTable(opt.display);
+    if (levels) printf("render: %d model levels named by the simulation's blueprints (%s)\n", levels, opt.display.c_str());
+    else fprintf(stderr, "render: --display %s: no DISPLAY lines found\n", opt.display.c_str());
+  }
   MeshRenderer meshes(device.get(), &textures);
   if (!meshes.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
@@ -282,10 +291,12 @@ int main(int argc, char** argv) {
       return 1;
     }
     haveRecording = true;
-    int known = opt.createLog.empty() ? 0 : recording.LoadCreateLog(opt.createLog);
-    printf("render: recording %s: ticks %u to %u, %d units named by the log\n", opt.recording.c_str(), recording.FirstTick(),
-           recording.LastTick(), known);
-    if (!known) fprintf(stderr, "render: no --createlog (an engine log made with MOHO64_DEBUG_CREATE=1): units are drawn as boxes\n");
+    const int fromLog = opt.createLog.empty() ? 0 : recording.LoadCreateLog(opt.createLog);
+    printf("render: recording %s: ticks %u to %u, %d units named by %s\n", opt.recording.c_str(), recording.FirstTick(),
+           recording.LastTick(), recording.NamedUnits() + fromLog, recording.NamedUnits() ? "the recording" : "the log");
+    if (!recording.NamedUnits() && !fromLog)
+      fprintf(stderr, "render: this recording does not say what its units are (an older one, or the original game's) and no\n"
+                      "        --createlog (an engine log made with MOHO64_DEBUG_CREATE=1) was given: units are drawn as boxes\n");
   }
   gfx::Texture environment;
   for (const auto& cube : map.environmentCubemaps)

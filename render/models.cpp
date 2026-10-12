@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 
 #include "bp_reader.h"
 #include "core/vfs.h"
@@ -66,8 +68,45 @@ std::string Lower(std::string s) {
 
 }  // namespace
 
+int ModelCache::LoadDisplayTable(const std::string& hostPath) {
+  std::ifstream in(hostPath);
+  std::string line;
+  int count = 0;
+  while (std::getline(in, line)) {
+    const size_t at = line.find("DISPLAY\t");
+    if (at == std::string::npos) continue;
+    std::vector<std::string> f;
+    for (size_t p = at + 8;;) {
+      const size_t e = line.find('\t', p);
+      f.push_back(line.substr(p, e == std::string::npos ? std::string::npos : e - p));
+      if (e == std::string::npos) break;
+      p = e + 1;
+    }
+    if (f.size() < 11) continue;
+    while (!f.back().empty() && (f.back().back() == '\r' || f.back().back() == ' ')) f.back().pop_back();
+    auto name = [](const std::string& v) { return v == "-" ? std::string() : v; };
+    DisplayEntry& entry = display_[Lower(f[0])];
+    entry.scale = static_cast<float>(atof(f[10].c_str()));
+    LodSource lod;
+    lod.cutoff = f[2] == "-" ? 1e9f : static_cast<float>(atof(f[2].c_str()));
+    lod.shader = f[3] == "-" ? "Unit" : f[3];
+    lod.mesh = name(f[4]);
+    lod.albedo = name(f[5]);
+    lod.normals = name(f[6]);
+    lod.specular = name(f[7]);
+    lod.secondary = name(f[8]);
+    entry.lods.push_back(std::move(lod));
+    ++count;
+  }
+  return count;
+}
+
 const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
   std::string id = Lower(blueprintId);
+  if (!original) {
+    auto listed = display_.find(id);
+    if (listed != display_.end()) return FromDisplay(id, id, listed->second);
+  }
   auto known = unitPaths_.find(id);
   if (known != unitPaths_.end()) return Blueprint(known->second, original);
   // the game's own units are in /units; a mod's are in its own folder under /mods
@@ -85,19 +124,31 @@ bool ModelCache::Remastered(const std::string& blueprintId) const {
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
 }
 
+const Model* ModelCache::FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry) {
+  auto it = models_.find("display:" + key);
+  if (it != models_.end()) return it->second.get();
+  Model* m = models_.emplace("display:" + key, std::make_unique<Model>()).first->second.get();
+  m->scale = entry.scale > 0 ? entry.scale : 1;
+  Build(m, key, base, entry.lods, false, true);
+  return m;
+}
+
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
-  const std::string key = original ? path + "#original" : path;
-  auto it = models_.find(key);
-  if (it != models_.end()) return it->second.get();
-  Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
-
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
   const size_t slash = path.rfind('/');
   const std::string dir = path.substr(0, slash + 1);
   std::string base = path.substr(slash + 1);
   const size_t under = base.rfind('_');
   base = under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
+  if (!original) {
+    auto listed = display_.find(path);
+    if (listed != display_.end()) return FromDisplay(path, base, listed->second);
+  }
+  const std::string key = original ? path + "#original" : path;
+  auto it = models_.find(key);
+  if (it != models_.end()) return it->second.get();
+  Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
 
   auto text = vfs_->ReadFile(path);
   BpValue bp;
@@ -108,22 +159,52 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   const BpValue& display = bp["Display"];
   const BpValue& lods = display["Mesh"]["LODs"];
   m->scale = static_cast<float>(display["UniformScale"].NumberOr(1));
+  std::vector<LodSource> sources;
+  const size_t count = std::max<size_t>(1, lods.items.size());
+  for (size_t i = 0; i < count; ++i) {
+    const BpValue& entry = lods.Item(i);
+    // a name in the blueprint is beside the blueprint unless it starts at the root; a texture the
+    // blueprint does not name has a standard name and may well not be there
+    auto file = [&](const char* k, const std::string& standard, bool* named) {
+      const std::string given = entry[k].StringOr(std::string());
+      if (named) *named = !given.empty();
+      if (given.empty()) return standard.empty() ? std::string() : dir + base + standard;
+      return given[0] == '/' ? given : dir + given;
+    };
+    LodSource s;
+    s.cutoff = static_cast<float>(entry["LODCutoff"].NumberOr(1e9));
+    s.shader = entry["ShaderName"].StringOr("Unit");
+    s.mesh = file("MeshName", "_lod" + std::to_string(i) + ".scm", nullptr);
+    s.albedo = file("AlbedoName", "_albedo.dds", &s.albedoNamed);
+    s.normals = file("NormalsName", "_normalsts.dds", &s.normalsNamed);
+    s.specular = file("SpecularName", "_specteam.dds", &s.specularNamed);
+    s.secondary = file("SecondaryName", "", &s.secondaryNamed);
+    sources.push_back(std::move(s));
+  }
+  Build(m, path, base, sources, original, false);
+  return m;
+}
+
+// Loads a model's levels from their file names. `merged`: the names come from the simulation's merged
+// blueprints (mods' changes are in them already; every texture has a name, there or not).
+void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged) {
   // A remastered model being tried out (the viewer's --preview): its folder, mounted at
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
   // whatever the blueprint lists. The scale stays the blueprint's.
   const std::string preview = "/preview/" + base + "/";
   const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
-  size_t count = std::max<size_t>(1, lods.items.size());
   if (previewed) {
-    count = 1;
+    size_t count = 1;
     while (count < 8 && vfs_->Exists(preview + base + "_lod" + std::to_string(count) + ".scm")) ++count;
+    sources.resize(count, sources.empty() ? LodSource{} : sources.back());
+    for (size_t i = 0; i < count; ++i) sources[i].mesh = preview + base + "_lod" + std::to_string(i) + ".scm";
   }
-  for (size_t i = 0; i < count; ++i) {
-    const BpValue& entry = lods.Item(i);
+  for (size_t i = 0; i < sources.size(); ++i) {
+    const LodSource& s = sources[i];
     ModelLod lod;
-    lod.cutoff = static_cast<float>(entry["LODCutoff"].NumberOr(1e9));
-    lod.shaderName = entry["ShaderName"].StringOr("Unit");
+    lod.cutoff = s.cutoff;
+    lod.shaderName = s.shader;
     const std::string kind = Lower(lod.shaderName);
     if (kind == "vertexnormal") {  // the far-away cards of trees: alpha test above 0x23, blended
       lod.alphaCut = 35.0f / 255;
@@ -135,42 +216,32 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     } else if (kind.find("terrain") != std::string::npos || kind.find("tmesh") != std::string::npos || kind.find("clutter") != std::string::npos) {
       lod.teamMask = false;  // rocks and other scenery
     }
-    // a name in the blueprint is beside the blueprint unless it starts at the root
-    auto file = [&](const char* key, const std::string& standard) {
-      const std::string given = entry[key].StringOr(std::string());
-      if (given.empty()) return dir + base + standard;
-      return given[0] == '/' ? given : dir + given;
-    };
-    const std::string meshPath = previewed ? preview + base + "_lod" + std::to_string(i) + ".scm"
-                                           : file("MeshName", "_lod" + std::to_string(i) + ".scm");
-    auto mesh = vfs_->ReadFile(meshPath);
+    auto mesh = vfs_->ReadFile(s.mesh);
     std::string error;
-    if (!mesh || !LoadScm(device_, *mesh, &lod, i == 0 ? &m->boundsMin : nullptr, i == 0 ? &m->boundsMax : nullptr, &error)) {
-      // a missing coarser level is common: the finer one before it is then used for its distances too
-      if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", path.c_str(), meshPath.c_str(), mesh ? error.c_str() : "file not found");
-      if (i == 0) return m;
-      m->lods.back().cutoff = std::max(m->lods.back().cutoff, lod.cutoff);
+    if (!mesh || !LoadScm(device_, *mesh, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error)) {
+      // a missing coarser level is common: the finer ones then stand in
+      if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
+      if (i == 0) return;
       continue;
     }
-    // a texture the blueprint does not name and that is not there is simply not used (many props
-    // have no normal or specular texture); a named one that is missing gets reported
-    auto texture = [&](const char* key, const std::string& standard, gfx::Texture fallback) {
-      const std::string name = file(key, standard);
-      if (entry[key].kind != BpValue::String && !vfs_->Exists(name)) return fallback;
+    // a texture that is not there is simply not used (many props have no normal or specular
+    // texture); one a blueprint file names itself and that is missing gets reported
+    auto texture = [&](const std::string& name, bool named, gfx::Texture fallback) {
+      if (name.empty() || (!(named && !merged) && !vfs_->Exists(name))) return fallback;
       return textures_->Get(name, fallback);
     };
-    lod.albedo = texture("AlbedoName", "_albedo.dds", textures_->White());
-    lod.normals = texture("NormalsName", "_normalsts.dds", textures_->FlatNormal());
-    lod.specular = texture("SpecularName", "_specteam.dds", textures_->Black());
+    lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White());
+    lod.normals = texture(s.normals, s.normalsNamed, textures_->FlatNormal());
+    lod.specular = texture(s.specular, s.specularNamed, textures_->Black());
+    lod.secondary = texture(s.secondary, s.secondaryNamed, textures_->White());
     lod.labPbr = kind == "labpbr";
-    lod.secondary = entry["SecondaryName"].kind == BpValue::String ? texture("SecondaryName", "", textures_->White()) : textures_->White();
-    // The lab's LabVisuals mod gives a unit remastered textures from a script that runs when the game
-    // merges blueprints, which this reader does not run. Its rule is simple enough to follow here: a
-    // unit with textures in the mod's folder uses them, as a LabPBR material, for its finest level.
-    // (In the running game the simulation's merged blueprints will say this, for any mod.)
-    std::string lab = "/mods/labvisuals/textures/" + base + "/" + base + "_lab_";
+    // Remastered textures from outside the blueprint: a previewed model's own, for every level; or,
+    // when the names were read from a .bp file (which does not show what mods' scripts change), the
+    // lab's LabVisuals mod's for the finest level, as that mod's script would set them.
+    std::string lab;
     if (previewed) lab = preview + (vfs_->Exists(preview + "textures/" + base + "_lab_albedo.dds") ? "textures/" : "") + base + "_lab_";
-    if (!original && (i == 0 || previewed) && vfs_->Exists(lab + "albedo.dds")) {
+    else if (!merged && !original && i == 0) lab = "/mods/labvisuals/textures/" + base + "/" + base + "_lab_";
+    if (!lab.empty() && vfs_->Exists(lab + "albedo.dds")) {
       lod.albedo = textures_->Get(lab + "albedo.dds", lod.albedo);
       lod.normals = textures_->Get(lab + "normal.dds", lod.normals);
       lod.specular = textures_->Get(lab + "spec.dds", lod.specular);
@@ -180,8 +251,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     }
     m->lods.push_back(std::move(lod));
   }
-  m->ok = true;
-  return m;
+  m->ok = !m->lods.empty();
 }
 
 }  // namespace render
