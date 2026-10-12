@@ -152,7 +152,10 @@ building), because nothing tells the interface about it.
      reclaim asks it (FA exe 0x81ec00 reads a byte of the unit's variable data, +0x69).
    No hurry with these.
 
-**Status:** asked 2026-10-12.
+**Status:** done by the engine track the same day (`docs/engine-answers.md`, "ui 7") and in use:
+the world's sounds are played from `SoundEvents`, the unit panel shows kills and the silo's
+numbers, and the right click's reclaim asks the unit's switch. Thank you. What it showed at once
+is request 8 below.
 
 ### 8. What an army sees
 The world's sounds are played (thank you for "7": `SoundEvents`, and the three facts). One thing

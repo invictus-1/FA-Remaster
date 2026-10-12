@@ -761,7 +761,11 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
       stance = v.alliance[static_cast<size_t>(army - 1)];
   bool enemy = stance == 0, ally = stance == 2, noArmy = e->view.army <= 0;
   if (enemy && (caps & kAttack) && !e->view.dead) return "RULEUCC_Attack";
-  bool reclaimable = InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt;
+  UnitStateView target;
+  StateOf(L, e, &target);
+  // (The unit's own switch, SetReclaimable, on top of the original's test: a unit a script has
+  // made unreclaimable is not offered for reclaim. Inferred, not read.)
+  bool reclaimable = (InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt) && target.reclaimable;
   if ((enemy || noArmy || InCategory(L, e, "RECLAIMFRIENDLY")) && reclaimable && (caps & kReclaim)) return "RULEUCC_Reclaim";
   if (enemy) return move;
   if ((caps & kRepair) && e->view.beingBuilt &&
@@ -1043,7 +1047,10 @@ int l_GetMissileInfoNow(lua_State* L) {
   };
   set("nukeSiloStorageCount", s.nukeSiloCount);
   set("tacticalSiloStorageCount", s.tacticalSiloCount);
-  for (const char* key : {"nukeSiloBuildCount", "nukeSiloMaxStorageCount", "tacticalSiloBuildCount", "tacticalSiloMaxStorageCount"}) set(key, 0);
+  set("nukeSiloBuildCount", s.nukeSiloBuildCount);
+  set("nukeSiloMaxStorageCount", s.nukeSiloMaxStorage);
+  set("tacticalSiloBuildCount", s.tacticalSiloBuildCount);
+  set("tacticalSiloMaxStorageCount", s.tacticalSiloMaxStorage);
   return 1;
 }
 
@@ -1051,8 +1058,7 @@ int l_GetMissileInfoNow(lua_State* L) {
 // world, nil for nothing. A unit: blueprintId, health, maxHealth, kills, the economy and silo
 // numbers, fuelRatio, shieldRatio, workProgress, userUnit, entityId (a string), armyIndex (from
 // 0), teamColor, customName; and `focus`, the same table for what it works on. (The original
-// also tells of things that are not units, and of `focusUpgrade` / `focusProp`; `kills` and the
-// silo's build and room counts are not in the simulation's view yet and read 0.)
+// also tells of things that are not units, and of `focusUpgrade` / `focusProp`.)
 void PushRollover(lua_State* L, UserUnit* u, bool withFocus) {
   UnitStateView s;
   StateOf(L, u, &s);
@@ -1070,19 +1076,19 @@ void PushRollover(lua_State* L, UserUnit* u, bool withFocus) {
   str("blueprintId", u->view.blueprint);
   num("health", u->view.health);
   num("maxHealth", u->view.maxHealth);
-  num("kills", 0);
+  num("kills", s.kills);
   num("energyConsumed", s.consumed[0]);
   num("massConsumed", s.consumed[1]);
   num("energyRequested", s.consumptionPerSecond[0]);
   num("massRequested", s.consumptionPerSecond[1]);
   num("energyProduced", s.produced[0]);
   num("massProduced", s.produced[1]);
-  num("tacticalSiloBuildCount", 0);
+  num("tacticalSiloBuildCount", s.tacticalSiloBuildCount);
   num("tacticalSiloStorageCount", s.tacticalSiloCount);
-  num("tacticalSiloMaxStorageCount", 0);
-  num("nukeSiloBuildCount", 0);
+  num("tacticalSiloMaxStorageCount", s.tacticalSiloMaxStorage);
+  num("nukeSiloBuildCount", s.nukeSiloBuildCount);
   num("nukeSiloStorageCount", s.nukeSiloCount);
-  num("nukeSiloMaxStorageCount", 0);
+  num("nukeSiloMaxStorageCount", s.nukeSiloMaxStorage);
   num("fuelRatio", s.fuelRatio);
   num("shieldRatio", s.shieldRatio);
   num("workProgress", u->view.workProgress);
