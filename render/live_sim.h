@@ -1,5 +1,5 @@
-// The running simulation as a source of frames: the engine's simulation (src/sim) plays a replay on
-// a thread of its own, and after every beat what the renderer needs is copied out. The renderer
+// The running simulation as a source of frames: the engine's simulation (src/sim) plays a replay,
+// or a new game, on a thread of its own, and after every beat what the renderer needs is copied out. The renderer
 // asks for the frame at a moment between two beats and gets them blended, exactly as with a
 // recording; it never touches the simulation's objects.
 //
@@ -24,15 +24,19 @@ class LiveSim {
  public:
   struct Setup {
     std::string initFile;   // the game's init file (init.lua, init_faf.lua, ...): what is mounted
-    std::string replay;     // a .SCFAReplay file
-    std::string modUids;    // a text file with one mod uid per line (may be empty)
+    std::string replay;     // a .SCFAReplay file to play, or
+    std::string session;    // a game configuration to start as a new game (what a lobby hands over at
+                            // Launch: a Lua file holding `GameConfig = { ... }`)
+    std::string modUids;    // a text file with one mod uid per line (empty: a session's own GameMods)
+    uint32_t seed = 0;      // a new game's random seed; 0: taken from the clock
   };
   enum class State { Loading, Running, Ended, Failed };
 
   LiveSim();
   ~LiveSim();  // stops the simulation's thread
 
-  // Reads the replay's header. False with a reason when it cannot be read.
+  // Mounts the game's files and reads the replay's header, or builds the session from the game
+  // configuration (which runs the map's scenario file). False with a reason when that fails.
   bool Open(const Setup& setup, std::string* error);
   const std::string& MapPath() const { return mapPath_; }  // "/maps/SCMP_009/SCMP_009.scmap"
   // Starts loading and then running, on the simulation's thread.

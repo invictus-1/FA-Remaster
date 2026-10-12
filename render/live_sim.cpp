@@ -12,7 +12,9 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "script/lua.hpp"
 #include "script/mount.h"
+#include "script/script_state.h"
 #include "sim/command_stream.h"
 #include "sim/replay.h"
 #include "sim/session.h"
@@ -95,6 +97,52 @@ LiveSim::~LiveSim() {
 
 bool LiveSim::Open(const Setup& setup, std::string* error) {
   setup_ = setup;
+  Engine& e = *engine_;
+  // (the simulation's own view of the files; used here before its thread starts, by that thread after)
+  if (!moho::MountFromInitFile(setup_.initFile, {}, e.vfs, e.hookDirs)) {
+    *error = "the init file " + setup_.initFile + " could not be run";
+    return false;
+  }
+  if (!setup_.modUids.empty()) {
+    std::ifstream f(setup_.modUids);
+    std::string line;
+    while (std::getline(f, line)) {
+      while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+      if (!line.empty() && line[0] != '#') e.uids.push_back(line);
+    }
+  }
+  if (!setup.session.empty()) {
+    // a new game, started the way the engine's own program starts one (src/app/main.cpp, RunGameConfig)
+    moho::ScriptState st(moho::ScriptState::Kind::User, &e.vfs);
+    st.SetHookDirs(e.hookDirs);
+    lua_State* L = st.L();
+    std::string why;
+    if (!moho::PushGameConfigFile(L, setup.session, &why)) {
+      *error = why;
+      return false;
+    }
+    moho::LaunchParams params;
+    params.seed = setup.seed ? setup.seed : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    if (!moho::SessionFromGameConfig(L, -1, params, &e.session, &why)) {
+      *error = "the game could not be launched: " + why;
+      return false;
+    }
+    if (setup_.modUids.empty()) {  // the configuration's own mods
+      lua_getfield(L, -1, "GameMods");
+      for (int i = 1; lua_istable(L, -1); ++i) {
+        lua_rawgeti(L, -1, i);
+        if (!lua_istable(L, -1)) {
+          lua_pop(L, 1);
+          break;
+        }
+        lua_getfield(L, -1, "uid");
+        if (lua_isstring(L, -1)) e.uids.push_back(lua_tostring(L, -1));
+        lua_pop(L, 2);
+      }
+    }
+    mapPath_ = e.session.header.map;
+    return true;
+  }
   auto data = moho::hostfs::ReadFile(setup.replay);
   if (!data) {
     *error = "cannot read the replay " + setup.replay;
@@ -117,18 +165,6 @@ void LiveSim::Start() { thread_ = std::thread([this] { Run(); }); }
 
 bool LiveSim::Load(std::string* error) {
   Engine& e = *engine_;
-  if (!moho::MountFromInitFile(setup_.initFile, {}, e.vfs, e.hookDirs)) {
-    *error = "the init file " + setup_.initFile + " could not be run";
-    return false;
-  }
-  if (!setup_.modUids.empty()) {
-    std::ifstream f(setup_.modUids);
-    std::string line;
-    while (std::getline(f, line)) {
-      while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-      if (!line.empty() && line[0] != '#') e.uids.push_back(line);
-    }
-  }
   e.sim = std::make_unique<moho::Sim>(&e.vfs, e.hookDirs, e.uids);
   e.sim->sessionMods = e.session.header.mods;
   if (!e.sim->LoadRules()) {
@@ -139,7 +175,7 @@ bool LiveSim::Load(std::string* error) {
     *error = "the session could not be started (see the simulation's log)";
     return false;
   }
-  e.stream = std::make_unique<moho::CommandStream>(e.replayData, e.session.header.streamOffset);
+  if (e.session.replay) e.stream = std::make_unique<moho::CommandStream>(e.replayData, e.session.header.streamOffset);
 
   // the armies' colours: a colour a script set, else the lobby's colour number in the game's list
   std::vector<Vec3> palette;
@@ -221,10 +257,14 @@ void LiveSim::Run() {
       if (stop_) return;
     }
     // as the engine's own program plays a replay: the messages before each Advance, then the beat
-    if (e.stream->AtEnd() || !e.stream->ApplyUntilAdvance(*e.sim)) break;  // the replay is over
-    if (e.sim->Paused()) {  // a paused beat uses up its Advance and moves nothing
-      e.sim->PausedBeat();
-      continue;
+    if (e.stream) {
+      if (e.stream->AtEnd() || !e.stream->ApplyUntilAdvance(*e.sim)) break;  // the replay is over
+      if (e.sim->Paused()) {  // a paused beat uses up its Advance and moves nothing
+        e.sim->PausedBeat();
+        continue;
+      }
+    } else if (e.sim->frozen) {
+      break;  // a new game that has ended
     }
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();

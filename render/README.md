@@ -55,7 +55,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
 
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
-               [--init <init file> --sim <replay> [--mod-uids <file>]]
+               [--init <init file> (--sim <replay> | --session <game configuration>) [--mod-uids <file>]]
                [--rec <recording>] [--display <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
@@ -86,6 +86,12 @@ the renderer draws each beat, blended with the next. The game's files are mounte
 init file, the map is the replay's, army colours are the game's. Space pauses, + and - change the
 speed, `--tick N` runs ahead to a tick; there is no going back. `--simlog <file>` keeps the
 engine's log.
+
+A new game instead of a replay: `--init <init file> --session <game configuration> [--seed N]`,
+where the configuration is what a lobby hands over at Launch (a Lua file with `GameConfig = { ... }`).
+Its AI armies play; nobody gives orders yet. Measured with one player and seven M28 AIs on a
+20 km map, ten game-minutes in (about 1,400 units): the whole map in view takes 0.93 ms a frame
+at 1920 x 1080 while the simulation, on its own thread, takes about 29 ms a tick.
 
 Playing a recording: make one with the engine (`MOHO64_RECORD=<file>` on a replay) and give it to
 the viewer with the replay's map; the recording says which blueprint each unit is. To draw units
@@ -161,7 +167,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
 - The live frame, first form: the viewer runs the simulation itself (`--sim`) and fills the same
   frame from the engine's `sim/sim_view.h` after every beat. Units and army colours only: bone
-  poses and projectiles are asked for (REQUESTS.md, 6). Only replays so far, no orders.
+  poses and projectiles are asked for (REQUESTS.md, 6). Replays and new games (`--session`); no
+  orders yet.
 - Step 5 has begun with what both looks need, and a first modern look:
   - The scene is drawn into a floating-point picture; a last pass puts it on the window.
   - The sun casts shadows (three cascaded shadow maps of 2048 pixels, 3 x 3 soft lookups), in both
