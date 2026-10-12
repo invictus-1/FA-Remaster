@@ -242,9 +242,10 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     return m;
   }
   const BpValue& display = bp["Display"];
-  if (!display["Mesh"].IsTable()) return m;  // nothing to draw (many projectiles are effects only)
-  const BpValue& lods = display["Mesh"]["LODs"];
-  m->scale = static_cast<float>(display["UniformScale"].NumberOr(1));
+  const bool meshFile = !display.IsTable() && bp["LODs"].IsTable();  // a mesh blueprint itself
+  if (!meshFile && !display["Mesh"].IsTable()) return m;  // nothing to draw (many projectiles are effects only)
+  const BpValue& lods = meshFile ? bp["LODs"] : display["Mesh"]["LODs"];
+  m->scale = static_cast<float>((meshFile ? bp : display)["UniformScale"].NumberOr(1));
   std::vector<LodSource> sources;
   const size_t count = std::max<size_t>(1, lods.items.size());
   for (size_t i = 0; i < count; ++i) {
@@ -333,6 +334,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     if (kind == "vertexnormal") {  // the far-away cards of trees: alpha test above 0x23, blended
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
+      lod.teamMask = false;
+    } else if (kind == "mapimager") {  // the machinery around the map
+      lod.border = true;
       lod.teamMask = false;
     } else if (kind == "labpbralpha") {  // remastered foliage and the like
       lod.alphaCut = 0.5f;

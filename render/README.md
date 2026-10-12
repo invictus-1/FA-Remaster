@@ -298,8 +298,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the first is always fair, and the last quarter of a spell goes over into the next. In a storm
   lightning strikes now and then: for half a second the clouds light everything, flickering.
   Rain shows as small rings running outward on wet ground near the camera. The weather is only
-  seen; it does nothing to the game. The viewer's seed is `--seed`; a host should give the
-  game's own (REQUESTS.md, 12). A map does not say its climate yet.
+  seen; it does nothing to the game. The seed is the game's own once a game has started (the
+  engine's `SessionSeed`), the viewer's `--seed` or 1 without one. A map does not say its
+  climate yet.
   Not the real thing: light scattered more than once is left out (dusk and deep night get a
   faint light of their own instead, chosen by eye); the moon's light is far stronger against the
   sun's than the real moon's, so that a night can be played; the stars are made by a formula and
@@ -307,6 +308,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   at yet: the minimap's ground (drawn once, in the map's light), and how bright the game's flashes
   should be to an eye opened for the night. The original look ignores the time of day. Cost: none
   that can be measured (1.3 ms a frame at 1920 x 1080 with half the picture sky, with or without).
+- What the map lies in: the original's field of machinery with a frame around the map is a mesh
+  the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
+  viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader
+  (`MapImager`) is the original's formula in the original look and lit glowing machinery in the
+  modern one.
 - Lamps on units (modern look, with a time of day). A remastered unit may bring a list of its
   lights (`<id>_lights.bp`; the form is in `docs/render-unit-lights.md`): points of light that ride
   on its bones. From dusk to dawn they are lit, as small lights (next point), for the units near

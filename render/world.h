@@ -145,6 +145,10 @@ class World {
   Climate climate = Climate::Temperate;
   float weatherSpell = 300;  // seconds one kind of weather lasts
   std::string hide;  // kinds of effect left out: any of "particles", "bands", "decals"
+  // What the map lies in: mesh blueprints ("/meshes/game/map-border_squ_uef_mesh"), each drawn once
+  // around the map as the original places it: at the map's middle, halfway between its lowest and
+  // highest ground, not turned, as large as the map is wide times the blueprint's UniformScale.
+  std::vector<std::string> borders;
 
   // --- the parts, for hosts that add to a frame or read its numbers ---
   TextureCache textures;
@@ -189,6 +193,7 @@ class World {
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
   float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
+  float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
   double clock_ = 0;
 };
 

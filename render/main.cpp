@@ -56,6 +56,8 @@
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
 //           (from noon when the map's light was on), Y: the map's own light again.
+// --border <mesh blueprint>  what the map lies in, as the game's MapBorderAdd names it (may be given twice),
+//           for example /meshes/game/map-border_squ_uef_mesh
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
@@ -135,6 +137,7 @@ struct Options {
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
   std::string weather, climate;         // --weather, --climate
+  std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
@@ -224,6 +227,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--weather") o->weather = v;
+    else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
     else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
@@ -387,6 +391,7 @@ int main(int argc, char** argv) {
   world.exposure = opt.exposure;
   world.timeOfDay = opt.timeOfDay;
   world.cloudCover = opt.clouds;
+  world.borders = opt.border;
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
   auto setWeather = [&](int which) {
@@ -722,6 +727,7 @@ int main(int argc, char** argv) {
         std::vector<BlueprintLook> looks;  // how the blueprints look as the simulation has them
         live.TakeLooks(&looks);
         world.SetLooks(looks);
+        if (live.Seed()) world.weatherSeed = live.Seed();  // the weather every player of this game sees
       }
       // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
       if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);

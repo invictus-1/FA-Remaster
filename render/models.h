@@ -65,6 +65,8 @@ struct ModelLod {
   // What the shader name means for drawing (from the original's techniques of those names):
   float alphaCut = 0;          // pixels whose albedo alpha is not above this are left out (foliage)
   bool blend = false;          // drawn blended over what is behind, by the albedo's alpha
+  bool border = false;         // "MapImager": the machinery a map lies in: lit by the sun's angle alone, its
+                               // albedo's alpha added to its colour, glowing where the specular's blue says
   bool leaves = false;         // "LabPBRAlpha": a remastered surface with holes: seen from both sides (lit as
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
@@ -104,7 +106,8 @@ class ModelCache {
   const std::string& UnitBlueprintPath(const std::string& blueprintId);
   // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
   bool Remastered(const std::string& blueprintId) const;
-  // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp").
+  // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp"),
+  // or of a mesh blueprint file itself ("/meshes/game/map-border_squ_uef_mesh.bp").
   const Model* Blueprint(const std::string& blueprintPath, bool original = false);
   // Reads the mesh and texture names of blueprints as the simulation has them after the game's
   // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models

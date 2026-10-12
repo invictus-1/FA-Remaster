@@ -75,6 +75,9 @@ class WorldPicture {
     uint32_t color;
   };
   void SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings);
+  // What the map lies in (the game's MapBorderAdd): the mesh blueprints to draw around the map, as
+  // the original places them; empty: nothing. In the main picture only.
+  void SetBorders(const std::vector<std::string>& meshBlueprints);
 
   // --- the minimap: the whole map from straight above with every unit's strategic icon ---
   // `width` x `height` pixels as Draw gives them. The map's whole height fills the picture's height;
