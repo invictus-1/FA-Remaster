@@ -262,6 +262,7 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
 }  // namespace
 
 namespace {
+bool g_satDebug = false;
 // BoxBox 0x474830 (prop_collision.md 3.2): A = prop, B = unit. True with the minimum-overlap face normal (pointing
 // from the unit to the prop) and depth; an edge axis gives a zero normal and depth.
 bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
@@ -302,6 +303,15 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
       best = ov[i];
       bi = i;
     }
+  }
+  if (g_satDebug) {  // MOHO64_DEBUG_COL: the fifteen normalised overlaps (0-5 faces, 6-14 edge pairs)
+    std::string s;
+    for (int i = 0; i < 15; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %d:%.5f", i, ov[i]);
+      s += b;
+    }
+    Logf(LogLevel::Info, "sat best %d%s", bi, s.c_str());
   }
   if (bi < 0) return false;
   Vec3 n = axes[bi];
@@ -422,10 +432,20 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       // shallowest FACE axis; when the shallowest of the fifteen is an edge-to-edge axis it reports depth 0, and
       // DoCollisionsFor skips a hit below 0.001: two hulls crossing corner to corner do not push each other
       Vec3 n;
+      static const long dbgSat = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
+      g_satDebug = dbgSat >= 0 && static_cast<long>(u->id) == dbgSat;
       if (!BoxBoxSat(o, box, &n, &depth)) depth = 0;
+      g_satDebug = false;
     } else if (s.type == ShapeType::Sphere) {
       depth = ObbSphereDepth(box, s.c, s.r);
     }
+    static const long dbgCol = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
+    if (dbgCol >= 0 && (static_cast<long>(u->id) == dbgCol || static_cast<long>(e->id) == dbgCol))
+      Logf(LogLevel::Info,
+           "col %u overlap %u (%.4f %.4f %.4f fwd %.4f %.4f half %.3f %.3f %.3f) with %u (type %d c %.4f %.4f %.4f ax2 %.4f %.4f "
+           "half %.3f %.3f %.3f r %.3f) depth %.5f",
+           sim.tick(), u->id, box.c.x, box.c.y, box.c.z, box.ax[2].x, box.ax[2].z, box.h.x, box.h.y, box.h.z, e->id,
+           static_cast<int>(s.type), s.c.x, s.c.y, s.c.z, s.ax[2].x, s.ax[2].z, s.half.x, s.half.y, s.half.z, s.r, depth);
     if (depth > 0) hits.push_back({e, depth});
   };
   for (Entity* e : cand)

@@ -82,6 +82,16 @@ bool RotateToward(float& x, float& z, float tx, float tz, float maxAngle) {
     c /= l;
   }
   float nx = c * x - s * z, nz = s * x + c * z;
+  static const bool dbgRot = getenv("MOHO64_DEBUG_ROT") != nullptr;  // every limited turn, as bits
+  if (dbgRot) {
+    auto bits = [](float f) {
+      uint32_t v;
+      std::memcpy(&v, &f, 4);
+      return v;
+    };
+    Logf(LogLevel::Info, "rot in %08x %08x to %08x %08x angle %08x c %08x s %08x out %08x %08x", bits(x), bits(z), bits(tx),
+         bits(tz), bits(maxAngle), bits(c), bits(s), bits(nx), bits(nz));
+  }
   x = nx;
   z = nz;
   return false;
@@ -508,7 +518,24 @@ void SnapUnit(const Sim& csim, Unit* u) {
   }
   if (hover) y += b.elevation;
   u->position.y = y;
+  // MOHO64_DEBUG_SNAP=<unit id>: the exact floats (as bits) going into and coming out of the tilt
+  static const long dbgSnap = getenv("MOHO64_DEBUG_SNAP") ? atol(getenv("MOHO64_DEBUG_SNAP")) : -1;
+  const bool dbg = dbgSnap >= 0 && static_cast<long>(u->id) == dbgSnap;
+  auto bits = [](float f) {
+    uint32_t v;
+    std::memcpy(&v, &f, 4);
+    return v;
+  };
+  const Quat before = u->orientation;
   AlignUp(u->orientation, n);  // 0x50b820: the transform's own up axis turns onto the normal
+  if (dbg)
+    Logf(LogLevel::Info,
+         "snap %u unit %u face %08x %08x heading %08x %08x pre wxyz %08x %08x %08x %08x n %08x %08x %08x post wxyz %08x %08x %08x %08x "
+         "corners y %08x %08x %08x %08x",
+         sim.tick(), u->id, bits(u->motion.fx), bits(u->motion.fz), bits(u->motion.bx), bits(u->motion.bz), bits(before.w),
+         bits(before.x), bits(before.y), bits(before.z), bits(n.x), bits(n.y), bits(n.z), bits(u->orientation.w),
+         bits(u->orientation.x), bits(u->orientation.y), bits(u->orientation.z), bits(c[0].y), bits(c[1].y), bits(c[2].y),
+         bits(c[3].y));
 }
 
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick) {
@@ -765,10 +792,27 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
     g.first = false;
   }
   float limit = dist > 0 ? TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, g.fx, g.fz, dx, dz, speedFrac0) : P.maxF;
+  // The turn starts from a NORMALISED copy of the facing: TurnInfo 0x6990e0 keeps one in its result (out+0x28,
+  // normalised by 0x6999f0: times 1 / length) and Generate hands that copy to the limited turn (0x5b386c). The
+  // turned vector itself goes into the point. So the facing is brought back to length 1 once per step; without
+  // it the last bit of a turning unit's heading differed from the original's on some beats.
+  float nfx = g.fx, nfz = g.fz;
+  {
+    const float l = std::sqrt(nfx * nfx + nfz * nfz);
+    if (l > 9.99999997e-07f) {
+      const float inv = 1.0f / l;
+      nfx *= inv;
+      nfz *= inv;
+    } else {
+      nfx = nfz = 0.0f;
+    }
+  }
   if (!g.reverse) {
-    RotateToward(g.fx, g.fz, tx, tz, turn);
+    RotateToward(nfx, nfz, tx, tz, turn);
+    g.fx = nfx;
+    g.fz = nfz;
   } else {
-    float bx = -g.fx, bz = -g.fz;
+    float bx = -nfx, bz = -nfz;
     RotateToward(bx, bz, tx, tz, turn);
     g.fx = -bx;
     g.fz = -bz;
