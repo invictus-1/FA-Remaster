@@ -52,6 +52,7 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
     *error = "the init file " + setup_.initFile + " could not be run";
     return false;
   }
+  for (const std::string& folder : setup_.maps) e.vfs.Mount(folder, "/maps");
   if (!setup_.modUids.empty()) {
     std::ifstream f(setup_.modUids);
     std::string line;

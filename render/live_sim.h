@@ -35,6 +35,7 @@ class LiveSim {
                             // Launch: a Lua file holding `GameConfig = { ... }`)
     std::string modUids;    // a text file with one mod uid per line (empty: a session's own GameMods)
     uint32_t seed = 0;      // a new game's random seed; 0: taken from the clock
+    std::vector<std::string> maps;  // more folders of map folders, mounted at /maps beside what the init file mounts
   };
   enum class State { Loading, Running, Ended, Failed };
 
