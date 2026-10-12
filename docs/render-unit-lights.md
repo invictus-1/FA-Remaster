@@ -40,7 +40,7 @@ One entry per light:
 | `Position` | Where the light is, `{ x, y, z }`, in the mesh's own coordinates: the same numbers the `.scm`'s vertices have (y up, the unit at rest, before the blueprint's `UniformScale`). Put it a little outside the surface the lamp sits in (a fifth of the lamp's size), not inside the hull, or the hull's own faces around it are lit from behind. | `{ 0, 0, 0 }` |
 | `Bone` | The name of the bone the light moves with, as the `.scm` names it (case does not matter). The position is still given as above, for the unit at rest; the renderer works out where that is on the bone. | the unit itself |
 | `Color` | `{ r, g, b }`, each 0 to 1, linear (not the screen's values: a colour picked on screen is raised to the power 2.2). | white |
-| `Radius` | How far the light reaches, in the mesh's units (as `Position`). The light is full at its place and falls to nothing at this distance. For a sense of size: the Striker is 13 long in these units, and a headlamp with `Radius = 45` lights a pool about three and a half Strikers across. | 1.5 |
+| `Radius` | How far the light reaches, in the mesh's units (as `Position`). The light is full at its place and falls to nothing at this distance. For a sense of size: the Striker is 13 long in these units; a headlamp with `Radius = 45` reaches three and a half Striker lengths, and the pool of light one sees is about that wide across, since the light fades toward its edge. | 1.5 |
 | `Strength` | How bright. 1 is a strong lamp (a headlamp); 0.3 a marker light; 3 a floodlight. | 1 |
 | `Blink` | Seconds for one on-and-off (half on, half nearly off). Units of one kind do not blink together. | steady |
 
