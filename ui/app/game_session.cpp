@@ -30,7 +30,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   auto t0 = std::chrono::steady_clock::now();
   SessionDescription session;
   LaunchParams params;
-  params.seed = static_cast<uint32_t>(t0.time_since_epoch().count());
+  params.seed = seedGiven ? seed : static_cast<uint32_t>(t0.time_since_epoch().count());
   if (!SessionFromGameConfig(L, config, params, &session, why)) return false;
 
   // The session's mods are the configuration's GameMods, by uid, in order.

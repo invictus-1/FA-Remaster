@@ -27,6 +27,7 @@
 #include "core/vfs.h"
 #include "maui/control.h"
 #include "script/script_state.h"
+#include "sim/session.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
 
@@ -53,7 +54,9 @@ int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
+std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
+long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
@@ -177,6 +180,8 @@ int main(int argc, char** argv) {
     else if (a == "--window") windowed = true;
     else if (a == "--session-out") sessionFile = next();
     else if (a == "--game-lua") gameLuaFile = next();
+    else if (a == "--session") sessionIn = next();
+    else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -222,6 +227,7 @@ int main(int argc, char** argv) {
   // A game launched from the lobby: the simulation starts from the game configuration and the host
   // runs its beats beside the interface's frames.
   ui::GameSession session(&vfs, cfg.hookDirs);
+  if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   ui::UserState user(&vfs, cfg);
@@ -231,6 +237,15 @@ int main(int argc, char** argv) {
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
     if (auto code = hostfs::ReadFile(o.luaFile)) user.RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
+  }
+  if (ok && !sessionIn.empty()) {  // start a game at once from a recorded configuration (what --session-out wrote)
+    lua_State* L = user.L();
+    std::string why;
+    if (!PushGameConfigFile(L, sessionIn, &why) || !session.Launch(L, -1, &why)) {
+      Logf(LogLevel::Error, "moho64ui: --session %s: %s", sessionIn.c_str(), why.c_str());
+      ok = false;
+    }
+    lua_settop(L, 0);
   }
   // When a game has been launched, its interface gets a state of its own: the session's start
   // script, the rules, the root frame and the main script again, then the in-game interface.

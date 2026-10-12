@@ -56,6 +56,7 @@ py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
+         [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
@@ -70,6 +71,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   look at anything the scripts can see, or to build controls; its output goes to the log).
 - `ui/tests/*.lua` are run that way and check themselves (`TEST ok` / `TEST FAIL` lines); the command
   is at the top of each file.
+- `--session-out file` writes the game configuration when a game is launched from the lobby, as Lua
+  that reads back. `--session file` starts a game from such a file at once, without the lobby;
+  `--seed N` fixes its random seed. `--game-lua file` runs a Lua file of yours in the launched
+  game's own state once its interface is up. `ui/tests/game.lua` is run that way: it checks the
+  in-game state (the session's facts, units, selection, the world view, a move order).
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)
   and counts the calls at exit. `--list-bindings` lists all of them as `built` or `stub`.
 - Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form), or memory only.

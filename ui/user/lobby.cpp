@@ -11,8 +11,11 @@
 // connection can be made (FA exe 0x7c0d40); a new lobby has the id -1 unless one was given, and
 // HostGame gives it the next free id, 0 for the first (0x7c0970, 0x7c1b20), then calls
 // self:Hosting(); GetLocalPlayerID returns the id as a string (0x7c2fc0).
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "core/hostfs.h"
 #include "core/log.h"
@@ -168,18 +171,94 @@ int l_Destroy(lua_State* L) {
   return 0;
 }
 
-// CLobby:LaunchGame(gameConfig). NOT BUILT: starting a session is the engine's side. The game
-// configuration (GameOptions, PlayerOptions, Observers, GameMods, ...) is what a session will be
-// started from, so it is kept: written to the log and to the host's session file when one is named.
+// A Lua value as source text that reads back as the same value: tables in full depth with their
+// keys in a fixed order (numbers first, then names), strings escaped. Functions and other values
+// that cannot be written become nil.
+void WriteLiteral(lua_State* L, int idx, int depth, std::string* out) {
+  if (idx < 0) idx = lua_gettop(L) + idx + 1;
+  switch (lua_type(L, idx)) {
+    case LUA_TBOOLEAN:
+      *out += lua_toboolean(L, idx) ? "true" : "false";
+      return;
+    case LUA_TNUMBER: {
+      char buf[40];
+      double v = lua_tonumber(L, idx);
+      if (v == static_cast<double>(static_cast<long long>(v)) && v > -1e15 && v < 1e15) std::snprintf(buf, sizeof buf, "%lld", static_cast<long long>(v));
+      else std::snprintf(buf, sizeof buf, "%.9g", v);
+      *out += buf;
+      return;
+    }
+    case LUA_TSTRING: {
+      size_t n = lua_strlen(L, idx);
+      const char* s = lua_tostring(L, idx);
+      *out += '"';
+      for (size_t i = 0; i < n; ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == '"' || c == '\\') {
+          *out += '\\';
+          *out += static_cast<char>(c);
+        } else if (c < 32 || c == 127) {
+          char buf[8];
+          std::snprintf(buf, sizeof buf, "\\%03d", c);
+          *out += buf;
+        } else {
+          *out += static_cast<char>(c);
+        }
+      }
+      *out += '"';
+      return;
+    }
+    case LUA_TTABLE: {
+      if (depth > 32) break;
+      std::vector<double> numbers;
+      std::vector<std::string> names;
+      lua_pushnil(L);
+      while (lua_next(L, idx) != 0) {
+        if (lua_type(L, -2) == LUA_TNUMBER) numbers.push_back(lua_tonumber(L, -2));
+        else if (lua_type(L, -2) == LUA_TSTRING) names.emplace_back(lua_tostring(L, -2), lua_strlen(L, -2));
+        lua_pop(L, 1);
+      }
+      std::sort(numbers.begin(), numbers.end());
+      std::sort(names.begin(), names.end());
+      std::string pad(static_cast<size_t>(depth + 1) * 2, ' ');
+      *out += "{\n";
+      for (double k : numbers) {
+        lua_pushnumber(L, static_cast<lua_Number>(k));
+        *out += pad + "[";
+        WriteLiteral(L, -1, depth + 1, out);
+        *out += "] = ";
+        lua_rawget(L, idx);
+        WriteLiteral(L, -1, depth + 1, out);
+        lua_pop(L, 1);
+        *out += ",\n";
+      }
+      for (const std::string& k : names) {
+        lua_pushlstring(L, k.data(), k.size());
+        *out += pad + "[";
+        WriteLiteral(L, -1, depth + 1, out);
+        *out += "] = ";
+        lua_rawget(L, idx);
+        WriteLiteral(L, -1, depth + 1, out);
+        lua_pop(L, 1);
+        *out += ",\n";
+      }
+      *out += std::string(static_cast<size_t>(depth) * 2, ' ') + "}";
+      return;
+    }
+    default:
+      break;
+  }
+  *out += "nil";
+}
+
+// CLobby:LaunchGame(gameConfig). The game configuration (GameOptions, PlayerOptions, Observers,
+// GameMods, ...) is what a session is started from, so it is kept: written to the log or, when
+// one is named, to the host's session file in a form that reads back (--session starts from it).
 int l_LaunchGame(lua_State* L) {
   Lobby* lobby = Self(L);
   luaL_checktype(L, 2, LUA_TTABLE);
   std::string text;
-  lua_getglobal(L, "repr");
-  if (lua_isfunction(L, -1)) {
-    lua_pushvalue(L, 2);
-    if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) text = lua_tostring(L, -1);
-  }
+  WriteLiteral(L, 2, 0, &text);
   lua_settop(L, 2);
   const std::string& file = UserState::From(L)->config().sessionFile;
   const auto& launch = UserState::From(L)->config().launchSession;

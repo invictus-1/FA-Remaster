@@ -219,25 +219,35 @@ int l_GetUnitCommandData(lua_State* L) {
   lua_newtable(L);  // 2: orders
   lua_newtable(L);  // 3: toggles
   lua_pushnil(L);   // 4: buildable category
-  std::vector<std::string> seen;
-  auto collect = [&](const char* caps, int out) {
+  // In the blueprints as the engine keeps them, a set of orders or toggles is a bit set written
+  // as text: the one name when a single bit is set, else the number.
+  static const char* const kOrders[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard", "RULEUCC_Patrol",
+                                        "RULEUCC_RetaliateToggle", "RULEUCC_Repair", "RULEUCC_Capture", "RULEUCC_Transport",
+                                        "RULEUCC_CallTransport", "RULEUCC_Nuke", "RULEUCC_Tactical", "RULEUCC_Teleport",
+                                        "RULEUCC_Ferry", "RULEUCC_SiloBuildTactical", "RULEUCC_SiloBuildNuke",
+                                        "RULEUCC_Sacrifice", "RULEUCC_Pause", "RULEUCC_Overcharge", "RULEUCC_Dive",
+                                        "RULEUCC_Reclaim", "RULEUCC_SpecialAction", "RULEUCC_Dock", "RULEUCC_Script"};
+  static const char* const kToggles[] = {"RULEUTC_ShieldToggle", "RULEUTC_WeaponToggle", "RULEUTC_JammingToggle",
+                                         "RULEUTC_IntelToggle", "RULEUTC_ProductionToggle", "RULEUTC_StealthToggle",
+                                         "RULEUTC_GenericToggle", "RULEUTC_SpecialToggle", "RULEUTC_CloakToggle"};
+  uint32_t masks[4] = {0, 0, 0, 0};  // the bits for the tables at stack index 2 (orders) and 3 (toggles)
+  auto collect = [&](const char* caps, int out, const char* const* names, int count) {
     lua_pushstring(L, "General");
     lua_gettable(L, -2);
     if (lua_istable(L, -1)) {
       lua_pushstring(L, caps);
       lua_gettable(L, -2);
-      if (lua_istable(L, -1)) {
-        int t = lua_gettop(L);
-        lua_pushnil(L);
-        while (lua_next(L, t) != 0) {
-          if (lua_type(L, -2) == LUA_TSTRING && lua_toboolean(L, -1)) {
-            std::string name = lua_tostring(L, -2);
-            if (std::find(seen.begin(), seen.end(), name) == seen.end()) {
-              seen.push_back(name);
-              lua_pushstring(L, name.c_str());
-              lua_rawseti(L, out, static_cast<int>(luaL_getn(L, out)) + 1);
-            }
-          }
+      if (lua_isstring(L, -1)) {
+        std::string text = lua_tostring(L, -1);
+        bool named = false;
+        for (int i = 0; i < count; ++i)
+          if (text == names[i]) masks[out] |= 1u << i, named = true;
+        if (!named) masks[out] |= static_cast<uint32_t>(std::strtoul(text.c_str(), nullptr, 10));
+      } else if (lua_istable(L, -1)) {  // the form of the blueprint files: {NAME = true, ...}
+        for (int i = 0; i < count; ++i) {
+          lua_pushstring(L, names[i]);
+          lua_rawget(L, -2);
+          if (lua_toboolean(L, -1)) masks[out] |= 1u << i;
           lua_pop(L, 1);
         }
       }
@@ -251,8 +261,8 @@ int l_GetUnitCommandData(lua_State* L) {
       lua_pop(L, 1);
       continue;
     }
-    collect("CommandCaps", 2);
-    collect("ToggleCaps", 3);
+    collect("CommandCaps", 2, kOrders, 24);
+    collect("ToggleCaps", 3, kToggles, 9);
     lua_pushstring(L, "Economy");
     lua_gettable(L, -2);
     if (lua_istable(L, -1)) {
@@ -291,6 +301,16 @@ int l_GetUnitCommandData(lua_State* L) {
     }
     lua_pop(L, 2);
   }
+  for (int i = 0, n = 0; i < 24; ++i)
+    if (masks[2] & (1u << i)) {
+      lua_pushstring(L, kOrders[i]);
+      lua_rawseti(L, 2, ++n);
+    }
+  for (int i = 0, n = 0; i < 9; ++i)
+    if (masks[3] & (1u << i)) {
+      lua_pushstring(L, kToggles[i]);
+      lua_rawseti(L, 3, ++n);
+    }
   if (lua_isnil(L, 4)) {  // nothing can be built: the empty category
     lua_getglobal(L, "ParseEntityCategory");
     lua_pushstring(L, "");

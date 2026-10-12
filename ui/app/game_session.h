@@ -33,6 +33,10 @@ class GameSession {
   // script's LaunchFailed ("NoConfig", "StartSpots"), or a description.
   bool Launch(lua_State* L, int config, std::string* why);
 
+  // The random seed of the next launch; without one the clock gives it.
+  bool seedGiven = false;
+  uint32_t seed = 0;
+
   bool running() const { return sim_ != nullptr; }
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
