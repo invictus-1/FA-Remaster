@@ -6,7 +6,10 @@
 // object Sound{} made and gives a handle or nil (CUserSoundManager::ScriptPlaySound 0x8ab2b0).
 // How its sound manager limits, fades and ducks is not read; what is here follows the sound
 // files' own settings.
+#include <algorithm>
+#include <cstdio>
 #include <string>
+#include <vector>
 
 #include "core/log.h"
 #include "script/lua.hpp"
@@ -124,8 +127,10 @@ int l_SoundInfo(lua_State* L) {
   lua_rawset(L, -3);
   return 1;
 }
-// moho64ui_SoundMix(milliseconds) -> the loudest sample (0..1) of that much sound, mixed here and
-// now. For runs without a sound device: it moves the sounds on as a device would.
+// moho64ui_SoundMix(milliseconds [, file]) -> the loudest sample (0..1) of that much sound, mixed
+// here and now. For runs without a sound device: it moves the sounds on as a device would. With a
+// file's name the sound is added to that file as it is (16 bits, stereo, 48000 a second), to be
+// compared with the game's sound data.
 int l_SoundMix(lua_State* L) {
   sound::SoundSystem* s = System(L);
   int frames = static_cast<int>(luaL_checknumber(L, 1) * sound::Mixer::kRate / 1000.0);
@@ -134,6 +139,12 @@ int l_SoundMix(lua_State* L) {
     std::vector<int16_t> out(static_cast<size_t>(frames) * 2);
     s->mixer().Mix(out.data(), frames);
     for (int16_t v : out) peak = std::max(peak, v < 0 ? -static_cast<int>(v) : static_cast<int>(v));
+    if (lua_isstring(L, 2)) {  // and added to a file as it is: 16 bits, stereo, 48000 a second
+      if (std::FILE* f = std::fopen(lua_tostring(L, 2), "ab")) {
+        std::fwrite(out.data(), sizeof(int16_t), out.size(), f);
+        std::fclose(f);
+      }
+    }
   }
   lua_pushnumber(L, peak / 32767.0);
   return 1;

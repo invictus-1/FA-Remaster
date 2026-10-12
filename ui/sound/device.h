@@ -1,5 +1,5 @@
-// The sound device: a thread of its own asks the mixer for the next piece of sound, a hundredth
-// of a second at a time, and hands it to the system's sound output.
+// The sound device: a thread of its own asks the mixer for the next piece of sound whenever the
+// system's sound output has room for it (about every hundredth of a second).
 #pragma once
 #include <memory>
 

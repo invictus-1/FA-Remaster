@@ -257,9 +257,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   one, as its category says. `StartSound`, `StopSound`, `StopAllSounds`, `SoundIsPrepared`,
   `SetVolume` / `GetVolume` by category (a category stands inside another: Global holds all),
   `PauseSound`, `PlayVoice` (the voices' banks by language, `AudioSetLanguage`) are built. A live
-  window plays through Windows' sound output in pieces of a hundredth of a second; `--no-sound`
+  window plays through Windows' sound session (WASAPI, shared mode: the system asks for sound
+  every hundredth of a second and about two such pieces are under way at most); `--no-sound`
   leaves the device closed, and runs without a window mix only when a test asks
-  (`ui/tests/sound.lua`). Not built: the world's sounds (units, weapons: they need the
+  (`ui/tests/sound.lua`). Checked without ears: the mixer's output equals the game's sound data
+  resampled, to one step of 32,767; and with `MOHO64UI_SOUND_CAPTURE=<file>` set, what the
+  system's output plays is recorded beside the run, to be searched for holes and jumps (the
+  first device, the old wave output with small buffers, had 187 holes of silence in 7.5 s,
+  heard as static; the session has none, in the menu and in a game). `MOHO64UI_SOUND=waveout`
+  takes the old wave output with larger buffers, as the host does by itself where the session
+  cannot be opened. Not built: the world's sounds (units, weapons: they need the
   simulation's sound events and a place in the world), ducking the other sounds under a voice,
   the volume curves and effects of the sound files, fading as the files set it. How the
   original's own sound manager limits and fades is not read from its code.
