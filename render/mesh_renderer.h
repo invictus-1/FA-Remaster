@@ -34,6 +34,10 @@ class MeshRenderer {
   // `teamColor` is rgb in 0..1; `built` is the fraction complete (1 for a finished unit).
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr);
+  // After the frame's last Add and before its first Draw: builds the bones of every posed model
+  // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them
+  // to the shaders once for all passes.
+  void Prepare(const std::vector<const View*>& views);
   // Draws the list as `view` sees it: into the scene, or (`shadowPass`) into a shadow map, where
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
   void Draw(const View& view, gfx::Texture environment, bool shadowPass = false);
@@ -55,6 +59,7 @@ class MeshRenderer {
   int drawnTriangles = 0;
   int shadowTriangles = 0;        // summed over the shadow passes since the last scene pass
   int posedInstances = 0;         // of the drawn ones: those with bones away from rest
+  float prepareMs = 0;            // what Prepare took on the processor, averaged over the last frames
 
  private:
   struct Instance {
@@ -69,7 +74,7 @@ class MeshRenderer {
     Instance instance;
     Pose pose;
     bool posed = false;
-    int rows = -1;  // where its bones' rows begin in rows_, once a pass has needed them
+    int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
   };
   struct Item {
     const ModelLod* lod;
@@ -87,8 +92,9 @@ class MeshRenderer {
   std::vector<Instance> batch_;
   // Bones: for every posed model a pass has seen, three rows of four numbers per bone: the matrix
   // that takes a vertex of the model at rest to where the bone has carried it (in the model's own
-  // space). rows_ holds them for the frame; each pass hands the ones it draws to the shaders.
-  std::vector<float> rows_, passRows_;
+  // space). rows_ holds them for the frame, in one buffer all passes read.
+  std::vector<float> rows_;
+  bool prepared_ = false;
 };
 
 }  // namespace render

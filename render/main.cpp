@@ -759,8 +759,8 @@ int main(int argc, char** argv) {
         const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);
         if (model && model->ok) {
           const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
-          // in its own colours: the original's shader multiplies a projectile's texture by a colour the
-          // program supplies, and which one that is for projectiles is not known yet (REQUESTS.md, 7)
+          // in its own colours: the original gives every mesh that is not a unit's opaque white where a
+          // unit gets its army's colour (docs/engine-answers.md, render 7)
           meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
         } else {
           const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
@@ -772,6 +772,12 @@ int main(int argc, char** argv) {
         const Vec3 c = armyColors[b.army % armyColors.size()] * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
         draw.Line({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, 0xff000000u | byte(c.z) << 16 | byte(c.y) << 8 | byte(c.x));
       }
+    }
+    {  // the bones of posed models, once for all the frame's passes
+      std::vector<const View*> views{&view};
+      if (haveMap && shadowsOn)
+        for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
+      meshes.Prepare(views);
     }
     // the sun's shadow maps first, then the scene into its own picture, then that onto the window
     if (haveMap && shadowsOn) {
@@ -824,6 +830,7 @@ int main(int argc, char** argv) {
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
+      if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;

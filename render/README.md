@@ -178,9 +178,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   one the simulation poses; other levels of detail and a previewed remastered mesh are matched to
   it by bone name. `--turn <bone>` turns a bone of placed units round and round (`--bones` lists
   the names), to look at moving parts without a game. In a game the simulation's poses are shown:
-  turrets aim, legs walk. Measured at 1080p on an RTX 4090: 10,000 Strikers at rest 1.7 ms a
-  frame, all 10,000 with a turned turret 4.3 ms (the bones' matrices are built on one core and
-  handed over once per pass: to be made cheaper).
+  turrets aim, legs walk. The bones of every posed model one of the frame's views will draw are
+  built once and handed over once for all passes. Measured at 1080p on an RTX 4090: 10,000
+  Strikers at rest 1.3 ms a frame, all 10,000 with a turned turret 3.1 ms, of which 1.3 ms is
+  building the 70,000 bone matrices on one core (several cores: to do).
 - Projectiles: one with a model in its blueprint is drawn as that model; the others are effects
   in the game, and until effects are written a short bright line along the flight stands in.
   Between beats a projectile flies on along its velocity. Beams are plain lines for now.
@@ -200,9 +201,16 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   - Materials for the modern look. Remastered units whose blueprint says `ShaderName = 'LabPBR'`
     carry them in their textures: specular red = metal, green = roughness, blue = glow, alpha = team
     colour mask; `SecondaryName` red = ambient occlusion. Original units: the old spec-team texture
-    is translated (reflection strength stands for metal, highlight strength for smoothness); this
-    translation is a first one and not yet tuned per faction (white paint on Cybran and Aeon units
-    comes out too dark).
+    is translated (reflection strength stands for metal, highlight strength for smoothness), with
+    each faction's own weights, because the four factions' textures were painted for four
+    different formulas: Aeon paint is dark and was lifted by what it mirrored; Cybran paint is
+    nearly black and was lit with the sun counted twice; Seraphim textures keep the team mask in
+    the ALBEDO's alpha and a dim detail picture in its colour, the surface being metal throughout.
+    The weights were set by eye on a few units of each faction and await a look by someone who
+    knows the game well.
+  - The original look has each faction's formula too (shader names `Unit`, `Aeon`, `Insect`,
+    `Seraphim` and their `...Navy` forms), with two stand-ins: the Cybran highlight and the
+    Seraphim reflection's view-angle ramp come from lookup textures that are not read yet.
   - The modern look's strengths (`--sun`, `--sky`, `--exposure`, `--reflection`) are constants found
     by eye on one map. Highlights and the mirrored sky are held back (`--reflection` 0.7): the game's
     sky pictures hold no values beyond white, and at full strength metal turns pale.
@@ -214,15 +222,15 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 Known gaps, to be closed in the steps they belong to:
 
 - Units: played from a recording, every model stands in its rest pose (a recording has no bone
-  poses; the running simulation gives them). All are drawn with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
-  highlights). A unit under construction is only darker. With a recording, army colours are a fixed
+  poses; the running simulation gives them). A unit under construction is only darker. With a recording, army colours are a fixed
   list (the running simulation gives the game's own).
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
 - Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
   The symbol's name is read from the `.bp` file, so a change a mod's script makes to it is not seen.
 - Props do not sway, and blended far-away cards are not sorted by distance.
-- Each shadow cascade draws every caster inside it again, also those a nearer cascade already
-  covers: the shadow maps often hold more triangles than the picture.
+- Shadows: a cascade leaves out what casts wholly inside the square the cascade before it covers
+  (that map has it, and every surface its shadow can reach reads that map). What straddles the
+  edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
 - No decals, no sky, no ground beyond the map's edge, no effects (explosions, smoke, the visible
