@@ -211,9 +211,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   button or key (move, attack ground, patrol), or a build icon, on which the commander builds
   the chosen building at the click. The console command `StartCommandMode`, which the order
   keys use, is built. So are the orders that need no click: `IssueCommand`, `IssueUnitCommand`
-  (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order), `SimCallback`
-  and the unit switches (pause, fire state, script bits); those last four are written against
-  the engine's command writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
+  (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
+  run the finished land factory built two engineers), `SimCallback` and the unit switches
+  (pause, fire state, script bits); those last two are written against the engine's command
+  writer but not checked in a game yet. Not there yet: selecting with the mouse and the orders that depend on
   what is under the cursor (both need the world's picture), the build preview and snapping to
   the grid, factory queues, unit states (queues, fire state, shields, pause).
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
