@@ -61,7 +61,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
                [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
-               [--lights <n>] [--hide particles,bands,decals] [--map-decals normals|all|albedo|off] [--decal-filter <name part>]
+               [--picture <file.png>] [--lights <n>] [--hide particles,bands,decals] [--map-decals normals|all|albedo|off] [--decal-filter <name part>]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -134,7 +134,10 @@ prints what it reports.
 | `lights.h` | small lights (explosion flashes; later lamps, muzzle flashes, shots), sorted into a grid over the ground |
 | `effects.h` | a running game's effects: the scripts' effect calls turned into emitters, beams and trails, kept on what they hang on |
 | `recording.h` | a tick recording as a source of frames |
-| `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
+| `sim_frames.h` | frames from a simulation someone else runs: every beat copied out, any moment between two beats blended |
+| `live_sim.h` | the viewer's own simulation: the engine on a thread of its own, feeding `sim_frames.h` |
+| `world.h` | the world's picture put together for one frame, and where things are on it (to screen and back, what is under a point); the viewer and every other host use it |
+| `world_picture.h` | the world as pixels for a host with its own window and drawing (the interface's program) |
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
 | `shadows.h` | the sun's shadow maps and where they are placed each frame |
 | `post.h` | the scene's own floating-point picture and the last pass that puts it on the window |
@@ -311,6 +314,16 @@ Known gaps, to be closed in the steps they belong to:
 - Layer textures repeat every `scale` world units in both directions; on a map that is not square the
   original may stretch one direction (not checked).
 - Ground textures use anisotropic filtering; the original uses plain trilinear.
+
+## For other hosts
+
+The renderer is a library as well as a viewer. `world.h` (`render::World`) is the whole picture
+for one frame on a device the host owns; `world_picture.h` (`render::WorldPicture`) wraps it for a
+host that has its own window and only wants pixels: it makes an invisible window and device of
+its own, takes the simulation's beats, and gives the world as seen by a camera, where a world
+position is on that picture, the ground under a pixel and the unit under a pixel.
+`docs/render-answers.md` says how to build it in and what it costs; the viewer's
+`--picture <file.png>` checks it against a running game.
 
 ## Asking the engine track
 

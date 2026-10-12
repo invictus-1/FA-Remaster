@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -17,6 +18,11 @@
 
 #include "frame.h"
 #include "linalg.h"
+#include "sim_frames.h"
+
+namespace moho {
+class Sim;
+}
 
 namespace render {
 
@@ -39,6 +45,10 @@ class LiveSim {
   // configuration (which runs the map's scenario file). False with a reason when that fails.
   bool Open(const Setup& setup, std::string* error);
   const std::string& MapPath() const { return mapPath_; }  // "/maps/SCMP_009/SCMP_009.scmap"
+  // Called on the simulation's thread, when set before Start: once the game has started, and after
+  // every beat (before this class copies the beat out; a hook that takes the beat's effect events
+  // leaves none for it). For another taker of beats, such as a WorldPicture being tried out.
+  std::function<void(const moho::Sim&)> onStarted, onBeat;
   // Starts loading and then running, on the simulation's thread.
   void Start();
 
@@ -59,17 +69,9 @@ class LiveSim {
   float LoadSeconds() const;   // how long loading took
 
  private:
-  struct Beat {
-    uint32_t tick = 0;
-    std::vector<FrameUnit> units;  // in entity-id order
-    std::vector<FrameBone> bones;  // what the units' spans point into
-    std::vector<FrameProjectile> projectiles;
-    std::vector<FrameBeam> beams;
-  };
   struct Engine;  // everything of src/sim, kept out of this header
   void Run();
   bool Load(std::string* error);
-  void Snapshot();
 
   Setup setup_;
   std::string mapPath_;
@@ -82,14 +84,8 @@ class LiveSim {
   State state_ = State::Loading;
   std::string problem_;
   uint32_t target_ = 0;
-  std::deque<Beat> beats_;             // the newest few
-  std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint and FrameProjectile::blueprint
-                                       // (0: unknown); only grows
-  std::vector<Vec3> armyColors_;
-  std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   float msPerTick_ = 0, loadSeconds_ = 0;
-
-  std::vector<std::string> namesForFrames_;  // the renderer's copy of names_ (what Frame::blueprints points at)
+  SimFrames frames_;  // the beats, copied out
 };
 
 }  // namespace render

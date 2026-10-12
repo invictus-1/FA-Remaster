@@ -35,6 +35,9 @@
 // --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
 //           to which the map's decals are drawn
 // --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
+// --picture <file.png>  with --sim or --session: checks the pixel interface for other hosts (world_picture.h):
+//           once the game is where --tick asks, the world is drawn through it into that file, its
+//           answers about the screen are printed, and the viewer ends
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -98,6 +101,8 @@
 #include "view.h"
 #include "water.h"
 #include "window.h"
+#include "world.h"
+#include "world_picture.h"
 
 using namespace render;
 
@@ -132,6 +137,7 @@ struct Options {
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
+  std::string picture; // --picture
   int testLights = 0;  // --lights
   std::string mapDecals = "normals";  // --map-decals
   float decalTurn = 1, decalRange = 1;
@@ -187,6 +193,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--picture") o->picture = v;
     else if (a == "--lights") o->testLights = atoi(v);
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
@@ -304,14 +311,8 @@ int main(int argc, char** argv) {
   moho::Vfs vfs;
   MountGameFiles(opt, &vfs);
   if (vfs.MountCount()) printf("render: %zu archives and folders, %zu files\n", vfs.MountCount(), vfs.FileCount());
-  TextureCache textures(device.get(), &vfs);
-  DebugDraw draw(device.get());
-  if (!draw.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
+  WorldPicture picture;
   LiveSim live;
   const bool haveLive = !opt.sim.empty() || !opt.session.empty();
   if (haveLive) {
@@ -331,102 +332,64 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (opt.map.empty()) opt.map = live.MapPath();
+    if (!opt.picture.empty()) {  // the pixel interface, fed by the same simulation
+      if (!picture.Open(&vfs, opt.map, &error)) {
+        fprintf(stderr, "render: --picture: %s\n", error.c_str());
+        return 1;
+      }
+      live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
+      live.onBeat = [&](const moho::Sim& sim) { picture.Beat(sim); };
+    }
     printf("render: simulation: %s %s on %s, loading ...\n", opt.session.empty() ? "the replay" : "a new game from",
            (opt.session.empty() ? opt.sim : opt.session).c_str(), live.MapPath().c_str());
     live.Start();
   }
 
-  MapData map;
-  std::unique_ptr<Terrain> terrain;
-  std::unique_ptr<Water> water;
-  if (!opt.map.empty()) {
-    auto file = vfs.ReadFile(opt.map);
-    if (!file) {
-      fprintf(stderr, "render: map %s: file not found (is --fa or --data given?)\n", opt.map.c_str());
+  // the world's picture: the map and everything drawn on it
+  World world(device.get(), &vfs);
+  {
+    World::Options wo;
+    wo.displayTable = opt.display;
+    wo.lodPixels = opt.lodPixels;
+    wo.mapDecals = opt.mapDecals;
+    wo.decalFilter = opt.decalFilter;
+    wo.decalTurn = opt.decalTurn;
+    wo.decalRange = opt.decalRange;
+    wo.verbose = opt.debug;
+    if (!world.Open(opt.map, wo, &error)) {
+      fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;
     }
-    if (!LoadMap(*file, &map, &error)) {
-      fprintf(stderr, "render: map %s: %s\n", opt.map.c_str(), error.c_str());
-      return 1;
-    }
-    terrain = std::make_unique<Terrain>(device.get(), &textures);
-    if (!terrain->Load(&map, &error)) {
-      fprintf(stderr, "render: terrain: %s\n", error.c_str());
-      return 1;
-    }
-    if (opt.lodPixels > 0) terrain->quadPixels = opt.lodPixels;
-    water = std::make_unique<Water>(device.get(), &textures);
-    if (!water->Load(&map, &error)) {
-      fprintf(stderr, "render: water: %s\n", error.c_str());
-      return 1;
-    }
-    printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", opt.map.c_str(), map.width, map.height, map.shader.c_str(),
-           map.props.size(), map.decals.size());
   }
-  const bool haveMap = terrain != nullptr;
-
-  // the recording played on the map
-  ModelCache models(device.get(), &vfs, &textures);
-  if (!opt.display.empty()) {
-    const int levels = models.LoadDisplayTable(opt.display);
-    if (levels) printf("render: %d model levels named by the simulation's blueprints (%s)\n", levels, opt.display.c_str());
-    else fprintf(stderr, "render: --display %s: no DISPLAY lines found\n", opt.display.c_str());
-  }
-  MeshRenderer meshes(device.get(), &textures);
-  if (!meshes.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  meshes.detail = opt.detail;
-  Particles particles(device.get(), &vfs, &textures);
-  if (!particles.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  Ribbons ribbons(device.get(), &vfs, &textures);
-  if (!ribbons.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  Decals decals(device.get(), &vfs, &textures);
-  if (!decals.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  if (haveMap && map.water.present) decals.SetWater(terrain->WaterMap(), terrain->WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
-  // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
-  if (haveMap && opt.mapDecals != "off") {
-    int laid = 0;
-    for (const MapDecal& d : map.decals) {
-      if (d.type != 1 && d.type != 2) continue;
-      if (!opt.decalFilter.empty() && d.textures[0].find(opt.decalFilter) == std::string::npos) continue;
-      if ((opt.mapDecals == "albedo" && d.type != 1) || (opt.mapDecals == "normals" && d.type != 2)) continue;  // one kind alone, to look at it
-      const float heading = d.rotation.y * opt.decalTurn;
-      Vec3 centre = d.position;
-      if (opt.mapDecals == "corner") {  // the position as the corner the decal is turned about
-        const float c = std::cos(heading), s = std::sin(heading), hx = d.scale.x * 0.5f, hz = d.scale.z * 0.5f;
-        centre.x += hx * c + hz * s;
-        centre.z += -hx * s + hz * c;
-      }
-      centre.y = map.Height(Clamp(centre.x, 0, static_cast<float>(map.width)), Clamp(centre.z, 0, static_cast<float>(map.height)));
-      const bool ok = d.type == 2 ? decals.AddNormal(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange)
-                                  : decals.Add(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * opt.decalRange);
-      if (ok) ++laid;
-    }
-    printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
-  }
-  Lights lights(device.get(), &vfs);
-  Effects effects(&particles, &ribbons, &decals, &lights, &models);
-  effects.verbose = opt.debug;
+  world.look = opt.look;
+  world.shadowsOn = opt.shadows;
+  world.iconsOn = opt.icons;
+  world.sun = opt.sun;
+  world.sky = opt.sky;
+  world.exposure = opt.exposure;
+  world.reflection = opt.reflection;
+  world.hide = opt.hide;
+  world.meshes.detail = opt.detail;
+  world.icons.scale = opt.iconScale;
+  world.ao.strength = opt.ao;
+  // the world's parts that the viewer's own switches add to, or whose numbers it prints
+  const MapData& map = world.map;
+  const bool haveMap = world.HaveMap();
+  const Terrain* terrain = &world.terrain;
+  ModelCache& models = world.models;
+  MeshRenderer& meshes = world.meshes;
+  Particles& particles = world.particles;
+  Ribbons& ribbons = world.ribbons;
+  Decals& decals = world.decals;
+  Lights& lights = world.lights;
+  Effects& effects = world.effects;
+  StrategicIcons& icons = world.icons;
+  DebugDraw& draw = world.draw;
+  AmbientOcclusion& ao = world.ao;
+  Look& look = world.look;
+  bool& shadowsOn = world.shadowsOn;
+  bool& iconsOn = world.iconsOn;
   std::vector<FrameEffectEvent> effectEvents;
-  StrategicIcons icons(device.get(), &vfs);
-  if (!icons.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  icons.scale = opt.iconScale;
-  bool iconsOn = opt.icons;
-  std::vector<const StrategicIcons::Kind*> iconKinds;  // by FrameUnit::blueprint; null: not looked up yet
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -441,39 +404,6 @@ int main(int argc, char** argv) {
     if (!recording.NamedUnits() && !fromLog)
       fprintf(stderr, "render: this recording does not say what its units are (an older one, or the original game's) and no\n"
                       "        --createlog (an engine log made with MOHO64_DEBUG_CREATE=1) was given: units are drawn as boxes\n");
-  }
-  gfx::Texture environment;
-  for (const auto& cube : map.environmentCubemaps)
-    if (cube.first == "<default>") environment = textures.Get(cube.second);
-
-  // the frame's passes and the light
-  AmbientOcclusion ao(device.get());
-  ao.strength = opt.ao;
-  Post post(device.get());
-  if (!ao.Init(&error) || !post.Init(&error)) {
-    fprintf(stderr, "render: shader: %s\n", error.c_str());
-    return 1;
-  }
-  Shadows shadows(device.get());
-  gfx::Texture sky = textures.SkyCube(haveMap ? map.skyCubemap : std::string());
-  Look look = opt.look;
-  bool shadowsOn = opt.shadows;
-  float sunStrength = opt.sun, skyStrength = opt.sky, exposure = opt.exposure;
-  // the map's props (trees, rocks, wrecks): where each stands does not change
-  struct PlacedProp {
-    const Model* model;
-    Mat4 world;
-  };
-  std::vector<PlacedProp> placedProps;
-  for (const MapProp& p : map.props) {
-    const Model* model = models.Blueprint(p.blueprint);
-    if (!model->ok) continue;
-    const Vec3 s = p.scale * model->scale;
-    Mat4 world = {{{p.axisX.x * s.x, p.axisY.x * s.y, p.axisZ.x * s.z, p.position.x},
-                   {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, p.position.y},
-                   {p.axisX.z * s.x, p.axisY.z * s.y, p.axisZ.z * s.z, p.position.z},
-                   {0, 0, 0, 1}}};
-    placedProps.push_back({model, world});
   }
   Frame frame;
   // where the frames come from: a recording, or the running simulation
@@ -726,27 +656,78 @@ int main(int argc, char** argv) {
 
     // an automatic run counts time in frames, so that its pictures can be compared
     const float time = automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
-    View view = View::Make(camera, device->Width(), device->Height(), time);
-    {  // the light: the map's sun, in the chosen look
-      ViewConstants& c = view.constants;
-      const Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
-      auto set = [](float* to, Vec3 v) {
-        to[0] = v.x;
-        to[1] = v.y;
-        to[2] = v.z;
-      };
-      set(c.sunDirection, sun);
-      set(c.sunColor, haveMap ? map.lighting.sunColor : Vec3{1, 1, 1});
-      set(c.sunAmbience, haveMap ? map.lighting.sunAmbience : Vec3{0.2f, 0.2f, 0.2f});
-      set(c.shadowFill, haveMap ? map.lighting.shadowFill : Vec3{0.3f, 0.3f, 0.4f});
-      c.lightMultiplier = haveMap ? map.lighting.multiplier : 1;
-      c.look = look == Look::Modern ? 1.0f : 0.0f;
-      c.modern[0] = sunStrength;
-      c.modern[1] = skyStrength;
-      c.modern[2] = exposure;
-      c.modern[3] = opt.reflection;
-      if (haveMap && shadowsOn) shadows.Place(camera, sun, &view);
+
+    // the game: how far the simulation is, and the frame to show
+    if (haveLive) {
+      const LiveSim::State state = live.GetState();
+      if (state != LiveSim::State::Loading && !liveReported) {
+        liveReported = true;
+        if (state == LiveSim::State::Failed) fprintf(stderr, "render: simulation: %s\n", live.Problem().c_str());
+        else printf("render: simulation: started after %.1f s\n", live.LoadSeconds());
+        std::vector<Vec3> own = live.ArmyColors();
+        if (!own.empty()) armyColors = std::move(own);
+      }
+      // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
+      if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);
+      // --tick: run ahead to that tick as fast as the simulation goes, showing its newest beat on the way
+      liveBusy = state == LiveSim::State::Loading;
+      if (state == LiveSim::State::Running && opt.tick > playTick) {
+        live.RunTo(static_cast<uint32_t>(opt.tick) + 2);
+        playTick = std::min(static_cast<double>(live.LastTick()), opt.tick);
+        liveBusy = playTick < opt.tick;
+      } else if (state != LiveSim::State::Loading) {
+        opt.tick = -1;  // reached, or the game ended before it
+      }
     }
+    const bool playing = havePlay && (!haveLive || live.GetState() != LiveSim::State::Loading);
+    if (playing) {
+      if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
+      playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
+      frameAt(playTick, &frame);
+      if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
+        framedLive = true;
+        lookAtUnits();
+      }
+    }
+
+    if (!opt.picture.empty() && playing && !liveBusy && frameCount >= 3) {
+      // --picture: the world through the pixel interface, and what it says about the screen
+      const int w = device->Width(), h = device->Height();
+      const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, playTick + 1);
+      std::vector<uint8_t> bytes(pixels.size() * 4);
+      for (size_t i = 0; i < pixels.size(); ++i) {
+        bytes[i * 4] = static_cast<uint8_t>(pixels[i] >> 16);
+        bytes[i * 4 + 1] = static_cast<uint8_t>(pixels[i] >> 8);
+        bytes[i * 4 + 2] = static_cast<uint8_t>(pixels[i]);
+        bytes[i * 4 + 3] = 255;
+      }
+      printf("render: --picture: %dx%d %s\n", w, h, WritePng(opt.picture, bytes.data(), w, h) ? opt.picture.c_str() : "could not be written");
+      {  // what a call costs, read-back included
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < 30; ++i) picture.Draw(camera, w, h, playTick + 1);
+        printf("render: --picture: %.2f ms a call\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30);
+      }
+      std::vector<uint32_t> inside;
+      picture.UnitsIn(0, 0, static_cast<float>(w), static_cast<float>(h), &inside);
+      printf("render: --picture: %zu units in the picture of %zu in the game\n", inside.size(), frame.units.size());
+      int shown = 0;
+      for (const FrameUnit& u : frame.units) {
+        float x, y;
+        if (!picture.Project({u.position[0], u.position[1], u.position[2]}, &x, &y) || x < 0 || y < 0 || x >= static_cast<float>(w) || y >= static_cast<float>(h)) continue;
+        Vec3 ground;
+        const bool hit = picture.GroundAt(x, y, &ground);
+        const uint32_t under = picture.UnitAt(x, y);
+        printf("render: --picture: unit %x at %.1f %.1f %.1f -> pixel %.0f %.0f; the ground there %.1f %.1f %.1f%s; the unit there %x%s\n", u.id,
+               u.position[0], u.position[1], u.position[2], x, y, ground.x, ground.y, ground.z, hit ? "" : " (none)", under,
+               under == u.id ? " (itself)" : "");
+        if (++shown == 6) break;
+      }
+      break;
+    }
+    const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+    device->BeginFrame(clear);
+    // effects run on the game's clock while a game plays (so they stand still when it is paused)
+    world.Begin(camera, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
 
     // --emit: every emitter is started again once all have ended and three seconds have passed
     if (!opt.emit.empty()) {
@@ -771,11 +752,13 @@ int main(int argc, char** argv) {
         ribbons.MoveTrail(trailHandles[i], at);
       }
     }
-    const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
-    device->BeginFrame(clear);
-    meshes.Begin();
-    icons.Begin(view);
-    for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
+    for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour
+      const float ring = 3 + 2.5f * static_cast<float>(i / 12), angle = time * (0.5f + 0.07f * static_cast<float>(i % 5)) + static_cast<float>(i) * 0.83f;
+      const Vec3 at{emitAt.x + std::cos(angle) * ring, 0, emitAt.z + std::sin(angle) * ring};
+      const float hue = static_cast<float>(i) * 2.4f;
+      lights.Add({at.x, groundHeight(at.x, at.z) + 1.2f, at.z}, 6,
+                 Vec3{0.5f + 0.5f * std::cos(hue), 0.5f + 0.5f * std::cos(hue + 2.1f), 0.5f + 0.5f * std::cos(hue + 4.2f)} * 3.0f);
+    }
     for (PlacedUnit& u : placedUnits) {
       Pose pose;
       if (u.turned >= 0) {
@@ -800,150 +783,14 @@ int main(int argc, char** argv) {
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
-    if (haveLive) {
-      const LiveSim::State state = live.GetState();
-      if (state != LiveSim::State::Loading && !liveReported) {
-        liveReported = true;
-        if (state == LiveSim::State::Failed) fprintf(stderr, "render: simulation: %s\n", live.Problem().c_str());
-        else printf("render: simulation: started after %.1f s\n", live.LoadSeconds());
-        std::vector<Vec3> own = live.ArmyColors();
-        if (!own.empty()) armyColors = std::move(own);
-      }
-      // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
-      if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);
-      // --tick: run ahead to that tick as fast as the simulation goes, showing its newest beat on the way
-      liveBusy = state == LiveSim::State::Loading;
-      if (state == LiveSim::State::Running && opt.tick > playTick) {
-        live.RunTo(static_cast<uint32_t>(opt.tick) + 2);
-        playTick = std::min(static_cast<double>(live.LastTick()), opt.tick);
-        liveBusy = playTick < opt.tick;
-      } else if (state != LiveSim::State::Loading) {
-        opt.tick = -1;  // reached, or the game ended before it
-      }
-    }
-    if (havePlay && (!haveLive || live.GetState() != LiveSim::State::Loading)) {
-      if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
-      playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
-      frameAt(playTick, &frame);
-      if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
-        framedLive = true;
-        lookAtUnits();
-      }
-      for (const FrameUnit& u : frame.units) {
-        if (u.dead) continue;
-        const Vec3 position{u.position[0], u.position[1], u.position[2]};
-        const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
-        const Vec3 color = armyColors[u.Army() % armyColors.size()];
-        const std::string& blueprint = (*frame.blueprints)[u.blueprint];
-        if (!blueprint.empty()) {  // its strategic icon, when it is far enough away
-          if (u.blueprint >= iconKinds.size()) iconKinds.resize(frame.blueprints->size(), nullptr);
-          const StrategicIcons::Kind*& kind = iconKinds[u.blueprint];
-          if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
-          icons.Add(kind, position, color);
-        }
-        const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
-        if (model && model->ok) {
-          Pose pose;
-          pose.now = frame.bones.data() + u.firstBone;
-          pose.nowCount = u.boneCount;
-          pose.next = frame.bones.data() + u.nextFirstBone;
-          pose.nextCount = u.nextBoneCount;
-          pose.blend = frame.blend;
-          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
-        } else {  // not known what it is, or its files cannot be read: a box in the army's colour
-          auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
-          draw.Box(position + Vec3{0, 0.4f, 0}, {0.4f, 0.4f, 0.4f}, 0xff000000u | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x));
-        }
-      }
-    }
-    if (havePlay) {
-      // projectiles: those with a model as that model; the others are effects in the game, which
-      // are not written yet: a bright stroke along the flight stands in, so that fire can be seen
-      for (const FrameProjectile& p : frame.projectiles) {
-        const Vec3 position{p.position[0], p.position[1], p.position[2]};
-        const std::string& blueprint = (*frame.blueprints)[p.blueprint];
-        const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);
-        if (model && model->ok) {
-          const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
-          // in its own colours: the original gives every mesh that is not a unit's opaque white where a
-          // unit gets its army's colour (docs/engine-answers.md, render 7)
-          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
-        } else if (!effects.OnEntity(p.id)) {  // (one with the game's own trail or glow needs no stand-in)
-          const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
-          ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
-        }
-      }
-      // beams: a line in a lightened army colour, until the beam effects are written
-      for (const FrameBeam& b : frame.beams) {
-        if (effects.OnEntity(b.id)) continue;
-        const Vec3 c = armyColors[b.army % armyColors.size()] * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
-        ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
-      }
-    }
-    lights.Build(&view);  // (after the effects have said what flashes; before any pass reads the view)
-    {  // the bones of posed models, once for all the frame's passes
-      std::vector<const View*> views{&view};
-      if (haveMap && shadowsOn)
-        for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
-      meshes.Prepare(views);
-    }
-    lights.Begin(havePlay ? playTick * 0.1 : static_cast<double>(time));
-    for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour
-      const float ring = 3 + 2.5f * static_cast<float>(i / 12), angle = time * (0.5f + 0.07f * static_cast<float>(i % 5)) + static_cast<float>(i) * 0.83f;
-      const Vec3 at{emitAt.x + std::cos(angle) * ring, 0, emitAt.z + std::sin(angle) * ring};
-      const float hue = static_cast<float>(i) * 2.4f;
-      lights.Add({at.x, groundHeight(at.x, at.z) + 1.2f, at.z}, 6,
-                 Vec3{0.5f + 0.5f * std::cos(hue), 0.5f + 0.5f * std::cos(hue + 2.1f), 0.5f + 0.5f * std::cos(hue + 4.2f)} * 3.0f);
-    }
-    if (haveLive) {  // what the scripts did with effects in the beats since the last frame
+    if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame
       live.TakeEffectEvents(&effectEvents);
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
     }
-    // effects run on the game's clock while a game plays (so they stand still when it is paused)
-    const double effectTime = havePlay ? playTick * 0.1 : static_cast<double>(time);
-    particles.Update(effectTime, &view);
-    ribbons.Update(effectTime);
-    // the sun's shadow maps first, then the scene into its own picture, then that onto the window
-    if (haveMap && shadowsOn) {
-      for (int i = 0; i < shadows.Count(); ++i) {
-        device->BeginPass(shadows.Pass(i));
-        terrain->Draw(shadows.CascadeView(i), true);
-        meshes.Draw(shadows.CascadeView(i), environment, true);
-      }
-    }
-    post.BeginScene(device->Width(), device->Height(), clear);
-    device->SetTexture(kShadowMapSlot, shadows.Map());
-    device->SetTexture(kEnvironmentSlot, sky);
-    lights.Bind();
-    if (haveMap) {
-      terrain->Draw(view);
-      // decals on the ground, before anything stands on it: they read the ground's depth
-      if (decals.Count() && opt.hide.find("decals") == std::string::npos) {
-        post.BeginColorOnly();
-        lights.Bind();
-        decals.Draw(view, camera, post.Depth(), havePlay ? playTick * 0.1 : static_cast<double>(time));
-        post.ContinueScene();
-        lights.Bind();
-      }
-      meshes.Draw(view, environment);
-      draw.Flush(view);
-      // ambient occlusion: from the depth of everything solid, laid over it before the water
-      if (look == Look::Modern && ao.strength > 0) {
-        ao.Compute(view, camera, post.Depth());
-        post.ContinueScene();
-        ao.Apply(view);
-      }
-      water->Draw(view);
-    } else {
-      DrawTestScene(draw);
-      draw.Flush(view);
-    }
-    // beams and trails, then particles: over everything solid and the water, by the scene's depth
-    if (opt.hide.find("bands") == std::string::npos) ribbons.Draw(view);
-    if (opt.hide.find("particles") == std::string::npos) particles.Draw(view);
-    post.Present(view);
-    if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
+    if (playing) world.AddFrame(frame, armyColors);
+    if (!haveMap) DrawTestScene(draw);
+    world.Render();
 
     if (!(automatic && liveBusy)) {  // an automatic run counts its frames from where it was asked to look
       if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
