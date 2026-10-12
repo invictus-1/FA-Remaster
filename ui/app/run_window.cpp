@@ -6,7 +6,9 @@
 #include "app/window.h"
 #include "core/log.h"
 #include "maui/control.h"
+#include "draw/draw.h"
 #include "maui/input.h"
+#include "script/script_state.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -34,6 +36,24 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
+  // The mouse pointer: the texture the scripts last set, as the system's own pointer.
+  std::string pointerTexture;
+  int pointerX = 0, pointerY = 0;
+  bool pointerHidden = false, pointerKnown = false;
+  auto updatePointer = [&](UserState& user) {
+    std::string texture;
+    int hotX = 0, hotY = 0;
+    bool hidden = false;
+    if (!CurrentCursor(user.L(), &texture, &hotX, &hotY, &hidden)) return;
+    if (pointerKnown && texture == pointerTexture && hotX == pointerX && hotY == pointerY && hidden == pointerHidden) return;
+    pointerKnown = true, pointerTexture = texture, pointerX = hotX, pointerY = hotY, pointerHidden = hidden;
+    window.HidePointer(hidden);
+    if (hidden) return;
+    static const Image none;
+    const Image& image = texture.empty() ? none : LoadTexture(ScriptState::From(user.L())->vfs(), texture);
+    if (image.valid()) window.SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY);
+    else window.SetPointer(nullptr, 0, 0, 0, 0);
+  };
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
   double drawSeconds = 0;
@@ -49,6 +69,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     user.ui().Render(user.L(), *target, 0);
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
     window.Present(*target);
+    updatePointer(current());
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
     // About 60 frames per second; the software backend has no vertical sync to wait for.

@@ -108,6 +108,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_ERASEBKGND:
       return 1;  // every frame covers the whole window
+    case WM_SETCURSOR:
+      if (LOWORD(lp) == HTCLIENT) {  // inside the window: the interface's pointer
+        SetCursor(static_cast<HCURSOR>(w->pointer()));
+        return TRUE;
+      }
+      break;
     default:
       break;
   }
@@ -118,6 +124,59 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 Window::~Window() {
   if (hwnd_) DestroyWindow(static_cast<HWND>(hwnd_));
+  for (auto& entry : pointers_)
+    if (entry.second) DestroyIcon(static_cast<HICON>(entry.second));
+}
+
+void Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY) {
+  HCURSOR made = nullptr;
+  // An image seen before (images live as long as the run): its pointer is kept, so an animated
+  // pointer does not make a new one for every step.
+  const std::pair<const uint32_t*, int> key{pixels, hotX * 4096 + hotY};
+  auto known = pointers_.find(key);
+  if (known != pointers_.end()) {
+    made = static_cast<HCURSOR>(known->second);
+  } else if (pixels && width > 0 && height > 0) {
+    // A colour bitmap with its own transparency, and the mask the system asks for beside it.
+    BITMAPV5HEADER bi{};
+    bi.bV5Size = sizeof bi;
+    bi.bV5Width = width;
+    bi.bV5Height = -height;  // rows from the top
+    bi.bV5Planes = 1;
+    bi.bV5BitCount = 32;
+    bi.bV5Compression = BI_BITFIELDS;
+    bi.bV5RedMask = 0x00ff0000, bi.bV5GreenMask = 0x0000ff00, bi.bV5BlueMask = 0x000000ff, bi.bV5AlphaMask = 0xff000000;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, dc);
+    HBITMAP mask = CreateBitmap(width, height, 1, 1, nullptr);
+    if (color && bits && mask) {
+      std::memcpy(bits, pixels, static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+      ICONINFO info{};
+      info.fIcon = FALSE;
+      info.xHotspot = static_cast<DWORD>(hotX < 0 ? 0 : hotX >= width ? width - 1 : hotX);
+      info.yHotspot = static_cast<DWORD>(hotY < 0 ? 0 : hotY >= height ? height - 1 : hotY);
+      info.hbmMask = mask;
+      info.hbmColor = color;
+      made = static_cast<HCURSOR>(CreateIconIndirect(&info));
+    }
+    if (color) DeleteObject(color);
+    if (mask) DeleteObject(mask);
+  }
+  if (pixels && known == pointers_.end()) pointers_[key] = made;
+  pointer_ = made;
+  // Shown at once when the mouse is over the window (the system asks again only when it moves).
+  POINT p;
+  if (hwnd_ && GetCursorPos(&p) && WindowFromPoint(p) == static_cast<HWND>(hwnd_) &&
+      SendMessageW(static_cast<HWND>(hwnd_), WM_NCHITTEST, 0, MAKELPARAM(p.x, p.y)) == HTCLIENT)
+    SetCursor(static_cast<HCURSOR>(pointer()));
+}
+
+void Window::HidePointer(bool hidden) {
+  if (hidden == pointerHidden_) return;
+  pointerHidden_ = hidden;
+  SetPointer(nullptr, 0, 0, 0, 0);  // (drops the image: the host sets it again when it is shown)
 }
 
 bool Window::Create(int width, int height, const char* title, Callbacks cb) {
@@ -141,6 +200,7 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb) {
                               rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
+  arrow_ = wc.hCursor;
   SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
   ShowWindow(hwnd, SW_SHOW);
   return true;
@@ -179,6 +239,8 @@ Window::~Window() {}
 bool Window::Create(int, int, const char*, Callbacks) { return false; }
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
+void Window::SetPointer(const uint32_t*, int, int, int, int) {}
+void Window::HidePointer(bool) {}
 }  // namespace moho::ui
 
 #endif

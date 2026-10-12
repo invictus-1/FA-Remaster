@@ -345,6 +345,33 @@ int l_Cursor_Show(lua_State* L) {
   return 0;
 }
 
+}  // namespace
+
+bool CurrentCursor(lua_State* L, std::string* texture, int* hotX, int* hotY, bool* hidden) {
+  lua_pushstring(L, kCursorKey);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  Cursor* c = lua_istable(L, -1) ? dynamic_cast<Cursor*>(GetObject(L, lua_gettop(L))) : nullptr;
+  lua_pop(L, 1);
+  if (!c) return false;
+  *texture = c->texture, *hotX = c->hotX, *hotY = c->hotY, *hidden = c->hidden;
+  return true;
+}
+
+namespace {
+
+// moho64ui_Cursor() -> texture, hotX, hotY, hidden: the mouse pointer as it stands (for tests)
+int l_CursorNow(lua_State* L) {
+  std::string texture;
+  int hotX = 0, hotY = 0;
+  bool hidden = false;
+  if (!CurrentCursor(L, &texture, &hotX, &hotY, &hidden)) return 0;
+  lua_pushstring(L, texture.c_str());
+  lua_pushnumber(L, hotX);
+  lua_pushnumber(L, hotY);
+  lua_pushboolean(L, hidden);
+  return 4;
+}
+
 // --- draggers: an object the scripts make and post while a mouse button is held ---
 
 class Dragger : public ScriptObject {};
@@ -394,6 +421,7 @@ void RegisterFrameBindings(lua_State* L) {
   SetMethod(L, "CMauiCursor", "ResetToDefault", l_Cursor_ResetToDefault);
   SetMethod(L, "CMauiCursor", "Hide", l_Cursor_Hide);
   SetMethod(L, "CMauiCursor", "Show", l_Cursor_Show);
+  lua_register(L, "moho64ui_Cursor", l_CursorNow);
 
   SetGlobal(L, "InternalCreateDragger", l_InternalCreateDragger);
   SetMethod(L, "CMauiLuaDragger", "Destroy", l_Dragger_Destroy);

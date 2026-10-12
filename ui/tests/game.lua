@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1400 --log out.log
+--            --frames 1450 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -205,6 +205,15 @@ local function run()
     s = view:Project(there)
     moho64ui_MouseMove(s.x, s.y)
     check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+    -- the mouse pointer: the world view's script chooses it every frame while the mouse is over it
+    WaitSeconds(0.2)
+    local pointer = moho64ui_Cursor()
+    check("the pointer over an enemy is the attack pointer", string.find(pointer or "", "/cursors/attack", 1, true) ~= nil, true)
+    moho64ui_MouseMove(s.x - 300, s.y)
+    WaitSeconds(0.2)
+    pointer = moho64ui_Cursor()
+    check("over the ground it is the plain one again", string.find(pointer or "", "/cursors/attack", 1, true), nil)
+    moho64ui_MouseMove(s.x, s.y)
     moho64ui_MouseButton("Right", true, s.x, s.y)
     moho64ui_MouseButton("Right", false, s.x, s.y)
     WaitSeconds(1)

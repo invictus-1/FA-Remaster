@@ -274,7 +274,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   simulation's sound events and a place in the world), ducking the other sounds under a voice,
   the volume curves and effects of the sound files, fading as the files set it. How the
   original's own sound manager limits and fades is not read from its code.
-- Not real yet: the other console commands, the game's cursor, movies, render passes,
+- The mouse pointer is the game's own: the texture the scripts set (`GetCursor():SetTexture`,
+  animated ones step through their pictures) is made into the system's pointer in a live window,
+  so it moves with the mouse whatever the frame rate is; a screenshot of a run without a window
+  has it drawn in. The world view the mouse is over runs its script's `OnUpdateCursor` every
+  frame, as the original's frame function does, and the script picks the pointer by the command
+  mode and by what a right click would order (attack over an enemy, and so on).
+- Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and

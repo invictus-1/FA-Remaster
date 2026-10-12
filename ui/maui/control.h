@@ -235,6 +235,9 @@ class WeakControl {
 
 void RegisterControlBindings(lua_State* L);        // control.cpp: moho.control_methods, groups, plain controls
 void RegisterFrameBindings(lua_State* L);          // ui_manager.cpp: frames, cursor, focus, capture
+// The mouse pointer as the scripts last set it (ui_manager.cpp): its texture and hot spot, and
+// whether it is hidden. False when the scripts have set no cursor yet.
+bool CurrentCursor(lua_State* L, std::string* texture, int* hotX, int* hotY, bool* hidden);
 void RegisterBitmapBindings(lua_State* L);         // bitmap.cpp
 void RegisterTextBindings(lua_State* L);           // text.cpp
 void RegisterScrollbarBindings(lua_State* L);      // scrollbar.cpp

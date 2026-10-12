@@ -2,14 +2,17 @@
 // mouse. This is the simplest thing that opens; the renderer track's window and device take its
 // place later. Windows only for now.
 #pragma once
+#include <cstdint>
 #include <functional>
+#include <map>
+#include <utility>
 
 #include "draw/draw.h"
 #include "maui/input.h"
 
 namespace moho::ui {
 
-class Window {
+class Window {  // (the host's one window)
  public:
   struct Callbacks {
     std::function<void(const UiEvent&)> mouseMove;
@@ -26,6 +29,12 @@ class Window {
   bool Pump();
   // Show the target's pixels.
   void Present(const SoftwareTarget& target);
+  // The mouse pointer over the window: an image (0xAARRGGBB, rows from the top) with its hot
+  // spot, shown by the system itself so that it moves with the mouse whatever the frame rate is.
+  // No image: the system's arrow. Hidden: none.
+  void SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY);
+  void HidePointer(bool hidden);
+  void* pointer() const { return pointerHidden_ ? nullptr : pointer_ ? pointer_ : arrow_; }
 
   Callbacks callbacks;
   bool closed = false;
@@ -33,6 +42,10 @@ class Window {
 
  private:
   void* hwnd_ = nullptr;
+  void* pointer_ = nullptr;  // the image's cursor
+  std::map<std::pair<const uint32_t*, int>, void*> pointers_;  // those made so far, by image and hot spot; ours to destroy
+  void* arrow_ = nullptr;    // the system's
+  bool pointerHidden_ = false;
 };
 
 class UserState;

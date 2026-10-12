@@ -797,7 +797,15 @@ uint32_t UnitUnderMouse(lua_State* L) {
 }
 
 void AdvanceCameras(lua_State* L, float seconds) {
-  for (auto& entry : UserState::From(L)->cameras) AdvanceCamera(L, static_cast<Camera*>(entry.second.get()), seconds);
+  UserState* user = UserState::From(L);
+  for (auto& entry : user->cameras) AdvanceCamera(L, static_cast<Camera*>(entry.second.get()), seconds);
+  // The world view the mouse is over has its script choose the mouse pointer, every frame (the
+  // original's frame function, FA exe 0x871140: "OnUpdateCursor").
+  if (user->gameInterface) {
+    UiManager& ui = user->ui();
+    WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));
+    if (v && !v->dead()) v->RunScript(L, "OnUpdateCursor");
+  }
 }
 
 void RegisterWorldViewBindings(lua_State* L) {

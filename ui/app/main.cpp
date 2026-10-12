@@ -317,6 +317,19 @@ int main(int argc, char** argv) {
     ui::SoftwareTarget target(width, height);
     shown->ui().Render(shown->L(), target, 0);
     if (!game) session.DrawStatus(target);
+    {  // the mouse pointer where the mouse is (a live window leaves it to the system)
+      std::string texture;
+      int hotX = 0, hotY = 0;
+      bool hidden = false;
+      if (ui::CurrentCursor(shown->L(), &texture, &hotX, &hotY, &hidden) && !hidden && !texture.empty()) {
+        const ui::Image& image = ui::LoadTexture(&vfs, texture);
+        if (image.valid()) {
+          float x = shown->ui().mouseX - static_cast<float>(hotX), y = shown->ui().mouseY - static_cast<float>(hotY);
+          target.DrawImage(image, {0, 0, static_cast<float>(image.width), static_cast<float>(image.height)},
+                           {x, y, x + static_cast<float>(image.width), y + static_cast<float>(image.height)}, 0xffffffffu);
+        }
+      }
+    }
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
   }
