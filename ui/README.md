@@ -285,8 +285,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   call (their stubs are named in the log).
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
-  (`WorldScene::borders`). Drawing it is asked of the renderer track (`ui/REQUESTS.md`, renderer
-  3, with how the original places and scales the mesh); until then the map lies on empty ground.
+  (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the
+  farthest zoom the map lies in its machinery with the frame around it, as in the original.
 - `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
   blueprint, health, economy, what it works on, its army and colour; the fields as the original
   writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by

@@ -202,4 +202,9 @@ is welcome. One thing that touches it: the camera can now go as far out as the o
 map takes 1 / 1.4 of the view from the farthest zoom), so what lies around the map is on screen
 at every game's start.
 
-**Status:** asked 2026-10-12.
+**Status:** done by the renderer track the same day (`docs/render-answers.md`, "ui 3":
+`WorldPicture::SetBorders`) and in use: from the farthest zoom the map lies in its machinery with
+the frame around it, as on the screenshot of the original. Thank you. Seen beside that
+screenshot: the original's machinery is darker and more even (its tops are not lit brighter
+than the rest); yours to judge with the looks. The time of day and the weather you offer there
+are noted: a game option for them is the interface's to add when Chris wants it.

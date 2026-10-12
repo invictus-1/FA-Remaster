@@ -21,17 +21,6 @@
 
 namespace moho::ui {
 
-// The map's border goes to the picture through WorldPicture::SetBorders (the renderer's answer to
-// request 3). The call is made only where the renderer's code has it: the answer reaches main with
-// the next merge of the renderer's branch, and this file builds before and after it. (Once it is
-// there for good, call it plainly.)
-template <class P>
-auto SetBordersIfThere(P& picture, const std::vector<std::string>& borders, int) -> decltype(picture.SetBorders(borders), void()) {
-  picture.SetBorders(borders);
-}
-template <class P>
-void SetBordersIfThere(P&, const std::vector<std::string>&, long) {}
-
 // The renderer's world picture behind the interface's WorldSource.
 struct GameSession::Picture : WorldSource {
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -81,7 +70,7 @@ struct GameSession::Picture : WorldSource {
       lines.push_back(o);
     }
     picture.SetShapes(lines, {});
-    SetBordersIfThere(picture, scene.borders, 0);
+    picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
