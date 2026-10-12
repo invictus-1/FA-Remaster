@@ -48,7 +48,7 @@ class Win32Window final : public Window {
     if (hwnd_) DestroyWindow(hwnd_);
   }
 
-  bool Init(const char* title, int width, int height, std::string* error, bool background) {
+  bool Init(const char* title, int width, int height, std::string* error, bool background, bool hidden) {
     // per-monitor DPI: the client area is in real pixels, Windows does not stretch the picture
     if (HMODULE user = GetModuleHandleW(L"user32.dll")) {
       using Fn = BOOL(WINAPI*)(HANDLE);
@@ -72,7 +72,7 @@ class Win32Window final : public Window {
       if (error) *error = "CreateWindowEx failed";
       return false;
     }
-    ShowWindow(hwnd_, background ? SW_SHOWNOACTIVATE : SW_SHOW);
+    if (!hidden) ShowWindow(hwnd_, background ? SW_SHOWNOACTIVATE : SW_SHOW);
     RECT c;
     GetClientRect(hwnd_, &c);
     width_ = c.right;
@@ -185,9 +185,9 @@ class Win32Window final : public Window {
 
 }  // namespace
 
-std::unique_ptr<Window> Window::Create(const char* title, int width, int height, std::string* error, bool background) {
+std::unique_ptr<Window> Window::Create(const char* title, int width, int height, std::string* error, bool background, bool hidden) {
   auto w = std::make_unique<Win32Window>();
-  if (!w->Init(title, width, height, error, background)) return nullptr;
+  if (!w->Init(title, width, height, error, background, hidden)) return nullptr;
   return w;
 }
 

@@ -1,0 +1,65 @@
+// Frames from a simulation someone else runs: after every beat the one who holds the simulation
+// (the viewer's own simulation thread, or the interface's host) says Beat, and what the renderer
+// needs of that beat is copied out; whoever draws asks for the frame at a moment between two beats
+// and gets them blended. Beat may be called on one thread and the rest on another.
+#pragma once
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "frame.h"
+#include "linalg.h"
+
+namespace moho {
+class Sim;
+class Vfs;
+}  // namespace moho
+
+namespace render {
+
+class SimFrames {
+ public:
+  SimFrames();
+  ~SimFrames();
+
+  // Once the game has started: reads the armies' colours as the game shows them (the game's list
+  // of colours is /lua/gamecolors.lua in `vfs`). On the simulation's thread.
+  void ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs);
+  // After every beat, on the simulation's thread. For the scripts' effects the simulation must have
+  // had `collectEffects` set from before its first beat.
+  void Beat(const moho::Sim& sim);
+
+  uint32_t FirstTick() const;  // of the beats kept
+  uint32_t LastTick() const;   // the newest beat
+  // The frame at a moment given in ticks, blended between the two beats around it (clamped to the
+  // beats kept). False while there is no beat yet.
+  bool FrameAt(double tick, Frame* out);
+  // The effect events of the beats since the last call, in order (each says its beat).
+  void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
+  // Each army's colour, by army index from 0; empty until ReadArmies.
+  std::vector<Vec3> ArmyColors() const;
+
+ private:
+  struct Beat_ {
+    uint32_t tick = 0;
+    std::vector<FrameUnit> units;  // in entity-id order
+    std::vector<FrameBone> bones;  // what the units' spans point into
+    std::vector<FrameProjectile> projectiles;
+    std::vector<FrameBeam> beams;
+  };
+  struct Scratch;  // the simulation's view structures, kept out of this header
+  std::unique_ptr<Scratch> scratch_;
+
+  mutable std::mutex mutex_;
+  std::deque<Beat_> beats_;            // the newest few
+  std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint and FrameProjectile::blueprint
+                                       // (0: unknown); only grows
+  std::vector<Vec3> armyColors_;
+  std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
+  std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
+};
+
+}  // namespace render

@@ -28,7 +28,9 @@ struct InputEvent {
 class Window {
  public:
   // `background`: shown without taking the keyboard from the program in use (automatic runs).
-  static std::unique_ptr<Window> Create(const char* title, int width, int height, std::string* error, bool background = false);
+  // `hidden`: never shown at all (a device needs a window even when its pictures are only read back).
+  static std::unique_ptr<Window> Create(const char* title, int width, int height, std::string* error, bool background = false,
+                                        bool hidden = false);
   virtual ~Window() = default;
 
   // Handles the pending messages and fills `events`. False once the window was closed.
