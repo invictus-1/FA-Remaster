@@ -27,6 +27,15 @@ struct ScmVertex {
   uint8_t bones[4];  // only the first is used: each vertex follows one bone
 };
 
+// A bone of a model's skeleton, standing at rest: where it is in the model's own space (model
+// units), composed down the chain of parents the way the simulation composes it.
+struct ModelBone {
+  std::string name;
+  int parent = -1;
+  Vec3 position;
+  Quat rotation;
+};
+
 struct ModelLod {
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
@@ -53,6 +62,10 @@ struct Model {
   std::vector<ModelLod> lods;  // finest first
   float scale = 1;             // model units to world units (the blueprint's Display.UniformScale)
   Vec3 boundsMin, boundsMax;   // of the finest level, in model units
+  // The skeleton of the mesh the blueprint names: the one the simulation poses. The vertices of
+  // every level follow these bones by index (a level whose file lists its bones in another order,
+  // or a remastered mesh tried out in the blueprint's place, is matched to them by name at loading).
+  std::vector<ModelBone> bones;
 };
 
 class ModelCache {

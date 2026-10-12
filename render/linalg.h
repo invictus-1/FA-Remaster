@@ -44,6 +44,12 @@ inline Vec3 Rotate(const Quat& q, Vec3 v) {
   Vec3 t = 2.0f * Cross(u, v);
   return v + q.w * t + Cross(u, t);
 }
+// The rotation b, then the rotation a.
+inline Quat Mul(const Quat& a, const Quat& b) {
+  return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+          a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+inline Quat Conjugate(const Quat& q) { return {-q.x, -q.y, -q.z, q.w}; }  // the rotation back, for a unit quaternion
 // Shortest-path normalised lerp: enough between two consecutive simulation ticks.
 inline Quat Nlerp(const Quat& a, Quat b, float t) {
   if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0) b = {-b.x, -b.y, -b.z, -b.w};

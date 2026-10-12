@@ -59,7 +59,8 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--rec <recording>] [--display <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
-               [--crowd <unit id>=<count>] [--detail 1] [--msaa 4] [--ao 1]
+               [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
+               [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
@@ -168,9 +169,17 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   of detail by distance, drawn instanced; the map's props (trees, rocks) with their own models.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
 - The live frame, first form: the viewer runs the simulation itself (`--sim`) and fills the same
-  frame from the engine's `sim/sim_view.h` after every beat. Units and army colours only: bone
-  poses and projectiles are asked for (REQUESTS.md, 6). Replays and new games (`--session`); no
-  orders yet.
+  frame from the engine's `sim/sim_view.h` after every beat. Units and army colours only so far.
+  Replays and new games (`--session`); no orders yet.
+- Bones. A model's vertices each follow one bone; a model whose bones are away from rest is drawn
+  posed (the bones' matrices go to the shaders in one buffer per pass; a model at rest costs what
+  it did). The frame carries, per unit, the bones that are not at rest at two beats, and the
+  picture shows the pose between them. The skeleton is that of the mesh the blueprint names, the
+  one the simulation poses; other levels of detail and a previewed remastered mesh are matched to
+  it by bone name. `--turn <bone>` turns a bone of placed units round and round (`--bones` lists
+  the names), to look at moving parts without a game. Filling the frame from the simulation
+  (bone poses, projectiles, beams: REQUESTS.md, 6) follows as soon as the engine's side is on
+  `main`; the frame and the drawing are ready for it.
 - Strategic icons (from step 6, brought forward: without them armies cannot be seen from far away).
   A unit farther from the camera than its blueprint's `Display.Mesh.IconFadeInZoom` shows the symbol
   its blueprint names (`StrategicIconName`), coloured as the original's shader colours it and
@@ -200,8 +209,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 
 Known gaps, to be closed in the steps they belong to:
 
-- Units: every model is drawn in its rest pose (a recording has no bone poses: turrets do not turn,
-  legs do not walk) and with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
+- Units: in a game or a recording every model still stands in its rest pose (turrets do not turn,
+  legs do not walk: a recording has no bone poses, and the simulation's are not read yet). All are
+  drawn with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
   highlights). A unit under construction is only darker. With a recording, army colours are a fixed
   list (the running simulation gives the game's own).
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.

@@ -4,12 +4,24 @@
 #include <string>
 #include <vector>
 
+#include "frame.h"
 #include "gfx.h"
 #include "models.h"
 #include "textures.h"
 #include "view.h"
 
 namespace render {
+
+// A unit's pose between two beats: its bones that are not at rest at the beat shown and at the one
+// after it (each list in rising bone order), and how far the moment drawn is from one to the other.
+// The lists must stay where they are until the frame's last Draw.
+struct Pose {
+  const FrameBone* now = nullptr;
+  size_t nowCount = 0;
+  const FrameBone* next = nullptr;
+  size_t nextCount = 0;
+  float blend = 0;
+};
 
 class MeshRenderer {
  public:
@@ -20,7 +32,8 @@ class MeshRenderer {
   void Begin();
   // `world` places the model's own units in the world (so it includes the model's scale).
   // `teamColor` is rgb in 0..1; `built` is the fraction complete (1 for a finished unit).
-  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1);
+  // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
+  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr);
   // Draws the list as `view` sees it: into the scene, or (`shadowPass`) into a shadow map, where
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
   void Draw(const View& view, gfx::Texture environment, bool shadowPass = false);
@@ -41,29 +54,41 @@ class MeshRenderer {
   int drawnInstances = 0;
   int drawnTriangles = 0;
   int shadowTriangles = 0;        // summed over the shadow passes since the last scene pass
+  int posedInstances = 0;         // of the drawn ones: those with bones away from rest
 
  private:
   struct Instance {
     float row0[4], row1[4], row2[4];  // the top three rows of the world matrix
     float color[4];                   // team colour, w: fraction complete
+    float bones[4];                   // x: where its bones' rows begin in the pass's bone buffer, -1: at rest
   };
   struct Entry {
     const Model* model;
     Vec3 centre;   // of its bounding sphere, in the world
     float radius;
     Instance instance;
+    Pose pose;
+    bool posed = false;
+    int rows = -1;  // where its bones' rows begin in rows_, once a pass has needed them
   };
   struct Item {
     const ModelLod* lod;
-    const Instance* instance;
+    Entry* entry;
+    float bones;  // Instance::bones.x for this pass
   };
+  void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, shadow_;
+  gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;
   std::vector<Item> items_;
   std::vector<Instance> batch_;
+  // Bones: for every posed model a pass has seen, three rows of four numbers per bone: the matrix
+  // that takes a vertex of the model at rest to where the bone has carried it (in the model's own
+  // space). rows_ holds them for the frame; each pass hands the ones it draws to the shaders.
+  std::vector<float> rows_, passRows_;
 };
 
 }  // namespace render

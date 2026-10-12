@@ -2,9 +2,9 @@
 // sees of the simulation. Today a frame is filled from a tick recording; later the running simulation
 // fills the same structure and hands over two consecutive ticks, which the renderer blends for display.
 //
-// This is the first version: what a recording holds. It will grow (bone poses, projectiles, props that
-// changed, beams, emitters, decals, shields, what each army can see); additions go at the end of the
-// structs so both sides can be updated one after the other.
+// A recording gives the units only; the running simulation also gives bone poses, projectiles and
+// beams. It will grow further (props that changed, emitters, decals, shields, what each army can
+// see); additions go at the end of the structs so both sides can be updated one after the other.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -23,20 +23,58 @@ struct FrameUnit {
   uint64_t states = 0;                  // the original's unit-state bits
   bool dead = false;
   bool beingBuilt = false;
+  // Its bones that do not stand at rest, as spans of Frame::bones: at this frame's beat, and at the
+  // beat after it (the picture shows the pose Frame::blend of the way from one to the other).
+  // Both empty: the unit stands in its model's rest pose.
+  uint32_t firstBone = 0, boneCount = 0;
+  uint32_t nextFirstBone = 0, nextBoneCount = 0;
 
   uint32_t Army() const { return (id >> 20) & 0xff; }
+};
+
+// One bone of a unit that is not at rest: its place and rotation in the unit's own frame, composed
+// down the chain of bones from the unit's origin; positions in world units (the model's scale applied).
+struct FrameBone {
+  uint32_t bone = 0;  // index in the skeleton of the unit's mesh; a unit's bones are listed in rising order
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};
+};
+
+struct FrameProjectile {
+  uint32_t id = 0;
+  uint32_t blueprint = 0;  // index into Frame::blueprints (a projectile's is its file's path)
+  uint32_t army = 0;       // from 0; 0xff: none
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};
+  float velocity[3] = {0, 0, 0};  // world units per second
+};
+
+// A weapon's beam while it is on.
+struct FrameBeam {
+  uint32_t id = 0;
+  uint32_t army = 0;
+  float start[3] = {0, 0, 0};
+  float end[3] = {0, 0, 0};
 };
 
 struct Frame {
   uint32_t tick = 0;                    // ten ticks per second of game time
   std::vector<FrameUnit> units;         // in entity-id order
-  // Blueprint ids ("uel0201") the units refer to. The list only grows, so an index stays valid.
+  std::vector<FrameBone> bones;         // what the units' spans point into
+  float blend = 0;                      // how far the moment shown is from this beat to the next, 0..1
+  std::vector<FrameProjectile> projectiles;  // moved on to the moment shown
+  std::vector<FrameBeam> beams;
+  // Blueprint ids the units ("uel0201") and projectiles ("/projectiles/.../x_proj.bp") refer to.
+  // The list only grows, so an index stays valid.
   const std::vector<std::string>* blueprints = nullptr;
 };
 
 // Fills `out` with the units of beat `a`, each moved the share `t` (0..1) of the way to where the
 // same unit is in the next beat `b` (both in entity-id order; `b` may be null). A unit that is not
 // in `b`, or is another unit there (ids are reused), stays as it is in `a`.
-void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out);
+// Bones: a unit keeps `a`'s span and gets, as its next span, `b`'s moved by `nextBoneOffset` (where
+// the caller puts `b`'s bones in the frame's list behind `a`'s); without `b`, its own span again.
+void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out,
+                uint32_t nextBoneOffset = 0);
 
 }  // namespace render
