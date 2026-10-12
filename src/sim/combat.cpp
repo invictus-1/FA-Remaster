@@ -369,6 +369,20 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   }
   return NaNVec();
 }
+
+// The same point for code that runs inside the motion pass (flight, a projectile's steering). An entity's new
+// transform is committed at the beat's end, so a target WITHOUT an aim bone - the centre of its collision
+// primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
+// has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
+Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
+  if (t.type == 1 && t.aimBone < 0)
+    if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
+      if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
+        return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
+      return e->shapePos;
+    }
+  return TargetPos(sim, t, false);
+}
 }  // namespace combat
 
 Vec3 EntityVelocity(const Entity* e) {

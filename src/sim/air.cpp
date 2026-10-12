@@ -35,6 +35,7 @@ namespace combat {
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
+Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
 }  // namespace combat
 
@@ -45,16 +46,10 @@ constexpr int kLand = 1, kSeabed = 2, kSub = 4, kWater = 8, kAir = 0x10;
 constexpr float kGravityY = -4.9f;
 
 // A target's point as the flight code sees it. The flight code runs inside the motion pass, and an entity's new
-// transform is committed only at the beat's end: a target WITHOUT an aim bone is the entity's position, which
-// for the original is still where the beat began even when the target has already taken its step. (With an aim
-// bone the point comes from the pose, which moved with the target's own step.)
-Vec3 TargetPosNow(Sim& sim, const AiTarget& t) {
-  Vec3 p = combat::TargetPos(sim, t, false);
-  if (const Entity* te = combat::TargetEntity(sim, t); te && te->shapeHeld && t.aimBone < 0)
-    p = {p.x - te->position.x + te->shapePos.x, p.y - te->position.y + te->shapePos.y,
-         p.z - te->position.z + te->shapePos.z};
-  return p;
-}
+// transform is committed only at the beat's end: a target WITHOUT an aim bone (the centre of its collision
+// primitive) stands and lies, for the original, as the beat began even when the target has already taken its
+// step. (With an aim bone the point comes from the pose, which moved with the target's own step.)
+Vec3 TargetPosNow(Sim& sim, const AiTarget& t) { return combat::TargetPosBeatStart(sim, t); }
 
 int LayerBits(const std::string& l) {
   if (l == "Land") return kLand;
