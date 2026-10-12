@@ -1,0 +1,306 @@
+#include "ribbons.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+#include "bp_reader.h"
+#include "core/vfs.h"
+
+namespace render {
+namespace {
+
+constexpr float kTick = 0.1f;  // seconds: blueprint times are taken to be simulation ticks (GUESS)
+
+// The band's texture (repeating) times a vertex colour times a ramp. A beam has no ramp (white); a
+// trail's ramp is read along its age, and beyond its age it is not there.
+const char kShader[] = R"hlsl(
+cbuffer RibbonSet : register(b1) {
+  float4 options;  // x: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied),
+                   // y: brightness of what glows in the modern look, z: 1 = a trail (it ends where its age does),
+                   // w: 1 = adds its colour as it is, whatever its alpha (the original's beams)
+};
+Texture2D bandTexture : register(t0);
+Texture2D rampTexture : register(t1);
+
+struct VIn {
+  float3 position : POSITION;
+  float2 uv : TEXCOORD0;
+  float2 rampUv : TEXCOORD1;
+  float4 color : COLOR;
+};
+struct VOut {
+  float4 position : SV_Position;
+  float2 uv : TEXCOORD0;
+  float2 rampUv : TEXCOORD1;
+  float4 color : COLOR;
+};
+VOut VS(VIn i) {
+  VOut o;
+  o.position = mul(viewProj, float4(i.position, 1));
+  o.uv = i.uv;
+  o.rampUv = i.rampUv;
+  o.color = i.color;
+  return o;
+}
+float4 PS(VOut i) : SV_Target {
+  if (options.z > 0.5 && (i.rampUv.x <= 0 || i.rampUv.x >= 1)) discard;
+  float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
+  if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
+  if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y : 1);
+  if (options.w > 0.5) c.a = 1;  // (the device's adding blend weighs by alpha)
+  return c;
+}
+)hlsl";
+
+float Number(const BpValue& v, float fallback) { return static_cast<float>(v.NumberOr(fallback)); }
+
+uint32_t Pack(const float c[4]) {
+  auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f + 0.5f); };
+  return byte(c[3]) << 24 | byte(c[2]) << 16 | byte(c[1]) << 8 | byte(c[0]);
+}
+
+// The game's blend mode numbers (0 alpha, 1 modulate inverse, 2 modulate 2x inverse, 3 add,
+// 4 premultiplied) as this file's kinds.
+int BlendKind(int mode) { return mode == 1 ? 1 : (mode == 2 || mode == 3) ? 2 : mode == 4 ? 3 : 0; }
+
+}  // namespace
+
+bool Ribbons::Init(std::string* error) {
+  std::string source = std::string(kViewShaderBlock) + kShader;
+  gfx::PipelineDesc pd;
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0},
+              {"TEXCOORD", 0, gfx::AttrType::Float2, 12},
+              {"TEXCOORD", 1, gfx::AttrType::Float2, 20},
+              {"COLOR", 0, gfx::AttrType::UByte4N, 28}};
+  pd.stride = sizeof(Vertex);
+  pd.cull = gfx::Cull::None;
+  pd.depthWrite = false;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  const struct {
+    const char* name;
+    gfx::Blend blend;
+  } kinds[4] = {{"bands, alpha", gfx::Blend::Alpha},
+                {"bands, darkening", gfx::Blend::InverseModulate},
+                {"bands, adding", gfx::Blend::Additive},
+                {"bands, premultiplied", gfx::Blend::Premultiplied}};
+  for (int i = 0; i < 4; ++i) {
+    pd.name = kinds[i].name;
+    pd.blend = kinds[i].blend;
+    pipelines_[i] = device_->CreatePipeline(pd, error);
+    if (!pipelines_[i]) return false;
+  }
+  gfx::BufferDesc bd;
+  bd.stride = sizeof(Vertex);
+  bd.dynamic = true;
+  buffer_ = device_->CreateBuffer(bd);
+  plain_.ok = true;
+  plain_.texture = plain_.ramp = textures_->White();
+  // a soft-edged band of the game's own, where there is one
+  const char* soft = "/textures/particles/beam_white_01.dds";
+  if (vfs_->Exists(soft)) plain_.texture = textures_->Get(soft, textures_->White());
+  return true;
+}
+
+// GUESSES in the reading of the two kinds of blueprint: colours are x, y, z, w = red, green, blue,
+// alpha; Thickness and Size are half the band's width; a beam without Blendmode adds; a trail's
+// TrailLength is how long a place stays, in ticks; UShift and VShift slide the texture per tick,
+// v running along the band; RepeatRate is repeats of the texture per world unit.
+const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
+  const std::string key = moho::Vfs::Normalize(path);
+  auto known = kinds_.find(key);
+  if (known != kinds_.end()) return known->second.get();
+  Kind* kind = kinds_.emplace(key, std::make_unique<Kind>()).first->second.get();
+  auto text = vfs_->ReadFile(key);
+  BpValue v;
+  if (!text || !ReadBlueprintFile(*text, &v)) {
+    fprintf(stderr, "render: beam or trail %s: %s\n", key.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
+    return kind;
+  }
+  kind->ramp = textures_->White();
+  if (v["RepeatTexture"].kind == BpValue::String) {  // a trail
+    kind->trail = true;
+    kind->texture = textures_->Get(v["RepeatTexture"].StringOr(std::string()), textures_->White());
+    kind->ramp = textures_->Get(v["RampTexture"].StringOr(std::string()), textures_->White());
+    kind->blend = BlendKind(static_cast<int>(Number(v["BlendMode"], 3)));
+    kind->halfWidth = Number(v["Size"], 0.1f);
+    kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);
+    kind->repeatRate = Number(v["TextureRepeatRate"], 1);
+  } else {
+    kind->texture = textures_->Get(v["TextureName"].StringOr(std::string()), textures_->White());
+    kind->blend = BlendKind(static_cast<int>(Number(v["Blendmode"], 3)));
+    kind->halfWidth = Number(v["Thickness"], 0.05f);
+    kind->length = Number(v["Length"], 1);
+    kind->repeatRate = Number(v["RepeatRate"], 0);
+    const struct {
+      const char* name;
+      float* to;
+    } colors[2] = {{"StartColor", kind->startColor}, {"EndColor", kind->endColor}};
+    for (const auto& c : colors) {
+      const BpValue& color = v[c.name];
+      if (!color.IsTable()) continue;
+      c.to[0] = Number(color["x"], 1);
+      c.to[1] = Number(color["y"], 1);
+      c.to[2] = Number(color["z"], 1);
+      c.to[3] = Number(color["w"], 1);
+    }
+  }
+  kind->uShift = Number(v["UShift"], 0) / kTick;
+  kind->vShift = Number(v["VShift"], 0) / kTick;
+  kind->ok = true;
+  return kind;
+}
+
+bool Ribbons::Beam(const std::string& blueprint, Vec3 start, Vec3 end) {
+  const Kind* kind = Blueprint(blueprint);
+  if (!kind->ok || kind->trail) return false;
+  beams_.push_back({kind, start, end, {1, 1, 1}, kind->halfWidth});
+  return true;
+}
+
+bool Ribbons::BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction) {
+  const Kind* kind = Blueprint(blueprint);
+  if (!kind->ok || kind->trail) return false;
+  beams_.push_back({kind, start, start + direction * kind->length, {1, 1, 1}, kind->halfWidth});
+  return true;
+}
+
+void Ribbons::PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width) { beams_.push_back({&plain_, start, end, color, width * 0.5f}); }
+
+uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position) {
+  const Kind* kind = Blueprint(blueprint);
+  if (!kind->ok || !kind->trail) return 0;
+  Trail t;
+  t.id = nextId_++;
+  t.kind = kind;
+  t.head = position;
+  t.started = now_;
+  t.points.push_back({position, now_});
+  trails_.push_back(std::move(t));
+  return trails_.back().id;
+}
+
+void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {
+  for (Trail& t : trails_)
+    if (t.id == trail && !t.stopped) {
+      t.head = position;
+      // a new place once the emitter has moved a little (a third of the band's width, at least a twentieth of a second apart)
+      const TrailPoint& last = t.points.back();
+      if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_});
+    }
+}
+
+void Ribbons::StopTrail(uint32_t trail) {
+  for (Trail& t : trails_)
+    if (t.id == trail) t.stopped = true;
+}
+
+void Ribbons::Update(double now) {
+  now_ = now;
+  for (Trail& t : trails_) {
+    const double oldest = now - static_cast<double>(t.kind->life);
+    // keep one place older than the trail's life, so the band's far end runs out smoothly
+    size_t drop = 0;
+    while (drop + 1 < t.points.size() && t.points[drop + 1].born < oldest) ++drop;
+    t.points.erase(t.points.begin(), t.points.begin() + static_cast<std::ptrdiff_t>(drop));
+  }
+  trails_.erase(std::remove_if(trails_.begin(), trails_.end(),
+                               [&](const Trail& t) { return t.stopped && (t.points.empty() || now - t.points.back().born > static_cast<double>(t.kind->life)); }),
+                trails_.end());
+}
+
+Ribbons::Batch* Ribbons::BatchFor(const Kind* kind) {
+  for (Batch& b : batches_)
+    if (b.kind == kind) return &b;
+  batches_.push_back({kind, {}});
+  return &batches_.back();
+}
+
+void Ribbons::Band(Batch* batch, const View& view, Vec3 a, Vec3 b, float halfA, float halfB, const float uvA[2], const float uvB[2],
+                   const float rampA[2], const float rampB[2], uint32_t colorA, uint32_t colorB) {
+  const Vec3 along = b - a;
+  if (Dot(along, along) < 1e-10f) return;
+  // sideways: square to the band and to the line of sight
+  Vec3 sideA = Cross(along, view.eye - a), sideB = Cross(along, view.eye - b);
+  if (Dot(sideA, sideA) < 1e-12f || Dot(sideB, sideB) < 1e-12f) return;  // seen end on
+  sideA = Normalize(sideA) * halfA;
+  sideB = Normalize(sideB) * halfB;
+  auto vertex = [&](Vec3 p, float u, const float uv[2], const float ramp[2], uint32_t color) {
+    // u runs across the band: the texture's u, and for a trail the ramp's v
+    return Vertex{{p.x, p.y, p.z}, {u + uv[0], uv[1]}, {ramp[0], batch->kind->trail ? u : ramp[1]}, color};
+  };
+  const Vertex a0 = vertex(a - sideA, 0, uvA, rampA, colorA), a1 = vertex(a + sideA, 1, uvA, rampA, colorA);
+  const Vertex b0 = vertex(b - sideB, 0, uvB, rampB, colorB), b1 = vertex(b + sideB, 1, uvB, rampB, colorB);
+  for (const Vertex& v : {a0, a1, b1, a0, b1, b0}) batch->vertices.push_back(v);
+}
+
+void Ribbons::Draw(const View& view) {
+  for (Batch& b : batches_) b.vertices.clear();
+  drawnBands = 0;
+  const float now = static_cast<float>(now_);
+  const float noRamp[2] = {0.5f, 0.5f};
+  for (const PendingBeam& beam : beams_) {
+    const Kind& k = *beam.kind;
+    const float length = Length(beam.end - beam.start);
+    // v runs along the beam and slides with time
+    const float v0 = k.vShift * now, v1 = v0 + (k.repeatRate > 0 ? length * k.repeatRate : 1.0f);
+    const float uvA[2] = {k.uShift * now, v0}, uvB[2] = {k.uShift * now, v1};
+    uint32_t colorA, colorB;
+    if (&k == &plain_) {
+      const float c[4] = {beam.color.x, beam.color.y, beam.color.z, 1};
+      colorA = colorB = Pack(c);
+    } else {
+      colorA = Pack(k.startColor) | 0xff000000u;  // (many beams give alpha 0: they add their colour as it is)
+      colorB = Pack(k.endColor) | 0xff000000u;
+    }
+    Band(BatchFor(&k), view, beam.start, beam.end, beam.halfWidth, beam.halfWidth, uvA, uvB, noRamp, noRamp, colorA, colorB);
+    ++drawnBands;
+  }
+  beams_.clear();
+  for (const Trail& t : trails_) {
+    const Kind& k = *t.kind;
+    Batch* batch = BatchFor(&k);
+    // from the oldest place to the newest, then on to where the emitter is now
+    auto place = [&](size_t i, Vec3* p, float* age, float* v) {
+      const bool head = i == t.points.size();
+      const double born = head ? now_ : t.points[i].born;
+      *p = head ? t.head : t.points[i].position;
+      *age = static_cast<float>((now_ - born) / static_cast<double>(k.life));
+      *v = static_cast<float>(born - t.started) / kTick * k.repeatRate;  // the texture is laid down as the emitter goes
+    };
+    const size_t count = t.points.size() + (t.stopped ? 0 : 1);
+    for (size_t i = 0; i + 1 < count; ++i) {
+      Vec3 a, b;
+      float ageA, ageB, vA, vB;
+      place(i, &a, &ageA, &vA);
+      place(i + 1, &b, &ageB, &vB);
+      const float uvA[2] = {0, vA}, uvB[2] = {0, vB};
+      const float rampA[2] = {ageA, 0}, rampB[2] = {ageB, 0};
+      Band(batch, view, a, b, k.halfWidth, k.halfWidth, uvA, uvB, rampA, rampB, 0xffffffffu, 0xffffffffu);
+    }
+    if (count > 1) ++drawnBands;
+  }
+
+  all_.clear();
+  for (const Batch& b : batches_) all_.insert(all_.end(), b.vertices.begin(), b.vertices.end());
+  if (all_.empty()) return;
+  device_->UpdateBuffer(buffer_, all_.data(), static_cast<uint32_t>(all_.size() * sizeof(Vertex)));
+  uint32_t first = 0;
+  for (const Batch& b : batches_) {
+    if (b.vertices.empty()) continue;
+    device_->SetPipeline(pipelines_[b.kind->blend]);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? 1.0f : 0.0f,
+                              !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
+    device_->SetConstants(1, options, sizeof options);
+    device_->SetTexture(0, b.kind->texture);
+    device_->SetTexture(1, b.kind->ramp);
+    device_->SetVertexBuffer(buffer_);
+    device_->Draw(static_cast<uint32_t>(b.vertices.size()), first);
+    first += static_cast<uint32_t>(b.vertices.size());
+  }
+}
+
+}  // namespace render

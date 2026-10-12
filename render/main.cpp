@@ -28,6 +28,8 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
+// --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
+//           trail (behind a point circling it); a name such as phalanx_munition_beam_01, or a path
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
 //           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
@@ -76,6 +78,7 @@
 #include "post.h"
 #include "live_sim.h"
 #include "recording.h"
+#include "ribbons.h"
 #include "scmap.h"
 #include "shadows.h"
 #include "terrain.h"
@@ -115,6 +118,7 @@ struct Options {
   std::string turn;    // --turn: the bone placed units turn
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
+  std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -164,6 +168,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--crowd") o->crowd.push_back(v);
     else if (a == "--turn") o->turn = v;
     else if (a == "--emit") o->emit.push_back(v);
+    else if (a == "--beam") o->beam.push_back(v);
+    else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
     else if (a == "--msaa") o->msaa = atoi(v);
@@ -351,6 +357,11 @@ int main(int argc, char** argv) {
   meshes.detail = opt.detail;
   Particles particles(device.get(), &vfs, &textures);
   if (!particles.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  Ribbons ribbons(device.get(), &vfs, &textures);
+  if (!ribbons.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
@@ -544,6 +555,8 @@ int main(int argc, char** argv) {
   const Vec3 emitAt = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
   std::vector<uint32_t> emitHandles(opt.emit.size(), 0);
   float emitStarted = -1e9f;
+  auto effectPath = [](const std::string& name) { return name.find('/') != std::string::npos ? name : "/effects/emitters/" + name + "_emit.bp"; };
+  std::vector<uint32_t> trailHandles(opt.trail.size(), 0);
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
@@ -689,12 +702,23 @@ int main(int argc, char** argv) {
         emitStarted = time;
         for (size_t i = 0; i < opt.emit.size(); ++i) {
           const std::string& name = opt.emit[i];
-          const std::string path = name.find('/') != std::string::npos ? name : "/effects/emitters/" + name + "_emit.bp";
-          emitHandles[i] = particles.Start(path, {emitAt.x, groundHeight(emitAt.x, emitAt.z) + 0.25f * opt.emitScale, emitAt.z}, Quat{}, opt.emitScale);
+          emitHandles[i] = particles.Start(effectPath(name), {emitAt.x, groundHeight(emitAt.x, emitAt.z) + 0.25f * opt.emitScale, emitAt.z}, Quat{}, opt.emitScale);
         }
       }
     }
     particles.Update(static_cast<double>(time));
+    ribbons.Update(static_cast<double>(time));
+    if (!opt.beam.empty() || !opt.trail.empty()) {  // --beam, --trail
+      const Vec3 base{emitAt.x, groundHeight(emitAt.x, emitAt.z) + 1, emitAt.z};
+      for (size_t i = 0; i < opt.beam.size(); ++i)
+        ribbons.Beam(effectPath(opt.beam[i]), base + Vec3{0, static_cast<float>(i) * 0.6f, 0}, base + Vec3{8, static_cast<float>(i) * 0.6f, 0});
+      for (size_t i = 0; i < opt.trail.size(); ++i) {
+        const float angle = time * 2, radius = 3 + static_cast<float>(i);
+        const Vec3 at = base + Vec3{std::cos(angle) * radius, 0, std::sin(angle) * radius};
+        if (!trailHandles[i]) trailHandles[i] = ribbons.StartTrail(effectPath(opt.trail[i]), at);
+        ribbons.MoveTrail(trailHandles[i], at);
+      }
+    }
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
     meshes.Begin();
@@ -781,7 +805,6 @@ int main(int argc, char** argv) {
       }
     }
     if (havePlay) {
-      auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
       // projectiles: those with a model as that model; the others are effects in the game, which
       // are not written yet: a bright stroke along the flight stands in, so that fire can be seen
       for (const FrameProjectile& p : frame.projectiles) {
@@ -795,13 +818,13 @@ int main(int argc, char** argv) {
           meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
         } else {
           const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
-          draw.Line(position - velocity * 0.06f, position, 0xffc8f4ffu);
+          ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
         }
       }
       // beams: a line in a lightened army colour, until the beam effects are written
       for (const FrameBeam& b : frame.beams) {
         const Vec3 c = armyColors[b.army % armyColors.size()] * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
-        draw.Line({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, 0xff000000u | byte(c.z) << 16 | byte(c.y) << 8 | byte(c.x));
+        ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
       }
     }
     {  // the bones of posed models, once for all the frame's passes
@@ -836,7 +859,8 @@ int main(int argc, char** argv) {
       DrawTestScene(draw);
       draw.Flush(view);
     }
-    particles.Draw(view);  // over everything solid and the water, by the scene's depth
+    ribbons.Draw(view);    // beams and trails, then particles: over everything solid and the water, by the scene's depth
+    particles.Draw(view);
     post.Present(view);
     if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 

@@ -7,7 +7,21 @@ Newest first.
 State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
 3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted,
 6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 answered
-(white for everything that is not a unit; that is what the renderer draws), 8 and 9 new.
+(white for everything that is not a unit; that is what the renderer draws), 8, 9 and 10 new.
+
+## 10. Questions: beams and trails, as 9 for emitters (2026-10-12, when 8 and 9 are done)
+
+The renderer now draws `BeamBlueprint`s and `TrailEmitterBlueprint`s (`render/ribbons.cpp`), again
+on guesses where the game's files do not say. To confirm or refute, any subset:
+
+1. Colours `{x, y, z, w}`: red, green, blue, alpha? Many beams give `w = 0` and blend by adding.
+2. `Thickness` (beams) and `Size` (trails): half the band's width or all of it?
+3. A beam's `Length`: used when the beam hangs on one entity (negative: backwards along it?); what
+   is 2000? `Lifetime` of a beam: ticks or seconds, and what ends?
+4. `UShift`, `VShift`, `RepeatRate`: per tick; which texture axis runs along the beam? (Guess: v.)
+5. A beam without `Blendmode`: which mode? (Guess: 3, add.)
+6. Trails: `TrailLength` as the time a place of the trail stays, in ticks? How often does the
+   original add a place (every tick, every frame)? `TextureRepeatRate`: per tick or per world unit?
 
 ## 9. Questions: how the original turns an EmitterBlueprint into particles (2026-10-12)
 
