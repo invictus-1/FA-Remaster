@@ -406,7 +406,11 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       o.ax[1] = s.ax[1];
       o.ax[2] = s.ax[2];
       o.h = s.half;
-      depth = ObbDepth(box, o);
+      // the primitive's own test (0x4ff260 -> BoxBox 0x474830, the one the props use): the depth along the
+      // shallowest FACE axis; when the shallowest of the fifteen is an edge-to-edge axis it reports depth 0, and
+      // DoCollisionsFor skips a hit below 0.001: two hulls crossing corner to corner do not push each other
+      Vec3 n;
+      if (!BoxBoxSat(o, box, &n, &depth)) depth = 0;
     } else if (s.type == ShapeType::Sphere) {
       depth = ObbSphereDepth(box, s.c, s.r);
     }
