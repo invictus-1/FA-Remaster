@@ -2,7 +2,7 @@
 //  - the sun's shadow (cascaded shadow maps),
 //  - the original game's light formula,
 //  - the modern one: physically based (metalness / roughness), sun plus sky light from the map's
-//    sky cube, plus the small lights near the surface (lights.h), in linear colour with values
+//    sky cube or from the computed sky (sky.h), plus the small lights near the surface (lights.h), in linear colour with values
 //    beyond 1 kept for the last pass to map to the screen.
 // A shader computes its surface (colour, normal, material) and asks one of the two for the result,
 // by the `look` value of the View block.
@@ -112,8 +112,14 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // the sky: its blurriest level lights the surface from all sides, a sharper level is mirrored
   float3 R = reflect(-V, N);
   float levels = 8;
-  float3 skyDiffuse = ToLinear(environmentSky.SampleLevel(samplerLinear, N, levels).rgb);
-  float3 skySpecular = ToLinear(environmentSky.SampleLevel(samplerLinear, R, roughness * levels).rgb);
+  float3 skyDiffuse, skySpecular;
+  [branch] if (skyZenith.w > 0.5) {  // the computed sky (sky.h)
+    skyDiffuse = SkyAmbient(N);
+    skySpecular = lerp(ComputedSky(R), SkyAmbient(R), saturate(roughness * 1.5));
+  } else {
+    skyDiffuse = ToLinear(environmentSky.SampleLevel(samplerLinear, N, levels).rgb);
+    skySpecular = ToLinear(environmentSky.SampleLevel(samplerLinear, R, roughness * levels).rgb);
+  }
   float3 fill = ToLinear(shadowFill) * 0.5;
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
   // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)

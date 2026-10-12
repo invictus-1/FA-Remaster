@@ -42,6 +42,15 @@ struct ViewConstants {
   // row of the lights' buffer where the lights themselves begin.
   float lightGrid[4];
   float lightGridSize[4];
+  // The computed sky (sky.h). Zenith and horizon: the sky's light overhead and at the horizon,
+  // linear; zenith's w is 1 when the sky is computed at all (0: the map's sky pictures and sun are
+  // what lights), horizon's w how much it is night. Glow: the light around the sun or moon; its w
+  // is how bright the day is (for what has no lighting of its own). Body: toward the sun, w 1 when
+  // the light that falls is the moon's.
+  float skyZenith[4];
+  float skyHorizon[4];
+  float skyGlow[4];
+  float skyBody[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -64,6 +73,10 @@ cbuffer View : register(b0) {
   float4 cascadeTexel;
   float4 lightGrid;       // the small lights' grid: corner x, z; 1 / square size; 1 = there are lights
   float4 lightGridSize;   // squares across, down; the row where the lights begin
+  float4 skyZenith;       // the computed sky (sky.h): rgb overhead; w: 1 = computed, 0 = the map's own
+  float4 skyHorizon;      // rgb at the horizon; w: how much it is night
+  float4 skyGlow;         // rgb around the sun or moon; w: how bright the day is
+  float4 skyBody;         // toward the sun; w: 1 = the moon's light falls
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -71,6 +84,20 @@ SamplerState samplerPointClamp : register(s2);
 SamplerState samplerLinear : register(s3);       // trilinear, wrap
 SamplerState samplerPoint : register(s4);        // point, wrap
 SamplerComparisonState samplerShadow : register(s5);
+
+// The computed sky's light from a direction (without the sun's and the moon's own disc).
+float3 ComputedSky(float3 d) {
+  float3 c = lerp(skyHorizon.rgb, skyZenith.rgb, pow(saturate(d.y), 0.5));
+  float3 body = skyBody.w > 0.5 ? -skyBody.xyz : skyBody.xyz;
+  float s = saturate(dot(d, body));
+  float s2 = s * s, s4 = s2 * s2, s16 = s4 * s4 * s4 * s4;
+  c += skyGlow.rgb * ((s4 * s * 0.25 + s16 * s16 * s16 * 0.6) * lerp(1, 0.35, saturate(d.y)));
+  return lerp(c, skyHorizon.rgb * 0.3, saturate(-d.y * 5));  // below the horizon: the ground far away
+}
+// What of it reaches a surface that faces that way, from all sides.
+float3 SkyAmbient(float3 n) {
+  return lerp(skyHorizon.rgb * 0.3, skyZenith.rgb * 0.8 + skyHorizon.rgb * 0.2, saturate(n.y * 0.5 + 0.5));
+}
 )hlsl";
 
 struct View {

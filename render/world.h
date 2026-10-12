@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "sky.h"
 #include "camera.h"
 #include "debug_draw.h"
 #include "decals.h"
@@ -120,6 +121,9 @@ class World {
   Look look = Look::Modern;
   bool shadowsOn = true, iconsOn = true;
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;  // the modern look's strengths
+  // The time of day, in hours (0..24; 6 sunrise, 12 noon, 18 sunset): the modern look's light is
+  // then the computed sky's (sky.h). Negative: the map's own light, as the original has it.
+  float timeOfDay = -1;
   std::string hide;  // kinds of effect left out: any of "particles", "bands", "decals"
 
   // --- the parts, for hosts that add to a frame or read its numbers ---
@@ -138,6 +142,7 @@ class World {
   DebugDraw draw;
   AmbientOcclusion ao;
   Post post;
+  Sky skyDraw;  // the computed sky behind everything
   Shadows shadows;
   View view;       // this frame's
   Camera camera;   // this frame's
