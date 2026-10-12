@@ -1264,18 +1264,27 @@ void Sim::Tick() {
   AnimTick(*this);
   gridDirty_ = true;
   // the units' own beat: economy events, regeneration or decay, consumption and production
+  // The entity stage runs its tasks in creation order, units, collision beams and projectiles alike. A collision
+  // beam is made with its weapon, so it comes after its owner and before every unit made later: a beam that kills
+  // a younger unit does so BEFORE that unit's own beat (the victim then takes no resources that beat), one that
+  // kills an older unit after it. Beams therefore go in between the units' beats, by creation handle; all of them
+  // are older than the shells in flight, which follow.
   {
     const std::vector<Unit*> order = MotionOrder();  // (part of Unit::MotionTick in the original)
-    for (size_t i = 0; i < order.size(); ++i)
+    const std::vector<CollisionBeam*> bs = beams;
+    size_t bi = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+      while (bi < bs.size() && bs[bi]->handle < order[i]->handle) BeamTick(*this, bs[bi++]);
       if (!order[i]->destroyQueued) UnitEconomyTick(*this, order[i]);
+    }
+    g_prof.Lap(5);
+    while (bi < bs.size()) BeamTick(*this, bs[bi++]);
   }
-  g_prof.Lap(5);
-  // Projectiles and beams move after every task stage (Sim::AdvanceBeat runs the three task
-  // stages first), so a shot moves in the beat it was fired, and Lua sees the move next beat.
+  g_prof.Lap(7);
+  // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
+  // moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
   g_prof.Lap(6);
-  BeamsTick(*this);
-  g_prof.Lap(7);
   ReconBeat(*this);  // army (tick % armies) updates its blips
   {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's

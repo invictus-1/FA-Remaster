@@ -537,23 +537,26 @@ int l_IsCollisionBeam(lua_State* L) {
 
 }  // namespace
 
-void BeamsTick(Sim& sim) {
+// CollisionBeamEntity::MotionTick 0x6735c0 for one beam
+void BeamTick(Sim& sim, CollisionBeam* b) {
   lua_State* L = sim.L();
-  std::vector<CollisionBeam*> beams = sim.beams;
-  for (CollisionBeam* b : beams) {
-    if (b->destroyQueued || !b->HasLuaObject()) continue;
-    UnitWeapon* w = b->weapon;
-    if (!w || !w->HasLuaObject() || !w->unit || w->unit->destroyQueued) continue;
-    Quat q;
-    b->position = BeamMuzzle(b, &q);
-    b->orientation = q;
-    if (!b->enabled) continue;
-    int old = b->counter++;
-    if (old >= b->interval) {
-      BeamCheck(sim, L, b);
-      b->counter = 0;
-    }
+  if (b->destroyQueued || !b->HasLuaObject()) return;
+  UnitWeapon* w = b->weapon;
+  if (!w || !w->HasLuaObject() || !w->unit || w->unit->destroyQueued) return;
+  Quat q;
+  b->position = BeamMuzzle(b, &q);
+  b->orientation = q;
+  if (!b->enabled) return;
+  int old = b->counter++;
+  if (old >= b->interval) {
+    BeamCheck(sim, L, b);
+    b->counter = 0;
   }
+}
+
+void BeamsTick(Sim& sim) {
+  std::vector<CollisionBeam*> beams = sim.beams;
+  for (CollisionBeam* b : beams) BeamTick(sim, b);
 }
 
 void RegisterDamageBindings(lua_State* L) {

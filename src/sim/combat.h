@@ -203,6 +203,7 @@ void PoseAdvance(Unit* u);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
 void ProjectilesTick(Sim& sim);
 void BeamsTick(Sim& sim);
+void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat
 void WeaponsTick(Sim& sim);
 // A unit leaves the world.
 void ReleaseUnitCombat(Sim& sim, Unit* u);
