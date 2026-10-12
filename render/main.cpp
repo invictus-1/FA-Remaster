@@ -25,6 +25,7 @@
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
 // --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
 // --crowd <unit id>=<count>  a square block of that unit, to measure what armies cost
+// --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
 // --detail  the models' quality setting: 1 full, 0.5 for a slower card, a huge value forces the finest level
@@ -37,7 +38,7 @@
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
-// Keys: W A S D or the arrows move, L switches the look, H the shadows, F12 saves a screenshot,
+// Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
 // V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
 #include <chrono>
@@ -60,6 +61,7 @@
 #include "frame.h"
 #include "gfx.h"
 #include "ground.h"
+#include "icons.h"
 #include "linalg.h"
 #include "mesh_renderer.h"
 #include "models.h"
@@ -87,7 +89,8 @@ const Vec3 kArmyColors[8] = {{0.26f, 0.43f, 0.93f}, {0.91f, 0.04f, 0.04f}, {0.38
 
 struct Options {
   int width = 1600, height = 900;
-  bool vsync = true, debug = false, paused = false, shadows = true;
+  bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
+  float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
   int frames = 0;
   float lodPixels = 0;
@@ -118,6 +121,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--debug") o->debug = true;
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
+    else if (a == "--noicons") o->icons = false;
     else if (!(v = value())) return false;
     else if (a == "--look") {
       if (!strcmp(v, "original")) o->look = Look::Original;
@@ -149,6 +153,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
     else if (a == "--msaa") o->msaa = atoi(v);
     else if (a == "--ao") o->ao = static_cast<float>(atof(v));
+    else if (a == "--icon-scale") o->iconScale = static_cast<float>(atof(v));
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
@@ -329,6 +334,14 @@ int main(int argc, char** argv) {
     return 1;
   }
   meshes.detail = opt.detail;
+  StrategicIcons icons(device.get(), &vfs);
+  if (!icons.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  icons.scale = opt.iconScale;
+  bool iconsOn = opt.icons;
+  std::vector<const StrategicIcons::Kind*> iconKinds;  // by FrameUnit::blueprint; null: not looked up yet
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -434,27 +447,28 @@ int main(int argc, char** argv) {
   struct PlacedUnit {
     const Model* model;
     Vec3 position;
+    const StrategicIcons::Kind* icon;
   };
   std::vector<PlacedUnit> placedUnits;
   float targetLift = 0;  // how far above the ground the camera's target is held
   {
-    auto stand = [&](const Model* model, Vec3 p) {
+    auto stand = [&](const Model* model, Vec3 p, const std::string& id) {
       p.y = haveMap ? map.Height(p.x, p.z) : 0;
       if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
-      placedUnits.push_back({model, p});
+      placedUnits.push_back({model, p, icons.ForBlueprint(models.UnitBlueprintPath(id))});
     };
     Vec3 at = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
     for (const std::string& id : opt.place) {
       const Model* model = models.Unit(id);
       if (!model->ok) continue;
       const float width = (model->boundsMax.x - model->boundsMin.x) * model->scale;
-      stand(model, at);
+      stand(model, at, id);
       // a remastered unit gets the game's own model beside it, in the same light, to compare
       const Model* original = models.Remastered(id) ? models.Unit(id, true) : nullptr;
       if (original && original->ok) {
         const float originalWidth = (original->boundsMax.x - original->boundsMin.x) * original->scale;
         at.x += (width + originalWidth) * 0.5f + std::max(width, originalWidth) * 0.25f;
-        stand(original, at);
+        stand(original, at, id);
         at.x += originalWidth * 1.5f;
       } else {
         at.x += width * 1.5f;
@@ -463,7 +477,8 @@ int main(int argc, char** argv) {
     // --crowd <unit id>=<count>: that many copies in a square block, to measure what many units cost
     for (const std::string& c : opt.crowd) {
       const size_t eq = c.find('=');
-      const Model* model = models.Unit(c.substr(0, eq));
+      const std::string id = c.substr(0, eq);
+      const Model* model = models.Unit(id);
       const int count = eq == std::string::npos ? 100 : atoi(c.c_str() + eq + 1);
       if (!model->ok || count <= 0) continue;
       const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
@@ -471,7 +486,7 @@ int main(int argc, char** argv) {
       const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(count))));
       for (int i = 0; i < count; ++i)
         stand(model, at + Vec3{(static_cast<float>(i % side) - static_cast<float>(side - 1) * 0.5f) * spacing, 0,
-                               (static_cast<float>(i / side) - static_cast<float>(side - 1) * 0.5f) * spacing});
+                               (static_cast<float>(i / side) - static_cast<float>(side - 1) * 0.5f) * spacing}, id);
     }
     // without --cam the camera frames what was placed; --heading and --pitch choose the side
     if (!opt.hasCam && !placedUnits.empty()) {
@@ -541,6 +556,7 @@ int main(int argc, char** argv) {
           if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
           if (e.key == 'H') shadowsOn = !shadowsOn;
+          if (e.key == 'I') iconsOn = !iconsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;
         case InputEvent::MouseDown:
@@ -627,8 +643,12 @@ int main(int argc, char** argv) {
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
     meshes.Begin();
+    icons.Begin(view);
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
-    for (const PlacedUnit& u : placedUnits) meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
+    for (const PlacedUnit& u : placedUnits) {
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
+      icons.Add(u.icon, u.position, kArmyColors[0]);
+    }
     if (haveLive) {
       const LiveSim::State state = live.GetState();
       if (state != LiveSim::State::Loading && !liveReported) {
@@ -664,6 +684,12 @@ int main(int argc, char** argv) {
         const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
         const Vec3 color = armyColors[u.Army() % armyColors.size()];
         const std::string& blueprint = (*frame.blueprints)[u.blueprint];
+        if (!blueprint.empty()) {  // its strategic icon, when it is far enough away
+          if (u.blueprint >= iconKinds.size()) iconKinds.resize(frame.blueprints->size(), nullptr);
+          const StrategicIcons::Kind*& kind = iconKinds[u.blueprint];
+          if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
+          icons.Add(kind, position, color);
+        }
         const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
         if (model && model->ok) {
           meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete);
@@ -700,6 +726,7 @@ int main(int argc, char** argv) {
       draw.Flush(view);
     }
     post.Present(view);
+    if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 
     if (!(automatic && liveBusy)) {  // an automatic run counts its frames from where it was asked to look
       if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
@@ -721,6 +748,7 @@ int main(int argc, char** argv) {
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
+      if (iconsOn) printf("; %d icons", icons.drawn);
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;
