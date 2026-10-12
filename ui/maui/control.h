@@ -215,6 +215,7 @@ void RegisterItemListBindings(lua_State* L);       // itemlist.cpp
 void RegisterEditBindings(lua_State* L);           // edit.cpp
 void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: border, histogram, movie
 void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
+void RegisterMapPreviewBindings(lua_State* L);     // mappreview.cpp
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);

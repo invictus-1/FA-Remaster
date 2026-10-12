@@ -127,6 +127,8 @@ bool DecodeDds(const std::string& d, Image& img) {
 
 }  // namespace
 
+bool DecodeImage(const std::string& data, Image& out) { return DecodeDds(data, out); }
+
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath) {
   static std::map<std::string, Image> cache;
   std::string key = Vfs::Normalize(vpath);
