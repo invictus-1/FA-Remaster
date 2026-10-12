@@ -100,6 +100,7 @@ void SiloTick(Sim& sim, Unit* u);
 // 0x5f9e50; silo: helping a silo build its missile) and the reclaim task (IssueReclaimTask 0x61ef60).
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo);
 BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target);
+void SiloAssist(Sim& sim, Unit* u, const float amount[2]);  // a helper's resources for the missile being built
 bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);  // one more missile: 0 tactical, 1 nuke
 void SiloRelease(Unit* u);
 bool SiloCommand(Sim& sim, Unit* u, const UnitCommand& c);  // true: handled (done at once)

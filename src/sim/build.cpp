@@ -295,6 +295,22 @@ bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
     return false;
   }
   float rate = builder->resourceConsumed;
+  // helping a silo build its missile (helper+0x40, 0x5f5cb6): what the builder's own request was granted this
+  // beat goes to the silo, which turns it into progress; done when the silo no longer builds
+  if (t.silo) {
+    if (!(LiveCommandCaps(L, target) & 0xc000u)) return true;  // RULEUCC_SiloBuildTactical | SiloBuildNuke
+    if (!target->unitStates.count("SiloBuildingAmmo")) return true;
+    if (target->silo) {
+      float amount[2] = {0, 0};
+      if (builder->request) {
+        amount[0] = builder->request->requested[0] * rate;
+        amount[1] = builder->request->requested[1] * rate;
+      }
+      SiloAssist(sim, target, amount);
+      builder->workProgress = target->workProgress;
+    }
+    return false;
+  }
   // assisting an enhancement (the target works on a script work item)
   if (target->unitStates.count("Enhancing")) {
     PushObjectValue(L, target, "WorkProgress");
@@ -2701,6 +2717,7 @@ struct SiloState : public ScriptObject {
   int stage = 0, kind = 0;
   int ticksTotal = 0, ticksLeft = 0;
   float ticks = 1, progress = 0;  // silo+0x44 (beats a missile takes), +0x48 (beats' worth done; a float in FAF)
+  float bank[2] = {0, 0};         // silo+0x3c / +0x40: resources helpers brought that are not spent yet
   float perTick[2] = {0, 0};
   std::shared_ptr<EconRequest> request;
 };
@@ -2789,6 +2806,28 @@ void CallWeaponMethod(Sim& sim, lua_State* L, Unit* u, const char* method, int w
 }
 
 }  // namespace
+
+// CAiSiloBuildImpl vt+0x28 as FAF patched it (0x5cf030 -> 0x12916f7): a helper hands the silo resources; they
+// are banked and spent at once as far as they cover whole shares of the per-beat cost
+void SiloAssist(Sim& sim, Unit* u, const float amount[2]) {
+  (void)sim;
+  SiloState* s = u->silo;
+  if (!s || s->stage == 0) return;
+  s->bank[0] += amount[0];
+  s->bank[1] += amount[1];
+  const float a = s->bank[0] / s->perTick[0], b = s->bank[1] / s->perTick[1];
+  const float frac = a < b ? a : b;  // minss
+  const float left = s->ticks - s->progress;
+  const float use = left > frac ? frac : left;
+  const float e = s->perTick[0] * use, m = s->perTick[1] * use;
+  s->progress += use;
+  u->consumedTick[0] += e;
+  u->consumedTick[1] += m;
+  u->workProgress = s->progress / s->ticks;
+  s->bank[0] -= e;
+  s->bank[1] -= m;
+  if (s->progress >= s->ticks) s->stage = 3;
+}
 
 // The silo builder's "add one" (CAiSiloBuildImpl vt+0x20; the interface's build-missile button sends it as the
 // info pair SiloBuildTactical / SiloBuildNuke = "add"): kind 0 tactical, 1 nuke. False if the unit has no such
