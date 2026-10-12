@@ -395,10 +395,22 @@ bool GetPickupUnitPos(const TransportObj& T, const Unit* cu, int* cx, int* cz) {
 Vec3 GetAttachBonePosition(const TransportObj& T, const Unit* cu) {
   const TransportReservation* r = GetReservedBone(T, cu);
   if (!r) return {};
+  // tu.pos + rotate(tu.quat, the bone's place in the unit's frame): the bone as this beat's POSE has it (a
+  // support commander's drone spot rides on its animated back), carried on the unit's transform of now
+  const Unit* tu = T.owner;
   Vec3 lp;
   Quat lr;
-  BoneLocal(T.owner, r->transportBone, &lp, &lr);
-  return Add(T.owner->position, Rotate(T.owner->orientation, lp));
+  if (r->transportBone >= 0 && tu->skeleton && tu->poseQ.size() == tu->skeleton->bones().size()) {
+    Vec3 wp;
+    Quat wq;
+    BoneWorld(tu, r->transportBone, &wp, &wq);
+    const Vec3 basePos = tu->poseSet ? tu->poseBasePos : tu->position;
+    const Quat baseOri = tu->poseSet ? tu->poseBaseOri : tu->orientation;
+    lp = Rotate(Conj(baseOri), Sub(wp, basePos));
+  } else {
+    BoneLocal(tu, r->transportBone, &lp, &lr);
+  }
+  return Add(tu->position, Rotate(tu->orientation, lp));
 }
 bool GetAttachPosition(const TransportObj& T, const Unit* cu, int* cx, int* cz) {
   if (!GetReservedBone(T, cu)) return false;
@@ -1571,7 +1583,16 @@ Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (
   if (!r) return {};
   Vec3 lp;
   Quat lr;
-  BoneLocal(O.owner, r->transportBone, &lp, &lr);
+  const Unit* tu = O.owner;
+  if (r->transportBone >= 0 && tu->skeleton && tu->poseQ.size() == tu->skeleton->bones().size()) {
+    // the bone's rotation in the unit's frame as this beat's pose has it (see GetAttachBonePosition)
+    Vec3 wp;
+    Quat wq;
+    BoneWorld(tu, r->transportBone, &wp, &wq);
+    lr = ComposeQ(Conj(tu->poseSet ? tu->poseBaseOri : tu->orientation), wq);
+  } else {
+    BoneLocal(tu, r->transportBone, &lp, &lr);
+  }
   Vec3 f = Forward(lr);
   f.y = 0;
   f = Rotate(O.owner->orientation, f);
@@ -2194,8 +2215,7 @@ int TickPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) return kTaskDone;
         const Vec3 v = owner->motion.vel;  // Entity vt+0x3c (inferred: the motion's velocity per beat)
         const Vec3 lead{pos.x + v.x * 10.0f, pos.y + v.y * 10.0f, pos.z + v.z * 10.0f};
-        AirSetGoal(sim, u, lead, sim.tick(), 1, false);  // CUnitMotion 0x6b85e0(target, facing, 1)
-        AirSetFacing(u, facing);
+        AirSetTargetFacing(sim, u, lead, facing, 1);  // CUnitMotion 0x6b85e0(target, facing, 1): the motion itself
         AirSetLandHeight(u, pos.y);
         const float dx = pos.x - u->position.x, dy = pos.y - u->position.y, dz = pos.z - u->position.z;
         if (0.5f > std::sqrt(dx * dx + dy * dy + dz * dz) || u->layer == "Land") {

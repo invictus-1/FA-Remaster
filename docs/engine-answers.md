@@ -3,6 +3,32 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 6: the live frame, bone poses and projectiles — done
+
+In `src/sim/sim_view.h`, beside `UnitViews` and `ArmyViews`, read once per beat after `Tick()`:
+
+- **Bone poses.** `UnitPoses(sim, &list)` gives, in entity-id order, every unit that is not in its rest
+  pose as `{ id, bones }`; `UnitPoseOf(sim, unitId, &bones)` gives one unit's (false: no such unit; an
+  empty list: rest pose). A `BonePose` is `{ bone, position[3], orientation[4] (x, y, z, w) }`: the bone's
+  transform **relative to the unit**, composed down the bone chain from the unit's origin, positions in
+  world units (the mesh's `UniformScale` applied). `bone` is the index in the `.scm` bone list. A bone is
+  listed when its transform in the unit's frame differs from the rest pose, so the children of a turned
+  bone are listed too; a bone not listed stands at rest (rest = the same composition of the `.scm`'s
+  parent-relative positions x scale and rotations). This is the pose the engine's weapons, animations and
+  other manipulators wrote this beat. The unit's own position and orientation are `UnitViews`'.
+- **Projectiles.** `ProjectileViews(sim, &list)`: `id`, `blueprint` (the projectile blueprint's id, a
+  path such as `/projectiles/.../x_proj.bp`), `army` (1-based), `position`, `orientation`, `velocity`
+  (world units per second), in creation order.
+- **Beams.** `BeamViews(sim, &list)`: the collision beams that are on: `id`, `army`, `unit` (the firing
+  unit's entity id), `start` and `end`. `blueprint` is empty today: the collision beam is the invisible
+  thing that deals the damage; the visible beam is an effect the scripts attach to it
+  (`CreateBeamEmitter` / `AttachBeamEntityToEntity`), which the engine records as calls only. Say when
+  you want those effect calls handed over (it is item 5 of render 2, with the build beams).
+
+Checked on the Experimental replay (`moho64 --sim <replay> --ticks 900 --view`): up to 15 posed units
+with 385 bones at one beat, 356 projectiles, 2 beams. Entity ids of projectiles and beams are the
+engine's ids (reused after a quarantine, like units').
+
 ## ui 4: what the in-game interface needs from a running simulation — done (first form)
 
 All four parts exist; `moho64 --session <file> --view [--orders <file>]` exercises them headless.
