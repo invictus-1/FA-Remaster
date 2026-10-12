@@ -946,6 +946,13 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
       bt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
       bt.DestBlend = bt.DestBlendAlpha = D3D12_BLEND_ONE;
       break;
+    case Blend::Multiply:
+      bt.BlendEnable = TRUE;
+      bt.SrcBlend = D3D12_BLEND_ZERO;
+      bt.DestBlend = D3D12_BLEND_SRC_COLOR;
+      bt.SrcBlendAlpha = D3D12_BLEND_ZERO;
+      bt.DestBlendAlpha = D3D12_BLEND_ONE;
+      break;
   }
   pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
   pd.RasterizerState.CullMode = desc.cull == Cull::None ? D3D12_CULL_MODE_NONE
@@ -965,7 +972,8 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     pd.NumRenderTargets = 1;
     pd.RTVFormats[0] = ToDxgi(desc.colorFormat);
   }
-  pd.DSVFormat = kDepthFormat;
+  pd.DSVFormat = desc.depthTarget ? kDepthFormat : DXGI_FORMAT_UNKNOWN;
+  if (!desc.depthTarget) pd.DepthStencilState.DepthEnable = FALSE;
   pd.SampleDesc.Count = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? static_cast<UINT>(desc.samples) : 1;
   pd.RasterizerState.MultisampleEnable = pd.SampleDesc.Count > 1;
 
@@ -1103,9 +1111,9 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   }
   TextureRec* color = Find(pass.color);
   TextureRec* depth = Find(pass.depth);
-  if (!depth || !depth->target || !depth->depth || pass.depthLayer < 0 || pass.depthLayer >= depth->layers ||
-      (pass.color.id && (!color || !color->target || color->depth))) {
-    fprintf(stderr, "render: Direct3D 12: BeginPass needs a depth target, and a colour target or none\n");
+  if ((!color && !depth) || (pass.color.id && (!color || !color->target || color->depth)) ||
+      (pass.depth.id && (!depth || !depth->target || !depth->depth || pass.depthLayer < 0 || pass.depthLayer >= depth->layers))) {
+    fprintf(stderr, "render: Direct3D 12: BeginPass needs a colour target, a depth target, or both\n");
     return;
   }
   // a target that stays in use (the next layer of a shadow map) keeps its state
@@ -1125,12 +1133,13 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   }
   passColor_ = pass.color.id;
   passDepth_ = pass.depth.id;
-  D3D12_CPU_DESCRIPTOR_HANDLE dsv = DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer));
+  D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth ? DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer)) : D3D12_CPU_DESCRIPTOR_HANDLE{};
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = color ? RtvHandle(color->view) : D3D12_CPU_DESCRIPTOR_HANDLE{};
-  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, &dsv);
+  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, depth ? &dsv : nullptr);
   if (color && pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
-  if (pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-  SetViewport(depth->width, depth->height);
+  if (depth && pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+  const TextureRec* sized = depth ? depth : color;
+  SetViewport(sized->width, sized->height);
 }
 
 void D3D12Device::SetPipeline(Pipeline pipeline) {

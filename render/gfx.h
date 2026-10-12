@@ -99,11 +99,11 @@ struct TargetDesc {
   int samples = 1;
 };
 
-// What a pass draws into. Every pass has a depth buffer.
+// What a pass draws into: a colour target, a depth target, or both.
 struct PassDesc {
   bool window = false;    // draw to the window (with the window's own depth buffer); the two below are unused
   Texture color;          // a colour target, or none for a depth-only pass
-  Texture depth;          // a depth target
+  Texture depth;          // a depth target, or none (pipelines drawn then say depthTarget = false)
   int depthLayer = 0;
   bool clearColor = true;
   float clearValue[4] = {0, 0, 0, 0};
@@ -120,7 +120,7 @@ struct VertexAttr {
 
 enum class Topology : uint8_t { Triangles, Lines };
 enum class Cull : uint8_t { None, Back, Front };
-enum class Blend : uint8_t { Opaque, Alpha, Premultiplied, Additive };
+enum class Blend : uint8_t { Opaque, Alpha, Premultiplied, Additive, Multiply };  // Multiply: what is there x what is drawn
 
 struct PipelineDesc {
   const char* name = "";         // for error messages
@@ -142,6 +142,7 @@ struct PipelineDesc {
   Format colorFormat = Format::RGBA8;
   bool depthOnly = false;
   int samples = 1;  // the samples per pixel of the targets it draws into
+  bool depthTarget = true;  // false for a pass that has a colour target only (full-screen work)
 };
 
 struct DeviceDesc {

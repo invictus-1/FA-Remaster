@@ -58,7 +58,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
-               [--crowd <unit id>=<count>] [--detail 1] [--msaa 4]
+               [--crowd <unit id>=<count>] [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
@@ -110,6 +110,7 @@ prints what it reports.
 | `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
 | `shadows.h` | the sun's shadow maps and where they are placed each frame |
 | `post.h` | the scene's own floating-point picture and the last pass that puts it on the window |
+| `ambient_occlusion.h` | darkening of creases and contact, from the picture's depth |
 | `debug_draw.h` | lines and plain boxes: markers and placeholders |
 | `png.h` | screenshots |
 | `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls, playback |
@@ -182,7 +183,10 @@ Known gaps, to be closed in the steps they belong to:
 - No decals, no sky, no ground beyond the map's edge, no projectiles or effects.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
-- The modern look still lacks: ambient occlusion in the picture, bloom, a water of its
+- Ambient occlusion (modern look, `--ao 0..1`, key O) is computed from the picture's depth and
+  multiplied onto the finished lighting, so it dims the sun's direct light too; it is not sorted
+  out per light. Thin things (foliage, antennas) darken a little as a whole.
+- The modern look still lacks: bloom, a water of its
   own (it shows the original's water with converted colours), and sky cubes that are properly
   pre-blurred (their mip levels are plain averages).
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.

@@ -72,6 +72,14 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
   device_->BeginPass(pass);
 }
 
+void Post::ContinueScene() {
+  gfx::PassDesc pass;
+  pass.color = drawn_ ? drawn_ : color_;
+  pass.depth = depth_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+}
+
 void Post::Present(const View& view) {
   if (drawn_) device_->Resolve(drawn_, color_);
   gfx::PassDesc pass;
