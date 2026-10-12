@@ -1492,8 +1492,14 @@ void MotionTick(Sim& sim, Unit* u) {
     AirMotionTick(sim, u);
     return;
   } else {
+    // CUnitMotion::MotionTick 0x6b9eb3..0x6b9f27: a unit in the Immobile state, or a stunned one, takes no step
+    // (0x6ba00d): its spline point is dropped, CalcMoveCommon still runs for what it does to the motion (the
+    // velocity dies away) but the transform it worked on is thrown away, and CalcMoveLand / Hover / Water with
+    // their SnapToGround are not reached. A unit made immobile the moment it is created therefore sits flat, at
+    // the height it was created with, until it is let go.
+    const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
     // UpdateCurrentLayer 0x6b9f64: before the move, on the committed position, while the last move is non-zero
-    if (!u->immobile && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) UpdateLayer(sim, u);
+    if (!held && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) UpdateLayer(sim, u);
     const bool oldFits = StandableAt(sim, b, start.x, start.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {
@@ -1501,6 +1507,24 @@ void MotionTick(Sim& sim, Unit* u) {
       m.prevPosSet = true;
     }
     if ((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
+    if (held) {
+      m.pointNow = false;
+      const Quat q0 = u->orientation;
+      const float bx0 = m.bx, bz0 = m.bz, fx0 = m.fx, fz0 = m.fz;
+      const bool turned = ArrivalTurn(sim, u);
+      common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
+      Coast(u);
+      u->position = start;
+      u->orientation = q0;
+      m.bx = bx0;
+      m.bz = bz0;
+      m.fx = fx0;
+      m.fz = fz0;
+      m.prevPos = start;
+      m.lastMove = {};
+      if (!u->beingBuilt) ProcessCommonMotionState(sim, u, common);
+      return;
+    }
     if (m.pointNow && !m.pushed) {
       // CalcMoveCommon: the unit moves onto the spline point the steering handed out
       const UnitMotion::SplinePoint& q = m.point;
