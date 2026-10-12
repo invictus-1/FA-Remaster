@@ -121,14 +121,22 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original's order (one list ordered by Depth, hidden ones left out); Bitmap and Text follow the
   original's placement (texture stretched over the rectangle without its border ring; the text
   baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
-  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list, edit
-  field, border and scrollbar draw by inference, marked in the source.
+  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list draws
+  as read from the original; the edit field, border and scrollbar draw by inference, marked in
+  the source, and agree with the screenshots where those show them.
 - Checked against the original: a lossless screenshot of the original game's main menu (3840x2160,
   the game's UI scale at 150%) compared with our picture of the same set-up. Every part compared
   (logo, profile name, button labels, button ends, brackets, bottom borders) sits at the same
   pixel position, and the text is the same to the pixel in practice (mean difference per colour
   value 0.02 to 4 of 255). What still differs is what we do not draw yet: the background movie and
   the moving glows behind the buttons.
+- Three more screens checked the same way (same resolution and scale): the options dialog, the
+  lobby and the lobby's Game Options dialog (map list, map picture and info, filters, options
+  column). All parts sit at offset (0, 0); mean difference per colour value 0.3 to 1.6 over the
+  parts that do not depend on the player's settings, 1.6 over the whole lobby screen. That
+  confirms how combo boxes, sliders, tabs, scrollbars and the edit field draw. The item list's
+  drawing is now read from the original (the highlighted row's band is the font's height, one
+  pixel less than the row).
 - Mouse input (`maui/input.*`): an event goes to the control holding the input capture, or to the
   control under the cursor (highest Depth among those not hidden, with hit testing on, containing
   the point), as the original's event table through the script's `HandleEvent`, and up to the

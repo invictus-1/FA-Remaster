@@ -19,33 +19,46 @@ class ItemList : public Control {
     if (!items.empty()) out += ", first \"" + items[0] + "\"";
   }
 
-  // Inferred (the original's 0x799a50 is not read yet): the background colour over the rectangle,
-  // then the shown rows from the top, each a row height apart, the selected row on its own
-  // background; text starts at Left on the row's baseline and is cut at the control's edges.
+  // As the original draws it (FA exe 0x799a50): nothing without a font; the background colour over
+  // the rectangle; the mouse-over row's band, then the selected row's band, each from the row's top
+  // down by the font's height (the external leading stays out, so bands of neighbouring rows do
+  // not touch); then the shown rows' text on their baselines (Top + i * row height + ascent),
+  // limited to the control's width, where the mouse-over colour goes before the selected one.
+  // Checked against a screenshot of the original's map list: same rows, same band. The original
+  // makes its solid colours as 16-bit textures (the band's 7f a8 a4 shows as 7b aa a5 there);
+  // that rounding is left out.
   void Draw(lua_State*, DrawTarget& target) override {
+    if (family.empty()) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    if (!colors[1].empty() && colors[1] != "0") target.FillRect(r, WithAlpha(ParseColor(colors[1]), alpha));
-    if (family.empty()) return;
     FontMetrics m = GetFontMetrics(family, size);
     float row = m.height + m.externalLeading;
     int lines = LinesVisible();
+    auto set = [](const std::string& c) { return !c.empty() && c != "0"; };
+    auto band = [&](int index, const std::string& color) {
+      if (index < this->top || index >= this->top + lines || !set(color)) return;
+      float y = r.y0 + static_cast<float>(index - this->top) * row;
+      target.FillRect(Rect{r.x0, y, r.x1, y + m.height}, WithAlpha(ParseColor(color), alpha));
+    };
+    if (set(colors[1])) target.FillRect(r, WithAlpha(ParseColor(colors[1]), alpha));
+    if (showMouseover) band(mouseover, colors[5]);
+    if (showSelection) band(selection, colors[3]);
     target.SetClip(r);
     for (int i = 0; i < lines && this->top + i < Count(); ++i) {
       int index = this->top + i;
       float y = r.y0 + static_cast<float>(i) * row;
-      bool selected = showSelection && index == selection;
-      if (selected && !colors[3].empty() && colors[3] != "0")
-        target.FillRect(Rect{r.x0, y, r.x1, y + row}, WithAlpha(ParseColor(colors[3]), alpha));
-      const std::string& fg = selected && !colors[2].empty() && colors[2] != "0" ? colors[2] : colors[0];
+      const std::string* fg = &colors[0];
+      if (showMouseover && index == mouseover) { if (set(colors[4])) fg = &colors[4]; }
+      else if (showSelection && index == selection) { if (set(colors[2])) fg = &colors[2]; }
       DrawString(target, family, size, items[static_cast<size_t>(index)], r.x0, y + m.ascent,
-                 WithAlpha(fg.empty() ? 0xffffffffu : ParseColor(fg), alpha));
+                 WithAlpha(fg->empty() ? 0xffffffffu : ParseColor(*fg), alpha));
     }
     target.ClearClip();
   }
 
   std::vector<std::string> items;
   int selection = -1;
+  int mouseover = -1;  // the row under the mouse; set by the list's own mouse handling (not built yet)
   int top = 0;  // the first row shown
   std::string family;
   int size = 0;
