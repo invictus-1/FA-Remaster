@@ -190,21 +190,41 @@ float4 PS(VOut i) : SV_Target {
     float3 shown = ground * (lit * 0.9 + 0.012) * disc * overHorizon;
     c = c * (1 - disc * overHorizon * 0.9) + shown;
   }
-  // the clouds: a layer over the ground (the same that shadows it), bent down toward the horizon
+  // the clouds: a layer over the ground (the same that shadows it), bent down toward the horizon. It
+  // has a thickness, and the view walks up through it in a few steps: a cloud is flat below and
+  // heaped above (the more cloud the layer has at a place, the higher it reaches there), and each
+  // step is lit by how much cloud lies between it and the light, and by the sky more the higher it is.
   [branch] if (skyClouds.x > 0 && d.y > 0.02) {
-    float2 q = cameraPosition.xz + d.xz * (max(150 - cameraPosition.y, 40) / (d.y + 0.1));
-    float field = CloudField(q) + (Cloudy(float3(q * 0.03, skyClouds.w * 3)) - 0.47) * 0.10;
-    float cloud = CloudFrom(field);
-    [branch] if (cloud > 0) {
-      float3 body = skyBody.w > 0.5 ? moon : sun;
-      // thicker toward the light: that side is in the cloud's own shade
-      float toward = CloudField(q + normalize(body.xz + 1e-4) * 45);
-      float shade = saturate((toward - field) * 3.5 + 0.45) * cloud;
-      float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
-      float3 lit = cloudLight.rgb * (1 - 0.8 * shade) * 0.6;
-      float through = pow(saturate(dot(d, body)), 10) * (1 - cloud) * 1.6;  // light coming through thin edges
-      float3 color = around * (0.5 + 0.3 * (1 - cloud)) + lit + cloudLight.rgb * through;
-      c = lerp(c, color, cloud * smoothstep(0.02, 0.15, d.y));
+    float3 body = skyBody.w > 0.5 ? moon : sun;
+    float2 toLight = normalize(body.xz + 1e-4) * 38;
+    float under = max(150 - cameraPosition.y, 40);  // the layer's underside over the eye
+    float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
+    float mark = lerp(0.75, 0.2, skyClouds.x);       // (CloudFrom's)
+    float through = 1;                               // what still comes through from behind
+    float3 gathered = 0;
+    // (each pixel starts its steps at another height, or the steps would show as sheets)
+    float start = Hash(float3(i.position.xy, 1.3));
+    const int steps = 8;
+    for (int k = 0; k < steps; ++k) {
+      float high = (k + start) / steps;
+      float2 q = cameraPosition.xz + d.xz * ((under + 45 * high) / (d.y + 0.1));
+      float field = CloudField(q) + (Cloudy(float3(q * 0.03, high * 2 + skyClouds.w * 3)) - 0.47) * 0.14;
+      float thick = saturate((saturate((field - mark) * 5) - high * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+      [branch] if (thick > 0.01) {
+        float fieldToLight = CloudField(q + toLight);
+        float shade = saturate((saturate((fieldToLight - mark) * 5) - (high + 0.25) * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+        float3 color = around * (0.32 + 0.5 * high) + cloudLight.rgb * (exp(-shade * 2.4) * 0.8);
+        float takes = thick * 0.42;
+        gathered += color * (through * takes);
+        through *= 1 - takes;
+      }
+    }
+    [branch] if (through < 0.995) {
+      float covered = 1 - through;
+      float3 color = gathered / covered;
+      // the light coming through thin edges toward the sun or moon
+      color += cloudLight.rgb * (pow(saturate(dot(d, body)), 10) * through * covered * 2.2);
+      c = lerp(c, color, covered * smoothstep(0.02, 0.15, d.y));
     }
   }
   // thick air: the sky low down is its colour

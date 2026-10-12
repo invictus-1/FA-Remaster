@@ -68,7 +68,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   [branch] if (weather.x + weather.y > 0) {
     float upward = saturate(N.y * 1.5 - 0.2);
     albedo *= 1 - 0.25 * weather.x;
-    roughness = lerp(roughness, 0.45, weather.x * (0.35 + 0.5 * upward));
+    roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
     float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
     metallic *= 1 - lying;

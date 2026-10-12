@@ -273,8 +273,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   is lit by the falling light (white by day, dark against a sunset, silver in moonlight), shaded
   on the side away from it; on the ground the same layer dims the falling light where a cloud
   stands between, so the shadows move over the land with the clouds; and the more clouds, the
-  greyer the sky's light. It is a flat layer, not clouds with a body; the water is not shadowed by
-  it; seen from above the layer (a camera high up) the clouds themselves are not drawn, only
+  greyer the sky's light. In the sky the layer has a thickness the view walks through in eight
+  steps: a cloud is flat below and heaped above, bright where the light reaches it and grey
+  underneath (each pixel starts its steps at another height, which shows as a fine grain at the
+  clouds' edges). On the ground it is still one flat layer; seen from above the layer (a camera high up) the clouds themselves are not drawn, only
   their shadows.
   Weather, first form (`--weather clear|rain|storm|snow|fog`, key R; `World::rain`, `snow`, `fog`,
   each 0..1): rain and snow fall as streaks and flakes in a box of air around what the camera
@@ -329,8 +331,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
   net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
   before. Limits: mirrored things are only those in the picture (nothing from outside it or
-  behind something); the small lights do not light the water; rain makes no rings on it; no
-  wakes behind ships. The original look keeps the original's formula.
+  behind something); the small lights do not light the water; no wakes behind ships. In rain
+  the surface is roughened and drops make rings on it. The original look keeps the original's formula.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader

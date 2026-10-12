@@ -164,6 +164,21 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float crest = saturate(sum.a - 1) * (1 - water.a) * 0.4;
   float3 N = normalize((2 * sum.xyz - 4).xzy);
   N = normalize(lerp(float3(0, 1, 0), N, water.r));
+  // rain: every small square of water has a drop falling into it again and again; its ring runs
+  // outward, tilting the surface, and the whole surface is roughened
+  float rings = 0;
+  [branch] if (falling.x > 0 && distance < 220) {
+    float2 g = xz * 2.2;
+    float2 cell = floor(g);
+    float h = CloudHash(float3(cell, 3.1));
+    float age = frac(time * (0.8 + h) + h * 9.0);
+    float2 from = g - (cell + 0.2 + 0.6 * float2(CloudHash(float3(cell, 6.7)), CloudHash(float3(cell, 11.3))));
+    float away = length(from);
+    float ring = saturate(1 - abs(away - age * 0.5) * 7) * (1 - age) * step(h, 0.08 + 0.3 * falling.x) * saturate(1 - distance / 220);
+    N = normalize(N + float3(from.x, 0, from.y) * (ring * 0.9 / max(away, 0.05)));
+    rings = ring;
+    N = normalize(N + float3(CloudNoise(float3(xz * 9, time * 3)) - 0.5, 0, CloudNoise(float3(xz * 9 + 5, time * 3)) - 0.5) * (0.25 * falling.x));
+  }
 
   // the light on the water
   float shadow = SunShadow(i.world, float3(0, 1, 0)) * CloudShadow(i.world);
@@ -207,6 +222,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float lapping = pow(saturate(sin(deep * 18 - time * 1.2) * 0.5 + 0.5), 6) * shore;
   float foam = saturate(shore * shore * patches * 1.5 + lapping * 0.5 * patches + crest);
   color = lerp(color, light * 0.85, foam);
+  color += light * (rings * 0.04);
 
   // the mirror: the sky, and what the picture shows that way
   float3 R = reflect(toPixel, N);
