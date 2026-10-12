@@ -1,5 +1,5 @@
 // What a host that shows the game reads from a running simulation between beats: the armies, an army's economy
-// totals, the units. Plain values, copied out; the host builds its own tables from them.
+// totals, the units with their bone poses, projectiles and beams. Plain values, copied out; the host builds its own tables from them.
 // (The per-beat Sync table is Sim::TakeSync.)
 #pragma once
 #include <cstdint>
@@ -53,11 +53,50 @@ struct UnitView {
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
 };
 
+// One bone of a unit's pose of this beat, where it differs from the rest pose: the bone's transform RELATIVE
+// TO THE UNIT (down the bone chain from the unit's origin; positions in world units, the mesh's uniform scale
+// applied). A bone below a moved bone is listed too, since its transform in the unit's frame moved with it.
+struct BonePose {
+  int bone = 0;                         // index in the mesh's bone list (.scm order)
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};  // x, y, z, w
+};
+struct UnitPose {
+  uint32_t id = 0;  // the unit's entity id
+  std::vector<BonePose> bones;
+};
+
+struct ProjectileView {
+  uint32_t id = 0;
+  std::string blueprint;  // the projectile blueprint's id (its path)
+  int army = 0;           // 1-based, 0 = none
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};
+  float velocity[3] = {0, 0, 0};  // world units per second
+};
+
+// A weapon's collision beam while it is on: from its muzzle to where it ends this beat.
+struct BeamView {
+  uint32_t id = 0;
+  std::string blueprint;  // the beam blueprint's id, empty if it has none
+  int army = 0;
+  uint32_t unit = 0;      // the firing unit's entity id (0xffffffff if gone)
+  float start[3] = {0, 0, 0};
+  float end[3] = {0, 0, 0};
+};
+
 std::vector<ArmyView> ArmyViews(const Sim& sim);
 // army: 1-based; an army that does not exist gives zeros.
 EconomyTotals EconomyTotalsOf(const Sim& sim, int army);
 // Every unit the simulation holds (those waiting to be destroyed left out), in entity-id order.
 void UnitViews(const Sim& sim, std::vector<UnitView>* out);
+// The posed bones of one unit (false: no such unit; an empty list: it stands in its rest pose), and of every
+// unit that has any, in entity-id order. Read once per beat, after Tick().
+bool UnitPoseOf(const Sim& sim, uint32_t unitId, std::vector<BonePose>* out);
+void UnitPoses(const Sim& sim, std::vector<UnitPose>* out);
+// The projectiles in flight (creation order) and the beams that are on.
+void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
+void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 // (The scenario info for SessionGetScenarioInfo is Sim::sessionScenario: the launched table as bytes.)
 
 }  // namespace moho

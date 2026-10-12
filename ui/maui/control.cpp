@@ -270,16 +270,14 @@ int l_Dump(lua_State* L) {
   return 0;
 }
 
-// Keyboard focus. Inferred: the control that loses the focus gets OnLoseKeyboardFocus(), the one
-// that gets it OnKeyboardFocusChange().
+// Keyboard focus: AcquireKeyboardFocus(blocksKeyDown) (the control's virtual slot 14, 0x787460)
+// and AbandonKeyboardFocus() (slot 15); see UiManager::SetFocus for who hears of it.
 int l_AcquireKeyboardFocus(lua_State* L) {
-  Ui(L).SetFocus(L, CheckControl(L, 1));
+  Ui(L).SetFocus(L, CheckControl(L, 1), lua_toboolean(L, 2) != 0);
   return 0;
 }
 int l_AbandonKeyboardFocus(lua_State* L) {
-  Control* c = CheckControl(L, 1);
-  UiManager& ui = Ui(L);
-  if (ui.focus == c) ui.SetFocus(L, nullptr);
+  CheckControl(L, 1)->AbandonKeyboardFocus(L);
   return 0;
 }
 int l_GetCurrentFocusControl(lua_State* L) {

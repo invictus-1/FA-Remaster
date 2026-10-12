@@ -2700,6 +2700,7 @@ struct SiloState : public ScriptObject {
   std::deque<int> queue;     // kinds waiting to be built
   int stage = 0, kind = 0;
   int ticksTotal = 0, ticksLeft = 0;
+  float ticks = 1, progress = 0;  // silo+0x44 (beats a missile takes), +0x48 (beats' worth done; a float in FAF)
   float perTick[2] = {0, 0};
   std::shared_ptr<EconRequest> request;
 };
@@ -2852,6 +2853,8 @@ void SiloTick(Sim& sim, Unit* u) {
       float ticks = bt * 10.0f / rate;
       s->ticksTotal = std::max(1, static_cast<int>(ticks));
       s->ticksLeft = s->ticksTotal;
+      s->ticks = ticks;
+      s->progress = 0;
       s->perTick[kEnergy] = ticks > 0 ? be * eAdj / ticks : 0;
       s->perTick[kMass] = ticks > 0 ? bm * mAdj / ticks : 0;
       if (s->request) s->request->live = false;
@@ -2868,16 +2871,24 @@ void SiloTick(Sim& sim, Unit* u) {
       return;
     }
     case 2: {
+      // FAF's patch of this state (0x5cf42a -> 0x129163f): what was granted this beat is spent whatever its
+      // size, and the missile advances by the smaller of the two granted shares (minss: the mass share when
+      // either is not a number); the full amounts stay requested. (The unpatched game waited for a full grant.)
       if (s->request) {
-        if (!(s->request->granted[0] >= s->perTick[0] && s->request->granted[1] >= s->perTick[1])) return;
-        u->consumedTick[0] += s->request->granted[0];
-        u->consumedTick[1] += s->request->granted[1];
+        const float gE = s->request->granted[0], gM = s->request->granted[1];
+        const float a = gE / s->perTick[0], b = gM / s->perTick[1];
+        const float frac = a < b ? a : b;
         s->request->granted[0] = s->request->granted[1] = 0;
+        u->consumptionShown[0] = s->perTick[0];
+        u->consumptionShown[1] = s->perTick[1];
+        u->consumedTick[0] += gE;
+        u->consumedTick[1] += gM;
+        s->progress += frac;
+      } else {
+        s->progress += 1.0f;
       }
-      --s->ticksLeft;
-      u->workProgress = 1.0f - static_cast<float>(s->ticksLeft) / static_cast<float>(s->ticksTotal);
-      if (s->ticksLeft > 0) return;
-      s->stage = 3;
+      u->workProgress = s->progress / s->ticks;
+      if (s->progress >= s->ticks) s->stage = 3;
       return;
     }
     case 3: {

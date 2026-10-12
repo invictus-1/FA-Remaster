@@ -23,9 +23,67 @@ UiEvent MouseEvent(WPARAM wp, LPARAM lp) {
   return e;
 }
 
+// A Windows virtual key as the original's key code (the table of its window library; the codes of
+// End, Home, Left, Right and Insert are confirmed by the original's edit field). 0: the key is its
+// own code (letters as capitals, digits).
+int KeyCodeOf(WPARAM vk) {
+  if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) return 326 + static_cast<int>(vk - VK_NUMPAD0);
+  if (vk >= VK_F1 && vk <= VK_F24) return 342 + static_cast<int>(vk - VK_F1);
+  switch (vk) {
+    case VK_CANCEL: return 303;
+    case VK_BACK: return 8;
+    case VK_TAB: return 9;
+    case VK_CLEAR: return 305;
+    case VK_RETURN: return 13;
+    case VK_SHIFT: return 306;
+    case VK_CONTROL: return 308;
+    case VK_MENU: return 309;
+    case VK_PAUSE: return 310;
+    case VK_CAPITAL: return 311;
+    case VK_ESCAPE: return 27;
+    case VK_SPACE: return 32;
+    case VK_PRIOR: return 312;
+    case VK_NEXT: return 313;
+    case VK_END: return 314;
+    case VK_HOME: return 315;
+    case VK_LEFT: return 316;
+    case VK_UP: return 317;
+    case VK_RIGHT: return 318;
+    case VK_DOWN: return 319;
+    case VK_SELECT: return 320;
+    case VK_PRINT: return 321;
+    case VK_EXECUTE: return 322;
+    case VK_SNAPSHOT: return 323;
+    case VK_INSERT: return 324;
+    case VK_DELETE: return 127;
+    case VK_HELP: return 325;
+    case VK_MULTIPLY: return 336;
+    case VK_ADD: return 337;
+    case VK_SEPARATOR: return 338;
+    case VK_SUBTRACT: return 339;
+    case VK_DECIMAL: return 340;
+    case VK_DIVIDE: return 341;
+    case VK_NUMLOCK: return 366;
+    case VK_SCROLL: return 367;
+    default: return 0;
+  }
+}
+
+UiEvent KeyEventOf(EventType type, int code, WPARAM raw) {
+  UiEvent e;
+  e.type = type;
+  e.keyCode = code;
+  e.rawKeyCode = static_cast<int>(raw);
+  e.shift = GetKeyState(VK_SHIFT) < 0;
+  e.ctrl = GetKeyState(VK_CONTROL) < 0;
+  e.alt = GetKeyState(VK_MENU) < 0;
+  return e;
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   Window* w = reinterpret_cast<Window*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   if (!w) return DefWindowProcW(hwnd, msg, wp, lp);
+  auto key = [&](const UiEvent& e) { return w->callbacks.key ? w->callbacks.key(e) : false; };
   auto button = [&](bool left, bool middle, bool right, bool pressed, bool dbl) {
     UiEvent e = MouseEvent(wp, lp);
     e.left = left, e.middle = middle, e.right = right;  // for a button event: the button it is about
@@ -53,11 +111,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};  // screen coordinates for the wheel
       ScreenToClient(hwnd, &p);
       UiEvent e = MouseEvent(GET_KEYSTATE_WPARAM(wp), MAKELPARAM(p.x, p.y));
-      e.wheelDelta = GET_WHEEL_DELTA_WPARAM(wp);
-      e.wheelRotation = e.wheelDelta;
+      e.wheelRotation = GET_WHEEL_DELTA_WPARAM(wp);  // signed: away from the user is positive
+      e.wheelDelta = WHEEL_DELTA;                    // the size of one notch
       if (w->callbacks.mouseWheel) w->callbacks.mouseWheel(e);
       return 0;
     }
+    // Keys as the original's window library hands them on: a key down first; when nothing handled
+    // it, the character follows, made here for the keys without one of their own (arrows, Home,
+    // End, Delete, the function keys) and by Windows (WM_CHAR) for the others; a handled key down
+    // swallows its character.
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+      int code = KeyCodeOf(wp);
+      w->keyDownHandled = key(KeyEventOf(EventType::KeyDown, code ? code : static_cast<int>(wp), wp));
+      bool ownCharacter = code == 127 || (code >= 312 && code <= 325) || (code >= 342 && code <= 365);
+      if (!w->keyDownHandled && ownCharacter) key(KeyEventOf(EventType::Char, code, wp));
+      if (msg == WM_SYSKEYDOWN) break;  // Alt+F4 and the like stay with Windows
+      return 0;
+    }
+    case WM_KEYUP:
+    case WM_SYSKEYUP: {
+      int code = KeyCodeOf(wp);
+      key(KeyEventOf(EventType::KeyUp, code ? code : static_cast<int>(wp), wp));
+      if (msg == WM_SYSKEYUP) break;
+      return 0;
+    }
+    case WM_CHAR:
+      if (w->keyDownHandled) w->keyDownHandled = false;
+      else key(KeyEventOf(EventType::Char, static_cast<int>(wp), wp));
+      return 0;
     case WM_SIZE:
       if (wp != SIZE_MINIMIZED && w->callbacks.resized && LOWORD(lp) > 0 && HIWORD(lp) > 0)
         w->callbacks.resized(LOWORD(lp), HIWORD(lp));
@@ -65,8 +147,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
       return 1;  // every frame covers the whole window
     default:
-      return DefWindowProcW(hwnd, msg, wp, lp);
+      break;
   }
+  return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 }  // namespace

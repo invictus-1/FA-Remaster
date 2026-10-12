@@ -8,6 +8,7 @@
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
 #endif
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -155,6 +156,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   int done = 0, paused = 0;
   sim.collectSync = o.view;
   size_t syncBeats = 0, syncBytes = 0;
+  size_t viewMax[4] = {0, 0, 0, 0};
+  std::string viewSample[3];
   std::string lastSync;
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
   // "<tick> pause", "<tick> resume", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
@@ -226,6 +229,50 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     sim.Tick();
     takeSync();
     ++done;
+    if (o.view) {  // the live frame's extras: the most seen at one beat, and one sample of each
+      std::vector<UnitPose> poses;
+      std::vector<ProjectileView> shots;
+      std::vector<BeamView> beamViews;
+      UnitPoses(sim, &poses);
+      ProjectileViews(sim, &shots);
+      BeamViews(sim, &beamViews);
+      size_t bones = 0;
+      for (const auto& up : poses) bones += up.bones.size();
+      char buf[256];
+      if (poses.size() > viewMax[0]) {
+        viewMax[0] = poses.size();
+        viewMax[1] = bones;
+        const UnitPose& up = poses.front();
+        const BonePose& b = up.bones.front();
+        std::snprintf(buf, sizeof buf, "tick %u unit %#x: %zu bones, bone %d at %.3f %.3f %.3f quat %.3f %.3f %.3f %.3f",
+                      sim.tick(), up.id, up.bones.size(), b.bone, b.position[0], b.position[1], b.position[2],
+                      b.orientation[0], b.orientation[1], b.orientation[2], b.orientation[3]);
+        viewSample[0] = buf;
+      }
+      if (shots.size() > viewMax[2]) {
+        viewMax[2] = shots.size();
+        const ProjectileView& pv = shots.front();
+        std::snprintf(buf, sizeof buf, "tick %u projectile %#x %s army %d at %.1f %.1f %.1f speed %.1f", sim.tick(), pv.id,
+                      pv.blueprint.c_str(), pv.army, pv.position[0], pv.position[1], pv.position[2],
+                      std::sqrt(pv.velocity[0] * pv.velocity[0] + pv.velocity[1] * pv.velocity[1] +
+                                pv.velocity[2] * pv.velocity[2]));
+        viewSample[1] = buf;
+      }
+      if (beamViews.size() > viewMax[3]) {
+        viewMax[3] = beamViews.size();
+        const BeamView& bv = beamViews.front();
+        std::snprintf(buf, sizeof buf, "tick %u beam %#x %s unit %#x from %.1f %.1f %.1f to %.1f %.1f %.1f", sim.tick(),
+                      bv.id, bv.blueprint.c_str(), bv.unit, bv.start[0], bv.start[1], bv.start[2], bv.end[0], bv.end[1],
+                      bv.end[2]);
+        viewSample[2] = buf;
+      }
+    }
+  }
+  if (ok && o.view) {
+    Logf(LogLevel::Info, "view: most at one beat: %zu posed units (%zu bones), %zu projectiles, %zu beams", viewMax[0],
+         viewMax[1], viewMax[2], viewMax[3]);
+    for (const std::string& line : viewSample)
+      if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
   }
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);

@@ -29,10 +29,19 @@ void Frame::Update(lua_State* L, float seconds) {
   Collect(this, all);
   for (Control* c : all) {
     if (c->dead() || !c->needsFrameUpdate) continue;
-    lua_pushnumber(L, seconds);
-    c->RunScript(L, "OnFrame", 1, 0);
+    c->FrameUpdate(L, seconds);
   }
   PurgeDeleted();
+}
+
+void Control::FrameUpdate(lua_State* L, float seconds) {
+  lua_pushnumber(L, seconds);
+  RunScript(L, "OnFrame", 1, 0);
+}
+
+void Control::AbandonKeyboardFocus(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  if (ui.focus == this) ui.SetFocus(L, nullptr);
 }
 
 void Frame::PurgeDeleted() {
@@ -130,15 +139,15 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
 void UiManager::Forget(Control* c) {
   if (focus == c) focus = nullptr;
   if (hover == c) hover = nullptr;
+  if (engineDragger == c) engineDragger = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());
 }
 
-void UiManager::SetFocus(lua_State* L, Control* c) {
-  if (focus == c) return;
+void UiManager::SetFocus(lua_State* L, Control* c, bool blocksKeyDown) {
   Control* old = focus;
   focus = c;
-  if (old) old->RunScript(L, "OnLoseKeyboardFocus");
-  if (c && focus == c) c->RunScript(L, "OnKeyboardFocusChange");
+  focusBlocksKeyDown = blocksKeyDown;
+  if (old && !old->dead()) old->RunScript(L, "OnKeyboardFocusChange");
 }
 
 // --- WeakControl ---

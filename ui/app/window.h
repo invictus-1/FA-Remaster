@@ -15,6 +15,7 @@ class Window {
     std::function<void(const UiEvent&)> mouseMove;
     std::function<void(const UiEvent&, bool pressed, bool doubleClick)> mouseButton;
     std::function<void(const UiEvent&)> mouseWheel;
+    std::function<bool(const UiEvent&)> key;  // a key down, key up or character; true when it was handled
     std::function<void(int width, int height)> resized;
   };
 
@@ -28,6 +29,7 @@ class Window {
 
   Callbacks callbacks;
   bool closed = false;
+  bool keyDownHandled = false;  // the last key down was handled: its character is not passed on
 
  private:
   void* hwnd_ = nullptr;

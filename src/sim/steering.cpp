@@ -393,8 +393,20 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also hits props: prop:OnCollision (prop_collision.md)
   if (b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u) PropCollisions(sim, u, box);
   std::vector<Hit> hits;
-  float r = std::max(b.sizeX, b.sizeZ) + 8.0f;
-  sim.ForUnitsInRect(u->position.x - r, u->position.z - r, u->position.x + r, u->position.z + r, [&](Unit* e) {
+  // COGrid::CollectEntitiesInBox 0x721dc0: the units registered in the entity-grid cells under the box, in the
+  // grid's order (rows, columns, the most recently registered first: rect_queries.md 2.4). The order decides who
+  // is pushed which way when a unit overlaps two neighbours, and where a same-order mate ends the list.
+  float hx = 0, hz = 0;
+  {
+    const float hs[3] = {box.h.x, box.h.y, box.h.z};
+    for (int i = 0; i < 3; ++i) {
+      hx += std::fabs(box.ax[i].x) * hs[i];
+      hz += std::fabs(box.ax[i].z) * hs[i];
+    }
+  }
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
+  auto visit = [&](Unit* e) {
     if (e == u || e->dead || e->destroyQueued) return;
     WorldShape s;
     if (!GetWorldShape(e, &s)) return;
@@ -415,7 +427,9 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       depth = ObbSphereDepth(box, s.c, s.r);
     }
     if (depth > 0) hits.push_back({e, depth});
-  });
+  };
+  for (Entity* e : cand)
+    if (e && e->kind == Entity::Kind::Unit) visit(static_cast<Unit*>(e));
   if (!hits.empty()) DoCollisionsFor(sim, u, hits);
 }
 

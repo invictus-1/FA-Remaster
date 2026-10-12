@@ -24,6 +24,7 @@ int RunWindow(UserState& user, int width, int height, int maxFrames,
   cb.mouseMove = [&](const UiEvent& e) { MouseMove(L, ui, e); };
   cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) { MouseButton(L, ui, e, pressed, dbl); };
   cb.mouseWheel = [&](const UiEvent& e) { MouseWheel(L, ui, e); };
+  cb.key = [&](const UiEvent& e) { return KeyEvent(L, ui, e); };
   cb.resized = [&](int w, int h) {
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);

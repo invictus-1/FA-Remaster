@@ -1829,6 +1829,10 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer) {
   if (!u->motion.air) return;
   SetTarget(sim, u, p, Vec3{}, layer);
 }
+void AirSetTargetFacing(Sim& sim, Unit* u, Vec3 p, Vec3 dir, int layer) {
+  if (!u->motion.air) return;
+  SetTarget(sim, u, p, dir, layer);
+}
 
 bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int spacing) {
   return GroundPrepareMoveImpl(sim, u, pos, excl, spacing);

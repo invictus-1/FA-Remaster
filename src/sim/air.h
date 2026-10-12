@@ -135,6 +135,9 @@ void AirSetLandHeight(Unit* u, float h);
 void AirSetFacing(Unit* u, Vec3 dir);
 // CUnitMotion::SetTarget(p, zero, layer) right away (layer bits: 1 Land, 0x10 Air).
 void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
+// CUnitMotion::SetTarget 0x6b85e0 as a task calls it on the motion itself: the point as given (no goal cell),
+// a facing to arrive with, the layer.
+void AirSetTargetFacing(Sim& sim, Unit* u, Vec3 p, Vec3 dir, int layer);
 // The terrain samples [x0, x1] x [z0, z1] changed (FlattenMapRect): refresh the look-ahead min/max pyramid.
 void AirTerrainChanged(const TerrainMap* map, int x0, int z0, int x1, int z1);
 // Unit::PrepareMove: a free landing spot near *pos (false: none found).
