@@ -220,6 +220,11 @@ struct PatrolBox {
 // box, within GuardScanRadius.
 Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box);
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e);
+// The task of a Nuke or Tactical order: CUnitFireAtTask (ctor 0x60b260, TaskTick 0x60b380), the launch of a
+// counted missile from a ManualFire weapon at the order's target.
+BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c);
+int TickFireAt(Sim& sim, Unit* u, BuildTask& t);
+void EndFireAt(Sim& sim, Unit* u, BuildTask& t);
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 void EndAttack(Sim& sim, Unit* u, BuildTask& t);
 // Aggressive moves and patrols look for enemies on the way (CUnitPatrolTask): an engaged target

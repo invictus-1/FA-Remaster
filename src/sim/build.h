@@ -101,7 +101,9 @@ void SiloTick(Sim& sim, Unit* u);
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo);
 BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target);
 void SiloAssist(Sim& sim, Unit* u, const float amount[2]);  // a helper's resources for the missile being built
-bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);  // one more missile: 0 tactical, 1 nuke
+bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);
+bool SiloIsBusy(Sim& sim, Unit* u, int kind);
+bool SiloIsFull(Sim& sim, Unit* u, int kind);  // one more missile: 0 tactical, 1 nuke
 void SiloRelease(Unit* u);
 bool SiloCommand(Sim& sim, Unit* u, const UnitCommand& c);  // true: handled (done at once)
 void RegisterSiloBindings(lua_State* L);

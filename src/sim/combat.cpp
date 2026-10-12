@@ -2211,6 +2211,118 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   return r;
 }
 
+// CUnitFireAtTask ctor 0x60b260: the weapon is the first ManualFire weapon that is not the overcharge and whose
+// NukeWeapon flag matches the order (Nuke: set, Tactical: clear). Kept as its index in t.count (-1: none).
+BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
+  auto t = std::make_unique<BuildTask>();
+  t->type = c.type;
+  t->order = "FireAt";
+  t->goalId = c.targetId;
+  t->targetPoint = c.targetPoint;
+  t->site = c.pos;
+  if (c.targetId)
+    if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
+  const bool nuke = c.type == CommandType::Nuke;
+  t->count = -1;
+  for (size_t i = 0; i < u->weapons.size(); ++i) {
+    const WeaponBp* b = u->weapons[i]->bp;
+    if (!b || !b->manualFire || b->overChargeWeapon || b->nukeWeapon != nuke) continue;
+    t->count = static_cast<int>(i);
+    break;
+  }
+  BuildTask* r = t.get();
+  sim.Own(std::move(t));
+  return r;
+}
+
+// TaskTick 0x60b380. States: 0 get in range and see to a missile, 1 wait for it, 2 fire, 3 wait for the launch to
+// begin (the unit turns Busy), 4 wait for it to end.
+int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
+  if (sim.tick() < t.waitUntil) return kTaskRunning;
+  UnitWeapon* w = t.count >= 0 && t.count < static_cast<int>(u->weapons.size()) ? u->weapons[static_cast<size_t>(t.count)] : nullptr;
+  if (!w || !w->enabled) return kTaskFailed;
+  const bool nuke = t.type == CommandType::Nuke;
+  const int kind = nuke ? 1 : 0;
+  const bool mobile = u->motion.bp && u->motion.bp->mobile() && !u->immobile;
+  const float minR = w->ovMinRadius < 0 ? w->bp->minRadius : w->ovMinRadius;
+  const float maxR = w->ovMaxRadius < 0 ? w->bp->maxRadius : w->ovMaxRadius;
+  const AiTarget target = CommandTarget(sim, t);
+  const Vec3 tp = TargetPos(sim, target, false);
+  const float dx = u->position.x - tp.x, dz = u->position.z - tp.z;
+  const float d = std::sqrt(dx * dx + dz * dz);
+  for (int guard = 0; guard < 4; ++guard) {
+    switch (t.state) {
+      case 0:
+        if (minR > d) {  // too close: back off to 1.1 x the minimum range (the spot's PrepareMove: not built)
+          if (!mobile) return kTaskFailed;
+          if (!u->motion.hasGoal) {
+            Vec3 away{u->position.x - tp.x, u->position.y - tp.y, u->position.z - tp.z};
+            const float len = std::sqrt(away.x * away.x + away.y * away.y + away.z * away.z);
+            const float k = len > 0 ? minR * 1.1f / len : 0.0f;
+            TaskMoveToward(sim, u, Vec3{tp.x + away.x * k, tp.y + away.y * k, tp.z + away.z * k});
+          }
+          return kTaskRunning;
+        }
+        if (d > maxR) {  // too far: go to the target
+          if (!mobile) return kTaskFailed;
+          if (!u->motion.hasGoal) TaskMoveToward(sim, u, tp);
+          return kTaskRunning;
+        }
+        if (mobile) TaskStopMoving(u);  // the navigator's AbortMove
+        if (CheckSilo(w)) {
+          t.state = 2;
+          continue;
+        }
+        if (SiloIsBusy(sim, u, kind)) {
+          t.state = 1;
+          return kTaskRunning;
+        }
+        if (SiloIsFull(sim, u, kind)) {
+          t.state = 2;
+          continue;
+        }
+        if (!SiloQueueAmmo(sim, u, kind)) return kTaskFailed;
+        t.state = 1;
+        return kTaskRunning;
+      case 1:
+        if (CheckSilo(w)) t.state = 2;
+        t.waitUntil = sim.tick() + 9;  // return 10
+        return kTaskRunning;
+      case 2:
+        if (!u->unitStates.count("Busy")) {
+          if (nuke) sim.CallMethod(sim.L(), u, "OnNukeLaunched", 0);
+          SetTarget(sim, w, target);
+          if (!u->stunned) {  // UnitWeapon::Fire 0x6d61f0
+            WeaponCall(sim, w, "OnFire");
+            ++g_fires;
+            ++w->shots;
+            const float rof = RoF(w);
+            w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
+          }
+          t.state = 3;
+        }
+        t.waitUntil = sim.tick() + 2;  // return 3
+        return kTaskRunning;
+      case 3:
+        if (u->unitStates.count("Busy")) t.state = 4;
+        t.waitUntil = sim.tick() + 2;
+        return kTaskRunning;
+      default:
+        if (!u->unitStates.count("Busy")) return kTaskDone;
+        t.waitUntil = sim.tick() + 2;
+        return kTaskRunning;
+    }
+  }
+  return kTaskRunning;
+}
+
+// dtor 0x60b800: the unit's Busy state is cleared
+void EndFireAt(Sim& sim, Unit* u, BuildTask& t) {
+  (void)sim;
+  (void)t;
+  if (!u->dead) u->unitStates.erase("Busy");
+}
+
 int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   (void)L;
   AiTarget target = CommandTarget(sim, t);

@@ -1883,6 +1883,9 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::Attack:
     case CommandType::FormAttack:
       return StartAttackTask(sim, u, c);
+    case CommandType::Nuke:
+    case CommandType::Tactical:
+      return StartFireAtTask(sim, u, c);  // DispatchTask 0x609692 / 0x6096a9
     case CommandType::Reclaim:
       if (!u->bpData || !u->bpData->hasBuilder || !c.targetId) return nullptr;
       t->order = "Reclaim";
@@ -1928,6 +1931,8 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
       break;
     case CommandType::Attack:
     case CommandType::FormAttack: r = TickAttack(sim, L, u, t); break;
+    case CommandType::Nuke:
+    case CommandType::Tactical: r = TickFireAt(sim, u, t); break;
     case CommandType::Patrol:
     case CommandType::FormPatrol:
     case CommandType::AggressiveMove:
@@ -1968,6 +1973,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.pdata) {
     EndPatrol(sim, u, t);
+    return;
+  }
+  if (t.type == CommandType::Nuke || t.type == CommandType::Tactical) {
+    EndFireAt(sim, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {
@@ -2827,6 +2836,20 @@ void SiloAssist(Sim& sim, Unit* u, const float amount[2]) {
   s->bank[0] -= e;
   s->bank[1] -= m;
   if (s->progress >= s->ticks) s->stage = 3;
+}
+
+// SiloIsBusy 0x5cef00: the kind is the one at the head of the build list. SiloIsFull 0x5cef20: what is stored
+// plus what is listed has reached the weapon's MaxProjectileStorage.
+bool SiloIsBusy(Sim& sim, Unit* u, int kind) {
+  SiloState* s = GetSilo(sim, u);
+  return !s->queue.empty() && s->queue.front() == kind;
+}
+bool SiloIsFull(Sim& sim, Unit* u, int kind) {
+  SiloState* s = GetSilo(sim, u);
+  int pending = 0;
+  for (int k : s->queue)
+    if (k == kind) ++pending;
+  return u->siloAmmo[kind] + pending >= s->maxStore[kind];
 }
 
 // The silo builder's "add one" (CAiSiloBuildImpl vt+0x20; the interface's build-missile button sends it as the
