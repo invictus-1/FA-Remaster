@@ -4,8 +4,8 @@ What is done, what is left, and in which order, for everything the interface tra
 the in-game interface, input, sound, preferences and the path into a new game. Written 2026-10-12;
 `ui/README.md` has the current state in detail, `ui/REQUESTS.md` what is asked of the other tracks.
 
-The measure used below: the original gives its interface scripts 531 engine functions. 250 are built;
-281 are still stubs that log when a script calls them.
+The measure used below: the original gives its interface scripts 531 engine functions. When this was
+written 250 were built; `ui/README.md` has the count as it is now (401 after the first sound work).
 
 ## Where we are
 
@@ -19,8 +19,11 @@ Done and checked:
 - Drawing (a software backend), a window, the mouse, draggers, modal dialogs.
 - Main menu → Skirmish → the lobby screen → Launch Game → the simulation starts and runs.
 
-Not there: nothing of a running game is shown or can be played. There is no keyboard, no sound, no
-in-game interface and no world view.
+Since this was written (see `ui/README.md` for each): the keyboard and the key maps; the in-game
+interface on a running game, in a state of its own; the world's picture from the renderer inside the
+world view; selecting, orders, building, factory queues, unit states; the camera, the right click and
+the arrow keys by the original's rules; and sound from the game's own sound files. So stages 1 to 5 are
+there in a first form, and stage 6 has begun with sound.
 
 ## The shortest way to a playable skirmish
 
