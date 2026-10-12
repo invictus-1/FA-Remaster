@@ -1219,8 +1219,8 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   float d3 = std::sqrt((diff.x * diff.x + diff.y * diff.y) + diff.z * diff.z);
   float d2 = std::sqrt(diff.x * diff.x + diff.z * diff.z);
   Vec3 dir3 = Normalized(diff);
-  float trig = 1.0f * b.breakOffTrigger;
-  float brk = 1.0f * b.breakOffDistance;
+  float trig = u->motion.breakOffTriggerMult * b.breakOffTrigger;
+  float brk = u->motion.breakOffDistanceMult * b.breakOffDistance;
   int s = a.combatState;
   Entity* E = combat::TargetEntity(sim, tgt);
   bool eAir = E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air";
@@ -1287,6 +1287,15 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   bool breakOff = (s == 1 && trig > d3) || (b.breakOffIfNearNewTarget && s == 0 && brk > d2) ||
                   (s == 2 && dotF < 0.0f) ||
                   (a.combatCounter > EngineFloor(b.sustainedTurnThreshold * 10.0f));
+  {
+    // MOHO64_DEBUG_TACTICS=<unit id>: what the attack-run state machine sees each beat
+    static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+    if (dbgId >= 0 && static_cast<long>(u->id) == dbgId)
+      Logf(LogLevel::Info, "tactics %u unit %u state %d target %u bone %d tp %.9g %.9g %.9g pos %.9g %.9g %.9g d3 %.9g d2 %.9g "
+           "trig %.9g brk %.9g dotF %.9g counter %d timer %u break %d",
+           now, u->id, s, E ? E->id : 0u, tgt.aimBone, tp.x, tp.y, tp.z, pos.x, pos.y, pos.z, d3, d2, trig, brk, dotF,
+           a.combatCounter, a.combatTimer, static_cast<int>(breakOff));
+  }
   if (!breakOff) {
     if (a.combatTimer >= now) {
       if (!facing || s == 6) return output();

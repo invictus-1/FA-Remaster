@@ -88,6 +88,9 @@ struct UnitMotion {
   // m+0xd8); lean and offset are added to the ground normal before the orientation is built
   Vec3 hoverLean, wobbleTarget, wobbleVel, wobble;
   float speedMult = 1, accMult = 1, turnMult = 1;
+  // the attack run's break-off multipliers (attributes +0x40 / +0x44; Unit:SetBreakOffTriggerMult / DistanceMult):
+  // a bomber's script raises them while it drops, so that it turns away after the run
+  float breakOffTriggerMult = 1, breakOffDistanceMult = 1;
   // fuel (fuel.md): m+0x0c use time, Physics.FuelRechargeRate, the platform refuel/repair state
   float fuelUseTime = 0, fuelRecharge = 0;
   bool refuelFlag = false;
