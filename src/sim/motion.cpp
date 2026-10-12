@@ -1575,12 +1575,20 @@ void MotionTick(Sim& sim, Unit* u) {
       // CalcMoveWater 0x6c3480 (every layer but Land and Seabed): the dive / surfacing step comes after the
       // move, and the unit is put at its depth while it lasts
       const bool diving = u->layer != "Land" && u->layer != "Seabed" && HandleDivingAndSurfacing(sim, u);
-      if (moved || m.needSnap || diving) {
+      // CalcMoveLand 0x6c3180: SnapToGround runs when the unit moved AND is not Teleporting (state 19: a unit
+      // in a transport's beam, whose task places it), or when motion+0x90 asks for it
+      const bool beamed = u->unitStates.count("Teleporting") > 0 && !m.surfaceNext;
+      if (((moved || m.needSnap) && !beamed) || diving) {
         SnapUnit(sim, u);
         m.needSnap = false;
       }
     }
     m.surfaceNext = false;  // (cleared after SnapToGround)
+    static const long dbgStep = getenv("MOHO64_DEBUG_MOTION") ? atol(getenv("MOHO64_DEBUG_MOTION")) : -1;
+    if (dbgStep == static_cast<long>(u->id))
+      fprintf(stderr, "step: tick %u pos %.4f %.4f vel %.5f %.5f %.5f pushed %d wasMoving %d point %d spline %d goal %d waypoint %d moved %d\n",
+              sim.tick(), u->position.x, u->position.z, m.vel.x, m.vel.y, m.vel.z, m.pushed ? 1 : 0, m.wasMoving ? 1 : 0,
+              m.pointNow ? 1 : 0, m.hasSpline ? 1 : 0, m.hasGoal ? 1 : 0, m.hasWaypoint ? 1 : 0, moved ? 1 : 0);
   }
   m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
   if (!u->beingBuilt) ProcessCommonMotionState(sim, u, common);

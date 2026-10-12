@@ -229,6 +229,11 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
   float vPush = std::min(Len(UnitVelocity(self)), b.maxSpeed * 0.1f);
   UnitCommand* c = Current(self);
   Vec3 prev = Sub(self->position, self->motion.lastMove);  // the position before its last move (u+0xd0)
+  // u+0xd0 is the entity's transform before its last AdvanceCoords. A unit in a transport's beam is advanced a
+  // second time each beat, by its task (CUnitCallTransport state 3), so there it is where the unit stood when
+  // the last beat ended: last beat's beam position plus last beat's coast.
+  if (self->unitStates.count("Teleporting") && self->lastMoveTick == sim.tick() && self->lastPosTick)
+    prev = Add(self->prevLastPosition, self->motion.lastMove);
   static const long dbg = getenv("MOHO64_DEBUG_PUSH") ? atol(getenv("MOHO64_DEBUG_PUSH")) : -1;
   for (const Hit& h : hits) {
     if (h.depth < 0.001f) continue;

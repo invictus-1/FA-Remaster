@@ -1088,7 +1088,8 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
           continue;
         }
         if (u->motion.hasGoal) MotionStop(u);
-        u->motion.vel = {};
+        // (the velocity is NOT cleared: a unit that was still rolling coasts on under the beam, its last steps
+        // added to the beam's position each beat; seen in the original at the pickup of the Transports replay)
         SetState(u, "Moving", false);  // (the walk's move task has ended)
         d.aPos = u->position;
         d.aQ = u->orientation;
