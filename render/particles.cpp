@@ -377,6 +377,13 @@ void Particles::Emit(Emitter* emitter, int tick) {
   emitter->positionBefore = emitter->position;
 }
 
+void Particles::Hide(uint32_t emitter, bool hidden) {
+  Emitter* e = Find(emitter);
+  if (!e || e->hidden == hidden) return;
+  e->hidden = hidden;
+  e->positionBefore = e->position;  // (seen again: it starts where it is, not along the way it came unseen)
+}
+
 void Particles::Update(double now, const View* view) {
   const auto t0 = std::chrono::steady_clock::now();
   now_ = now;
@@ -388,6 +395,12 @@ void Particles::Update(double now, const View* view) {
     // one that is behind makes up only its last ticks: at most 24, and no more than a particle lives
     const int makeUp = std::min(24, static_cast<int>(std::ceil(e.blueprint->longestLife)));
     if (last - e.ticksDone > makeUp + 1) e.ticksDone = last - makeUp - 1;
+    if (e.hidden) {  // what it hangs on is not seen: nothing now, and nothing made up later
+      ++quietEmitters;
+      e.ticksDone = last;
+      if (e.lifetime >= 0 && due > last) e.stopped = true;
+      continue;
+    }
     if (view && e.emitIfVisible && e.ticksDone < last) {
       const float margin = 8 * std::max(1.0f, e.scale);  // how far its particles may be from it and still be seen
       const Vec3 r{margin, margin, margin};

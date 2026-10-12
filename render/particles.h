@@ -81,6 +81,9 @@ class Particles {
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
+  // While hidden an emitter throws nothing out, and makes nothing up afterwards (what it hangs on
+  // is not seen by whom the picture is for).
+  void Hide(uint32_t emitter, bool hidden);
 
   // Moves time on to `now` (seconds): emitters throw out what is due, and end. With `view`, an
   // emitter whose blueprint says EmitIfVisible throws nothing out while it is out of the picture
@@ -125,6 +128,7 @@ class Particles {
     int ticksDone = 0;   // of its own time, in tenths of a second
     float carry = 0;     // the fraction of a particle left over from the last tick
     bool stopped = false;
+    bool hidden = false;
   };
   const EmitterBlueprint* Blueprint(const std::string& path);
   Emitter* Find(uint32_t id);

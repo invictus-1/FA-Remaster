@@ -4,7 +4,7 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
-## ui, to the renderer 5: only what the player's army sees — units, shots, minimap and picking done; effects and the ground not yet
+## ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap and picking done; the ground not yet
 
 `WorldPicture::SetFocusArmy(army)` in `render/world_picture.h`: the engine's army number, from 1;
 0 (as it is until you call it): no one army, everything shows. It takes hold with the next beat
@@ -24,8 +24,9 @@ A projectile is drawn where the focus army sees its place. `DrawMinimap` goes by
 hit, a blip can (within about ten pixels, like any icon).
 
 Not yet, so the picture still gives away more than it should:
-- the game's effects are not hidden: the smoke, trails, beams and flashes of units the army does
-  not see are drawn (they hang on entities by id; next step on my side);
+- effects that hang on a unit or shot the army does not see are hidden (smoke, exhaust, trails,
+  beams, flashes of light), but effects that hang on nothing are not: the explosion of a unit that
+  has just died in the dark, and marks left on the ground, still show;
 - the ground the army does not see is not darkened, and the original's remembered sight (a building
   seen once stays as a ghost where it stood) is not there: a unit no longer seen falls back to its
   blip or to nothing;

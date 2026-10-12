@@ -62,6 +62,9 @@ class Effects {
   // Where an entity's bone is in the frame. False when the entity is not in it.
   // `model`: where the unit's model is remembered between calls (may be null).
   bool AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* position, Quat* orientation, const Model** model = nullptr);
+  // Is that entity one the army the picture is for does not see (a unit that is not seen now, a
+  // shot where it does not see)? What hangs on such a one is not shown.
+  static bool Hidden(const Frame& frame, uint32_t entity);
 
   Particles* particles_;
   Ribbons* ribbons_;
