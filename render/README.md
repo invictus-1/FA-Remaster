@@ -56,7 +56,8 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
-               [--mods <folder of mods>] [--preview <unit id>=<folder>] [--place <unit id>]
+               [--mods <folder of mods>] [--maps <folder of map folders>]
+               [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--look modern|original] [--noshadows]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
@@ -70,7 +71,10 @@ Escape quits.
 Looking at a remastered model without a recording: `--preview uel0401=<folder>` takes that unit's
 meshes (`uel0401_lod0.scm`, `_lod1.scm`, ...) and LabPBR textures (`uel0401_lab_albedo.dds`,
 `_lab_normal.dds`, `_lab_spec.dds`, `_lab_ao.dds`, in the folder or its `textures` folder) from there
-instead of the game's, and `--place uel0401` stands the unit at the camera's starting point.
+instead of the game's, and `--place uel0401` stands the unit in the scene with the game's own model
+beside it (to its east) in the same light, and frames both. `--at x,z` says where (choose flat
+ground), `--heading` and `--pitch` from which side. Meshes may be `.scm` version 5 or version 6
+(version 5 with 32-bit indices, for models of more than 65,535 vertices).
 
 Playing a recording: make one with the engine, with the log that says which unit is which
 (`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to

@@ -13,6 +13,8 @@
 // --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
 // --tick, --paused  where playback starts, and whether it stands still
 // --mods    a folder of mods (each in its own folder): their units and textures are found too
+// --maps    a folder of map folders (maps being worked on), found before the game's own maps
+// --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
@@ -81,7 +83,7 @@ struct Options {
   bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
-  std::vector<std::string> data, mods, previews, place;
+  std::vector<std::string> data, mods, maps, previews, place;
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -112,6 +114,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fa") o->fa = v;
     else if (a == "--data") o->data.push_back(v);
     else if (a == "--mods") o->mods.push_back(v);
+    else if (a == "--maps") o->maps.push_back(v);
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
@@ -143,6 +146,10 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     if (!n) fprintf(stderr, "render: no .nx2 or .scd archives in %s\n", folder.c_str());
   };
   for (const std::string& folder : o.data) archives(folder);
+  // --maps: a folder of map folders (maps being worked on); mounted before the game's own maps, so
+  // a map of the same name there is the one that is found
+  for (const std::string& folder : o.maps)
+    if (!vfs->Mount(folder, "/maps")) fprintf(stderr, "render: --maps %s: no such folder\n", folder.c_str());
   if (!o.fa.empty()) {
     archives(o.fa + "/gamedata");
     if (!vfs->Mount(o.fa + "/maps", "/maps")) fprintf(stderr, "render: no maps folder in %s\n", o.fa.c_str());
