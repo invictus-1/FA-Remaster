@@ -13,6 +13,7 @@
 #include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/blueprints.h"
+#include "sim/collision.h"
 #include "sim/commands.h"
 #include "sim/landnav.h"
 #include "sim/motion.h"
@@ -382,8 +383,10 @@ void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
 
 // COORDS_CanMoveAt with strict 0 (air_extra 3.6): no standing, completed, non-air unit of another formation
 bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
+  // the box is a square of the footprint's larger side (S = max(SizeX, SizeZ)), y from -1000 to 1000
+  const float S = static_cast<float>(std::max(FpSizeX(u), FpSizeZ(u)));
   float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
-  float x1 = x0 + FpSizeX(u), z1 = z0 + FpSizeZ(u);
+  float x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
     if (blocked || e == u || Gone(e) || e->beingBuilt || e->layer == "Air") return;
@@ -392,9 +395,18 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
     if (moving) return;
     if (e->form && e->form == u->form && !e->unitStates.count("Attacking") && !u->unitStates.count("Attacking")) return;
     if (e->unitStates.count("Attached")) return;
-    const MotionBlueprint* b = e->motion.bp;
-    float hx = b ? b->sizeX * 0.5f : 0.5f, hz = b ? b->sizeZ * 0.5f : 0.5f;
-    if (e->position.x + hx < x0 || e->position.x - hx > x1 || e->position.z + hz < z0 || e->position.z - hz > z1) return;
+    // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity+0x240, the axis-aligned bounds of its
+    // collision shape as it stands: a turned or tilted hull has a wider one) touches the box, touching counts
+    WorldShape ws;
+    if (GetWorldShape(e, &ws)) {
+      Vec3 mn, mx;
+      ShapeBounds(ws, &mn, &mx);
+      if (mx.x < x0 || mn.x > x1 || mx.z < z0 || mn.z > z1) return;
+    } else {
+      const MotionBlueprint* b = e->motion.bp;
+      float hx = b ? b->sizeX * 0.5f : 0.5f, hz = b ? b->sizeZ * 0.5f : 0.5f;
+      if (e->position.x + hx < x0 || e->position.x - hx > x1 || e->position.z + hz < z0 || e->position.z - hz > z1) return;
+    }
     blocked = true;
   });
   return !blocked;
