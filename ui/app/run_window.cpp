@@ -14,7 +14,8 @@ namespace moho::ui {
 // Open a window on the user state's interface and run until it is closed, or for maxFrames frames
 // when that is not 0. Each frame: input, one frame of the user state with the time that really
 // passed, the picture. Returns the number of frames shown, or -1 when no window could be opened.
-int RunWindow(UserState& user, int width, int height, int maxFrames) {
+int RunWindow(UserState& user, int width, int height, int maxFrames,
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame) {
   lua_State* L = user.L();
   UiManager& ui = user.ui();
   auto target = std::make_unique<SoftwareTarget>(width, height);
@@ -44,6 +45,7 @@ int RunWindow(UserState& user, int width, int height, int maxFrames) {
     auto t0 = Clock::now();
     target->Clear(0xff000000u);
     ui.Render(L, *target, 0);
+    if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
     window.Present(*target);
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;

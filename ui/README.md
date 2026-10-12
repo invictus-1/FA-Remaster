@@ -142,10 +142,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the game's tutorial question to the game's lobby screen in single-player form (about 2,900
   controls: slots, colours, factions, game options, the map's picture with its start positions
   and resource markers). The Launch button runs the script's launch path to its end. Joining a
-  game and starting one are not built: `LaunchGame` records the game configuration the script
-  hands over (to the log, or to the file named by `--session-out`) and tells the script the game
-  launched, as the original does, so the lobby closes; the session itself does not start, and the
-  screen stays empty. See `REQUESTS.md` for what the engine track needs to start a session from it.
+  game is not built.
+- Launch starts a game: `LaunchGame` records the game configuration the script hands over
+  (`--session-out`), the host builds a session from it with the engine's `SessionFromGameConfig`,
+  loads the rules and starts the simulation (`app/game_session.*`), and the script hears
+  `GameLaunched` (or `LaunchFailed` with the reason), so the lobby closes. The host then runs the
+  simulation's beats, ten a second, beside the interface. There is no in-game interface and no
+  world view yet: the host shows its own notice (map, game time, number of units). What the
+  in-game interface needs from the running simulation is request 4 in `REQUESTS.md`.
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
   drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
   open their screens.

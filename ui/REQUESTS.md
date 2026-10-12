@@ -43,9 +43,38 @@ track answers under the request.
   `Configurations.standard.teams` and `customprops.ExtraArmies`, and on success calls the script's
   `GameLaunched`).
 
-### 4. Coming, not needed yet
-- Issue orders and sim callbacks from the interface (`IssueCommand`, `SimCallback`), and the sync
-  data a session's interface reads each beat (`GetArmiesTable`, `GetEconomyTotals`, unit data).
+  **Status:** done by the engine track (`docs/engine-answers.md`, "ui 3"), and in use: the interface
+  host links the simulation, and the lobby's Launch button starts a session through
+  `SessionFromGameConfig` with the live table (`ui/app/game_session.*`). The simulation then runs
+  its beats beside the interface. Thank you. The note about the recorded file's `repr` comments is
+  understood; the host passes the live table.
+
+### 4. What the in-game interface needs from a running simulation
+The answer to "say which you need first", in the order the game's interface scripts need them when a
+session starts (`/lua/ui/game/gamemain.lua` and what it loads). First the reading side, then orders.
+
+1. **The sync table of each beat.** The simulation's scripts fill the global `Sync` during a beat;
+   the original hands that table to the user state after the beat, where the engine calls
+   `OnSync()` (`/lua/UserSync.lua`). Most of the in-game interface hangs on it (score, economy
+   display data, unit data, pings, camera requests, `Sync.GameResult`).
+   *Smallest form:* after `Sim::Tick()`, a way to take the beat's `Sync` out of the simulation's
+   state as bytes (`SerializeLua` exists already) and have it emptied for the next beat, for
+   example `std::string Sim::TakeSync()`. The host pushes it into the user state.
+2. **Session facts the user state asks for by function:** `SessionGetScenarioInfo()` (the
+   scenario info table as the simulation has it), `GetArmiesTable()` (`armiesTable` with each army's
+   name, nickname, faction, colour, human / civilian, `focusArmy`, `numArmies`), `GetFocusArmy()`,
+   `GetEconomyTotals()` (income, last use, requested, stored, max storage, reclaimed for mass and
+   energy of the focus army), `GetGameTimeSeconds()` / `GameTick()`, `GetSimTicksPerSecond()`.
+   *Smallest form:* plain accessors on `Sim` (a struct per army, the economy totals of one army,
+   the scenario info as serialized Lua); the host makes the tables.
+3. **Units as the interface sees them** (`UserUnit`): per unit its entity id, blueprint id, army,
+   position, health and max health, fraction complete, whether it is selectable / dead, and its
+   command queue length. Needed for selection, the unit view and the build panels.
+   *Smallest form:* a per-beat list from `Sim::units()` with those fields; ids stable as in the
+   recordings.
+4. **Then the writing side:** `SimCallback({Func, Args}, addUnitSelection)` into the simulation's
+   `/lua/SimCallbacks.lua`, and `IssueCommand` / `IssueUnitCommand` / `IssueBlueprintCommand` for the
+   selected units, applied between beats the way a command stream's messages are.
 
 ## To the renderer track
 

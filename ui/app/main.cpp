@@ -20,6 +20,7 @@
 #include <shlobj.h>
 #endif
 
+#include "app/game_session.h"
 #include "app/window.h"
 #include "core/hostfs.h"
 #include "core/log.h"
@@ -216,6 +217,11 @@ int main(int argc, char** argv) {
   cfg.prefsFile = o.prefsFile;
   cfg.sessionFile = sessionFile;
 
+  // A game launched from the lobby: the simulation starts from the game configuration and the host
+  // runs its beats beside the interface's frames.
+  ui::GameSession session(&vfs, cfg.hookDirs);
+  cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
+
   ui::UserState user(&vfs, cfg);
   bool ok = user.Boot();
   if (ok && o.stage != "userinit") ok = user.StartMainScript();
@@ -226,16 +232,24 @@ int main(int argc, char** argv) {
   }
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
-    done = ui::RunWindow(user, width, height, o.frames);
+    done = ui::RunWindow(user, width, height, o.frames, [&session](double seconds, ui::SoftwareTarget& target) {
+      session.Advance(seconds);
+      session.DrawStatus(target);
+    });
     if (done < 0) ok = false;
   } else {
-    for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
+    for (; done < o.frames; ++done) {
+      user.Frame(1.0 / 60.0);
+      session.Advance(1.0 / 60.0);
+    }
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
+  for (const auto& line : session.Status()) Logf(LogLevel::Info, "moho64ui: session: %s", line.c_str());
   if (dumpUi) user.ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture
     ui::SoftwareTarget target(width, height);
     user.ui().Render(user.L(), target, 0);
+    session.DrawStatus(target);
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
   }

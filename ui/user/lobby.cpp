@@ -182,14 +182,22 @@ int l_LaunchGame(lua_State* L) {
   }
   lua_settop(L, 2);
   const std::string& file = UserState::From(L)->config().sessionFile;
-  Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: starting a game is not built yet; game configuration (%zu bytes)%s%s",
-       text.size(), file.empty() ? " follows" : " written to ", file.c_str());
-  if (file.empty()) LogWrite(LogLevel::Info, text);
+  const auto& launch = UserState::From(L)->config().launchSession;
+  Logf(LogLevel::Info, "moho64ui: CLobby:LaunchGame: game configuration (%zu bytes)%s%s", text.size(),
+       file.empty() ? " follows" : " written to ", file.c_str());
+  if (!launch) Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: this host cannot start a session; nothing starts");
+  if (file.empty()) LogWrite(LogLevel::Debug, text);
   else if (!hostfs::WriteFile(file, "GameConfig = " + text + "\n")) Logf(LogLevel::Warning, "moho64ui: cannot write %s", file.c_str());
-  // The original calls self:GameLaunched() once the session is on its way (FA exe 0x7c38c0), and
-  // the lobby script counts on it: by now it has prepared itself for the game and cannot go on as
-  // a lobby. So the script is told; it closes the lobby and destroys this object. The session
-  // itself does not start yet.
+  // The host starts the session (when it can: a host without the simulation only records). As in
+  // the original (FA exe 0x7c38c0), the script then hears self:GameLaunched(), on which it closes
+  // the lobby and destroys this object, or self:LaunchFailed(reason).
+  std::string why;
+  if (launch && !launch(L, 2, &why)) {
+    Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: launch failed: %s", why.c_str());
+    lua_pushstring(L, why.c_str());
+    lobby->Call(L, "LaunchFailed", 1);
+    return 0;
+  }
   lobby->Call(L, "GameLaunched", 0);
   return 0;  // `lobby` may be gone here
 }

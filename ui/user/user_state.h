@@ -7,6 +7,7 @@
 // WaitFrames is coroutine.yield.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +32,9 @@ class UserState {
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file; empty = preferences live in memory only
     std::string sessionFile;            // where a launched game's configuration is written; empty = to the log
+    // Starts a session from the game configuration table at stack index `config` when the lobby
+    // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
+    std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
     int width = 1920, height = 1080;    // the head's size in pixels
   };
 

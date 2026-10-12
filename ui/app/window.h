@@ -35,7 +35,10 @@ class Window {
 
 class UserState;
 // The host's live mode (run_window.cpp): the interface in a window until it is closed, or for
-// maxFrames frames when that is not 0. Returns the frames shown, or -1 when no window opened.
-int RunWindow(UserState& user, int width, int height, int maxFrames);
+// maxFrames frames when that is not 0. `eachFrame` (may be empty) is called once per frame after
+// the interface has drawn, with the real time that passed and the picture before it is shown.
+// Returns the frames shown, or -1 when no window opened.
+int RunWindow(UserState& user, int width, int height, int maxFrames,
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame);
 
 }  // namespace moho::ui

@@ -6,10 +6,10 @@
     py ui/build_ui.py --jobs 32
     py ui/build_ui.py --target x86_64-windows-gnu   (cross-build from Linux)
 
-The interface is built on its own: the engine's libraries it uses (src/core, src/script, the Lua
+The interface is built on its own: the engine's libraries (src/core, src/script, src/sim, the Lua
 dialect) are compiled from the same sources with the same flags as tools/build_zig.py, plus
-everything under ui/. Nothing of the simulation is linked except the engine-object handle
-(src/sim/script_object.cpp), which the script threads need.
+everything under ui/. The simulation is linked in so that a game launched from the lobby runs
+inside this host; the interface changes nothing in it.
 Incremental: an object is rebuilt when its source or any header is newer.
 """
 import argparse, concurrent.futures as cf, glob, os, subprocess, sys
@@ -52,10 +52,9 @@ def main():
     for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src"), "-I", UI] + lua_inc + zlib_inc
-    for d in ("core", "script"):
+    for d in ("core", "script", "sim"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
-    add(os.path.join(ROOT, "src", "sim", "script_object.cpp"), cxxflags, True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
         add(f, cxxflags, True)
 
