@@ -334,6 +334,16 @@ void StartHead(Sim& sim, Unit* u) {
       PopHead(u);
       continue;
     }
+    if (c.type == CommandType::SpecialAction) {  // 0x6095d0: the script's OnSpecialAction(target position)
+      Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+      const Vec3 p = te ? te->position : c.pos;
+      PopHead(u);
+      lua_State* L = sim.L();
+      PushVector(L, p.x, p.y, p.z);
+      sim.CallMethod(L, u, "OnSpecialAction", 1);
+      if (u->dead || u->destroyQueued) return;
+      continue;
+    }
     switch (c.type) {  // DispatchTask 0x608ef0: CUnitCommand::GenerateFormation (formations.md 1.2)
       case CommandType::Move:
       case CommandType::FormMove:

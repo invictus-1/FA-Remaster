@@ -324,10 +324,11 @@ on; a callback reaches `/lua/SimCallbacks.lua`'s `DoCallback`.
 to do: the order a player gives with a factory selected); it is carried out since 2026-10-12. Building
 from a factory is an ordinary `IssueCommand` of type 7 (BuildFactory) with the blueprint and a count.
 
-Known gaps on the engine side, in the order they will hurt: one order that still ends at once
-(SpecialAction; nuke and tactical launch, overcharge, capture, sacrifice, teleport, kill / destroy
-self and pause are carried out since 2026-10-12, and a captured unit changes army through
-`ChangeUnitArmy`), and classic AI opponents (below).
+Known gaps on the engine side: classic AI opponents (below), and three rare orders that still end at
+once: `DetachFromTransport`, `Dock` on a unit that is not an air staging platform, and a teleport
+through another unit's beacon. The others are carried out (nuke and tactical launch, overcharge,
+capture, sacrifice, teleport, special action, kill / destroy self and pause since 2026-10-12; a
+captured unit changes army through `ChangeUnitArmy`).
 
 **AI opponents, where they stand (2026-10-12).** A new game against M28 runs: the recorded skirmish's
 set-up (the player and seven M28 AIx armies on Seton's Clutch) started as a new game through `--session`
