@@ -20,6 +20,7 @@
 
 #include "core/backtrace.h"
 #include "core/log.h"
+#include "sim/collision.h"
 #include "sim/commands.h"
 #include "sim/economy.h"
 #include "sim/combat.h"
@@ -602,10 +603,20 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
       if (selfTransport && (moving || loading)) return;
     }
     if (o->parentId || State(o, "Attached")) return;
-    const MotionBlueprint* ob = o->motion.bp;
-    float hx = (ob ? ob->sizeX : 1) * 0.5f, hz = (ob ? ob->sizeZ : 1) * 0.5f;
-    if (o->position.x + hx < x0 || o->position.x - hx > x1 || o->position.z + hz < z0 || o->position.z - hz > z1)
-      return;
+    // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity::UpdateAABox, from its collision
+    // shape as it stands, turned and tilted) against the box, inclusive. A tank lying across reaches further in
+    // x than its SizeX: the blueprint's sizes around the position are not it.
+    WorldShape s;
+    if (GetWorldShape(o, &s)) {
+      Vec3 mn, mx;
+      ShapeBounds(s, &mn, &mx);
+      if (x0 > mx.x || mn.x > x1 || z0 > mx.z || mn.z > z1) return;
+    } else {
+      const MotionBlueprint* ob = o->motion.bp;
+      float hx = (ob ? ob->sizeX : 1) * 0.5f, hz = (ob ? ob->sizeZ : 1) * 0.5f;
+      if (o->position.x + hx < x0 || o->position.x - hx > x1 || o->position.z + hz < z0 || o->position.z - hz > z1)
+        return;
+    }
     blocked = true;
   });
   return !blocked;
