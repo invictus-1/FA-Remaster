@@ -227,8 +227,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
   left click selects a unit and dragging selects a box. The camera's field of view and its
-  tilt by distance are not the original's yet; the minimap is still empty (one picture only);
-  selected units are not marked in the world. `--no-world` runs a game without the picture
+  tilt by distance are not the original's yet. The interface hands the picture what it adds to
+  the world: the selected units (a ring under each), the lines of their orders, and the ghost of
+  a building being placed where the mouse points, green where the engine says it can stand
+  (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
+  where the building cannot stand. A minimap world view shows the renderer's minimap picture; a
+  left click on it moves the main camera there. The mouse wheel zooms towards the cursor. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu

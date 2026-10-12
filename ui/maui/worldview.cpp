@@ -19,6 +19,7 @@
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/sim.h"
+#include "sim/sim_view.h"
 #include "sim/terrain.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -285,14 +286,77 @@ class WorldView : public Control {
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
+    // What the picture shows beside the world: marks under the selected units, the lines of their
+    // orders, and while a building is being placed its ghost where the mouse points (by the
+    // picture before this one), green where it can stand.
+    WorldScene scene;
+    SelectionForWorld(L, &scene.selection, &scene.lines);
+    std::string mode, name;
+    CommandMode(L, &mode, &name);
+    UiManager& ui = user->ui();
+    if (sim && pixels_ && (mode == "build" || mode == "buildanchored") && !name.empty() && HitTest(ui.mouseX, ui.mouseY)) {
+      float at[3];
+      WorldGhost ghost;
+      if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at) && BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
+        ghost.blueprint = name;
+        scene.ghosts.push_back(ghost);
+      }
+    }
+    source->SetScene(scene);
     pixels_ = source->Draw(cam, w, h);
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
     return pixels_ != nullptr;
   }
 
-  void Draw(lua_State* L, DrawTarget& target) override {
-    if (!EnsurePicture(L)) return;
+  // The game script's command mode (the original asks it the same way: commandmode.GetCommandMode(),
+  // FA exe 0x83dda0, gives {mode, data}): mode "order" with data.name = an order's name, or
+  // "build" with data.name = the blueprint to build; empty when there is none.
+  void CommandMode(lua_State* L, std::string* mode, std::string* name) {
+    int top = lua_gettop(L);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/commandmode.lua");
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "GetCommandMode");
+      lua_gettable(L, -2);
+      if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        if (lua_isstring(L, -1)) *mode = lua_tostring(L, -1);
+        lua_rawgeti(L, -2, 2);
+        if (lua_istable(L, -1)) {
+          lua_pushstring(L, "name");
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1)) *name = lua_tostring(L, -1);
+        }
+      }
+    }
+    lua_settop(L, top);
+  }
+
+  // A minimap shows the whole map from above, in the map's proportion inside its rectangle.
+  // False without a picture source.
+  bool MinimapRect(lua_State* L, Rect* out) {
+    WorldSource* source = UserState::From(L)->config().world;
+    float mw = 0, mh = 0;
+    if (!source || !miniMap || !source->MapSize(&mw, &mh)) return false;
     Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    float w = r.x1 - r.x0, h = r.y1 - r.y0;
+    if (w < 2 || h < 2) return false;
+    float pw = std::floor(std::min(w, h * mw / mh)), ph = std::floor(pw * mh / mw);
+    out->x0 = std::floor(r.x0 + (w - pw) * 0.5f), out->y0 = std::floor(r.y0 + (h - ph) * 0.5f);
+    out->x1 = out->x0 + pw, out->y1 = out->y0 + ph;
+    return pw >= 1 && ph >= 1;
+  }
+
+  void Draw(lua_State* L, DrawTarget& target) override {
+    Rect r;
+    if (MinimapRect(L, &r)) {
+      int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+      if (const uint32_t* pixels = UserState::From(L)->config().world->DrawMinimap(w, h))
+        target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+      return;
+    }
+    if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
   }
@@ -302,6 +366,12 @@ class WorldView : public Control {
   void ProjectPoint(lua_State* L, const float world[3], float* sx, float* sy) {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
+    if (MinimapRect(L, &r)) {
+      float x = 0, y = 0;
+      if (UserState::From(L)->config().world->MinimapProject(world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
+      else *sx = *sy = -100000.0f;
+      return;
+    }
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (EnsurePicture(L)) {
       float x = 0, y = 0;
@@ -316,6 +386,7 @@ class WorldView : public Control {
   void Unproject(lua_State* L, float sx, float sy, float world[3]) {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
+    if (MinimapRect(L, &r) && UserState::From(L)->config().world->MinimapGroundAt(sx - r.x0, sy - r.y0, world)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (EnsurePicture(L) && UserState::From(L)->config().world->GroundAt(sx - r.x0, sy - r.y0, world)) return;
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * c->zoom * std::tan(kFovY * 0.5f)) : 1;
@@ -373,29 +444,24 @@ class WorldView : public Control {
     Unproject(L, e.x, e.y, world);
     if (e.right) return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
     if (!e.left) return false;
-    // A left press while the game script is in a command mode (the original asks it the same way:
-    // commandmode.GetCommandMode(), FA exe 0x83dda0, gives {mode, data}): mode "order" with
-    // data.name = an order's name, or "build" with data.name = the blueprint to build.
+    // A left press while the game script is in a command mode: an order with the place as its
+    // target, or a building to build there. A building goes where the simulation would put it
+    // (the site snapped to its grid) and only where it can stand, as the original's interface
+    // lets no other order through.
     std::string mode, name;
-    int top = lua_gettop(L);
-    lua_getglobal(L, "import");
-    lua_pushstring(L, "/lua/ui/game/commandmode.lua");
-    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
-      lua_pushstring(L, "GetCommandMode");
-      lua_gettable(L, -2);
-      if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
-        lua_rawgeti(L, -1, 1);
-        if (lua_isstring(L, -1)) mode = lua_tostring(L, -1);
-        lua_rawgeti(L, -2, 2);
-        if (lua_istable(L, -1)) {
-          lua_pushstring(L, "name");
-          lua_gettable(L, -2);
-          if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
-        }
-      }
+    CommandMode(L, &mode, &name);
+    if (mode == "build" || mode == "buildanchored") {
+      Sim* sim = UserState::From(L)->config().sim;
+      float site[3] = {world[0], world[1], world[2]};
+      bool free = true;
+      if (sim && BuildSiteOf(*sim, name, world, site, &free) && !free) return true;
+      return IssueToSelection(L, "BuildMobile", site[0], site[1], site[2], !e.shift, name);
     }
-    lua_settop(L, top);
-    if (mode == "build" || mode == "buildanchored") return IssueToSelection(L, "BuildMobile", world[0], world[1], world[2], !e.shift, name);
+    if (miniMap && mode.empty()) {  // a left click on the minimap: the main camera looks there
+      Camera* main = GetCameraObject(L, "WorldCamera");
+      main->focus[0] = world[0], main->focus[2] = world[2];
+      return true;
+    }
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
     if (!mode.empty() || !UserState::From(L)->config().world || miniMap) return false;
     pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;

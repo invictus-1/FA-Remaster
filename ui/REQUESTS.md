@@ -119,6 +119,11 @@ Thank you.
 2. **A new commander's fire state is 2** in `UnitStateView` (hold ground), where the order button
    expects 0 (return fire) for a unit nobody touched. Is 2 what the original has for it?
 
+**Status:** answered (`docs/engine-answers.md`, "ui 6"): the refused sites lay over a mass deposit,
+as in the original; `BuildSiteOf` gives the snapped site and whether it is free, and the interface
+asks it for the build preview and before it sends a build order. Fire state 2 is FAF's own start
+value for commanders and structures. Thank you.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -161,3 +166,9 @@ you. Part 4 (one window, one device) when the read-back becomes the bottleneck.
 4. **Lines and shapes in the world** for orders (the waypoint lines of a selected unit's queue,
    range rings). FAF's scripts also draw their own shapes through a per-frame call; that can wait.
 5. Models and textures from the simulation's merged blueprints (you named it under "not yet").
+
+**Status:** parts 1 to 4 are done by the renderer track (`docs/render-answers.md`) and in use: the
+selection ring and the order lines of the selected units, the ghost of a building being placed
+(green or red by the engine's `BuildSiteOf`), and the minimap picture in a minimap world view.
+Thank you. Seen so far: order lines one pixel wide read well from close by; from far out they are
+hard to see, so wider or always-on-top lines would help when you get to it.

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "maui/world_source.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
@@ -1078,6 +1079,40 @@ void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
     if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
   }
   SetSelection(L, now);
+}
+
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines) {
+  Sim* sim = TheSim(L);
+  UserState* user = UserState::From(L);
+  if (!sim || !user->units) return;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  int shown = 0;
+  for (UserUnit* u : store.selection) {
+    if (u->gone || u->view.dead) continue;
+    ids->push_back(u->view.id);
+    if (u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
+    UnitStateView s;
+    if (!UnitStateOf(*sim, u->view.id, &s)) continue;
+    float from[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
+    for (const CommandView& c : s.queue) {
+      if (!c.hasPosition) continue;
+      // First version of the colours: move light blue, attack red, patrol green, building white,
+      // reclaim yellow, the rest grey. (The original's are still to be looked up.)
+      uint32_t color = 0xffc0c0c0u;
+      switch (static_cast<CommandType>(c.type)) {
+        case CommandType::Move: case CommandType::FormMove: case CommandType::AggressiveMove: color = 0xff40c8ffu; break;
+        case CommandType::Attack: case CommandType::FormAttack: color = 0xffff4040u; break;
+        case CommandType::Patrol: case CommandType::FormPatrol: color = 0xff40ff40u; break;
+        case CommandType::BuildMobile: case CommandType::BuildFactory: color = 0xffffffffu; break;
+        case CommandType::Reclaim: color = 0xffffff40u; break;
+        default: break;
+      }
+      WorldLine line;
+      for (int i = 0; i < 3; ++i) line.a[i] = from[i], line.b[i] = c.position[i], from[i] = c.position[i];
+      line.color = color;
+      lines->push_back(line);
+    }
+  }
 }
 
 // After a beat: the interface's units follow the simulation's.
