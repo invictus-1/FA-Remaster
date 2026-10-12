@@ -715,6 +715,34 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskFailed;
 }
 
+// Sim::LocationIsFree 0x62da50 for a factory's own footprint rect (flag 1), the part for units that are NOT
+// mobile: a live unit other than the factory, not on the Air layer and not carried, whose collision primitive
+// meets the rect's box (y -100 .. 100) and whose skirt rect overlaps the rect (strictly) keeps the factory from
+// starting. Seen: a ferry beacon set down on a factory. NOT PORTED: the mobile half. A mobile unit there blocks
+// too, and SIM_TryToBuild 0x62dd40 then asks the standing ones of the army to move off; without that call a
+// blocked factory would wait for ever, so mobile units are let through here as before.
+bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F) {
+  const NamedFootprint& fp = Footprint(*F->blueprint);
+  const int x0 = RoundEven(F->position.x - fp.sizeX * 0.5f), z0 = RoundEven(F->position.z - fp.sizeZ * 0.5f);
+  const float qx0 = static_cast<float>(x0), qz0 = static_cast<float>(z0);
+  const float qx1 = static_cast<float>(x0 + fp.sizeX), qz1 = static_cast<float>(z0 + fp.sizeZ);
+  const Vec3 mn{qx0, -100.0f, qz0}, mx{qx1, 100.0f, qz1};
+  bool blocked = false;
+  sim.ForUnitsInRect(qx0 - 16, qz0 - 16, qx1 + 16, qz1 + 16, [&](Unit* e) {
+    if (blocked || e == F || e->dead || e->destroyQueued || !e->blueprint) return;
+    if (e->parentId || e->unitStates.count("Attached") || e->layer == "Air") return;
+    if (e->motion.bp && e->motion.bp->mobile()) return;  // (see above)
+    WorldShape ws;
+    if (!GetWorldShape(e, &ws)) return;
+    Vec3 a, b;
+    ShapeBounds(ws, &a, &b);
+    if (!GridCellsMeet(mn, mx, a, b) || !ShapeOverlapsAABox(ws, mn, mx)) return;
+    const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+    if (qx1 > r.x0 && r.x1 > qx0 && qz1 > r.z0 && r.z1 > qz0 && r.x1 > r.x0 && r.z0 < r.z1) blocked = true;
+  });
+  return blocked;
+}
+
 // CFactoryBuildTask::Execute 0x5fa790 (factory_handoff.md 1). Waits ("return r") are kept in waitUntil.
 int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (sim.tick() < t.waitUntil) return kTaskRunning;
@@ -731,6 +759,7 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return wait(1);
       }
       if (u->paused) return wait(10);
+      if (FactorySiteBlocked(sim, L, u)) return wait(50);  // 0x62da50 false: (SIM_TryToBuild,) return 50
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, u->orientation, false, u);
       if (!nu || !Alive(nu)) return wait(10);
       nu->fireState = u->fireState;
