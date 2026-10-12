@@ -120,6 +120,7 @@ class Unit : public Entity {
   uint32_t focusId = 0;            // GetFocusUnit: what it builds, repairs, reclaims, ...
   uint32_t guardedId = 0;               // unit+0x4e0 (SetGuardedUnit only)
   std::vector<uint32_t> guarders;
+  int capturers = 0;               // u+0x690: capture tasks at work on this unit
   bool isPod = false;              // u+0x688: in category POD or STATIONASSISTPOD (pod_assist.md)
   bool isFactoryBuilder = false;
   uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id

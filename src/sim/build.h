@@ -46,6 +46,12 @@ struct BuildTask : public ScriptObject {
   uint32_t workId = 0;
   bool noMove = false, silo = false, assist = false, inheritWork = false, moving = false;
   bool child = false;  // a child task of the guard (or another task), not a command's own task
+  // CUnitCaptureTask: +0x4c started, +0x50 progress and +0x54 total (beats), +0x58 the request, +0x5c / +0x60
+  // the per-beat energy and mass
+  bool capStarted = false;
+  int capProgress = 0, capTotal = 0;
+  float capPerTick[2] = {0, 0};
+  std::shared_ptr<struct EconRequest> capRequest;
   // CUnitMobileBuildTask: the reclaim child clearing the site (0x5f6ea0), the wreck being rebuilt
   BuildTask* sub = nullptr;
   uint32_t subFrom = 0, rebuildWreck = 0;
@@ -96,6 +102,8 @@ std::vector<Unit*> Guards(Sim& sim, const Unit* g);
 
 // Missile silos (CAiSiloBuildImpl): queued and automatic missile builds; a unit's beat.
 void SiloTick(Sim& sim, Unit* u);
+int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
+void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 // Child tasks another task starts for its unit: the repair / build-assist task (CUnitRepairTask::operator new
 // 0x5f9e50; silo: helping a silo build its missile) and the reclaim task (IssueReclaimTask 0x61ef60).
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo);
