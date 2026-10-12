@@ -55,12 +55,18 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
 
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
+               [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
                [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
 Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, the middle button drags
 the ground, the right button turns and tilts. Keys: W A S D or the arrows move, F12 saves a
 screenshot, V switches vsync, Escape quits.
+
+Playing a recording: make one with the engine, with the log that says which unit is which
+(`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
+the viewer with the replay's map. Space pauses, + and - change the speed, Page Up / Page Down jump
+ten seconds, Home starts over.
 
 `--frames N --screenshot file.png` renders N frames, saves the last one, prints the time per frame and
 exits: the way to check a change without looking at the screen (`--cam` chooses the view). `--debug`
@@ -81,27 +87,41 @@ prints what it reports.
 | `terrain.h` | the ground: level-of-detail mesh, layer blending and lighting as the original computes them |
 | `water.h` | the water surface |
 | `ground.h` | where a ray (the mouse pointer) meets the ground |
+| `bp_reader.h` | reads a blueprint file as plain data, without Lua (for the viewer: mesh and texture names) |
+| `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
+| `mesh_renderer.h` | draws models, instanced: units and props |
+| `recording.h` | a tick recording as a source of frames |
 | `debug_draw.h` | lines and plain boxes: markers and placeholders |
 | `png.h` | screenshots |
-| `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls |
+| `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls, playback |
 
 Shaders are written for this renderer and live as text in the `.cpp` that uses them. The game's own
 shader files are read for what they compute, not copied.
 
 ## Where it stands
 
-Steps 1 and 2 of the order of work are done.
+Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 
 - Step 1: window, device, frame loop.
 - Step 2: the ground from the `.scmap` (the "TTerrain" and "TTerrainXP" looks: layers, masks, the
   map's normal map, sun, specular, the under-water tint), the water sheet (wave normals, reflected sky,
-  sun glint, crests), the map's props as boxes.
+  sun glint, crests).
+- Step 3: models from `.scm` files with albedo, normal and spec-team textures, team colours, levels
+  of detail by distance, drawn instanced; the map's props (trees, rocks) with their own models.
+- Step 4: a recording played on its map: units move as recorded, blended between ticks.
 
 Known gaps, to be closed in the steps they belong to:
 
+- Units: every model is drawn in its rest pose (a recording has no bone poses: turrets do not turn,
+  legs do not walk) and with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
+  highlights). A unit under construction is only darker. Army colours are a fixed list, not the
+  replay's. No strategic icons: beyond its last level of detail a unit is not drawn.
+- Levels of detail switch at the blueprint file's `LODCutoff` taken as distance to the camera; what
+  the original measures exactly, and what the game's scripts change after loading, is not applied.
+- Props do not sway, and blended far-away cards are not sorted by distance.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No shadows, no decals, no sky, no ground beyond the map's edge.
+- No shadows, no decals, no sky, no ground beyond the map's edge, no projectiles or effects.
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
 - Layer textures repeat every `scale` world units in both directions; on a map that is not square the
   original may stretch one direction (not checked).

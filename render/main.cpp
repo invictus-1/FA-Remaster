@@ -1,18 +1,23 @@
 // moho64view: the renderer's own program. It shows a map from the player's game files with the game
-// camera (the recording's units come next); without a map, a test scene.
+// camera and plays a tick recording on it; without a map, a test scene.
 //
 //   moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]
+//              [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
 //              [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
 //              [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 //
 // --fa      the game's installation folder: its gamedata\*.scd and its maps are used
 // --data    a folder of .nx2 / .scd archives used before the game's own (a patched game's files);
 //           may be given several times, the first folder wins
+// --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
+// --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
+// --tick, --paused  where playback starts, and whether it stands still
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
-// Keys: W A S D or the arrows move, F12 saves a screenshot, V switches vsync, Escape quits.
+// Keys: W A S D or the arrows move, F12 saves a screenshot, V switches vsync, Escape quits;
+// Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -28,10 +33,14 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "debug_draw.h"
+#include "frame.h"
 #include "gfx.h"
 #include "ground.h"
 #include "linalg.h"
+#include "mesh_renderer.h"
+#include "models.h"
 #include "png.h"
+#include "recording.h"
 #include "scmap.h"
 #include "terrain.h"
 #include "textures.h"
@@ -45,12 +54,17 @@ namespace {
 
 constexpr float kPi = 3.14159265f;
 
+// Army colours until they are read from the replay: the first of the game's own list.
+const Vec3 kArmyColors[8] = {{0.26f, 0.43f, 0.93f}, {0.91f, 0.04f, 0.04f}, {0.38f, 0.43f, 0.49f}, {0.98f, 0.98f, 0.0f},
+                             {1.0f, 0.53f, 0.22f},  {0.62f, 0.21f, 0.74f}, {1.0f, 0.53f, 0.93f},  {0.18f, 0.55f, 0.22f}};
+
 struct Options {
   int width = 1600, height = 900;
-  bool vsync = true, debug = false;
+  bool vsync = true, debug = false, paused = false;
   int frames = 0;
   float lodPixels = 0;
-  std::string screenshot, fa, map;
+  double tick = -1;
+  std::string screenshot, fa, map, recording, createLog;
   std::vector<std::string> data;
   bool hasCam = false;
   float cam[5] = {};
@@ -63,7 +77,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     const char* v = nullptr;
     if (a == "--novsync") o->vsync = false;
     else if (a == "--debug") o->debug = true;
+    else if (a == "--paused") o->paused = true;
     else if (!(v = value())) return false;
+    else if (a == "--rec") o->recording = v;
+    else if (a == "--createlog") o->createLog = v;
+    else if (a == "--tick") o->tick = atof(v);
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
     } else if (a == "--frames") o->frames = atoi(v);
@@ -115,10 +133,12 @@ int main(int argc, char** argv) {
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
     fprintf(stderr, "usage: moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]\n"
+                    "                  [--rec <recording> --createlog <engine log>] [--tick N] [--paused]\n"
                     "                  [--size WxH] [--novsync] [--debug] [--lod <pixels>]\n"
                     "                  [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]\n");
     return 2;
   }
+  setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   std::string error;
   auto window = Window::Create("FA Remastered", opt.width, opt.height, &error);
   if (!window) {
@@ -152,7 +172,6 @@ int main(int argc, char** argv) {
   MapData map;
   std::unique_ptr<Terrain> terrain;
   std::unique_ptr<Water> water;
-  DebugDraw::Baked props;
   if (!opt.map.empty()) {
     auto file = vfs.ReadFile(opt.map);
     if (!file) {
@@ -174,21 +193,54 @@ int main(int argc, char** argv) {
       fprintf(stderr, "render: water: %s\n", error.c_str());
       return 1;
     }
-    // the map's trees, rocks and wrecks as plain boxes until their meshes are drawn
-    for (const MapProp& p : map.props) {
-      const bool tree = p.blueprint.find("/trees/") != std::string::npos;
-      const bool rock = p.blueprint.find("/rocks/") != std::string::npos || p.blueprint.find("/boulders/") != std::string::npos;
-      const bool group = p.blueprint.find("/groups/") != std::string::npos;
-      const float s = std::max(0.1f, p.scale.y);
-      Vec3 half = tree ? Vec3{group ? 1.2f : 0.3f, 1.4f, group ? 1.2f : 0.3f} : rock ? Vec3{0.6f, 0.4f, 0.6f} : Vec3{0.5f, 0.3f, 0.5f};
-      half = half * s;
-      draw.Box(p.position + Vec3{0, half.y, 0}, half, tree ? 0xff2d5a2au : rock ? 0xff808488u : 0xff4a6078u);
-    }
-    props = draw.Bake();
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", opt.map.c_str(), map.width, map.height, map.shader.c_str(),
            map.props.size(), map.decals.size());
   }
   const bool haveMap = terrain != nullptr;
+
+  // the recording played on the map
+  ModelCache models(device.get(), &vfs, &textures);
+  MeshRenderer meshes(device.get(), &textures);
+  if (!meshes.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  Recording recording;
+  bool haveRecording = false;
+  if (!opt.recording.empty()) {
+    if (!recording.Load(opt.recording, &error)) {
+      fprintf(stderr, "render: recording %s: %s\n", opt.recording.c_str(), error.c_str());
+      return 1;
+    }
+    haveRecording = true;
+    int known = opt.createLog.empty() ? 0 : recording.LoadCreateLog(opt.createLog);
+    printf("render: recording %s: ticks %u to %u, %d units named by the log\n", opt.recording.c_str(), recording.FirstTick(),
+           recording.LastTick(), known);
+    if (!known) fprintf(stderr, "render: no --createlog (an engine log made with MOHO64_DEBUG_CREATE=1): units are drawn as boxes\n");
+  }
+  gfx::Texture environment;
+  for (const auto& cube : map.environmentCubemaps)
+    if (cube.first == "<default>") environment = textures.Get(cube.second);
+  // the map's props (trees, rocks, wrecks): where each stands does not change
+  struct PlacedProp {
+    const Model* model;
+    Mat4 world;
+  };
+  std::vector<PlacedProp> placedProps;
+  for (const MapProp& p : map.props) {
+    const Model* model = models.Blueprint(p.blueprint);
+    if (!model->ok) continue;
+    const Vec3 s = p.scale * model->scale;
+    Mat4 world = {{{p.axisX.x * s.x, p.axisY.x * s.y, p.axisZ.x * s.z, p.position.x},
+                   {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, p.position.y},
+                   {p.axisX.z * s.x, p.axisY.z * s.y, p.axisZ.z * s.z, p.position.z},
+                   {0, 0, 0, 1}}};
+    placedProps.push_back({model, world});
+  }
+  Frame frame;
+  double playTick = haveRecording ? (opt.tick >= 0 ? opt.tick : recording.FirstTick()) : 0;
+  double playSpeed = 1;  // 1: ten ticks a second, as the game runs at normal speed
+  bool paused = opt.paused;
 
   Camera camera;
   float maxDistance = 6000;
@@ -253,6 +305,12 @@ int main(int argc, char** argv) {
           if (e.key == kKeyEscape) quit = true;
           if (e.key == kKeyF12) wantScreenshot = true;
           if (e.key == 'V') device->SetVsync(vsync = !vsync);
+          if (e.key == kKeySpace) paused = !paused;
+          if (e.key == kKeyPlus) playSpeed = std::min(playSpeed * 2, 64.0);
+          if (e.key == kKeyMinus) playSpeed = std::max(playSpeed / 2, 0.125);
+          if (e.key == kKeyPageDown) playTick += 100;
+          if (e.key == kKeyPageUp) playTick -= 100;
+          if (e.key == kKeyHome) playTick = recording.FirstTick();
           break;
         case InputEvent::MouseDown:
           dragX = e.x;
@@ -317,9 +375,30 @@ int main(int argc, char** argv) {
 
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
+    meshes.Begin(view);
+    for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
+    if (haveRecording) {
+      if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
+      playTick = std::clamp(playTick, static_cast<double>(recording.FirstTick()), static_cast<double>(recording.LastTick()));
+      recording.FrameAt(playTick, &frame);
+      for (const FrameUnit& u : frame.units) {
+        if (u.dead) continue;
+        const Vec3 position{u.position[0], u.position[1], u.position[2]};
+        const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
+        const Vec3 color = kArmyColors[u.Army() % 8];
+        const std::string& blueprint = (*frame.blueprints)[u.blueprint];
+        const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
+        if (model && model->ok) {
+          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete);
+        } else {  // not known what it is, or its files cannot be read: a box in the army's colour
+          auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
+          draw.Box(position + Vec3{0, 0.4f, 0}, {0.4f, 0.4f, 0.4f}, 0xff000000u | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x));
+        }
+      }
+    }
     if (haveMap) {
       terrain->Draw(view);
-      draw.DrawBaked(props, view, sun);
+      meshes.Draw(map.lighting, environment);
       draw.Flush(view, sun);
       water->Draw(view);
     } else {
@@ -352,7 +431,12 @@ int main(int argc, char** argv) {
       int n = snprintf(title, sizeof title, "FA Remastered - %s - %s - %.2f ms (%.0f fps)%s", device->BackendName(),
                        device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? "" : " - vsync off");
       if (haveMap && n > 0 && n < static_cast<int>(sizeof title))
-        snprintf(title + n, sizeof title - static_cast<size_t>(n), " - ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
+        n += snprintf(title + n, sizeof title - static_cast<size_t>(n), " - ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
+      if (haveRecording && n > 0 && n < static_cast<int>(sizeof title)) {
+        const int seconds = static_cast<int>(playTick / 10);
+        snprintf(title + n, sizeof title - static_cast<size_t>(n), " - %d:%02d (tick %d) x%g%s - %d units, %d triangles", seconds / 60, seconds % 60,
+                 static_cast<int>(playTick), playSpeed, paused ? " paused" : "", meshes.drawnInstances, meshes.drawnTriangles);
+      }
       window->SetTitle(title);
       titleTime = 0;
       titleFrames = 0;
