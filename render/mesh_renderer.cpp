@@ -104,9 +104,13 @@ float4 PS(VOut i) : SV_Target {
     float metallic = 0, roughness = 0.9;
     float3 emission = 0;
     if (kind.w > 0.5) {
+      // a remastered unit: the material as painted. Team-coloured panels take the army's colour and
+      // keep the paint's own light and dark (the rule of the lab's LabPBR shader for the original game).
+      float luma = dot(albedo.rgb, float3(0.299, 0.587, 0.114));
+      base = lerp(ToLinear(albedo.rgb), ToLinear(i.color.rgb * saturate(0.15 + luma * 1.3)), teamMask);
       metallic = spec.r;
       roughness = spec.g;
-      emission = base * spec.b * 4;
+      emission = base * spec.b * 1.5;
     } else if (kind.z < 0.5) {
       metallic = saturate(spec.r * 1.2) * 0.7 * (1 - teamMask);
       roughness = lerp(0.75, 0.35, saturate(spec.g * 1.5));

@@ -65,7 +65,16 @@ std::string Lower(std::string s) {
 
 const Model* ModelCache::Unit(const std::string& blueprintId) {
   std::string id = Lower(blueprintId);
-  return Blueprint("/units/" + id + "/" + id + "_unit.bp");
+  auto known = unitPaths_.find(id);
+  if (known != unitPaths_.end()) return Blueprint(known->second);
+  // the game's own units are in /units; a mod's are in its own folder under /mods
+  std::string path = "/units/" + id + "/" + id + "_unit.bp";
+  if (!vfs_->Exists(path)) {
+    std::vector<std::string> found = vfs_->FindFiles("/mods", id + "_unit.bp");
+    if (!found.empty()) path = found.front();
+  }
+  unitPaths_.emplace(id, path);
+  return Blueprint(path);
 }
 
 const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
@@ -113,7 +122,13 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
       if (given.empty()) return dir + base + standard;
       return given[0] == '/' ? given : dir + given;
     };
-    const std::string meshPath = file("MeshName", "_lod" + std::to_string(i) + ".scm");
+    // A remastered model being tried out (the viewer's --preview): its folder, mounted at
+    // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace
+    // the blueprint's for every level. Scale and cutoffs stay the blueprint's.
+    const std::string preview = "/preview/" + base + "/";
+    const bool previewed = vfs_->Exists(preview + base + "_lod0.scm");
+    const std::string meshPath = previewed ? preview + base + "_lod" + std::to_string(i) + ".scm"
+                                           : file("MeshName", "_lod" + std::to_string(i) + ".scm");
     auto mesh = vfs_->ReadFile(meshPath);
     std::string error;
     if (!mesh || !LoadScm(device_, *mesh, &lod, i == 0 ? &m->boundsMin : nullptr, i == 0 ? &m->boundsMax : nullptr, &error)) {
@@ -135,6 +150,20 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath) {
     lod.specular = texture("SpecularName", "_specteam.dds", textures_->Black());
     lod.labPbr = kind == "labpbr";
     lod.secondary = entry["SecondaryName"].kind == BpValue::String ? texture("SecondaryName", "", textures_->White()) : textures_->White();
+    // The lab's LabVisuals mod gives a unit remastered textures from a script that runs when the game
+    // merges blueprints, which this reader does not run. Its rule is simple enough to follow here: a
+    // unit with textures in the mod's folder uses them, as a LabPBR material, for its finest level.
+    // (In the running game the simulation's merged blueprints will say this, for any mod.)
+    std::string lab = "/mods/labvisuals/textures/" + base + "/" + base + "_lab_";
+    if (previewed) lab = preview + (vfs_->Exists(preview + "textures/" + base + "_lab_albedo.dds") ? "textures/" : "") + base + "_lab_";
+    if ((i == 0 || previewed) && vfs_->Exists(lab + "albedo.dds")) {
+      lod.albedo = textures_->Get(lab + "albedo.dds", lod.albedo);
+      lod.normals = textures_->Get(lab + "normal.dds", lod.normals);
+      lod.specular = textures_->Get(lab + "spec.dds", lod.specular);
+      lod.secondary = vfs_->Exists(lab + "ao.dds") ? textures_->Get(lab + "ao.dds", textures_->White()) : textures_->White();
+      lod.labPbr = true;
+      lod.shaderName = "LabPBR";
+    }
     m->lods.push_back(std::move(lod));
   }
   m->ok = true;

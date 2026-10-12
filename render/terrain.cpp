@@ -135,7 +135,7 @@ float4 PS(VOut i) : SV_Target {
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, 0, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
     // full sunlight), so that shallows keep the map's water colours
-    float full = lightMultiplier * modern.x;
+    float full = max(lightMultiplier * modern.x, 0.01);
     float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), ramp.rgb, ramp.a);
     return float4(ToLinear(screen) * full, 1);
   }

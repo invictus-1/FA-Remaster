@@ -69,6 +69,7 @@ class ModelCache {
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
+  std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
 };
 
 }  // namespace render

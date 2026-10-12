@@ -56,7 +56,9 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
+               [--mods <folder of mods>] [--preview <unit id>=<folder>] [--place <unit id>]
                [--look modern|original] [--noshadows]
+               [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
                [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
@@ -64,6 +66,11 @@ Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, th
 the ground, the right button turns and tilts. Keys: W A S D or the arrows move, L switches between
 the modern and the original look, H switches the shadows, F12 saves a screenshot, V switches vsync,
 Escape quits.
+
+Looking at a remastered model without a recording: `--preview uel0401=<folder>` takes that unit's
+meshes (`uel0401_lod0.scm`, `_lod1.scm`, ...) and LabPBR textures (`uel0401_lab_albedo.dds`,
+`_lab_normal.dds`, `_lab_spec.dds`, `_lab_ao.dds`, in the folder or its `textures` folder) from there
+instead of the game's, and `--place uel0401` stands the unit at the camera's starting point.
 
 Playing a recording: make one with the engine, with the log that says which unit is which
 (`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
@@ -127,7 +134,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
     is translated (reflection strength stands for metal, highlight strength for smoothness); this
     translation is a first one and not yet tuned per faction (white paint on Cybran and Aeon units
     comes out too dark).
-  - The modern look's strengths (sun, sky, exposure) are constants found by eye on one map.
+  - The modern look's strengths (`--sun`, `--sky`, `--exposure`, `--reflection`) are constants found
+    by eye on one map. Highlights and the mirrored sky are held back (`--reflection` 0.7): the game's
+    sky pictures hold no values beyond white, and at full strength metal turns pale.
+- Mods: `--mods <folder>` makes the mods of that folder available under `/mods/<name>`, so a mod's
+  units are found. What a mod's scripts change in blueprints is not seen (the reader runs no Lua),
+  with one exception written out by hand: units with textures in the lab's `LabVisuals` mod get them
+  as a LabPBR material, as that mod's script would do.
 
 Known gaps, to be closed in the steps they belong to:
 

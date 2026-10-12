@@ -75,7 +75,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
-  float3 color = (diffuseColor / 3.14159265 + D * Vis * F) * sunRadiance * (nDotL * shadow) * 3.14159265;
+  // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
+  // dark paint of middling roughness shows more sheen than colour)
+  float3 color = (diffuseColor / 3.14159265 + D * Vis * F * modern.w) * sunRadiance * (nDotL * shadow) * 3.14159265;
 
   // the sky: its blurriest level lights the surface from all sides, a sharper level is mirrored
   float3 R = reflect(-V, N);
@@ -83,7 +85,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float3 skyDiffuse = ToLinear(environmentSky.SampleLevel(samplerLinear, N, levels).rgb);
   float3 skySpecular = ToLinear(environmentSky.SampleLevel(samplerLinear, R, roughness * levels).rgb);
   float3 fill = ToLinear(shadowFill) * 0.5;
-  color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV)) * (modern.y * occlusion);
+  // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
+  // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)
+  color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV) * modern.w) * (modern.y * occlusion);
   return color + emission;
 }
 )hlsl";

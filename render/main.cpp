@@ -12,8 +12,12 @@
 // --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
 // --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
 // --tick, --paused  where playback starts, and whether it stands still
+// --mods    a folder of mods (each in its own folder): their units and textures are found too
+// --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
+// --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --noshadows  start without the sun's shadows
+// --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
@@ -69,9 +73,12 @@ struct Options {
   Look look = Look::Modern;
   int frames = 0;
   float lodPixels = 0;
+  // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
+  // chosen for the original's formula)
+  float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
-  std::vector<std::string> data;
+  std::vector<std::string> data, mods, previews, place;
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -101,6 +108,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--screenshot") o->screenshot = v;
     else if (a == "--fa") o->fa = v;
     else if (a == "--data") o->data.push_back(v);
+    else if (a == "--mods") o->mods.push_back(v);
+    else if (a == "--preview") o->previews.push_back(v);
+    else if (a == "--place") o->place.push_back(v);
+    else if (a == "--sun") o->sun = static_cast<float>(atof(v));
+    else if (a == "--sky") o->sky = static_cast<float>(atof(v));
+    else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
+    else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--map") o->map = v;
     else if (a == "--cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
@@ -123,6 +137,16 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
   if (!o.fa.empty()) {
     archives(o.fa + "/gamedata");
     if (!vfs->Mount(o.fa + "/maps", "/maps")) fprintf(stderr, "render: no maps folder in %s\n", o.fa.c_str());
+  }
+  // every mod of a mods folder, each under /mods/<its folder's name>, as the game mounts them
+  for (const std::string& folder : o.mods)
+    for (const std::string& name : moho::hostfs::ListDirectory(folder))
+      if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
+  // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
+  for (const std::string& p : o.previews) {
+    const size_t eq = p.find('=');
+    if (eq == std::string::npos || !vfs->Mount(p.substr(eq + 1), "/preview/" + p.substr(0, eq)))
+      fprintf(stderr, "render: --preview %s: expected <unit id>=<existing folder>\n", p.c_str());
   }
 }
 
@@ -247,9 +271,7 @@ int main(int argc, char** argv) {
   gfx::Texture sky = textures.SkyCube(haveMap ? map.skyCubemap : std::string());
   Look look = opt.look;
   bool shadowsOn = opt.shadows;
-  // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
-  // chosen for the original's formula)
-  float sunStrength = 1.5f, skyStrength = 1.8f, exposure = 0.9f;
+  float sunStrength = opt.sun, skyStrength = opt.sky, exposure = opt.exposure;
   // the map's props (trees, rocks, wrecks): where each stands does not change
   struct PlacedProp {
     const Model* model;
@@ -308,6 +330,21 @@ int main(int argc, char** argv) {
     camera.heading = 0;
   };
   if (haveRecording && !opt.hasCam) lookAtUnits();
+  // --place <unit id>: stands that unit at the camera's starting target (several: side by side),
+  // to look at a model without a recording
+  struct PlacedUnit {
+    const Model* model;
+    Vec3 position;
+  };
+  std::vector<PlacedUnit> placedUnits;
+  for (size_t i = 0; i < opt.place.size(); ++i) {
+    const Model* model = models.Unit(opt.place[i]);
+    if (!model->ok) continue;
+    Vec3 p = camera.target + Vec3{static_cast<float>(i) * 8, 0, 0};
+    p.y = haveMap ? map.Height(p.x, p.z) : 0;
+    if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
+    placedUnits.push_back({model, p});
+  }
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
@@ -438,6 +475,7 @@ int main(int argc, char** argv) {
       c.modern[0] = sunStrength;
       c.modern[1] = skyStrength;
       c.modern[2] = exposure;
+      c.modern[3] = opt.reflection;
       if (haveMap && shadowsOn) shadows.Place(camera, sun, &view);
     }
 
@@ -445,6 +483,7 @@ int main(int argc, char** argv) {
     device->BeginFrame(clear);
     meshes.Begin();
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
+    for (const PlacedUnit& u : placedUnits) meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
     if (haveRecording) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
       playTick = std::clamp(playTick, static_cast<double>(recording.FirstTick()), static_cast<double>(recording.LastTick()));

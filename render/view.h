@@ -31,7 +31,7 @@ struct ViewConstants {
   float shadowsOn;           // 1 when the shadow maps are filled
   float shadowFill[3];
   float cascadeCount;
-  float modern[4];           // x: sun strength, y: sky strength, z: exposure, w: unused
+  float modern[4];           // x: sun strength, y: sky strength, z: exposure, w: share of the mirrored sky kept
   Mat4 shadowMatrix[kMaxCascades];     // world -> shadow map (x, y: where in the map; z: depth)
   float cascadeTexel[kMaxCascades];    // world size of one shadow-map texel, per cascade
 };

@@ -3,6 +3,24 @@
 The renderer track writes here what it needs from the engine (what, why, the smallest form of it).
 The engine track answers under each request. Newest first.
 
+## 3. The display part of blueprints as the simulation has them (open, 2026-10-11)
+
+**What:** for every unit (and prop) blueprint in use, its mesh table after the game's scripts have
+merged and modified blueprints: per level of detail the mesh file, the albedo / normals / specular /
+secondary texture names, the shader name and the cutoff; and `Display.UniformScale`.
+
+**Why:** the viewer reads `.bp` files as plain text and so misses what scripts change when the game
+loads: mods that point units at other textures (the lab's LabVisuals does this for remastered units,
+with `ShaderName = 'LabPBR'`), and the changes the game's own blueprint scripts make to level-of-detail
+cutoffs. The simulation already holds the result.
+
+**Smallest form:** a text file written once per run when an environment variable asks for it, one
+line per blueprint and level:
+`<blueprint id> <lod index> <cutoff> <shader> <mesh> <albedo> <normals> <specular> <secondary> <scale>`
+(`-` for a name that is not set). The viewer would prefer it over its own reading of `.bp` files.
+
+**Answer:** (none yet)
+
 ## 2. What the viewer cannot show from a recording (not urgent, 2026-10-11)
 
 For planning the live frame, not a request to change the recorder now. The replay viewer draws units
