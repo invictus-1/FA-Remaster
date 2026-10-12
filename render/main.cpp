@@ -83,7 +83,8 @@ struct Options {
   bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
-  std::vector<std::string> data, mods, maps, previews, place;
+  std::vector<std::string> data, mods, maps, previews, place, crowd;
+  float lodScale = 1;  // below 1 keeps models' finer levels of detail (and the models themselves) for longer
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -117,6 +118,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--maps") o->maps.push_back(v);
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--place") o->place.push_back(v);
+    else if (a == "--crowd") o->crowd.push_back(v);
+    else if (a == "--lodscale") o->lodScale = static_cast<float>(atof(v));
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
@@ -260,6 +263,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
+  meshes.lodScale = opt.lodScale;
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -376,6 +380,19 @@ int main(int argc, char** argv) {
       } else {
         at.x += width * 1.5f;
       }
+    }
+    // --crowd <unit id>=<count>: that many copies in a square block, to measure what many units cost
+    for (const std::string& c : opt.crowd) {
+      const size_t eq = c.find('=');
+      const Model* model = models.Unit(c.substr(0, eq));
+      const int count = eq == std::string::npos ? 100 : atoi(c.c_str() + eq + 1);
+      if (!model->ok || count <= 0) continue;
+      const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+      const float spacing = std::max(size.x, size.z) * 1.3f;
+      const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(count))));
+      for (int i = 0; i < count; ++i)
+        stand(model, at + Vec3{(static_cast<float>(i % side) - static_cast<float>(side - 1) * 0.5f) * spacing, 0,
+                               (static_cast<float>(i / side) - static_cast<float>(side - 1) * 0.5f) * spacing});
     }
     // without --cam the camera frames what was placed; --heading and --pitch choose the side
     if (!opt.hasCam && !placedUnits.empty()) {
@@ -586,7 +603,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      printf("\n");
+      printf("; models: %d drawn, %d triangles\n", meshes.drawnInstances, meshes.drawnTriangles);
       break;
     }
 
