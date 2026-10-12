@@ -318,6 +318,16 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     p->lastTargetPos = blip->position;
   } else {
     Vec3 t = TargetPos(sim, p->target, false);
+    // A target WITHOUT an aim bone is the entity's own position, and an entity that already took its step in
+    // this beat still stands, for the original, where the beat began (its transform is committed in step 13):
+    // the point is taken out of the hull's frame of now and put back in with the held one. (With an aim bone
+    // the point comes from the unit's pose, which did move with the unit's own step: the Experimental replay
+    // needs that, the Transports replay the other.)
+    if (const Entity* te0 = TargetEntity(sim, p->target);
+        te0 && te0->shapeHeld && p->target.aimBone < 0 && !IsNaN(t)) {
+      const Vec3 local = Rotate(Conj(te0->orientation), Sub(t, te0->position));
+      t = Add(te0->shapePos, Rotate(te0->shapeOri, local));
+    }
     if (!IsNaN(t)) p->lastTargetPos = t;
   }
   Vec3 aim = p->lastTargetPos;
