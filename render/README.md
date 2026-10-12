@@ -53,11 +53,19 @@ So: build it against recordings, combine later by swapping the source of the fra
 Nothing else is needed on Windows: the Direct3D 12 headers come with the compiler, and shaders are
 compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
 
-    moho64view [--size 1600x900] [--novsync] [--debug] [--frames N] [--screenshot file.png]
+    moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
+               [--data <folder of .nx2 / .scd archives used before the game's own>]...
+               [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
+               [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
-`--frames N --screenshot file.png` renders N frames, saves the last one and exits: the way to check a
-change without looking at the screen. `--debug` turns on Direct3D's validation layer (when the
-Windows "Graphics Tools" feature is installed) and prints what it reports.
+Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, the middle button drags
+the ground, the right button turns and tilts. Keys: W A S D or the arrows move, F12 saves a
+screenshot, V switches vsync, Escape quits.
+
+`--frames N --screenshot file.png` renders N frames, saves the last one, prints the time per frame and
+exits: the way to check a change without looking at the screen (`--cam` chooses the view). `--debug`
+turns on Direct3D's validation layer (when the Windows "Graphics Tools" feature is installed) and
+prints what it reports.
 
 ## The files
 
@@ -66,14 +74,38 @@ Windows "Graphics Tools" feature is installed) and prints what it reports.
 | `gfx.h` | the thin device interface: buffers, textures, pipelines, draws. The only thing a second backend implements |
 | `gfx_d3d12.cpp` | its Direct3D 12 backend (chosen first: no SDK to install on Windows; Vulkan can follow for other systems) |
 | `window.h`, `window_win32.cpp` | the window and its input |
-| `linalg.h`, `camera.h` | vectors, matrices, the game camera |
+| `linalg.h`, `camera.h`, `view.h` | vectors, matrices, the game camera, what each drawing pass is told about the picture |
 | `frame.h` | the frame: what the renderer is given to draw |
-| `png.h`, `png.cpp` | screenshots |
-| `main.cpp` | `moho64view`: the frame loop |
+| `dds.h`, `textures.h` | reading `.dds` files; textures by virtual path, each loaded once |
+| `scmap.h` | the map file as the renderer needs it (heights, layers, masks, lighting, water, decals, props) |
+| `terrain.h` | the ground: level-of-detail mesh, layer blending and lighting as the original computes them |
+| `water.h` | the water surface |
+| `ground.h` | where a ray (the mouse pointer) meets the ground |
+| `debug_draw.h` | lines and plain boxes: markers and placeholders |
+| `png.h` | screenshots |
+| `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls |
+
+Shaders are written for this renderer and live as text in the `.cpp` that uses them. The game's own
+shader files are read for what they compute, not copied.
 
 ## Where it stands
 
-Step 1 of the order of work is done: window, device, frame loop, a test scene (grid and boxes).
+Steps 1 and 2 of the order of work are done.
+
+- Step 1: window, device, frame loop.
+- Step 2: the ground from the `.scmap` (the "TTerrain" and "TTerrainXP" looks: layers, masks, the
+  map's normal map, sun, specular, the under-water tint), the water sheet (wave normals, reflected sky,
+  sun glint, crests), the map's props as boxes.
+
+Known gaps, to be closed in the steps they belong to:
+
+- Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
+  is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
+- No shadows, no decals, no sky, no ground beyond the map's edge.
+- Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
+- Layer textures repeat every `scale` world units in both directions; on a map that is not square the
+  original may stretch one direction (not checked).
+- Ground textures use anisotropic filtering; the original uses plain trilinear.
 
 ## Asking the engine track
 

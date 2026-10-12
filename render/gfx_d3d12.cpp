@@ -1,13 +1,13 @@
 // Direct3D 12 backend of gfx.h.
 //
 // How it is put together:
-//  - One root signature for every pipeline: four root constant-buffer views (b0..b3), one table of 16
-//    textures (t0..t15) and the fixed samplers.
+//  - One root signature for every pipeline: four root constant-buffer views (b0..b3), one table of 32
+//    textures (t0..t31) and the fixed samplers.
 //  - Per back buffer ("frame slot"): a command allocator, a ring of upload pages for this frame's
 //    constants and dynamic buffers, a share of the shader-visible descriptor heap, and the list of
 //    resources destroyed while it was recorded. All of it is reused when the slot comes round again,
 //    after the GPU has finished that frame.
-//  - Every texture has one descriptor in a CPU-side heap; a draw's 16 textures are copied from there
+//  - Every texture has one descriptor in a CPU-side heap; a draw's 32 textures are copied from there
 //    into the frame's share of the shader-visible heap (once per distinct set per frame).
 //  - Static buffers and textures are uploaded at creation through a separate command list, waiting for
 //    the GPU each time (load time only).
@@ -31,7 +31,7 @@ bool IsBlockCompressed(Format f) { return f >= Format::BC1 && f <= Format::BC5; 
 
 int BytesPerPixelOrBlock(Format f) {
   switch (f) {
-    case Format::R8: return 1;
+    case Format::R8: case Format::A8: return 1;
     case Format::RG8: case Format::R16: case Format::R16F: return 2;
     case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::R32F: return 4;
     case Format::RGBA16F: return 8;
@@ -73,10 +73,10 @@ class Com {
 };
 
 constexpr int kFrames = 3;
-constexpr int kTexSlots = 16;
+constexpr int kTexSlots = 32;
 constexpr int kCbSlots = 4;
 constexpr uint32_t kMaxTextures = 16384;       // CPU-side descriptors, one per texture (slot 0: the null texture)
-constexpr uint32_t kRingDescriptors = 98304;   // shader-visible, split between the frame slots
+constexpr uint32_t kRingDescriptors = kFrames * kTexSlots * 4096;  // shader-visible, split between the frame slots
 constexpr size_t kPageSize = 8u << 20;
 constexpr DXGI_FORMAT kBackFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
@@ -84,6 +84,7 @@ constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 DXGI_FORMAT ToDxgi(Format f) {
   switch (f) {
     case Format::R8: return DXGI_FORMAT_R8_UNORM;
+    case Format::A8: return DXGI_FORMAT_A8_UNORM;
     case Format::RG8: return DXGI_FORMAT_R8G8_UNORM;
     case Format::RGBA8: return DXGI_FORMAT_R8G8B8A8_UNORM;
     case Format::RGBA8_sRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;

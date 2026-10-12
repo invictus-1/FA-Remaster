@@ -1,9 +1,16 @@
-// moho64view: the renderer's own program. For now a window, the device and the frame loop with a test
-// scene (a grid and a few boxes) and the game camera; the map and the recording come next.
+// moho64view: the renderer's own program. It shows a map from the player's game files with the game
+// camera (the recording's units come next); without a map, a test scene.
 //
-//   moho64view [--size 1600x900] [--novsync] [--debug] [--frames N] [--screenshot file.png]
+//   moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]
+//              [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
+//              [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 //
+// --fa      the game's installation folder: its gamedata\*.scd and its maps are used
+// --data    a folder of .nx2 / .scd archives used before the game's own (a patched game's files);
+//           may be given several times, the first folder wins
+// --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
+//
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
 // Keys: W A S D or the arrows move, F12 saves a screenshot, V switches vsync, Escape quits.
 #include <chrono>
@@ -11,115 +18,95 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "camera.h"
+#include "core/hostfs.h"
+#include "core/log.h"
+#include "core/vfs.h"
+#include "debug_draw.h"
 #include "gfx.h"
+#include "ground.h"
 #include "linalg.h"
 #include "png.h"
+#include "scmap.h"
+#include "terrain.h"
+#include "textures.h"
+#include "view.h"
+#include "water.h"
 #include "window.h"
 
 using namespace render;
 
 namespace {
 
-const char kSceneShader[] = R"hlsl(
-cbuffer Scene : register(b0) {
-  row_major float4x4 viewProj;
-  float3 sunDirection;
-  float pad0;
-};
-struct VIn {
-  float3 position : POSITION;
-  float3 normal : NORMAL;
-  float4 color : COLOR;
-};
-struct VOut {
-  float4 position : SV_Position;
-  float3 normal : NORMAL;
-  float4 color : COLOR;
-};
-VOut VS(VIn i) {
-  VOut o;
-  o.position = mul(viewProj, float4(i.position, 1));
-  o.normal = i.normal;
-  o.color = i.color;
-  return o;
-}
-float4 PS(VOut i) : SV_Target {
-  float light = 1;
-  if (dot(i.normal, i.normal) > 0) light = 0.25 + 0.75 * saturate(dot(normalize(i.normal), sunDirection));
-  return float4(i.color.rgb * light, i.color.a);
-}
-)hlsl";
-
-struct SceneConstants {
-  Mat4 viewProj;
-  Vec3 sunDirection;
-  float pad0;
-};
-
-struct Vertex {
-  Vec3 position;
-  Vec3 normal;
-  uint32_t color;  // 0xAABBGGRR
-};
-
-void AddLine(std::vector<Vertex>& v, Vec3 a, Vec3 b, uint32_t color) {
-  v.push_back({a, {}, color});
-  v.push_back({b, {}, color});
-}
-
-// A box with outward faces wound counter-clockwise (seen from outside, in the right-handed world).
-void AddBox(std::vector<Vertex>& v, Vec3 center, Vec3 half, uint32_t color) {
-  const Vec3 axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-  const float h[3] = {half.x, half.y, half.z};
-  for (int a = 0; a < 3; ++a) {
-    for (int sign = -1; sign <= 1; sign += 2) {
-      Vec3 n = axes[a] * static_cast<float>(sign);
-      Vec3 u = axes[(a + 1) % 3], w = axes[(a + 2) % 3];
-      if (sign < 0) std::swap(u, w);  // keep u x w = n
-      float hu = sign < 0 ? h[(a + 2) % 3] : h[(a + 1) % 3], hw = sign < 0 ? h[(a + 1) % 3] : h[(a + 2) % 3];
-      Vec3 c = center + n * h[a];
-      Vec3 p0 = c - u * hu - w * hw, p1 = c + u * hu - w * hw, p2 = c + u * hu + w * hw, p3 = c - u * hu + w * hw;
-      for (Vec3 p : {p0, p1, p2, p0, p2, p3}) v.push_back({p, n, color});
-    }
-  }
-}
+constexpr float kPi = 3.14159265f;
 
 struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false;
   int frames = 0;
-  std::string screenshot;
+  float lodPixels = 0;
+  std::string screenshot, fa, map;
+  std::vector<std::string> data;
+  bool hasCam = false;
+  float cam[5] = {};
 };
 
 bool ParseOptions(int argc, char** argv, Options* o) {
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : nullptr; };
-    if (a == "--size") {
-      const char* v = value();
-      if (!v || sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
-    } else if (a == "--novsync") {
-      o->vsync = false;
-    } else if (a == "--debug") {
-      o->debug = true;
-    } else if (a == "--frames") {
-      const char* v = value();
-      if (!v) return false;
-      o->frames = atoi(v);
-    } else if (a == "--screenshot") {
-      const char* v = value();
-      if (!v) return false;
-      o->screenshot = v;
-    } else {
-      return false;
-    }
+    const char* v = nullptr;
+    if (a == "--novsync") o->vsync = false;
+    else if (a == "--debug") o->debug = true;
+    else if (!(v = value())) return false;
+    else if (a == "--size") {
+      if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
+    } else if (a == "--frames") o->frames = atoi(v);
+    else if (a == "--lod") o->lodPixels = static_cast<float>(atof(v));
+    else if (a == "--screenshot") o->screenshot = v;
+    else if (a == "--fa") o->fa = v;
+    else if (a == "--data") o->data.push_back(v);
+    else if (a == "--map") o->map = v;
+    else if (a == "--cam") {
+      if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
+      o->hasCam = true;
+    } else return false;
   }
   return true;
+}
+
+// The game's files: every archive of the --data folders, then the game's own, then its maps.
+void MountGameFiles(const Options& o, moho::Vfs* vfs) {
+  auto archives = [&](const std::string& folder) {
+    int n = 0;
+    for (const char* pattern : {"/*.nx2", "/*.scd"})
+      for (const std::string& name : moho::hostfs::Glob(folder + pattern))
+        if (vfs->Mount(folder + "/" + name, "/")) ++n;
+    if (!n) fprintf(stderr, "render: no .nx2 or .scd archives in %s\n", folder.c_str());
+  };
+  for (const std::string& folder : o.data) archives(folder);
+  if (!o.fa.empty()) {
+    archives(o.fa + "/gamedata");
+    if (!vfs->Mount(o.fa + "/maps", "/maps")) fprintf(stderr, "render: no maps folder in %s\n", o.fa.c_str());
+  }
+}
+
+void DrawTestScene(DebugDraw& draw) {
+  for (int i = -128; i <= 128; i += 8) {
+    uint32_t c = i == 0 ? 0xff808080u : (i % 64 == 0 ? 0xff585858u : 0xff383838u);
+    draw.Line({static_cast<float>(i), 0, -128}, {static_cast<float>(i), 0, 128}, c);
+    draw.Line({-128, 0, static_cast<float>(i)}, {128, 0, static_cast<float>(i)}, c);
+  }
+  draw.Box({0, 2, 0}, {2, 2, 2}, 0xffc0c0c0u);
+  draw.Box({12, 1, 0}, {1, 1, 1}, 0xff4040e0u);      // red: +x, east
+  draw.Box({0, 1, 12}, {1, 1, 1}, 0xffe06040u);      // blue: +z, south
+  draw.Box({0, 9, 0}, {0.5f, 3, 0.5f}, 0xff40c040u); // green: up
+  draw.Box({-40, 4, -60}, {6, 4, 10}, 0xff60a0c0u);
 }
 
 }  // namespace
@@ -127,7 +114,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
 int main(int argc, char** argv) {
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
-    fprintf(stderr, "usage: moho64view [--size WxH] [--novsync] [--debug] [--frames N] [--screenshot file.png]\n");
+    fprintf(stderr, "usage: moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]\n"
+                    "                  [--size WxH] [--novsync] [--debug] [--lod <pixels>]\n"
+                    "                  [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]\n");
     return 2;
   }
   std::string error;
@@ -149,49 +138,97 @@ int main(int argc, char** argv) {
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
 
-  gfx::PipelineDesc pd;
-  pd.name = "scene";
-  pd.vertexSource = pd.pixelSource = kSceneShader;
-  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}, {"NORMAL", 0, gfx::AttrType::Float3, 12}, {"COLOR", 0, gfx::AttrType::UByte4N, 24}};
-  pd.stride = sizeof(Vertex);
-  gfx::Pipeline solid = device->CreatePipeline(pd, &error);
-  pd.name = "lines";
-  pd.topology = gfx::Topology::Lines;
-  pd.cull = gfx::Cull::None;
-  gfx::Pipeline lines = solid ? device->CreatePipeline(pd, &error) : gfx::Pipeline{};
-  if (!solid || !lines) {
+  moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
+  moho::Vfs vfs;
+  MountGameFiles(opt, &vfs);
+  if (vfs.MountCount()) printf("render: %zu archives and folders, %zu files\n", vfs.MountCount(), vfs.FileCount());
+  TextureCache textures(device.get(), &vfs);
+  DebugDraw draw(device.get());
+  if (!draw.Init(&error)) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
 
-  std::vector<Vertex> grid, boxes;
-  for (int i = -128; i <= 128; i += 8) {
-    uint32_t c = i == 0 ? 0xff808080u : (i % 64 == 0 ? 0xff585858u : 0xff383838u);
-    AddLine(grid, {static_cast<float>(i), 0, -128}, {static_cast<float>(i), 0, 128}, c);
-    AddLine(grid, {-128, 0, static_cast<float>(i)}, {128, 0, static_cast<float>(i)}, c);
+  MapData map;
+  std::unique_ptr<Terrain> terrain;
+  std::unique_ptr<Water> water;
+  DebugDraw::Baked props;
+  if (!opt.map.empty()) {
+    auto file = vfs.ReadFile(opt.map);
+    if (!file) {
+      fprintf(stderr, "render: map %s: file not found (is --fa or --data given?)\n", opt.map.c_str());
+      return 1;
+    }
+    if (!LoadMap(*file, &map, &error)) {
+      fprintf(stderr, "render: map %s: %s\n", opt.map.c_str(), error.c_str());
+      return 1;
+    }
+    terrain = std::make_unique<Terrain>(device.get(), &textures);
+    if (!terrain->Load(&map, &error)) {
+      fprintf(stderr, "render: terrain: %s\n", error.c_str());
+      return 1;
+    }
+    if (opt.lodPixels > 0) terrain->quadPixels = opt.lodPixels;
+    water = std::make_unique<Water>(device.get(), &textures);
+    if (!water->Load(&map, &error)) {
+      fprintf(stderr, "render: water: %s\n", error.c_str());
+      return 1;
+    }
+    // the map's trees, rocks and wrecks as plain boxes until their meshes are drawn
+    for (const MapProp& p : map.props) {
+      const bool tree = p.blueprint.find("/trees/") != std::string::npos;
+      const bool rock = p.blueprint.find("/rocks/") != std::string::npos || p.blueprint.find("/boulders/") != std::string::npos;
+      const bool group = p.blueprint.find("/groups/") != std::string::npos;
+      const float s = std::max(0.1f, p.scale.y);
+      Vec3 half = tree ? Vec3{group ? 1.2f : 0.3f, 1.4f, group ? 1.2f : 0.3f} : rock ? Vec3{0.6f, 0.4f, 0.6f} : Vec3{0.5f, 0.3f, 0.5f};
+      half = half * s;
+      draw.Box(p.position + Vec3{0, half.y, 0}, half, tree ? 0xff2d5a2au : rock ? 0xff808488u : 0xff4a6078u);
+    }
+    props = draw.Bake();
+    printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", opt.map.c_str(), map.width, map.height, map.shader.c_str(),
+           map.props.size(), map.decals.size());
   }
-  AddBox(boxes, {0, 2, 0}, {2, 2, 2}, 0xffc0c0c0u);
-  AddBox(boxes, {12, 1, 0}, {1, 1, 1}, 0xff4040e0u);   // red: +x, east
-  AddBox(boxes, {0, 1, 12}, {1, 1, 1}, 0xffe06040u);   // blue: +z, south
-  AddBox(boxes, {0, 9, 0}, {0.5f, 3, 0.5f}, 0xff40c040u);  // green: up
-  AddBox(boxes, {-40, 4, -60}, {6, 4, 10}, 0xff60a0c0u);
-  gfx::BufferDesc bd;
-  bd.stride = sizeof(Vertex);
-  bd.size = static_cast<uint32_t>(grid.size() * sizeof(Vertex));
-  bd.data = grid.data();
-  gfx::Buffer gridBuffer = device->CreateBuffer(bd);
-  bd.size = static_cast<uint32_t>(boxes.size() * sizeof(Vertex));
-  bd.data = boxes.data();
-  gfx::Buffer boxBuffer = device->CreateBuffer(bd);
-  gfx::BufferDesc dyn;
-  dyn.stride = sizeof(Vertex);
-  dyn.dynamic = true;
-  gfx::Buffer markerBuffer = device->CreateBuffer(dyn);
+  const bool haveMap = terrain != nullptr;
 
   Camera camera;
-  camera.heading = 0.5f;
-  camera.pitch = 0.75f;
-  camera.distance = 70;
+  float maxDistance = 6000;
+  if (haveMap) {  // the whole map from straight above
+    const float w = static_cast<float>(map.width), h = static_cast<float>(map.height);
+    camera.target = {w * 0.5f, 0, h * 0.5f};
+    float aspect = static_cast<float>(window->Width()) / static_cast<float>(std::max(1, window->Height()));
+    float fit = std::max(h, w / aspect) * 0.5f / std::tan(camera.fovY * 0.5f);
+    camera.distance = fit * 1.05f;
+    camera.pitch = kPi / 2;
+    maxDistance = fit * 1.6f;
+  } else {
+    camera.heading = 0.5f;
+    camera.pitch = 0.75f;
+    camera.distance = 70;
+  }
+  if (opt.hasCam) {
+    camera.target = {opt.cam[0], 0, opt.cam[1]};
+    camera.distance = opt.cam[2];
+    camera.pitch = opt.cam[3] * kPi / 180;
+    camera.heading = opt.cam[4] * kPi / 180;
+  }
+  auto groundHeight = [&](float x, float z) {
+    if (!haveMap) return 0.0f;
+    float y = map.Height(x, z);
+    return map.water.present ? std::max(y, map.water.elevation) : y;
+  };
+  camera.target.y = groundHeight(camera.target.x, camera.target.z);
+  // what the pointer is on: the ground, or failing that the level plane through the camera's target
+  auto pick = [&](int px, int py, Vec3* hit) {
+    const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
+    if (h <= 0) return false;
+    Ray ray = camera.PixelRay(static_cast<float>(px), static_cast<float>(py), w, h);
+    if (haveMap && HitGround(map, ray, true, hit)) return true;
+    return HitPlaneY(ray, camera.target.y, hit);
+  };
+  auto pickAtHeight = [&](int px, int py, float y, Vec3* hit) {
+    const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
+    return h > 0 && HitPlaneY(camera.PixelRay(static_cast<float>(px), static_cast<float>(py), w, h), y, hit);
+  };
 
   std::vector<InputEvent> events;
   std::vector<uint8_t> capture;
@@ -199,7 +236,8 @@ int main(int argc, char** argv) {
   int dragX = 0, dragY = 0;
   Vec3 grab;
   bool grabbing = false;
-  auto last = std::chrono::steady_clock::now();
+  const auto start = std::chrono::steady_clock::now();
+  auto last = start;
   double titleTime = 0;
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
 
@@ -207,7 +245,6 @@ int main(int argc, char** argv) {
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - last).count();
     last = now;
-    const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
 
     bool quit = false;
     for (const InputEvent& e : events) {
@@ -220,7 +257,7 @@ int main(int argc, char** argv) {
         case InputEvent::MouseDown:
           dragX = e.x;
           dragY = e.y;
-          if (e.key == 2) grabbing = h > 0 && HitPlaneY(camera.PixelRay(static_cast<float>(e.x), static_cast<float>(e.y), w, h), camera.target.y, &grab);
+          if (e.key == 2) grabbing = pick(e.x, e.y, &grab);
           break;
         case InputEvent::MouseUp:
           if (e.key == 2) grabbing = false;
@@ -228,25 +265,21 @@ int main(int argc, char** argv) {
         case InputEvent::MouseMove:
           if (window->MouseDown(1)) {
             camera.heading -= static_cast<float>(e.x - dragX) * 0.005f;
-            camera.pitch = Clamp(camera.pitch + static_cast<float>(e.y - dragY) * 0.005f, 0.05f, 1.5707963f);
-          } else if (grabbing && h > 0) {
+            camera.pitch = Clamp(camera.pitch + static_cast<float>(e.y - dragY) * 0.005f, 0.1f, kPi / 2);
+          } else if (grabbing) {
             // keep the grabbed ground point under the pointer
             Vec3 hit;
-            if (HitPlaneY(camera.PixelRay(static_cast<float>(e.x), static_cast<float>(e.y), w, h), camera.target.y, &hit))
-              camera.target += grab - hit;
+            if (pickAtHeight(e.x, e.y, grab.y, &hit)) camera.target += Vec3{grab.x - hit.x, 0, grab.z - hit.z};
           }
           dragX = e.x;
           dragY = e.y;
           break;
         case InputEvent::Wheel: {
-          if (h <= 0) break;
           // zoom at the pointer: the ground point under it stays where it is
           Vec3 before, after;
-          Ray ray = camera.PixelRay(static_cast<float>(e.x), static_cast<float>(e.y), w, h);
-          bool hit = HitPlaneY(ray, camera.target.y, &before);
-          camera.distance = Clamp(camera.distance * std::pow(0.85f, e.wheel), 2.0f, 6000.0f);
-          if (hit && HitPlaneY(camera.PixelRay(static_cast<float>(e.x), static_cast<float>(e.y), w, h), camera.target.y, &after))
-            camera.target += before - after;
+          bool hit = pick(e.x, e.y, &before);
+          camera.distance = Clamp(camera.distance * std::pow(0.85f, e.wheel), 3.0f, maxDistance);
+          if (hit && pickAtHeight(e.x, e.y, before.y, &after)) camera.target += Vec3{before.x - after.x, 0, before.z - after.z};
           break;
         }
         default:
@@ -259,13 +292,18 @@ int main(int argc, char** argv) {
     {  // keyboard movement, along the ground in the camera's directions
       Vec3 r, u, b;
       camera.Axes(&r, &u, &b);
-      Vec3 forward = Normalize(Vec3{-std::sin(camera.heading), 0, -std::cos(camera.heading)});
+      Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
       float step = camera.distance * 1.2f * dt;
       if (window->KeyDown('W') || window->KeyDown(kKeyUp)) camera.target += forward * step;
       if (window->KeyDown('S') || window->KeyDown(kKeyDown)) camera.target -= forward * step;
       if (window->KeyDown('D') || window->KeyDown(kKeyRight)) camera.target += r * step;
       if (window->KeyDown('A') || window->KeyDown(kKeyLeft)) camera.target -= r * step;
     }
+    if (haveMap) {
+      camera.target.x = Clamp(camera.target.x, 0, static_cast<float>(map.width));
+      camera.target.z = Clamp(camera.target.z, 0, static_cast<float>(map.height));
+    }
+    camera.target.y = groundHeight(camera.target.x, camera.target.z);
 
     if (window->Width() == 0 || window->Height() == 0) {  // minimized
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -273,31 +311,21 @@ int main(int argc, char** argv) {
     }
     if (window->Width() != device->Width() || window->Height() != device->Height()) device->Resize(window->Width(), window->Height());
 
-    SceneConstants sc;
-    sc.viewProj = camera.Projection(w / h) * camera.View();
-    sc.sunDirection = Normalize(Vec3{0.4f, 0.8f, 0.45f});
-    sc.pad0 = 0;
-
-    // a small cross at the camera's target (also the test of a dynamic buffer)
-    std::vector<Vertex> marker;
-    float m = camera.distance * 0.02f;
-    AddLine(marker, camera.target - Vec3{m, 0, 0}, camera.target + Vec3{m, 0, 0}, 0xff00ffffu);
-    AddLine(marker, camera.target - Vec3{0, 0, m}, camera.target + Vec3{0, 0, m}, 0xff00ffffu);
-    AddLine(marker, camera.target, camera.target + Vec3{0, m, 0}, 0xff00ffffu);
+    const float time = std::chrono::duration<float>(now - start).count();
+    View view = View::Make(camera, device->Width(), device->Height(), time);
+    Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
 
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
-    device->SetPipeline(solid);
-    device->SetConstants(0, &sc, sizeof sc);
-    device->SetVertexBuffer(boxBuffer);
-    device->Draw(static_cast<uint32_t>(boxes.size()));
-    device->SetPipeline(lines);
-    device->SetConstants(0, &sc, sizeof sc);
-    device->SetVertexBuffer(gridBuffer);
-    device->Draw(static_cast<uint32_t>(grid.size()));
-    device->UpdateBuffer(markerBuffer, marker.data(), static_cast<uint32_t>(marker.size() * sizeof(Vertex)));
-    device->SetVertexBuffer(markerBuffer);
-    device->Draw(static_cast<uint32_t>(marker.size()));
+    if (haveMap) {
+      terrain->Draw(view);
+      draw.DrawBaked(props, view, sun);
+      draw.Flush(view, sun);
+      water->Draw(view);
+    } else {
+      DrawTestScene(draw);
+      draw.Flush(view, sun);
+    }
 
     ++frameCount;
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
@@ -309,14 +337,22 @@ int main(int argc, char** argv) {
       else fprintf(stderr, "render: cannot write %s\n", path.c_str());
       wantScreenshot = false;
     }
-    if (lastFrame) break;
+    if (lastFrame) {
+      const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
+      if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
+      printf("\n");
+      break;
+    }
 
     titleTime += dt;
     ++titleFrames;
     if (titleTime >= 0.5) {
-      char title[256];
-      snprintf(title, sizeof title, "FA Remastered - %s - %s - %.2f ms (%.0f fps)%s", device->BackendName(),
-               device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? "" : " - vsync off");
+      char title[320];
+      int n = snprintf(title, sizeof title, "FA Remastered - %s - %s - %.2f ms (%.0f fps)%s", device->BackendName(),
+                       device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? "" : " - vsync off");
+      if (haveMap && n > 0 && n < static_cast<int>(sizeof title))
+        snprintf(title + n, sizeof title - static_cast<size_t>(n), " - ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       window->SetTitle(title);
       titleTime = 0;
       titleFrames = 0;

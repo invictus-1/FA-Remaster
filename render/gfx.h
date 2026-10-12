@@ -7,7 +7,7 @@
 //    32-bit float: together with linalg.h's Perspective this keeps precision at strategic-zoom distances.
 //  - Shaders are HLSL source (model 5.1), compiled when a pipeline is created.
 //    Constant buffers: registers b0..b3, set per draw with SetConstants (the data is copied).
-//    Textures: registers t0..t15. Samplers are fixed:
+//    Textures: registers t0..t31. Samplers are fixed:
 //      s0 anisotropic wrap, s1 trilinear clamp, s2 point clamp, s3 trilinear wrap, s4 point wrap.
 //  - Handles are plain numbers; 0 means "none". Destroying is deferred until the GPU is done with them.
 //  - Buffers: a static buffer gets its data at creation. A dynamic buffer holds no data of its own:
@@ -38,6 +38,7 @@ struct Pipeline {
 enum class Format : uint8_t {
   Unknown,
   R8,
+  A8,  // reads as (0, 0, 0, a)
   RG8,
   RGBA8,
   RGBA8_sRGB,
