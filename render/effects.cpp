@@ -19,6 +19,15 @@ void Effects::Queue(std::vector<FrameEffectEvent>&& events) {
   for (FrameEffectEvent& e : events) pending_.push_back(std::move(e));
 }
 
+bool Effects::Hidden(const Frame& frame, uint32_t entity) {
+  if (entity == kNone) return false;
+  auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+  if (unit != frame.units.end() && unit->id == entity) return !unit->Seen();
+  for (const FrameProjectile& p : frame.projectiles)
+    if (p.id == entity) return !p.seen;
+  return false;
+}
+
 bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* position, Quat* orientation, const Model** remembered) {
   if (entity == kNone) return false;
   // a unit: the frame's units are in entity-id order
@@ -166,7 +175,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     // numbers: size, lifetime in ticks; the texture and the ramp are names in /textures/particles
     const std::vector<float>& n = event.numbers;
     // the modern look gets a light; the original look the glow on the ground the original draws
-    if (n.size() >= 2 && !event.blueprint.empty()) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
+    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     if (n.size() >= 2 && !event.blueprint.empty())
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;
@@ -216,6 +225,8 @@ void Effects::Update(double tick, const Frame& frame) {
         e.orientation = q;
       }
     }
+    // what hangs on something the army the picture is for does not see is not shown
+    const bool hidden = e.attached && here && Hidden(frame, e.entity);
     switch (e.kind) {
       case Kind::Emitter:
         // one that is not attached and has run out is forgotten (the particle system has ended it)
@@ -225,14 +236,17 @@ void Effects::Update(double tick, const Frame& frame) {
           End(id);
           continue;
         }
-        if (e.attached) particles_->Move(e.handle, e.position, e.orientation);
+        if (e.attached) {
+          particles_->Move(e.handle, e.position, e.orientation);
+          particles_->Hide(e.handle, hidden);
+        }
         break;
       case Kind::Trail:
-        ribbons_->MoveTrail(e.handle, e.position);
+        if (!hidden) ribbons_->MoveTrail(e.handle, e.position);
         break;
       case Kind::Beam:
       case Kind::TextureBeam: {
-        if (!here) break;  // made but not yet put anywhere, or its weapon's beam is off
+        if (!here || hidden) break;  // made but not yet put anywhere, or its weapon's beam is off, or not seen
         Vec3 end;
         Quat unused;
         // between two things; with the second one gone the original falls back to the form on one thing

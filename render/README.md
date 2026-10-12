@@ -312,8 +312,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   another army's unit is drawn while that army sees it, as a blip (its strategic icon without
   detail, at any distance) while it is on radar, sonar or omni alone, and not at all otherwise,
   by the engine's `ReconOf` read with every beat; shots only where the army sees; the minimap and
-  what is under the mouse go by the same. Not yet: the effects of unseen units are still drawn,
-  and unseen ground is not darkened.
+  what is under the mouse go by the same, and effects that hang on an unseen unit or shot are
+  hidden. Not yet: effects that hang on nothing (a unit's explosion) show everywhere, and unseen
+  ground is not darkened.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader
