@@ -235,8 +235,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
   left click selects a unit and dragging selects a box. The camera follows the original's rules,
-  read from its code: it starts as far out as it goes (the map takes 1 / 1.4 of what would fill
-  the view), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
+  read from its code: its zoom is the width of world the view shows (the eye stands at zoom /
+  (2 tan(fov / 2))); it starts as far out as it goes (the map takes 1 / 1.4 of the view: 0.7083
+  of the height here, 0.7087 on a screenshot of the original), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
   field of view (across the view's longer side) goes from 60 to 65 degrees; a wheel notch brings
   the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
   cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four

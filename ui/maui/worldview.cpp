@@ -43,7 +43,9 @@ const float kDegrees = 0.0174533f, kPi = 3.14159265f;
 const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
 const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
 
-// A camera looks at a place on the map (`focus`) from a distance (`zoom`). The zoom glides to
+// A camera looks at a place on the map (`focus`). Its `zoom` is how much of the world it shows
+// across the longer side of its view, in map units (so the nearest zoom, 5, shows a strip five
+// units wide, and at the farthest the map takes 1 / maxZoomMult of the view). The zoom glides to
 // `targetZoom`; how far the camera leans and how wide it sees follow from the zoom.
 class Camera : public ScriptObject {
  public:
@@ -75,6 +77,11 @@ float ZoomBlend(const Camera* c) {
 float PitchOf(const Camera* c) { return (kNearPitch + ZoomBlend(c) * (kFarPitch - kNearPitch)) * kDegrees; }
 // The upright field of view. The original's angle (65 degrees nearest, 60 farthest) is across the
 // longer side of the view (its projection, FA exe 0x4efdd0, shrinks the other side by the aspect).
+// The eye's distance from the focus (FA exe 0x7aa33f: zoom / (2 tan(fov / 2)), kept at +0x35c).
+float EyeDistance(const Camera* c) {
+  float half = std::tan((kNearFov + ZoomBlend(c) * (kFarFov - kNearFov)) * kDegrees * 0.5f);
+  return c->zoom / (2.0f * half);
+}
 float FovYOf(const Camera* c) {
   float half = std::tan((kNearFov + ZoomBlend(c) * (kFarFov - kNearFov)) * kDegrees * 0.5f);
   return 2.0f * std::atan(c->aspect > 1 ? half / c->aspect : half);
@@ -347,7 +354,7 @@ class WorldView : public Control {
     TakeAspect(c);
     WorldCamera w;
     w.target[0] = c->focus[0], w.target[1] = c->focus[1], w.target[2] = c->focus[2];
-    w.distance = c->zoom;
+    w.distance = EyeDistance(c);
     w.heading = c->heading - kPi;
     w.pitch = PitchOf(c);
     w.fovY = FovYOf(c);
@@ -463,7 +470,7 @@ class WorldView : public Control {
       else *sx = *sy = -100000.0f;  // behind the camera: nowhere on screen
       return;
     }
-    float scale = c->zoom > 0 ? (r.y1 - r.y0) / (2.0f * c->zoom * std::tan(FovYOf(c) * 0.5f)) : 1;
+    float scale = c->zoom > 0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
     *sx = (r.x0 + r.x1) * 0.5f + (world[0] - c->focus[0]) * scale;
     *sy = (r.y0 + r.y1) * 0.5f + (world[2] - c->focus[2]) * scale;
   }
@@ -482,7 +489,7 @@ class WorldView : public Control {
     if (MinimapRect(L, &r) && UserState::From(L)->config().world->MinimapGroundAt(sx - r.x0, sy - r.y0, world)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (((!fresh && PictureIsCurrent(L)) || EnsurePicture(L)) && UserState::From(L)->config().world->GroundAt(sx - r.x0, sy - r.y0, world)) return;
-    float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * c->zoom * std::tan(FovYOf(c) * 0.5f)) : 1;
+    float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
     Sim* sim = UserState::From(L)->config().sim;
