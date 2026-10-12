@@ -94,6 +94,9 @@ struct TargetDesc {
   int layers = 1;
   Format format = Format::RGBA8;
   float clearValue[4] = {0, 0, 0, 0};  // the colour it will usually be cleared to (clearing to it is fastest)
+  // Samples per pixel (1, 2, 4 or 8) for anti-aliasing. A target with more than one cannot be read
+  // as a texture: draw into it, then Resolve it into an ordinary target of the same size and format.
+  int samples = 1;
 };
 
 // What a pass draws into. Every pass has a depth buffer.
@@ -138,6 +141,7 @@ struct PipelineDesc {
   // (shadow maps; the pixel shader may then be left out, or return nothing and only discard).
   Format colorFormat = Format::RGBA8;
   bool depthOnly = false;
+  int samples = 1;  // the samples per pixel of the targets it draws into
 };
 
 struct DeviceDesc {
@@ -173,6 +177,9 @@ class Device {
   // Starts another pass; the targets of the pass before it become readable as textures.
   // The viewport is the whole target. A target must not be bound as a texture in its own pass.
   virtual void BeginPass(const PassDesc& pass) = 0;
+  // Averages a multi-sample colour target into an ordinary one (same size and format). Ends the
+  // current pass; begin another before drawing again.
+  virtual void Resolve(Texture from, Texture to) = 0;
   virtual void SetPipeline(Pipeline pipeline) = 0;
   virtual void SetConstants(int slot, const void* data, uint32_t size) = 0;
   virtual void SetTexture(int slot, Texture texture) = 0;

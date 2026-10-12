@@ -150,6 +150,7 @@ bool MeshRenderer::Init(std::string* error) {
               {"BLENDINDICES", 0, gfx::AttrType::UByte4, offsetof(ScmVertex, bones)}};
   pd.stride = sizeof(ScmVertex);
   pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
   pd.name = "models, blended";
@@ -157,6 +158,7 @@ bool MeshRenderer::Init(std::string* error) {
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
   pd.name = "models, shadow";
+  pd.samples = 1;
   pd.blend = gfx::Blend::Opaque;
   pd.pixelEntry = "ShadowPS";
   pd.depthOnly = true;

@@ -22,7 +22,7 @@ class Post {
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_;
-  gfx::Texture color_, depth_;
+  gfx::Texture color_, depth_, drawn_;
   int width_ = 0, height_ = 0;
 };
 

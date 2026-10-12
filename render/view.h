@@ -9,6 +9,9 @@ namespace render {
 
 // The scene is drawn into a target of this format (colours beyond 0..1 survive until the last pass).
 inline constexpr gfx::Format kSceneFormat = gfx::Format::RGBA16F;
+// Samples per pixel of the scene's picture (anti-aliasing: 1 off, 2, 4, 8). Set before any renderer
+// builds its pipelines; every pipeline that draws into the scene is built for it.
+inline int gSceneSamples = 4;
 // Texture registers every scene shader may read; the frame code binds them, the renderers leave them alone.
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade
 inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip levels (blurrier going down)

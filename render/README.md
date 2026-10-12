@@ -58,7 +58,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
-               [--crowd <unit id>=<count>] [--detail 1]
+               [--crowd <unit id>=<count>] [--detail 1] [--msaa 4]
                [--look modern|original] [--noshadows]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
@@ -180,7 +180,9 @@ Known gaps, to be closed in the steps they belong to:
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
 - No decals, no sky, no ground beyond the map's edge, no projectiles or effects.
-- The modern look still lacks: ambient occlusion in the picture, bloom, anti-aliasing, a water of its
+- Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
+  geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
+- The modern look still lacks: ambient occlusion in the picture, bloom, a water of its
   own (it shows the original's water with converted colours), and sky cubes that are properly
   pre-blurred (their mip levels are plain averages).
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
