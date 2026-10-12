@@ -364,9 +364,17 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     // behave as well as even ones)
     const std::vector<ModelLod>& lods = e.model->lods;
     size_t level = 0;
-    while (level + 1 < lods.size() &&
-           wanted * wanted < static_cast<float>(lods[level].indexCount / 3) * static_cast<float>(lods[level + 1].indexCount / 3))
-      ++level;
+    const std::vector<float>& sizes = e.model->levelPixels;
+    if (!sizes.empty()) {
+      // built to the standard: each level down to the size it was made for (the quality setting and
+      // the shadows' coarser wish count as a smaller size)
+      const float size = pixels * 0.75f * std::sqrt(detail * (shadowPass ? shadowDetail : 1.0f));
+      while (level < sizes.size() && level + 1 < lods.size() && size < sizes[level]) ++level;
+    } else {
+      while (level + 1 < lods.size() &&
+             wanted * wanted < static_cast<float>(lods[level].indexCount / 3) * static_cast<float>(lods[level + 1].indexCount / 3))
+        ++level;
+    }
     const ModelLod* lod = &lods[level];
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) continue;

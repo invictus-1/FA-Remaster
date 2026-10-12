@@ -47,6 +47,8 @@ class MeshRenderer {
   // to that wish. So every model costs about the same per pixel, whatever its budgets and however
   // many levels it has. With levels a quarter of each other, the finest is used from about 180
   // pixels across.
+  // A model built to the four-level standard (Model::levelPixels) is switched at the sizes its
+  // levels were made for instead; its size is taken as three quarters of its bounding sphere's.
   float trianglesPerPixel = 0.55f;
   // The quality setting: scales that wish. 1 is full quality; 0.5 suits a slower card; a very large
   // value forces every model's finest level.

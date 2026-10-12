@@ -326,6 +326,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     m->lods.push_back(std::move(lod));
   }
   m->ok = !m->lods.empty();
+  // the four-level standard (LOD0 above 250 pixels, LOD1 to 100, LOD2 to 30, LOD3 below)
+  if (previewed && m->lods.size() == 4) m->levelPixels = {250, 100, 30};
 }
 
 }  // namespace render

@@ -163,9 +163,16 @@ Measured at 1920 x 1080 with shadows (`--crowd <unit>=<count>`), 10,000 units in
 |---|---|
 | a remastered tank of 26,859 triangles, always at its finest level, shadows from it too | 72.8 ms |
 | the same tank with three levels (26,859 / 8,056 / 2,599), level chosen by size | 3.5 ms |
+| the tank built to the four-level standard (26,821 / 6,499 / 1,967 / 586), far away | 1.9 ms |
+| the same, close enough to fill the view | 2.8 ms |
 | a model of about 470 triangles | 3.0 ms |
 
 The blueprint's `LODCutoff` distances are the original game's and are not used here.
+
+A remastered unit built to the four-level standard (its export folder for this engine: four
+`_lod<n>.scm` files, tried out with `--preview`) is switched at the sizes its levels were made and
+judged for instead: the finest above 250 pixels, then down to 100, down to 30, and the last below
+that, its size taken as three quarters of its bounding sphere's on screen.
 
 ## Where it stands
 
