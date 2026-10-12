@@ -3,6 +3,19 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 7: the colour of a projectile's mesh — white (read from the exe)
+
+The mesh instance's colour is an argument of `MeshRenderer::CreateMeshInstance` (0x7df530), and the
+original has two callers:
+
+- `UserUnit::CreateMeshInstance` (0x8c00e0) passes the army's colour (`army+0x148`, an ARGB value; -1 when
+  the unit has no army).
+- `UserEntity::CreateMeshInstance` (0x8b88d0), which every other entity uses, projectiles and props
+  alike, passes the constant **-1 = 0xFFFFFFFF, opaque white** (`push -1` at 0x8b892e).
+
+So `vertex.color` is white for projectiles and props, and the army's colour only for units. Your guess
+was right; blue rockets would be wrong.
+
 ## render 6: the live frame, bone poses and projectiles — done
 
 In `src/sim/sim_view.h`, beside `UnitViews` and `ArmyViews`, read once per beat after `Tick()`:
