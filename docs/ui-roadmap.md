@@ -148,9 +148,12 @@ connection (GPGNet), observers, disconnect and desync dialogs.
 - Renderer: the shared window and device, the world's picture inside a rectangle with a camera given by
   the interface, picking (what is under the mouse in the world), and drawing the interface's quads.
 
-## Decisions wanted
+## Decisions
 
-1. Preferences: take over the player's existing game profile (name, options, key bindings) on first
-   start, or begin fresh?
-2. The front-end background: decode the original movie, or make the new background first?
-3. After the playable skirmish: sound first, or replays and the score screen first?
+Taken 2026-10-12:
+
+1. Preferences: the player's existing game profile (name, options, key bindings) is taken over once, on
+   first start. The original's file is only read, never written.
+2. The front-end background: the new background is made first. Decoding the original movie can follow
+   later.
+3. After the playable skirmish, sound comes before replays and the score screen.
