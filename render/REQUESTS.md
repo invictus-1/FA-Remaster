@@ -9,7 +9,33 @@ State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted fo
 6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 answered
 (white for everything that is not a unit; that is what the renderer draws), 8 done and in use
 (`EffectEvents` drives emitters, beams and trails in games; light particles and decals not drawn yet),
-9 and 10 open (questions).
+9 and 10 open (questions), 11 new.
+
+## 11. The display part of blueprints, handed over in the program (2026-10-12)
+
+**What:** what `tools/dump_display.lua` writes to a log (render 3), as a call beside the views in
+`sim_view.h`, read once after the rules are loaded: for every unit, prop and projectile blueprint
+with a `Display.Mesh`, its id, `Display.UniformScale`, and per level of detail the mesh file, the
+albedo, normals, specular and secondary texture files (as the scripts and mods left them), the
+shader name and `LODCutoff`. And for units three things the dump does not have: `StrategicIconName`,
+`StrategicIconSortPriority`, `Display.Mesh.IconFadeInZoom`, and `SelectionSizeX`, `SelectionSizeZ`.
+
+    struct DisplayLod { std::string mesh, albedo, normals, specular, secondary, shader; float cutoff; };
+    struct BlueprintDisplay {
+      std::string id;                 // as UnitView::blueprint / ProjectileView::blueprint name it
+      float uniformScale;
+      std::vector<DisplayLod> lods;
+      std::string icon; int iconSortPriority; float iconFadeInZoom;
+      float selectionSizeX, selectionSizeZ;
+    };
+    void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out);
+
+**Why:** the renderer reads `.bp` files with a reader of its own, which does not see what the
+game's scripts and mods change after loading (a mod's new textures, FAF's blueprint passes). The
+viewer gets round it with the dump's log file; the interface's program, which holds the simulation
+and uses the renderer as a library (`render/world_picture.h`), has no such log. With this call both
+take the names from the simulation itself, and the renderer's own blueprint reader is only needed
+when there is no simulation.
 
 ## 10. Questions: beams and trails, as 9 for emitters (2026-10-12, when 8 and 9 are done)
 

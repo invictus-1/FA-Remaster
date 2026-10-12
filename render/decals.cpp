@@ -78,6 +78,10 @@ float4 PS(VOut i) : SV_Target {
   float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
+  if (i.options.z > 2.5) {  // a mark: as it is (the modern look's picture is linear light, mapped back at the end)
+    if (look > 0.5) c.rgb = ToLinear(c.rgb) * 1.6;
+    return c;
+  }
   if (i.options.z > 1.5) {
     // a normal decal: the ground's own slope (from how its place changes from pixel to pixel)
     // tilted by the decal's, and the picture multiplied by how much more or less light that takes
@@ -188,6 +192,12 @@ bool Decals::AddNormal(const std::string& texture, Vec3 centre, float sizeX, flo
   return true;
 }
 
+void Decals::AddMark(gfx::Texture texture, Vec3 centre, float sizeX, float sizeZ, float heading) {
+  Decal d{texture, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, 0, 0, 0};
+  d.mark = true;
+  marks_.push_back(d);
+}
+
 bool Decals::AddLight(const std::string& texture, const std::string& ramp, Vec3 centre, float size, double born, float seconds) {
   if (size <= 0 || seconds <= 0 || !vfs_->Exists(texture)) return false;
   const gfx::Texture t = textures_->Get(texture);
@@ -203,7 +213,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [now](const Decal& d) { return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds); }),
                 decals_.end());
   visible_.clear();
-  for (const Decal& d : decals_) {
+  for (size_t which = 0; which < decals_.size() + marks_.size(); ++which) {
+    const Decal& d = which < decals_.size() ? decals_[which] : marks_[which - decals_.size()];
     const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
     // the ground under a decal may rise and fall across it: the box is tall for its width
     const float halfHeight = reach * 0.7f + 1.5f;
@@ -227,10 +238,11 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.sinHeading = std::sin(d.heading);
     n.alpha = alpha;
     n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
-    n.light = d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
+    n.light = d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
     n.glow = glow;
-    visible_.push_back({d.texture.id, d.ramp.id, d.ramp ? 2 : d.normal ? 1 : 0, n});
+    visible_.push_back({d.texture.id, d.ramp.id, d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
   }
+  marks_.clear();
   if (visible_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
   std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
@@ -257,7 +269,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
     if (bound != kind) {
       bound = kind;
-      device_->SetPipeline(kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);
+      device_->SetPipeline(kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);  // (marks blend as pictures do)
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
       device_->SetTexture(1, sceneDepth);

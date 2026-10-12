@@ -70,11 +70,11 @@ bool StrategicIcons::Init(std::string* error) {
 }
 
 // The symbol of that name, put into the shared texture when it is first asked for. -1: no such file.
-int StrategicIcons::Icon(const std::string& name) {
+int StrategicIcons::Icon(const std::string& name, const char* suffix) {
   auto known = iconByName_.find(name);
   if (known != iconByName_.end()) return known->second;
   int index = -1;
-  const std::string path = kIconFolder + name + "_rest.dds";
+  const std::string path = kIconFolder + name + suffix + ".dds";
   auto file = vfs_->ReadFile(path);
   DdsImage image;
   std::vector<uint8_t> pixels;
@@ -117,7 +117,12 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   kind->priority = std::clamp(static_cast<int>(bp["StrategicIconSortPriority"].NumberOr(128)), 0, 255);
   std::string name = bp["StrategicIconName"].StringOr(std::string());
   for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (!name.empty()) kind->icon = Icon(name);
+  if (!name.empty()) {
+    kind->icon = Icon(name);
+    if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
+  }
+  kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
+  kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));
   return kind;
 }
 
@@ -127,8 +132,36 @@ void StrategicIcons::Begin(const View& view) {
   pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
 }
 
-void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color) {
+void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height) const {
+  const int icon = selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
+  if (icon < 0) return;
+  const Rect& r = rects_[static_cast<size_t>(icon)];
+  auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+  const uint32_t army[3] = {byte(color.x), byte(color.y), byte(color.z)};
+  for (int y = 0; y < r.height; ++y) {
+    const int py = cy - r.height / 2 + y;
+    if (py < 0 || py >= height) continue;
+    for (int x = 0; x < r.width; ++x) {
+      const int px = cx - r.width / 2 + x;
+      if (px < 0 || px >= width) continue;
+      const uint8_t* s = &atlasPixels_[(static_cast<size_t>(r.y + y) * kAtlasSize + static_cast<size_t>(r.x + x)) * 4];
+      if (s[3] == 0) continue;
+      // the shader's rule: within half the colour cube's edge of middle grey, the army's colour
+      const float d0 = static_cast<float>(s[0]) / 255.0f - 0.5f, d1 = static_cast<float>(s[1]) / 255.0f - 0.5f, d2 = static_cast<float>(s[2]) / 255.0f - 0.5f;
+      const bool tinted = d0 * d0 + d1 * d1 + d2 * d2 < 0.25f;
+      const uint32_t c[3] = {tinted ? army[0] : s[0], tinted ? army[1] : s[1], tinted ? army[2] : s[2]};
+      uint32_t& to = pixels[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)];
+      const uint32_t a = s[3], ia = 255 - a;
+      const uint32_t red = (c[0] * a + ((to >> 16) & 0xff) * ia) / 255, green = (c[1] * a + ((to >> 8) & 0xff) * ia) / 255,
+                     blue = (c[2] * a + (to & 0xff) * ia) / 255;
+      to = 0xff000000u | red << 16 | green << 8 | blue;
+    }
+  }
+}
+
+void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected) {
   if (kind->icon < 0) return;
+  const int icon = selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
   // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on
   const float distance = Length(position - view_.eye);
   const float from = kind->fadeIn * (1 - fadeShare);
@@ -141,11 +174,11 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color) {
   const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
-  const Rect& r = rects_[static_cast<size_t>(kind->icon)];
+  const Rect& r = rects_[static_cast<size_t>(icon)];
   const float halfW = static_cast<float>(r.width) * pixel_ * 0.5f, halfH = static_cast<float>(r.height) * pixel_ * 0.5f;
   if (x + halfW < 0 || y + halfH < 0 || x - halfW > static_cast<float>(view_.width) || y - halfH > static_cast<float>(view_.height)) return;
   auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-  listed_.push_back({x, y, kind->icon, byte(alpha) << 24 | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x), kind->priority});
+  listed_.push_back({x, y, icon, byte(alpha) << 24 | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x), kind->priority});
 }
 
 void StrategicIcons::Draw() {

@@ -142,6 +142,10 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
   } else if (bits == 24) {
     out->format = rMask == 0xff ? gfx::Format::RGBA8 : gfx::Format::BGRA8;
     sourceBytes = 3;
+  } else if (bits == 16 && (pfFlags & 0x40)) {
+    // 16-bit colour (5-5-5 with one bit of alpha, 5-6-5, 4-4-4-4): made into four bytes a pixel below
+    out->format = gfx::Format::RGBA8;
+    sourceBytes = 2;
   } else if (bits == 8) {
     out->format = aMask == 0xff ? gfx::Format::A8 : gfx::Format::R8;
   } else {
@@ -169,6 +173,30 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
   if (!sourceBytes) {
     out->data = src;
     out->dataSize = chainBytes(mips, false) * static_cast<size_t>(layers);
+    return true;
+  }
+  if (sourceBytes == 2) {
+    // each channel by its mask, widened to a byte; no alpha mask: opaque
+    const uint32_t masks[4] = {rMask, U32(file, 96), U32(file, 100), aMask};
+    const size_t pixels = chainBytes(mips, true) * static_cast<size_t>(layers) / 2;
+    out->converted.resize(pixels * 4);
+    uint8_t* dst = out->converted.data();
+    for (size_t i = 0; i < pixels; ++i, src += 2, dst += 4) {
+      const uint32_t v = static_cast<uint32_t>(src[0]) | static_cast<uint32_t>(src[1]) << 8;
+      for (int c = 0; c < 4; ++c) {
+        const uint32_t mask = masks[c];
+        if (!mask) {
+          dst[c] = c == 3 ? 255 : 0;
+          continue;
+        }
+        int shift = 0;
+        while (!((mask >> shift) & 1)) ++shift;
+        const uint32_t top = mask >> shift;
+        dst[c] = static_cast<uint8_t>(((v & mask) >> shift) * 255 / top);
+      }
+    }
+    out->data = out->converted.data();
+    out->dataSize = out->converted.size();
     return true;
   }
   // 24-bit: add an opaque alpha byte

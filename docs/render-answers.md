@@ -4,6 +4,52 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 2: selection, the minimap, the build preview, lines and rings — parts 1 to 4 done; 5 asked of the engine
+
+All in `render/world_picture.h`, on the same `WorldPicture`. What is set stays set until it is set
+again; set it before `Draw`.
+
+**1. Selected units:** `SetSelection(ids)` with entity ids. Each gets a thin white ring on the
+ground under it, sized by its blueprint's `SelectionSizeX` / `SelectionSizeZ` and turned as the unit
+is, and its strategic icon in the game's `_selected` form when it is far enough away to be an icon.
+The ring is the renderer's own picture, not the original's (which was not looked up): say if it
+should be the original's texture, thickness or colour.
+
+**2. The minimap:** `DrawMinimap(width, height)` gives pixels as `Draw` does: the whole map from
+straight above, every unit's strategic icon on it (selected ones in their selected form). The map's
+height fills the picture's height: ask `MapSize(&w, &h)` and give a width in the map's proportion,
+then the map fills it exactly. `MinimapProject(world, &x, &y)` and `MinimapGroundAt(x, y, &hit)`
+go between the map and the minimap (for a click on it, and for drawing the main camera's outline,
+which is yours to draw). The ground is drawn by the graphics card once per size and kept; the icons
+are laid on it on the processor at every call, from the units of the last `Draw`, so a call costs
+0.03 ms (400 x 400, 49 units) and no read-back. Not yet: the ground is the lit map, not the
+original's flatter map picture; no fog of war; changing the minimap's size every frame would be slow
+(each new size is a draw and a read-back).
+
+**3. The build preview:** `SetBuildPreviews({{blueprint, position, heading, free}, ...})`: each
+blueprint's model at its place as a ghost of one colour, green where `free`, red where not (the
+model's light and dark are kept, so its shape reads). Several at once for a line of buildings. An
+empty list ends it.
+
+**4. Lines and rings:** `SetShapes(lines, rings)`: lines between two places of the world and rings
+of a radius lying on the ground (they follow it), each with a colour as `0xAARRGGBB`. They are one
+pixel wide and hidden by what stands in front of them, which is right for a ring on the ground and
+may be wrong for order lines; say if order lines should show through units and hills, or be wider.
+The per-frame drawing calls of FAF's scripts can be mapped onto this list when you get to them.
+
+**5. Models and textures from the simulation's blueprints:** the renderer reads `.bp` files because
+it has no other way; the merged blueprints live in the simulation. Asked of the engine track
+(`render/REQUESTS.md`, 11): the display part of every blueprint handed over in the program, as
+`tools/dump_display.lua` writes it to a log today. Once that exists, `GameStarted(sim)` will take it
+and nothing changes on your side.
+
+**Checked** with the viewer's `--picture`: a live replay with every third unit selected, two
+ghosts (one free, one blocked), a line and a ring, and the minimap; `MinimapProject` then
+`MinimapGroundAt` returned the place they started from.
+
+Also fixed on the way: two of FAF's strategic icons (`icon_bot3_armored`, `icon_bot3_sniper`) are
+16-bit colour `.dds` files, which the renderer did not read; they showed no icon.
+
 ## ui, to the renderer 1: the world's picture inside the interface — parts 1 to 3 done (first form)
 
 `render/world_picture.h` is the whole interface: a class `render::WorldPicture` that the host makes

@@ -33,7 +33,8 @@ class MeshRenderer {
   // `world` places the model's own units in the world (so it includes the model's scale).
   // `teamColor` is rgb in 0..1; `built` is the fraction complete (1 for a finished unit).
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
-  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr);
+  // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
+  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr);
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
   // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them
   // to the shaders once for all passes.
@@ -67,12 +68,13 @@ class MeshRenderer {
   struct Instance {
     float row0[4], row1[4], row2[4];  // the top three rows of the world matrix
     float color[4];                   // team colour, w: fraction complete
-    float bones[4];                   // x: where its bones' rows begin in the pass's bone buffer, -1: at rest
+    float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none)
   };
   struct Entry {
     const Model* model;
     Vec3 centre;   // of its bounding sphere, in the world
-    float radius;
+    float radius;      // of the sphere it is surely inside (a posed model's is wider)
+    float sizeRadius;  // of the model at rest: what its size on screen is counted by
     Instance instance;
     Pose pose;
     bool posed = false;
