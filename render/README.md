@@ -58,6 +58,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
                [--mods <folder of mods>] [--maps <folder of map folders>]
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
+               [--crowd <unit id>=<count>] [--detail 1]
                [--look modern|original] [--noshadows]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
@@ -71,7 +72,9 @@ Escape quits.
 Looking at a remastered model without a recording: `--preview uel0401=<folder>` takes that unit's
 meshes (`uel0401_lod0.scm`, `_lod1.scm`, ...) and LabPBR textures (`uel0401_lab_albedo.dds`,
 `_lab_normal.dds`, `_lab_spec.dds`, `_lab_ao.dds`, in the folder or its `textures` folder) from there
-instead of the game's, and `--place uel0401` stands the unit in the scene with the game's own model
+instead of the game's (as many levels as the folder has `_lod<n>.scm` files; give `--preview`
+several times for one unit to gather its files from several folders, the first folder wins), and
+`--place uel0401` stands the unit in the scene with the game's own model
 beside it (to its east) in the same light, and frames both. `--at x,z` says where (choose flat
 ground), `--heading` and `--pitch` from which side. Meshes may be `.scm` version 5 or version 6
 (version 5 with 32-bit indices, for models of more than 65,535 vertices).
@@ -118,10 +121,19 @@ shader files are read for what they compute, not copied.
 
 A full game at normal speed with 5,000 to 10,000 units on screen at 60 frames a second or more on a
 top graphics card (measured on an RTX 4090), and playable on an RTX 3060 with the same files at
-lower settings. Measured at 1920 x 1080 with shadows (`--crowd <unit>=<count>`): 10,000 models of
-about 470 triangles take 3.0 ms; 10,000 models of 27,000 triangles take 73 ms. Cost follows
-triangles (about 0.27 ms per million), so the target stands on levels of detail chosen by a unit's
-size on screen. That choice is not built yet: today a level is used up to its blueprint's distance.
+lower settings. Cost follows triangles, not the number of units, so the target stands on levels of
+detail chosen by a unit's size on screen: a model wishes for about half a triangle per pixel of
+the circle it covers and is drawn at the level nearest to that; its shadow comes from a coarser
+level, and a model under 12 pixels casts none. `--detail` scales the wish (the quality setting).
+Measured at 1920 x 1080 with shadows (`--crowd <unit>=<count>`), 10,000 units in view:
+
+| 10,000 units | Frame |
+|---|---|
+| a remastered tank of 26,859 triangles, always at its finest level, shadows from it too | 72.8 ms |
+| the same tank with three levels (26,859 / 8,056 / 2,599), level chosen by size | 3.5 ms |
+| a model of about 470 triangles | 3.0 ms |
+
+The blueprint's `LODCutoff` distances are the original game's and are not used here.
 
 ## Where it stands
 
@@ -161,9 +173,10 @@ Known gaps, to be closed in the steps they belong to:
   legs do not walk) and with the UEF "Unit" look (the Aeon, Cybran and Seraphim looks differ in their
   highlights). A unit under construction is only darker. Army colours are a fixed list, not the
   replay's. No strategic icons: beyond its last level of detail a unit is not drawn.
-- Levels of detail switch at the blueprint file's `LODCutoff` taken as distance to the camera; what
-  the original measures exactly, and what the game's scripts change after loading, is not applied.
+- A unit smaller than a pixel and a half is not drawn (strategic icons will take over there).
 - Props do not sway, and blended far-away cards are not sorted by distance.
+- Each shadow cascade draws every caster inside it again, also those a nearer cascade already
+  covers: the shadow maps often hold more triangles than the picture.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
 - No decals, no sky, no ground beyond the map's edge, no projectiles or effects.

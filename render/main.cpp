@@ -15,6 +15,8 @@
 // --mods    a folder of mods (each in its own folder): their units and textures are found too
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
 // --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
+// --crowd <unit id>=<count>  a square block of that unit, to measure what armies cost
+// --detail  the models' quality setting: 1 full, 0.5 for a slower card, a huge value forces the finest level
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
@@ -84,7 +86,7 @@ struct Options {
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
-  float lodScale = 1;  // below 1 keeps models' finer levels of detail (and the models themselves) for longer
+  float detail = 1;    // the models' quality setting (mesh_renderer.h): 1 full, 0.5 for a slower card, huge = finest always
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -119,7 +121,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
-    else if (a == "--lodscale") o->lodScale = static_cast<float>(atof(v));
+    else if (a == "--detail") o->detail = static_cast<float>(atof(v));
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
@@ -263,7 +265,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
-  meshes.lodScale = opt.lodScale;
+  meshes.detail = opt.detail;
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -603,7 +605,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      printf("; models: %d drawn, %d triangles\n", meshes.drawnInstances, meshes.drawnTriangles);
+      printf("; models: %d drawn, %d triangles, %d more in shadow maps\n", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       break;
     }
 

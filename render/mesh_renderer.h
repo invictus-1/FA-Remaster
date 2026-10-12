@@ -25,12 +25,22 @@ class MeshRenderer {
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
   void Draw(const View& view, gfx::Texture environment, bool shadowPass = false);
 
-  // Distances are multiplied by this before they are compared with a model's cutoffs: below 1 keeps
-  // detail (and the model itself) for longer.
-  float lodScale = 1;
+  // Level of detail is chosen by size on screen, not by distance: a model wishes for
+  // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
+  // to that wish. So every model costs about the same per pixel, whatever its budgets and however
+  // many levels it has. With levels a quarter of each other, the finest is used from about 180
+  // pixels across.
+  float trianglesPerPixel = 0.55f;
+  // The quality setting: scales that wish. 1 is full quality; 0.5 suits a slower card; a very large
+  // value forces every model's finest level.
+  float detail = 1;
+  float minPixels = 1.5f;         // smaller than this on screen: not drawn (a strategic icon's job)
+  float shadowMinPixels = 12;     // smaller than this: casts no shadow
+  float shadowDetail = 0.25f;     // shadows are drawn from coarser levels: this share of the triangles
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
+  int shadowTriangles = 0;        // summed over the shadow passes since the last scene pass
 
  private:
   struct Instance {
@@ -50,6 +60,7 @@ class MeshRenderer {
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, shadow_;
+  bool countedScene_ = true;
   std::vector<Entry> entries_;
   std::vector<Item> items_;
   std::vector<Instance> batch_;
