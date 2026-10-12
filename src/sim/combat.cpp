@@ -34,6 +34,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/entity_grid.h"
 #include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/intel.h"
@@ -936,6 +937,26 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
     u->blipCache.push_back(t);
   });
   std::sort(u->blipCache.begin(), u->blipCache.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
+  // EntitiesAroundPoint walks the entity grid, so the list comes in GRID order (rect_queries.md 2.4: rows by z,
+  // columns by x, in a bucket the most recently registered first; ids play no part). FindBestEnemy depends on it:
+  // the current target only holds its place against candidates that come after it.
+  if (u->blipCache.size() > 1 && sim.entityGrid().ready()) {
+    std::vector<Entity*> grid;
+    sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &grid);
+    std::vector<Unit*> ordered;
+    ordered.reserve(u->blipCache.size());
+    for (Entity* e : grid) {
+      if (e->kind != Entity::Kind::Unit) continue;
+      Unit* t = static_cast<Unit*>(e);
+      if (std::binary_search(u->blipCache.begin(), u->blipCache.end(), t,
+                             [](const Unit* x, const Unit* y) { return x->id < y->id; }))
+        ordered.push_back(t);
+    }
+    if (ordered.size() != u->blipCache.size())  // (not in the grid: no collision shape; they keep id order, last)
+      for (Unit* t : u->blipCache)
+        if (std::find(ordered.begin(), ordered.end(), t) == ordered.end()) ordered.push_back(t);
+    u->blipCache.swap(ordered);
+  }
   return u->blipCache;
 }
 
