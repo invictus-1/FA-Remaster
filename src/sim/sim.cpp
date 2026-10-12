@@ -1300,7 +1300,9 @@ void Sim::Tick() {
       MotionTick(*this, u);
       // CUnitMotion::MoveTo 0x6b92e0 (after every CalcMove*) first brings the transform's quaternion back to unit
       // length (0x4edaa0). Without it a hovering unit's orientation, re-tilted from itself every beat, creeps off.
-      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt) {
+      // (Not for aircraft: AirMotionTick has done its own MoveTo; a third normalising after the rotation step's and
+      // that one moves the last bits back: Transports replay, tick 63.)
+      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt && u->motion.bp->motionType != kMotionAir) {
         Quat& q = u->orientation;
         const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
         if (len > 9.99999997e-07f) {

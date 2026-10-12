@@ -449,8 +449,13 @@ void AddPickupUnits(Sim& sim, TransportObj& T, const std::vector<Unit*>& units, 
     T.pickupFacing = Forward(units[0]->orientation);
   } else {
     float dx = x - tu->position.x, dz = z - tu->position.z;
-    float l = std::sqrt(dx * dx + dz * dz);
-    T.pickupFacing = l <= 1e-6f ? Vec3{} : Vec3{dx / l, 0, dz / l};
+    float l = std::sqrt(dz * dz + dx * dx);
+    if (l > 9.99999997e-07f) {  // 0x5e63b1: times 1 / length
+      float inv = 1.0f / l;
+      T.pickupFacing = {dx * inv, inv * 0.0f, dz * inv};
+    } else {
+      T.pickupFacing = {};
+    }
   }
   T.pickupPos = {x, tu->position.y, z};
   T.pickup.clear();
@@ -916,8 +921,10 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
   }
   if (d.assigned > 0) {
     if (!O.isAirStaging) {
-      float n = static_cast<float>(d.assigned);
-      d.pickupPoint = {d.pickupPoint.x / n, d.pickupPoint.y / n, d.pickupPoint.z / n};
+      // 0x62558f: the sum times 1 / count (not divided by it: the two differ in the last bit, which turns the
+      // pickup facing by a few 1e-6 rad)
+      float inv = 1.0f / static_cast<float>(d.assigned);
+      d.pickupPoint = {d.pickupPoint.x * inv, inv * d.pickupPoint.y, inv * d.pickupPoint.z};
       if (CanFly(T)) AirPrepareMove(sim, T, &d.pickupPoint);
     } else {
       d.pickupPoint = T->position;

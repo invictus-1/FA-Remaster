@@ -38,3 +38,14 @@ personality would send M28 down a path it has never run. M28 is to be replaced l
 ### A mod shield without `Display.AnimationActivate` (xsb11022)
 
 Data of a mod, the same in the original. Not ours to change.
+
+## Where the FAF exe itself departs from the stock game (we follow the FAF exe)
+
+### A transport's load factor is always 1 (0x6a8b30)
+
+In the stock game `Unit::CalcTransportLoadFactor` returns (own + cargo) / own, each a product of four
+blueprint numbers of the unit (read as its size; the fields were not looked up), and
+`CUnitMotion::ComputeAirControl` (0x6be6b0) divides the turn, roll and lift gains by it: a loaded transport
+steers and climbs more slowly. The FAF exe has the function's first three bytes replaced by `fld1; ret`, so
+the factor is 1 whatever the cargo. Our recordings come from the FAF exe, so ours is 1 too. If the stock
+behaviour is ever wanted it is one function (the cached value sits at unit+0x564).

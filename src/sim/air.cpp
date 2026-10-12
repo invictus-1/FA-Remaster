@@ -807,6 +807,19 @@ struct Ctrl {
   Vec3 force, torque;
 };
 
+bool g_bodyDebug = false;  // MOHO64_DEBUG_BODY=<unit id>: the control's and the rotation step's values as bits
+uint32_t FBits(float f) {
+  uint32_t v;
+  std::memcpy(&v, &f, 4);
+  return v;
+}
+void BodyDebugVec(const char* name, const float* p, int n) {
+  char buf[160];
+  int o = std::snprintf(buf, sizeof buf, "ctl %s", name);
+  for (int i = 0; i < n && o < static_cast<int>(sizeof buf) - 10; ++i) o += std::snprintf(buf + o, sizeof buf - o, " %08x", FBits(p[i]));
+  Logf(LogLevel::Info, "%s", buf);
+}
+
 // CUnitMotion::CalcWingedLift 0x6bc950
 float WingedLift(const AirMotion& a, float unitY, float desiredY, float upY) {
   float base = GetElevationWanted(a, unitY);
@@ -1038,6 +1051,8 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   AirMotion& a = A(u);
   const AirBp& b = *a.bp;
   PhysBody& pb = a.body;
+  // 1 / Unit::CalcTransportLoadFactor (vt+0x24, 0x6a8b30). The FAF exe patches that function to "fld1; ret", so
+  // the factor is 1 whatever the cargo (docs/deviations.md)
   float invL = 1.0f / 1.0f;
   float kTurn = b.kTurn * invL, kRoll = b.kRoll * invL, kLift = b.kLift * invL;
   Vec3 dv = desired;
@@ -1067,6 +1082,7 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
     HoverOrientation(u, facing, axes);
     a.combatTimer = 0;
   }
+  if (g_bodyDebug) BodyDebugVec("rawaxes", &axes.X.x, 9);
   OrthoNormalize(axes);
   QuatW Qd = AxesToQuat(axes);
   const QuatW q = pb.q;
@@ -1121,6 +1137,24 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   float m = pb.mass;
   c.force = {(F.x - 0.0f) * m, (F.y - kGravityY) * m, (F.z - 0.0f) * m};
   c.torque = MultQuadVec(q, Vec3{T.x / pb.invI[0], T.y / pb.invI[1], T.z / pb.invI[2]});
+  if (g_bodyDebug) {
+    const float k[5] = {kTurn, kRoll, b.kTurnDamping, b.kRollDamping, static_cast<float>(mode)};
+    BodyDebugVec("k", k, 5);
+    BodyDebugVec("v", &pb.v.x, 3);
+    BodyDebugVec("prevVel", &a.prevVel.x, 3);
+    BodyDebugVec("facing", &facing.x, 3);
+    BodyDebugVec("axes", &axes.X.x, 9);
+    BodyDebugVec("Qd", &Qd.w, 4);
+    BodyDebugVec("q", &q.w, 4);
+    BodyDebugVec("P", &P.w, 4);
+    BodyDebugVec("axis", &axis.x, 3);
+    BodyDebugVec("angle", &angle, 1);
+    BodyDebugVec("L", &pb.L.x, 3);
+    BodyDebugVec("wb", &wb.x, 3);
+    BodyDebugVec("H", &H.x, 3);
+    BodyDebugVec("T", &T.x, 3);
+    BodyDebugVec("torque", &c.torque.x, 3);
+  }
   return c;
 }
 
@@ -1299,6 +1333,7 @@ void BodyLinear(PhysBody& b, const Vec3& F, float dt) {
 // 0x6978d0: angular step with a world torque
 void BodyAngular(PhysBody& b, const Vec3& T, float dt) {
   Vec3 Lo = b.L;
+  const QuatW q0 = b.q;
   b.L.x = T.x * dt + Lo.x;
   b.L.y = T.y * dt + Lo.y;
   b.L.z = T.z * dt + Lo.z;
@@ -1309,12 +1344,30 @@ void BodyAngular(PhysBody& b, const Vec3& T, float dt) {
   Vec3 d{b.invI[0] * al.x, b.invI[1] * al.y, b.invI[2] * al.z};
   QuatW dq = VecToQuat(d);
   b.q = QMulBody(b.q, dq);
+  const QuatW qm = b.q;
   NormalizeQuat(b.q);
+  if (g_bodyDebug) {
+    auto bits = [](float f) {
+      uint32_t v;
+      std::memcpy(&v, &f, 4);
+      return v;
+    };
+    Logf(LogLevel::Info,
+         "body dt %08x T %08x %08x %08x Lo %08x %08x %08x q0 %08x %08x %08x %08x invI %08x %08x %08x av %08x %08x %08x al %08x "
+         "%08x %08x d %08x %08x %08x dq %08x %08x %08x %08x qm %08x %08x %08x %08x q %08x %08x %08x %08x",
+         bits(dt), bits(T.x), bits(T.y), bits(T.z), bits(Lo.x), bits(Lo.y), bits(Lo.z), bits(q0.w), bits(q0.x), bits(q0.y),
+         bits(q0.z), bits(b.invI[0]), bits(b.invI[1]), bits(b.invI[2]), bits(av.x), bits(av.y), bits(av.z), bits(al.x),
+         bits(al.y), bits(al.z), bits(d.x), bits(d.y), bits(d.z), bits(dq.w), bits(dq.x), bits(dq.y), bits(dq.z), bits(qm.w),
+         bits(qm.x), bits(qm.y), bits(qm.z), bits(b.q.w), bits(b.q.x), bits(b.q.y), bits(b.q.z));
+  }
 }
 
 // CUnitMotion::CalcMoveAir 0x6bee50
 void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
   AirMotion& a = A(u);
+  static const long dbgBody = getenv("MOHO64_DEBUG_BODY") ? atol(getenv("MOHO64_DEBUG_BODY")) : -1;
+  g_bodyDebug = dbgBody >= 0 && static_cast<long>(u->id) == dbgBody;
+  if (g_bodyDebug) Logf(LogLevel::Info, "body tick %u", sim.tick());
   const AirBp& b = *a.bp;
   PhysBody& body = a.body;
   const TerrainMap* map = sim.map();
@@ -1400,6 +1453,11 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       }
       // desired facing: the formation vector first
       Vec3 fv = FormationVector(sim, u);
+      if (g_bodyDebug) {
+        BodyDebugVec("formationVector", &fv.x, 3);
+        BodyDebugVec("storedFacing", &a.facing.x, 3);
+        BodyDebugVec("fwdH", &fwdH.x, 3);
+      }
       if (!IsZeroBits(fv)) {
         a.facing = fv;
         facing = fv;

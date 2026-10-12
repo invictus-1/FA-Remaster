@@ -69,14 +69,25 @@ inline double Atan2d(double y, double x) {
   return y < 0 ? -a : a;
 }
 inline float Atan2(float y, float x) { return static_cast<float>(Atan2d(y, x)); }
+// acos and asin as the original's C library does them on the sim thread (_CIacos 0xa8dcd0, _CIasin 0xa8dde0, the
+// x87 branch: fld1 fadd, fld1 fsub, fmulp, fsqrt, fpatan). Its control-word helper 0xaa7bd5 keeps the precision
+// bits, so 1 + x, 1 - x, their product and the root each round to 24 bits; only fpatan stays wide. The result is
+// often one unit in the last place away from the correctly rounded value (Transports replay, tick 58, 2026-10-12).
+inline float SqrtOneMinusSquare(float x) {
+  float a = 1.0f + x, b = 1.0f - x;
+  float p = a * b;
+  return std::sqrt(p);
+}
 inline float Acos(float x) {
-  double d = x < -1 ? -1.0 : (x > 1 ? 1.0 : x);
-  return static_cast<float>(Atan2d(std::sqrt((1.0 - d) * (1.0 + d)), d));
+  if (!(x > -1.0f)) return 3.14159274f;
+  if (!(x < 1.0f)) return 0.0f;
+  return static_cast<float>(Atan2d(SqrtOneMinusSquare(x), x));
 }
 
 inline float Asin(float x) {
-  double d = x < -1 ? -1.0 : (x > 1 ? 1.0 : x);
-  return static_cast<float>(Atan2d(d, std::sqrt((1.0 - d) * (1.0 + d))));
+  if (!(x > -1.0f)) return -1.57079637f;
+  if (!(x < 1.0f)) return 1.57079637f;
+  return static_cast<float>(Atan2d(x, SqrtOneMinusSquare(x)));
 }
 inline float Atan(float x) { return static_cast<float>(Atan2d(x, 1.0)); }
 // natural log (x > 0): x = m * 2^e with m in [sqrt(1/2), sqrt(2)), then 2*atanh((m-1)/(m+1))
