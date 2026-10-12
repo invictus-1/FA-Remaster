@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -64,6 +65,8 @@ class UserState {
   // A beat's sync table from the simulation (bytes as Sim::TakeSync gives them).
   void DeliverSync(const std::string& blob);
   std::unique_ptr<ScriptObject> provider;  // the game script's world interface provider, once made
+  bool gameInterface = false;              // the game's interface has been created (GameLoaded ran)
+  std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)

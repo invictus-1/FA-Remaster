@@ -34,6 +34,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterInputBindings(L);
   RegisterLobbyBindings(L);
   RegisterKeyMapBindings(L);
+  RegisterWorldViewBindings(L);
   RegisterSessionBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
@@ -45,6 +46,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 
 UserState::~UserState() {
   provider.reset();
+  cameras.clear();
   ui_.reset();  // the controls let go of their Lua tables while the state is still there
   threads_.reset();
   state_.reset();
@@ -86,7 +88,15 @@ bool UserState::RunString(const std::string& code, const std::string& chunkName)
 // head, then the main script.
 bool UserState::StartMainScript() {
   lua_State* L = state_->L();
+  // __EngineStats: the original keeps its statistics tree here; ours is the empty tree (a name
+  // and no children) until there are statistics to show.
   lua_newtable(L);
+  lua_pushstring(L, "Name");
+  lua_pushstring(L, "");
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Children");
+  lua_newtable(L);
+  lua_rawset(L, -3);
   lua_setglobal(L, "__EngineStats");
   if (!ui_->CreateRootFrames(L, config_.width, config_.height)) {
     Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", 0);
@@ -107,8 +117,12 @@ bool UserState::StartGame() {
 }
 
 void UserState::GameLoaded() {
+  // The loading screen goes: the script that made it never removes it, so the engine must.
+  // (Inferred: that the root frames are cleared here.)
+  for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
   lua_pushboolean(state_->L(), 0);  // not a replay
   CallProvider("CreateGameInterface", 1);
+  gameInterface = true;
   CallProvider("StopLoadingDialog");
 }
 

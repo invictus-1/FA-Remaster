@@ -155,9 +155,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`--session-out`), the host builds a session from it with the engine's `SessionFromGameConfig`,
   loads the rules and starts the simulation (`app/game_session.*`), and the script hears
   `GameLaunched` (or `LaunchFailed` with the reason), so the lobby closes. The host then runs the
-  simulation's beats, ten a second, beside the interface. There is no in-game interface and no
-  world view yet: the host shows its own notice (map, game time, number of units). What the
-  in-game interface needs from the running simulation is request 4 in `REQUESTS.md`.
+  simulation's beats, ten a second, beside the interface.
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
   drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
   open their screens.
@@ -182,10 +180,23 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   tables. A bound key runs its action as a console command before the controls hear of the key;
   nothing is bound while a control has the keyboard focus. Of the console commands only `UI_Lua`
   is built (most bindings use it); the others are logged once as not built.
+- The in-game interface comes up on a running game. As in the original, a launched game gets a
+  script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
+  functions (5,334 blueprints, the categories); the game script makes its world interface
+  provider and is told to start loading, to create the game interface and that loading stopped
+  (`user/session_bindings.cpp`). The session's facts are answered from the simulation (scenario,
+  armies, focus army, economy totals, time, pause, clients), every beat's sync table arrives as
+  `Sync` with `OnSync()`, and `gamemain.OnBeat()` runs. The game's own set-up of the screen runs
+  through without a script error, and the economy bar, the score board with the clock, the tabs
+  and the overlay panel show a live game. First versions, not read from the original yet: the
+  world view control and the cameras (`maui/worldview.cpp`: the control lays out and draws
+  nothing, a camera records what scripts set), the order of the provider's calls, the clearing
+  of the loading screen. The interface has no units yet: nothing can be selected or ordered.
 - Not real yet: the other console commands, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 258 of the 531 engine functions are built; the rest are logged stubs.
+- About 320 of the 531 engine functions are built (some 40 of them, the world view's and the
+  cameras', as a first version); the rest are logged stubs.
 
 ## Asking the engine track
 

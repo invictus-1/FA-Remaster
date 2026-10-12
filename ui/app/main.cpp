@@ -244,6 +244,10 @@ int main(int argc, char** argv) {
     gameCfg.sim = session.sim();
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L()) && game->Boot() && game->StartMainScript() && game->StartGame();
+    session.RunFirstBeat();
+    // What the simulation told its interface before there was one (the first beats).
+    if (up)
+      for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
     Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
     shown = game.get();
     if (up) {
@@ -257,7 +261,7 @@ int main(int argc, char** argv) {
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.Advance(seconds);
-                           session.DrawStatus(target);
+                           if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            startGameInterface();
                          });
     if (done < 0) ok = false;
@@ -274,7 +278,7 @@ int main(int argc, char** argv) {
   if (!screenshot.empty()) {  // draw the head once and save the picture
     ui::SoftwareTarget target(width, height);
     shown->ui().Render(shown->L(), target, 0);
-    session.DrawStatus(target);
+    if (!game) session.DrawStatus(target);
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
   }

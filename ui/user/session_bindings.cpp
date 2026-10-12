@@ -83,6 +83,12 @@ int l_GetGameTimeSeconds(lua_State* L) {
   lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()) * 0.1f);
   return 1;
 }
+// GetSimRate() and GetGameSpeed(): how much faster or slower than normal the game runs, in the
+// steps the speed keys count. The host runs at normal speed: 0.
+int l_Zero(lua_State* L) {
+  lua_pushnumber(L, 0);
+  return 1;
+}
 int l_GetSimTicksPerSecond(lua_State* L) {
   lua_pushnumber(L, 10);
   return 1;
@@ -207,6 +213,34 @@ int l_GetEconomyTotals(lua_State* L) {
   return 1;
 }
 
+// GameTime(): the game's time in seconds. GetGameTime(): the same as text.
+std::string TimeText(double seconds) {
+  int s = seconds > 0 ? static_cast<int>(seconds) : 0;
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
+  return buf;
+}
+int l_GameTime(lua_State* L) {
+  lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()) * 0.1f);
+  return 1;
+}
+int l_GetGameTime(lua_State* L) {
+  lua_pushstring(L, TimeText(TheSim(L)->tick() * 0.1).c_str());
+  return 1;
+}
+// FormatTime(seconds): hours, minutes and seconds as "HH:MM:SS". (Inferred form.)
+int l_FormatTime(lua_State* L) {
+  lua_pushstring(L, TimeText(luaL_checknumber(L, 1)).c_str());
+  return 1;
+}
+
+// ValidateUnitsList(units): the units of a list that still exist. The interface has no units of
+// its own yet, so none do.
+int l_ValidateUnitsList(lua_State* L) {
+  lua_newtable(L);
+  return 1;
+}
+
 // GetSessionClients(): the one local player. (Field names as the scripts read them.)
 int l_GetSessionClients(lua_State* L) {
   Sim* sim = TheSim(L);
@@ -273,13 +307,30 @@ void UserState::DeliverSync(const std::string& blob) {
   lua_getglobal(L, "OnSync");
   if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) != 0)
     LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  lua_settop(L, top + 1);
+  // Then the beat itself: gamemain.OnBeat() runs what the panels registered to do every beat
+  // (the original calls it by name, FA exe 0x83dd08). Inferred: that it follows the sync.
+  if (gameInterface) {
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/gamemain.lua");
+    if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "OnBeat");
+      lua_gettable(L, -2);
+      if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) != 0)
+        LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+    }
+  }
   lua_settop(L, top);
 }
 
 void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "InternalCreateWldUIProvider", l_InternalCreateWldUIProvider);
   SetMethod(L, "CLuaWldUIProvider", "Destroy", l_ProviderDestroy);
+  SetGlobal(L, "FormatTime", l_FormatTime);
   if (!TheSim(L)) return;
+  SetGlobal(L, "GameTime", l_GameTime);
+  SetGlobal(L, "GetGameTime", l_GetGameTime);
+  SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
   for (const char* name : {"SessionIsReplay", "WorldIsLoading", "SessionIsMultiplayer", "SessionIsGameOver",
                            "SessionIsBeingRecorded", "SessionIsObservingAllowed", "IsObserver"})
@@ -287,6 +338,8 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSimTicksPerSecond", l_GetSimTicksPerSecond);
+  SetGlobal(L, "GetSimRate", l_Zero);
+  SetGlobal(L, "GetGameSpeed", l_Zero);
   SetGlobal(L, "SessionIsPaused", l_SessionIsPaused);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
   SetGlobal(L, "SessionGetScenarioInfo", l_SessionGetScenarioInfo);
