@@ -702,16 +702,23 @@ int l_GetWeapon(lua_State* L) {
   if (i < 1 || i > static_cast<int>(u->weapons.size())) return luaL_error(L, "GetWeapon: index %d out of range", i);
   return PushNew(L, u->weapons[i - 1]);
 }
+// Deviation 1 (docs/deviations.md): FAF's Unit.lua sets a unit state "Sacrificing" in OnStartSacrifice and
+// OnStopSacrifice. The original has no such state, so both callbacks stop at that line with "Invalid enum value"
+// and the sacrifice effects and the AI's events never happen. With Sim::fixes the name is taken as a state that
+// only scripts read.
+bool UnitStateNameOk(lua_State* L, const char* name) {
+  return IsUnitStateName(name) || (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing"));
+}
 int l_IsUnitState(lua_State* L) {
   const char* name = luaL_checkstring(L, 2);
-  if (!IsUnitStateName(name)) return luaL_error(L, "Invalid enum value %s", name);
+  if (!UnitStateNameOk(L, name)) return luaL_error(L, "Invalid enum value %s", name);
   lua_pushboolean(L, U(L)->unitStates.count(name) > 0);
   return 1;
 }
 int l_SetUnitState(lua_State* L) {
   Unit* u = U(L);
   std::string s = luaL_checkstring(L, 2);
-  if (!IsUnitStateName(s.c_str())) return luaL_error(L, "Invalid enum value %s", s.c_str());
+  if (!UnitStateNameOk(L, s.c_str())) return luaL_error(L, "Invalid enum value %s", s.c_str());
   if (lua_toboolean(L, 3)) u->unitStates.insert(s);
   else u->unitStates.erase(s);
   return 0;

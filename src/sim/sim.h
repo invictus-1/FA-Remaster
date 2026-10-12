@@ -263,6 +263,10 @@ class Sim {
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
   int focusArmy = -1;  // 0-based, -1 = observer/replay
   bool isReplay = true;  // false for a session launched from a game configuration (Start(SessionDescription))
+  // Deliberate departures from the original that repair something broken in it or in the game's scripts
+  // (docs/deviations.md lists each one). On in a new game, off while a replay is played back, so that a
+  // recording of the original still plays as the original did. MOHO64_FIXES=0 / 1 overrides.
+  bool fixes = false;
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
   std::string sessionMods;
