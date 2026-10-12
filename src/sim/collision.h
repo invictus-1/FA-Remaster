@@ -40,6 +40,11 @@ bool SegmentHit(const WorldShape& s, Vec3 p0, Vec3 p1, Vec3* hit, float* dist);
 bool SphereOverlap(const WorldShape& s, Vec3 c, float r);
 bool PointInShape(const WorldShape& s, Vec3 p);
 void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx);
+// The entity grid's part of a box query. The original keeps entities in a grid of cells 4 world units wide and
+// gives a box the cells [floor(min) >> 2, (ceil(max) + 3) >> 2) on x and z (0x4fcbe0); a query only meets the
+// entities whose cells it shares, before any box is compared. So two boxes that merely touch on a coordinate
+// that is a multiple of 4 do not find each other, although their boxes overlap in the inclusive sense.
+bool GridCellsMeet(const Vec3& mnA, const Vec3& mxA, const Vec3& mnB, const Vec3& mxB);
 // CollideBox against an axis-aligned box (touching counts).
 bool ShapeOverlapsAABox(const WorldShape& s, Vec3 mn, Vec3 mx);
 // The same against an oriented box: centre, three unit axes, half extents along them.

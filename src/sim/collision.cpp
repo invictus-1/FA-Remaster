@@ -151,6 +151,13 @@ void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx) {
   *mx = Add(s.c, e);
 }
 
+bool GridCellsMeet(const Vec3& mnA, const Vec3& mxA, const Vec3& mnB, const Vec3& mxB) {
+  // 0x4fcbe0: first cell floor(min) >> 2 (not below 0), one past the last (ceil(max) + 3) >> 2
+  auto lo = [](float v) { return std::max(0, static_cast<int>(std::floor(v)) >> 2); };
+  auto hi = [](float v) { return (static_cast<int>(std::ceil(v)) + 3) >> 2; };
+  return lo(mnA.x) < hi(mxB.x) && lo(mnB.x) < hi(mxA.x) && lo(mnA.z) < hi(mxB.z) && lo(mnB.z) < hi(mxA.z);
+}
+
 static void RevertShape(lua_State* L, Entity* e);
 // A primitive against an oriented box (the primitives' vt+0x1c: box 0x4ff260 -> 0x474830, sphere 0x4fe860), as
 // CollectEntitiesInBox 0x721dc0 asks it: touching counts.

@@ -118,6 +118,8 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   int S = std::max(SX(u), SZ(u));
   float x0 = static_cast<float>(x), z0 = static_cast<float>(z), x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
+  const Unit* by = nullptr;
+  Vec3 byMn{}, byMx{};
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
     if (blocked || e == u) return;
     WorldShape s;
@@ -125,6 +127,12 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     Vec3 mn, mx;
     ShapeBounds(s, &mn, &mx);
     if (x0 > mx.x || mn.x > x1 || -1000.0f > mx.y || mn.y > 1000.0f || z0 > mx.z || mn.z > z1) return;
+    // (the gather asks the entity grid first: a unit whose box only touches the square on a multiple of 4 is in
+    // other cells and is not found at all)
+    if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
+    by = e;
+    byMn = mn;
+    byMx = mx;
     // 0x721488: a Land-layer unit counts for an IgnoreStructures footprint only when its own has the flag;
     // Air and Sub layer units never count
     if (e->layer == "Land") {
@@ -145,7 +153,9 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   });
   static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
   if (blocked && dbgClear == static_cast<long>(u->id))
-    Logf(LogLevel::Info, "clear %u unit %u cell (%d,%d) flags %d: blocked", sim.tick(), u->id, x, z, flags);
+    Logf(LogLevel::Info, "clear %u unit %u cell (%d,%d) flags %d: blocked by unit %u at %.4f %.4f, box x %.5f..%.5f z %.5f..%.5f",
+         sim.tick(), u->id, x, z, flags, by ? by->id : 0u, by ? by->position.x : 0.0f, by ? by->position.z : 0.0f,
+         byMn.x, byMx.x, byMn.z, byMx.z);
   return blocked;
 }
 
@@ -167,11 +177,20 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
   const float half[3] = {hw, 1000.0f, len * 0.5f};
   bool blocked = false;
   const float reach = hw + 16.0f;  // (candidates come by their centre: far enough for the biggest hulls)
+  // the line box's own bounds, for the entity grid (0x721de9: 0x4fe2d0, then 0x4fcbe0)
+  const Vec3 ext{std::fabs(axes[0].x) * half[0] + std::fabs(axes[2].x) * half[2], 1000.0f,
+                 std::fabs(axes[0].z) * half[0] + std::fabs(axes[2].z) * half[2]};
+  const Vec3 boxMn{centre.x - ext.x, centre.y - ext.y, centre.z - ext.z};
+  const Vec3 boxMx{centre.x + ext.x, centre.y + ext.y, centre.z + ext.z};
   sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
                      std::max(az, bz) + reach, [&](Unit* e) {
                        if (blocked || e == u) return;
                        WorldShape s;
-                       if (!GetWorldShape(e, &s) || !ShapeOverlapsOBox(s, centre, axes, half)) return;
+                       if (!GetWorldShape(e, &s)) return;
+                       Vec3 mn, mx;
+                       ShapeBounds(s, &mn, &mx);
+                       if (!GridCellsMeet(boxMn, boxMx, mn, mx)) return;
+                       if (!ShapeOverlapsOBox(s, centre, axes, half)) return;
                        if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
                            !BlocksFor(u, e, flags))
                          return;
