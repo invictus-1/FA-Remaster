@@ -133,6 +133,13 @@ class World {
   // three), and a host may set them.
   float rain = 0, snow = 0, fog = 0;
   float wet = 0, snowLying = 0;
+  // Weather that changes by itself (weather.h, WeatherAt): with `weatherAuto`, the clouds, rain,
+  // snow and fog above are what the seed and the frame's clock (the game's, when a game plays)
+  // say. A host gives every player of a game the same seed.
+  bool weatherAuto = false;
+  uint32_t weatherSeed = 1;
+  Climate climate = Climate::Temperate;
+  float weatherSpell = 300;  // seconds one kind of weather lasts
   std::string hide;  // kinds of effect left out: any of "particles", "bands", "decals"
 
   // --- the parts, for hosts that add to a frame or read its numbers ---

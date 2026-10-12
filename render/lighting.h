@@ -67,8 +67,8 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // the weather on the surface: wet is darker and shinier; snow lies on what faces up
   [branch] if (weather.x + weather.y > 0) {
     float upward = saturate(N.y * 1.5 - 0.2);
-    albedo *= 1 - 0.35 * weather.x;
-    roughness = lerp(roughness, 0.3, weather.x * (0.35 + 0.5 * upward));
+    albedo *= 1 - 0.25 * weather.x;
+    roughness = lerp(roughness, 0.45, weather.x * (0.35 + 0.5 * upward));
     float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
     metallic *= 1 - lying;
@@ -140,7 +140,20 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
   // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)
   color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV) * modern.w) * (modern.y * occlusion);
-  return ThroughAir(color + small + emission, length(cameraPosition - world));
+  // rain on what faces up: each small square of ground has a drop falling on it again and again,
+  // and its ring runs outward and fades (near the camera only: from far they would only flicker)
+  float toEye = length(cameraPosition - world);
+  [branch] if (falling.x > 0 && N.y > 0.6 && toEye < 140) {
+    float2 g = world.xz * 3.0;
+    float2 cell = floor(g);
+    float h = CloudHash(float3(cell, 1.7));
+    float age = frac(time * (0.9 + h) + h * 7.0);
+    float2 centre = cell + 0.2 + 0.6 * float2(CloudHash(float3(cell, 5.1)), CloudHash(float3(cell, 9.4)));
+    float ring = abs(length(g - centre) - age * 0.45);
+    float splash = saturate(1 - ring * 6) * (1 - age) * (1 - age) * step(h, falling.x * 0.45) * saturate(1 - toEye / 140);
+    color += (skyZenith.rgb + skyHorizon.rgb) * (splash * 0.1);
+  }
+  return ThroughAir(color + small + emission, toEye);
 }
 )hlsl";
 

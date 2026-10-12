@@ -286,9 +286,20 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   and a little of it with rain and snow, is the air taking the colour of the sky's light with
   distance, never all of it, or the map seen from high up would be gone. All of this is in the
   light every surface shares, so nothing about a model or a map needs to be made for it. Not yet:
-  splashes and puddles, snow that builds up as a layer, lightning, wind on the trees, sound, and
-  weather that changes by itself during a game (a host sets it). Cost: none that can be measured
-  (1.4 to 1.5 ms a frame at 1920 x 1080, clear, storm or snow alike).
+  puddles, snow that builds up as a layer, wind on the trees, sound, a bolt to see in the sky.
+  Cost: none that can be measured (1.4 to 1.5 ms a frame at 1920 x 1080, clear, storm or snow
+  alike).
+  Weather that changes by itself (`--weather auto`, `World::weatherAuto`): `WeatherAt(seed,
+  seconds)` in `weather.h` says what the weather is at a moment of the game's clock. It follows
+  from the seed and the time alone, so every player of a game sees the same weather, a replay
+  shows what the game showed, and nothing is kept or sent: time is cut into spells (five minutes
+  unless said), each spell has one kind of weather drawn by the seed (clear, fair, cloudy,
+  overcast, rain, storm, fog, snow, by shares that depend on a climate: temperate, cold, dry),
+  the first is always fair, and the last quarter of a spell goes over into the next. In a storm
+  lightning strikes now and then: for half a second the clouds light everything, flickering.
+  Rain shows as small rings running outward on wet ground near the camera. The weather is only
+  seen; it does nothing to the game. The viewer's seed is `--seed`; a host should give the
+  game's own (REQUESTS.md, 12). A map does not say its climate yet.
   Not the real thing: light scattered more than once is left out (dusk and deep night get a
   faint light of their own instead, chosen by eye); the moon's light is far stronger against the
   sun's than the real moon's, so that a night can be played; the stars are made by a formula and

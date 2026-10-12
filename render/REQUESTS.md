@@ -13,7 +13,21 @@ State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted fo
 beams and trails by the engine's account; not yet acted on: `SetEmitterCurveParam`,
 `ResizeEmitterCurve`, `SetBeamParam`, refracting particles), 11 done and in use (`BlueprintDisplays`
 is read once the game has started; models and strategic icons take their names from it, so a
-running game needs no `--display` log any more).
+running game needs no `--display` log any more). 12 new.
+
+## 12. A number every player of a game has the same: the session's seed (2026-10-12, small)
+
+**What:** a call beside the views, for example `uint32_t SessionSeed(const Sim& sim)`, that gives the
+seed the simulation's random stream was started with (or any other number that is the same for
+every player of a game and in its replay, and differs from game to game).
+
+**Why:** the renderer's weather changes by itself during a game (`render/weather.h`, `WeatherAt(seed,
+seconds)`): what it is follows from a seed and the game's clock alone, so nothing has to be sent.
+For every player to see the same rain at the same time, and a replay to show the weather the game
+had, that seed must come from the game. The weather is only seen; it changes nothing in the
+simulation, and the renderer draws nothing from the simulation's random stream.
+
+**Until then:** the viewer uses its `--seed` option (the same number it gives a new game), or 1.
 
 ## 11. The display part of blueprints, handed over in the program (2026-10-12)
 

@@ -169,13 +169,32 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
-    // the weather: its clouds, and what it has done to surfaces by now
+    // the weather: what it is by itself, its clouds, and what it has done to surfaces by now
+    float flash = 0;
+    if (weatherAuto) {
+      const WeatherNow now = WeatherAt(weatherSeed, clock, climate, weatherSpell);
+      cloudCover = now.clouds;
+      rain = now.rain;
+      snow = now.snow;
+      fog = now.fog;
+      flash = now.flash;
+    } else {
+      flash = LightningAt(weatherSeed, clock, rain);
+    }
     const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
     weatherTime_ = time;
     wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
     snowLying = std::clamp(snowLying + (snow > 0 ? dt / 60 : -dt / 180), 0.0f, 1.0f);
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover);
+    if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
+      const Vec3 bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
+      skyLight.zenith += bolt;
+      skyLight.horizon += bolt * 0.6f;
+    }
+    c.falling[0] = rain;
+    c.falling[1] = snow;
+    c.falling[2] = flash;
     c.weather[0] = wet;
     c.weather[1] = snowLying;
     // (rain and snow thicken the air a little; the air never hides all of a far thing, or the

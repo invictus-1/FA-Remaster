@@ -59,6 +59,8 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
+// --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
+//           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
@@ -132,7 +134,8 @@ struct Options {
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
-  std::string weather;                  // --weather
+  std::string weather, climate;         // --weather, --climate
+  float weatherSpell = 300;             // --weather-spell
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
   bool hasAt = false;
@@ -221,6 +224,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--weather") o->weather = v;
+    else if (a == "--climate") o->climate = v;
+    else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
     else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
@@ -390,6 +395,10 @@ int main(int argc, char** argv) {
     world.snow = which == 3 ? 0.8f : 0.0f;
     world.fog = which == 4 ? 1.0f : which == 2 ? 0.25f : 0.0f;
   };
+  world.weatherAuto = opt.weather == "auto";
+  world.weatherSeed = opt.seed ? opt.seed : 1;
+  world.weatherSpell = opt.weatherSpell;
+  world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : Climate::Temperate;
   for (int i = 0; i < 5; ++i)
     if (opt.weather == kWeathers[i]) {
       setWeather(i);
@@ -418,7 +427,7 @@ int main(int argc, char** argv) {
   AmbientOcclusion& ao = world.ao;
   Look& look = world.look;
   float dayShift = 0;  // hours added with T
-  bool dayOn = opt.timeOfDay >= 0 || opt.dayLength > 0 || weatherNow != 0;  // a time of day lights (T), or the map's own light (Y)
+  bool dayOn = opt.timeOfDay >= 0 || opt.dayLength > 0 || weatherNow != 0 || world.weatherAuto;  // a time of day lights (T), or the map's own light (Y)
   bool& shadowsOn = world.shadowsOn;
   bool& iconsOn = world.iconsOn;
   std::vector<FrameEffectEvent> effectEvents;
@@ -632,6 +641,7 @@ int main(int argc, char** argv) {
           }
           if (e.key == 'Y') dayOn = false;
           if (e.key == 'R') {
+            world.weatherAuto = false;
             setWeather((weatherNow + 1) % 5);
             dayOn = true;
             printf("render: weather: %s\n", kWeathers[weatherNow]);
