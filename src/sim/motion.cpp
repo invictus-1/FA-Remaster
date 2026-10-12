@@ -1218,6 +1218,54 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   return true;
 }
 
+// CalcMoveCommon's spline-point branch for MotionType 7 (0x6c21d9..0x6c2295): a hovering unit's hull does not take
+// the point's direction. It turns, at TurnFacingRate and from where the hull points now (TurnInfo, as above),
+// toward a face point: its slaved weapon's target when it has one (0x6c1fe2: with a point it faces the target
+// whatever the arc says), else the point plus the point's direction. So a hover tank drives backwards or sideways
+// with its gun on the enemy. There is no 0.9999 test here. Sets the hull (m.bx / m.bz and the orientation).
+void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
+  UnitMotion& m = u->motion;
+  const MotionBlueprint& b = *m.bp;
+  Vec3 fv{};
+  if (!SlavedFaceVector(sim, u, &fv)) fv = Vec3{dirX, 0, dirZ};
+  const Quat& q = u->orientation;
+  float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
+    cx /= cl;
+    cz /= cl;
+  } else {
+    cx = m.bx;
+    cz = -m.bz;
+  }
+  float nx = cx, nz = cz;
+  const float wx = fv.x, wz = -fv.z;
+  const float th = std::min(b.turnFacingRate * m.turnMult * 0.0017453292f, 3.14159274f);
+  const float lc = std::sqrt(cx * cx + cz * cz), lw = std::sqrt(wx * wx + wz * wz);
+  if (lc * lw != 0) {
+    float k = std::cos(th);
+    if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
+      nx = wx * lc / lw;
+      nz = wz * lc / lw;
+    } else {
+      float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
+      if (wz * cx - cz * wx < 0) sn = -sn;
+      if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
+        float r = std::sqrt(sn * sn + k * k);
+        sn /= r;
+        k /= r;
+      }
+      nx = k * cx - sn * cz;
+      nz = k * cz + sn * cx;
+    }
+  }
+  const float l = std::sqrt(nx * nx + nz * nz);
+  if (l > 0) {
+    m.bx = nx / l;
+    m.bz = -nz / l;
+  }
+  u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+}
+
 // ---- hover: CUnitMotion::CalcMoveHover 0x6c2bc0 (lean and wobble) and SnapToGround 0x6c1610's hover branch ----
 namespace {
 bool ClampLength(Vec3& v, float p) {  // 0x5d1e70
