@@ -1382,8 +1382,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
             SetState(u, "CannotFindPlaceToLand", true);
             UpdateSpeedThrough(sim, u);
           } else {
-            a.target.x = spot.x;
-            a.target.z = spot.z;
+            a.target = spot;  // PrepareMove works on the target itself: a spot from its rings has y = 0
             if (State(u, "CannotFindPlaceToLand")) {
               SetState(u, "CannotFindPlaceToLand", false);
               UpdateSpeedThrough(sim, u);
@@ -1768,17 +1767,29 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   const AirBp& b = *a.bp;
   a.pendingLayer = layer;
   a.pendingFacing = {};
+  // COORDS_ToWorldPos 0x50b0f0: a goal cell's world position has the height of the ground there, or of the
+  // water above it unless the footprint may stand on the seabed (OccupancyCaps bit 2): the height that came
+  // with the order is not used
+  const TerrainMap* map = sim.map();
+  const bool seabed = u->blueprint && u->blueprint->hasFootprint && (u->blueprint->footprint.caps & 2);
+  auto cellHeight = [&](float x, float z) {
+    float h = Elevation(map, x, z);
+    if (!seabed && map && map->hasWater && map->waterElevation > h) h = map->waterElevation;
+    return h;
+  };
   if (layer == kLand && b.canFly && landingSpot) {  // a landing move: a free spot (NewMoveTask ctor step 4)
     int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));
-    goal = {cx + b.footprintX * 0.5f, goal.y, cz + b.footprintZ * 0.5f};
+    goal = {cx + b.footprintX * 0.5f, 0.0f, cz + b.footprintZ * 0.5f};
+    goal.y = cellHeight(goal.x, goal.z);
     PrepareMove(sim, u, &goal);
   }
   int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));
   a.pending = true;
   a.pendingTick = tick;
-  a.pendingGoal = {cx + b.footprintX * 0.5f, goal.y, cz + b.footprintZ * 0.5f};
+  a.pendingGoal = {cx + b.footprintX * 0.5f, 0.0f, cz + b.footprintZ * 0.5f};
+  a.pendingGoal.y = cellHeight(a.pendingGoal.x, a.pendingGoal.z);
   a.destEntity = 0;  // (a destination is cleared by the next SetGoal)
   u->motion.hasGoal = true;
   u->motion.arrived = false;
@@ -1868,7 +1879,10 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t) {
   Vec3 lb = MultQuadVec(conj, pb.L);
   Vec3 wb{lb.x * pb.invI[0], lb.y * pb.invI[1], lb.z * pb.invI[2]};
   Vec3 w = MultQuadVec(pb.q, wb);
-  Vec3 v = u->motion.lastMove;
+  // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
+  // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
+  // transport coming down on its landing spot (layer Land) is "not moving" for this
+  Vec3 v = u->layer == "Air" ? u->motion.lastMove : u->motion.vel;
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
   QuatW q{c, 0, s, 0};
@@ -1986,6 +2000,12 @@ void AirMotionTick(Sim& sim, Unit* u) {
       m.hasGoal = false;
       m.arrived = true;
       sim.ResumeCommandThread(u);  // Succeeded wakes the move task (re-linked at the stage's new end)
+      // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
+      static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
+      if (dbgArrive)
+        Logf(LogLevel::Info, "airarrive %u unit %#x d %.4f r %.4f vert %d landLayer %d layer %s queue %zu head %d task %d",
+             sim.tick(), u->id, d, r, a.vertEvent, a.landLayer, u->layer.c_str(), u->commands.size(),
+             u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type), u->task ? 1 : 0);
     }
   }
 }

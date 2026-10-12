@@ -991,6 +991,11 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           if (T->motion.hasGoal) return kTaskRunning;
           d.moving = false;
           SetState(T, "Moving", false);  // its dtor clears it
+          // ... and aborts the navigator: CUnitMoveTask's destructor 0x618700 does so whenever the queue is not
+          // being cleared for a new order (queue+0x1c is 0 then, and its table 0x618998 says "abort" for 0), so
+          // the motion is stopped at the point one second ahead (CAiNavigatorAir::AbortMove 0x5a4f00). Seen: a
+          // transport that reached its pickup point holds its own position from that beat on, not the goal cell.
+          if (CanFly(T) && T->motion.arrived) AirAbort(sim, T);
         }
         O.atPickup = true;
         t.state = 3;
