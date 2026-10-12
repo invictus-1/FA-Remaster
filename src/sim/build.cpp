@@ -1940,7 +1940,12 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack) {
     EndAttack(sim, u, t);
-    if (Alive(u)) StopMovingIfTask(u, t);
+    // ... and AbortMove (nav vt+0x10) whatever the navigator does: an idle one still rebuilds the brake spline the
+    // steering holds (MakeIdle -> SetWaypoints(0, 0)), so a unit already braking brakes from its speed of now
+    if (Alive(u)) {
+      if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+      u->unitStates.erase("Moving");
+    }
     return;
   }
   (void)success;  // build-like tasks end by their own state (the task dtors), not the caller's view

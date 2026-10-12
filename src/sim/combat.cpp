@@ -2254,7 +2254,10 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   u->unitStates.erase("Attacking");
   u->unitStates.erase("MakingAttackRun");
   if (u->dead || u->destroyQueued) return;
-  if (u->desiredTarget.type != 0) SetDesiredTarget(sim, u, AiTarget{});
+  // the dtor 0x5f4160: IgnoreFormation(false), attacker.Stop() 0x5d56f0 = SetDesiredTarget(none) whatever the
+  // desired target was (every weapon is told SetTarget(none): one that still holds a target, also a long dead
+  // one, gets OnLostTarget - a missile launcher packs up), then AbortMove (the caller)
+  if (!u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
   u->navIgnoreFormation = false;
 }
 
