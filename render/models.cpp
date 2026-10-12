@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <cstring>
 #include <fstream>
+#include <optional>
 
 #include "bp_reader.h"
 #include "core/vfs.h"
@@ -14,8 +16,47 @@ namespace {
 
 // .scm: "MODL", then 11 ints (version 5 or 6, bone offset, weighted bone count, vertex offset, extra vertex
 // offset, vertex count, index offset, index count, info offset, info count, total bone count);
-// vertices of 68 bytes; indices of 16 bits, three per triangle.
-bool LoadScm(gfx::Device* device, const std::string& file, ModelLod* lod, Vec3* boundsMin, Vec3* boundsMax, std::string* error) {
+// vertices of 68 bytes; indices of 16 bits, three per triangle. Each bone is 108 bytes: the rest
+// pose's inverse (16 floats), position (3 floats) and rotation (w, x, y, z) relative to the parent,
+// the offset of its name, the parent's index (-1: none), two unused ints.
+//
+// The bones of an .scm file, each composed with its parents as the simulation does it
+// (src/sim/skeleton.cpp), so a pose the simulation hands over and this rest pose agree exactly.
+void ReadScmBones(const std::string& file, std::vector<ModelBone>* bones) {
+  bones->clear();
+  if (file.size() < 48 || file.compare(0, 4, "MODL") != 0) return;
+  int32_t h[11];
+  std::memcpy(h, file.data() + 4, sizeof h);
+  const int64_t offset = h[1], total = h[10];
+  if (offset < 48 || total <= 0 || offset + total * 108 > static_cast<int64_t>(file.size())) return;
+  bones->resize(static_cast<size_t>(total));
+  for (int64_t i = 0; i < total; ++i) {
+    const char* at = file.data() + offset + i * 108 + 64;
+    float f[7];
+    int32_t n[2];
+    std::memcpy(f, at, sizeof f);
+    std::memcpy(n, at + 28, sizeof n);
+    ModelBone& b = (*bones)[static_cast<size_t>(i)];
+    if (n[0] >= 0 && static_cast<size_t>(n[0]) < file.size()) b.name = file.c_str() + n[0];
+    for (char& c : b.name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const Vec3 position{f[0], f[1], f[2]};
+    const Quat rotation{f[4], f[5], f[6], f[3]};
+    if (n[1] >= 0 && n[1] < i) {
+      const ModelBone& parent = (*bones)[static_cast<size_t>(n[1])];
+      b.parent = n[1];
+      b.rotation = Mul(parent.rotation, rotation);
+      b.position = parent.position + Rotate(parent.rotation, position);
+    } else {
+      b.rotation = rotation;
+      b.position = position;
+    }
+  }
+}
+
+// `skeleton`: the bones the model's vertices are to follow by index (Model::bones). Where the file
+// lists its own bones in another order, its vertices are renumbered by the bones' names.
+bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
+             Vec3* boundsMax, std::string* error) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -44,6 +85,27 @@ bool LoadScm(gfx::Device* device, const std::string& file, ModelLod* lod, Vec3* 
       *boundsMin = {std::min(boundsMin->x, p[0]), std::min(boundsMin->y, p[1]), std::min(boundsMin->z, p[2])};
       *boundsMax = {std::max(boundsMax->x, p[0]), std::max(boundsMax->y, p[1]), std::max(boundsMax->z, p[2])};
     }
+  }
+  // which of the skeleton's bones each of the file's bones is; left alone when they are the same list
+  std::vector<ModelBone> own;
+  ReadScmBones(file, &own);
+  bool same = own.size() <= skeleton.size();
+  for (size_t i = 0; same && i < own.size(); ++i) same = own[i].name == skeleton[i].name;
+  std::string renumbered;
+  if (!same && !skeleton.empty()) {
+    std::vector<uint8_t> to(256, 0);
+    for (size_t i = 0; i < own.size() && i < 256; ++i)
+      for (size_t k = 0; k < skeleton.size() && k < 256; ++k)
+        if (skeleton[k].name == own[i].name) {
+          to[i] = static_cast<uint8_t>(k);
+          break;
+        }
+    renumbered.assign(vertices, static_cast<size_t>(vertexCount) * sizeof(ScmVertex));
+    for (int64_t i = 0; i < vertexCount; ++i) {
+      char& bone = renumbered[static_cast<size_t>(i) * sizeof(ScmVertex) + offsetof(ScmVertex, bones)];
+      bone = static_cast<char>(to[static_cast<uint8_t>(bone)]);
+    }
+    vertices = renumbered.data();
   }
   gfx::BufferDesc vb;
   vb.stride = sizeof(ScmVertex);
@@ -161,6 +223,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     return m;
   }
   const BpValue& display = bp["Display"];
+  if (!display["Mesh"].IsTable()) return m;  // nothing to draw (many projectiles are effects only)
   const BpValue& lods = display["Mesh"]["LODs"];
   m->scale = static_cast<float>(display["UniformScale"].NumberOr(1));
   std::vector<LodSource> sources;
@@ -196,6 +259,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
   // whatever the blueprint lists. The scale stays the blueprint's.
+  // the skeleton is that of the mesh the blueprint names, which is what the simulation poses
+  std::string skeletonMesh = sources.empty() ? std::string() : sources[0].mesh;
+  auto skeletonFile = skeletonMesh.empty() ? std::nullopt : vfs_->ReadFile(skeletonMesh);
+  if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
   const std::string preview = "/preview/" + base + "/";
   const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
   if (previewed) {
@@ -220,9 +287,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind.find("terrain") != std::string::npos || kind.find("tmesh") != std::string::npos || kind.find("clutter") != std::string::npos) {
       lod.teamMask = false;  // rocks and other scenery
     }
-    auto mesh = vfs_->ReadFile(s.mesh);
+    auto mesh = s.mesh == skeletonMesh ? skeletonFile : vfs_->ReadFile(s.mesh);
     std::string error;
-    if (!mesh || !LoadScm(device_, *mesh, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error)) {
+    if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error)) {
       // a missing coarser level is common: the finer ones then stand in
       if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
       if (i == 0) return;

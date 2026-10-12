@@ -60,6 +60,9 @@ class LiveSim {
   struct Beat {
     uint32_t tick = 0;
     std::vector<FrameUnit> units;  // in entity-id order
+    std::vector<FrameBone> bones;  // what the units' spans point into
+    std::vector<FrameProjectile> projectiles;
+    std::vector<FrameBeam> beams;
   };
   struct Engine;  // everything of src/sim, kept out of this header
   void Run();
@@ -78,7 +81,8 @@ class LiveSim {
   std::string problem_;
   uint32_t target_ = 0;
   std::deque<Beat> beats_;             // the newest few
-  std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint (0: unknown); only grows
+  std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint and FrameProjectile::blueprint
+                                       // (0: unknown); only grows
   std::vector<Vec3> armyColors_;
   float msPerTick_ = 0, loadSeconds_ = 0;
 

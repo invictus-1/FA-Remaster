@@ -4,12 +4,15 @@
 
 namespace render {
 
-void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out) {
+void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out,
+                uint32_t nextBoneOffset) {
   out->clear();
   out->reserve(countA);
   size_t j = 0;
   for (size_t i = 0; i < countA; ++i) {
     FrameUnit u = a[i];
+    u.nextFirstBone = u.firstBone;
+    u.nextBoneCount = u.boneCount;
     if (b && t > 0) {
       while (j < countB && b[j].id < u.id) ++j;
       if (j < countB && b[j].id == u.id && b[j].blueprint == u.blueprint) {
@@ -23,6 +26,8 @@ void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t co
         u.orientation[3] = q.w;
         u.fractionComplete += (v.fractionComplete - u.fractionComplete) * t;
         u.health += (v.health - u.health) * t;
+        u.nextFirstBone = v.firstBone + nextBoneOffset;
+        u.nextBoneCount = v.boneCount;
       }
     }
     out->push_back(u);

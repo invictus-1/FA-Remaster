@@ -9,7 +9,7 @@
 namespace render {
 namespace {
 
-constexpr size_t kMaxInstances = 1024;  // per draw call (the size of the shader's array)
+constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader's array: 64 KB at most)
 
 // The surface of a model, then one of the two lightings.
 //
@@ -27,14 +27,19 @@ constexpr size_t kMaxInstances = 1024;  // per draw call (the size of the shader
 //   strength for smoothness. This is a first translation, to be tuned per faction.
 //   Props are plain rough surfaces.
 // A unit under construction is simply darker (the build effects are not written yet).
+//
+// Bones: every vertex follows one bone. A model at rest is drawn as its file holds it; for a posed
+// one the vertex is first moved by its bone's matrix (three rows in the bone buffer).
 const char kShader[] = R"hlsl(
 struct Instance {
   float4 row0, row1, row2;
   float4 color;
+  float4 bones;
 };
 cbuffer Instances : register(b2) {
-  Instance instances[1024];
+  Instance instances[768];
 };
+StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only,
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
@@ -67,13 +72,23 @@ struct VOut {
 VOut VS(VIn i, uint instance : SV_InstanceID) {
   Instance n = instances[instance];
   float4 p = float4(i.position, 1);
+  float3 normal = i.normal, tangent = i.tangent, binormal = i.binormal;
+  [branch] if (n.bones.x >= 0) {  // (a real branch: a model at rest must not read the buffer at all)
+    uint at = (uint)n.bones.x + i.bones.x * 3;
+    float4 b0 = boneRows[at], b1 = boneRows[at + 1], b2 = boneRows[at + 2];
+    float3x3 turn = float3x3(b0.xyz, b1.xyz, b2.xyz);
+    p = float4(dot(b0, p), dot(b1, p), dot(b2, p), 1);
+    normal = mul(turn, normal);
+    tangent = mul(turn, tangent);
+    binormal = mul(turn, binormal);
+  }
   VOut o;
   o.world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
   o.position = mul(viewProj, float4(o.world, 1));
   float3x3 r = float3x3(n.row0.xyz, n.row1.xyz, n.row2.xyz);
-  o.normal = mul(r, i.normal);
-  o.tangent = mul(r, i.tangent);
-  o.binormal = mul(r, i.binormal);
+  o.normal = mul(r, normal);
+  o.tangent = mul(r, tangent);
+  o.binormal = mul(r, binormal);
   o.uv = i.uv;
   o.color = n.color;
   return o;
@@ -165,12 +180,52 @@ bool MeshRenderer::Init(std::string* error) {
   pd.cull = gfx::Cull::None;  // thin and open meshes cast a shadow from either side
   shadow_ = device_->CreatePipeline(pd, error);
   batch_.resize(kMaxInstances);
+  gfx::BufferDesc bd;
+  bd.kind = gfx::BufferKind::Shader;
+  bd.stride = 16;
+  bd.dynamic = true;
+  boneBuffer_ = device_->CreateBuffer(bd);
   return static_cast<bool>(shadow_);
 }
 
-void MeshRenderer::Begin() { entries_.clear(); }
+void MeshRenderer::Begin() {
+  entries_.clear();
+  rows_.clear();
+}
 
-void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built) {
+// The rows of a posed model's bones. A bone's matrix is: back from where the bone stands at rest,
+// then to where it is now. Now is between the two beats' poses; a bone a beat does not list is at
+// rest in that beat.
+void MeshRenderer::BuildRows(Entry* entry) {
+  const std::vector<ModelBone>& bones = entry->model->bones;
+  const Pose& pose = entry->pose;
+  entry->rows = static_cast<int>(rows_.size() / 4);
+  rows_.resize(rows_.size() + bones.size() * 12);
+  float* out = rows_.data() + static_cast<size_t>(entry->rows) * 4;
+  const float toModel = 1.0f / entry->model->scale;  // poses are in world units
+  size_t ia = 0, ib = 0;
+  for (size_t i = 0; i < bones.size(); ++i, out += 12) {
+    while (ia < pose.nowCount && pose.now[ia].bone < i) ++ia;
+    while (ib < pose.nextCount && pose.next[ib].bone < i) ++ib;
+    const FrameBone* a = ia < pose.nowCount && pose.now[ia].bone == i ? &pose.now[ia] : nullptr;
+    const FrameBone* b = ib < pose.nextCount && pose.next[ib].bone == i ? &pose.next[ib] : nullptr;
+    if (!a && !b) {  // at rest: nothing to do to its vertices
+      const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+      std::copy(identity, identity + 12, out);
+      continue;
+    }
+    const ModelBone& rest = bones[i];
+    auto place = [&](const FrameBone* f) { return f ? Vec3{f->position[0], f->position[1], f->position[2]} * toModel : rest.position; };
+    auto turn = [&](const FrameBone* f) { return f ? Quat{f->orientation[0], f->orientation[1], f->orientation[2], f->orientation[3]} : rest.rotation; };
+    const Quat q = Mul(Nlerp(turn(a), turn(b), pose.blend), Conjugate(rest.rotation));
+    const Vec3 t = Lerp(place(a), place(b), pose.blend) - Rotate(q, rest.position);
+    const Mat4 m = Mat4::FromTRS(t, q);
+    for (int r = 0; r < 3; ++r)
+      for (int c = 0; c < 4; ++c) out[r * 4 + c] = m.m[r][c];
+  }
+}
+
+void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose) {
   if (!model || !model->ok) return;
   Entry e;
   e.model = model;
@@ -189,6 +244,13 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   e.instance.color[1] = teamColor.y;
   e.instance.color[2] = teamColor.z;
   e.instance.color[3] = built;
+  e.instance.bones[0] = -1;
+  e.instance.bones[1] = e.instance.bones[2] = e.instance.bones[3] = 0;
+  if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
+    e.pose = *pose;
+    e.posed = true;
+    e.radius *= 1.25f;  // parts swing out of the rest pose's bounds
+  }
   entries_.push_back(e);
 }
 
@@ -197,7 +259,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     if (countedScene_) shadowTriangles = 0;
     countedScene_ = false;
   } else {
-    drawnInstances = drawnTriangles = 0;
+    drawnInstances = drawnTriangles = posedInstances = 0;
     countedScene_ = true;
   }
   // What this view sees, each at the level its size on the SCREEN asks for (view.eye, fovY and height
@@ -206,7 +268,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   const float focal = static_cast<float>(view.height) / (2 * std::tan(view.fovY * 0.5f));
   const float smallest = shadowPass ? shadowMinPixels : minPixels;
   const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
-  for (const Entry& e : entries_) {
+  for (Entry& e : entries_) {
     const Vec3 r{e.radius, e.radius, e.radius};
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
     const float pixels = 2 * e.radius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
@@ -222,7 +284,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       ++level;
     const ModelLod* lod = &lods[level];
     // the far-away cards of trees are flat pictures: they cast no shadow
-    if (!(shadowPass && lod->blend)) items_.push_back({lod, &e.instance});
+    if (!(shadowPass && lod->blend)) items_.push_back({lod, &e, -1.0f});
   }
   if (items_.empty()) return;
   // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
@@ -230,7 +292,22 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod < b.lod;
   });
 
+  // the bones of the posed models this pass draws, in one buffer
+  passRows_.clear();
+  for (Item& item : items_) {
+    Entry* e = item.entry;
+    if (!e->posed) continue;
+    if (e->rows < 0) BuildRows(e);
+    item.bones = static_cast<float>(passRows_.size() / 4);
+    const float* from = rows_.data() + static_cast<size_t>(e->rows) * 4;
+    passRows_.insert(passRows_.end(), from, from + e->model->bones.size() * 12);
+    if (!shadowPass) ++posedInstances;
+  }
+  if (passRows_.empty()) passRows_.assign(4, 0.0f);  // the shaders' buffer is never left unset
+  device_->UpdateBuffer(boneBuffer_, passRows_.data(), static_cast<uint32_t>(passRows_.size() * sizeof(float)));
+
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
+  device_->SetShaderBuffer(boneBuffer_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   if (!shadowPass) device_->SetTexture(3, environment ? environment : textures_->GreyCube());
 
@@ -243,7 +320,8 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     }
     size_t n = 0;
     while (at + n < items_.size() && items_[at + n].lod == lod && n < kMaxInstances) {
-      batch_[n] = *items_[at + n].instance;
+      batch_[n] = items_[at + n].entry->instance;
+      batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
     const float kind[4] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f};

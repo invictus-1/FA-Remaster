@@ -25,6 +25,8 @@
 // --maps    a folder of map folders (maps being worked on), found before the game's own maps
 // --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
 // --crowd <unit id>=<count>  a square block of that unit, to measure what armies cost
+// --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
+//           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
@@ -41,6 +43,7 @@
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
 // V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -105,6 +108,8 @@ struct Options {
   std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, place, crowd;
+  std::string turn;    // --turn: the bone placed units turn
+  bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
   float detail = 1;    // the models' quality setting (mesh_renderer.h): 1 full, 0.5 for a slower card, huge = finest always
@@ -122,6 +127,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
+    else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--look") {
       if (!strcmp(v, "original")) o->look = Look::Original;
@@ -150,6 +156,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
+    else if (a == "--turn") o->turn = v;
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
     else if (a == "--msaa") o->msaa = atoi(v);
     else if (a == "--ao") o->ao = static_cast<float>(atof(v));
@@ -448,6 +455,8 @@ int main(int argc, char** argv) {
     const Model* model;
     Vec3 position;
     const StrategicIcons::Kind* icon;
+    int turned = -1;               // --turn: the bone it turns
+    std::vector<FrameBone> bones;  // this frame's pose
   };
   std::vector<PlacedUnit> placedUnits;
   float targetLift = 0;  // how far above the ground the camera's target is held
@@ -455,7 +464,22 @@ int main(int argc, char** argv) {
     auto stand = [&](const Model* model, Vec3 p, const std::string& id) {
       p.y = haveMap ? map.Height(p.x, p.z) : 0;
       if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
-      placedUnits.push_back({model, p, icons.ForBlueprint(models.UnitBlueprintPath(id))});
+      PlacedUnit placed{model, p, icons.ForBlueprint(models.UnitBlueprintPath(id)), -1, {}};
+      if (opt.listBones && (placedUnits.empty() || placedUnits.back().model != model)) {
+        printf("render: %s: %zu bones:", id.c_str(), model->bones.size());
+        for (size_t i = 0; i < model->bones.size(); ++i) printf(" %zu %s", i, model->bones[i].name.c_str());
+        printf("\n");
+      }
+      if (!opt.turn.empty()) {  // by name (as the file spells it, in any case), or by number
+        std::string wanted = opt.turn;
+        for (char& c : wanted) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (size_t i = 0; i < model->bones.size() && placed.turned < 0; ++i)
+          if (model->bones[i].name == wanted) placed.turned = static_cast<int>(i);
+        if (placed.turned < 0 && !wanted.empty() && std::isdigit(static_cast<unsigned char>(wanted[0])) &&
+            static_cast<size_t>(atoi(wanted.c_str())) < model->bones.size())
+          placed.turned = atoi(wanted.c_str());
+      }
+      placedUnits.push_back(std::move(placed));
     };
     Vec3 at = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
     for (const std::string& id : opt.place) {
@@ -645,8 +669,28 @@ int main(int argc, char** argv) {
     meshes.Begin();
     icons.Begin(view);
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
-    for (const PlacedUnit& u : placedUnits) {
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
+    for (PlacedUnit& u : placedUnits) {
+      Pose pose;
+      if (u.turned >= 0) {
+        // the pose a simulation would hand over for that bone turned about the unit's upright axis:
+        // the bone and all that hangs on it, each where the turn about the bone's own place carries it
+        const std::vector<ModelBone>& bones = u.model->bones;
+        const float angle = time * 0.8f, scale = u.model->scale;
+        const Quat yaw{0, std::sin(angle * 0.5f), 0, std::cos(angle * 0.5f)};
+        const Vec3 pivot = bones[static_cast<size_t>(u.turned)].position * scale;
+        u.bones.clear();
+        for (size_t i = static_cast<size_t>(u.turned); i < bones.size(); ++i) {
+          int up = static_cast<int>(i);
+          while (up >= 0 && up != u.turned) up = bones[static_cast<size_t>(up)].parent;
+          if (up != u.turned) continue;
+          const Vec3 p = pivot + Rotate(yaw, bones[i].position * scale - pivot);
+          const Quat q = Mul(yaw, bones[i].rotation);
+          u.bones.push_back({static_cast<uint32_t>(i), {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w}});
+        }
+        pose.now = pose.next = u.bones.data();
+        pose.nowCount = pose.nextCount = u.bones.size();
+      }
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
     if (haveLive) {
@@ -692,11 +736,41 @@ int main(int argc, char** argv) {
         }
         const Model* model = blueprint.empty() ? nullptr : models.Unit(blueprint);
         if (model && model->ok) {
-          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete);
+          Pose pose;
+          pose.now = frame.bones.data() + u.firstBone;
+          pose.nowCount = u.boneCount;
+          pose.next = frame.bones.data() + u.nextFirstBone;
+          pose.nextCount = u.nextBoneCount;
+          pose.blend = frame.blend;
+          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
         } else {  // not known what it is, or its files cannot be read: a box in the army's colour
           auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
           draw.Box(position + Vec3{0, 0.4f, 0}, {0.4f, 0.4f, 0.4f}, 0xff000000u | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x));
         }
+      }
+    }
+    if (havePlay) {
+      auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
+      // projectiles: those with a model as that model; the others are effects in the game, which
+      // are not written yet: a bright stroke along the flight stands in, so that fire can be seen
+      for (const FrameProjectile& p : frame.projectiles) {
+        const Vec3 position{p.position[0], p.position[1], p.position[2]};
+        const std::string& blueprint = (*frame.blueprints)[p.blueprint];
+        const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);
+        if (model && model->ok) {
+          const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
+          // in its own colours: the original's shader multiplies a projectile's texture by a colour the
+          // program supplies, and which one that is for projectiles is not known yet (REQUESTS.md, 7)
+          meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
+        } else {
+          const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
+          draw.Line(position - velocity * 0.06f, position, 0xffc8f4ffu);
+        }
+      }
+      // beams: a line in a lightened army colour, until the beam effects are written
+      for (const FrameBeam& b : frame.beams) {
+        const Vec3 c = armyColors[b.army % armyColors.size()] * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
+        draw.Line({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, 0xff000000u | byte(c.z) << 16 | byte(c.y) << 8 | byte(c.x));
       }
     }
     // the sun's shadow maps first, then the scene into its own picture, then that onto the window
@@ -749,6 +823,7 @@ int main(int argc, char** argv) {
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
+      if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;

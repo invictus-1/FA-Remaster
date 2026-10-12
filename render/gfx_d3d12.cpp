@@ -246,6 +246,7 @@ class D3D12Device final : public Device {
   void SetTexture(int slot, Texture texture) override;
   void SetVertexBuffer(Buffer buffer) override;
   void SetIndexBuffer(Buffer buffer) override;
+  void SetShaderBuffer(Buffer buffer) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
   void EndFrame(std::vector<uint8_t>* capture) override;
@@ -453,7 +454,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_DESCRIPTOR_RANGE range = {};
   range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
   range.NumDescriptors = kTexSlots;
-  D3D12_ROOT_PARAMETER params[kCbSlots + 1] = {};
+  D3D12_ROOT_PARAMETER params[kCbSlots + 2] = {};
   for (int i = 0; i < kCbSlots; ++i) {
     params[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[i].Descriptor.ShaderRegister = static_cast<UINT>(i);
@@ -463,6 +464,11 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   params[kCbSlots].DescriptorTable.NumDescriptorRanges = 1;
   params[kCbSlots].DescriptorTable.pDescriptorRanges = &range;
   params[kCbSlots].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  // the shader buffer: a root descriptor, so it needs no entry in the descriptor tables (t0, space1)
+  params[kCbSlots + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[kCbSlots + 1].Descriptor.ShaderRegister = 0;
+  params[kCbSlots + 1].Descriptor.RegisterSpace = 1;
+  params[kCbSlots + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_STATIC_SAMPLER_DESC samplers[6] = {};
   // s5: for shadow maps. Compares against the stored (reversed) depth: 1 where the given depth is
   // nearer to the light or equal; blends the four nearest results. Outside the map: lit.
@@ -491,7 +497,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   }
   D3D12_ROOT_SIGNATURE_DESC rd = {};
-  rd.NumParameters = kCbSlots + 1;
+  rd.NumParameters = kCbSlots + 2;
   rd.pParameters = params;
   rd.NumStaticSamplers = 6;
   rd.pStaticSamplers = samplers;
@@ -1209,6 +1215,12 @@ void D3D12Device::SetIndexBuffer(Buffer buffer) {
   if (!rec || rec->kind != BufferKind::Index || (rec->dynamic && rec->frame != frameNumber_)) return;
   D3D12_INDEX_BUFFER_VIEW view = {rec->gpu, rec->size, rec->stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
   list_->IASetIndexBuffer(&view);
+}
+
+void D3D12Device::SetShaderBuffer(Buffer buffer) {
+  BufferRec* rec = Find(buffer);
+  if (!rec || rec->kind != BufferKind::Shader || !rec->dynamic || rec->frame != frameNumber_) return;
+  list_->SetGraphicsRootShaderResourceView(kCbSlots + 1, rec->gpu);
 }
 
 void D3D12Device::Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) {

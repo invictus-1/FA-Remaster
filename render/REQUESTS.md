@@ -5,7 +5,19 @@ The engine track answers in `docs/engine-answers.md` on `main` (so that no file 
 Newest first.
 
 State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted for the live frame,
-3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted, 6 new.
+3 done and in use (`tools/dump_display.lua`, the viewer's `--display`), 4 agreed, 5 accepted,
+6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 new (a question).
+
+## 7. A question: which colour does the original give a projectile's mesh? (2026-10-12, small)
+
+**What:** the game's mesh shader for projectiles (`TMeshAlpha`, `TMeshGlow`, ... in `effects/mesh.fx`,
+pixel shader `NormalMappedPS` without `maskAlbedo`) multiplies the texture by `vertex.color`, a colour the
+program supplies per mesh. For units that is the army's colour. For projectiles the game's files do not
+say: white, the army's colour, or something else?
+
+**Why:** the renderer first passed the army's colour and got blue rockets for the blue army, which looks
+wrong from memory of the game; it now passes white, a guess. If the disassembly shows what the original
+passes for a projectile's mesh (and for a prop's, assumed white), one line in the answers settles it.
 
 ## 6. The live frame: bone poses and projectiles first (2026-10-12)
 

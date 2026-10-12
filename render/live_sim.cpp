@@ -81,6 +81,10 @@ struct LiveSim::Engine {
   std::unique_ptr<moho::Sim> sim;
   std::unique_ptr<moho::CommandStream> stream;
   std::vector<moho::UnitView> views;
+  std::vector<moho::UnitPose> poses;
+  std::vector<moho::ProjectileView> projectiles;
+  std::vector<moho::BeamView> beams;
+  std::unordered_map<uint32_t, uint32_t> poseOf;  // unit id -> index in poses, this beat
   std::unordered_map<std::string, uint32_t> nameIndex;
 };
 
@@ -203,26 +207,67 @@ bool LiveSim::Load(std::string* error) {
 void LiveSim::Snapshot() {
   Engine& e = *engine_;
   moho::UnitViews(*e.sim, &e.views);
+  moho::UnitPoses(*e.sim, &e.poses);
+  moho::ProjectileViews(*e.sim, &e.projectiles);
+  moho::BeamViews(*e.sim, &e.beams);
+  e.poseOf.clear();
+  for (uint32_t i = 0; i < e.poses.size(); ++i) e.poseOf.emplace(e.poses[i].id, i);
   Beat beat;
   beat.tick = e.sim->tick();
   beat.units.reserve(e.views.size());
   std::vector<std::string> fresh;
+  auto nameOf = [&](const std::string& blueprint) {
+    auto it = e.nameIndex.find(blueprint);
+    if (it == e.nameIndex.end()) {
+      it = e.nameIndex.emplace(blueprint, static_cast<uint32_t>(e.nameIndex.size() + 1)).first;
+      fresh.push_back(blueprint);
+    }
+    return it->second;
+  };
   for (const moho::UnitView& v : e.views) {
     FrameUnit u;
     u.id = v.id;
-    auto it = e.nameIndex.find(v.blueprint);
-    if (it == e.nameIndex.end()) {
-      it = e.nameIndex.emplace(v.blueprint, static_cast<uint32_t>(e.nameIndex.size() + 1)).first;
-      fresh.push_back(v.blueprint);
-    }
-    u.blueprint = it->second;
+    u.blueprint = nameOf(v.blueprint);
     std::memcpy(u.position, v.position, sizeof u.position);
     std::memcpy(u.orientation, v.orientation, sizeof u.orientation);
     u.health = v.health;
     u.fractionComplete = v.fractionComplete;
     u.dead = v.dead;
     u.beingBuilt = v.beingBuilt;
+    auto posed = e.poseOf.find(v.id);
+    if (posed != e.poseOf.end()) {  // its bones that are away from rest
+      u.firstBone = static_cast<uint32_t>(beat.bones.size());
+      for (const moho::BonePose& b : e.poses[posed->second].bones) {
+        if (b.bone < 0) continue;
+        FrameBone f;
+        f.bone = static_cast<uint32_t>(b.bone);
+        std::memcpy(f.position, b.position, sizeof f.position);
+        std::memcpy(f.orientation, b.orientation, sizeof f.orientation);
+        beat.bones.push_back(f);
+      }
+      u.boneCount = static_cast<uint32_t>(beat.bones.size()) - u.firstBone;
+    }
     beat.units.push_back(u);
+  }
+  beat.projectiles.reserve(e.projectiles.size());
+  for (const moho::ProjectileView& v : e.projectiles) {
+    FrameProjectile p;
+    p.id = v.id;
+    p.blueprint = v.blueprint.empty() ? 0 : nameOf(v.blueprint);
+    p.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
+    std::memcpy(p.position, v.position, sizeof p.position);
+    std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
+    std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
+    beat.projectiles.push_back(p);
+  }
+  beat.beams.reserve(e.beams.size());
+  for (const moho::BeamView& v : e.beams) {
+    FrameBeam b;
+    b.id = v.id;
+    b.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
+    std::memcpy(b.start, v.start, sizeof b.start);
+    std::memcpy(b.end, v.end, sizeof b.end);
+    beat.beams.push_back(b);
   }
   std::lock_guard<std::mutex> lock(mutex_);
   for (std::string& n : fresh) names_.push_back(std::move(n));
@@ -310,6 +355,10 @@ uint32_t LiveSim::LastTick() const {
 bool LiveSim::FrameAt(double tick, Frame* out) {
   std::lock_guard<std::mutex> lock(mutex_);
   out->units.clear();
+  out->bones.clear();
+  out->projectiles.clear();
+  out->beams.clear();
+  out->blend = 0;
   for (size_t i = namesForFrames_.size(); i < names_.size(); ++i) namesForFrames_.push_back(names_[i]);
   out->blueprints = &namesForFrames_;
   if (beats_.empty()) return false;
@@ -320,7 +369,18 @@ bool LiveSim::FrameAt(double tick, Frame* out) {
   const Beat* b = i + 1 < beats_.size() ? &beats_[i + 1] : nullptr;
   const float t = b ? static_cast<float>((tick - a.tick) / static_cast<double>(b->tick - a.tick)) : 0;
   out->tick = a.tick;
-  BlendUnits(a.units.data(), a.units.size(), b ? b->units.data() : nullptr, b ? b->units.size() : 0, t, &out->units);
+  // the bones of both beats, this beat's first: the units' spans for the next beat are moved behind them
+  out->bones = a.bones;
+  if (b) out->bones.insert(out->bones.end(), b->bones.begin(), b->bones.end());
+  out->blend = t;
+  BlendUnits(a.units.data(), a.units.size(), b ? b->units.data() : nullptr, b ? b->units.size() : 0, t, &out->units,
+             static_cast<uint32_t>(a.bones.size()));
+  // projectiles fly on along their velocity for the part of the beat that has passed (a beat is a tenth of a second)
+  out->projectiles = a.projectiles;
+  const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
+  for (FrameProjectile& p : out->projectiles)
+    for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
+  out->beams = a.beams;
   return true;
 }
 
