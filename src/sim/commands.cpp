@@ -1183,10 +1183,17 @@ int l_SetMult(lua_State* L) {
   return 0;
 }
 
+// Unit:SetImmobile(flag) 0x6c6770: sets or clears the unit state Immobile (1), nothing else. (Ours also keeps a
+// flag and stops the motion at once.)
 int l_SetImmobile(lua_State* L) {
   Unit* u = U(L);
   u->immobile = lua_toboolean(L, 2) != 0;
-  if (u->immobile) MotionStop(u);
+  if (u->immobile) {
+    u->unitStates.insert("Immobile");
+    MotionStop(u);
+  } else {
+    u->unitStates.erase("Immobile");
+  }
   return 0;
 }
 

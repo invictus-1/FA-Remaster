@@ -498,6 +498,10 @@ void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   }
   if (!CanFly(child) && !skipBallistic) {
     m.ballistic = true;
+    // CalcMoveBallistic starts from Unit::GetVelocity, the entity's last displacement: what the unit moved with
+    // its transport in the beat before (seen: cargo let go from a hovering transport that was still sinking 0.3
+    // a beat starts its fall at that speed and keeps the drift)
+    if (child->lastPosTick) m.lastMove = Sub(child->position, child->lastPosition);
   } else {
     m.needSnap = true;
   }
