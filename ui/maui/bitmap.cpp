@@ -20,6 +20,27 @@ class Bitmap : public Control {
     else if (solid) out += "colour " + color;
   }
 
+  // Draw (FA exe 0x780850): the current texture stretched over the control's rectangle (or tiled
+  // at its own size), its border ring left out, multiplied by the control's alpha.
+  void Draw(lua_State* L, DrawTarget& target) override {
+    Rect dst;
+    GetRect(&dst.x0, &dst.y0, &dst.x1, &dst.y1);
+    if (solid) {
+      target.FillRect(dst, WithAlpha(ParseColor(color), alpha));
+      return;
+    }
+    if (textures.empty()) return;
+    size_t index = frame >= 0 && static_cast<size_t>(frame) < textures.size() ? static_cast<size_t>(frame) : 0;
+    const Image& img = LoadTexture(ScriptState::From(L)->vfs(), textures[index]);
+    if (!img.valid()) return;
+    float b = static_cast<float>(border);
+    float iw = static_cast<float>(img.width) - 2 * b, ih = static_cast<float>(img.height) - 2 * b;
+    Rect src{b + u0 * iw, b + v0 * ih, b + u1 * iw, b + v1 * ih};
+    uint32_t tint = WithAlpha(0xffffffffu, alpha);
+    if (tiled) target.DrawImageTiled(img, src, dst, tint);
+    else target.DrawImage(img, src, dst, tint);
+  }
+
   LazyVar bitmapWidth, bitmapHeight;
   std::vector<std::string> textures;  // more than one: animation frames
   int border = 1;

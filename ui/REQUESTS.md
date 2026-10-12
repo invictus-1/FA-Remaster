@@ -22,9 +22,28 @@ track answers under the request.
 - **Smallest form:** the handle part moved to `src/script/` (for example `script/script_handle.*`);
   the simulation's class tables stay where they are.
 
-### 3. Coming, not needed yet
-- Start a simulation from a session description (map, armies, options, mods) instead of a replay:
-  what `LaunchSinglePlayerSession` will hand over once skirmish set-up works.
+### 3. Start a simulation from the lobby's game configuration
+- **What:** a way to start a session from a game configuration instead of a replay.
+- **Why:** skirmish set-up works as far as the Launch button: the game's lobby script calls
+  `CLobby:LaunchGame(gameConfig)`, and that table is what the original starts the session from. The
+  interface host records it (`moho64ui --session-out file.lua` writes `GameConfig = { ... }` in the
+  script's own `repr` form). Its parts:
+  - `GameOptions`: `ScenarioFile` (for example `/maps/scmp_009/scmp_009_scenario.lua`) and the game
+    options as strings (`Victory`, `UnitCap`, `FogOfWar`, `CheatsEnabled`, `GameSpeed`, `Share`,
+    `TeamSpawn`, `PrebuiltUnits`, `NoRushOption`, ...), plus `Ratings` and `ClanTags` by player name.
+  - `PlayerOptions`: one table per army in slot order (`PlayerName`, `Human`, `OwnerID`, `Faction`,
+    `StartSpot`, `Team`, `PlayerColor`, `ArmyColor`, `AIPersonality`, `Civilian`, ...).
+  - `Observers`, `GameMods` (the active mods), `AutoTeams`, `ClosedSlots`, `SpawnMex`.
+- **Smallest form:** something like `Sim::Start(const SessionDescription&)` beside
+  `Sim::Start(const ReplayHeader&)`, where the description holds the same things the replay header
+  does (map, scenario info, mods, armies with their options, seed) and can be filled from this
+  table. The original builds its session info from the table in `CLobby::LaunchGame` (FA exe
+  0x7c38c0: it reads `GameOptions`, `ScenarioFile`, `PlayerOptions`, `Observers`, `GameMods`,
+  `Human`, `Civilian`, `OwnerID`, `PlayerName`, `ArmyName`, `StartSpots`, the scenario's
+  `Configurations.standard.teams` and `customprops.ExtraArmies`, and on success calls the script's
+  `GameLaunched`).
+
+### 4. Coming, not needed yet
 - Issue orders and sim callbacks from the interface (`IssueCommand`, `SimCallback`), and the sync
   data a session's interface reads each beat (`GetArmiesTable`, `GetEconomyTotals`, unit data).
 

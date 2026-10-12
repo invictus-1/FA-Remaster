@@ -110,9 +110,57 @@ void UiManager::Update(lua_State* L, float seconds) {
   for (Frame* f : frames_) f->Update(L, seconds);
 }
 
+// Drawing a head (FA exe 0x786fa0, 0x7870f0): the frame and everything below it, depth first,
+// makes one list ordered by Depth; the controls that are not hidden draw in that order, lowest
+// first. Depth is only asked of controls that are not hidden. Inferred: controls of equal depth
+// keep their tree order. Render passes are not told apart yet: every pass draws.
+void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
+  Frame* frame = GetFrame(head);
+  if (!frame) return;
+  std::vector<Control*> all{frame};
+  Collect(frame, all);
+  std::vector<std::pair<float, Control*>> order;
+  for (Control* c : all)
+    if (!c->dead() && !c->IsHidden()) order.emplace_back(c->depth.Get(), c);
+  std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (auto& [depth, c] : order)
+    if (!c->dead()) c->Draw(L, target);
+}
+
 void UiManager::Forget(Control* c) {
   if (focus == c) focus = nullptr;
+  if (hover == c) hover = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());
+}
+
+void UiManager::SetFocus(lua_State* L, Control* c) {
+  if (focus == c) return;
+  Control* old = focus;
+  focus = c;
+  if (old) old->RunScript(L, "OnLoseKeyboardFocus");
+  if (c && focus == c) c->RunScript(L, "OnKeyboardFocusChange");
+}
+
+// --- WeakControl ---
+
+void WeakControl::Set(lua_State* L, int idx) {
+  Clear();
+  L_ = ScriptState::From(L)->L();
+  lua_pushvalue(L, idx);
+  ref_ = luaL_ref(L, LUA_REGISTRYINDEX);
+}
+
+void WeakControl::Clear() {
+  if (L_ && ref_ != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, ref_);
+  ref_ = LUA_NOREF;
+}
+
+Control* WeakControl::Get() const {
+  if (ref_ == LUA_NOREF) return nullptr;
+  lua_rawgeti(L_, LUA_REGISTRYINDEX, ref_);
+  Control* c = dynamic_cast<Control*>(GetObject(L_, -1));
+  lua_pop(L_, 1);
+  return c && !c->dead() ? c : nullptr;
 }
 
 int UiManager::CountControls() const {
@@ -302,6 +350,17 @@ int l_Dragger_Destroy(lua_State* L) {
   return 0;
 }
 
+// moho64ui_Describe(control): not an engine function of the original. The host's own debugging
+// aid for tests: the control's class and state as --dump-ui prints them.
+int l_Describe(lua_State* L) {
+  Control* c = CheckControl(L, 1);
+  std::string own = c->ClassName();
+  own += " ";
+  c->Describe(own);
+  lua_pushstring(L, own.c_str());
+  return 1;
+}
+
 }  // namespace
 
 void RegisterFrameBindings(lua_State* L) {
@@ -329,6 +388,8 @@ void RegisterFrameBindings(lua_State* L) {
 
   SetGlobal(L, "InternalCreateDragger", l_InternalCreateDragger);
   SetMethod(L, "CMauiLuaDragger", "Destroy", l_Dragger_Destroy);
+
+  lua_register(L, "moho64ui_Describe", l_Describe);
 }
 
 }  // namespace moho::ui

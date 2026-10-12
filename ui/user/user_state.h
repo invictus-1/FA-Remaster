@@ -30,6 +30,7 @@ class UserState {
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file; empty = preferences live in memory only
+    std::string sessionFile;            // where a launched game's configuration is written; empty = to the log
     int width = 1920, height = 1080;    // the head's size in pixels
   };
 
@@ -75,5 +76,7 @@ void RegisterPrefsBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Time, command line, interface state, front-end data, Random (basics.cpp).
 void RegisterBasicBindings(lua_State* L);
+// The lobby object in its local form (lobby.cpp).
+void RegisterLobbyBindings(lua_State* L);
 
 }  // namespace moho::ui

@@ -54,9 +54,13 @@ So the job is two layers:
 ```
 py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip install ziglang)
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
-         [--stage userinit|setup|frontend] [--size 1920x1080] [--frames N] [--dump-ui]
-         [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
+         [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
+         [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
+         [-- <the game's own arguments>]
 ```
+- `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
+  frames). Without it the host runs headless on its own clock.
+- `--screenshot file.png` draws the head once at the end and saves the picture.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
   `uimain.SetupUI()`, `frontend` (the default) adds `uimain.StartFrontEndUI()`. `--frames N` then
   runs N frames (controls' `OnFrame`, script threads) at 60 frames per second of its own clock.
@@ -92,9 +96,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 
 - Step 1 works: the user state boots from the game's files. `/lua/userInit.lua`, `uimain.SetupUI()`
   and `uimain.StartFrontEndUI()` run without script errors, also with mods' hooks active.
-- Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap and Text are
-  built; Border, Edit, ItemList, Scrollbar, Movie, Histogram, Mesh and the map preview exist as
-  plain controls (they lay out; their own methods are still stubs). The main menu script builds
+- Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap, Text, Border,
+  ItemList, Scrollbar, Edit and Histogram are built as far as scripts can see them (state, layout,
+  callbacks that need no input). Movie reads a file's size and frame rate but decodes nothing yet:
+  it reports itself loaded and never finishes. Mesh and the map preview are plain controls (they
+  lay out; their own methods are still stubs). The main menu script builds
   its whole screen: 67 controls (logo, borders, the eight menu buttons with their labels) with
   rectangles from the real texture sizes; controls that ask for frame updates get `OnFrame`. Without
   a profile in the preferences the game's own profile dialog comes up instead.
@@ -103,9 +109,50 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   LazyVar creation and reading, texture size with its border. Inferred from the scripts' use and
   marked so in the source: `SetParent`, keyboard focus callbacks, `GetTopmostDepth`, the order of
   control updates and script threads within a frame.
-- Not real yet: text measures (`font.h` is a placeholder, so text-dependent layout is approximate),
-  everything drawn, input, sound, key maps, movies.
-- 155 of the 531 engine functions are built; the rest are logged stubs.
+- Text measures are the original's on Windows: the same GDI font (family name, height = -size,
+  antialiased), its text metrics for ascent / descent / leading, and each character's width from
+  the same DrawText call, summed without kerning (`maui/font.*`). The game's `/fonts/*.ttf` are
+  added to the process at start, as the original does. On other hosts the measures are still a
+  placeholder.
+- Drawing, first part (`draw/`): a small 2D target (`draw/draw.h`: textured rectangles, filled
+  rectangles, glyphs, a clip rectangle) with a software backend that fills a pixel buffer.
+  `--screenshot file.png` draws the head once at the end and saves the picture: the main menu and
+  the profile dialog come out as in the game (without the background movie). Controls draw in the
+  original's order (one list ordered by Depth, hidden ones left out); Bitmap and Text follow the
+  original's placement (texture stretched over the rectangle without its border ring; the text
+  baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
+  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list, edit
+  field, border and scrollbar draw by inference, marked in the source.
+- Checked against the original: a lossless screenshot of the original game's main menu (3840x2160,
+  the game's UI scale at 150%) compared with our picture of the same set-up. Every part compared
+  (logo, profile name, button labels, button ends, brackets, bottom borders) sits at the same
+  pixel position, and the text is the same to the pixel in practice (mean difference per colour
+  value 0.02 to 4 of 255). What still differs is what we do not draw yet: the background movie and
+  the moving glows behind the buttons.
+- Mouse input (`maui/input.*`): an event goes to the control holding the input capture, or to the
+  control under the cursor (highest Depth among those not hidden, with hit testing on, containing
+  the point), as the original's event table through the script's `HandleEvent`, and up to the
+  parents until one handles it; MouseEnter / MouseExit; `uimain.OnMouseButtonPress`. Read from the
+  original: the target rule, the event table, the passing up. Inferred: the order of exit and enter.
+- Draggers (`PostDragger`): while one is posted the mouse's moves and the release of its button go
+  to it instead of the controls. The game's buttons click through this, so the main menu's
+  buttons work: Options opens the options dialog (about 790 controls), Exit asks for confirmation.
+- The lobby object (`user/lobby.cpp`) in its local form: it hosts (the host gets the id 0, as in
+  the original), has no peers and sends nothing. With it Skirmish goes from the main menu through
+  the game's tutorial question to the game's lobby screen in single-player form (about 2,900
+  controls: slots, colours, factions, game options, the map's picture with its start positions
+  and resource markers). The Launch button runs the script's launch path to its end. Joining a
+  game and starting one are not built: `LaunchGame` records the game configuration the script
+  hands over (to the log, or to the file named by `--session-out`) and tells the script the game
+  launched, as the original does, so the lobby closes; the session itself does not start, and the
+  screen stays empty. See `REQUESTS.md` for what the engine track needs to start a session from it.
+- `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
+  drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
+  open their screens.
+- Not real yet: keyboard input and key maps, the game's cursor, sound, movies, render passes,
+  bitmap animation, other texture formats, and the engine functions the screens behind the menu
+  call (their stubs are named in the log).
+- 250 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
 

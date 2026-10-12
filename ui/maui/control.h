@@ -12,12 +12,14 @@
 #include <string>
 #include <vector>
 
+#include "draw/draw.h"
 #include "maui/lazyvar.h"
 #include "script/lua.hpp"
 #include "sim/script_object.h"
 
 namespace moho::ui {
 
+class DrawTarget;
 class Frame;
 class UiManager;
 
@@ -37,6 +39,15 @@ class Control : public ScriptObject {
   virtual const char* ClassName() const { return "control"; }
   // One line of this control's own state for Dump (texture, text, ...).
   virtual void Describe(std::string& out) const { (void)out; }
+  // Draw this control alone (its children draw themselves). A plain control draws nothing.
+  virtual void Draw(lua_State* L, DrawTarget& target) {
+    (void)L;
+    (void)target;
+  }
+  // The rectangle the LazyVars give right now.
+  void GetRect(float* x0, float* y0, float* x1, float* y1) const {
+    *x0 = left.Get(), *y0 = top.Get(), *x1 = right.Get(), *y1 = bottom.Get();
+  }
 
   // Destroy (0x786ef0): leave the parent, join the root frame's list of dead controls (they are
   // deleted at the end of the frame), run self:OnDestroy(), then destroy the children, newest first.
@@ -54,6 +65,16 @@ class Control : public ScriptObject {
   virtual bool HitTest(float x, float y) const;
   void SetParent(Control* parent);
   void SetAlpha(float alpha, bool children);
+
+  // What a scrollbar asks of the control it scrolls (FA exe: the control's virtual slots 18-22).
+  // A control hands these to its script (IsScrollable, GetScrollValues, ScrollLines, ScrollPages,
+  // ScrollSetTop); an item list answers them itself. Axis 0 is vertical, 1 horizontal ("Vert" and
+  // "Horz" for scripts). GetScrollValues fills: range min, range max, visible min, visible max.
+  virtual bool IsScrollable(lua_State* L, int axis);
+  virtual void GetScrollValues(lua_State* L, int axis, float out[4]);
+  virtual void ScrollLines(lua_State* L, int axis, float lines);
+  virtual void ScrollPages(lua_State* L, int axis, float pages);
+  virtual void ScrollSetTop(lua_State* L, int axis, float top);
 
   // self:<name>(args): the `nargs` values on top of L are the arguments. Returns true when the
   // function exists and ran without error; then `nresults` results are on the stack. A script
@@ -92,12 +113,11 @@ class Group : public Control {
 };
 
 // A control class whose own behaviour is not built yet: it lays out like any control, and its own
-// methods are still logged stubs. Border and Movie carry the two extra LazyVars their scripts read.
+// methods are still logged stubs.
 class PlainControl : public Control {
  public:
   explicit PlainControl(const char* className) : className_(className) {}
   const char* ClassName() const override { return className_; }
-  LazyVar extraWidth, extraHeight;  // BorderWidth/BorderHeight, MovieWidth/MovieHeight
 
  private:
   const char* className_;
@@ -141,13 +161,21 @@ class UiManager {
   bool initialized() const { return !frames_.empty(); }
 
   void Update(lua_State* L, float seconds);
+  // Draw a head's controls onto a target, in the original's order.
+  void Render(lua_State* L, DrawTarget& target, int head);
   // Log the tree of every head: one line per control with its class, name, rectangle, depth and state.
   void Dump() const;
   int CountControls() const;
 
   Control* focus = nullptr;                // keyboard focus
+  Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
+  int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
+  int draggerKey = 0;                      // the key code whose release ends it
   std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
   void Forget(Control* c);                 // a control died: drop it from focus and capture
+  // Give the keyboard focus to a control (or to none). Inferred: the control that loses it gets
+  // OnLoseKeyboardFocus(), the one that gets it OnKeyboardFocusChange().
+  void SetFocus(lua_State* L, Control* c);
 
  private:
   std::vector<Frame*> frames_;
@@ -161,10 +189,33 @@ T* CheckControl(lua_State* L, int idx) {
   return CheckObject<T>(L, idx);
 }
 
-void RegisterControlBindings(lua_State* L);  // control.cpp: moho.control_methods, groups, plain controls
-void RegisterFrameBindings(lua_State* L);    // ui_manager.cpp: frames, cursor, focus, capture
-void RegisterBitmapBindings(lua_State* L);   // bitmap.cpp
-void RegisterTextBindings(lua_State* L);     // text.cpp
+// One control's hold on another that may be destroyed first (a scrollbar and the control it
+// scrolls): it keeps the other's script table and asks it for the control each time.
+class WeakControl {
+ public:
+  WeakControl() = default;
+  ~WeakControl() { Clear(); }
+  WeakControl(const WeakControl&) = delete;
+  WeakControl& operator=(const WeakControl&) = delete;
+  void Set(lua_State* L, int idx);  // the control's table at idx
+  void Clear();
+  Control* Get() const;             // nullptr once the control is destroyed
+
+ private:
+  lua_State* L_ = nullptr;
+  int ref_ = LUA_NOREF;
+};
+
+void RegisterControlBindings(lua_State* L);        // control.cpp: moho.control_methods, groups, plain controls
+void RegisterFrameBindings(lua_State* L);          // ui_manager.cpp: frames, cursor, focus, capture
+void RegisterBitmapBindings(lua_State* L);         // bitmap.cpp
+void RegisterTextBindings(lua_State* L);           // text.cpp
+void RegisterScrollbarBindings(lua_State* L);      // scrollbar.cpp
+void RegisterItemListBindings(lua_State* L);       // itemlist.cpp
+void RegisterEditBindings(lua_State* L);           // edit.cpp
+void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: border, histogram, movie
+void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
+void RegisterMapPreviewBindings(lua_State* L);     // mappreview.cpp
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);

@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/control.h"
+#include "maui/font.h"
 #include "script/script_state.h"
 #include "script/threads.h"
 #include "user/bindings.h"
@@ -24,6 +25,14 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterFrameBindings(L);
   RegisterBitmapBindings(L);
   RegisterTextBindings(L);
+  RegisterScrollbarBindings(L);
+  RegisterItemListBindings(L);
+  RegisterEditBindings(L);
+  RegisterSimpleControlBindings(L);
+  RegisterInputBindings(L);
+  RegisterLobbyBindings(L);
+  RegisterMapPreviewBindings(L);
+  InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
   // Hooks of the active mods apply to the scripts of this state as well. (The original's front end
   // takes the active mods from the preferences; here they come from the host's mod list.)
