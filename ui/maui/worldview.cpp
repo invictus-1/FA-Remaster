@@ -269,11 +269,35 @@ class WorldView : public Control {
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
-    if (e.type == EventType::ButtonPress && e.right) {
-      float world[3];
-      Unproject(L, e.x, e.y, world);
-      return IssueMoveToSelection(L, world[0], world[1], world[2], !e.shift);
+    if (e.type != EventType::ButtonPress) return false;
+    float world[3];
+    Unproject(L, e.x, e.y, world);
+    if (e.right) return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
+    if (!e.left) return false;
+    // A left press while the game script is in a command mode (the original asks it the same way:
+    // commandmode.GetCommandMode(), FA exe 0x83dda0, gives {mode, data}): mode "order" with
+    // data.name = an order's name, or "build" with data.name = the blueprint to build.
+    std::string mode, name;
+    int top = lua_gettop(L);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/commandmode.lua");
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "GetCommandMode");
+      lua_gettable(L, -2);
+      if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        if (lua_isstring(L, -1)) mode = lua_tostring(L, -1);
+        lua_rawgeti(L, -2, 2);
+        if (lua_istable(L, -1)) {
+          lua_pushstring(L, "name");
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
+        }
+      }
     }
+    lua_settop(L, top);
+    if (mode == "build" || mode == "buildanchored") return IssueToSelection(L, "BuildMobile", world[0], world[1], world[2], !e.shift, name);
+    if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
     return false;
   }
 };

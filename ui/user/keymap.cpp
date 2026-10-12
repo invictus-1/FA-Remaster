@@ -368,6 +368,31 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     UserState::From(L)->RunString(rest, text);
     return;
   }
+  if (Upper(name) == "STARTCOMMANDMODE") {  // StartCommandMode <mode> <name>: commandmode.StartCommandMode(mode, {name = name})
+    // Only in a game: the keys bound to it are bound in the front end too, where the game's
+    // command-mode script has no business. (Inferred: that the original leaves it out there.)
+    if (!UserState::From(L)->gameInterface) return;
+    size_t sp = rest.find_first_of(" \t");
+    std::string mode = rest.substr(0, sp);
+    size_t at = sp == std::string::npos ? sp : rest.find_first_not_of(" \t", sp);
+    std::string arg = at == std::string::npos ? std::string() : rest.substr(at);
+    int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/commandmode.lua");
+    if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "StartCommandMode");
+      lua_gettable(L, -2);
+      lua_pushstring(L, mode.c_str());
+      lua_newtable(L);
+      lua_pushstring(L, "name");
+      lua_pushstring(L, arg.c_str());
+      lua_rawset(L, -3);
+      if (lua_pcall(L, 2, 0, top + 1) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+    }
+    lua_settop(L, top);
+    return;
+  }
   KeyMap& map = Map(L);
   if (map.unbuilt.insert(Upper(name)).second)
     Logf(LogLevel::Debug, "moho64ui: console command not built: %s", name.c_str());

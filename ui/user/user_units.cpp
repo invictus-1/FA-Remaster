@@ -563,18 +563,75 @@ std::string TakeOrders(lua_State* L) {
   return store.writer ? store.writer->Take() : std::string();
 }
 
-bool IssueMoveToSelection(lua_State* L, float x, float y, float z, bool clear) {
+// commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
+// engine issued for the player, as a table. First version of that table: CommandType (the
+// order's name), Clear, Target = {Type = "Position", Position}, Units, Blueprint.
+void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserUnit*>& units, float x, float y, float z,
+                         bool clear, const std::string& blueprint) {
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandmode.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "OnCommandIssued");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      lua_newtable(L);
+      lua_pushstring(L, "CommandType");
+      lua_pushstring(L, type);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "Clear");
+      lua_pushboolean(L, clear);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "Blueprint");
+      if (blueprint.empty()) lua_pushnil(L);
+      else lua_pushstring(L, blueprint.c_str());
+      lua_rawset(L, -3);
+      lua_pushstring(L, "Units");
+      PushUnitList(L, units, false);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "Target");
+      lua_newtable(L);
+      lua_pushstring(L, "Type");
+      lua_pushstring(L, "Position");
+      lua_rawset(L, -3);
+      lua_pushstring(L, "Position");
+      PushVector(L, x, y, z);
+      lua_rawset(L, -3);
+      lua_rawset(L, -3);
+      if (lua_pcall(L, 1, 0, top + 1) != 0)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/game/commandmode.lua:OnCommandIssued': %s",
+             lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+}
+
+bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear, const std::string& blueprint) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
+  static const struct {
+    const char* name;
+    CommandType type;
+  } kOrders[] = {{"Move", CommandType::Move}, {"Attack", CommandType::Attack}, {"Patrol", CommandType::Patrol},
+                 {"AggressiveMove", CommandType::AggressiveMove}, {"BuildMobile", CommandType::BuildMobile}};
+  const char* name = nullptr;
+  CommandType type = CommandType::None;
+  for (const auto& o : kOrders)
+    if (order == o.name) name = o.name, type = o.type;
+  if (!name) return false;
   std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
   for (UserUnit* u : Store(L).selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id);
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
   if (ids.empty()) return false;
   StreamIssueData d;
-  d.type = static_cast<int>(CommandType::Move);
+  d.type = static_cast<int>(type);
   d.target.type = 2;  // a position
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
+  d.blueprint = blueprint;
   Writer(L).IssueCommand(ids, d, clear);
+  ReportCommandIssued(L, name, units, x, y, z, clear, blueprint);
   return true;
 }
 

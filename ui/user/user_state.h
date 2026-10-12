@@ -115,10 +115,13 @@ void RegisterSessionBindings(lua_State* L);
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);
-// Orders (user_units.cpp): a move order for the selected units of the player's army to a place
-// (false when none is selected); and the orders written since the last call, as the command
-// stream's bytes for the engine's ApplyCommands.
-bool IssueMoveToSelection(lua_State* L, float x, float y, float z, bool clear);
+// Orders (user_units.cpp): an order with a place as its target for the selected units of the
+// player's army ("Move", "Attack", "Patrol", "AggressiveMove", or "BuildMobile" with the
+// blueprint to build); false when no unit is selected or the order is not one of these. The game
+// script hears of it (commandmode.OnCommandIssued). And the orders written since the last call,
+// as the command stream's bytes for the engine's ApplyCommands.
+bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear,
+                      const std::string& blueprint = std::string());
 std::string TakeOrders(lua_State* L);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
