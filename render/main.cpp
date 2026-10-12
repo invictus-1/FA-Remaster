@@ -12,11 +12,20 @@
 // --rec     a tick recording (the engine's MOHO64_RECORD file) of a replay on that map
 // --createlog  the engine's log of the same run with MOHO64_DEBUG_CREATE=1: which unit is which
 // --tick, --paused  where playback starts, and whether it stands still
+// --mods    a folder of mods (each in its own folder): their units and textures are found too
+// --maps    a folder of map folders (maps being worked on), found before the game's own maps
+// --at x,z, --heading, --pitch  where --place stands its units, and from which side they are framed
+// --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
+// --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
+// --look    modern (the default: physically based lighting) or original (the game's own formulas)
+// --noshadows  start without the sun's shadows
+// --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
-// Keys: W A S D or the arrows move, F12 saves a screenshot, V switches vsync, Escape quits;
+// Keys: W A S D or the arrows move, L switches the look, H the shadows, F12 saves a screenshot,
+// V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
 #include <chrono>
 #include <cmath>
@@ -40,8 +49,10 @@
 #include "mesh_renderer.h"
 #include "models.h"
 #include "png.h"
+#include "post.h"
 #include "recording.h"
 #include "scmap.h"
+#include "shadows.h"
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
@@ -60,12 +71,20 @@ const Vec3 kArmyColors[8] = {{0.26f, 0.43f, 0.93f}, {0.91f, 0.04f, 0.04f}, {0.38
 
 struct Options {
   int width = 1600, height = 900;
-  bool vsync = true, debug = false, paused = false;
+  bool vsync = true, debug = false, paused = false, shadows = true;
+  Look look = Look::Modern;
   int frames = 0;
   float lodPixels = 0;
+  // the modern look's strengths, found by eye on the game's maps (the maps' own light values were
+  // chosen for the original's formula)
+  float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
+  float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
+  float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
+  bool hasAt = false;
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog;
-  std::vector<std::string> data;
+  std::vector<std::string> data, mods, maps, previews, place, crowd;
+  float lodScale = 1;  // below 1 keeps models' finer levels of detail (and the models themselves) for longer
   bool hasCam = false;
   float cam[5] = {};
 };
@@ -78,7 +97,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     if (a == "--novsync") o->vsync = false;
     else if (a == "--debug") o->debug = true;
     else if (a == "--paused") o->paused = true;
+    else if (a == "--noshadows") o->shadows = false;
     else if (!(v = value())) return false;
+    else if (a == "--look") {
+      if (!strcmp(v, "original")) o->look = Look::Original;
+      else if (!strcmp(v, "modern")) o->look = Look::Modern;
+      else return false;
+    }
     else if (a == "--rec") o->recording = v;
     else if (a == "--createlog") o->createLog = v;
     else if (a == "--tick") o->tick = atof(v);
@@ -89,6 +114,22 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--screenshot") o->screenshot = v;
     else if (a == "--fa") o->fa = v;
     else if (a == "--data") o->data.push_back(v);
+    else if (a == "--mods") o->mods.push_back(v);
+    else if (a == "--maps") o->maps.push_back(v);
+    else if (a == "--preview") o->previews.push_back(v);
+    else if (a == "--place") o->place.push_back(v);
+    else if (a == "--crowd") o->crowd.push_back(v);
+    else if (a == "--lodscale") o->lodScale = static_cast<float>(atof(v));
+    else if (a == "--sun") o->sun = static_cast<float>(atof(v));
+    else if (a == "--sky") o->sky = static_cast<float>(atof(v));
+    else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
+    else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
+    else if (a == "--heading") o->heading = static_cast<float>(atof(v));
+    else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
+    else if (a == "--at") {
+      if (sscanf(v, "%f,%f", &o->at[0], &o->at[1]) != 2) return false;
+      o->hasAt = true;
+    }
     else if (a == "--map") o->map = v;
     else if (a == "--cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
@@ -108,9 +149,23 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     if (!n) fprintf(stderr, "render: no .nx2 or .scd archives in %s\n", folder.c_str());
   };
   for (const std::string& folder : o.data) archives(folder);
+  // --maps: a folder of map folders (maps being worked on); mounted before the game's own maps, so
+  // a map of the same name there is the one that is found
+  for (const std::string& folder : o.maps)
+    if (!vfs->Mount(folder, "/maps")) fprintf(stderr, "render: --maps %s: no such folder\n", folder.c_str());
   if (!o.fa.empty()) {
     archives(o.fa + "/gamedata");
     if (!vfs->Mount(o.fa + "/maps", "/maps")) fprintf(stderr, "render: no maps folder in %s\n", o.fa.c_str());
+  }
+  // every mod of a mods folder, each under /mods/<its folder's name>, as the game mounts them
+  for (const std::string& folder : o.mods)
+    for (const std::string& name : moho::hostfs::ListDirectory(folder))
+      if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
+  // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
+  for (const std::string& p : o.previews) {
+    const size_t eq = p.find('=');
+    if (eq == std::string::npos || !vfs->Mount(p.substr(eq + 1), "/preview/" + p.substr(0, eq)))
+      fprintf(stderr, "render: --preview %s: expected <unit id>=<existing folder>\n", p.c_str());
   }
 }
 
@@ -140,7 +195,10 @@ int main(int argc, char** argv) {
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   std::string error;
-  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error);
+  // an automatic run (--frames) must give the same picture whatever the person at the machine is
+  // doing: its window stays in the background and what is typed or clicked is not acted on
+  const bool automatic = opt.frames > 0;
+  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error, automatic);
   if (!window) {
     fprintf(stderr, "render: no window: %s\n", error.c_str());
     return 1;
@@ -205,6 +263,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
+  meshes.lodScale = opt.lodScale;
   Recording recording;
   bool haveRecording = false;
   if (!opt.recording.empty()) {
@@ -221,6 +280,18 @@ int main(int argc, char** argv) {
   gfx::Texture environment;
   for (const auto& cube : map.environmentCubemaps)
     if (cube.first == "<default>") environment = textures.Get(cube.second);
+
+  // the frame's passes and the light
+  Post post(device.get());
+  if (!post.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  Shadows shadows(device.get());
+  gfx::Texture sky = textures.SkyCube(haveMap ? map.skyCubemap : std::string());
+  Look look = opt.look;
+  bool shadowsOn = opt.shadows;
+  float sunStrength = opt.sun, skyStrength = opt.sky, exposure = opt.exposure;
   // the map's props (trees, rocks, wrecks): where each stands does not change
   struct PlacedProp {
     const Model* model;
@@ -279,12 +350,71 @@ int main(int argc, char** argv) {
     camera.heading = 0;
   };
   if (haveRecording && !opt.hasCam) lookAtUnits();
+  // --place <unit id>: stands that unit at the camera's starting target (several: side by side),
+  // to look at a model without a recording
+  struct PlacedUnit {
+    const Model* model;
+    Vec3 position;
+  };
+  std::vector<PlacedUnit> placedUnits;
+  float targetLift = 0;  // how far above the ground the camera's target is held
+  {
+    auto stand = [&](const Model* model, Vec3 p) {
+      p.y = haveMap ? map.Height(p.x, p.z) : 0;
+      if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
+      placedUnits.push_back({model, p});
+    };
+    Vec3 at = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
+    for (const std::string& id : opt.place) {
+      const Model* model = models.Unit(id);
+      if (!model->ok) continue;
+      const float width = (model->boundsMax.x - model->boundsMin.x) * model->scale;
+      stand(model, at);
+      // a remastered unit gets the game's own model beside it, in the same light, to compare
+      const Model* original = models.Remastered(id) ? models.Unit(id, true) : nullptr;
+      if (original && original->ok) {
+        const float originalWidth = (original->boundsMax.x - original->boundsMin.x) * original->scale;
+        at.x += (width + originalWidth) * 0.5f + std::max(width, originalWidth) * 0.25f;
+        stand(original, at);
+        at.x += originalWidth * 1.5f;
+      } else {
+        at.x += width * 1.5f;
+      }
+    }
+    // --crowd <unit id>=<count>: that many copies in a square block, to measure what many units cost
+    for (const std::string& c : opt.crowd) {
+      const size_t eq = c.find('=');
+      const Model* model = models.Unit(c.substr(0, eq));
+      const int count = eq == std::string::npos ? 100 : atoi(c.c_str() + eq + 1);
+      if (!model->ok || count <= 0) continue;
+      const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+      const float spacing = std::max(size.x, size.z) * 1.3f;
+      const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(count))));
+      for (int i = 0; i < count; ++i)
+        stand(model, at + Vec3{(static_cast<float>(i % side) - static_cast<float>(side - 1) * 0.5f) * spacing, 0,
+                               (static_cast<float>(i / side) - static_cast<float>(side - 1) * 0.5f) * spacing});
+    }
+    // without --cam the camera frames what was placed; --heading and --pitch choose the side
+    if (!opt.hasCam && !placedUnits.empty()) {
+      Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+      for (const PlacedUnit& u : placedUnits) {
+        const Vec3 a = u.position + u.model->boundsMin * u.model->scale, b = u.position + u.model->boundsMax * u.model->scale;
+        lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+        hi = {std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
+      }
+      camera.target = (lo + hi) * 0.5f;
+      targetLift = (hi.y - lo.y) * 0.5f;  // look at the units' middle, not at their feet
+      camera.distance = Length(hi - lo) * 0.5f / std::tan(camera.fovY * 0.5f) * 0.95f;
+      camera.heading = opt.heading * kPi / 180;
+      camera.pitch = opt.pitch * kPi / 180;
+    }
+  }
   auto groundHeight = [&](float x, float z) {
     if (!haveMap) return 0.0f;
     float y = map.Height(x, z);
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
-  camera.target.y = groundHeight(camera.target.x, camera.target.z);
+  camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // what the pointer is on: the ground, or failing that the level plane through the camera's target
   auto pick = [&](int px, int py, Vec3* hit) {
     const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
@@ -315,6 +445,7 @@ int main(int argc, char** argv) {
     last = now;
 
     bool quit = false;
+    if (automatic) events.clear();
     for (const InputEvent& e : events) {
       switch (e.type) {
         case InputEvent::KeyDown:
@@ -328,6 +459,8 @@ int main(int argc, char** argv) {
           if (e.key == kKeyPageUp) playTick -= 100;
           if (e.key == kKeyHome) playTick = recording.FirstTick();
           if (e.key == 'F' && haveRecording) lookAtUnits();
+          if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
+          if (e.key == 'H') shadowsOn = !shadowsOn;
           break;
         case InputEvent::MouseDown:
           dragX = e.x;
@@ -364,7 +497,7 @@ int main(int argc, char** argv) {
     events.clear();
     if (quit) break;
 
-    {  // keyboard movement, along the ground in the camera's directions
+    if (!automatic) {  // keyboard movement, along the ground in the camera's directions
       Vec3 r, u, b;
       camera.Axes(&r, &u, &b);
       Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
@@ -378,7 +511,7 @@ int main(int argc, char** argv) {
       camera.target.x = Clamp(camera.target.x, 0, static_cast<float>(map.width));
       camera.target.z = Clamp(camera.target.z, 0, static_cast<float>(map.height));
     }
-    camera.target.y = groundHeight(camera.target.x, camera.target.z);
+    camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
 
     if (window->Width() == 0 || window->Height() == 0) {  // minimized
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -386,14 +519,35 @@ int main(int argc, char** argv) {
     }
     if (window->Width() != device->Width() || window->Height() != device->Height()) device->Resize(window->Width(), window->Height());
 
-    const float time = std::chrono::duration<float>(now - start).count();
+    // an automatic run counts time in frames, so that its pictures can be compared
+    const float time = automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
     View view = View::Make(camera, device->Width(), device->Height(), time);
-    Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
+    {  // the light: the map's sun, in the chosen look
+      ViewConstants& c = view.constants;
+      const Vec3 sun = haveMap ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
+      auto set = [](float* to, Vec3 v) {
+        to[0] = v.x;
+        to[1] = v.y;
+        to[2] = v.z;
+      };
+      set(c.sunDirection, sun);
+      set(c.sunColor, haveMap ? map.lighting.sunColor : Vec3{1, 1, 1});
+      set(c.sunAmbience, haveMap ? map.lighting.sunAmbience : Vec3{0.2f, 0.2f, 0.2f});
+      set(c.shadowFill, haveMap ? map.lighting.shadowFill : Vec3{0.3f, 0.3f, 0.4f});
+      c.lightMultiplier = haveMap ? map.lighting.multiplier : 1;
+      c.look = look == Look::Modern ? 1.0f : 0.0f;
+      c.modern[0] = sunStrength;
+      c.modern[1] = skyStrength;
+      c.modern[2] = exposure;
+      c.modern[3] = opt.reflection;
+      if (haveMap && shadowsOn) shadows.Place(camera, sun, &view);
+    }
 
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     device->BeginFrame(clear);
-    meshes.Begin(view);
+    meshes.Begin();
     for (const PlacedProp& p : placedProps) meshes.Add(p.model, p.world, {1, 1, 1});
+    for (const PlacedUnit& u : placedUnits) meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0]);
     if (haveRecording) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
       playTick = std::clamp(playTick, static_cast<double>(recording.FirstTick()), static_cast<double>(recording.LastTick()));
@@ -413,15 +567,27 @@ int main(int argc, char** argv) {
         }
       }
     }
+    // the sun's shadow maps first, then the scene into its own picture, then that onto the window
+    if (haveMap && shadowsOn) {
+      for (int i = 0; i < shadows.Count(); ++i) {
+        device->BeginPass(shadows.Pass(i));
+        terrain->Draw(shadows.CascadeView(i), true);
+        meshes.Draw(shadows.CascadeView(i), environment, true);
+      }
+    }
+    post.BeginScene(device->Width(), device->Height(), clear);
+    device->SetTexture(kShadowMapSlot, shadows.Map());
+    device->SetTexture(kEnvironmentSlot, sky);
     if (haveMap) {
       terrain->Draw(view);
-      meshes.Draw(map.lighting, environment);
-      draw.Flush(view, sun);
+      meshes.Draw(view, environment);
+      draw.Flush(view);
       water->Draw(view);
     } else {
       DrawTestScene(draw);
-      draw.Flush(view, sun);
+      draw.Flush(view);
     }
+    post.Present(view);
 
     ++frameCount;
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
@@ -437,7 +603,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / frameCount);
       if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
-      printf("\n");
+      printf("; models: %d drawn, %d triangles\n", meshes.drawnInstances, meshes.drawnTriangles);
       break;
     }
 

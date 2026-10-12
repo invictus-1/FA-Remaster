@@ -135,6 +135,17 @@ void RegisterBasicBindings(lua_State* L) {
   SetGlobal(L, "SetFrontEndData", l_SetFrontEndData);
   SetGlobal(L, "GetFrontEndData", l_GetFrontEndData);
   SetGlobal(L, "Random", l_Random);
+
+  // The front end: no session runs, no world loads, and no GPGNet is connected (sending to it
+  // does nothing).
+  static const lua_CFunction kFalse = [](lua_State* S) -> int {
+    lua_pushboolean(S, 0);
+    return 1;
+  };
+  static const lua_CFunction kNothing = [](lua_State*) -> int { return 0; };
+  for (const char* name : {"SessionIsActive", "SessionIsReplay", "WorldIsLoading", "WorldIsPlaying", "GpgNetActive"})
+    SetGlobal(L, name, kFalse);
+  SetGlobal(L, "GpgNetSend", kNothing);
 }
 
 }  // namespace moho::ui

@@ -273,19 +273,13 @@ int l_Dump(lua_State* L) {
 // Keyboard focus. Inferred: the control that loses the focus gets OnLoseKeyboardFocus(), the one
 // that gets it OnKeyboardFocusChange().
 int l_AcquireKeyboardFocus(lua_State* L) {
-  Control* c = CheckControl(L, 1);
-  UiManager& ui = Ui(L);
-  if (ui.focus == c) return 0;
-  Control* old = ui.focus;
-  ui.focus = c;
-  if (old) old->RunScript(L, "OnLoseKeyboardFocus");
-  c->RunScript(L, "OnKeyboardFocusChange");
+  Ui(L).SetFocus(L, CheckControl(L, 1));
   return 0;
 }
 int l_AbandonKeyboardFocus(lua_State* L) {
   Control* c = CheckControl(L, 1);
   UiManager& ui = Ui(L);
-  if (ui.focus == c) ui.focus = nullptr;
+  if (ui.focus == c) ui.SetFocus(L, nullptr);
   return 0;
 }
 int l_GetCurrentFocusControl(lua_State* L) {
@@ -313,28 +307,13 @@ int l_InternalCreateGroup(lua_State* L) {
 }
 
 // The control classes that are not built yet: they exist, lay out and answer the control methods.
-template <const char* ClassName, const char* WidthField, const char* HeightField>
+template <const char* ClassName>
 int l_InternalCreatePlain(lua_State* L) {
-  PlainControl* c = MakeControl<PlainControl>(L, ClassName);
-  if (*WidthField) {
-    lua_pushstring(L, WidthField);
-    c->extraWidth.Create(L, 0.0f);
-    c->extraWidth.Push(L);
-    lua_rawset(L, 1);
-    lua_pushstring(L, HeightField);
-    c->extraHeight.Create(L, 0.0f);
-    c->extraHeight.Push(L);
-    lua_rawset(L, 1);
-  }
-  c->RunInit(L);
+  MakeControl<PlainControl>(L, ClassName)->RunInit(L);
   return 0;
 }
 
-constexpr char kNone[] = "";
-constexpr char kBorder[] = "border", kBorderWidth[] = "BorderWidth", kBorderHeight[] = "BorderHeight";
-constexpr char kMovie[] = "movie", kMovieWidth[] = "MovieWidth", kMovieHeight[] = "MovieHeight";
-constexpr char kEdit[] = "edit", kHistogram[] = "histogram", kItemList[] = "itemlist", kMesh[] = "mesh";
-constexpr char kScrollbar[] = "scrollbar", kMapPreview[] = "mappreview";
+constexpr char kMesh[] = "mesh", kMapPreview[] = "mappreview";
 
 }  // namespace
 
@@ -368,14 +347,9 @@ void RegisterControlBindings(lua_State* L) {
   SetMethod(L, cls, "GetCurrentFocusControl", l_GetCurrentFocusControl);
 
   SetGlobal(L, "InternalCreateGroup", l_InternalCreateGroup);
-  SetGlobal(L, "InternalCreateBorder", l_InternalCreatePlain<kBorder, kBorderWidth, kBorderHeight>);
-  SetGlobal(L, "InternalCreateMovie", l_InternalCreatePlain<kMovie, kMovieWidth, kMovieHeight>);
-  SetGlobal(L, "InternalCreateEdit", l_InternalCreatePlain<kEdit, kNone, kNone>);
-  SetGlobal(L, "InternalCreateHistogram", l_InternalCreatePlain<kHistogram, kNone, kNone>);
-  SetGlobal(L, "InternalCreateItemList", l_InternalCreatePlain<kItemList, kNone, kNone>);
-  SetGlobal(L, "InternalCreateMesh", l_InternalCreatePlain<kMesh, kNone, kNone>);
-  SetGlobal(L, "InternalCreateScrollbar", l_InternalCreatePlain<kScrollbar, kNone, kNone>);
-  SetGlobal(L, "InternalCreateMapPreview", l_InternalCreatePlain<kMapPreview, kNone, kNone>);
+  // Not built yet: the 3D mesh control and the map preview.
+  SetGlobal(L, "InternalCreateMesh", l_InternalCreatePlain<kMesh>);
+  SetGlobal(L, "InternalCreateMapPreview", l_InternalCreatePlain<kMapPreview>);
 }
 
 }  // namespace moho::ui

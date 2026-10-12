@@ -27,7 +27,8 @@ struct InputEvent {
 
 class Window {
  public:
-  static std::unique_ptr<Window> Create(const char* title, int width, int height, std::string* error);
+  // `background`: shown without taking the keyboard from the program in use (automatic runs).
+  static std::unique_ptr<Window> Create(const char* title, int width, int height, std::string* error, bool background = false);
   virtual ~Window() = default;
 
   // Handles the pending messages and fills `events`. False once the window was closed.

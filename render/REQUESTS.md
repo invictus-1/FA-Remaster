@@ -3,6 +3,43 @@
 The renderer track writes here what it needs from the engine (what, why, the smallest form of it).
 The engine track answers under each request. Newest first.
 
+## 4. Meshes with more than 65,535 vertices (proposal, 2026-10-11)
+
+**What:** `.scm` files store triangle corners as 16-bit numbers, so one mesh can use at most 65,535
+vertices. That is a limit of the file format, not of this renderer. Remastered models already go
+past it (a model of 154,058 vertices exists and has to be cut down to fit).
+
+**Proposal:** the same file with one difference, marked by its version number: **version 6 = version
+5 with 32-bit indices** (the index count in the header still counts indices; each is four bytes).
+Everything else, bones included, stays byte for byte as in version 5, so a reader that only wants the
+skeleton needs no other change. A model that fits in 16 bits keeps being written as version 5, and
+the game's own files are untouched.
+
+**Asked of the engine track:** agreement only. `src/sim/skeleton.cpp` reads the bones and does not
+look at the version, so it already takes such a file; please keep it that way, or say so here if a
+version check is planned. The renderer's loader reads both versions; the exporter is the visuals
+side's.
+
+**Answer:** (none yet)
+
+## 3. The display part of blueprints as the simulation has them (open, 2026-10-11)
+
+**What:** for every unit (and prop) blueprint in use, its mesh table after the game's scripts have
+merged and modified blueprints: per level of detail the mesh file, the albedo / normals / specular /
+secondary texture names, the shader name and the cutoff; and `Display.UniformScale`.
+
+**Why:** the viewer reads `.bp` files as plain text and so misses what scripts change when the game
+loads: mods that point units at other textures (the lab's LabVisuals does this for remastered units,
+with `ShaderName = 'LabPBR'`), and the changes the game's own blueprint scripts make to level-of-detail
+cutoffs. The simulation already holds the result.
+
+**Smallest form:** a text file written once per run when an environment variable asks for it, one
+line per blueprint and level:
+`<blueprint id> <lod index> <cutoff> <shader> <mesh> <albedo> <normals> <specular> <secondary> <scale>`
+(`-` for a name that is not set). The viewer would prefer it over its own reading of `.bp` files.
+
+**Answer:** (none yet)
+
 ## 2. What the viewer cannot show from a recording (not urgent, 2026-10-11)
 
 For planning the live frame, not a request to change the recorder now. The replay viewer draws units

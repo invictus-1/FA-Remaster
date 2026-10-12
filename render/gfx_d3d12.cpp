@@ -33,7 +33,7 @@ int BytesPerPixelOrBlock(Format f) {
   switch (f) {
     case Format::R8: case Format::A8: return 1;
     case Format::RG8: case Format::R16: case Format::R16F: return 2;
-    case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::R32F: return 4;
+    case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::R32F: case Format::D32: return 4;
     case Format::RGBA16F: return 8;
     case Format::BC1: case Format::BC1_sRGB: case Format::BC4: return 8;
     case Format::BC2: case Format::BC2_sRGB: case Format::BC3: case Format::BC3_sRGB: case Format::BC5: return 16;
@@ -77,6 +77,8 @@ constexpr int kTexSlots = 32;
 constexpr int kCbSlots = 4;
 constexpr uint32_t kMaxTextures = 16384;       // CPU-side descriptors, one per texture (slot 0: the null texture)
 constexpr uint32_t kRingDescriptors = kFrames * kTexSlots * 4096;  // shader-visible, split between the frame slots
+constexpr uint32_t kMaxColorTargets = 64;      // render-target views beyond the window's
+constexpr uint32_t kMaxDepthViews = 128;       // depth views beyond the window's (one per layer of a depth target)
 constexpr size_t kPageSize = 8u << 20;
 constexpr DXGI_FORMAT kBackFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
@@ -178,6 +180,12 @@ struct BufferRec {
 struct TextureRec {
   bool used = false;
   Com<ID3D12Resource> resource;
+  // targets only
+  bool target = false, depth = false;
+  bool writable = false;  // currently in its render-target / depth-write state
+  int width = 0, height = 0, layers = 1;
+  uint32_t view = 0;      // its first render-target or depth view (index into that heap)
+  DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 };
 
 struct PipelineRec {
@@ -224,12 +232,14 @@ class D3D12Device final : public Device {
   Buffer CreateBuffer(const BufferDesc& desc) override;
   void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) override;
   Texture CreateTexture(const TextureDesc& desc) override;
+  Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
 
   void BeginFrame(const float clearColor[4]) override;
+  void BeginPass(const PassDesc& pass) override;
   void SetPipeline(Pipeline pipeline) override;
   void SetConstants(int slot, const void* data, uint32_t size) override;
   void SetTexture(int slot, Texture texture) override;
@@ -248,6 +258,19 @@ class D3D12Device final : public Device {
   Span Allocate(size_t size, size_t align);
   void BindTextures();
   void Retire(IUnknown* object);
+  uint32_t NewTextureIndex();
+  void ReleasePassTargets();
+  void SetViewport(int width, int height);
+  D3D12_CPU_DESCRIPTOR_HANDLE RtvHandle(uint32_t index) const {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = rtvStart_;
+    h.ptr += static_cast<SIZE_T>(index) * rtvStep_;
+    return h;
+  }
+  D3D12_CPU_DESCRIPTOR_HANDLE DsvHandle(uint32_t index) const {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = dsvStart_;
+    h.ptr += static_cast<SIZE_T>(index) * dsvStep_;
+    return h;
+  }
   D3D12_CPU_DESCRIPTOR_HANDLE StagingHandle(uint32_t index) const {
     D3D12_CPU_DESCRIPTOR_HANDLE h = stagingStart_;
     h.ptr += static_cast<SIZE_T>(index) * srvStep_;
@@ -278,7 +301,11 @@ class D3D12Device final : public Device {
   uint64_t readbackSize_ = 0;
   D3D12_CPU_DESCRIPTOR_HANDLE rtvStart_{}, dsvStart_{}, stagingStart_{}, ringCpuStart_{};
   D3D12_GPU_DESCRIPTOR_HANDLE ringGpuStart_{};
-  UINT rtvStep_ = 0, srvStep_ = 0;
+  UINT rtvStep_ = 0, dsvStep_ = 0, srvStep_ = 0;
+  uint32_t nextRtv_ = kFrames, nextDsv_ = 1;  // views handed out so far (the window's come first)
+  std::vector<uint32_t> freeRtv_;
+  std::vector<std::pair<uint32_t, uint32_t>> freeDsv_;  // first view, count
+  uint32_t passColor_ = 0, passDepth_ = 0;    // the current pass's targets (0: none, or the window's)
 
   FrameSlot frames_[kFrames];
   int cur_ = 0;
@@ -382,8 +409,8 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     hd.Flags = visible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     return device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(out.Put()));
   };
-  if (FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kFrames, false, rtvHeap_)) ||
-      FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, dsvHeap_)) ||
+  if (FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kFrames + kMaxColorTargets, false, rtvHeap_)) ||
+      FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1 + kMaxDepthViews, false, dsvHeap_)) ||
       FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxTextures, false, stagingHeap_)) ||
       FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kRingDescriptors, true, ringHeap_)))
     return fail("CreateDescriptorHeap", hr);
@@ -393,6 +420,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   ringCpuStart_ = ringHeap_->GetCPUDescriptorHandleForHeapStart();
   ringGpuStart_ = ringHeap_->GetGPUDescriptorHandleForHeapStart();
   rtvStep_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+  dsvStep_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
   srvStep_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
   // texture 0: the null texture every unused slot points at (reads as zero)
@@ -434,7 +462,16 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   params[kCbSlots].DescriptorTable.NumDescriptorRanges = 1;
   params[kCbSlots].DescriptorTable.pDescriptorRanges = &range;
   params[kCbSlots].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  D3D12_STATIC_SAMPLER_DESC samplers[5] = {};
+  D3D12_STATIC_SAMPLER_DESC samplers[6] = {};
+  // s5: for shadow maps. Compares against the stored (reversed) depth: 1 where the given depth is
+  // nearer to the light or equal; blends the four nearest results. Outside the map: lit.
+  samplers[5].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+  samplers[5].AddressU = samplers[5].AddressV = samplers[5].AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  samplers[5].BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+  samplers[5].ComparisonFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+  samplers[5].MaxLOD = D3D12_FLOAT32_MAX;
+  samplers[5].ShaderRegister = 5;
+  samplers[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   const struct {
     D3D12_FILTER filter;
     D3D12_TEXTURE_ADDRESS_MODE address;
@@ -455,7 +492,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_ROOT_SIGNATURE_DESC rd = {};
   rd.NumParameters = kCbSlots + 1;
   rd.pParameters = params;
-  rd.NumStaticSamplers = 5;
+  rd.NumStaticSamplers = 6;
   rd.pStaticSamplers = samplers;
   rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
   Com<ID3DBlob> blob, errors;
@@ -741,6 +778,113 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   return {index};
 }
 
+uint32_t D3D12Device::NewTextureIndex() {  // 0: no room
+  if (!freeTextures_.empty()) {
+    uint32_t index = freeTextures_.back();
+    freeTextures_.pop_back();
+    return index;
+  }
+  if (textures_.size() >= kMaxTextures) {
+    fprintf(stderr, "render: Direct3D 12: out of texture slots (%u)\n", kMaxTextures);
+    return 0;
+  }
+  textures_.emplace_back();
+  return static_cast<uint32_t>(textures_.size() - 1);
+}
+
+Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
+  const bool depth = desc.format == Format::D32;
+  const DXGI_FORMAT format = depth ? DXGI_FORMAT_D32_FLOAT : ToDxgi(desc.format);
+  if (format == DXGI_FORMAT_UNKNOWN || IsBlockCompressed(desc.format) || desc.width <= 0 || desc.height <= 0 || desc.layers <= 0 ||
+      (!depth && desc.layers != 1))
+    return {};
+  TextureRec rec;
+  rec.used = rec.target = true;
+  rec.depth = depth;
+  rec.width = desc.width;
+  rec.height = desc.height;
+  rec.layers = desc.layers;
+  rec.format = format;
+
+  // its views: one render-target view, or one depth view per layer
+  bool haveView = false;
+  if (depth) {
+    for (size_t i = 0; i < freeDsv_.size() && !haveView; ++i)
+      if (freeDsv_[i].second == static_cast<uint32_t>(desc.layers)) {
+        rec.view = freeDsv_[i].first;
+        freeDsv_.erase(freeDsv_.begin() + static_cast<std::ptrdiff_t>(i));
+        haveView = true;
+      }
+    if (!haveView && nextDsv_ + static_cast<uint32_t>(desc.layers) <= 1 + kMaxDepthViews) {
+      rec.view = nextDsv_;
+      nextDsv_ += static_cast<uint32_t>(desc.layers);
+      haveView = true;
+    }
+  } else if (!freeRtv_.empty()) {
+    rec.view = freeRtv_.back();
+    freeRtv_.pop_back();
+    haveView = true;
+  } else if (nextRtv_ < kFrames + kMaxColorTargets) {
+    rec.view = nextRtv_++;
+    haveView = true;
+  }
+  if (!haveView) {
+    fprintf(stderr, "render: Direct3D 12: too many render targets\n");
+    return {};
+  }
+
+  D3D12_RESOURCE_DESC rd = {};
+  rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  rd.Width = static_cast<UINT64>(desc.width);
+  rd.Height = static_cast<UINT>(desc.height);
+  rd.DepthOrArraySize = static_cast<UINT16>(desc.layers);
+  rd.MipLevels = 1;
+  rd.Format = depth ? DXGI_FORMAT_R32_TYPELESS : format;
+  rd.SampleDesc.Count = 1;
+  rd.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  D3D12_CLEAR_VALUE clear = {};
+  clear.Format = format;
+  if (!depth) std::memcpy(clear.Color, desc.clearValue, sizeof clear.Color);
+  D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+  HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                &clear, IID_PPV_ARGS(rec.resource.Put()));
+  if (FAILED(hr)) return Complain("creating a render target", hr), Texture{};
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+  srv.Format = depth ? DXGI_FORMAT_R32_FLOAT : format;
+  srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  if (desc.layers > 1) {
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv.Texture2DArray.MipLevels = 1;
+    srv.Texture2DArray.ArraySize = static_cast<UINT>(desc.layers);
+  } else {
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Texture2D.MipLevels = 1;
+  }
+  if (depth) {
+    for (int layer = 0; layer < desc.layers; ++layer) {
+      D3D12_DEPTH_STENCIL_VIEW_DESC dv = {};
+      dv.Format = DXGI_FORMAT_D32_FLOAT;
+      if (desc.layers > 1) {
+        dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dv.Texture2DArray.FirstArraySlice = static_cast<UINT>(layer);
+        dv.Texture2DArray.ArraySize = 1;
+      } else {
+        dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+      }
+      device_->CreateDepthStencilView(rec.resource.Get(), &dv, DsvHandle(rec.view + static_cast<uint32_t>(layer)));
+    }
+  } else {
+    device_->CreateRenderTargetView(rec.resource.Get(), nullptr, RtvHandle(rec.view));
+  }
+  const uint32_t index = NewTextureIndex();
+  if (!index) return {};
+  device_->CreateShaderResourceView(rec.resource.Get(), &srv, StagingHandle(index));
+  textures_[index] = std::move(rec);
+  return {index};
+}
+
 Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
   auto compile = [&](std::string_view source, const char* entry, const char* target, Com<ID3DBlob>& out) {
     Com<ID3DBlob> errors;
@@ -755,7 +899,8 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
   };
   Com<ID3DBlob> vs, ps;
   if (!compile(desc.vertexSource, desc.vertexEntry, "vs_5_1", vs)) return {};
-  if (!compile(desc.pixelSource, desc.pixelEntry, "ps_5_1", ps)) return {};
+  const bool hasPixelShader = !desc.pixelSource.empty();
+  if (hasPixelShader && !compile(desc.pixelSource, desc.pixelEntry, "ps_5_1", ps)) return {};
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
   for (const VertexAttr& a : desc.attrs) {
@@ -771,7 +916,7 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
   D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
   pd.pRootSignature = rootSignature_.Get();
   pd.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
-  pd.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+  if (hasPixelShader) pd.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
   pd.SampleMask = 0xffffffffu;
   D3D12_RENDER_TARGET_BLEND_DESC& bt = pd.BlendState.RenderTarget[0];
   bt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
@@ -809,8 +954,10 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
   pd.InputLayout = {elements.data(), static_cast<UINT>(elements.size())};
   pd.PrimitiveTopologyType = desc.topology == Topology::Lines ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE
                                                               : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-  pd.NumRenderTargets = 1;
-  pd.RTVFormats[0] = kBackFormat;
+  if (!desc.depthOnly) {
+    pd.NumRenderTargets = 1;
+    pd.RTVFormats[0] = ToDxgi(desc.colorFormat);
+  }
   pd.DSVFormat = kDepthFormat;
   pd.SampleDesc.Count = 1;
 
@@ -847,6 +994,12 @@ void D3D12Device::Destroy(Buffer buffer) {
 void D3D12Device::Destroy(Texture texture) {
   TextureRec* rec = Find(texture);
   if (!rec) return;
+  if (rec->target) {
+    if (passColor_ == texture.id) passColor_ = 0;
+    if (passDepth_ == texture.id) passDepth_ = 0;
+    if (rec->depth) freeDsv_.emplace_back(rec->view, static_cast<uint32_t>(rec->layers));
+    else freeRtv_.push_back(rec->view);
+  }
   Retire(rec->resource.Get());
   *rec = TextureRec{};
   device_->CopyDescriptorsSimple(1, StagingHandle(texture.id), StagingHandle(0), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -881,15 +1034,76 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   list_->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
   list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
   list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
-  D3D12_VIEWPORT vp = {0, 0, static_cast<float>(width_), static_cast<float>(height_), 0, 1};
-  D3D12_RECT scissor = {0, 0, width_, height_};
-  list_->RSSetViewports(1, &vp);
-  list_->RSSetScissorRects(1, &scissor);
+  SetViewport(width_, height_);
   list_->SetGraphicsRootSignature(rootSignature_.Get());
   ID3D12DescriptorHeap* heaps[] = {ringHeap_.Get()};
   list_->SetDescriptorHeaps(1, heaps);
   boundTextures_ = TableKey{};
   texturesDirty_ = true;
+  passColor_ = passDepth_ = 0;
+}
+
+void D3D12Device::SetViewport(int width, int height) {
+  D3D12_VIEWPORT vp = {0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+  D3D12_RECT scissor = {0, 0, width, height};
+  list_->RSSetViewports(1, &vp);
+  list_->RSSetScissorRects(1, &scissor);
+}
+
+// The targets of the pass that ends become readable as textures again.
+void D3D12Device::ReleasePassTargets() {
+  for (uint32_t id : {passColor_, passDepth_}) {
+    if (!id || id >= textures_.size() || !textures_[id].used || !textures_[id].writable) continue;
+    TextureRec& t = textures_[id];
+    D3D12_RESOURCE_BARRIER b = Transition(t.resource.Get(), t.depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    list_->ResourceBarrier(1, &b);
+    t.writable = false;
+  }
+  passColor_ = passDepth_ = 0;
+}
+
+void D3D12Device::BeginPass(const PassDesc& pass) {
+  if (!inFrame_) return;
+  if (pass.window) {
+    ReleasePassTargets();
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(static_cast<uint32_t>(cur_));
+    list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
+    if (pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
+    if (pass.clearDepth) list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+    SetViewport(width_, height_);
+    return;
+  }
+  TextureRec* color = Find(pass.color);
+  TextureRec* depth = Find(pass.depth);
+  if (!depth || !depth->target || !depth->depth || pass.depthLayer < 0 || pass.depthLayer >= depth->layers ||
+      (pass.color.id && (!color || !color->target || color->depth))) {
+    fprintf(stderr, "render: Direct3D 12: BeginPass needs a depth target, and a colour target or none\n");
+    return;
+  }
+  // a target that stays in use (the next layer of a shadow map) keeps its state
+  if (passColor_ != pass.color.id || passDepth_ != pass.depth.id) ReleasePassTargets();
+  // a target cannot be read while it is drawn into
+  for (uint32_t& bound : boundTextures_.t)
+    if (bound && (bound == pass.color.id || bound == pass.depth.id)) {
+      bound = 0;
+      texturesDirty_ = true;
+    }
+  for (TextureRec* t : {color, depth}) {
+    if (!t || t->writable) continue;
+    D3D12_RESOURCE_BARRIER b = Transition(t->resource.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                          t->depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list_->ResourceBarrier(1, &b);
+    t->writable = true;
+  }
+  passColor_ = pass.color.id;
+  passDepth_ = pass.depth.id;
+  D3D12_CPU_DESCRIPTOR_HANDLE dsv = DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer));
+  D3D12_CPU_DESCRIPTOR_HANDLE rtv = color ? RtvHandle(color->view) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, &dsv);
+  if (color && pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
+  if (pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+  SetViewport(depth->width, depth->height);
 }
 
 void D3D12Device::SetPipeline(Pipeline pipeline) {
@@ -973,6 +1187,7 @@ void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t 
 
 void D3D12Device::EndFrame(std::vector<uint8_t>* capture) {
   FrameSlot& f = frames_[cur_];
+  ReleasePassTargets();
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
   if (capture) {
     D3D12_RESOURCE_DESC bd = f.backBuffer->GetDesc();

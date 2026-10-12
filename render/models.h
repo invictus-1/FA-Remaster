@@ -31,6 +31,12 @@ struct ModelLod {
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
   gfx::Texture albedo, normals, specular;
+  gfx::Texture secondary;  // remastered units: ambient occlusion in red
+  // Remastered units ("LabPBR"): the specular texture holds the material itself - red: metal,
+  // green: roughness, blue: glow, alpha: team colour mask. Otherwise it is the original's spec-team
+  // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
+  // modern lighting has to translate.
+  bool labPbr = false;
   float cutoff = 0;        // used while the camera is no further away than this (the blueprint's LODCutoff)
   std::string shaderName;  // "Unit", "Aeon", "Insect", "Seraphim", "UndulatingNormalMappedAlpha", ...
   // What the shader name means for drawing (from the original's techniques of those names):
@@ -54,15 +60,19 @@ class ModelCache {
 
   // The model of a unit blueprint id ("uel0201"). Never null: a unit whose files cannot be read gets
   // a model with ok == false (reported once).
-  const Model* Unit(const std::string& blueprintId);
+  // `original`: the game's own model even when a remastered one is there (to show both side by side).
+  const Model* Unit(const std::string& blueprintId, bool original = false);
+  // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
+  bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp").
-  const Model* Blueprint(const std::string& blueprintPath);
+  const Model* Blueprint(const std::string& blueprintPath, bool original = false);
 
  private:
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
+  std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
 };
 
 }  // namespace render

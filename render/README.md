@@ -40,9 +40,9 @@ So: build it against recordings, combine later by swapping the source of the fra
 3. Units as meshes: `.scm` loader (skeleton reading already exists in `src/sim/skeleton.*`), `.dds`
    textures, the unit shader's inputs (albedo, normal, spec-team map), team colours.
 4. The replay viewer: play a recording on its map with a free camera and the strategic zoom.
-5. The original look first ("legacy": match the game's lighting and water closely enough that
-   screenshots compare), then the modern path (PBR-style lighting, shadows, better water) as a second,
-   switchable mode.
+5. The two looks: the original's ("legacy": the game's own light formulas, kept as a switch) and the
+   modern one (physically based lighting, shadows, better water). The modern look is where the work
+   goes; matching the original picture for picture is not a goal.
 6. Effects and the rest: emitters, beams, decals, projectiles, shields, fog of war, strategic icons.
 
 ## Build and run
@@ -56,12 +56,25 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
     moho64view --fa "<the game's folder>" --map /maps/SCMP_009/SCMP_009.scmap
                [--data <folder of .nx2 / .scd archives used before the game's own>]...
                [--rec <recording> --createlog <engine log>] [--tick N] [--paused]
+               [--mods <folder of mods>] [--maps <folder of map folders>]
+               [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
+               [--look modern|original] [--noshadows]
+               [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
                [--size 1600x900] [--novsync] [--debug] [--lod <pixels>]
                [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]
 
 Without `--map` it shows a test scene. Mouse: the wheel zooms at the pointer, the middle button drags
-the ground, the right button turns and tilts. Keys: W A S D or the arrows move, F12 saves a
-screenshot, V switches vsync, Escape quits.
+the ground, the right button turns and tilts. Keys: W A S D or the arrows move, L switches between
+the modern and the original look, H switches the shadows, F12 saves a screenshot, V switches vsync,
+Escape quits.
+
+Looking at a remastered model without a recording: `--preview uel0401=<folder>` takes that unit's
+meshes (`uel0401_lod0.scm`, `_lod1.scm`, ...) and LabPBR textures (`uel0401_lab_albedo.dds`,
+`_lab_normal.dds`, `_lab_spec.dds`, `_lab_ao.dds`, in the folder or its `textures` folder) from there
+instead of the game's, and `--place uel0401` stands the unit in the scene with the game's own model
+beside it (to its east) in the same light, and frames both. `--at x,z` says where (choose flat
+ground), `--heading` and `--pitch` from which side. Meshes may be `.scm` version 5 or version 6
+(version 5 with 32-bit indices, for models of more than 65,535 vertices).
 
 Playing a recording: make one with the engine, with the log that says which unit is which
 (`MOHO64_RECORD=<file>` and `MOHO64_DEBUG_CREATE=1`, `--log <file>`, on a replay), then give both to
@@ -91,12 +104,24 @@ prints what it reports.
 | `models.h` | a blueprint's meshes (`.scm`) and textures, with their levels of detail |
 | `mesh_renderer.h` | draws models, instanced: units and props |
 | `recording.h` | a tick recording as a source of frames |
+| `lighting.h` | the lighting all scene shaders share: shadows, the original's light formula, the modern one |
+| `shadows.h` | the sun's shadow maps and where they are placed each frame |
+| `post.h` | the scene's own floating-point picture and the last pass that puts it on the window |
 | `debug_draw.h` | lines and plain boxes: markers and placeholders |
 | `png.h` | screenshots |
 | `main.cpp` | `moho64view`: mounting the game's files, the frame loop, the camera's controls, playback |
 
 Shaders are written for this renderer and live as text in the `.cpp` that uses them. The game's own
 shader files are read for what they compute, not copied.
+
+## The target
+
+A full game at normal speed with 5,000 to 10,000 units on screen at 60 frames a second or more on a
+top graphics card (measured on an RTX 4090), and playable on an RTX 3060 with the same files at
+lower settings. Measured at 1920 x 1080 with shadows (`--crowd <unit>=<count>`): 10,000 models of
+about 470 triangles take 3.0 ms; 10,000 models of 27,000 triangles take 73 ms. Cost follows
+triangles (about 0.27 ms per million), so the target stands on levels of detail chosen by a unit's
+size on screen. That choice is not built yet: today a level is used up to its blueprint's distance.
 
 ## Where it stands
 
@@ -109,6 +134,26 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Step 3: models from `.scm` files with albedo, normal and spec-team textures, team colours, levels
   of detail by distance, drawn instanced; the map's props (trees, rocks) with their own models.
 - Step 4: a recording played on its map: units move as recorded, blended between ticks.
+- Step 5 has begun with what both looks need, and a first modern look:
+  - The scene is drawn into a floating-point picture; a last pass puts it on the window.
+  - The sun casts shadows (three cascaded shadow maps of 2048 pixels, 3 x 3 soft lookups), in both
+    looks.
+  - **Two looks, switchable while running.** *Original*: the game's own light formulas. *Modern*:
+    physically based (metal and roughness per surface, a GGX highlight, light and reflections from
+    the map's sky cube, linear colour, a filmic curve at the end). Both draw the same files.
+  - Materials for the modern look. Remastered units whose blueprint says `ShaderName = 'LabPBR'`
+    carry them in their textures: specular red = metal, green = roughness, blue = glow, alpha = team
+    colour mask; `SecondaryName` red = ambient occlusion. Original units: the old spec-team texture
+    is translated (reflection strength stands for metal, highlight strength for smoothness); this
+    translation is a first one and not yet tuned per faction (white paint on Cybran and Aeon units
+    comes out too dark).
+  - The modern look's strengths (`--sun`, `--sky`, `--exposure`, `--reflection`) are constants found
+    by eye on one map. Highlights and the mirrored sky are held back (`--reflection` 0.7): the game's
+    sky pictures hold no values beyond white, and at full strength metal turns pale.
+- Mods: `--mods <folder>` makes the mods of that folder available under `/mods/<name>`, so a mod's
+  units are found. What a mod's scripts change in blueprints is not seen (the reader runs no Lua),
+  with one exception written out by hand: units with textures in the lab's `LabVisuals` mod get them
+  as a LabPBR material, as that mod's script would do.
 
 Known gaps, to be closed in the steps they belong to:
 
@@ -121,7 +166,10 @@ Known gaps, to be closed in the steps they belong to:
 - Props do not sway, and blended far-away cards are not sorted by distance.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No shadows, no decals, no sky, no ground beyond the map's edge, no projectiles or effects.
+- No decals, no sky, no ground beyond the map's edge, no projectiles or effects.
+- The modern look still lacks: ambient occlusion in the picture, bloom, anti-aliasing, a water of its
+  own (it shows the original's water with converted colours), and sky cubes that are properly
+  pre-blurred (their mip levels are plain averages).
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
 - Layer textures repeat every `scale` world units in both directions; on a map that is not square the
   original may stretch one direction (not checked).

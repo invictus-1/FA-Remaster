@@ -23,7 +23,8 @@ class Terrain {
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.
   bool Load(const MapData* map, std::string* error);
-  void Draw(const View& view);
+  // Into the scene, or (`shadowPass`) into a shadow map, where only depth is written.
+  void Draw(const View& view, bool shadowPass = false);
 
   // On-screen size, in pixels, that one quad of the mesh should have: smaller means more triangles.
   float quadPixels = 6;
@@ -48,7 +49,7 @@ class Terrain {
   gfx::Device* device_;
   TextureCache* textures_;
   const MapData* map_ = nullptr;
-  gfx::Pipeline pipeline_;
+  gfx::Pipeline pipeline_, shadowPipeline_;
   gfx::Buffer gridVertices_, gridIndices_;
   uint32_t gridIndexCount_ = 0;
   gfx::Texture heightTexture_, normalMap_, maskLow_, maskHigh_, waterMap_, waterRamp_;

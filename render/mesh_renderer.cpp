@@ -4,28 +4,30 @@
 #include <cmath>
 #include <cstddef>
 
+#include "lighting.h"
+
 namespace render {
 namespace {
 
 constexpr size_t kMaxInstances = 1024;  // per draw call (the size of the shader's array)
 
-// The unit look, after what the original's "Unit" shader computes, written anew:
-//   normal  = the normal map's green and alpha as x and y, in the frame binormal / tangent / normal
-//   albedo  = the albedo texture, replaced by the team colour where the spec-team texture's alpha says
-//   light   = sun * max(0, N.L) + ambience, times the lighting multiplier, the shadow-fill colour
-//             filling what the light leaves
-//   colour  = albedo * (light + glow + 2 * reflected environment * spec.r) + highlight * spec.g
-// with glow = 2 * spec.b and highlight = (0.6, 0.8, 0.9) * (R.V)^2.
-// Every model is drawn with this look for now, props included (foliage with its alpha cutting holes);
-// the Aeon, Cybran and Seraphim variants, swaying trees, shadows and the build effects come with the
-// stage that matches the original's look. A unit under construction is simply darker.
+// The surface of a model, then one of the two lightings.
+//
+// Surface: the normal map's green and alpha are x and y in the frame binormal / tangent / normal;
+// where the specular texture's alpha says so, the team colour replaces the albedo.
+//
+// Original look, after what the game's "Unit" shader computes, written anew:
+//   colour = albedo * (light + glow + 2 * reflected environment * spec.r) + highlight * spec.g
+// with glow = 2 * spec.b and highlight = (0.6, 0.8, 0.9) * (R.V)^2. Every unit is drawn with this
+// formula for now; the Aeon, Cybran and Seraphim variants differ in their highlights.
+//
+// Modern look: the surface as a material (metal, roughness, glow, occlusion) for lighting.h.
+//   Remastered units carry the material in their textures (see ModelLod::labPbr).
+//   Original units: the old texture is translated - reflection strength stands for metal, highlight
+//   strength for smoothness. This is a first translation, to be tuned per faction.
+//   Props are plain rough surfaces.
+// A unit under construction is simply darker (the build effects are not written yet).
 const char kShader[] = R"hlsl(
-cbuffer MeshConstants : register(b1) {
-  float4 sunDirection;  // xyz toward the sun, w: lighting multiplier
-  float4 sunDiffuse;
-  float4 sunAmbient;
-  float4 shadowFill;
-};
 struct Instance {
   float4 row0, row1, row2;
   float4 color;
@@ -35,12 +37,14 @@ cbuffer Instances : register(b2) {
 };
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only,
-                // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says)
+                // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
+                // w: 1 = the specular texture is a remastered unit's material
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
 Texture2D specularMap : register(t2);
 TextureCube environmentMap : register(t3);
+Texture2D secondaryMap : register(t4);
 
 struct VIn {
   float3 position : POSITION;
@@ -75,48 +79,66 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   return o;
 }
 
+// shadow maps: depth only, with foliage's holes
+void ShadowPS(VOut i) {
+  if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
+}
+
 float4 PS(VOut i) : SV_Target {
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
   float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
+  float occlusion = secondaryMap.Sample(samplerAniso, i.uv.xy).r;
   if (kind.x > 0) clip(albedo.a - kind.x);
   float3 vertexNormal = normalize(i.normal);
-  float3 light;
-  if (kind.y > 0.5) {
-    // the plain look ("VertexNormal"): the mesh's normal, no highlights
-    light = sunDiffuse.rgb * saturate(dot(sunDirection.xyz, vertexNormal)) + sunAmbient.rgb;
-    light = sunDirection.w * light + (1 - light) * shadowFill.rgb;
-    return float4(i.color.rgb * albedo.rgb * light, albedo.a);
-  }
   float3 n = float3(nxy, sqrt(saturate(1 - dot(nxy, nxy))));
-  float3 N = normalize(n.x * normalize(i.binormal) + n.y * normalize(i.tangent) + n.z * vertexNormal);
-  float3 toCamera = normalize(cameraPosition - i.world);
-  float3 sun = sunDirection.xyz;
-  float sunDotN = dot(sun, N);
+  float3 N = kind.y > 0.5 ? vertexNormal : normalize(n.x * normalize(i.binormal) + n.y * normalize(i.tangent) + n.z * vertexNormal);
+  float shadow = SunShadow(i.world, vertexNormal);
+  float built = 0.3 + 0.7 * i.color.a;
+  float teamMask = kind.z > 0.5 ? 0 : spec.a;
 
+  if (look > 0.5) {
+    float3 base = ToLinear(albedo.rgb);
+    float3 tint = ToLinear(i.color.rgb);
+    base = kind.z > 0.5 ? base * tint : lerp(base, tint, teamMask);
+    float metallic = 0, roughness = 0.9;
+    float3 emission = 0;
+    if (kind.w > 0.5) {
+      // a remastered unit: the material as painted. Team-coloured panels take the army's colour and
+      // keep the paint's own light and dark (the rule of the lab's LabPBR shader for the original game).
+      float luma = dot(albedo.rgb, float3(0.299, 0.587, 0.114));
+      base = lerp(ToLinear(albedo.rgb), ToLinear(i.color.rgb * saturate(0.15 + luma * 1.3)), teamMask);
+      metallic = spec.r;
+      roughness = spec.g;
+      emission = base * spec.b * 1.5;
+    } else if (kind.z < 0.5) {
+      metallic = saturate(spec.r * 1.2) * 0.7 * (1 - teamMask);
+      roughness = lerp(0.75, 0.35, saturate(spec.g * 1.5));
+      emission = base * spec.b * 3;
+      occlusion = 1;
+    } else {
+      occlusion = 1;
+    }
+    float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
+    return float4(lit * built, kind.y > 0.5 ? albedo.a : 1);
+  }
+
+  float3 light = OriginalLight(dot(sunDirection, N), shadow);
+  if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
+  float3 toCamera = normalize(cameraPosition - i.world);
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;
   albedo.rgb = kind.z > 0.5 ? albedo.rgb * i.color.rgb : lerp(i.color.rgb, albedo.rgb, 1 - spec.a);
-  float highlight = saturate(dot(reflect(-sun, N), toCamera));
+  float highlight = saturate(dot(reflect(-sunDirection, N), toCamera));
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
-  light = sunDiffuse.rgb * saturate(sunDotN) + sunAmbient.rgb;
-  light = sunDirection.w * light + (1 - light) * shadowFill.rgb;
   float3 color = albedo.rgb * (2 * spec.b + light + 2 * environment * spec.r) + additive;
-  color *= 0.3 + 0.7 * i.color.a;
-  return float4(color, 1);
+  return float4(color * built, 1);
 }
 )hlsl";
-
-struct MeshConstants {
-  float sunDirection[4];
-  float sunDiffuse[4];
-  float sunAmbient[4];
-  float shadowFill[4];
-};
 
 }  // namespace
 
 bool MeshRenderer::Init(std::string* error) {
-  std::string source = std::string(kViewShaderBlock) + kShader;
+  std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.name = "models";
   pd.vertexSource = pd.pixelSource = source;
@@ -127,104 +149,103 @@ bool MeshRenderer::Init(std::string* error) {
               {"TEXCOORD", 0, gfx::AttrType::Float4, offsetof(ScmVertex, uv0)},
               {"BLENDINDICES", 0, gfx::AttrType::UByte4, offsetof(ScmVertex, bones)}};
   pd.stride = sizeof(ScmVertex);
+  pd.colorFormat = kSceneFormat;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
   pd.name = "models, blended";
   pd.blend = gfx::Blend::Alpha;
   blended_ = device_->CreatePipeline(pd, error);
+  if (!blended_) return false;
+  pd.name = "models, shadow";
+  pd.blend = gfx::Blend::Opaque;
+  pd.pixelEntry = "ShadowPS";
+  pd.depthOnly = true;
+  pd.cull = gfx::Cull::None;  // thin and open meshes cast a shadow from either side
+  shadow_ = device_->CreatePipeline(pd, error);
   batch_.resize(kMaxInstances);
-  return static_cast<bool>(blended_);
+  return static_cast<bool>(shadow_);
 }
 
-void MeshRenderer::Begin(const View& view) {
-  view_ = view;
-  items_.clear();
-}
+void MeshRenderer::Begin() { entries_.clear(); }
 
-bool MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built) {
-  if (!model || !model->ok) return false;
+void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built) {
+  if (!model || !model->ok) return;
+  Entry e;
+  e.model = model;
   // the model's bounding sphere in the world (the matrix is a rotation with one scale)
   const Vec3 centre = (model->boundsMin + model->boundsMax) * 0.5f;
   const float scale = std::sqrt(world.m[0][0] * world.m[0][0] + world.m[1][0] * world.m[1][0] + world.m[2][0] * world.m[2][0]);
-  const float radius = Length(model->boundsMax - model->boundsMin) * 0.5f * scale;
+  e.radius = Length(model->boundsMax - model->boundsMin) * 0.5f * scale;
   const Vec4 c = world * Vec4{centre.x, centre.y, centre.z, 1};
-  const Vec3 at{c.x, c.y, c.z};
-  if (!view_.BoxVisible(at - Vec3{radius, radius, radius}, at + Vec3{radius, radius, radius})) return false;
-  const float distance = Length(at - view_.eye) * lodScale;
-  const ModelLod* lod = nullptr;
-  for (const ModelLod& l : model->lods)
-    if (distance <= l.cutoff) {
-      lod = &l;
-      break;
-    }
-  if (!lod) return false;
-
-  Item item;
-  item.lod = lod;
+  e.centre = {c.x, c.y, c.z};
   for (int k = 0; k < 4; ++k) {
-    item.instance.row0[k] = world.m[0][k];
-    item.instance.row1[k] = world.m[1][k];
-    item.instance.row2[k] = world.m[2][k];
+    e.instance.row0[k] = world.m[0][k];
+    e.instance.row1[k] = world.m[1][k];
+    e.instance.row2[k] = world.m[2][k];
   }
-  item.instance.color[0] = teamColor.x;
-  item.instance.color[1] = teamColor.y;
-  item.instance.color[2] = teamColor.z;
-  item.instance.color[3] = built;
-  items_.push_back(item);
-  return true;
+  e.instance.color[0] = teamColor.x;
+  e.instance.color[1] = teamColor.y;
+  e.instance.color[2] = teamColor.z;
+  e.instance.color[3] = built;
+  entries_.push_back(e);
 }
 
-void MeshRenderer::Draw(const MapLighting& lighting, gfx::Texture environment) {
-  drawnInstances = drawnTriangles = 0;
+void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass) {
+  if (!shadowPass) drawnInstances = drawnTriangles = 0;
+  // what this view sees, each at the level of detail its distance from the camera asks for
+  items_.clear();
+  for (const Entry& e : entries_) {
+    const Vec3 r{e.radius, e.radius, e.radius};
+    if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
+    const float distance = Length(e.centre - view.eye) * lodScale;
+    for (const ModelLod& l : e.model->lods)
+      if (distance <= l.cutoff) {
+        // the far-away cards of trees are flat pictures: they cast no shadow
+        if (!(shadowPass && l.blend)) items_.push_back({&l, &e.instance});
+        break;
+      }
+  }
   if (items_.empty()) return;
   // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
   std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
     return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod < b.lod;
   });
 
-  MeshConstants c = {};
-  auto set = [](float* to, Vec3 v, float w) {
-    to[0] = v.x;
-    to[1] = v.y;
-    to[2] = v.z;
-    to[3] = w;
-  };
-  set(c.sunDirection, Normalize(lighting.sunDirection), lighting.multiplier);
-  set(c.sunDiffuse, lighting.sunColor, 0);
-  set(c.sunAmbient, lighting.sunAmbience, 0);
-  set(c.shadowFill, lighting.shadowFill, 0);
-  device_->SetPipeline(pipeline_);
-  device_->SetConstants(0, &view_.constants, sizeof view_.constants);
-  device_->SetConstants(1, &c, sizeof c);
-  device_->SetTexture(3, environment ? environment : textures_->GreyCube());
+  device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  if (!shadowPass) device_->SetTexture(3, environment ? environment : textures_->GreyCube());
 
   bool blending = false;
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    if (lod->blend && !blending) {
+    if (lod->blend && !blending && !shadowPass) {
       device_->SetPipeline(blended_);
       blending = true;
     }
     size_t n = 0;
     while (at + n < items_.size() && items_[at + n].lod == lod && n < kMaxInstances) {
-      batch_[n] = items_[at + n].instance;
+      batch_[n] = *items_[at + n].instance;
       ++n;
     }
-    const float kind[4] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, 0};
+    const float kind[4] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f};
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
-    device_->SetTexture(1, lod->normals);
-    device_->SetTexture(2, lod->specular);
+    if (!shadowPass) {
+      device_->SetTexture(1, lod->normals);
+      device_->SetTexture(2, lod->specular);
+      device_->SetTexture(4, lod->secondary);
+    }
     device_->SetVertexBuffer(lod->vertices);
     device_->SetIndexBuffer(lod->indices);
     // only the instances drawn are handed over: the shader reads no further into its array
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
-    drawnInstances += static_cast<int>(n);
-    drawnTriangles += static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
+    if (!shadowPass) {
+      drawnInstances += static_cast<int>(n);
+      drawnTriangles += static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
+    }
     at += n;
   }
-  items_.clear();
 }
 
 }  // namespace render

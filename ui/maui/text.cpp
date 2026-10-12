@@ -1,27 +1,9 @@
 // Text: one line of text in one font and colour.
-#include <cmath>
-
 #include "maui/control.h"
 #include "maui/font.h"
 #include "user/bindings.h"
 
 namespace moho::ui {
-
-// Placeholder measures (see font.h).
-FontMetrics GetFontMetrics(const std::string&, int pointSize) {
-  FontMetrics m;
-  m.ascent = std::floor(static_cast<float>(pointSize) * 0.8f + 0.5f);
-  m.descent = std::floor(static_cast<float>(pointSize) * 0.2f + 0.5f);
-  return m;
-}
-
-float StringAdvance(const std::string&, int pointSize, const std::string& text) {
-  int chars = 0;
-  for (unsigned char c : text)
-    if ((c & 0xc0) != 0x80) ++chars;  // UTF-8: count the first byte of each character
-  return std::floor(static_cast<float>(chars) * static_cast<float>(pointSize) * 0.5f + 0.5f);
-}
-
 namespace {
 
 class Text : public Control {
@@ -29,6 +11,24 @@ class Text : public Control {
   const char* ClassName() const override { return "text"; }
   void Describe(std::string& out) const override {
     out += "\"" + text + "\" " + family + " " + std::to_string(pointSize) + (color.empty() ? "" : " " + color);
+  }
+
+  // Draw (FA exe 0x7a3040). The pen starts at Left, or with horizontal centring at
+  // Left + Width/2 - advance/2. The baseline is Top + ascent, or with vertical centring
+  // Top + Height/2 + (ascent - internal leading)/2. A drop shadow is the same text in black, one
+  // pixel right and down, drawn first. With clip-to-width only the characters that fit are drawn.
+  void Draw(lua_State*, DrawTarget& target) override {
+    if (family.empty() || text.empty()) return;
+    FontMetrics m = GetFontMetrics(family, pointSize);
+    float w = width.Get();
+    float x = left.Get();
+    if (centeredHorizontally) x = x + w * 0.5f - StringAdvance(family, pointSize, text) * 0.5f;
+    float baseline = centeredVertically ? top.Get() + height.Get() * 0.5f + (m.ascent - m.internalLeading) * 0.5f
+                                        : top.Get() + m.ascent;
+    uint32_t c = WithAlpha(color.empty() ? 0xffffffffu : ParseColor(color), alpha);
+    float maxAdvance = clipToWidth ? w : -1.0f;
+    if (dropShadow) DrawString(target, family, pointSize, text, x + 1, baseline + 1, c & 0xff000000u, maxAdvance);
+    DrawString(target, family, pointSize, text, x, baseline, c, maxAdvance);
   }
 
   LazyVar textAdvance, fontAscent, fontDescent, fontExternalLeading;
