@@ -1175,7 +1175,18 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   }
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
-  float cx = m.bx, cz = -m.bz;          // current forward (x, -z)
+  // current forward (x, -z): the hull's own forward axis, tilt included, flattened and normalised (TurnInfo
+  // 0x698ff0 -> 0x6990e0 / 0x6999f0). On a slope it is a little off the flat heading the hull was built from, so
+  // "face where you face" (a slaved weapon with its target inside the arc) is no turn at all.
+  const Quat& q = u->orientation;
+  float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
+    cx /= cl;
+    cz /= cl;
+  } else {
+    cx = m.bx;
+    cz = -m.bz;
+  }
   float wx = fv.x, wz = -fv.z;          // toward T = pos + fv
   float len = std::sqrt(wx * wx + wz * wz);
   if (len <= 0) return false;
