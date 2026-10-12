@@ -643,6 +643,11 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
     u->position = P1;
     float scale = std::max(0.001f, tHit);
     m.lastMove = {(P1.x - P0.x) / scale, (P1.y - P0.y) / scale, (P1.z - P0.z) / scale};
+    // The landing sets motion+0x90 (as a push or a warp onto land does): the beat after, the unit's contacts are
+    // worked out although it is at rest, so cargo dropped side by side is pushed apart. Its own vector
+    // (motion+0x38) is zero then: the push it gives is not raised by the speed of its fall (seen: two Strikers
+    // 0.59 apart get 0.275 each = half of max(depth, half the longer side), nothing added).
+    m.surfaceNext = true;
     SetUnitLayer(sim, u, layer);
     m.ballistic = false;
     lua_State* L = sim.L();
