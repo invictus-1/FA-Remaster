@@ -1,5 +1,6 @@
 #include "maui/font.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <unordered_map>
@@ -8,6 +9,7 @@
 
 #include "core/log.h"
 #include "core/vfs.h"
+#include "draw/draw.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -43,10 +45,12 @@ std::vector<wchar_t> Decode(const std::string& s) {
 struct GdiFont {
   HFONT font = nullptr;
   FontMetrics metrics;
+  int cellHeight = 0, pad = 0;  // tmHeight and tmAveCharWidth
   std::unordered_map<wchar_t, float> advances;
+  std::unordered_map<wchar_t, GlyphMask> glyphs;
 };
 
-// One memory DC with a 128x128 32-bit bitmap, as the original measures and draws its characters on.
+// One memory DC with a 128x128 32-bit bitmap, as the original measures its characters on.
 HDC MeasureDC() {
   static HDC dc = nullptr;
   if (!dc) {
@@ -71,7 +75,10 @@ GdiFont& Font(const std::string& family, int size) {
       f.metrics.height = static_cast<float>(tm.tmHeight);
       f.metrics.ascent = static_cast<float>(tm.tmAscent);
       f.metrics.descent = static_cast<float>(tm.tmDescent);
+      f.metrics.internalLeading = static_cast<float>(tm.tmInternalLeading);
       f.metrics.externalLeading = static_cast<float>(tm.tmExternalLeading);
+      f.cellHeight = tm.tmHeight;
+      f.pad = tm.tmAveCharWidth;
     }
   } else {
     Logf(LogLevel::Warning, "moho64ui: cannot create font %s %d", family.c_str(), size);
@@ -92,6 +99,71 @@ float CharAdvance(GdiFont& f, wchar_t ch) {
   }
   f.advances.emplace(ch, adv);
   return adv;
+}
+
+// A character's picture, made as the original makes it (FA exe 0x425940): drawn in white on black
+// with DrawText into a cell that leaves the font's average character width free on both sides
+// (for parts that reach beyond the advance), then read back; a pixel's brightness is its
+// coverage. The cell is cut down to the part that has ink.
+const GlyphMask& Glyph(GdiFont& f, wchar_t ch) {
+  auto it = f.glyphs.find(ch);
+  if (it != f.glyphs.end()) return it->second;
+  GlyphMask mask;
+  int cellW = static_cast<int>(CharAdvance(f, ch)) + 2 * f.pad, cellH = f.cellHeight;
+  static HDC dc = nullptr;
+  static HBITMAP dib = nullptr;
+  static uint32_t* bits = nullptr;
+  static int dibW = 0, dibH = 0;
+  if (cellW > 0 && cellH > 0 && f.font) {
+    if (!dc) dc = CreateCompatibleDC(nullptr);
+    if (dc && (cellW > dibW || cellH > dibH)) {
+      dibW = std::max(dibW, std::max(cellW, 256));
+      dibH = std::max(dibH, std::max(cellH, 128));
+      BITMAPINFO bi{};
+      bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+      bi.bmiHeader.biWidth = dibW;
+      bi.bmiHeader.biHeight = -dibH;  // rows from the top
+      bi.bmiHeader.biPlanes = 1;
+      bi.bmiHeader.biBitCount = 32;
+      void* p = nullptr;
+      HBITMAP fresh = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &p, nullptr, 0);
+      if (fresh) {
+        SelectObject(dc, fresh);
+        if (dib) DeleteObject(dib);
+        dib = fresh;
+        bits = static_cast<uint32_t*>(p);
+      }
+    }
+    if (dc && bits) {
+      SelectObject(dc, f.font);
+      RECT cell{0, 0, cellW, cellH};
+      FillRect(dc, &cell, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+      SetBkColor(dc, RGB(0, 0, 0));
+      SetTextColor(dc, RGB(255, 255, 255));
+      RECT rc{f.pad, 0, cellW, cellH};
+      DrawTextW(dc, &ch, 1, &rc, DT_NOPREFIX | DT_NOCLIP | DT_SINGLELINE);
+      GdiFlush();
+      int x0 = cellW, x1 = 0, y0 = cellH, y1 = 0;
+      for (int y = 0; y < cellH; ++y)
+        for (int x = 0; x < cellW; ++x)
+          if (bits[static_cast<size_t>(y) * static_cast<size_t>(dibW) + static_cast<size_t>(x)] & 0x00ffffffu) {
+            x0 = std::min(x0, x), x1 = std::max(x1, x + 1);
+            y0 = std::min(y0, y), y1 = std::max(y1, y + 1);
+          }
+      if (x1 > x0) {
+        mask.width = x1 - x0;
+        mask.height = y1 - y0;
+        mask.left = x0 - f.pad;
+        mask.top = y0;
+        mask.coverage.resize(static_cast<size_t>(mask.width) * static_cast<size_t>(mask.height));
+        for (int y = y0; y < y1; ++y)
+          for (int x = x0; x < x1; ++x)
+            mask.coverage[static_cast<size_t>(y - y0) * static_cast<size_t>(mask.width) + static_cast<size_t>(x - x0)] =
+                static_cast<uint8_t>((bits[static_cast<size_t>(y) * static_cast<size_t>(dibW) + static_cast<size_t>(x)] >> 8) & 0xff);
+      }
+    }
+  }
+  return f.glyphs.emplace(ch, std::move(mask)).first->second;
 }
 
 #endif  // _WIN32
@@ -129,9 +201,23 @@ float StringAdvance(const std::string& family, int size, const std::string& text
   return sum;
 }
 
+void DrawString(DrawTarget& target, const std::string& family, int size, const std::string& text, float x, float baseline,
+                uint32_t color, float maxAdvance) {
+  GdiFont& f = Font(family, size);
+  int lineTop = static_cast<int>(std::floor(baseline - f.metrics.ascent + 0.5f));
+  float pen = 0;
+  for (wchar_t ch : Decode(text)) {
+    float adv = CharAdvance(f, ch);
+    if (maxAdvance >= 0 && pen + adv > maxAdvance) break;
+    const GlyphMask& g = Glyph(f, ch);
+    if (g.width) target.DrawGlyph(g, static_cast<int>(std::floor(x + pen + 0.5f)) + g.left, lineTop + g.top, color);
+    pen += adv;
+  }
+}
+
 #else
 
-// Placeholder measures (see font.h).
+// Placeholder measures (see font.h); nothing is drawn.
 FontMetrics GetFontMetrics(const std::string&, int size) {
   FontMetrics m;
   m.ascent = std::floor(static_cast<float>(size) * 0.8f + 0.5f);
@@ -143,6 +229,8 @@ FontMetrics GetFontMetrics(const std::string&, int size) {
 float StringAdvance(const std::string&, int size, const std::string& text) {
   return std::floor(static_cast<float>(Decode(text).size()) * static_cast<float>(size) * 0.5f + 0.5f);
 }
+
+void DrawString(DrawTarget&, const std::string&, int, const std::string&, float, float, uint32_t, float) {}
 
 #endif
 

@@ -13,6 +13,24 @@ class Text : public Control {
     out += "\"" + text + "\" " + family + " " + std::to_string(pointSize) + (color.empty() ? "" : " " + color);
   }
 
+  // Draw (FA exe 0x7a3040). The pen starts at Left, or with horizontal centring at
+  // Left + Width/2 - advance/2. The baseline is Top + ascent, or with vertical centring
+  // Top + Height/2 + (ascent - internal leading)/2. A drop shadow is the same text in black, one
+  // pixel right and down, drawn first. With clip-to-width only the characters that fit are drawn.
+  void Draw(lua_State*, DrawTarget& target) override {
+    if (family.empty() || text.empty()) return;
+    FontMetrics m = GetFontMetrics(family, pointSize);
+    float w = width.Get();
+    float x = left.Get();
+    if (centeredHorizontally) x = x + w * 0.5f - StringAdvance(family, pointSize, text) * 0.5f;
+    float baseline = centeredVertically ? top.Get() + height.Get() * 0.5f + (m.ascent - m.internalLeading) * 0.5f
+                                        : top.Get() + m.ascent;
+    uint32_t c = WithAlpha(color.empty() ? 0xffffffffu : ParseColor(color), alpha);
+    float maxAdvance = clipToWidth ? w : -1.0f;
+    if (dropShadow) DrawString(target, family, pointSize, text, x + 1, baseline + 1, c & 0xff000000u, maxAdvance);
+    DrawString(target, family, pointSize, text, x, baseline, c, maxAdvance);
+  }
+
   LazyVar textAdvance, fontAscent, fontDescent, fontExternalLeading;
   std::string text, family, color;
   int pointSize = 0;

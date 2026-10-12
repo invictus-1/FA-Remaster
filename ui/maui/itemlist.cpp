@@ -19,6 +19,31 @@ class ItemList : public Control {
     if (!items.empty()) out += ", first \"" + items[0] + "\"";
   }
 
+  // Inferred (the original's 0x799a50 is not read yet): the background colour over the rectangle,
+  // then the shown rows from the top, each a row height apart, the selected row on its own
+  // background; text starts at Left on the row's baseline and is cut at the control's edges.
+  void Draw(lua_State*, DrawTarget& target) override {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (!colors[1].empty() && colors[1] != "0") target.FillRect(r, WithAlpha(ParseColor(colors[1]), alpha));
+    if (family.empty()) return;
+    FontMetrics m = GetFontMetrics(family, size);
+    float row = m.height + m.externalLeading;
+    int lines = LinesVisible();
+    target.SetClip(r);
+    for (int i = 0; i < lines && this->top + i < Count(); ++i) {
+      int index = this->top + i;
+      float y = r.y0 + static_cast<float>(i) * row;
+      bool selected = showSelection && index == selection;
+      if (selected && !colors[3].empty() && colors[3] != "0")
+        target.FillRect(Rect{r.x0, y, r.x1, y + row}, WithAlpha(ParseColor(colors[3]), alpha));
+      const std::string& fg = selected && !colors[2].empty() && colors[2] != "0" ? colors[2] : colors[0];
+      DrawString(target, family, size, items[static_cast<size_t>(index)], r.x0, y + m.ascent,
+                 WithAlpha(fg.empty() ? 0xffffffffu : ParseColor(fg), alpha));
+    }
+    target.ClearClip();
+  }
+
   std::vector<std::string> items;
   int selection = -1;
   int top = 0;  // the first row shown

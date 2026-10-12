@@ -2,7 +2,9 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/vfs.h"
 #include "maui/control.h"
+#include "script/script_state.h"
 #include "user/bindings.h"
 
 namespace moho::ui {
@@ -60,6 +62,39 @@ class Scrollbar : public Control {
   void Describe(std::string& out) const override {
     out += axis == 0 ? "vertical" : "horizontal";
     if (!scrollable.Get()) out += ", not connected";
+  }
+
+  // Inferred (the original's 0x7a0840 is not read yet): the background stretched over the bar; the
+  // thumb covers the visible part of the connected control's range, its end pieces at their own
+  // size and the middle piece stretched between them. Nothing but the background is drawn when
+  // everything is visible.
+  void Draw(lua_State* L, DrawTarget& target) override {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    const Vfs* vfs = ScriptState::From(L)->vfs();
+    uint32_t tint = WithAlpha(0xffffffffu, alpha);
+    auto put = [&](const std::string& file, const Rect& dst) {
+      if (file.empty()) return;
+      const Image& img = LoadTexture(vfs, file);
+      if (img.valid())
+        target.DrawImage(img, Rect{1, 1, static_cast<float>(img.width - 1), static_cast<float>(img.height - 1)}, dst, tint);
+    };
+    put(background, r);
+    Control* c = Target();
+    if (!c || axis != 0) return;
+    float v[4];
+    c->GetScrollValues(L, axis, v);
+    float range = v[1] - v[0];
+    if (range <= 0 || (v[2] <= v[0] && v[3] >= v[1])) return;
+    float len = r.y1 - r.y0;
+    float t0 = r.y0 + len * (v[2] - v[0]) / range, t1 = r.y0 + len * (v[3] - v[0]) / range;
+    float capTop = 0, capBottom = 0;
+    if (!thumbTop.empty() && LoadTexture(vfs, thumbTop).valid()) capTop = static_cast<float>(LoadTexture(vfs, thumbTop).height - 2);
+    if (!thumbBottom.empty() && LoadTexture(vfs, thumbBottom).valid()) capBottom = static_cast<float>(LoadTexture(vfs, thumbBottom).height - 2);
+    if (t1 - t0 < capTop + capBottom) t1 = t0 + capTop + capBottom;
+    put(thumbTop, Rect{r.x0, t0, r.x1, t0 + capTop});
+    put(thumbMiddle, Rect{r.x0, t0 + capTop, r.x1, t1 - capBottom});
+    put(thumbBottom, Rect{r.x0, t1 - capBottom, r.x1, t1});
   }
 
   int axis = 0;

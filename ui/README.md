@@ -110,7 +110,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the same DrawText call, summed without kerning (`maui/font.*`). The game's `/fonts/*.ttf` are
   added to the process at start, as the original does. On other hosts the measures are still a
   placeholder.
-- Not real yet: everything drawn, input, sound, key maps, movies.
+- Drawing, first part (`draw/`): a small 2D target (`draw/draw.h`: textured rectangles, filled
+  rectangles, glyphs, a clip rectangle) with a software backend that fills a pixel buffer.
+  `--screenshot file.png` draws the head once at the end and saves the picture: the main menu and
+  the profile dialog come out as in the game (without the background movie). Controls draw in the
+  original's order (one list ordered by Depth, hidden ones left out); Bitmap and Text follow the
+  original's placement (texture stretched over the rectangle without its border ring; the text
+  baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
+  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list, edit
+  field, border and scrollbar draw by inference, marked in the source.
+- Not real yet: a window, input, sound, key maps, movies, render passes, other texture formats.
 - 221 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track

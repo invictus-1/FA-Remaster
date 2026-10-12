@@ -110,6 +110,23 @@ void UiManager::Update(lua_State* L, float seconds) {
   for (Frame* f : frames_) f->Update(L, seconds);
 }
 
+// Drawing a head (FA exe 0x786fa0, 0x7870f0): the frame and everything below it, depth first,
+// makes one list ordered by Depth; the controls that are not hidden draw in that order, lowest
+// first. Depth is only asked of controls that are not hidden. Inferred: controls of equal depth
+// keep their tree order. Render passes are not told apart yet: every pass draws.
+void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
+  Frame* frame = GetFrame(head);
+  if (!frame) return;
+  std::vector<Control*> all{frame};
+  Collect(frame, all);
+  std::vector<std::pair<float, Control*>> order;
+  for (Control* c : all)
+    if (!c->dead() && !c->IsHidden()) order.emplace_back(c->depth.Get(), c);
+  std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (auto& [depth, c] : order)
+    if (!c->dead()) c->Draw(L, target);
+}
+
 void UiManager::Forget(Control* c) {
   if (focus == c) focus = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());

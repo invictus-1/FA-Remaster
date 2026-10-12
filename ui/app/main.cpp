@@ -47,6 +47,7 @@ struct Options {
 Options* g_opts = nullptr;
 int width = 1920, height = 1080;  // --size: the head's size in pixels
 bool dumpUi = false;              // --dump-ui: log the control tree at the end
+std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
 // keeps them to itself for now: see ui/REQUESTS.md.
@@ -165,6 +166,7 @@ int main(int argc, char** argv) {
     else if (a == "--list-bindings") o.listBindings = true;
     else if (a == "--quiet") o.quiet = true;
     else if (a == "--dump-ui") dumpUi = true;
+    else if (a == "--screenshot") screenshot = next();
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -218,6 +220,12 @@ int main(int argc, char** argv) {
   for (; done < o.frames; ++done) user.Frame(1.0 / 60.0);
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
   if (dumpUi) user.ui().Dump();
+  if (!screenshot.empty()) {  // draw the head once and save the picture
+    ui::SoftwareTarget target(width, height);
+    user.ui().Render(user.L(), target, 0);
+    if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
+    else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
+  }
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
   return ok ? 0 : 1;

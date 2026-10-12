@@ -32,6 +32,22 @@ class Edit : public Control {
     out += "\"" + text + "\" " + family + " " + std::to_string(size) + (enabled ? "" : " input off");
   }
 
+  // Inferred (the original's draw is not read yet): the background when shown, then the text from
+  // Left with its line centred in the control's height, cut at the control's edges. No caret yet.
+  void Draw(lua_State*, DrawTarget& target) override {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (showBackground && !background.empty()) target.FillRect(r, WithAlpha(ParseColor(background), alpha));
+    if (family.empty() || text.empty()) return;
+    FontMetrics m = GetFontMetrics(family, size);
+    float lineTop = r.y0 + ((r.y1 - r.y0) - m.height) * 0.5f;
+    uint32_t c = WithAlpha(foreground.empty() ? 0xffffffffu : ParseColor(foreground), alpha);
+    target.SetClip(r);
+    if (dropShadow) DrawString(target, family, size, text, r.x0 + 1, lineTop + m.ascent + 1, c & 0xff000000u);
+    DrawString(target, family, size, text, r.x0, lineTop + m.ascent, c);
+    target.ClearClip();
+  }
+
   std::string text, family;
   int size = 0;
   int maxChars = 512;  // inferred default; scripts set their own

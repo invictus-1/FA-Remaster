@@ -12,12 +12,14 @@
 #include <string>
 #include <vector>
 
+#include "draw/draw.h"
 #include "maui/lazyvar.h"
 #include "script/lua.hpp"
 #include "sim/script_object.h"
 
 namespace moho::ui {
 
+class DrawTarget;
 class Frame;
 class UiManager;
 
@@ -37,6 +39,15 @@ class Control : public ScriptObject {
   virtual const char* ClassName() const { return "control"; }
   // One line of this control's own state for Dump (texture, text, ...).
   virtual void Describe(std::string& out) const { (void)out; }
+  // Draw this control alone (its children draw themselves). A plain control draws nothing.
+  virtual void Draw(lua_State* L, DrawTarget& target) {
+    (void)L;
+    (void)target;
+  }
+  // The rectangle the LazyVars give right now.
+  void GetRect(float* x0, float* y0, float* x1, float* y1) const {
+    *x0 = left.Get(), *y0 = top.Get(), *x1 = right.Get(), *y1 = bottom.Get();
+  }
 
   // Destroy (0x786ef0): leave the parent, join the root frame's list of dead controls (they are
   // deleted at the end of the frame), run self:OnDestroy(), then destroy the children, newest first.
@@ -150,6 +161,8 @@ class UiManager {
   bool initialized() const { return !frames_.empty(); }
 
   void Update(lua_State* L, float seconds);
+  // Draw a head's controls onto a target, in the original's order.
+  void Render(lua_State* L, DrawTarget& target, int head);
   // Log the tree of every head: one line per control with its class, name, rectangle, depth and state.
   void Dump() const;
   int CountControls() const;

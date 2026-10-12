@@ -21,6 +21,39 @@ class Border : public Control {
     if (solid) out += "colour " + color;
     else if (!textures[0].empty()) out += textures[0];
   }
+  // Inferred (the original's 0x784f50 is not read yet): the corner textures in the corners at
+  // their own size, the vertical texture stretched along the left and right edges between them,
+  // the horizontal one along the top and bottom.
+  void Draw(lua_State* L, DrawTarget& target) override {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (solid) {
+      target.FillRect(r, WithAlpha(ParseColor(color), alpha));
+      return;
+    }
+    const Vfs* vfs = ScriptState::From(L)->vfs();
+    uint32_t tint = WithAlpha(0xffffffffu, alpha);
+    const Image* img[6];
+    float w[6], h[6];
+    for (int i = 0; i < 6; ++i) {
+      img[i] = textures[i].empty() ? nullptr : &LoadTexture(vfs, textures[i]);
+      if (img[i] && !img[i]->valid()) img[i] = nullptr;
+      w[i] = img[i] ? static_cast<float>(img[i]->width - 2) : 0;
+      h[i] = img[i] ? static_cast<float>(img[i]->height - 2) : 0;
+    }
+    auto put = [&](int i, float x0, float y0, float x1, float y1) {
+      if (img[i]) target.DrawImage(*img[i], Rect{1, 1, 1 + w[i], 1 + h[i]}, Rect{x0, y0, x1, y1}, tint);
+    };
+    put(2, r.x0, r.y0, r.x0 + w[2], r.y0 + h[2]);
+    put(3, r.x1 - w[3], r.y0, r.x1, r.y0 + h[3]);
+    put(4, r.x0, r.y1 - h[4], r.x0 + w[4], r.y1);
+    put(5, r.x1 - w[5], r.y1 - h[5], r.x1, r.y1);
+    put(0, r.x0, r.y0 + h[2], r.x0 + w[0], r.y1 - h[4]);
+    put(0, r.x1 - w[0], r.y0 + h[3], r.x1, r.y1 - h[5]);
+    put(1, r.x0 + w[2], r.y0, r.x1 - w[3], r.y0 + h[1]);
+    put(1, r.x0 + w[4], r.y1 - h[1], r.x1 - w[5], r.y1);
+  }
+
   LazyVar borderWidth, borderHeight;
   std::string textures[6];  // vertical, horizontal, upper left, upper right, lower left, lower right
   bool solid = false;
