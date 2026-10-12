@@ -3,9 +3,9 @@
 // protocol "None" and nobody else in it.
 //
 // This is its local form: it can host, has no peers, and sends nothing. Joining a game and
-// launching one are NOT BUILT: joining reports a failed connection, and LaunchGame writes the
-// game configuration the script hands over (to the log, and to the file the host names) and tells
-// the script the launch failed, with a sentence that says so in the lobby's chat.
+// starting one are NOT BUILT: joining reports a failed connection; LaunchGame writes the game
+// configuration the script hands over (to the log, or to the file the host names) and tells the
+// script the game launched, but no session starts.
 //
 // Read from the original: InternalCreateLobby takes exactly 7 arguments and returns nil when no
 // connection can be made (FA exe 0x7c0d40); a new lobby has the id -1 unless one was given, and
@@ -182,13 +182,16 @@ int l_LaunchGame(lua_State* L) {
   }
   lua_settop(L, 2);
   const std::string& file = UserState::From(L)->config().sessionFile;
-  Logf(LogLevel::Info, "moho64ui: CLobby:LaunchGame: game configuration (%zu bytes)%s%s", text.size(),
-       file.empty() ? "" : " written to ", file.c_str());
+  Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: starting a game is not built yet; game configuration (%zu bytes)%s%s",
+       text.size(), file.empty() ? " follows" : " written to ", file.c_str());
   if (file.empty()) LogWrite(LogLevel::Info, text);
   else if (!hostfs::WriteFile(file, "GameConfig = " + text + "\n")) Logf(LogLevel::Warning, "moho64ui: cannot write %s", file.c_str());
-  lua_pushstring(L, "Starting a game from this screen is not built yet. The game set-up was recorded.");
-  lobby->Call(L, "LaunchFailed", 1);
-  return 0;
+  // The original calls self:GameLaunched() once the session is on its way (FA exe 0x7c38c0), and
+  // the lobby script counts on it: by now it has prepared itself for the game and cannot go on as
+  // a lobby. So the script is told; it closes the lobby and destroys this object. The session
+  // itself does not start yet.
+  lobby->Call(L, "GameLaunched", 0);
+  return 0;  // `lobby` may be gone here
 }
 
 }  // namespace

@@ -140,17 +140,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The lobby object (`user/lobby.cpp`) in its local form: it hosts (the host gets the id 0, as in
   the original), has no peers and sends nothing. With it Skirmish goes from the main menu through
   the game's tutorial question to the game's lobby screen in single-player form (about 2,900
-  controls: slots, colours, factions, game options, the map's markers). Joining a game and
-  launching one are not built: `LaunchGame` records the game configuration the script hands over
-  (to the log, or to the file named by `--session-out`) and tells the script the launch failed,
-  in words, in the lobby's chat.
+  controls: slots, colours, factions, game options, the map's picture with its start positions
+  and resource markers). The Launch button runs the script's launch path to its end. Joining a
+  game and starting one are not built: `LaunchGame` records the game configuration the script
+  hands over (to the log, or to the file named by `--session-out`) and tells the script the game
+  launched, as the original does, so the lobby closes; the session itself does not start, and the
+  screen stays empty. See `REQUESTS.md` for what the engine track needs to start a session from it.
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
   drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
   open their screens.
 - Not real yet: keyboard input and key maps, the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
-- 222 of the 531 engine functions are built; the rest are logged stubs.
+- 250 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
 

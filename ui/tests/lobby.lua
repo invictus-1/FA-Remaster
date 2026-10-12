@@ -32,11 +32,13 @@ check("nobody else is in it", table.getn(lobby:GetPeers()), 0)
 check("names stay as they are", lobby:MakeValidGameName("My Game") .. "|" .. lobby:MakeValidPlayerName("0", "Tester"), "My Game|Tester")
 lobby:BroadcastData({ Type = "Test" })
 
--- launching is not built: the script hears that the launch failed, in words
-local reason
-lobby.LaunchFailed = function(self, reasonKey) reason = reasonKey end
+-- launching: the host records the game configuration and the script is told the game launched
+-- (starting the session itself is not built yet)
+local heard = {}
+lobby.LaunchFailed = function(self, reasonKey) table.insert(heard, "failed") end
+lobby.GameLaunched = function(self) table.insert(heard, "launched") end
 lobby:LaunchGame({ GameOptions = { ScenarioFile = "/maps/x/x_scenario.lua" }, PlayerOptions = {}, Observers = {}, GameMods = {} })
-check("LaunchGame reports that it could not launch", type(reason) == "string" and string.find(reason, "not built") ~= nil, true)
+check("LaunchGame calls GameLaunched", table.concat(heard, " "), "launched")
 
 local uidLobby = LobbyComm.CreateLobbyComm("None", 0, "Other", "42", nil)
 check("a given id is kept", uidLobby:GetLocalPlayerID(), "42")
