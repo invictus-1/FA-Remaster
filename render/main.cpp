@@ -34,6 +34,7 @@
 //           taken as its corner (for finding out what the map file means)
 // --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
 //           to which the map's decals are drawn
+// --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -80,6 +81,7 @@
 #include "gfx.h"
 #include "ground.h"
 #include "icons.h"
+#include "lights.h"
 #include "linalg.h"
 #include "mesh_renderer.h"
 #include "models.h"
@@ -130,6 +132,7 @@ struct Options {
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
+  int testLights = 0;  // --lights
   std::string mapDecals = "normals";  // --map-decals
   float decalTurn = 1, decalRange = 1;
   std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
@@ -184,6 +187,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--lights") o->testLights = atoi(v);
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
     else if (a == "--decal-turn") o->decalTurn = static_cast<float>(atof(v));
@@ -411,7 +415,8 @@ int main(int argc, char** argv) {
     }
     printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
   }
-  Effects effects(&particles, &ribbons, &decals, &models);
+  Lights lights(device.get(), &vfs);
+  Effects effects(&particles, &ribbons, &decals, &lights, &models);
   effects.verbose = opt.debug;
   std::vector<FrameEffectEvent> effectEvents;
   StrategicIcons icons(device.get(), &vfs);
@@ -875,11 +880,20 @@ int main(int argc, char** argv) {
         ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
       }
     }
+    lights.Build(&view);  // (after the effects have said what flashes; before any pass reads the view)
     {  // the bones of posed models, once for all the frame's passes
       std::vector<const View*> views{&view};
       if (haveMap && shadowsOn)
         for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
       meshes.Prepare(views);
+    }
+    lights.Begin(havePlay ? playTick * 0.1 : static_cast<double>(time));
+    for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour
+      const float ring = 3 + 2.5f * static_cast<float>(i / 12), angle = time * (0.5f + 0.07f * static_cast<float>(i % 5)) + static_cast<float>(i) * 0.83f;
+      const Vec3 at{emitAt.x + std::cos(angle) * ring, 0, emitAt.z + std::sin(angle) * ring};
+      const float hue = static_cast<float>(i) * 2.4f;
+      lights.Add({at.x, groundHeight(at.x, at.z) + 1.2f, at.z}, 6,
+                 Vec3{0.5f + 0.5f * std::cos(hue), 0.5f + 0.5f * std::cos(hue + 2.1f), 0.5f + 0.5f * std::cos(hue + 4.2f)} * 3.0f);
     }
     if (haveLive) {  // what the scripts did with effects in the beats since the last frame
       live.TakeEffectEvents(&effectEvents);
@@ -901,13 +915,16 @@ int main(int argc, char** argv) {
     post.BeginScene(device->Width(), device->Height(), clear);
     device->SetTexture(kShadowMapSlot, shadows.Map());
     device->SetTexture(kEnvironmentSlot, sky);
+    lights.Bind();
     if (haveMap) {
       terrain->Draw(view);
       // decals on the ground, before anything stands on it: they read the ground's depth
       if (decals.Count() && opt.hide.find("decals") == std::string::npos) {
         post.BeginColorOnly();
+        lights.Bind();
         decals.Draw(view, camera, post.Depth(), havePlay ? playTick * 0.1 : static_cast<double>(time));
         post.ContinueScene();
+        lights.Bind();
       }
       meshes.Draw(view, environment);
       draw.Flush(view);
@@ -953,6 +970,7 @@ int main(int argc, char** argv) {
         printf("; %d particles of %d emitters (%d quiet), %.2f ms", particles.liveParticles, particles.liveEmitters, particles.quietEmitters, particles.cpuMs);
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
+      if (lights.count) printf("; %d lights", lights.count);
       if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());

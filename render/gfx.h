@@ -7,8 +7,9 @@
 //    32-bit float: together with linalg.h's Perspective this keeps precision at strategic-zoom distances.
 //  - Shaders are HLSL source (model 5.1), compiled when a pipeline is created.
 //    Constant buffers: registers b0..b3, set per draw with SetConstants (the data is copied).
-//    Textures: registers t0..t31. One buffer of plain data (SetShaderBuffer), read in a shader as
-//    `StructuredBuffer<T> name : register(t0, space1)`. Samplers are fixed:
+//    Textures: registers t0..t31. Two buffers of plain data (SetShaderBuffer, slots 0 and 1), read
+//    in a shader as `StructuredBuffer<T> name : register(t0, space1)` and `register(t1, space1)`.
+//    Samplers are fixed:
 //      s0 anisotropic wrap, s1 trilinear clamp, s2 point clamp, s3 trilinear wrap, s4 point wrap,
 //      s5 shadow comparison (1 where the given depth is nearer to the light than the stored one or
 //      equal, the four nearest results blended; outside the map: 1).
@@ -189,8 +190,9 @@ class Device {
   virtual void SetTexture(int slot, Texture texture) = 0;
   virtual void SetVertexBuffer(Buffer buffer) = 0;
   virtual void SetIndexBuffer(Buffer buffer) = 0;
-  // The buffer shaders read as their StructuredBuffer (a dynamic buffer of kind Shader, updated this frame).
-  virtual void SetShaderBuffer(Buffer buffer) = 0;
+  // A buffer shaders read as a StructuredBuffer (a dynamic buffer of kind Shader, updated this
+  // frame), in slot 0 or 1.
+  virtual void SetShaderBuffer(Buffer buffer, int slot = 0) = 0;
   virtual void Draw(uint32_t vertexCount, uint32_t firstVertex = 0, uint32_t instances = 1) = 0;
   virtual void DrawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0,
                            uint32_t instances = 1) = 0;

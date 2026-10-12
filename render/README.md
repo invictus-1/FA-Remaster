@@ -61,7 +61,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
                [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
-               [--hide particles,bands,decals] [--map-decals normals|all|albedo|off] [--decal-filter <name part>]
+               [--lights <n>] [--hide particles,bands,decals] [--map-decals normals|all|albedo|off] [--decal-filter <name part>]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -131,6 +131,7 @@ prints what it reports.
 | `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
 | `ribbons.h` | beams and trails: bands of texture that face the camera, from the game's beam and trail blueprints |
 | `decals.h` | what is laid on the ground by the scene's depth: the map's decals, scorch marks and markers, the light of explosions |
+| `lights.h` | small lights (explosion flashes; later lamps, muzzle flashes, shots), sorted into a grid over the ground |
 | `effects.h` | a running game's effects: the scripts' effect calls turned into emitters, beams and trails, kept on what they hang on |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
@@ -190,7 +191,7 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   picture's depth, so a mark follows the ground exactly and never climbs onto a unit. The
   scripts' "light particles" (the light an explosion throws around it; in the original a flat
   sheet drawn over everything) are laid on the ground the same way, adding their light; they do
-  not light units yet (that comes with real lights). As in the original, an emitter out of the picture or farther from the camera
+  not light units; in the modern look real lights take their place (below). As in the original, an emitter out of the picture or farther from the camera
   than its blueprint's `LODCutoff` throws nothing out. Measured at 1080p on an RTX 4090: a fight
   close up with 14,600 particles of 246 emitters, 0.8 ms a frame; a ten-minute game of eight
   armies seen whole, 4,075 live effects (all emitters too far away to throw anything), 2.2 ms a
@@ -225,6 +226,15 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   How an emitter turns its curves into particles is in the original program, not
   in the game's files; `particles.cpp` marks what it guesses (time in ticks, a key's z as a random
   spread, rates per tick, degrees, sizes as half an edge), and REQUESTS.md, 9 asks.
+- Small lights (modern look). A light is a point that lights what is within its radius. Every
+  frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
+  the lights of the square it is over - ground, units and decals alike, with the same material
+  maths as the sun (no shadows from them yet). Today's lights are the scripts' "light particles"
+  (explosion and muzzle flashes, coloured along their life by their ramp texture); the original
+  look keeps the glow on the ground the original draws instead. Measured at 1080p on an RTX 4090
+  over 2,500 units: no lights 1.3 ms a frame, 1,000 lights 1.2 ms, 5,000 lights 1.4 ms.
+  `--lights <n>` circles n coloured lights around a spot; with `--sun 0.2 --sky 0.25` that is a
+  first look at night.
 - Strategic icons (from step 6, brought forward: without them armies cannot be seen from far away).
   A unit farther from the camera than its blueprint's `Display.Mesh.IconFadeInZoom` shows the symbol
   its blueprint names (`StrategicIconName`), coloured as the original's shader colours it and

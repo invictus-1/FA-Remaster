@@ -37,6 +37,11 @@ struct ViewConstants {
   float modern[4];           // x: sun strength, y: sky strength, z: exposure, w: share of the mirrored sky kept
   Mat4 shadowMatrix[kMaxCascades];     // world -> shadow map (x, y: where in the map; z: depth)
   float cascadeTexel[kMaxCascades];    // world size of one shadow-map texel, per cascade
+  // The small lights' grid over the ground (lights.h): where its corner is (x, z), 1 / the size
+  // of a square, and 1 when there are lights at all; then squares across, squares down, and the
+  // row of the lights' buffer where the lights themselves begin.
+  float lightGrid[4];
+  float lightGridSize[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -57,6 +62,8 @@ cbuffer View : register(b0) {
   float4 modern;          // x: sun strength, y: sky strength, z: exposure
   row_major float4x4 shadowMatrix[4];
   float4 cascadeTexel;
+  float4 lightGrid;       // the small lights' grid: corner x, z; 1 / square size; 1 = there are lights
+  float4 lightGridSize;   // squares across, down; the row where the lights begin
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);

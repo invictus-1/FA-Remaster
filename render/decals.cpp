@@ -93,8 +93,8 @@ float4 PS(VOut i) : SV_Target {
     return float4(lerp(float3(1, 1, 1), change, saturate(c.r * i.options.x)), 1);
   }
   if (i.options.z > 0.5) {  // a light: its glow times its ramp along its time, added
+    if (look > 0.5) discard;  // the modern look has real lights for this (lights.h)
     c *= rampTexture.Sample(samplerLinearClamp, float2(i.options.y, 0.5));
-    if (look > 0.5) c.rgb = ToLinear(c.rgb) * i.options.w;
     return c;
   }
   c.a *= i.options.x;

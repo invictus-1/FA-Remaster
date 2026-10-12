@@ -161,6 +161,8 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   } else if (f == "CreateLightParticle" || f == "CreateLightParticleIntel") {
     // numbers: size, lifetime in ticks; the texture and the ramp are names in /textures/particles
     const std::vector<float>& n = event.numbers;
+    // the modern look gets a light; the original look the glow on the ground the original draws
+    if (n.size() >= 2 && !event.blueprint.empty()) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     if (n.size() >= 2 && !event.blueprint.empty())
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;

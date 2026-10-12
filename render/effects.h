@@ -14,6 +14,7 @@
 
 #include "decals.h"
 #include "frame.h"
+#include "lights.h"
 #include "linalg.h"
 #include "models.h"
 #include "particles.h"
@@ -23,8 +24,8 @@ namespace render {
 
 class Effects {
  public:
-  Effects(Particles* particles, Ribbons* ribbons, Decals* decals, ModelCache* models)
-      : particles_(particles), ribbons_(ribbons), decals_(decals), models_(models) {}
+  Effects(Particles* particles, Ribbons* ribbons, Decals* decals, Lights* lights, ModelCache* models)
+      : particles_(particles), ribbons_(ribbons), decals_(decals), lights_(lights), models_(models) {}
 
   // Events in the order the simulation made them.
   void Queue(std::vector<FrameEffectEvent>&& events);
@@ -65,6 +66,7 @@ class Effects {
   Particles* particles_;
   Ribbons* ribbons_;
   Decals* decals_;
+  Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;
   std::unordered_map<uint32_t, Effect> effects_;
