@@ -68,6 +68,7 @@ GdiFont& Font(const std::string& family, int size) {
     SelectObject(dc, f.font);
     TEXTMETRICW tm{};
     if (GetTextMetricsW(dc, &tm)) {
+      f.metrics.height = static_cast<float>(tm.tmHeight);
       f.metrics.ascent = static_cast<float>(tm.tmAscent);
       f.metrics.descent = static_cast<float>(tm.tmDescent);
       f.metrics.externalLeading = static_cast<float>(tm.tmExternalLeading);
@@ -135,6 +136,7 @@ FontMetrics GetFontMetrics(const std::string&, int size) {
   FontMetrics m;
   m.ascent = std::floor(static_cast<float>(size) * 0.8f + 0.5f);
   m.descent = std::floor(static_cast<float>(size) * 0.2f + 0.5f);
+  m.height = m.ascent + m.descent;
   return m;
 }
 

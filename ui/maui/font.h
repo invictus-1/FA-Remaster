@@ -22,6 +22,7 @@ class Vfs;
 namespace moho::ui {
 
 struct FontMetrics {
+  float height = 0;  // GDI's tmHeight: ascent + descent
   float ascent = 0, descent = 0, externalLeading = 0;
 };
 

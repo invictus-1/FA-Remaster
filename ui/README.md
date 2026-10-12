@@ -92,9 +92,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 
 - Step 1 works: the user state boots from the game's files. `/lua/userInit.lua`, `uimain.SetupUI()`
   and `uimain.StartFrontEndUI()` run without script errors, also with mods' hooks active.
-- Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap and Text are
-  built; Border, Edit, ItemList, Scrollbar, Movie, Histogram, Mesh and the map preview exist as
-  plain controls (they lay out; their own methods are still stubs). The main menu script builds
+- Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap, Text, Border,
+  ItemList, Scrollbar, Edit and Histogram are built as far as scripts can see them (state, layout,
+  callbacks that need no input). Movie reads a file's size and frame rate but decodes nothing yet:
+  it reports itself loaded and never finishes. Mesh and the map preview are plain controls (they
+  lay out; their own methods are still stubs). The main menu script builds
   its whole screen: 67 controls (logo, borders, the eight menu buttons with their labels) with
   rectangles from the real texture sizes; controls that ask for frame updates get `OnFrame`. Without
   a profile in the preferences the game's own profile dialog comes up instead.
@@ -109,7 +111,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   added to the process at start, as the original does. On other hosts the measures are still a
   placeholder.
 - Not real yet: everything drawn, input, sound, key maps, movies.
-- 155 of the 531 engine functions are built; the rest are logged stubs.
+- 221 of the 531 engine functions are built; the rest are logged stubs.
 
 ## Asking the engine track
 
