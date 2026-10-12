@@ -102,7 +102,10 @@ the viewer with the replay's map; the recording says which blueprint each unit i
 as the game with its mods has them, also give `--display` the log of
 `moho64 ... --ticks 1 --sim-lua tools/dump_display.lua --log <file>`: the mesh and texture names
 then come from the simulation's merged blueprints instead of from the `.bp` files (which do not
-show what mods' scripts change). Space pauses, + and - change the speed, Page Up / Page Down jump
+show what mods' scripts change). A game or replay that runs inside the viewer (`--sim`,
+`--session`) needs no such log: once the game has started the renderer asks the simulation itself
+(`BlueprintDisplays`) how every unit, projectile and prop looks and which strategic icon a unit
+has. Space pauses, + and - change the speed, Page Up / Page Down jump
 ten seconds, Home starts over, F points the camera at the units.
 
 `--frames N --screenshot file.png` renders N frames, saves the last one, prints the time per frame and
@@ -224,8 +227,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Beams and trails (step 6): the game's `BeamBlueprint`s (a band from start to end, its texture
   sliding along, its colour running from a start to an end colour) and `TrailEmitterBlueprint`s
   (a band through where the emitter has been, fading along a ramp texture) are drawn, facing the
-  camera. `--beam <name>` and `--trail <name>` show one. What is guessed about the two kinds of
-  blueprint is asked in REQUESTS.md, 10.
+  camera. `--beam <name>` and `--trail <name>` show one. How the original reads the two kinds of
+  blueprint was read from the original program by the engine track (`docs/engine-answers.md`,
+  render 10) and is followed: a beam without `Length` is 10 long, a beam between two things whose
+  second is gone falls back to the form on one, a trail's texture repeats by the way the emitter
+  has gone. One difference: the original adds a place to a trail once a tick; here one is added
+  whenever the emitter has moved a little, so that a fast shot's trail has no corners.
 - Particle effects, first form (step 6). The game's emitters (`/effects/emitters/*_emit.bp`: fire,
   smoke, flashes, debris, sparks) are played: an emitter reads a particle's start values from its
   blueprint's curves, and from then on the graphics card works out where the particle is, how big
@@ -233,9 +240,18 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   game's `effects/particle.fx` does, written anew. Particles facing the camera, lying flat, or
   stretched along their flight; alpha, adding, darkening and premultiplied blending; textures with
   frames and strips. `--emit <name>` plays emitters over and over at a spot, to look at them.
-  How an emitter turns its curves into particles is in the original program, not
-  in the game's files; `particles.cpp` marks what it guesses (time in ticks, a key's z as a random
-  spread, rates per tick, degrees, sizes as half an edge), and REQUESTS.md, 9 asks.
+  How an emitter turns its curves into particles is in the original program, not in the game's
+  files; the engine track read it there (`docs/engine-answers.md`, render 9) and `particles.cpp`
+  follows that account: times in ticks, a curve's value as y plus a random share of z, the curves
+  read at the emitter's age modulo `Repeattime`, the particles of one tick spread over the tick
+  and along the emitter's way, the emitter's disc (`SizeCurve`), gravity, air resistance,
+  `AlignToBone`, `SnapToWaterline` and `OnlyEmitOnWater`, and `EmitIfVisible`: an emitter out of
+  the picture (or, hanging on a unit or a shot, farther from the camera than its `LODCutoff`)
+  throws nothing out, and makes up the last ticks when it is seen again. Of the scripts' changes to
+  a running emitter, `ScaleEmitter`, `OffsetEmitter` and `SetEmitterParam` with `POSITION_X/Y/Z`,
+  `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on. Not yet:
+  `SetEmitterCurveParam`, `ResizeEmitterCurve`, and particles that refract (blend mode 5) are not
+  drawn.
 - Small lights (modern look). A light is a point that lights what is within its radius. Every
   frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
   the lights of the square it is over - ground, units and decals alike, with the same material

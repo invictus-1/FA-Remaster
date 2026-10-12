@@ -103,8 +103,12 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     } else if (event.name == "SetEmitterParam" && !n.empty()) {
       std::string parameter = event.text;
       for (char& c : parameter) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-      if (parameter == "LIFETIME" && e.kind == Kind::Emitter) particles_->SetLifetime(e.handle, n[0]);
-      // (the other parameters and SetEmitterCurveParam, ResizeEmitterCurve, SetBeamParam: not acted on yet)
+      // the emitter's place in the frame of what it hangs on, or one of the parameters the particles know
+      if (parameter == "POSITION_X") e.offset.x = n[0];
+      else if (parameter == "POSITION_Y") e.offset.y = n[0];
+      else if (parameter == "POSITION_Z") e.offset.z = n[0];
+      else if (e.kind == Kind::Emitter) particles_->SetParam(e.handle, parameter, n[0]);
+      // (SetEmitterCurveParam, ResizeEmitterCurve, SetBeamParam: not acted on yet)
     } else if (event.name == "AttachBeamToEntity") {  // a beam made without a place gets one
       e.entity = event.entity;
       e.bone = event.bone;
@@ -138,7 +142,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   if (f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity") {
     e.kind = Kind::Emitter;
     e.attached = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity";
-    e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at);
+    e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached);
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
     e.kind = Kind::Trail;
@@ -231,8 +235,8 @@ void Effects::Update(double tick, const Frame& frame) {
         if (!here) break;  // made but not yet put anywhere, or its weapon's beam is off
         Vec3 end;
         Quat unused;
-        if (e.entity2 != kNone) {
-          if (!AttachPoint(frame, e.entity2, e.bone2, &end, &unused)) break;
+        // between two things; with the second one gone the original falls back to the form on one thing
+        if (e.entity2 != kNone && AttachPoint(frame, e.entity2, e.bone2, &end, &unused)) {
         } else {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});

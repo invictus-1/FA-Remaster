@@ -40,6 +40,9 @@ class StrategicIcons {
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.
   const Kind* ForBlueprint(const std::string& blueprintPath);
+  // Says what the kind of that blueprint file shows, in place of reading the file (the values the
+  // simulation has). `icon` empty: none; `fadeIn`, `selectionX`, `selectionZ` 0: not said.
+  void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ);
 
   // Empties the list; `view` is what the frame is seen with.
   void Begin(const View& view);
@@ -89,6 +92,12 @@ class StrategicIcons {
   std::vector<Rect> rects_;
   std::unordered_map<std::string, int> iconByName_;
   std::unordered_map<std::string, std::unique_ptr<Kind>> kinds_;
+  struct Said {  // what Define was told, until a unit of that kind is first shown
+    std::string icon;
+    int priority = 0;
+    float fadeIn = 0, selectionX = 0, selectionZ = 0;
+  };
+  std::unordered_map<std::string, Said> said_;
 
   View view_;
   float pixel_ = 1;  // this frame's scale

@@ -10,7 +10,7 @@
 namespace render {
 namespace {
 
-constexpr float kTick = 0.1f;  // seconds: blueprint times are taken to be simulation ticks (GUESS)
+constexpr float kTick = 0.1f;  // seconds: blueprint times are in simulation ticks
 
 // The band's texture (repeating) times a vertex colour times a ramp. A beam has no ramp (white); a
 // trail's ramp is read along its age, and beyond its age it is not there.
@@ -104,10 +104,12 @@ bool Ribbons::Init(std::string* error) {
   return true;
 }
 
-// GUESSES in the reading of the two kinds of blueprint: colours are x, y, z, w = red, green, blue,
-// alpha; Thickness and Size are half the band's width; a beam without Blendmode adds; a trail's
-// TrailLength is how long a place stays, in ticks; UShift and VShift slide the texture per tick,
-// v running along the band; RepeatRate is repeats of the texture per world unit.
+// The two kinds of blueprint, as the original reads them (docs/engine-answers.md, render 10):
+// colours are x, y, z, w = red, green, blue, alpha; Thickness and Size push each side of the band
+// out by their whole value (the game's shader), so they are half its width; a beam without
+// Blendmode adds, without Length is 10 long; a trail's TrailLength is how long a place stays, in
+// ticks; v runs along the band; a beam's RepeatRate and a trail's TextureRepeatRate are repeats of
+// the texture per world unit; UShift and VShift slide a beam's texture, per tick.
 const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
   const std::string key = moho::Vfs::Normalize(path);
   auto known = kinds_.find(key);
@@ -132,7 +134,7 @@ const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
     kind->texture = textures_->Get(v["TextureName"].StringOr(std::string()), textures_->White());
     kind->blend = BlendKind(static_cast<int>(Number(v["Blendmode"], 3)));
     kind->halfWidth = Number(v["Thickness"], 0.05f);
-    kind->length = Number(v["Length"], 1);
+    kind->length = Number(v["Length"], 10);
     kind->repeatRate = Number(v["RepeatRate"], 0);
     const struct {
       const char* name;
@@ -189,7 +191,7 @@ uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position) {
   t.kind = kind;
   t.head = position;
   t.started = now_;
-  t.points.push_back({position, now_});
+  t.points.push_back({position, now_, 0});
   trails_.push_back(std::move(t));
   return trails_.back().id;
 }
@@ -203,10 +205,12 @@ Ribbons::Trail* Ribbons::Find(uint32_t id) {
 void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {
   for (Trail& t : trails_)
     if (t.id == trail && !t.stopped) {
-      t.head = position;
-      // a new place once the emitter has moved a little (a third of the band's width, at least a twentieth of a second apart)
+      // a new place once the emitter has moved a little (a third of the band's width, at least a
+      // fiftieth of a second apart; the original adds one a tick, which at a high frame rate shows corners)
       const TrailPoint& last = t.points.back();
-      if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_});
+      t.head = position;
+      t.travelled = last.travelled + Length(position - last.position);
+      if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_, t.travelled});
     }
 }
 
@@ -286,7 +290,7 @@ void Ribbons::Draw(const View& view) {
       const double born = head ? now_ : t.points[i].born;
       *p = head ? t.head : t.points[i].position;
       *age = static_cast<float>((now_ - born) / static_cast<double>(k.life));
-      *v = static_cast<float>(born - t.started) / kTick * k.repeatRate;  // the texture is laid down as the emitter goes
+      *v = (head ? t.travelled : t.points[i].travelled) * k.repeatRate;  // the texture is laid down along the way gone
     };
     const size_t count = t.points.size() + (t.stopped ? 0 : 1);
     for (size_t i = 0; i + 1 < count; ++i) {

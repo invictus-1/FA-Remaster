@@ -66,6 +66,11 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   }
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
+  {  // how the blueprints look, once the game has said
+    std::vector<BlueprintLook> looks;
+    m.frames.TakeLooks(&looks);
+    if (!looks.empty()) m.world->SetLooks(looks);
+  }
   // the moment shown lies between the last two beats known: one beat back from the newest
   const double first = static_cast<double>(m.frames.FirstTick()), last = static_cast<double>(m.frames.LastTick());
   const double shown = std::clamp(tick - 1, first, last);

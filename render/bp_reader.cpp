@@ -91,6 +91,14 @@ struct Parser {
       v->string = Quoted();
       return true;
     }
+    if (c == '[' && p + 1 < s.size() && s[p + 1] == '[') {  // [[a string as it stands]]
+      size_t e = s.find("]]", p + 2);
+      if (e == std::string_view::npos) return false;
+      v->kind = BpValue::String;
+      v->string = std::string(s.substr(p + 2, e - p - 2));
+      p = e + 2;
+      return true;
+    }
     if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '.' || c == '+') {
       char* end = nullptr;
       std::string text(s.substr(p, 64));
@@ -142,7 +150,7 @@ struct Parser {
         } else {
           p = start;
         }
-      } else if (s[p] == '[') {  // ['key'] = value or [3] = value
+      } else if (s[p] == '[' && !(p + 1 < s.size() && s[p + 1] == '[')) {  // ['key'] = value or [3] = value
         ++p;
         BpValue k;
         if (!Value(&k) || !Eat(']') || !Eat('=')) return false;

@@ -73,6 +73,24 @@ struct FrameEffectEvent {
   std::string text, text2;
 };
 
+// How a blueprint looks, as the simulation has it after the game's scripts and the mods changed it
+// (the engine's BlueprintDisplay, copied out): what the renderer otherwise reads from .bp files.
+struct BlueprintLook {
+  struct Level {
+    std::string mesh, albedo, normals, specular, secondary, shader;  // virtual paths; empty: not set
+    float cutoff = 0;                                                // LODCutoff (0: not set)
+  };
+  std::string id;   // as a frame's blueprint names say it (a unit's id, a projectile's or prop's .bp path)
+  int kind = 0;     // 0 unit, 1 projectile, 2 prop
+  float scale = 1;  // Display.UniformScale
+  std::vector<Level> levels;
+  // units only; 0 or empty: the blueprint does not say
+  std::string icon;
+  int iconPriority = 0;
+  float iconFadeIn = 0;
+  float selectionX = 0, selectionZ = 0;
+};
+
 struct Frame {
   uint32_t tick = 0;                    // ten ticks per second of game time
   std::vector<FrameUnit> units;         // in entity-id order

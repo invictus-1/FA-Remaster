@@ -163,6 +163,25 @@ int ModelCache::LoadDisplayTable(const std::string& hostPath) {
   return count;
 }
 
+void ModelCache::SetLook(const BlueprintLook& look) {
+  if (look.levels.empty()) return;
+  // a unit by its id; a projectile or a prop by its blueprint file's path
+  DisplayEntry& entry = display_[look.kind == 0 ? Lower(look.id) : moho::Vfs::Normalize(look.id)];
+  entry.scale = look.scale;
+  entry.lods.clear();
+  for (const BlueprintLook::Level& l : look.levels) {
+    LodSource s;
+    s.cutoff = l.cutoff > 0 ? l.cutoff : 1e9f;
+    s.shader = l.shader.empty() ? "Unit" : l.shader;
+    s.mesh = l.mesh;
+    s.albedo = l.albedo;
+    s.normals = l.normals;
+    s.specular = l.specular;
+    s.secondary = l.secondary;
+    entry.lods.push_back(std::move(s));
+  }
+}
+
 const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
   std::string id = Lower(blueprintId);
   if (!original) {

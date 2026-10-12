@@ -9,7 +9,11 @@ State on 2026-10-12: 1 done and in use (recordings name their units), 2 noted fo
 6 done and in use (`UnitPoses`, `ProjectileViews`, `BeamViews` fill the live frame), 7 answered
 (white for everything that is not a unit; that is what the renderer draws), 8 done and in use
 (`EffectEvents` drives emitters, beams and trails in games; light particles and decals not drawn yet),
-9 and 10 open (questions), 11 new.
+9 and 10 answered and followed (`particles.cpp`, `ribbons.cpp` and `effects.cpp` now play emitters,
+beams and trails by the engine's account; not yet acted on: `SetEmitterCurveParam`,
+`ResizeEmitterCurve`, `SetBeamParam`, refracting particles), 11 done and in use (`BlueprintDisplays`
+is read once the game has started; models and strategic icons take their names from it, so a
+running game needs no `--display` log any more).
 
 ## 11. The display part of blueprints, handed over in the program (2026-10-12)
 

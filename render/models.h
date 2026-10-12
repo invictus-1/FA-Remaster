@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "frame.h"
 #include "gfx.h"
 #include "linalg.h"
 #include "textures.h"
@@ -93,6 +94,9 @@ class ModelCache {
   // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models
   // listed there take their names from it instead of from the .bp file. Returns the levels read.
   int LoadDisplayTable(const std::string& hostPath);
+  // The same from the simulation itself: how one blueprint looks (frame.h, BlueprintLook). Models
+  // asked for afterwards take their names from it.
+  void SetLook(const BlueprintLook& look);
 
  private:
   struct LodSource {
