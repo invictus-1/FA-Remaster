@@ -114,12 +114,40 @@ void CallOnMouseButtonPress(lua_State* L, const UiEvent& e) {
 
 }  // namespace
 
-bool SendEvent(lua_State* L, Control* c, const UiEvent& e) {
-  PushEvent(L, c, e);
-  if (!c->RunScript(L, "HandleEvent", 1, 1)) return false;
+bool Control::HandleEvent(lua_State* L, const UiEvent& e) {
+  PushEvent(L, this, e);
+  if (!RunScript(L, "HandleEvent", 1, 1)) return false;
   bool handled = lua_toboolean(L, -1) != 0;
   lua_pop(L, 1);
   return handled;
+}
+
+void PushEventTable(lua_State* L, Control* c, const UiEvent& e) { PushEvent(L, c, e); }
+
+bool SendEvent(lua_State* L, Control* c, const UiEvent& e) { return c->HandleEvent(L, e); }
+
+bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e) {
+  e.x = e.y = -1;
+  if (ui.focus && !ui.focus->dead()) return ui.focus->HandleEvent(L, e);
+  if (ui.inputCapture.empty()) return false;
+  Control* c = ui.inputCapture.back();
+  if (c && !c->dead()) c->HandleEvent(L, e);
+  return true;
+}
+
+void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt) {
+  UiEvent e;
+  e.shift = shift, e.ctrl = ctrl, e.alt = alt;
+  e.keyCode = e.rawKeyCode = charCode >= 'a' && charCode <= 'z' ? charCode - 32 : charCode;
+  e.type = EventType::KeyDown;
+  if (!KeyEvent(L, ui, e)) {
+    e.keyCode = ctrl && e.keyCode >= 'A' && e.keyCode <= 'Z' ? e.keyCode - 64 : charCode;
+    e.type = EventType::Char;
+    KeyEvent(L, ui, e);
+  }
+  e.keyCode = e.rawKeyCode;
+  e.type = EventType::KeyUp;
+  KeyEvent(L, ui, e);
 }
 
 void PostEvent(lua_State* L, Control* c, const UiEvent& e) {
@@ -209,6 +237,7 @@ void EndDragger(lua_State* L, UiManager& ui) {
 int l_PostDragger(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   lua_settop(L, 3);
+  ui.engineDragger = nullptr;
   if (PushDragger(L, ui)) {
     bool same = lua_rawequal(L, -1, 3) != 0;
     if (same) {
@@ -229,7 +258,20 @@ int l_PostDragger(lua_State* L) {
 
 }  // namespace
 
+void UiManager::PostEngineDragger(lua_State* L, Control* control, int key) {
+  if (PushDragger(L, *this)) {
+    EndDragger(L, *this);
+    CallDragger(L, "OnCancel", 0, 0, 0);
+  }
+  engineDragger = control;
+  draggerKey = key;
+}
+
 void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
+  if (ui.engineDragger) {
+    ui.engineDragger->DragMove(L, e);
+    return;
+  }
   if (PushDragger(L, ui)) {
     CallDragger(L, "OnMove", 2, e.x, e.y);
     return;
@@ -243,6 +285,13 @@ void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
 
 void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doubleClick) {
   e.keyCode = ButtonKeyCode(e);
+  if (!pressed && ui.draggerKey == e.keyCode && ui.engineDragger) {
+    Control* c = ui.engineDragger;
+    ui.engineDragger = nullptr;
+    ui.draggerKey = 0;
+    c->DragRelease(L, e);
+    return;
+  }
   if (!pressed && ui.draggerKey == e.keyCode && PushDragger(L, ui)) {
     EndDragger(L, ui);
     CallDragger(L, "OnRelease", 2, e.x, e.y);
@@ -253,7 +302,7 @@ void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doub
   e.type = !pressed ? EventType::ButtonRelease : doubleClick ? EventType::ButtonDClick : EventType::ButtonPress;
   if (pressed) {
     // A click away from the control with the keyboard focus tells it so (0x7a4d09).
-    if (ui.focus && ui.focus != target && !ui.focus->dead()) ui.focus->RunScript(L, "OnLoseKeyboardFocus");
+    if (ui.focus && ui.focus != target && !ui.focus->dead()) ui.focus->LosingKeyboardFocus(L);
     CallOnMouseButtonPress(L, e);
     target = Target(ui, e);  // the scripts above may have changed what is there
   }
@@ -299,6 +348,25 @@ int l_ControlAt(lua_State* L) {
   return 1;
 }
 
+// moho64ui_Key(code [, modifiers]): one key pressed and let go. `code` is a character ("a"), or
+// a key code as events carry it (13 Enter, 27 Escape, 8 Backspace, 127 Delete, 314 End, 315 Home,
+// 316 Left, 318 Right, 324 Insert); modifiers is a string naming any of Shift, Ctrl, Alt.
+int l_Key(lua_State* L) {
+  int code = lua_type(L, 1) == LUA_TSTRING ? static_cast<unsigned char>(lua_tostring(L, 1)[0])
+                                           : static_cast<int>(luaL_checknumber(L, 1));
+  std::string mods = luaL_optstring(L, 2, "");
+  KeyPress(L, UserState::From(L)->ui(), code, mods.find("Shift") != std::string::npos,
+           mods.find("Ctrl") != std::string::npos, mods.find("Alt") != std::string::npos);
+  return 0;
+}
+
+// moho64ui_Type(text): the characters of an ASCII text typed one after the other.
+int l_Type(lua_State* L) {
+  std::string text = luaL_checkstring(L, 1);
+  for (unsigned char ch : text) KeyPress(L, UserState::From(L)->ui(), ch, false, false, false);
+  return 0;
+}
+
 }  // namespace
 
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f);  // user/bindings.h
@@ -308,6 +376,8 @@ void RegisterInputBindings(lua_State* L) {
   lua_register(L, "moho64ui_MouseMove", l_MouseMove);
   lua_register(L, "moho64ui_MouseButton", l_MouseButton);
   lua_register(L, "moho64ui_ControlAt", l_ControlAt);
+  lua_register(L, "moho64ui_Key", l_Key);
+  lua_register(L, "moho64ui_Type", l_Type);
 }
 
 }  // namespace moho::ui

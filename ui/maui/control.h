@@ -22,6 +22,7 @@ namespace moho::ui {
 class DrawTarget;
 class Frame;
 class UiManager;
+struct UiEvent;
 
 class Control : public ScriptObject {
  public:
@@ -75,6 +76,23 @@ class Control : public ScriptObject {
   virtual void ScrollLines(lua_State* L, int axis, float lines);
   virtual void ScrollPages(lua_State* L, int axis, float pages);
   virtual void ScrollSetTop(lua_State* L, int axis, float top);
+
+  // An event for this control (FA exe: virtual slot 12, 0x7873a0): the script's
+  // self:HandleEvent(event); true when it handled the event. Edit fields and item lists do their
+  // own work here instead.
+  virtual bool HandleEvent(lua_State* L, const UiEvent& e);
+  // One frame of time for a control that asked for frame updates (slot 13, 0x787420):
+  // self:OnFrame(seconds).
+  virtual void FrameUpdate(lua_State* L, float seconds);
+  // Give up the keyboard focus if this control has it (slot 15, 0x787480).
+  virtual void AbandonKeyboardFocus(lua_State* L);
+  // A mouse button went down on another control while this one had the keyboard focus (slot 16,
+  // 0x787440): self:OnLoseKeyboardFocus(). The focus itself stays unless the script gives it up.
+  virtual void LosingKeyboardFocus(lua_State* L) { RunScript(L, "OnLoseKeyboardFocus"); }
+  // For a control that posted itself as the dragger (UiManager::PostEngineDragger): the mouse
+  // moved, and the button was let go.
+  virtual void DragMove(lua_State* L, const UiEvent& e) { (void)L, (void)e; }
+  virtual void DragRelease(lua_State* L, const UiEvent& e) { (void)L, (void)e; }
 
   // self:<name>(args): the `nargs` values on top of L are the arguments. Returns true when the
   // function exists and ran without error; then `nresults` results are on the stack. A script
@@ -171,11 +189,19 @@ class UiManager {
   Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
   int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
   int draggerKey = 0;                      // the key code whose release ends it
+  Control* engineDragger = nullptr;        // a control dragging by itself (an edit field's mouse selection)
+  // The engine's own draggers (the original posts a C++ dragger object the same way scripts post
+  // theirs): until the button `key` is let go, mouse moves go to control->DragMove and the release
+  // to control->DragRelease. A script dragger that was active is cancelled.
+  void PostEngineDragger(lua_State* L, Control* control, int key);
   std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
   void Forget(Control* c);                 // a control died: drop it from focus and capture
-  // Give the keyboard focus to a control (or to none). Inferred: the control that loses it gets
-  // OnLoseKeyboardFocus(), the one that gets it OnKeyboardFocusChange().
-  void SetFocus(lua_State* L, Control* c);
+  // Give the keyboard focus to a control or to none (MAUI_SetKeyboardFocus, FA exe 0x79cc10): the
+  // control that had it until now hears self:OnKeyboardFocusChange(), also when it is given the
+  // focus again; the new one hears nothing. `blocksKeyDown` is kept as the original keeps it
+  // (what reads it is with the key maps).
+  void SetFocus(lua_State* L, Control* c, bool blocksKeyDown = true);
+  bool focusBlocksKeyDown = false;
 
  private:
   std::vector<Frame*> frames_;

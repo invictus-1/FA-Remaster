@@ -161,7 +161,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - `--window` runs the interface live in a window (Windows): real time, the mouse, about 5 ms of
   drawing per frame at 1600x900. The main menu opens, its buttons light up under the cursor and
   open their screens.
-- Not real yet: keyboard input and key maps, the game's cursor, sound, movies, render passes,
+- Keyboard (`maui/input.*`, `maui/edit.cpp`, read from the original): a key event goes to the
+  control with the keyboard focus alone, or without one to the control on top of the input
+  capture; a key down that nobody handled becomes a character event. On a focus change the
+  control that had the focus hears `OnKeyboardFocusChange`; a mouse press elsewhere tells it
+  `OnLoseKeyboardFocus`. The edit field types, deletes, selects with Shift and with the mouse,
+  moves by words with Ctrl, copies, cuts and pastes, keeps a window onto text wider than itself,
+  blinks its caret, and asks its script on Enter, Escape, characters and other keys. In the
+  lobby's map dialog, typing into the name filter narrows the map list. In the window the real
+  keyboard is connected.
+- Not real yet: key maps (the game's key bindings), the game's cursor, sound, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
 - 250 of the 531 engine functions are built; the rest are logged stubs.
