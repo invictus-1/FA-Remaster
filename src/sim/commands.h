@@ -40,6 +40,9 @@ enum class CommandType : int {
 
 struct UnitCommand {
   int targetPoint = -1;  // CAiTarget bone pick of an entity target (index into AI.TargetBones; -1 none)
+  // the order named the army's recon BLIP of an enemy unit (a player's order: the interface only knows blips),
+  // not the unit itself (an order the engine issues from what a weapon found: [entity+0x68] at 0x5d9415)
+  bool targetViaBlip = false;
   uint32_t id = 0;
   CommandType type = CommandType::None;
   Vec3 pos;

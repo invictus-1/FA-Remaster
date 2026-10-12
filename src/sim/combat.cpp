@@ -1348,11 +1348,12 @@ void WeaponsTick(Sim& sim) {
 
 // SetDesiredTarget 0x5d75b0
 static void SetDesiredTarget(Sim& sim, Unit* u, const AiTarget& t) {
+  // A PLAYER's order on an enemy unit holds the army's recon blip of it (the watch: weapons that take the order's
+  // target report the blip, weapons that found the same unit themselves report the unit): the target comes with
+  // viaBlip set from the command (CommandTarget). An order the engine made itself from what a weapon found (the
+  // auto-initiated attack) names the unit: its missiles lose their target the moment the unit dies (seen: one
+  // zig-zag draw less in the beat an interceptor died), where a blip's outlive the unit.
   u->desiredTarget = t;
-  // an order's enemy unit is held as the army's recon blip of it (the watch: weapons that take the order's
-  // target report the blip, weapons that found the same unit themselves report the unit)
-  if (Entity* e = TargetEntity(sim, t))
-    if (e->kind == Entity::Kind::Unit && e->army && u->army && IsEnemy(u->army, e->army)) u->desiredTarget.viaBlip = true;
   bool has = HasTarget(sim, t);
   for (UnitWeapon* w : u->weapons) {
     if (!w->bp) continue;
@@ -1890,6 +1891,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
       if (e->kind == Entity::Kind::Unit) {
         Unit* tu = static_cast<Unit*>(e);
         a.mobile = IsMobile(tu);
+        a.viaBlip = t.targetViaBlip;
         // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
@@ -2280,6 +2282,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Attack";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2297,6 +2300,7 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "FireAt";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2406,6 +2410,7 @@ BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Attack";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = e->position;
   InitAttack(sim, u, *t, false);
   for (size_t i = 0; i < u->weapons.size(); ++i)

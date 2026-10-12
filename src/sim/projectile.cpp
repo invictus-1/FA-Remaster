@@ -356,6 +356,14 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       float oy = static_cast<float>(sim.FRand(-Z, Z));
       float oz = static_cast<float>(sim.FRand(-Z, Z));
       p->zigOffset = {ox, oy, oz};
+      if (getenv("MOHO64_DEBUG_PROJ")) {
+        const Entity* e0 = p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
+        const Unit* tu = e0 && e0->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e0) : nullptr;
+        Logf(LogLevel::Info, "pdbg %u %u zigzag (launcher %u, target unit %d%s, dead %d destroy queued %d)", sim.tick(),
+             p->id, p->launcher ? p->launcher->id : 0u, tu ? static_cast<int>(tu->id) : -1,
+             p->target.viaBlip ? " via its blip" : "", tu ? static_cast<int>(tu->dead) : -1,
+             tu ? static_cast<int>(tu->destroyQueued) : -1);
+      }
       p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
     }
     float s = std::min(Len(Sub(aim, pos)) / Z, 1.0f);

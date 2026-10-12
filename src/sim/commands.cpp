@@ -675,6 +675,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t) {
   c.targetId = 0;
   c.targetPoint = -1;
+  c.targetViaBlip = false;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
@@ -682,7 +683,10 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
       // on units, so a real blip stands for its unit; a jammer's fake blip is not a target yet.
       if (e->kind == Entity::Kind::Blip) {
         auto* b = static_cast<ReconBlip*>(e);
-        if (!b->fake && b->source && !b->source->destroyQueued) e = b->source;
+        if (!b->fake && b->source && !b->source->destroyQueued) {
+          e = b->source;
+          c.targetViaBlip = true;
+        }
       }
       c.targetId = EntityRef(e);
       c.pos = e->position;
