@@ -416,6 +416,14 @@ int l_GetAIBrain(lua_State* L) {
 }
 Vec3 BonePosition(const Entity* e, int bone);
 int ResolveBone(lua_State* L, Entity* e, int arg);
+// The transform a script is told (entity+0x9c.. / +0xac..): the COMMITTED one. An entity that has taken its step in
+// this beat still stands, for a script that asks before the beat's end, where the beat began; nearly all scripts
+// run before the moves, so it only shows in callbacks of the motion and projectile passes (an OnImpact, a
+// collision check). Seen: a projectile's impact script asks a walking commander's position; FAF's carpet bombs
+// then aim at that very table (GetPosition's one table per entity) for the rest of the salvo, a beat's walk off.
+static const Vec3& ScriptPos(const Entity* e) { return e->shapeHeld ? e->shapePos : e->position; }
+static const Quat& ScriptOri(const Entity* e) { return e->shapeHeld ? e->shapeOri : e->orientation; }
+
 int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world position
   // exe 0x68fc90: a destroyed entity (or a non-entity) gives (0, 0, 0), no error (probe v9).
   Entity* e = ToObject<Entity>(L, 1);
@@ -424,22 +432,23 @@ int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world pos
     return 1;
   }
   if (lua_gettop(L) > 1) {  // with a bone: a new vector every call
-    PushVec(L, lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2)));
+    PushVec(L, lua_isnoneornil(L, 2) ? ScriptPos(e) : BonePosition(e, ResolveBone(L, e, 2)));
     return 1;
   }
   // Without a bone the entity keeps ONE Lua vector (a LuaObject at entity+0x258): the first call makes it, every
   // later call writes x, y, z into that same table and returns it. So every position a script got from this
   // entity is the same table and follows the entity (and the script's own edits): FAF's CreateAdjacencyBeams
   // shifts its "hub" copies and then compares the "original" ones, which are the same tables.
+  const Vec3& sp = ScriptPos(e);
   if (e->positionRef == LUA_NOREF) {
-    PushVec(L, e->position);
+    PushVec(L, sp);
     lua_pushvalue(L, -1);
     e->positionRef = luaL_ref(L, LUA_REGISTRYINDEX);
     e->positionState = ScriptState::From(L)->L();
     return 1;
   }
   lua_rawgeti(L, LUA_REGISTRYINDEX, e->positionRef);
-  const float v[3] = {e->position.x, e->position.y, e->position.z};
+  const float v[3] = {sp.x, sp.y, sp.z};
   for (int i = 0; i < 3; ++i) {
     lua_pushnumber(L, v[i]);
     lua_rawseti(L, -2, i + 1);
@@ -448,14 +457,14 @@ int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world pos
 }
 int l_GetPositionXYZ(lua_State* L) {
   Entity* e = E(L);
-  Vec3 p = lua_isnoneornil(L, 2) ? e->position : BonePosition(e, ResolveBone(L, e, 2));
+  Vec3 p = lua_isnoneornil(L, 2) ? ScriptPos(e) : BonePosition(e, ResolveBone(L, e, 2));
   lua_pushnumber(L, p.x);
   lua_pushnumber(L, p.y);
   lua_pushnumber(L, p.z);
   return 3;
 }
 int l_GetOrientation(lua_State* L) {
-  const Quat& q = E(L)->orientation;
+  const Quat& q = ScriptOri(E(L));
   PushVector(L, 0, 0, 0);  // quaternion = {x,y,z,w} with the vector metatable
   float v[4] = {q.x, q.y, q.z, q.w};
   for (int i = 0; i < 4; ++i) {
@@ -465,7 +474,7 @@ int l_GetOrientation(lua_State* L) {
   return 1;
 }
 int l_GetHeading(lua_State* L) {
-  lua_pushnumber(L, Heading(E(L)->orientation));
+  lua_pushnumber(L, Heading(ScriptOri(E(L))));
   return 1;
 }
 int l_SetPosition(lua_State* L) {  // SetPosition(vector, immediate): a warp

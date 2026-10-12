@@ -773,7 +773,8 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
     if (w->bp->needToComputeBombDrop && HasTarget(sim, w->target)) {
       if (!u->unitStates.count("MakingAttackRun")) return false;
       Vec3 T = TargetPos(sim, w->target, false);
-      // a mobile target is led: where it will be in Air.PredictAheadForBombDrop seconds (0x62cd40)
+      // a mobile target is led: where it will be in Air.PredictAheadForBombDrop seconds (0x62cd40). (Weapons
+      // run before the beat's moves: nothing is held yet, committed and current are the same here.)
       if (cb.predictAheadForBombDrop > 0 && w->target.mobile)
         if (Entity* te = TargetEntity(sim, w->target); te && te->kind == Entity::Kind::Unit)
           T = PredictAhead(sim, static_cast<Unit*>(te), cb.predictAheadForBombDrop, true);
