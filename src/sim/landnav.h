@@ -63,6 +63,8 @@ struct LandNav {
 
 // Start a move to world position `goal` (land units). speedThrough: drive through the goal.
 void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goal, bool speedThrough);
+// FindFreeSpot 0x62b200: the nearest place to *pos where the unit's footprint fits (false: none found).
+bool LandFreeSpot(Sim& sim, const Unit* u, Vec3* pos);
 // The path tables' background cluster build (beat start, before the armies).
 void LandNavBackground(Sim& sim);
 // The goal as a rect of cells [x0, x1) x [z0, z1) (a 1x1 goal moves to a free spot nearby).

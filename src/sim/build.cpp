@@ -1972,6 +1972,40 @@ void EndSacrifice(Sim& sim, Unit* u, BuildTask& t) {
   }
 }
 
+// ---- teleport (CUnitTeleportTask: new 0x60aac0, ctor 0x60ab20, TaskTick 0x60ac00, dtor 0x60aec0) ----
+// The engine only finds the landing spot and hands over to the script: OnTeleportUnit(teleporter, location,
+// orientation) starts the script's teleport, which holds the unit Immobile while it charges; the task waits for
+// that to end. Ended early (a new order): the script's OnFailedTeleport. Here the teleporter is the unit itself
+// (the dispatch 0x6096fc); the form with another unit as the teleporter is not built.
+int TickTeleport(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.state == 0) {
+    Vec3 p = t.site;
+    if (!LandFreeSpot(sim, u, &p)) return kTaskFailed;  // FindFreeSpot 0x62b200 (whole map)
+    u->unitStates.insert("Teleporting");
+    PushObject(L, u);
+    PushVector(L, p.x, 0.0f, p.z);  // the spot's x and z; y is 0
+    PushVector(L, 0, 0, 0);
+    const float q[4] = {t.orderOri.x, t.orderOri.y, t.orderOri.z, t.orderOri.w};
+    for (int i = 0; i < 4; ++i) {
+      lua_pushnumber(L, q[i]);
+      lua_rawseti(L, -2, i + 1);
+    }
+    t.state = 1;
+    sim.CallMethod(L, u, "OnTeleportUnit", 3);
+    return kTaskRunning;
+  }
+  if (u->immobile || u->unitStates.count("Immobile")) return kTaskRunning;  // (Unit:SetImmobile keeps a flag here)
+  t.state = 2;
+  return kTaskDone;
+}
+
+void EndTeleport(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (!u || u->destroyQueued) return;
+  u->unitStates.erase("Teleporting");
+  if (t.state != 2) sim.CallMethod(L, u, "OnFailedTeleport", 0);
+  u->motion.surfaceNext = true;  // motion+0x90 = 1: the next motion tick takes the ground again
+}
+
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo) {
   BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
   InitRepair(sim, u, *t, target, silo);
@@ -2226,6 +2260,14 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       u->focusId = c.targetId;
       sim.CallMethod(sim.L(), u, "OnAssignedFocusEntity", 0);
       break;
+    case CommandType::Teleport: {  // DispatchTask 0x6096fc
+      Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+      if (!e && !c.hasPos) return nullptr;
+      t->order = "Teleport";
+      t->site = e ? e->position : c.pos;
+      t->orderOri = u->orientation;
+      break;
+    }
     case CommandType::Sacrifice: {  // DispatchTask 0x609a12
       Unit* T = UnitOfRef(sim, c.targetId);
       if (!T) return nullptr;
@@ -2268,6 +2310,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Reclaim: r = TickReclaim(sim, L, u, t); break;
     case CommandType::Capture: r = TickCapture(sim, L, u, t); break;
     case CommandType::Sacrifice: r = TickSacrifice(sim, L, u, t); break;
+    case CommandType::Teleport: r = TickTeleport(sim, L, u, t); break;
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
     case CommandType::TransportUnloadUnits:
@@ -2335,6 +2378,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   }
   if (t.type == CommandType::Sacrifice) {
     EndSacrifice(sim, u, t);
+    return;
+  }
+  if (t.type == CommandType::Teleport) {
+    EndTeleport(sim, L, u, t);
     return;
   }
   if (t.type == CommandType::Attack || t.type == CommandType::FormAttack || t.type == CommandType::OverCharge) {

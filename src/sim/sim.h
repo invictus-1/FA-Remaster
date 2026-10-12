@@ -176,6 +176,9 @@ class Sim {
   // wantLayer: the params' +0x28, a layer bit or 0 = Entity::GetStartingLayer chooses.
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
                    Unit* builder = nullptr, bool keepY = false, uint8_t wantLayer = 0);
+  // Unit::Warp 0x6aa310 (the script's Warp() on a unit): the layer and the height are chosen for the new place
+  // as at creation (the given y is not used), the motion is reset there and a move in progress is aborted.
+  void WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q);
   // PROJ_Create (sim/projectile.cpp): runs OnPreCreate, OnLayerChange and OnCreate; nullptr when
   // it destroyed itself (a homing projectile without a target).
   class Projectile* CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* army, Entity* launcher, Vec3 pos,

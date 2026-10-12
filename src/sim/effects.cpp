@@ -283,7 +283,7 @@ int l_Warp(lua_State* L) {  // Warp(entity, location, [orientation])
     v[i] = static_cast<float>(lua_tonumber(L, -1));
     lua_pop(L, 1);
   }
-  e->position = {v[0], v[1], v[2]};
+  Quat ori = e->orientation;
   if (lua_istable(L, 3)) {
     float q[4];
     for (int i = 0; i < 4; ++i) {
@@ -291,8 +291,14 @@ int l_Warp(lua_State* L) {  // Warp(entity, location, [orientation])
       q[i] = static_cast<float>(lua_tonumber(L, -1));
       lua_pop(L, 1);
     }
-    e->orientation = {q[0], q[1], q[2], q[3]};
+    ori = {q[0], q[1], q[2], q[3]};
   }
+  if (e->kind == Entity::Kind::Unit) {  // the entity's own Warp: Unit::Warp 0x6aa310 re-seats the unit
+    Sim::From(L)->WarpUnit(L, static_cast<Unit*>(e), Vec3{v[0], v[1], v[2]}, ori);
+    return 0;
+  }
+  e->position = {v[0], v[1], v[2]};
+  e->orientation = ori;
   return 0;
 }
 

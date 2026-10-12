@@ -48,6 +48,7 @@ struct BuildTask : public ScriptObject {
   bool child = false;  // a child task of the guard (or another task), not a command's own task
   // CUnitCaptureTask: +0x4c started, +0x50 progress and +0x54 total (beats), +0x58 the request, +0x5c / +0x60
   // the per-beat energy and mass
+  Quat orderOri;  // CUnitTeleportTask +0x58: the unit's orientation when the order was dispatched
   bool capStarted = false;
   int capProgress = 0, capTotal = 0;
   float capPerTick[2] = {0, 0};

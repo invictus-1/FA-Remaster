@@ -23,6 +23,7 @@
 #include "sim/entity_grid.h"
 #include "sim/vecmath.h"
 #include "sim/intel.h"
+#include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/air.h"
@@ -1480,6 +1481,50 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   CallMethod(L, u, complete ? "OnStopBeingBuilt" : "OnStartBeingBuilt", 2);
   lua_settop(L, top);
   return u;
+}
+
+// Unit::Warp 0x6aa310: Entity::GetStartingLayer for the new place, IUnit::CalcSpawnElevation for its height
+// (the y given is dropped), CUnitMotion::Warp 0x6b93d0 (the entity's two transforms both become the new one, so
+// it has no velocity; the motion's target is the place; on land the next motion tick takes the ground) and the
+// navigator's AbortMove; a unit without a motion just takes the transform. Then SetCurrentLayer.
+void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
+  if (!u->blueprint) return;
+  const BlueprintInfo& bp = *u->blueprint;
+  const TerrainMap* m = map_.get();
+  const uint8_t layer = StartingLayer(*this, bp, m, pos, 0);
+  const float water = m && m->hasWater ? m->waterElevation : -10000.0f;
+  const bool mobile = u->motion.bp && u->motion.bp->mobile();
+  if (layer & (kLayerLand | kLayerSeabed)) {
+    if (m) pos.y = m->TerrainHeight(pos.x, pos.z);
+  } else if (layer == kLayerWater) {
+    pos.y = water;
+  } else if (layer == kLayerSub) {
+    bps_.PushTable(L, bp);
+    lua_pushstring(L, "Physics");
+    lua_rawget(L, -2);
+    pos.y = water + FieldNumber(L, -1, "Elevation", 0);
+    lua_pop(L, 2);
+  } else if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {
+    pos.y = AirSpawnHeight(*this, bp, L, pos.x, pos.z, pos.y);
+  }
+  u->position = pos;
+  u->orientation = q;
+  u->lastPosition = pos;
+  if (mobile) {
+    MotionStop(u);
+    u->motion.vel = {};
+    if (u->motion.air) AirWarp(*this, u);
+    if (layer == kLayerLand) u->motion.surfaceNext = true;
+  }
+  const std::string name = LayerName(layer);
+  if (u->layer != name) {
+    const std::string old = u->layer;
+    u->layer = name;
+    lua_pushstring(L, name.c_str());
+    lua_pushstring(L, old.c_str());
+    CallMethod(L, u, "OnLayerChange", 2);
+  }
+  MarkUnitsMoved();
 }
 
 Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, Vec3 scale) {

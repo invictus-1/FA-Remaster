@@ -700,6 +700,44 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   return Fits(sim, u, CellOf(u, x, z));
 }
 
+// The rings of the free-spot search 0x62b200 around a cell that does not fit: square rings stepping by the
+// footprint size, up to 900 candidates. true: *gc is the first cell where the unit fits; false: *gc unchanged.
+static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc) {
+  int step = std::max(SX(u), SZ(u));
+  int tested = 0;
+  bool found = false;
+  const TerrainMap* map = sim.map();
+  float W = map ? static_cast<float>(map->width()) : 1e9f, H = map ? static_cast<float>(map->height()) : 1e9f;
+  Vec3 base = WorldOf(sim, u, *gc);
+  for (int r = 1; !found; ++r) {
+    for (int i = -r; i <= r && !found; ++i) {
+      int jStep = (i == -r || i == r) ? 1 : 2 * r;
+      for (int j = -r; j <= r; j += jStep) {
+        ++tested;
+        float x = base.x + i * step, z = base.z + j * step;
+        float m = static_cast<float>(step);
+        if (!(x - m >= 0 && z - m >= 0 && x + m < W && z + m < H)) continue;
+        PathCell c = CellOf(u, x, z);
+        if (Fits(sim, u, c)) {
+          *gc = c;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (tested > 899) break;
+  }
+  return found;
+}
+
+// FindFreeSpot 0x62b200 for a point: where the unit's footprint fits, at the point or on the rings around it.
+bool LandFreeSpot(Sim& sim, const Unit* u, Vec3* pos) {
+  PathCell c = CellOf(u, pos->x, pos->z);
+  if (!Fits(sim, u, c) && !FreeSpotRings(sim, u, &c)) return false;
+  *pos = WorldOf(sim, u, c);
+  return true;
+}
+
 // CAiNavigatorLand::SetGoal 0x5a3ed0 (1x1 goal) with the free-spot spiral 0x62b200
 void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
   PathCell gc = CellOf(u, goalPos.x, goalPos.z);
@@ -720,32 +758,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
     return;
   }
   // the free-spot spiral: the cell itself, then square rings stepping by the footprint size
-  if (single && !Fits(sim, u, gc)) {
-    int step = std::max(SX(u), SZ(u));
-    int tested = 0;
-    bool found = false;
-    const TerrainMap* map = sim.map();
-    float W = map ? static_cast<float>(map->width()) : 1e9f, H = map ? static_cast<float>(map->height()) : 1e9f;
-    Vec3 base = WorldOf(sim, u, gc);
-    for (int r = 1; !found; ++r) {
-      for (int i = -r; i <= r && !found; ++i) {
-        int jStep = (i == -r || i == r) ? 1 : 2 * r;
-        for (int j = -r; j <= r; j += jStep) {
-          ++tested;
-          float x = base.x + i * step, z = base.z + j * step;
-          float m = static_cast<float>(step);
-          if (!(x - m >= 0 && z - m >= 0 && x + m < W && z + m < H)) continue;
-          PathCell c = CellOf(u, x, z);
-          if (Fits(sim, u, c)) {
-            gc = c;
-            found = true;
-            break;
-          }
-        }
-      }
-      if (tested > 899) break;
-    }
-  }
+  if (single && !Fits(sim, u, gc)) FreeSpotRings(sim, u, &gc);
   ResetPathState(sim, n);
   n.active = true;
   n.goal[0] = gc.x;
