@@ -611,7 +611,9 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   if (!m.ballistic) return false;
   const TerrainMap* map = sim.map();
   Vec3 P0 = u->position;
-  Vec3 v = m.lastMove;
+  // Unit::GetVelocity: the entity's last displacement, i.e. the difference of two (rounded) positions, not a
+  // velocity carried along: the fall's last bits follow from that
+  Vec3 v = u->lastPosTick ? Sub(u->position, u->prevLastPosition) : m.lastMove;
   const float c = 0.0100000007f;
   Vec3 v2{v.x, v.y + -4.9f * c, v.z};
   float water = map && map->hasWater ? map->waterElevation : -10000.0f;
@@ -831,8 +833,62 @@ void AttachedUnitsTick(Sim& sim) {
       Vec3 Cp;
       Quat Cq;
       BoneLocal(u, u->ownBone, &Cp, &Cq);
-      Quat q = QNorm(QMul(Pq, Conj(Cq)));
-      Vec3 pos = Sub(Pp, Rotate(q, Cp));
+      if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
+        // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
+        // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
+        // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
+        // they change with where the unit is.
+        Vec3 Wp;
+        Quat Wq;
+        BoneWorld(u, u->ownBone, &Wp, &Wq);
+        const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
+        const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
+        const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
+        const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
+        Cq = ComposeQ(iq, Wq);
+        const Vec3 r = RotateM(iq, Wp);
+        Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
+      }
+      // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
+      // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
+      // the child's own bone transform (0x676850), in the original's order of operations; the position is rotated
+      // with the quaternion BEFORE it is normalised (0x4edaa0). The last bits matter: a unit let go in the air
+      // starts its fall with the last step it made here.
+      const float cx = -0.0f - Cq.x, cy = -0.0f - Cq.y, cz = -0.0f - Cq.z;
+      Quat q;
+      q.w = ((Pq.w * Cq.w - Pq.x * cx) - Pq.y * cy) - Pq.z * cz;
+      q.x = ((Pq.y * cz + Pq.w * cx) + Pq.x * Cq.w) - Pq.z * cy;
+      q.y = ((Pq.z * cx + Pq.w * cy) + Pq.y * Cq.w) - Pq.x * cz;
+      q.z = ((Pq.x * cy + Pq.w * cz) + Pq.z * Cq.w) - Pq.y * cx;
+      const Vec3 rv = RotateM(q, Vec3{-0.0f - Cp.x, -0.0f - Cp.y, -0.0f - Cp.z});
+      Vec3 pos{rv.x + Pp.x, Pp.y + rv.y, Pp.z + rv.z};
+      {
+        const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+        if (len > 9.99999997e-07f) {
+          const float inv = 1.0f / len;
+          q = {q.x * inv, inv * q.y, inv * q.z, q.w * inv};
+        } else {
+          q = {0, 0, 0, 0};
+        }
+      }
+      {  // MOHO64_DEBUG_ATTACH=<unit id>: the attach step's inputs and result as bits
+        static const long dbg = getenv("MOHO64_DEBUG_ATTACH") ? atol(getenv("MOHO64_DEBUG_ATTACH")) : -1;
+        if (dbg >= 0 && static_cast<long>(u->id) == dbg) {
+          auto b = [](float f) {
+            uint32_t v;
+            std::memcpy(&v, &f, 4);
+            return v;
+          };
+          const Unit* pu = p->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p) : nullptr;
+          Logf(LogLevel::Info,
+               "attach %u bone %d own %d P.q(wxyz) %08x %08x %08x %08x P.pos %08x %08x %08x C.q %08x %08x %08x %08x C.pos %08x %08x "
+               "%08x -> q %08x %08x %08x %08x pos %08x %08x %08x | parent q %08x %08x %08x %08x pos %08x %08x %08x posed %d",
+               sim.tick(), u->parentBone, u->ownBone, b(Pq.w), b(Pq.x), b(Pq.y), b(Pq.z), b(Pp.x), b(Pp.y), b(Pp.z), b(Cq.w), b(Cq.x),
+               b(Cq.y), b(Cq.z), b(Cp.x), b(Cp.y), b(Cp.z), b(q.w), b(q.x), b(q.y), b(q.z), b(pos.x), b(pos.y), b(pos.z),
+               b(p->orientation.w), b(p->orientation.x), b(p->orientation.y), b(p->orientation.z), b(p->position.x), b(p->position.y),
+               b(p->position.z), pu && pu->poseSet ? 1 : 0);
+        }
+      }
       u->orientation = q;
       u->position = pos;
       u->motion.lastMove = Sub(pos, before);

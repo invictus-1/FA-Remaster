@@ -772,7 +772,10 @@ void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
   } else {
     float hx = orig.x - u->position.x, hz = orig.z - u->position.z;
     float dist = std::sqrt(hx * hx + hz * hz);
-    if (dist > b.startTurnDistance) a.facing = {hx / dist, 0, hz / dist};
+    if (dist > b.startTurnDistance) {  // 0x6b881c: times 1 / distance (a division differs in the last bit)
+      const float inv = 1.0f / dist;
+      a.facing = {inv * hx, inv * 0.0f, hz * inv};
+    }
   }
   FreeLandRect(sim, u);
 }
