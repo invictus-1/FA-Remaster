@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/hostfs.h"
+#include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
 
@@ -16,14 +17,25 @@ namespace {
 
 int AbsIndex(lua_State* L, int idx) { return idx > 0 || idx <= LUA_REGISTRYINDEX ? idx : lua_gettop(L) + idx + 1; }
 
-void WriteValue(lua_State* L, int idx, std::string& out, int depth);
+// The tables being written, outermost first: a table that contains itself is written as nil (the original's
+// writer, LuaObject::ToByteStream 0x4d2c80, has no such test and would not return).
+struct PathStep {
+  const void* table;
+  std::string key;  // the key it was reached by
+};
+struct Path {
+  std::vector<PathStep> steps;
+  std::string nextKey;
+  int warned = 0;
+};
+void WriteValue(lua_State* L, int idx, std::string& out, Path& path);
 
 bool Writable(lua_State* L, int idx) {
   int t = lua_type(L, idx);
   return t == LUA_TNUMBER || t == LUA_TSTRING || t == LUA_TBOOLEAN || t == LUA_TTABLE;
 }
 
-void WriteValue(lua_State* L, int idx, std::string& out, int depth) {
+void WriteValue(lua_State* L, int idx, std::string& out, Path& path) {
   idx = AbsIndex(L, idx);
   switch (lua_type(L, idx)) {
     case LUA_TNUMBER: {
@@ -41,22 +53,38 @@ void WriteValue(lua_State* L, int idx, std::string& out, int depth) {
       out.push_back(3);
       out.push_back(lua_toboolean(L, idx) ? 1 : 0);
       break;
-    case LUA_TTABLE:
-      if (depth > 64 || !lua_checkstack(L, 4)) {
+    case LUA_TTABLE: {
+      const void* self = lua_topointer(L, idx);
+      bool inside = path.steps.size() > 200 || !lua_checkstack(L, 4);
+      for (const PathStep& st : path.steps) inside = inside || st.table == self;
+      if (inside) {
+        if (path.warned++ < 3) {
+          std::string where;
+          for (const PathStep& st : path.steps) where += st.key + ".";
+          Logf(LogLevel::Warning, "moho64: a table that contains itself was left out of a serialized value: %s%s",
+               where.c_str(), path.nextKey.c_str());
+        }
         out.push_back(2);
         break;
       }
+      path.steps.push_back({self, path.nextKey});
       out.push_back(4);
       lua_pushnil(L);
       while (lua_next(L, idx)) {
         if (Writable(L, -2) && Writable(L, -1)) {
-          WriteValue(L, -2, out, depth + 1);
-          WriteValue(L, -1, out, depth + 1);
+          WriteValue(L, -2, out, path);
+          if (lua_type(L, -1) == LUA_TTABLE) {
+            if (lua_type(L, -2) == LUA_TSTRING) path.nextKey = lua_tostring(L, -2);
+            else path.nextKey = std::to_string(static_cast<long long>(lua_tonumber(L, -2)));
+          }
+          WriteValue(L, -1, out, path);
         }
         lua_pop(L, 1);
       }
       out.push_back(5);
+      path.steps.pop_back();
       break;
+    }
     default:
       out.push_back(2);
   }
@@ -132,7 +160,10 @@ bool PushScenarioInfo(lua_State* L, const std::string& file, std::string* error)
 
 }  // namespace
 
-void SerializeLua(lua_State* L, int idx, std::string* out) { WriteValue(L, idx, *out, 0); }
+void SerializeLua(lua_State* L, int idx, std::string* out) {
+  Path path;
+  WriteValue(L, idx, *out, path);
+}
 
 bool SessionFromGameConfig(lua_State* L, int config, const LaunchParams& params, SessionDescription* out,
                            std::string* error) {

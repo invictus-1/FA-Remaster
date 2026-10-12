@@ -46,6 +46,12 @@ class Army {
   bool civilian = false;
   bool human = false;
   bool outOfGame = false;
+  // What the interface shows of the army: the lobby's colour numbers (the options' ArmyColor / PlayerColor,
+  // indices into the game's colour tables, 0 = not given), a colour a script set outright (SetArmyColor,
+  // -1 = none), and SetArmyShowScore.
+  int armyColor = 0, playerColor = 0;
+  int rgb[3] = {-1, -1, -1};
+  bool showScore = true;
   std::string plans;
   AiBrain* brain = nullptr;
   Platoon* pool = nullptr;      // the "ArmyPool" platoon every army has
@@ -104,6 +110,12 @@ class Sim {
   void Tick();
   // A paused beat (AdvanceBeat steps 15-19 + Sync): destroy queue and id pools only; the game tick stays.
   void PausedBeat();
+  // The scripts' Sync table of each beat, as bytes (SerializeLua), oldest first, for a host that shows the
+  // game: set collectSync before the beats and take the list after every Tick / PausedBeat (each entry is one
+  // beat; the host makes it the user state's Sync and calls OnSync()). With or without a host the table is
+  // emptied after every beat (the scripts' ResetSyncTable), as the original does.
+  bool collectSync = false;
+  std::vector<std::string> TakeSync();
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 
@@ -246,6 +258,9 @@ class Sim {
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
   std::string sessionMods;
+  // The session's scenario info as it was launched (serialized Lua; what the interface's SessionGetScenarioInfo
+  // returns). The scripts' own ScenarioInfo grows engine objects during the game and is not for handing out.
+  std::string sessionScenario;
   bool cheats = false;
 
   // Command stream state (engine-ref command_stream.md 4 and 7; sim/command_stream.cpp plays the messages)
@@ -298,6 +313,8 @@ class Sim {
   std::vector<std::unique_ptr<ScriptObject>> owned_;
   std::map<uint32_t, Entity*> entities_;
   std::vector<Unit*> units_;
+  std::vector<std::string> pendingSync_;
+  void SyncStep();  // the script part of Sim::Sync
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;

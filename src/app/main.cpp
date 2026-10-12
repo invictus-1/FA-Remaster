@@ -3,7 +3,7 @@
 //
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
-//          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--sim-lua file]
+//          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 #include <chrono>
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
@@ -23,7 +23,9 @@
 #include "script/script_state.h"
 #include "sim/script_object.h"
 #include "sim/command_stream.h"
+#include "sim/command_writer.h"
 #include "sim/session.h"
+#include "sim/sim_view.h"
 #include "sim/sim.h"
 
 using namespace moho;
@@ -42,6 +44,8 @@ struct Options {
   std::string session;  // --session <file>: start the session a lobby's game configuration describes
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
   bool hasSeed = false;
+  std::string orders;   // --orders file: orders issued through the command writer at given ticks (testing)
+  bool view = false;    // --view: collect what a host reads (sync tables, armies, units) and log a summary
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
@@ -81,6 +85,45 @@ int RunRules(Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vect
   return ok ? 0 : 1;
 }
 
+// --view: what a host that shows the game would have read (sim/sim_view.h, Sim::TakeSync), as log lines.
+void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& lastSync) {
+  Logf(LogLevel::Info, "view: %zu sync tables, %zu bytes in all, the last %zu bytes", syncBeats, syncBytes, lastSync.size());
+  if (!lastSync.empty()) {
+    ScriptState st(ScriptState::Kind::User, nullptr);
+    lua_State* L = st.L();
+    std::string keys;
+    if (PushSerializedLua(L, lastSync) && lua_istable(L, -1)) {
+      lua_pushnil(L);
+      while (lua_next(L, -2)) {
+        if (lua_type(L, -2) == LUA_TSTRING) keys += std::string(" ") + lua_tostring(L, -2);
+        lua_pop(L, 1);
+      }
+      Logf(LogLevel::Info, "view: the last sync table's keys:%s", keys.c_str());
+    } else {
+      Logf(LogLevel::Error, "view: the last sync table does not read back");
+    }
+  }
+  Logf(LogLevel::Info, "view: scenario info %zu bytes, tick %u", sim.sessionScenario.size(), sim.tick());
+  for (const ArmyView& a : ArmyViews(sim)) {
+    EconomyTotals e = EconomyTotalsOf(sim, a.index);
+    Logf(LogLevel::Info,
+         "view: army %d %s \"%s\" faction %d%s%s colours %d/%d rgb %d,%d,%d; mass %.1f of %.0f (+%.2f -%.2f), "
+         "energy %.1f of %.0f (+%.2f -%.2f)",
+         a.index, a.name.c_str(), a.nickname.c_str(), a.faction, a.human ? " human" : "", a.civilian ? " civilian" : "",
+         a.armyColor, a.playerColor, a.rgb[0], a.rgb[1], a.rgb[2], e.stored[1], e.maxStorage[1], e.income[1],
+         e.lastUseActual[1], e.stored[0], e.maxStorage[0], e.income[0], e.lastUseActual[0]);
+  }
+  std::vector<UnitView> units;
+  UnitViews(sim, &units);
+  Logf(LogLevel::Info, "view: %zu units", units.size());
+  for (size_t i = 0; i < units.size() && i < 8; ++i) {
+    const UnitView& u = units[i];
+    Logf(LogLevel::Info, "view: unit %#x %s army %d at %.1f %.1f %.1f health %.0f/%.0f built %.2f queue %d%s%s", u.id,
+         u.blueprint.c_str(), u.army, u.position[0], u.position[1], u.position[2], u.health, u.maxHealth,
+         u.fractionComplete, u.queueLength, u.selectable ? "" : " unselectable", u.dead ? " dead" : "");
+  }
+}
+
 // Run a session headless: `stream` is the replay's bytes (its command stream starts at the header's
 // streamOffset), or null for a session launched from a game configuration, which has no commands.
 int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
@@ -110,6 +153,60 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   CommandStream stream(*data, header->streamOffset);
   bool playStream = stream_ && !getenv("MOHO64_NO_STREAM");
   int done = 0, paused = 0;
+  sim.collectSync = o.view;
+  size_t syncBeats = 0, syncBytes = 0;
+  std::string lastSync;
+  // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
+  // "<tick> pause", "<tick> resume", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
+  // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
+  std::multimap<uint32_t, std::string> orders;
+  if (!o.orders.empty()) {
+    std::ifstream f(o.orders);
+    std::string line;
+    while (std::getline(f, line)) {
+      if (line.empty() || line[0] == '#') continue;
+      size_t sp = line.find(' ');
+      if (sp != std::string::npos) orders.insert({static_cast<uint32_t>(std::atoi(line.c_str())), line.substr(sp + 1)});
+    }
+  }
+  CommandWriter writer(0);
+  std::map<std::string, int> ordersUnhandled;
+  auto giveOrders = [&] {
+    auto range = orders.equal_range(static_cast<uint32_t>(done + paused));
+    for (auto it = range.first; it != range.second; ++it) {
+      char what[32] = "", ids[256] = "", tail[32] = "";
+      int type = 0;
+      float x = 0, y = 0, z = 0;
+      const char* text = it->second.c_str();
+      if (std::sscanf(text, "%31s", what) != 1) continue;
+      if (!std::strcmp(what, "pause")) writer.RequestPause();
+      else if (!std::strcmp(what, "resume")) writer.Resume();
+      else if (!std::strcmp(what, "callback") && std::sscanf(text, "%*s %255s", ids) == 1) writer.LuaSimCallback(ids, {}, {});
+      else if (!std::strcmp(what, "issue")) {
+        int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
+        if (n < 2) continue;
+        std::vector<uint32_t> units;
+        for (char* tok = std::strtok(ids, ","); tok; tok = std::strtok(nullptr, ","))
+          units.push_back(static_cast<uint32_t>(std::strtoul(tok, nullptr, 0)));
+        StreamIssueData d;
+        d.type = type;
+        if (n >= 5) {
+          d.target.type = 2;
+          d.target.pos = {x, y, z};
+        }
+        uint32_t id = writer.IssueCommand(units, d, std::strcmp(tail, "queue") != 0);
+        Logf(LogLevel::Info, "orders: tick %u: command %#x type %d for %zu unit(s)", sim.tick(), id, type, units.size());
+      }
+    }
+    if (!writer.empty() && !ApplyCommands(sim, writer.Take(), &ordersUnhandled)) Logf(LogLevel::Error, "orders: a message was malformed");
+  };
+  auto takeSync = [&] {
+    for (auto& b : sim.TakeSync()) {
+      ++syncBeats;
+      syncBytes += b.size();
+      lastSync = std::move(b);
+    }
+  };
   while (ok && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
       if (!stream.ApplyUntilAdvance(sim)) {
@@ -118,15 +215,20 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         if (!getenv("MOHO64_PAST_END")) break;
       }
     }
+    giveOrders();
     if (sim.Paused()) {
       sim.PausedBeat();
+      takeSync();
       ++paused;
       if (sim.frozen && (stream.AtEnd() || !playStream)) break;
       continue;
     }
     sim.Tick();
+    takeSync();
     ++done;
   }
+  for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
+  if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);
   if (stream_ && playStream)
     Logf(LogLevel::Info, "moho64: command stream: %u messages, %u beats (%d paused)%s", stream.messages(),
          stream.beats(), paused, stream.hadError() ? ", with errors" : "");
@@ -239,7 +341,9 @@ int main(int argc, char** argv) {
     else if (a == "--seed") {
       o.seed = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 0));
       o.hasSeed = true;
-    } else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
+    } else if (a == "--view") o.view = true;
+    else if (a == "--orders") o.orders = next();
+    else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else {

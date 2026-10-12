@@ -94,6 +94,17 @@ int l_SetArmyOutOfGame(lua_State* L) {
   return 0;
 }
 
+// SetArmyColor(army, r, g, b) and SetArmyShowScore(army, bool): kept for the interface (sim/sim_view.h)
+int l_SetArmyColor(lua_State* L) {
+  if (Army* a = S(L)->GetArmy(L, 1))
+    for (int i = 0; i < 3; ++i) a->rgb[i] = static_cast<int>(luaL_checknumber(L, 2 + i));
+  return 0;
+}
+int l_SetArmyShowScore(lua_State* L) {
+  if (Army* a = S(L)->GetArmy(L, 1)) a->showScore = lua_toboolean(L, 2) != 0;
+  return 0;
+}
+
 int l_GetGameTick(lua_State* L) {
   lua_pushnumber(L, S(L)->tick());
   return 1;
@@ -506,6 +517,8 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "ArmyGetHandicap", l_ArmyGetHandicap);
   SetGlobal(L, "ArmyIsOutOfGame", l_ArmyIsOutOfGame);
   SetGlobal(L, "SetArmyOutOfGame", l_SetArmyOutOfGame);
+  SetGlobal(L, "SetArmyColor", l_SetArmyColor);
+  SetGlobal(L, "SetArmyShowScore", l_SetArmyShowScore);
   SetGlobal(L, "GetCueBank", l_GetCueBank);
   SetGlobal(L, "GetGameTick", l_GetGameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
@@ -681,6 +694,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   rngTrace_ = getenv("MOHO64_DEBUG_RNG") != nullptr;
   RecorderOpen();
   cheats = replay.cheats;
+  sessionScenario = replay.scenario;
   cmdSources.clear();
   for (const auto& src : replay.sources) cmdSources.push_back({src.name, src.pausesAllowed});
 
@@ -816,6 +830,10 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     army->civilian = lua_toboolean(L, -1);
     field("Human");
     army->human = lua_toboolean(L, -1);
+    field("ArmyColor");
+    army->armyColor = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+    field("PlayerColor");
+    army->playerColor = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
     army->sources = ra.sources;
     lua_settop(L, setup);
     armies_.push_back(std::move(army));
@@ -1147,11 +1165,62 @@ bool Sim::OkayToMessWith(const Army* a) const {
   return cheats;  // CheatsEnabled() (also feeds the beat checksum in the original)
 }
 
+// The script part of Sim::Sync (0x747b11): the engine's own fields go into the scripts' global Sync (who paused
+// and how many pauses that source has left, the focus army's statistics), the table is handed over as bytes, and
+// the scripts' ResetSyncTable() empties it for the next beat. (Not built: Sync.Cheaters, the sources that used a
+// cheat this beat, and the statistics' Children: only the debug window /lua/debug/ArmyStats.lua reads them.)
+void Sim::SyncStep() {
+  lua_State* L = state_->L();
+  const int top = lua_gettop(L);
+  lua_pushstring(L, "Sync");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  if (lua_istable(L, -1)) {
+    const int sync = lua_gettop(L);
+    const bool paused = pauseOwner >= 0 && pauseOwner < static_cast<int>(cmdSources.size());
+    lua_pushstring(L, "PausedBy");
+    if (paused) lua_pushnumber(L, pauseOwner + 1);
+    else lua_pushnil(L);
+    lua_rawset(L, sync);
+    lua_pushstring(L, "TimeoutsRemaining");
+    if (paused) lua_pushnumber(L, cmdSources[pauseOwner].pausesLeft);
+    else lua_pushnil(L);
+    lua_rawset(L, sync);
+    if (focusArmy >= 0 && focusArmy < static_cast<int>(armies_.size())) {
+      lua_pushstring(L, "__ArmyStats");
+      lua_newtable(L);
+      lua_pushstring(L, "Tick");
+      lua_pushnumber(L, tick_);
+      lua_rawset(L, -3);
+      lua_rawset(L, sync);
+    }
+    if (collectSync) {
+      pendingSync_.emplace_back();
+      SerializeLua(L, sync, &pendingSync_.back());
+    }
+  }
+  lua_settop(L, top);
+  lua_pushstring(L, "ResetSyncTable");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  if (lua_isfunction(L, -1)) {
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_insert(L, -2);
+    if (lua_pcall(L, 0, 0, top + 1) != 0) LogScriptError(lua_tostring(L, -1) ? lua_tostring(L, -1) : "ResetSyncTable");
+  }
+  lua_settop(L, top);
+}
+
+std::vector<std::string> Sim::TakeSync() {
+  std::vector<std::string> out;
+  out.swap(pendingSync_);
+  return out;
+}
+
 void Sim::PausedBeat() {
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
   UpdateIdPools();
+  SyncStep();
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
 }
 
@@ -1332,6 +1401,7 @@ void Sim::Tick() {
   g_prof.Lap(1);
   ProcessDestroyQueue();
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
+  SyncStep();
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   g_prof.Lap(11);

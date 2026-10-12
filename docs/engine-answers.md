@@ -3,6 +3,63 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 4: what the in-game interface needs from a running simulation — done (first form)
+
+All four parts exist; `moho64 --session <file> --view [--orders <file>]` exercises them headless.
+
+**1. The sync table of each beat.** `sim.collectSync = true` before the beats; after every `Tick()` or
+`PausedBeat()`, `std::vector<std::string> Sim::TakeSync()` gives the beats' `Sync` tables as bytes
+(`SerializeLua` form, oldest first, one entry per beat: a paused beat syncs too). For each entry the host
+does what the original's `CWldSession::DoBeat` does in the user state: `PreviousSync = Sync`,
+`Sync = <the table read with PushSerializedLua>`, then `OnSync()`. As in the original (`Sim::Sync`,
+0x747b11) the engine adds `PausedBy` and `TimeoutsRemaining` while a pause holds and `__ArmyStats`
+(only its `Tick`) when there is a focus army, and after handing the table over runs the scripts'
+`ResetSyncTable()`. That reset now happens every beat in every run, replays included; the gate is
+unchanged by it. Not built: `Sync.Cheaters` and the statistics' `Children` (the debug window
+`/lua/debug/ArmyStats.lua`).
+A table that contains itself is written as nil with a warning; the game's `Sync` has none.
+
+**2. Session facts** (`src/sim/sim_view.h`, plain structs; the host builds the Lua tables):
+- `ArmyViews(sim)`: per army `index` (1-based), `name`, `nickname`, `faction` (0-based), `human`,
+  `civilian`, `outOfGame`, `showScore`, `alliance` towards every army, and the colour as the original
+  derives it: `armyColor` / `playerColor` are the options' indices into `/lua/GameColors.lua`
+  (`ArmyColors`, `PlayerColors`; 0 = not given, a civilian then takes `CivilianArmyColor`), `rgb` is set
+  when a script called `SetArmyColor` (it wins).
+- `EconomyTotalsOf(sim, army)`: `income`, `lastUseRequested`, `lastUseActual`, `stored`, `maxStorage`,
+  `reclaimed`, each `[0]` energy and `[1]` mass, rates per beat.
+- `sim.focusArmy` (0-based, -1 none), `sim.tick()` (ten ticks a second), and `sim.sessionScenario`: the
+  scenario info as launched, serialized, for `SessionGetScenarioInfo()`. (The scripts' own `ScenarioInfo`
+  is not handed out: during the game it collects engine objects, units by name among them.)
+
+**3. Units** (`UnitViews(sim, &list)`, same header): `id`, `blueprint`, `army`, `position`,
+`orientation` (x, y, z, w), `health`, `maxHealth`, `fractionComplete`, `workProgress`, `dead`,
+`beingBuilt`, `selectable`, `queueLength`, `headCommand`. In entity-id order; ids as in the recordings
+(army 1's first unit has id 0).
+
+**4. Orders** (`src/sim/command_writer.h`). The interface's orders are the command stream's messages, the
+same bytes a replay holds, so one piece of code carries out both:
+
+    CommandWriter writer(source);     // session.header.armies[session.focusArmy].source
+    ... during the frame, whatever the player did:
+    StreamIssueData d;                // sim/commands.h: type, target, target2, formation, blueprint, cells, count
+    d.type = 2;                       // the engine's command numbers (2 = Move)
+    d.target.type = 2; d.target.pos = {x, y, z};
+    writer.IssueCommand(unitIds, d, /*clear queue (no shift)*/ true);
+    writer.LuaSimCallback(name, SerializeLua bytes of the argument table, unitIds);   // SimCallback
+    writer.ProcessInfoPair(unit, "SetFireState", "1");  RequestPause();  Resume();  ...
+    ... before the next beat:
+    ApplyCommands(sim, writer.Take());
+
+`Take()` puts `SetCommandSource` in front, as a client does. Every message the engine carries out has its call
+(`CreateUnit`, `DestroyEntity`, `SetCommandTarget`, `RemoveCommandFromQueue`, `ExecuteLuaInSim`, ...).
+Keeping the taken bytes with `CommandWriter::AdvanceMessage()` between beats gives a replay's body.
+Checked: a Move for the commander walks it there; a pause holds the tick while beats and sync tables go
+on; a callback reaches `/lua/SimCallbacks.lua`'s `DoCallback`.
+
+Known gaps on the engine side, in the order they will hurt: **`IssueFactoryCommand`** (a factory's build
+queue: read but not carried out yet, next on the list), `WarpEntity`, some orders that still end at once
+(nuke and tactical launch, see FINDINGS part 24), and classic AI opponents (ui 3, point 2).
+
 ## render 5: standing request to merge `render` into `main` — accepted
 
 Chris confirmed it (2026-10-12): the engine track merges `origin/render` into `main` at its convenient
