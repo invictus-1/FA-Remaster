@@ -25,13 +25,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       ao(device),
       post(device),
       skyDraw(device),
+      falling(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -168,7 +169,19 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
-    skyLight = SkyAt(timeOfDay);
+    // the weather: its clouds, and what it has done to surfaces by now
+    const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
+    weatherTime_ = time;
+    wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
+    snowLying = std::clamp(snowLying + (snow > 0 ? dt / 60 : -dt / 180), 0.0f, 1.0f);
+    const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
+    skyLight = SkyAt(timeOfDay, cover);
+    c.weather[0] = wet;
+    c.weather[1] = snowLying;
+    // (rain and snow thicken the air a little; the air never hides all of a far thing, or the
+    // whole map seen from high up would be gone)
+    c.weather[2] = 0.0035f * fog + 0.0007f * rain + 0.0010f * snow;
+    c.weather[3] = 0.55f + 0.3f * fog;
     SetSky(skyLight, &c);
     lightDirection = skyLight.direction;
   }
@@ -318,6 +331,7 @@ void World::Render() {
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   if (hide.find("particles") == std::string::npos) particles.Draw(view);
+  if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
   post.Present(view);
   if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 }

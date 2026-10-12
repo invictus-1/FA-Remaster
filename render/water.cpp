@@ -78,7 +78,7 @@ float4 PS(VOut i) : SV_Target {
   rgb = rgb * (1 - c) + c;
   through *= 1 - c;
   // the modern look works in linear light: the same water for now, its colours converted
-  if (look > 0.5) rgb = pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight);
+  if (look > 0.5) rgb = ThroughAir(pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight), length(i.world - cameraPosition));
   return float4(rgb, 1 - through);
 }
 )hlsl";

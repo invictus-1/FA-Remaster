@@ -11,6 +11,11 @@
 namespace render {
 
 inline const char kLightingShaderBlock[] = R"hlsl(
+// How much of the lying snow a kind of surface takes (a shader may say before this block: units
+// take less than the ground, so that they can still be told apart).
+#ifndef SURFACE_SNOW
+#define SURFACE_SNOW 1.0
+#endif
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
@@ -58,6 +63,17 @@ float3 EnvironmentBrdf(float3 f0, float roughness, float nDotV) {
 // The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
+  shadow *= CloudShadow(world);  // (a computed sky's clouds)
+  // the weather on the surface: wet is darker and shinier; snow lies on what faces up
+  [branch] if (weather.x + weather.y > 0) {
+    float upward = saturate(N.y * 1.5 - 0.2);
+    albedo *= 1 - 0.35 * weather.x;
+    roughness = lerp(roughness, 0.3, weather.x * (0.35 + 0.5 * upward));
+    float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
+    albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
+    metallic *= 1 - lying;
+    roughness = lerp(roughness, 0.7, lying);
+  }
   float3 V = normalize(cameraPosition - world);
   float3 L = sunDirection;
   float3 H = normalize(V + L);
@@ -124,7 +140,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
   // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)
   color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV) * modern.w) * (modern.y * occlusion);
-  return color + small + emission;
+  return ThroughAir(color + small + emission, length(cameraPosition - world));
 }
 )hlsl";
 

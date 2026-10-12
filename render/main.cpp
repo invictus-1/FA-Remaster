@@ -56,6 +56,9 @@
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
 //           (from noon when the map's light was on), Y: the map's own light again.
+// --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
+// --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
+//           steps through them. Given as an option, surfaces are wet or snowy from the start.
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
@@ -128,6 +131,8 @@ struct Options {
   // chosen for the original's formula)
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
+  float clouds = 0.3f;                  // --clouds
+  std::string weather;                  // --weather
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
   float at[2] = {};                // --at x,z: where placed units stand (default: the camera's starting target)
   bool hasAt = false;
@@ -214,6 +219,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
+    else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
+    else if (a == "--weather") o->weather = v;
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
     else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
@@ -374,6 +381,21 @@ int main(int argc, char** argv) {
   world.sky = opt.sky;
   world.exposure = opt.exposure;
   world.timeOfDay = opt.timeOfDay;
+  world.cloudCover = opt.clouds;
+  int weatherNow = 0;  // which of kWeathers
+  static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
+  auto setWeather = [&](int which) {
+    weatherNow = which;
+    world.rain = which == 1 ? 0.5f : which == 2 ? 1.0f : 0.0f;
+    world.snow = which == 3 ? 0.8f : 0.0f;
+    world.fog = which == 4 ? 1.0f : which == 2 ? 0.25f : 0.0f;
+  };
+  for (int i = 0; i < 5; ++i)
+    if (opt.weather == kWeathers[i]) {
+      setWeather(i);
+      world.wet = world.rain > 0 ? 1.0f : 0.0f;
+      world.snowLying = world.snow > 0 ? 1.0f : 0.0f;
+    }
   if (opt.dayLength > 0 && world.timeOfDay < 0) world.timeOfDay = 12;
   world.reflection = opt.reflection;
   world.hide = opt.hide;
@@ -396,7 +418,7 @@ int main(int argc, char** argv) {
   AmbientOcclusion& ao = world.ao;
   Look& look = world.look;
   float dayShift = 0;  // hours added with T
-  bool dayOn = opt.timeOfDay >= 0 || opt.dayLength > 0;  // a time of day lights (T), or the map's own light (Y)
+  bool dayOn = opt.timeOfDay >= 0 || opt.dayLength > 0 || weatherNow != 0;  // a time of day lights (T), or the map's own light (Y)
   bool& shadowsOn = world.shadowsOn;
   bool& iconsOn = world.iconsOn;
   std::vector<FrameEffectEvent> effectEvents;
@@ -609,6 +631,12 @@ int main(int argc, char** argv) {
             dayOn = true;
           }
           if (e.key == 'Y') dayOn = false;
+          if (e.key == 'R') {
+            setWeather((weatherNow + 1) % 5);
+            dayOn = true;
+            printf("render: weather: %s\n", kWeathers[weatherNow]);
+          }
+          if (e.key == 'C') world.cloudCover = world.cloudCover >= 0.95f ? 0 : std::min(world.cloudCover + 0.25f, 1.0f);
           if (e.key == 'I') iconsOn = !iconsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;

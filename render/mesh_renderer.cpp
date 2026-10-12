@@ -228,7 +228,8 @@ float4 PS(VOut i) : SV_Target {
 }  // namespace
 
 bool MeshRenderer::Init(std::string* error) {
-  std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
+  // (units and props take half the lying snow the ground takes: they must still be told apart)
+  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + kLightingShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.name = "models";
   pd.vertexSource = pd.pixelSource = source;

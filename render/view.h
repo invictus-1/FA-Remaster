@@ -52,6 +52,13 @@ struct ViewConstants {
   float skyGlow[4];
   float skyBody[4];
   float skyMoon[4];  // toward the moon
+  // The cloud layer: x how much of the sky it covers (0 none .. 1 all of it); y, z how far it has
+  // drifted (world units); w how far its shapes have changed.
+  float skyClouds[4];
+  // The weather on surfaces and in the air (with a computed sky): x how wet things are, y how much
+  // snow lies (both 0..1), z how thick the air is (the share of light lost per world unit), w the
+  // most of a far thing the air may hide.
+  float weather[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -79,6 +86,8 @@ cbuffer View : register(b0) {
   float4 skyGlow;         // rgb around the sun or moon; w: how bright the day is
   float4 skyBody;         // toward the sun; w: 1 = the moon's light falls
   float4 skyMoon;         // toward the moon
+  float4 skyClouds;       // the cloud layer: x cover 0..1; y, z its drift (world units); w its change
+  float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -95,6 +104,37 @@ float3 ComputedSky(float3 d) {
   float s2 = s * s, s4 = s2 * s2, s16 = s4 * s4 * s4 * s4;
   c += skyGlow.rgb * ((s4 * s * 0.25 + s16 * s16 * s16 * 0.6) * lerp(1, 0.35, saturate(d.y)));
   return lerp(c, skyHorizon.rgb * 0.3, saturate(-d.y * 5));  // below the horizon: the ground far away
+}
+// The cloud layer (sky.h), 150 above the ground's zero: the layered noise it is cut from at a place
+// on the layer (world x, z), how much cloud that makes there, and what of the falling light comes
+// through to a place on the ground.
+float CloudHash(float3 p) {
+  p = frac(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float CloudNoise(float3 p) {
+  float3 cell = floor(p), f = frac(p);
+  f = f * f * (3 - 2 * f);
+  return lerp(lerp(lerp(CloudHash(cell), CloudHash(cell + float3(1, 0, 0)), f.x), lerp(CloudHash(cell + float3(0, 1, 0)), CloudHash(cell + float3(1, 1, 0)), f.x), f.y),
+              lerp(lerp(CloudHash(cell + float3(0, 0, 1)), CloudHash(cell + float3(1, 0, 1)), f.x), lerp(CloudHash(cell + float3(0, 1, 1)), CloudHash(cell + float3(1, 1, 1)), f.x), f.y),
+              f.z);
+}
+float CloudField(float2 q) {
+  float3 p = float3((q + skyClouds.yz) * 0.004, skyClouds.w);
+  return CloudNoise(p) * 0.55 + CloudNoise(p * 2.3 + 7.1) * 0.3 + CloudNoise(p * 5.1 + 3.3) * 0.15;
+}
+float CloudFrom(float field) { return saturate((field - lerp(0.75, 0.2, skyClouds.x)) * 5); }
+float CloudShadow(float3 world) {
+  if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
+  float2 q = world.xz + sunDirection.xz * ((150 - world.y) / max(sunDirection.y, 0.2));
+  return 1 - 0.75 * CloudFrom(CloudField(q));
+}
+// The colour of thick air, and a colour seen through `distance` of it.
+float3 AirColor() { return skyZenith.rgb * 0.45 + skyHorizon.rgb * 0.75; }
+float3 ThroughAir(float3 color, float distance) {
+  if (weather.z <= 0) return color;
+  return lerp(color, AirColor(), min(1 - exp(-distance * weather.z), weather.w));
 }
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {
