@@ -32,6 +32,7 @@
 namespace moho {
 
 namespace combat {
+bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
@@ -1607,8 +1608,10 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
 }
 
 // --------------------------------------------------------------------------------------------
-// Falling (CUnitMotion::CalcMoveBallistic 0x6c0290; the terrain test is approximated by a fine
-// march along the segment against the bilinear surface - TODO: the original's triangle walk)
+// Falling (CUnitMotion::CalcMoveBallistic 0x6c0290). The step is a segment against the terrain (STIMap::
+// Intersection 0x476f30, combat::TerrainSegmentHit): the unit comes down ON the point it returns and the step's
+// scale is the hit distance over the segment's length (0x6c0896). Where that point is under water the original
+// takes the water plane (0x577bc0); there the fine march below still does it.
 
 void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   AirMotion& a = A(u);
@@ -1630,6 +1633,19 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   // segment against the terrain (and the water plane)
   bool hit = false;
   float tHit = 1;
+  bool exact = false;
+  Vec3 hitP{};
+  {
+    float d = 0;
+    Vec3 h{};
+    if (combat::TerrainSegmentHit(map, P0, P1, &d, &h) && (amph || !(map && map->hasWater) || h.y >= water)) {
+      const Vec3 hv{(P1.x - P0.x) * 0.5f, (P1.y - P0.y) * 0.5f, (P1.z - P0.z) * 0.5f};
+      const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+      exact = hit = true;
+      hitP = h;
+      tHit = d / (ext * 2.0f);
+    }
+  }
   const int N = 16;
   float prevDiff = P0.y - (amph || !map || !map->hasWater ? Elevation(map, P0.x, P0.z)
                                                           : std::max(Elevation(map, P0.x, P0.z), water));
@@ -1648,7 +1664,7 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   }
   int oldLayer = LayerBits(u->layer);
   if (hit) {
-    P1 = {P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
+    P1 = exact ? hitP : Vec3{P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
     *scale = tHit;
     float terr = Elevation(map, P1.x, P1.z);
     if (water < terr) SetLayerBits(sim, u, kLand);
