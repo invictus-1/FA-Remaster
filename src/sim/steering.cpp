@@ -238,7 +238,9 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     if (c && Current(o) == c) return;  // one order: never pushed apart (ends the whole list)
     if (!Mobile(o)) continue;
     if (SameFormationLayer(self, o)) continue;
-    Vec3 d{prev.x - o->position.x, 0, prev.z - o->position.z};
+    // (o.pos is the other's committed position: where it stood when the beat began, also when it has moved)
+    const Vec3& op = o->shapeHeld ? o->shapePos : o->position;
+    Vec3 d{prev.x - op.x, 0, prev.z - op.z};
     if (d.x * d.x + d.z * d.z < 1e-6f) {
       d.x = static_cast<float>(sim.FRand(-1, 1));
       d.z = static_cast<float>(sim.FRand(-1, 1));

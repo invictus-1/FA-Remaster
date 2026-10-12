@@ -3250,6 +3250,15 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
   }
   Vec3 tp = TargetPos(sim, w->target, false);
   if (IsNaN(tp)) return false;
+  // this runs inside the motion pass: a target that already moved this beat still stands, for the original,
+  // where the beat began (its transform is committed in step 13). Seen: a launcher's body starts turning after a
+  // target that began to move one beat later than "its new place" would make it.
+  // The aim point rides on the target's hull, so it is taken through the transform the beat began with (position
+  // and orientation): out of the hull's frame of now, back in with the held one.
+  if (const Entity* te = TargetEntity(sim, w->target); te && te->shapeHeld) {
+    const Vec3 local = Rotate(Conj(te->orientation), Sub(tp, te->position));
+    tp = Add(te->shapePos, Rotate(te->shapeOri, local));
+  }
   if (const float aa = CB(u).attackAngle; aa > 0) {
     // AI.AttackAngle (ubp+0x4d0; 0x6c2350): the unit shows the target its side. The direction to the target is
     // turned about the up axis by the angle, away from the side the target is on, so the target ends up
@@ -3268,11 +3277,17 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
   if (!(180.0f > arc)) return false;
   float a = dmath::Atan2(tp.x - u->position.x, tp.z - u->position.z);
   float rel = std::fabs(WrapAngle(a - UnitHeading(u)));
+  const bool was = m.slavedTurning;
   if (m.slavedTurning) {
     if (arc * 0.008726646f > rel) m.slavedTurning = false;
   } else if (rel > arc * 0.017453292f) {
     m.slavedTurning = true;
   }
+  static const long dbgSl = getenv("MOHO64_DEBUG_SLAVED") ? atol(getenv("MOHO64_DEBUG_SLAVED")) : -1;
+  if (dbgSl >= 0 && static_cast<long>(u->id) == dbgSl)
+    Logf(LogLevel::Info, "slaved %u unit %u arc %.3f rel %.5f deg turning %d -> %d target %.4f %.4f heading %.4f deg",
+         sim.tick(), u->id, arc, rel * 57.29578f, was ? 1 : 0, m.slavedTurning ? 1 : 0, tp.x, tp.z,
+         UnitHeading(u) * 57.29578f);
   if (m.slavedTurning || (m.bp && m.bp->motionType == kMotionHover && m.pointNow))
     *dir = Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
   else
