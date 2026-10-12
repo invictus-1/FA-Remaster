@@ -8,6 +8,7 @@
 // What weather does to surfaces (wet, snow lying) and to the air (fog) is in the lighting every
 // shader shares (lighting.h, by the view's `weather` values); the clouds are sky.h's.
 #pragma once
+#include <cstdint>
 #include <string>
 
 #include "camera.h"
@@ -15,6 +16,22 @@
 #include "view.h"
 
 namespace render {
+
+// What the weather is at a moment: how much of the sky clouds cover, how hard it rains or snows,
+// how thick the air is (each 0..1), and how bright a lightning's flash is just now (0: none).
+struct WeatherNow {
+  float clouds = 0.3f, rain = 0, snow = 0, fog = 0, flash = 0;
+};
+enum class Climate { Temperate, Cold, Dry };  // rain and storms; snow instead of rain; mostly clear
+
+// The weather of a game at `seconds` of its clock. It follows from the seed and the time alone:
+// whoever asks with the same two gets the same weather, so every player of a game sees the same,
+// a replay shows what the game showed, and nothing needs to be kept or sent. Time is cut into
+// spells of `spell` seconds; each spell has one kind of weather, drawn by the seed (the first is
+// always fair), and the last quarter of a spell goes over into the next.
+WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate = Climate::Temperate, float spell = 300);
+// A storm's lightning alone: how bright its flash is at that moment, for rain that hard.
+float LightningAt(uint32_t seed, double seconds, float rain);
 
 class Precipitation {
  public:

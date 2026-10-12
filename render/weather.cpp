@@ -70,6 +70,83 @@ struct FallConstants {
 
 }  // namespace
 
+namespace {
+
+// A number 0..1 from whole numbers.
+float Draw01(uint32_t seed, uint32_t a, uint32_t b) {
+  uint32_t h = seed * 0x9e3779b9u + a * 0x85ebca6bu + b * 0xc2b2ae35u + 0x27d4eb2fu;
+  h ^= h >> 15;
+  h *= 0x2c1b3c6du;
+  h ^= h >> 12;
+  h *= 0x297a2d39u;
+  h ^= h >> 15;
+  return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
+}
+
+// The kinds of weather, and how often each comes in a climate (shares of 100).
+struct Kind {
+  WeatherNow weather;
+  int temperate, cold, dry;
+};
+const Kind kKinds[] = {
+    {{0.10f, 0, 0, 0, 0}, 22, 15, 45},     // clear
+    {{0.35f, 0, 0, 0, 0}, 26, 20, 35},     // fair
+    {{0.65f, 0, 0, 0, 0}, 16, 18, 12},     // cloudy
+    {{0.92f, 0, 0, 0.1f, 0}, 8, 12, 0},    // overcast
+    {{0.85f, 0.5f, 0, 0, 0}, 14, 0, 0},    // rain
+    {{1.0f, 1.0f, 0, 0.25f, 0}, 6, 0, 4},  // storm
+    {{0.5f, 0, 0, 1.0f, 0}, 8, 10, 4},     // fog
+    {{0.9f, 0, 0.8f, 0.1f, 0}, 0, 25, 0},  // snow
+};
+
+const WeatherNow& SpellWeather(uint32_t seed, int64_t spell, Climate climate) {
+  if (spell <= 0) return kKinds[1].weather;
+  float left = Draw01(seed, static_cast<uint32_t>(spell), 17) * 100;
+  for (const Kind& k : kKinds) {
+    left -= static_cast<float>(climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : k.temperate);
+    if (left < 0) return k.weather;
+  }
+  return kKinds[1].weather;
+}
+
+}  // namespace
+
+WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate, float spell) {
+  spell = std::max(spell, 1.0f);
+  const double at = std::max(seconds, 0.0) / spell;
+  const int64_t index = static_cast<int64_t>(at);
+  const WeatherNow& a = SpellWeather(seed, index, climate);
+  const WeatherNow& b = SpellWeather(seed, index + 1, climate);
+  float t = std::clamp((static_cast<float>(at - static_cast<double>(index)) - 0.75f) * 4, 0.0f, 1.0f);
+  t = t * t * (3 - 2 * t);
+  WeatherNow w;
+  w.clouds = a.clouds + (b.clouds - a.clouds) * t;
+  w.rain = a.rain + (b.rain - a.rain) * t;
+  w.snow = a.snow + (b.snow - a.snow) * t;
+  w.fog = a.fog + (b.fog - a.fog) * t;
+  w.flash = LightningAt(seed, seconds, w.rain);
+  return w;
+}
+
+float LightningAt(uint32_t seed, double seconds, float rain) {
+  if (rain < 0.7f || seconds < 0) return 0;
+  // time in stretches of seven seconds; a stretch may have one stroke, the likelier the harder it rains
+  float flash = 0;
+  const int64_t now = static_cast<int64_t>(seconds / 7);
+  for (int64_t stretch = now - 1; stretch <= now; ++stretch) {
+    if (stretch < 0) continue;
+    const uint32_t n = static_cast<uint32_t>(stretch);
+    if (Draw01(seed, n, 31) > (rain - 0.6f) * 2) continue;
+    const double struck = static_cast<double>(stretch) * 7 + Draw01(seed, n, 47) * 6.5;
+    const float since = static_cast<float>(seconds - struck);
+    if (since < 0 || since > 0.6f) continue;
+    // a stroke flickers: bright at once, twice more, and gone
+    const float flicker = 0.55f + 0.45f * std::cos(since * 46);
+    flash = std::max(flash, std::exp(-since * 7) * flicker * (0.6f + 0.4f * Draw01(seed, n, 59)));
+  }
+  return flash;
+}
+
 bool Precipitation::Init(std::string* error) {
   std::string source = std::string(kViewShaderBlock) + kShader;
   gfx::PipelineDesc pd;

@@ -59,6 +59,8 @@ struct ViewConstants {
   // snow lies (both 0..1), z how thick the air is (the share of light lost per world unit), w the
   // most of a far thing the air may hide.
   float weather[4];
+  // What falls just now: x how hard it rains, y how hard it snows (0..1), z a lightning's flash.
+  float falling[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -88,6 +90,7 @@ cbuffer View : register(b0) {
   float4 skyMoon;         // toward the moon
   float4 skyClouds;       // the cloud layer: x cover 0..1; y, z its drift (world units); w its change
   float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
+  float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
