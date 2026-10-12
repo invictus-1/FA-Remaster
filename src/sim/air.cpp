@@ -44,6 +44,18 @@ constexpr float kInf = std::numeric_limits<float>::infinity();
 constexpr int kLand = 1, kSeabed = 2, kSub = 4, kWater = 8, kAir = 0x10;
 constexpr float kGravityY = -4.9f;
 
+// A target's point as the flight code sees it. The flight code runs inside the motion pass, and an entity's new
+// transform is committed only at the beat's end: a target WITHOUT an aim bone is the entity's position, which
+// for the original is still where the beat began even when the target has already taken its step. (With an aim
+// bone the point comes from the pose, which moved with the target's own step.)
+Vec3 TargetPosNow(Sim& sim, const AiTarget& t) {
+  Vec3 p = combat::TargetPos(sim, t, false);
+  if (const Entity* te = combat::TargetEntity(sim, t); te && te->shapeHeld && t.aimBone < 0)
+    p = {p.x - te->position.x + te->shapePos.x, p.y - te->position.y + te->shapePos.y,
+         p.z - te->position.z + te->shapePos.z};
+  return p;
+}
+
 int LayerBits(const std::string& l) {
   if (l == "Land") return kLand;
   if (l == "Seabed") return kSeabed;
@@ -987,10 +999,11 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
   float R = b.startTurnDistance * a.circleRatio;
   Entity* focus = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
   if (focus && (State(u, "Building") || State(u, "Repairing"))) {
-    cx = focus->position.x;
-    cz = focus->position.z;
+    const Vec3& fp = focus->shapeHeld ? focus->shapePos : focus->position;  // as the beat began (see TargetPosNow)
+    cx = fp.x;
+    cz = fp.z;
   } else if (combat::HasTarget(sim, target)) {
-    Vec3 tp = combat::TargetPos(sim, target, false);
+    Vec3 tp = TargetPosNow(sim, target);
     cx = tp.x;
     cz = tp.z;
     UnitWeapon* w = nullptr;
@@ -1183,7 +1196,7 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   Entity* E = combat::TargetEntity(sim, tgt);
   if (E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air") {
     Unit* tu = static_cast<Unit*>(E);
-    float tgtY = tu->motion.air ? h + tu->motion.air->bp->elevation : combat::TargetPos(sim, tgt, false).y;
+    float tgtY = tu->motion.air ? h + tu->motion.air->bp->elevation : TargetPosNow(sim, tgt).y;
     float want = b.elevation * 0.5f + h;
     return std::max(want, tgtY) - u->position.y;
   }
@@ -1191,10 +1204,12 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   return (h + b.elevation) - u->position.y;
 }
 
+// "position != previous position" of ANOTHER entity (entity+0xac against +0xc8): both are the transforms the
+// beat began with, whether or not that entity has already taken its step in this beat
 bool MovedThisTick(const Entity* e) {
   if (e->kind != Entity::Kind::Unit) return false;
   const Unit* t = static_cast<const Unit*>(e);
-  return !IsZeroBits(t->motion.lastMove);
+  return !IsZeroBits(t->motion.velCommitted);
 }
 
 // CUnitMotion::ComputeAirCombatTactics 0x6bcdb0
@@ -1204,7 +1219,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   uint32_t now = sim.tick();
   float speed = u->motion.speedMult * b.maxAirspeed;
   Vec3 pos = u->position;
-  Vec3 tp = combat::TargetPos(sim, tgt, false);
+  Vec3 tp = TargetPosNow(sim, tgt);
   Vec3 diff{tp.x - pos.x, tp.y - pos.y, tp.z - pos.z};
   float d3 = std::sqrt((diff.x * diff.x + diff.y * diff.y) + diff.z * diff.z);
   float d2 = std::sqrt(diff.x * diff.x + diff.z * diff.z);
@@ -1224,7 +1239,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         if (E && tgt.mobile) {
           float t = 1.0f;
           if (b.predictAheadForBombDrop > 0 && !eAir) t = b.predictAheadForBombDrop;
-          Vec3 p = E->kind == Entity::Kind::Unit ? PredictAhead(sim, static_cast<Unit*>(E), t) : Vec3{};
+          Vec3 p = E->kind == Entity::Kind::Unit ? PredictAhead(sim, static_cast<Unit*>(E), t, true) : Vec3{};
           out = {p.x - pos.x, p.y - pos.y, p.z - pos.z};
         } else {
           out = {dir3.x * d3, dir3.y * d3, dir3.z * d3};
@@ -1961,20 +1976,27 @@ void AirAbort(Sim& sim, Unit* u) {
   u->motion.hasGoal = false;
 }
 
-Vec3 PredictAhead(Sim& sim, Unit* u, float t) {
+Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   (void)sim;
-  Vec3 p = u->position;
-  if (!u->motion.air) return p;
-  const PhysBody& pb = A(u).body;
-  // world angular velocity: R * (invI (.) R^T L)
-  QuatW conj{pb.q.w, -pb.q.x, -pb.q.y, -pb.q.z};
-  Vec3 lb = MultQuadVec(conj, pb.L);
-  Vec3 wb{lb.x * pb.invI[0], lb.y * pb.invI[1], lb.z * pb.invI[2]};
-  Vec3 w = MultQuadVec(pb.q, wb);
+  // asked of ANOTHER unit inside the motion pass: its position and its last displacement are those the beat
+  // began with (the transform is committed at the beat's end), its body's turn rate is the one of now
+  Vec3 p = other && u->shapeHeld ? u->shapePos : u->position;
+  // every unit with a motion has the body (unit+0x4b0, unit+0x1fc): a walking or driving unit is carried on
+  // along its velocity too, its body just never turns (seen: bombers leading a commander who starts to walk)
+  if (!u->motion.air && !(u->motion.bp && u->motion.bp->mobile())) return p;
+  Vec3 w{};
+  if (u->motion.air) {
+    const PhysBody& pb = A(u).body;
+    // world angular velocity: R * (invI (.) R^T L)
+    QuatW conj{pb.q.w, -pb.q.x, -pb.q.y, -pb.q.z};
+    Vec3 lb = MultQuadVec(conj, pb.L);
+    Vec3 wb{lb.x * pb.invI[0], lb.y * pb.invI[1], lb.z * pb.invI[2]};
+    w = MultQuadVec(pb.q, wb);
+  }
   // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
   // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
   // transport coming down on its landing spot (layer Land) is "not moving" for this
-  Vec3 v = u->layer == "Air" ? u->motion.lastMove : u->motion.vel;
+  Vec3 v = u->layer == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : u->motion.vel;
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
   QuatW q{c, 0, s, 0};

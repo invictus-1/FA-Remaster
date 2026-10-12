@@ -27,6 +27,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/air.h"
 #include "sim/blueprints.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
@@ -233,6 +234,12 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     Vec3 v = Mul(EntityVelocity(p->launcher), 10);
     if (HasTarget(*this, target) && p->launcher->kind == Entity::Kind::Unit) {
       Vec3 T = TargetPos(*this, target, false);
+      // a mobile target is led by the launcher's Air.PredictAheadForBombDrop seconds (0x62cd40)
+      const Unit* lu0 = static_cast<const Unit*>(p->launcher);
+      const float ahead = lu0->motion.air && lu0->motion.air->bp ? lu0->motion.air->bp->predictAheadForBombDrop : 0;
+      if (ahead > 0 && target.mobile)
+        if (Entity* te = TargetEntity(*this, target); te && te->kind == Entity::Kind::Unit)
+          T = PredictAhead(*this, static_cast<Unit*>(te), ahead, true);
       Vec3 dd{T.x - p->launcher->position.x, 0, T.z - p->launcher->position.z};
       v = Mul(Norm(dd), Len(v));
     }

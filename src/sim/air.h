@@ -154,7 +154,7 @@ void AirAbort(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
 void AirSpeedThroughEvent(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.
-Vec3 PredictAhead(Sim& sim, Unit* u, float t);
+Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other = false);
 // Warp: re-sync the body and the terrain height.
 void AirWarp(Sim& sim, Unit* u);
 // CUnitMotion::ProcessFuelLevels 0x6b9940 (fuel.md 3): burn in the air, refuel on the ground or

@@ -759,6 +759,10 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
     if (w->bp->needToComputeBombDrop && HasTarget(sim, w->target)) {
       if (!u->unitStates.count("MakingAttackRun")) return false;
       Vec3 T = TargetPos(sim, w->target, false);
+      // a mobile target is led: where it will be in Air.PredictAheadForBombDrop seconds (0x62cd40)
+      if (cb.predictAheadForBombDrop > 0 && w->target.mobile)
+        if (Entity* te = TargetEntity(sim, w->target); te && te->kind == Entity::Kind::Unit)
+          T = PredictAhead(sim, static_cast<Unit*>(te), cb.predictAheadForBombDrop, true);
       Vec3 R = CalcBombDrop(u, T);
       if (IsNaN(R)) return false;
       float d = DistXZ(u->position, R), thr = w->bp->bombDropThreshold;
@@ -2463,8 +2467,9 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
     WeaponCall(sim, u->weapons[static_cast<size_t>(t.adata->ocWeapon)], "OnDisableWeapon");  // dtor 0x5f41e4
   // the task's teardown clears its unit states also when the unit died (seen: a killed unit's queue empties and
   // "Attacking" goes in the same beat)
+  // (MakingAttackRun is not the task's: only the flight code sets it and clears it, in its own pass; a killed
+  // aircraft keeps it)
   u->unitStates.erase("Attacking");
-  u->unitStates.erase("MakingAttackRun");
   if (u->dead || u->destroyQueued) return;
   // the dtor 0x5f4160: IgnoreFormation(false), attacker.Stop() 0x5d56f0 = SetDesiredTarget(none) whatever the
   // desired target was (every weapon is told SetTarget(none): one that still holds a target, also a long dead
