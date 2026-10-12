@@ -230,6 +230,37 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   return e.id;
 }
 
+void Particles::Flash(const std::string& texture, const std::string& ramp, Vec3 position, float size, float ticks, double startedAt) {
+  if (ticks <= 0 || size <= 0) return;
+  // a blueprint of its own for every pair of textures: flat, adding its light
+  const std::string key = "light:" + moho::Vfs::Normalize(texture) + "|" + moho::Vfs::Normalize(ramp);
+  std::unique_ptr<EmitterBlueprint>& bp = blueprints_[key];
+  if (!bp) {
+    bp = std::make_unique<EmitterBlueprint>();
+    bp->ok = true;
+    bp->flat = true;
+    bp->blendMode = 3;
+    bp->texture = vfs_->Exists(texture) ? textures_->Get(texture, textures_->White()) : textures_->White();
+    bp->ramp = vfs_->Exists(ramp) ? textures_->Get(ramp, textures_->White()) : textures_->White();
+  }
+  std::unique_ptr<Set>& set = sets_[bp.get()];
+  if (!set) {
+    set = std::make_unique<Set>();
+    set->blueprint = bp.get();
+    order_.push_back(set.get());
+  }
+  Particle p{};
+  p.position[0] = position.x;
+  p.position[1] = position.y;
+  p.position[2] = position.z;
+  p.startTime = static_cast<float>(startedAt >= 0 ? startedAt : now_);
+  p.lifetime = ticks * kTick;
+  p.size = size;
+  p.stripHeight = p.frameSize = 1;
+  p.rampV = 0.5f;
+  set->particles.push_back(p);
+}
+
 Particles::Emitter* Particles::Find(uint32_t id) {
   auto it = index_.find(id);
   return it == index_.end() ? nullptr : &emitters_[it->second];

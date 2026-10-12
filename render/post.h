@@ -21,6 +21,9 @@ class Post {
   gfx::Texture Depth() const { return depth_; }
   // Begins the scene's pass again after a pass in between, keeping what was drawn.
   void ContinueScene();
+  // Begins a pass into the scene's colour alone, keeping what was drawn: for work that reads the
+  // scene's depth while it changes the colour (decals). ContinueScene afterwards.
+  void BeginColorOnly();
   // Begins the window's pass and draws the scene's picture into it. More may be drawn on top after.
   void Present(const View& view);
 

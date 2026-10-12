@@ -63,6 +63,10 @@ class Particles {
   uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1);
   // Where an emitter is now (one that sits on something that moves).
   void Move(uint32_t emitter, Vec3 position, const Quat& orientation);
+  // One flat glow on the ground that lives `ticks` and is coloured by `ramp` along that time: the
+  // original's "light particle", the light an explosion throws on its surroundings. `texture` and
+  // `ramp` are paths. `size` is half its edge.
+  void Flash(const std::string& texture, const std::string& ramp, Vec3 position, float size, float ticks, double startedAt = -1);
   // What the game's scripts change on an emitter: its size (ScaleEmitter), and how long it runs,
   // in ticks (the LIFETIME parameter; negative: until stopped).
   void SetScale(uint32_t emitter, float scale);

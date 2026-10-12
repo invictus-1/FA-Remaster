@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "decals.h"
 #include "frame.h"
 #include "linalg.h"
 #include "models.h"
@@ -22,7 +23,8 @@ namespace render {
 
 class Effects {
  public:
-  Effects(Particles* particles, Ribbons* ribbons, ModelCache* models) : particles_(particles), ribbons_(ribbons), models_(models) {}
+  Effects(Particles* particles, Ribbons* ribbons, Decals* decals, ModelCache* models)
+      : particles_(particles), ribbons_(ribbons), decals_(decals), models_(models) {}
 
   // Events in the order the simulation made them.
   void Queue(std::vector<FrameEffectEvent>&& events);
@@ -35,8 +37,9 @@ class Effects {
 
   int live = 0;        // effects being kept
   int started = 0;     // since the beginning
-  int notShown = 0;    // events for kinds of effect that are not drawn yet (light particles, decals)
+  int notShown = 0;    // events for kinds of effect that are not drawn yet (decals other than albedo ones, splats on bones)
   float cpuMs = 0;     // Update on the processor, averaged over the last frames
+  bool verbose = false;  // says each kind of light flash and decal once, as it first appears
 
  private:
   enum class Kind { Emitter, Trail, Beam, TextureBeam };
@@ -61,9 +64,11 @@ class Effects {
 
   Particles* particles_;
   Ribbons* ribbons_;
+  Decals* decals_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;
   std::unordered_map<uint32_t, Effect> effects_;
+  std::unordered_map<std::string, int> said_;
   std::unordered_map<uint32_t, int> hanging_;  // entity -> how many effects hang on it
   std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_;  // this frame: entity id -> index in the frame's lists
 };

@@ -61,6 +61,7 @@ compiled at start by the `d3dcompiler_47.dll` that is part of Windows.
                [--preview <unit id>=<folder>] [--place <unit id>] [--at x,z] [--heading 25] [--pitch 32]
                [--crowd <unit id>=<count>] [--turn <bone>] [--bones]
                [--emit <emitter>]... [--emit-scale 1] [--beam <blueprint>]... [--trail <blueprint>]...
+               [--hide particles,bands,decals]
                [--detail 1] [--msaa 4] [--ao 1]
                [--look modern|original] [--noshadows] [--noicons] [--icon-scale <n>]
                [--sun 1.4] [--sky 1.1] [--exposure 0.55] [--reflection 0.7]
@@ -129,6 +130,7 @@ prints what it reports.
 | `icons.h` | strategic icons: the game's symbols for units seen from far away, all in one draw call |
 | `particles.h` | particle effects: the game's emitter blueprints played, the particles moved by the graphics card |
 | `ribbons.h` | beams and trails: bands of texture that face the camera, from the game's beam and trail blueprints |
+| `decals.h` | pictures laid on the ground (scorch marks, markers) and the light explosions throw on it, by the scene's depth |
 | `effects.h` | a running game's effects: the scripts' effect calls turned into emitters, beams and trails, kept on what they hang on |
 | `recording.h` | a tick recording as a source of frames |
 | `live_sim.h` | the running simulation as a source of frames: the engine on its own thread, beats copied out |
@@ -182,7 +184,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the pose shown), its projectile, or its weapon's beam. So fights show the game's own muzzle
   flashes, shots and trails, impacts, explosions and smoke. Acted on: `ScaleEmitter`,
   `OffsetEmitter`, the `LIFETIME` parameter, `AttachBeamToEntity`; the other parameter and curve
-  calls are not yet. As in the original, an emitter out of the picture or farther from the camera
+  calls are not yet. The scripts' decals and splats (scorch marks, the mass and hydrocarbon
+  markers) are laid on the ground: after the ground is drawn and before anything stands on it,
+  each one's box is drawn and the ground's place under every pixel is worked out from the
+  picture's depth, so a mark follows the ground exactly and never climbs onto a unit. The
+  scripts' "light particles" (the light an explosion throws around it; in the original a flat
+  sheet drawn over everything) are laid on the ground the same way, adding their light; they do
+  not light units yet (that comes with real lights). As in the original, an emitter out of the picture or farther from the camera
   than its blueprint's `LODCutoff` throws nothing out. Measured at 1080p on an RTX 4090: a fight
   close up with 14,600 particles of 246 emitters, 0.8 ms a frame; a ten-minute game of eight
   armies seen whole, 4,075 live effects (all emitters too far away to throw anything), 2.2 ms a
@@ -265,9 +273,10 @@ Known gaps, to be closed in the steps they belong to:
   edge is still drawn in both.
 - Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
   is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
-- No decals, no sky, no ground beyond the map's edge. Effects: no light particles (the flash of
-  light an explosion throws on its surroundings), no decals or scorch marks; scripts' changes to
-  emitter curves are ignored; particles are not sorted by distance, do not refract
+- The MAP's own decals are read but not drawn yet (their normal decals need the ground's lighting
+  to take them in). No sky, no ground beyond the map's edge. Effects: only albedo decals; no
+  splats on bones; explosion light falls on the ground only; scripts' changes to emitter curves
+  are ignored; particles are not sorted by distance, do not refract
   (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).

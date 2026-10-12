@@ -28,6 +28,8 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
+// --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
+//           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
 //           trail (behind a point circling it); a name such as phalanx_munition_beam_01, or a path
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
@@ -66,6 +68,7 @@
 #include "core/vfs.h"
 #include "script/mount.h"
 #include "debug_draw.h"
+#include "decals.h"
 #include "effects.h"
 #include "frame.h"
 #include "gfx.h"
@@ -120,6 +123,7 @@ struct Options {
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
+  std::string hide;    // --hide: kinds of effect left out
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
   float ao = 1;        // ambient occlusion in the modern look: 0 off, 1 full
@@ -170,6 +174,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--turn") o->turn = v;
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
+    else if (a == "--hide") o->hide = v;
     else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
@@ -366,7 +371,13 @@ int main(int argc, char** argv) {
     fprintf(stderr, "render: shader: %s\n", error.c_str());
     return 1;
   }
-  Effects effects(&particles, &ribbons, &models);
+  Decals decals(device.get(), &vfs, &textures);
+  if (!decals.Init(&error)) {
+    fprintf(stderr, "render: shader: %s\n", error.c_str());
+    return 1;
+  }
+  Effects effects(&particles, &ribbons, &decals, &models);
+  effects.verbose = opt.debug;
   std::vector<FrameEffectEvent> effectEvents;
   StrategicIcons icons(device.get(), &vfs);
   if (!icons.Init(&error)) {
@@ -857,6 +868,12 @@ int main(int argc, char** argv) {
     device->SetTexture(kEnvironmentSlot, sky);
     if (haveMap) {
       terrain->Draw(view);
+      // decals on the ground, before anything stands on it: they read the ground's depth
+      if (decals.Count() && opt.hide.find("decals") == std::string::npos) {
+        post.BeginColorOnly();
+        decals.Draw(view, camera, post.Depth(), havePlay ? playTick * 0.1 : static_cast<double>(time));
+        post.ContinueScene();
+      }
       meshes.Draw(view, environment);
       draw.Flush(view);
       // ambient occlusion: from the depth of everything solid, laid over it before the water
@@ -870,8 +887,9 @@ int main(int argc, char** argv) {
       DrawTestScene(draw);
       draw.Flush(view);
     }
-    ribbons.Draw(view);    // beams and trails, then particles: over everything solid and the water, by the scene's depth
-    particles.Draw(view);
+    // beams and trails, then particles: over everything solid and the water, by the scene's depth
+    if (opt.hide.find("bands") == std::string::npos) ribbons.Draw(view);
+    if (opt.hide.find("particles") == std::string::npos) particles.Draw(view);
     post.Present(view);
     if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
 
@@ -901,8 +919,8 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (haveLive)
-        printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms", effects.live, effects.started, effects.notShown,
-               ribbons.drawnBands, effects.cpuMs);
+        printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
+               effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
       break;
