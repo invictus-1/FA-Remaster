@@ -19,6 +19,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/command_writer.h"
+#include "sim/session.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "user/bindings.h"
@@ -635,6 +636,172 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
   return true;
 }
 
+namespace {
+
+// --- orders that need no place ---
+
+// The engine's command numbers by the names scripts use ("UNITCOMMAND_Stop" or "Stop").
+const struct {
+  const char* name;
+  CommandType type;
+} kCommandNames[] = {
+    {"Stop", CommandType::Stop}, {"Move", CommandType::Move}, {"Dive", CommandType::Dive}, {"FormMove", CommandType::FormMove},
+    {"BuildSiloTactical", CommandType::BuildSiloTactical}, {"BuildSiloNuke", CommandType::BuildSiloNuke},
+    {"BuildFactory", CommandType::BuildFactory}, {"BuildMobile", CommandType::BuildMobile}, {"BuildAssist", CommandType::BuildAssist},
+    {"Attack", CommandType::Attack}, {"FormAttack", CommandType::FormAttack}, {"Nuke", CommandType::Nuke},
+    {"Tactical", CommandType::Tactical}, {"Teleport", CommandType::Teleport}, {"Guard", CommandType::Guard},
+    {"Patrol", CommandType::Patrol}, {"Ferry", CommandType::Ferry}, {"FormPatrol", CommandType::FormPatrol},
+    {"Reclaim", CommandType::Reclaim}, {"Repair", CommandType::Repair}, {"Capture", CommandType::Capture},
+    {"TransportLoadUnits", CommandType::TransportLoadUnits}, {"TransportReverseLoadUnits", CommandType::TransportReverseLoadUnits},
+    {"TransportUnloadUnits", CommandType::TransportUnloadUnits},
+    {"TransportUnloadSpecificUnits", CommandType::TransportUnloadSpecificUnits},
+    {"DetachFromTransport", CommandType::DetachFromTransport}, {"Upgrade", CommandType::Upgrade}, {"Script", CommandType::Script},
+    {"AssistCommander", CommandType::AssistCommander}, {"KillSelf", CommandType::KillSelf}, {"DestroySelf", CommandType::DestroySelf},
+    {"Sacrifice", CommandType::Sacrifice}, {"Pause", CommandType::Pause}, {"OverCharge", CommandType::OverCharge},
+    {"AggressiveMove", CommandType::AggressiveMove}, {"FormAggressiveMove", CommandType::FormAggressiveMove},
+    {"AssistMove", CommandType::AssistMove}, {"SpecialAction", CommandType::SpecialAction}, {"Dock", CommandType::Dock},
+};
+bool CommandByName(std::string name, CommandType* type, const char** plain) {
+  if (name.rfind("UNITCOMMAND_", 0) == 0) name = name.substr(12);
+  for (const auto& c : kCommandNames)
+    if (name == c.name) {
+      *type = c.type;
+      *plain = c.name;
+      return true;
+    }
+  return false;
+}
+
+// The entity ids of the player's own living units in a list.
+void OwnIds(lua_State* L, const std::vector<UserUnit*>& list, std::vector<uint32_t>* ids, std::vector<UserUnit*>* units) {
+  int army = TheSim(L)->focusArmy + 1;
+  for (UserUnit* u : list)
+    if (!u->gone && !u->view.dead && u->view.army == army) ids->push_back(u->view.id), units->push_back(u);
+}
+
+// One order without a place for a list of units: `params` (a stack index or 0) is the order's Lua
+// value, as a Script order carries one.
+bool IssuePlain(lua_State* L, const std::vector<UserUnit*>& list, const std::string& command, int params, bool clear,
+                const std::string& blueprint, int count) {
+  CommandType type;
+  const char* plain;
+  if (!CommandByName(command, &type, &plain)) {
+    Logf(LogLevel::Warning, "moho64ui: unknown order '%s'", command.c_str());
+    return false;
+  }
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  OwnIds(L, list, &ids, &units);
+  if (ids.empty()) return false;
+  StreamIssueData d;
+  d.type = static_cast<int>(type);
+  d.blueprint = blueprint;
+  d.count = d.maxCount = count;
+  if (params && lua_istable(L, params)) SerializeLua(L, params, &d.lua);
+  // Scripts issue Stop without saying "clear" and expect the units to stop at once, so a Stop
+  // empties the queue. (Inferred: where the original decides that.)
+  if (type == CommandType::Stop) clear = true;
+  Writer(L).IssueCommand(ids, d, clear);
+  ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint);
+  return true;
+}
+
+// IssueCommand(command [, luaParams [, clear]]): an order for the selected units
+int l_IssueCommand(lua_State* L) {
+  IssuePlain(L, Store(L).selection, luaL_checkstring(L, 1), lua_istable(L, 2) ? 2 : 0, lua_toboolean(L, 3) != 0, std::string(), 1);
+  return 0;
+}
+// IssueUnitCommand(units, command [, luaParams [, clear]])
+int l_IssueUnitCommand(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  IssuePlain(L, list, luaL_checkstring(L, 2), lua_istable(L, 3) ? 3 : 0, lua_toboolean(L, 4) != 0, std::string(), 1);
+  return 0;
+}
+// IssueBlueprintCommand(command, blueprintId, count [, clear]): for the selected units (a factory's
+// build order). It goes behind what is queued unless `clear` says otherwise.
+int l_IssueBlueprintCommand(lua_State* L) {
+  IssuePlain(L, Store(L).selection, luaL_checkstring(L, 1), 0, lua_toboolean(L, 4) != 0, luaL_checkstring(L, 2),
+             static_cast<int>(luaL_optnumber(L, 3, 1)));
+  return 0;
+}
+// IssueBlueprintCommandToUnit(unit, command, blueprintId, count [, clear])
+int l_IssueBlueprintCommandToUnit(lua_State* L) {
+  std::vector<UserUnit*> list;
+  if (UserUnit* u = ToUnit(L, 1)) list.push_back(u);
+  IssuePlain(L, list, luaL_checkstring(L, 2), 0, lua_toboolean(L, 5) != 0, luaL_checkstring(L, 3), static_cast<int>(luaL_optnumber(L, 4, 1)));
+  return 0;
+}
+
+// GetUnitCommandFromCommandCap(cap): the order's name for an order cap ("RULEUCC_Stop" ->
+// "UNITCOMMAND_Stop"). (Inferred pairs where the two names differ.)
+int l_GetUnitCommandFromCommandCap(lua_State* L) {
+  std::string cap = luaL_checkstring(L, 1);
+  if (cap.rfind("RULEUCC_", 0) == 0) cap = cap.substr(8);
+  static const char* const kOther[][2] = {{"Overcharge", "OverCharge"}, {"SiloBuildTactical", "BuildSiloTactical"},
+                                          {"SiloBuildNuke", "BuildSiloNuke"}, {"Transport", "TransportUnloadUnits"},
+                                          {"CallTransport", "TransportLoadUnits"}, {"RetaliateToggle", "None"}};
+  for (const auto& o : kOther)
+    if (cap == o[0]) cap = o[1];
+  lua_pushstring(L, ("UNITCOMMAND_" + cap).c_str());
+  return 1;
+}
+
+// SimCallback({Func = name, Args = table} [, addUnitSelection]): the simulation's script runs the
+// named callback with the arguments, and with the selected units when asked.
+int l_SimCallback(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_pushstring(L, "Func");
+  lua_gettable(L, 1);
+  std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+  lua_pop(L, 1);
+  lua_pushstring(L, "Args");
+  lua_gettable(L, 1);
+  std::string args;
+  if (!lua_isnil(L, -1)) SerializeLua(L, lua_gettop(L), &args);
+  lua_pop(L, 1);
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  if (lua_toboolean(L, 2)) OwnIds(L, Store(L).selection, &ids, &units);
+  if (!name.empty()) Writer(L).LuaSimCallback(name, args, ids);
+  return 0;
+}
+
+// A switch on every own unit of a list: the simulation is told by key and value.
+void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& value) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, listIdx, &list);
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  OwnIds(L, list, &ids, &units);
+  for (uint32_t id : ids) Writer(L).ProcessInfoPair(id, key, value);
+}
+// SetPaused(units, paused), SetAutoMode(units, on), SetFireState(units, state),
+// ToggleFireState(units, currentState), ToggleScriptBit(units, bit, currentState)
+int l_SetPaused(lua_State* L) {
+  InfoPair(L, 1, "SetPaused", lua_toboolean(L, 2) ? "true" : "false");
+  return 0;
+}
+int l_SetAutoMode(lua_State* L) {
+  InfoPair(L, 1, "SetAutoMode", lua_toboolean(L, 2) ? "true" : "false");
+  return 0;
+}
+int l_SetFireState(lua_State* L) {
+  InfoPair(L, 1, "SetFireState", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
+  return 0;
+}
+int l_ToggleFireState(lua_State* L) {  // the next of the three states
+  int current = static_cast<int>(luaL_optnumber(L, 2, 0));
+  InfoPair(L, 1, "SetFireState", std::to_string(current < 0 ? 0 : (current + 1) % 3));
+  return 0;
+}
+int l_ToggleScriptBit(lua_State* L) {
+  InfoPair(L, 1, "ToggleScriptBit", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
+  return 0;
+}
+
+}  // namespace
+
 // After a beat: the interface's units follow the simulation's.
 void RefreshUserUnits(lua_State* L) {
   Sim* sim = TheSim(L);
@@ -683,6 +850,17 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetIdleFactories", l_GetIdleFactories);
   SetGlobal(L, "GetUnitCommandData", l_GetUnitCommandData);
   SetGlobal(L, "GetFireState", l_ListZero);
+  SetGlobal(L, "IssueCommand", l_IssueCommand);
+  SetGlobal(L, "IssueUnitCommand", l_IssueUnitCommand);
+  SetGlobal(L, "IssueBlueprintCommand", l_IssueBlueprintCommand);
+  SetGlobal(L, "IssueBlueprintCommandToUnit", l_IssueBlueprintCommandToUnit);
+  SetGlobal(L, "GetUnitCommandFromCommandCap", l_GetUnitCommandFromCommandCap);
+  SetGlobal(L, "SimCallback", l_SimCallback);
+  SetGlobal(L, "SetPaused", l_SetPaused);
+  SetGlobal(L, "SetAutoMode", l_SetAutoMode);
+  SetGlobal(L, "SetFireState", l_SetFireState);
+  SetGlobal(L, "ToggleFireState", l_ToggleFireState);
+  SetGlobal(L, "ToggleScriptBit", l_ToggleScriptBit);
   for (const char* name : {"GetScriptBit", "GetIsPaused", "GetIsAutoMode", "GetIsAutoSurfaceMode"}) SetGlobal(L, name, l_ListFalse);
   for (const char* name : {"GetAttachedUnitsList", "GetAssistingUnitsList"}) SetGlobal(L, name, l_ListEmpty);
 

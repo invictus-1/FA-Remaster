@@ -3,7 +3,7 @@
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
 -- the lobby) with the player in the first slot:
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 840 --log out.log
+--            --frames 960 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -89,6 +89,13 @@ local function run()
     WaitSeconds(3)
     local now = cdr:GetPosition()
     check("the commander walks towards a right click", now[1] > pos[1] + 2, true)
+    check("an order's command name", GetUnitCommandFromCommandCap("RULEUCC_Stop"), "UNITCOMMAND_Stop")
+    IssueUnitCommand({cdr}, "Stop")
+    WaitSeconds(1)
+    local a = cdr:GetPosition()
+    WaitSeconds(1)
+    local b = cdr:GetPosition()
+    check("Stop halts it", math.abs(a[1] - b[1]) < 0.01 and math.abs(a[3] - b[3]) < 0.01, true)
 
     -- command modes: the script's mode decides what a left click in the world does
     local CM = import("/lua/ui/game/commandmode.lua")
