@@ -284,6 +284,37 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
   const std::string preview = "/preview/" + base + "/";
   const bool previewed = !original && vfs_->Exists(preview + base + "_lod0.scm");
+  // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md)
+  if (!original) {
+    const std::string file = previewed ? preview + base + "_lights.bp" : "/mods/labvisuals/textures/" + base + "/" + base + "_lights.bp";
+    auto text = vfs_->Exists(file) ? vfs_->ReadFile(file) : std::nullopt;
+    BpValue list;
+    if (text && !ReadBlueprintFile(*text, &list)) fprintf(stderr, "render: %s: the list of lights cannot be read\n", file.c_str());
+    for (const BpValue& entry : list.items) {
+      if (m->lights.size() >= 16) break;
+      auto three = [&](const char* name, Vec3 fallback) {
+        const BpValue& v = entry[name];
+        if (v.items.size() < 3) return fallback;
+        return Vec3{static_cast<float>(v.Item(0).NumberOr(0)), static_cast<float>(v.Item(1).NumberOr(0)), static_cast<float>(v.Item(2).NumberOr(0))};
+      };
+      ModelLight light;
+      const Vec3 at = three("Position", {0, 0, 0});  // in the mesh's own coordinates, at rest
+      light.place = at;
+      const std::string bone = Lower(entry["Bone"].StringOr(std::string()));
+      for (size_t b = 0; !bone.empty() && b < m->bones.size(); ++b)
+        if (Lower(m->bones[b].name) == bone) {
+          light.bone = static_cast<int>(b);
+          light.place = Rotate(Conjugate(m->bones[b].rotation), at - m->bones[b].position);
+          break;
+        }
+      if (!bone.empty() && light.bone < 0) fprintf(stderr, "render: %s: no bone named %s (the light rides on the unit itself)\n", file.c_str(), bone.c_str());
+      light.color = three("Color", {1, 1, 1});
+      light.radius = static_cast<float>(entry["Radius"].NumberOr(1.5));
+      light.strength = static_cast<float>(entry["Strength"].NumberOr(1));
+      light.blink = static_cast<float>(entry["Blink"].NumberOr(0));
+      m->lights.push_back(light);
+    }
+  }
   if (previewed) {
     size_t count = 1;
     while (count < 8 && vfs_->Exists(preview + base + "_lod" + std::to_string(count) + ".scm")) ++count;
@@ -302,6 +333,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     if (kind == "vertexnormal") {  // the far-away cards of trees: alpha test above 0x23, blended
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
+      lod.teamMask = false;
+    } else if (kind == "labpbralpha") {  // remastered foliage and the like
+      lod.alphaCut = 0.5f;
+      lod.leaves = true;
       lod.teamMask = false;
     } else if (kind.find("alpha") != std::string::npos) {  // NormalMappedAlpha and its relatives: alpha test above 0x80
       lod.alphaCut = 128.0f / 255;
@@ -325,9 +360,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     };
     lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White());
     lod.normals = texture(s.normals, s.normalsNamed, textures_->FlatNormal());
-    lod.specular = texture(s.specular, s.specularNamed, textures_->Black());
+    lod.specular = texture(s.specular, s.specularNamed, gfx::Texture{});  // (none: black, or see plainMaterial below)
     lod.secondary = texture(s.secondary, s.secondaryNamed, textures_->White());
-    lod.labPbr = kind == "labpbr";
+    lod.labPbr = kind == "labpbr" || kind == "labpbralpha";
     // Remastered textures from outside the blueprint: a previewed model's own, for every level; or,
     // when the names were read from a .bp file (which does not show what mods' scripts change), the
     // lab's LabVisuals mod's for the finest level, as that mod's script would set them.
@@ -342,6 +377,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.labPbr = true;
       lod.shaderName = "LabPBR";
     }
+    if (!lod.labPbr && !lod.specular) lod.specular = textures_->Black();
+    lod.plainMaterial = lod.labPbr && !lod.specular;
+    if (lod.plainMaterial) lod.specular = textures_->Black();
     m->lods.push_back(std::move(lod));
   }
   m->ok = !m->lods.empty();

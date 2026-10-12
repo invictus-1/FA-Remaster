@@ -307,6 +307,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   at yet: the minimap's ground (drawn once, in the map's light), and how bright the game's flashes
   should be to an eye opened for the night. The original look ignores the time of day. Cost: none
   that can be measured (1.3 ms a frame at 1920 x 1080 with half the picture sky, with or without).
+- Lamps on units (modern look, with a time of day). A remastered unit may bring a list of its
+  lights (`<id>_lights.bp`; the form is in `docs/render-unit-lights.md`): points of light that ride
+  on its bones. From dusk to dawn they are lit, as small lights (next point), for the units near
+  what the camera looks at. Tried with a hand-made list on the Striker; no unit ships one yet.
 - Small lights (modern look). A light is a point that lights what is within its radius. Every
   frame the lights are sorted into a grid of squares over the ground, and a pixel looks only at
   the lights of the square it is over - ground, units and decals alike, with the same material
@@ -339,6 +343,14 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
     the ALBEDO's alpha and a dim detail picture in its colour, the surface being metal throughout.
     The weights were set by eye on a few units of each faction and await a look by someone who
     knows the game well.
+  - `ShaderName = 'LabPBRAlpha'`: the same material with holes, for ferns, grass tufts, needles and
+    the like. The ALBEDO's alpha says where the surface is (cut at one half); the holes' edges are
+    a pixel wide and smoothed by the picture's several samples a pixel (alpha to coverage), so
+    nothing is blended or sorted. The surface is seen from both sides and lit as facing whoever
+    looks, so a leaf needs one face only. There is no team colour: the specular texture's alpha is
+    instead how much light comes through from the far side (0 none, 1 much; leaves glow against the
+    sun). It casts and takes shadows with its holes. A level of either material without a specular
+    texture is drawn rough, without metal or glow. Not yet: wind.
   - The original look has each faction's formula too (shader names `Unit`, `Aeon`, `Insect`,
     `Seraphim` and their `...Navy` forms), with two stand-ins: the Cybran highlight and the
     Seraphim reflection's view-angle ramp come from lookup textures that are not read yet.

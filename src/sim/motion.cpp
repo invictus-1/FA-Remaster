@@ -1537,11 +1537,12 @@ void MotionTick(Sim& sim, Unit* u) {
       // flattened by the facing above and not re-tilted: probe unit 0x90002f at ticks 142-143)
       moved = true;
       common = true;
-    } else if (!m.pushed) {
-      // (no spline point: standing, coasting to a stop, or with a goal the navigator is still thinking about. A
-      // hull with a weapon slaved to it turns toward that weapon's target in all of these: a launcher re-ordered
-      // every other beat turned 9 degrees in the one beat it had no spline. The formation's forward vector is
-      // only taken while the navigator is idle, which ArrivalTurn tests itself.)
+    } else {
+      // (no spline point: standing, coasting to a stop, pushed, or with a goal the navigator is still thinking
+      // about. A hull with a weapon slaved to it turns toward that weapon's target in all of these: a launcher
+      // re-ordered every other beat turned 9 degrees in the one beat it had no spline, and one pushed aside by a
+      // passing tank turned after its target on the third beat of the push. The formation's forward vector is only
+      // taken while the navigator is idle, which ArrivalTurn tests itself.)
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
       common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
       moved = Coast(u);
@@ -1549,9 +1550,6 @@ void MotionTick(Sim& sim, Unit* u) {
         m.needSnap = true;
         u->orientation = LookQuat(m.bx, 0.0f, m.bz);
       }
-    } else {
-      common = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
-      moved = Coast(u);  // pushed, or no spline point (the navigator is thinking): keeps rolling and slows down
     }
     if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {
       float dx = start.x - u->position.x, dz = start.z - u->position.z;

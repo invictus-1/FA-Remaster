@@ -55,7 +55,8 @@ cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only,
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
-  float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim
+  float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
+                // y: 1 = leaves (ModelLod::leaves); z: 1 = a remastered level without its material texture
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -113,13 +114,27 @@ void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
 }
 
-float4 Shade(VOut i) {
+float4 Shade(VOut i, bool front) {
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
   float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
   float occlusion = secondaryMap.Sample(samplerAniso, i.uv.xy).r;
-  if (kind.x > 0) clip(albedo.a - kind.x);
+  if (kind2.z > 0.5) spec = float4(0, 0.85, 0, kind2.y > 0.5 ? 0.35 : 0);  // rough, no metal; leaves let some light through
+  // holes: cut where the alpha is not above the mark; leaves get a soft edge a pixel wide instead,
+  // which the samples of a pixel turn into a smooth one (alpha to coverage)
+  float cover = 1;
+  if (kind2.y > 0.5) {
+    cover = saturate((albedo.a - kind.x) / max(fwidth(albedo.a), 1e-4) + 0.5);
+    clip(cover - 0.02);
+  } else if (kind.x > 0) {
+    clip(albedo.a - kind.x);
+  }
   float3 vertexNormal = normalize(i.normal);
+  if (kind2.y > 0.5 && !front) {  // a leaf seen from behind is lit as from behind
+    vertexNormal = -vertexNormal;
+    i.tangent = -i.tangent;
+    i.binormal = -i.binormal;
+  }
   float3 n = float3(nxy, sqrt(saturate(1 - dot(nxy, nxy))));
   float3 N = kind.y > 0.5 ? vertexNormal : normalize(n.x * normalize(i.binormal) + n.y * normalize(i.tangent) + n.z * vertexNormal);
   float shadow = SunShadow(i.world, vertexNormal);
@@ -182,7 +197,11 @@ float4 Shade(VOut i) {
       occlusion = 1;
     }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
-    return float4(lit * built, kind.y > 0.5 ? albedo.a : 1);
+    if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
+      float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
+      lit += base * falls * (saturate(dot(-N, sunDirection)) * shadow * CloudShadow(i.world) * spec.a * 0.6);
+    }
+    return float4(lit * built, kind.y > 0.5 ? albedo.a : cover);
   }
 
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
@@ -214,8 +233,8 @@ float4 Shade(VOut i) {
 }
 
 // a ghost: its shape in one colour, the light and dark of the model kept
-float4 PS(VOut i) : SV_Target {
-  float4 c = Shade(i);
+float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
+  float4 c = Shade(i, front);
   if (dot(i.tint, float3(1, 1, 1)) > 0) {
     float lightness = dot(c.rgb, float3(0.3, 0.6, 0.1));
     float3 tint = look > 0.5 ? ToLinear(i.tint) : i.tint;
@@ -248,6 +267,13 @@ bool MeshRenderer::Init(std::string* error) {
   pd.blend = gfx::Blend::Alpha;
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
+  pd.name = "models, leaves";
+  pd.blend = gfx::Blend::Opaque;
+  pd.cull = gfx::Cull::None;
+  pd.alphaToCoverage = true;
+  leaves_ = device_->CreatePipeline(pd, error);
+  if (!leaves_) return false;
+  pd.alphaToCoverage = false;
   pd.name = "models, shadow";
   pd.samples = 1;
   pd.blend = gfx::Blend::Opaque;
@@ -409,12 +435,13 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   if (!shadowPass) device_->SetTexture(3, environment ? environment : textures_->GreyCube());
 
-  bool blending = false;
+  int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    if (lod->blend && !blending && !shadowPass) {
-      device_->SetPipeline(blended_);
-      blending = true;
+    const int wanted = shadowPass ? 0 : lod->blend ? 2 : lod->leaves ? 1 : 0;
+    if (wanted != drawing) {
+      device_->SetPipeline(wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
+      drawing = wanted;
     }
     size_t n = 0;
     while (at + n < items_.size() && items_[at + n].lod == lod && n < kMaxInstances) {
@@ -423,7 +450,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       ++n;
     }
     const float kind[8] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
-                           static_cast<float>(lod->faction), 0, 0, 0};
+                           static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, 0};
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
