@@ -695,6 +695,19 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
   // 0x5a4342: while the goal still waits for its search (path state 2: a formation's path delay, the thinking
   // beat) the steering is told nothing; the navigator stays "thinking" and hands the target over afterwards
   if (n.targetChanged && n.active && n.state == 2) n.targetPending = true;
+  // 0x5a434c: what decides is whether the navigator's target differs from the steering's waypoint (memcmp
+  // 0x4f0a50 of the two points), not whether the target changed this beat. A formation member that sat out its
+  // path delay with its own cell as its target has given the steering nothing yet: in the beat its search starts
+  // the own cell goes over, its status becomes 2, and the first waypoint of the path is then a drive-through one.
+  // (Only while it is still "thinking" here: ours' steering does not keep its last waypoint after arriving.)
+  if (!n.targetChanged && !n.targetPending && n.active && n.state != 2 && n.thinking && n.hasTarget) {
+    const Vec3 wp0 = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z}
+                                                              : WorldOf(sim, u, n.target);
+    const UnitMotion& m0 = u->motion;
+    const bool same0 = m0.hasWaypoint && !m0.path.empty() && m0.path.back().x == wp0.x && m0.path.back().y == wp0.y &&
+                       m0.path.back().z == wp0.z;
+    if (!same0) n.targetPending = true;
+  }
   if ((n.targetChanged || n.targetPending) && n.active && n.state != 2) {
     n.targetPending = false;
     bool inGoal = InGoal(n, n.target);
