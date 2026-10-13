@@ -106,6 +106,7 @@ struct AirMotion {
   // navigator (CAiNavigatorAir)
   bool steering = false;     // status 2
   uint32_t destEntity = 0;   // SetDestUnit's entity: the target follows it every beat until the next SetGoal
+  bool reaimAtDest = false;  // it was at its target at the last beat's end and has a destination: re-aim, not arrive
   bool inFormation = false;  // navigator +0x88: follows its formation slot (air_nav 4.3)
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;

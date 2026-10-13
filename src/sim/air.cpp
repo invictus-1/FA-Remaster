@@ -2098,8 +2098,16 @@ void AirMotionTick(Sim& sim, Unit* u) {
       const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
       if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER"))
         SetTarget(sim, u, now, Vec3{}, 0);
+      // ... and anybody who would have ARRIVED (AtTarget, last beat's end) does not, while there is a destination
+      // entity: the target is taken from the entity again (0x5a50d0: "if dest: Update...; return" in place of
+      // status 0). So within its arrival radius - a second of flight for a fighter at speed - an aircraft follows
+      // its destination beat by beat, chaser or not. (Seen: the flight record's target of a patrolling fighter
+      // that attacks a passing aircraft is that aircraft's place of the beat before, every beat.)
+      else if (a.reaimAtDest)
+        SetTarget(sim, u, now, Vec3{}, 0);
     }
   }
+  a.reaimAtDest = false;
   Transform T{ToW(u->orientation), u->position};
   Vec3 start = u->position;
   bool idle = u->commands.empty();
@@ -2151,6 +2159,14 @@ void AirMotionTick(Sim& sim, Unit* u) {
       auto cell = [&](float v, int s) { return static_cast<int>(std::nearbyint(v - s * 0.5f)); };
       at = cell(a.target.x, ab.footprintX) == cell(a.goal.x, ab.footprintX) &&
            cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
+    }
+    if (at && a.destEntity) {
+      // a destination entity: no arrival, the navigator takes its target from the entity again (next beat, above)
+      const Entity* de = sim.FindEntity(a.destEntity);
+      if (de && !de->destroyQueued) {
+        a.reaimAtDest = true;
+        at = false;
+      }
     }
     if (at) {
       a.steering = false;
