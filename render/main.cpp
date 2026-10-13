@@ -165,6 +165,9 @@ struct Options {
   std::string weather, climate;         // --weather, --climate
   std::string find;                     // --find
   bool show = false;                    // --show
+  int shots = 0;                        // --shots
+  std::string animate;                  // --animate: an .sca file of the game's
+  float animateAt = -1;                 // ... and where in it (0..1); below 0: it plays
   int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -268,6 +271,15 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--find") o->find = v;
+    else if (a == "--shots") o->shots = atoi(v);
+    else if (a == "--animate") {  // <file.sca>[,<fraction>]
+      o->animate = v;
+      const size_t comma = o->animate.rfind(',');
+      if (comma != std::string::npos) {
+        o->animateAt = static_cast<float>(atof(o->animate.c_str() + comma + 1));
+        o->animate.resize(comma);
+      }
+    }
     else if (a == "--self-destruct") {  // <beat>[,<army>]: that army's commander destroys itself then (a new game)
       if (sscanf(v, "%d,%d", &o->selfDestructAt, &o->selfDestructArmy) < 1) return false;
     }
@@ -640,6 +652,44 @@ int main(int argc, char** argv) {
     std::vector<FrameBone> bones;  // this frame's pose
   };
   std::vector<PlacedUnit> placedUnits;
+  // --animate: one of the game's animations (.sca: per frame every bone's place and turn against
+  // its parent, the turn as w x y z; the layout as the engine reads it, src/sim/anim.cpp), for the
+  // placed units whose bones it names
+  struct Animation {
+    int frames = 0, bones = 0;
+    float duration = 0;
+    std::vector<std::string> names;  // lower case
+    std::vector<float> data;         // frames x bones x 7
+  } animation;
+  if (!opt.animate.empty()) {
+    const auto file = vfs.ReadFile(opt.animate);
+    int32_t head[9] = {};
+    if (file && file->size() >= 36 && !file->compare(0, 4, "ANIM")) std::memcpy(head, file->data(), 36);
+    const int32_t frames = head[2], bones = head[4], namesAt = head[5], dataAt = head[7];
+    const size_t stride = static_cast<size_t>(std::max(bones, 0)) * 28 + 8, first = static_cast<size_t>(std::max(dataAt, 0)) + 28;
+    if (frames > 0 && bones > 0 && namesAt > 0 && dataAt > 0 && first + static_cast<size_t>(frames) * stride <= file->size()) {
+      animation.frames = frames;
+      animation.bones = bones;
+      std::memcpy(&animation.duration, file->data() + 12, 4);
+      size_t at = static_cast<size_t>(namesAt);
+      for (int i = 0; i < bones && at < file->size(); ++i) {
+        size_t end = file->find('\0', at);
+        if (end == std::string::npos) end = file->size();
+        std::string name(*file, at, end - at);
+        for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        animation.names.push_back(name);
+        at = end + 1;
+      }
+      animation.names.resize(static_cast<size_t>(bones));
+      animation.data.resize(static_cast<size_t>(frames) * static_cast<size_t>(bones) * 7);
+      for (int f = 0; f < frames; ++f)
+        std::memcpy(animation.data.data() + static_cast<size_t>(f) * static_cast<size_t>(bones) * 7, file->data() + first + static_cast<size_t>(f) * stride + 8,
+                    static_cast<size_t>(bones) * 28);
+      printf("render: animation %s: %d frames of %d bones, %.2f s\n", opt.animate.c_str(), frames, bones, animation.duration);
+    } else {
+      fprintf(stderr, "render: animation %s: not found, or not an .sca file\n", opt.animate.c_str());
+    }
+  }
   float targetLift = 0;  // how far above the ground the camera's target is held
   {
     auto stand = [&](const Model* model, Vec3 p, const std::string& id) {
@@ -1004,6 +1054,44 @@ int main(int argc, char** argv) {
     }
     for (PlacedUnit& u : placedUnits) {
       Pose pose;
+      if (u.turned < 0 && animation.frames > 0) {
+        // the pose a simulation would hand over at that moment of the animation: every bone's place
+        // and turn down the chain from the unit (a bone the file does not name keeps its rest
+        // against its parent)
+        const std::vector<ModelBone>& bones = u.model->bones;
+        const float scale = u.model->scale;
+        float where = opt.animateAt >= 0 ? std::min(opt.animateAt, 1.0f) : std::fmod(time * 0.25f, 1.0f);
+        where *= static_cast<float>(animation.frames - 1);
+        const int frame = std::min(static_cast<int>(where), animation.frames - 1), after = std::min(frame + 1, animation.frames - 1);
+        const float part = where - static_cast<float>(frame);
+        std::vector<Vec3> place(bones.size());
+        std::vector<Quat> turn(bones.size());
+        u.bones.clear();
+        bool named = false;
+        for (size_t i = 0; i < bones.size(); ++i) {
+          const int up = bones[i].parent;
+          const bool hasUp = up >= 0 && static_cast<size_t>(up) < i;
+          // (its rest against its parent, from the rests the model holds against the unit)
+          Vec3 p = hasUp ? Rotate(Conjugate(bones[static_cast<size_t>(up)].rotation), bones[i].position - bones[static_cast<size_t>(up)].position) : bones[i].position;
+          Quat q = hasUp ? Mul(Conjugate(bones[static_cast<size_t>(up)].rotation), bones[i].rotation) : bones[i].rotation;
+          for (int b = 0; b < animation.bones; ++b)
+            if (animation.names[static_cast<size_t>(b)] == bones[i].name) {
+              const float* a = animation.data.data() + (static_cast<size_t>(frame) * static_cast<size_t>(animation.bones) + static_cast<size_t>(b)) * 7;
+              const float* c = animation.data.data() + (static_cast<size_t>(after) * static_cast<size_t>(animation.bones) + static_cast<size_t>(b)) * 7;
+              p = Lerp(Vec3{a[0], a[1], a[2]}, Vec3{c[0], c[1], c[2]}, part);
+              q = Nlerp(Quat{a[4], a[5], a[6], a[3]}, Quat{c[4], c[5], c[6], c[3]}, part);
+              named = true;
+              break;
+            }
+          place[i] = hasUp ? place[static_cast<size_t>(up)] + Rotate(turn[static_cast<size_t>(up)], p) : p;
+          turn[i] = hasUp ? Mul(turn[static_cast<size_t>(up)], q) : q;
+          const Vec3 w = place[i] * scale;
+          u.bones.push_back({static_cast<uint32_t>(i), {w.x, w.y, w.z}, {turn[i].x, turn[i].y, turn[i].z, turn[i].w}, false});
+        }
+        if (!named) u.bones.clear();  // (not this unit's animation)
+        pose.now = pose.next = u.bones.data();
+        pose.nowCount = pose.nextCount = u.bones.size();
+      }
       if (u.turned >= 0) {
         // the pose a simulation would hand over for that bone turned about the unit's upright axis:
         // the bone and all that hangs on it, each where the turn about the bone's own place carries it
@@ -1023,8 +1111,9 @@ int main(int argc, char** argv) {
         pose.now = pose.next = u.bones.data();
         pose.nowCount = pose.nextCount = u.bones.size();
       }
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, u.turned >= 0 ? &pose : nullptr);
-      world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
+      const bool posed = u.turned >= 0 || !u.bones.empty();
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
+      world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame
@@ -1080,10 +1169,19 @@ int main(int argc, char** argv) {
       ++frameCount;
     }
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
-    const bool shoot = wantScreenshot || (lastFrame && !opt.screenshot.empty());
+    // (--shots <n>: every n-th counted frame is written too, as <screenshot>_0001.png ...: a thing
+    // that moves or flickers, looked at over time in one and the same game)
+    const bool series = opt.shots > 0 && automatic && !liveBusy && !opt.screenshot.empty() && !lastFrame && frameCount % opt.shots == 0;
+    const bool shoot = wantScreenshot || series || (lastFrame && !opt.screenshot.empty());
     device->EndFrame(shoot ? &capture : nullptr);
     if (shoot && !capture.empty()) {
       std::string path = wantScreenshot ? "screenshot" + std::to_string(++shotNumber) + ".png" : opt.screenshot;
+      if (series && !wantScreenshot) {
+        char number[16];
+        snprintf(number, sizeof number, "_%04d", frameCount / opt.shots);
+        const size_t dot = path.rfind('.');
+        path = dot == std::string::npos ? path + number : path.substr(0, dot) + number + path.substr(dot);
+      }
       if (WritePng(path, capture.data(), device->Width(), device->Height())) printf("render: wrote %s\n", path.c_str());
       else fprintf(stderr, "render: cannot write %s\n", path.c_str());
       wantScreenshot = false;
