@@ -339,8 +339,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the picture shows in the mirrored direction, land and units, found by walking through the
   picture's depth; foam lies where the water is shallow, along the shore and round whatever
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
-  net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
-  before. Limits: mirrored things are only those in the picture (nothing from outside it or
+  net of light; the sun or moon glints. The small waves are the map's four moving normal maps, as before; over them runs a
+  swell of four trains of longer waves, which tilts the surface and carries the waterline up
+  and down the shore (the sheet is drawn a little above the water's level, and where the water
+  stands lower just now is worked out per pixel); the shore's foam is fine lace with fronts
+  running in toward the land, thick only at the very waterline, where the water thins out to
+  nothing. The surface itself is still one flat sheet: the swell does not lift it, so from low
+  down the horizon of the water is a ruled line. Limits: mirrored things are only those in the picture (nothing from outside it or
   behind something). What moves on the water trails a wake of foam (`wakes.h`: flat pieces laid
   along the places it has been in the last seconds, so the wake curves behind a ship that
   turns; longer and stronger the faster it goes). Lamps and flashes light the water and glint on
