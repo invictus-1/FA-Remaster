@@ -82,6 +82,8 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 // Per tick after all units moved: attached units follow their parents (transport cargo gets the
 // full attach transform and the parent's layer; orphaned cargo starts to fall).
 void AttachedUnitsTick(Sim& sim);
+// A script-attached unit whose parent no longer exists: free motion again (a flyer) or a fall, on the Air layer.
+void AttachParentGone(Sim& sim, Unit* u);
 // Motion of a falling (detached) land unit: true while it falls.
 bool LandBallisticTick(Sim& sim, Unit* u);
 // Unit::Kill hooks: before SetDead (cargo leaves its transport) and after it (the dying unit's

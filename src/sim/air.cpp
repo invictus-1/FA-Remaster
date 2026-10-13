@@ -1344,6 +1344,12 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     }
     if (s == 2 && (dir3.x * fwd.x + dir3.y * fwd.y) + dir3.z * fwd.z >= 0.0f) return output();
     uint32_t r1 = sim.NextUInt32();
+    {
+      static const bool dbgDraw = getenv("MOHO64_DEBUG_TACDRAW") != nullptr;  // who draws a new attack-run state
+      if (dbgDraw)
+        Logf(LogLevel::Info, "tacdraw %u unit %u (made %llu) target %u", now, u->id,
+             static_cast<unsigned long long>(u->entSeq), E ? E->id : 0u);
+    }
     s = 3 + static_cast<int>((static_cast<uint64_t>(r1) * 3) >> 32);
     int lo = EngineFloor(b.randomMinChangeCombatStateTime * 10.0f);
     int hi = EngineFloor(b.randomMaxChangeCombatStateTime * 10.0f);
@@ -2322,6 +2328,14 @@ void AirNotifyAttached(Sim& sim, Unit* u) {
 void AirNotifyDetached(Sim& sim, Unit* u) {
   if (!u->motion.air) return;
   SetMotionState(sim, u, 0);
+}
+// CUnitMotion::MotionTick 0x6b9d10, motion state Attached with the parent link gone: the state becomes None for
+// what can fly (Ballistic otherwise), the layer Air, and the transform stays where it is for this beat.
+void AirParentGone(Sim& sim, Unit* u) {
+  if (!u->motion.air) AirInit(sim, u);
+  SetMotionState(sim, u, A(u).bp->canFly ? 0 : 2);
+  SetLayerBits(sim, u, kAir);
+  u->motion.lastMove = {};
 }
 
 namespace {

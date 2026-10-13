@@ -1074,7 +1074,7 @@ const std::vector<Unit*>& Sim::CommandOrder() {
 const std::vector<Unit*>& Sim::MotionOrder() {
   if (motionOrderDirty_) {
     motionOrder_ = units_;
-    std::sort(motionOrder_.begin(), motionOrder_.end(), [](const Unit* a, const Unit* b) { return a->entSeq < b->entSeq; });
+    std::sort(motionOrder_.begin(), motionOrder_.end(), [](const Unit* a, const Unit* b) { return a->motSeq < b->motSeq; });
     motionOrderDirty_ = false;
   }
   return motionOrder_;
@@ -1101,6 +1101,7 @@ void Sim::AddUnitToLists(Unit* u) {
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
   u->entSeq = ++entSeqNext_;
+  u->motSeq = u->entSeq;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;
   InsertById(units_, u);
@@ -1293,7 +1294,7 @@ void Sim::Tick() {
   g_prof.Lap(2);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   g_prof.Lap(10);
-  const std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: motion may create or destroy nothing)
+  std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
   // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
   // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the
@@ -1310,7 +1311,26 @@ void Sim::Tick() {
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     beamsBefore(u->handle);
-    if (u->destroyQueued) continue;
+    // (A unit whose Destroy is queued still has its turn: the entity is only taken away at the beat's end. Seen: a
+    // dead aircraft that the flight code had just taken back starts its crash, three draws, in the beat its script
+    // destroys it.)
+    // Entity::TaskTick 0x679c40, step 2: attached to a parent that has not had its turn in this pass, the task
+    // answers -4: the thread is linked at the run list's new end, runs later in this pass, and keeps that place.
+    if (u->parentId && u->orderedParent != u->parentId) {
+      u->orderedParent = u->parentId;
+      if (const Entity* p = FindEntity(u->parentId)) {
+        const bool parentLater = p->kind == Entity::Kind::Unit
+                                     ? static_cast<const Unit*>(p)->lastPosTick != tick_
+                                     : p->handle > (u->orderHandle ? u->orderHandle : u->handle);
+        if (parentLater) {
+          u->motSeq = ++entSeqNext_;
+          u->orderHandle = nextHandle_;
+          motionOrderDirty_ = true;
+          motionOrder.push_back(u);
+          continue;
+        }
+      }
+    }
     // (lastPosition = the entity's coords before this beat's motion. On a unit's first beat that is where it was
     // CREATED: an attach in the same beat, a factory putting its new unit on the build bone, only writes the
     // pending transform, so the entity "moved" in its first AdvanceCoords and position != previous position for
@@ -1334,8 +1354,23 @@ void Sim::Tick() {
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
     const Quat prevOri = u->orientation;
-    if (u->parentId) {  // attached (a factory's product): held at the parent's bone
-      Entity* p = FindEntity(u->parentId);
+    // A parent that no longer exists holds nothing (AttachParentGone): the unit goes back to its own motion on the
+    // Air layer, although it still shows state Attached. Seen: a dead aircraft sinking on FAF's sinker projectile;
+    // when the projectile is gone at the sea floor the wreck is in the Air layer for a beat, and the beat after
+    // it starts a crash (three draws) before the script's Destroy comes through.
+    Entity* const attachParent = u->parentId ? FindEntity(u->parentId) : nullptr;
+    {
+      // MOHO64_DEBUG_ATTACHED=<unit id>: what holds an attached unit each beat
+      static const long dbgAtt = getenv("MOHO64_DEBUG_ATTACHED") ? atol(getenv("MOHO64_DEBUG_ATTACHED")) : -1;
+      if (dbgAtt >= 0 && static_cast<long>(u->id) == dbgAtt)
+        Logf(LogLevel::Info, "attached %u unit %u (made %llu%s) parent ref %u: %s%s, full %d, layer %s, dead %d, pos %.9g %.9g %.9g",
+             tick_, u->id, static_cast<unsigned long long>(u->entSeq), u->destroyQueued ? ", destroy queued" : "",
+             u->parentId, !u->parentId ? "none" : attachParent ? "there" : "gone",
+             attachParent && attachParent->destroyQueued ? " (destroy queued)" : "", u->attachFull ? 1 : 0,
+             u->layer.c_str(), u->dead ? 1 : 0, u->position.x, u->position.y, u->position.z);
+    }
+    if (u->parentId && attachParent) {  // attached (a factory's product): held at the parent's bone
+      Entity* p = attachParent;
       if (p && !p->destroyQueued) {  // the child takes the bone's transform (Entity attach)
         Vec3 bp;
         Quat bq;
@@ -1349,6 +1384,9 @@ void Sim::Tick() {
         u->position = bp;
         u->orientation = bq;
       }
+      u->motion.vel = {};
+    } else if (u->parentId) {
+      AttachParentGone(*this, u);  // (the transform stays for this beat; the motion takes the unit from the next)
       u->motion.vel = {};
     } else {
       MotionTick(*this, u);

@@ -488,6 +488,7 @@ void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   child->attachFull = false;
   SetState(child, "Attached", false);
   child->transportedBy = 0;
+  child->detachedAt = sim.tick();
   UnitMotion& m = child->motion;
   m.vel = {};
   // the motion's facing: the unit's current heading
@@ -822,6 +823,21 @@ bool TransportHasCargo(const Unit* u) {
   for (Unit* o : sim.units())
     if (!o->destroyQueued && o->parentId == ref && o->attachFull) return true;
   return false;
+}
+
+// CUnitMotion::MotionTick 0x6b9d10, motion state Attached with the parent link gone (a unit a SCRIPT attached to
+// an entity that has been destroyed since, FAF's sinker projectile under a wreck for one): a flyer goes back to
+// free motion, everything else starts to fall, both on the Air layer. Unit state Attached stays: nothing told the
+// unit of a detach (seen in the original's records).
+void AttachParentGone(Sim& sim, Unit* u) {
+  u->parentId = 0;
+  if (!u->motion.bp || !u->motion.bp->mobile()) return;
+  if (CanFly(u)) {
+    AirParentGone(sim, u);
+  } else {
+    u->motion.ballistic = true;
+    SetUnitLayer(sim, u, "Air");
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

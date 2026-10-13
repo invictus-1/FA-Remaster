@@ -316,9 +316,12 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 namespace {
 
 void StartHead(Sim& sim, Unit* u) {
-  // carried by a transport: nothing is dispatched until dropped; a dropped unit waits until it
-  // landed (FAF makes it immobile while it falls; the original's move task would wait too)
-  if ((u->parentId && u->attachFull) || u->unitStates.count("Attached") || u->motion.ballistic) {
+  // Carried by a transport: nothing is dispatched until it is let go. Then the queue runs again from the NEXT
+  // beat, also while the unit still falls (seen: a tank dropped by "unload these units" has that order in its own
+  // queue, three times; it cannot carry them out and all three are gone the beat after the drop, long before it
+  // lands). Not in the beat of the drop itself: the transport's thread, woken by its arrival, has its turn after
+  // the cargo's.
+  if ((u->parentId && u->attachFull) || u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
     u->headState = kNotStarted;
     return;
   }

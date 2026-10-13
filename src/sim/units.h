@@ -157,7 +157,14 @@ class Unit : public Entity {
   std::shared_ptr<struct TransportObj> transport;  // transports (sim/transport.cpp)
   uint32_t transportedBy = 0;      // the transport carrying it (entity ref)
   uint64_t cmdSeq = 0;  // command-thread order (Sim::CommandOrder)
-  uint64_t entSeq = 0;  // creation order: the entity task thread's place in stage sim+0x930 (Sim::MotionOrder)
+  uint64_t entSeq = 0;  // creation order (the army stages go by it)
+  // The entity task thread's place in stage sim+0x930 (Sim::MotionOrder): creation order, until the unit is
+  // attached to a parent whose turn comes later in the pass. Then Entity::TaskTick answers -4 and the thread is
+  // linked at the run list's new end, for good (orderHandle: that place among the creation handles;
+  // orderedParent: the parent this has been settled for).
+  uint64_t motSeq = 0;
+  uint32_t orderHandle = 0, orderedParent = 0;
+  uint32_t detachedAt = 0xffffffffu;  // the beat a transport let it go (its order queue runs from the next one)
   float fuelRatio = -1;            // u+0x294 (fuel.md): -1 none; 1 at spawn for FuelUseTime > 0
   uint32_t ferryUnit = 0;          // GetFerryUnit (+0x4c8): the ferry assigned to pick it up
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)
