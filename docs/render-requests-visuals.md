@@ -36,4 +36,9 @@ LabVisuals.
 the original's upgrade bones have nothing on them, and nothing shows for those upgrades until they are
 made.
 
-**Status:** asked 2026-10-12.
+**Status:** asked 2026-10-12. Answered 2026-10-13 (the visuals track's reply file, section 16): queued
+behind six factories; the rebuilt commander is ONE model on the BlackOps skeleton (66 bones) with all
+twelve upgrades, each rigid on its own bone (`HAC`, `Gatling_Cannon`, `Torpedo_Launcher`,
+`Zephyr_Amplifier`, `Engineering_Suite`, `Flamer`, the two `*_Lance_Turret`s, `Back_MissilePack_B01`,
+`Back_SalvoLauncher`, `Back_ShieldPack`, `Back_IntelPack`). Told in return: the experimentals' level
+caps for it; the cannon's charge meter has no shader parameter yet (it is drawn as its textures say).
