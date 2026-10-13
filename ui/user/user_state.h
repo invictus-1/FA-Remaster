@@ -161,6 +161,9 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
 // none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
 bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+// A Script order at a place for the selected units, as the game's own script allows it
+// (VerifyScriptCommand): FAF's attack-move, an ability. True when the click is used up.
+bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear);
 // Where the main camera listens from, for the world's sounds (worldview.cpp): its eye, the place
 // it looks at, the direction to the screen's right along the ground, and its zoom. False before
 // the camera is placed.

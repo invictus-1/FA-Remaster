@@ -872,6 +872,7 @@ class WorldView : public Control {
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;
     }
+    if (mode == "order" && name == "RULEUCC_Script") return IssueScriptAt(L, world[0], world[1], world[2], !e.shift);
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
     if (!mode.empty() || miniMap) return false;
     if (e.type == EventType::ButtonDClick) {

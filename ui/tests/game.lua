@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 3000 --log out.log
+--            --frames 3100 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -586,6 +586,25 @@ local function run()
     local home = cdr:GetPosition()
     IssueCommand("UNITCOMMAND_Stop")
     cam:Reset()
+    WaitSeconds(0.3)
+
+    -- FAF's attack-move: its order button starts a Script order mode; a left click then asks the
+    -- game's own script (VerifyScriptCommand) and sends the Script order with what it answers; the
+    -- script hears of it with its Lua value and has the simulation make it an aggressive move
+    SelectUnits({cdr})
+    CM.StartCommandMode("order", {name = "RULEUCC_Script", AbilityName = "AttackMove", TaskName = "AttackMove", Cursor = "ATTACK_MOVE"})
+    local attackTo = cdr:GetPosition()
+    attackTo[1] = attackTo[1] - 14
+    attackTo[3] = attackTo[3] - 6
+    local attackAt = view:Project(attackTo)
+    moho64ui_MouseMove(attackAt.x, attackAt.y)
+    moho64ui_MouseButton("Left", true, attackAt.x, attackAt.y)
+    moho64ui_MouseButton("Left", false, attackAt.x, attackAt.y)
+    WaitSeconds(0.5)
+    local attackMove = (cdr:GetCommandQueue() or {})[1]
+    check("an attack-move reaches the unit as an aggressive move", attackMove ~= nil and attackMove.type, "AggressiveMove")
+    check("and its mode has ended", CM.GetCommandMode()[1], false)
+    IssueCommand("UNITCOMMAND_Stop")
     WaitSeconds(0.3)
 
     -- a row of buildings: in build mode a left press marks the first site, and letting go

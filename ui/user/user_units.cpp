@@ -783,10 +783,12 @@ void RequestSessionPause(lua_State* L, bool pause) {
 // commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
 // engine issued for the player, as a table. First version of that table: CommandType (the
 // order's name), Clear, Target = {Type = "Position", Position} or {Type = "Entity", EntityId,
-// Position}, Units, Blueprint.
+// Position}, Units, Blueprint, and LuaParams when the order carries a Lua value (`luaParams`: its
+// stack index, 0 for none): the script reads it for a Script order (an attack-move, an enhancement).
 void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserUnit*>& units, float x, float y, float z,
-                         bool clear, const std::string& blueprint, uint32_t entity = 0xffffffffu) {
+                         bool clear, const std::string& blueprint, uint32_t entity = 0xffffffffu, int luaParams = 0) {
   int top = lua_gettop(L);
+  if (luaParams < 0) luaParams = top + luaParams + 1;
   lua_pushcfunction(L, ScriptTraceback);
   lua_getglobal(L, "import");
   lua_pushstring(L, "/lua/ui/game/commandmode.lua");
@@ -808,6 +810,11 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
       lua_pushstring(L, "Units");
       PushUnitList(L, units, false);
       lua_rawset(L, -3);
+      if (luaParams && lua_istable(L, luaParams)) {
+        lua_pushstring(L, "LuaParams");
+        lua_pushvalue(L, luaParams);
+        lua_rawset(L, -3);
+      }
       lua_pushstring(L, "Target");
       lua_newtable(L);
       lua_pushstring(L, "Type");
@@ -905,6 +912,94 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
 
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear, const std::string& blueprint) {
   return IssueOrder(L, order, x, y, z, 0xffffffffu, clear, blueprint);
+}
+
+// A Script order at a place: what a left click does while the script's order mode is
+// RULEUCC_Script (FAF's attack-move, an ability). The game's own script decides whether and with
+// what the order goes out: `/lua/user/userscriptcommand.lua` VerifyScriptCommand(command) answers
+// with the order's Lua value ({TaskName, Location, UserValidated, ...}) and the units it may go to
+// (AuthorizedUnits, which is not sent along); without UserValidated nothing is issued. Real
+// replays hold the order so: type Script, the place as its target, the table as its Lua value,
+// no formation. (How the original builds the table it hands the script is not read: it gets the
+// same one OnCommandIssued gets.)
+bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  for (UserUnit* u : Store(L).selection)
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
+  if (ids.empty()) return false;
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/user/userscriptcommand.lua");
+  if (lua_pcall(L, 1, 1, top + 1) != 0 || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    return false;
+  }
+  lua_pushstring(L, "VerifyScriptCommand");
+  lua_gettable(L, -2);
+  lua_newtable(L);  // the command, as the script's OnCommandIssued gets it
+  lua_pushstring(L, "CommandType");
+  lua_pushstring(L, "Script");
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Clear");
+  lua_pushboolean(L, clear);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Units");
+  PushUnitList(L, units, false);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Target");
+  lua_newtable(L);
+  lua_pushstring(L, "Type");
+  lua_pushstring(L, "Position");
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Position");
+  PushVector(L, x, y, z);
+  lua_rawset(L, -3);
+  lua_rawset(L, -3);
+  if (!lua_isfunction(L, -2) || lua_pcall(L, 1, 1, top + 1) != 0 || !lua_istable(L, -1)) {
+    if (lua_isstring(L, -1)) Logf(LogLevel::Warning, "Error running '/lua/user/userscriptcommand.lua:VerifyScriptCommand': %s", lua_tostring(L, -1));
+    lua_settop(L, top);
+    return true;  // (the click is used up all the same)
+  }
+  const int result = lua_gettop(L);
+  lua_pushstring(L, "UserValidated");
+  lua_gettable(L, result);
+  const bool valid = lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  if (!valid) {
+    lua_settop(L, top);
+    return true;
+  }
+  lua_pushstring(L, "AuthorizedUnits");
+  lua_gettable(L, result);
+  if (lua_istable(L, -1)) {
+    std::vector<UserUnit*> listed, allowed;
+    ReadUnitList(L, lua_gettop(L), &listed);
+    ids.clear();
+    for (UserUnit* u : listed)
+      if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), allowed.push_back(u);
+    units = allowed;
+  }
+  lua_pop(L, 1);
+  lua_pushstring(L, "AuthorizedUnits");
+  lua_pushnil(L);
+  lua_settable(L, result);
+  if (ids.empty()) {
+    lua_settop(L, top);
+    return true;
+  }
+  StreamIssueData d;
+  d.type = static_cast<int>(CommandType::Script);
+  d.target.type = 2;
+  d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
+  SerializeLua(L, result, &d.lua);
+  Writer(L).IssueCommand(ids, d, clear);
+  ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, result);
+  lua_settop(L, top);
+  return true;
 }
 
 // What the player's army knows of a unit now (the engine's ReconOf bits; its own and its allies'
@@ -1079,7 +1174,7 @@ bool IssuePlain(lua_State* L, const std::vector<UserUnit*>& list, const std::str
   // empties the queue. (Inferred: where the original decides that.)
   if (type == CommandType::Stop) clear = true;
   Writer(L).IssueCommand(ids, d, clear);
-  ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint);
+  ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint, 0xffffffffu, params && lua_istable(L, params) ? params : 0);
   return true;
 }
 
