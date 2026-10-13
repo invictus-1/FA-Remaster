@@ -401,9 +401,9 @@ void GameSession::PlayBeatSounds() {
   for (const SoundEvent& e : events) {
     bool ours = isFriendly(e.army);
     if (log)
-      Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s", static_cast<unsigned>(sim_->tick()),
+      Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s (%s)", static_cast<unsigned>(sim_->tick()),
            e.kind == SoundEvent::Play ? "play" : "loop", static_cast<unsigned>(e.entity), e.army, e.position[0], e.position[1],
-           e.position[2], e.bank.c_str(), e.cue.c_str());
+           e.position[2], e.bank.c_str(), e.cue.c_str(), ours ? "ours" : seen(e.entity, e.position) ? "seen" : "not seen");
     if (e.kind == SoundEvent::Play) {
       if (ours || seen(e.entity, e.position)) sounds->PlayAt(e.bank, e.cue, e.position);
     } else if (ours) {
