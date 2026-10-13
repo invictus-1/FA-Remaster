@@ -20,9 +20,10 @@ count a look in which every place is seen as exploring). 14 done and in use (`Pr
 `EntityViews`, a projectile's scale: wreckage, trees that burn, fall and are reclaimed, shields'
 bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 done
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
-16 open (the unit of a projectile's scale velocity; the renderer goes by its own reading meanwhile).
+16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
+draws at the engine's `ProjectileView::size`).
 
-## 16. A projectile's scale velocity: in what unit? (2026-10-13, not blocking)
+## 16. A projectile's scale velocity: in what unit? (2026-10-13, answered)
 
 **Who asks:** the renderer. **What:** a check in the original of what `Projectile:SetScaleVelocity`
 (and the blueprint's `MeshScaleVelocity`) adds to: the size the mesh is DRAWN at (the blueprint's
@@ -43,7 +44,12 @@ beat by beat, because the script changes the velocity twice while the ball lives
 (a line in `sim_view.h` saying so would do); if the original holds the drawn size in `scale` itself,
 say what `SetScale` means for a blueprint whose `UniformScale` is not 1.
 
-**Answer:** (none yet)
+**Answer:** in `docs/engine-answers.md` (render 16): the reading is right. The original holds one scale
+per entity and it is the drawn size: `UniformScale` (+- `MeshScaleRange`) at launch, plus the scale
+velocity x 0.1 every beat; `SetScale` and `SetDrawScale` both write that same value outright. The
+engine now keeps it as `ProjectileView::size[3]`, and the renderer draws a shell at it
+(`FrameProjectile::size`, with `growth` between beats); its own sum is gone. Script entities and
+props still come as `scale` and `drawScale`; to be asked for if one shows at a wrong size.
 
 ## 15. Hidden bones: the parts of a mesh a script hides and shows (2026-10-12, not blocking)
 

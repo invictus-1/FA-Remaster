@@ -1081,6 +1081,11 @@ int main(int argc, char** argv) {
         int shields = 0;
         for (const FrameEntity& f : frame.entities)
           if (f.shield && shields++ < 4) printf("; shield at %.0f, %.0f (size %.1f)", f.position[0], f.position[2], f.scale[0]);
+        int big = 0;  // (shells drawn large: a ball of fire, a box of light, or a size gone wrong)
+        for (const FrameProjectile& q : frame.projectiles)
+          if (q.sized && std::max(q.size[0], std::max(q.size[1], q.size[2])) > 6 && frame.blueprints && q.blueprint < frame.blueprints->size() && big++ < 6)
+            printf("; shell %s of size %.1f, %.1f, %.1f at %.0f, %.0f", (*frame.blueprints)[q.blueprint].c_str(), q.size[0], q.size[1], q.size[2], q.position[0], q.position[2]);
+        printf("; camera at %.0f, %.0f", camera.target.x, camera.target.z);
       }
       if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
