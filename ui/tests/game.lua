@@ -529,8 +529,8 @@ local function run()
     local ended = GetGameTimeSeconds()
     WaitSeconds(0.5)
     check("and its time stands", GetGameTimeSeconds(), ended)
-    -- (To add when the engine's IsGameOver answers, "ui 10" in REQUESTS.md: the final score has
-    -- come, import("/lua/ui/dialogs/hotstats.lua").scoreData.current and .history are there.)
+    local final = import("/lua/ui/dialogs/hotstats.lua").scoreData
+    check("the simulation's scripts have handed over the final score", final ~= nil and final.current ~= nil and final.history ~= nil, true)
     LOG("TEST done: " .. failed .. " failed")
 end
 

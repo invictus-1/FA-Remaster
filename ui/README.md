@@ -399,11 +399,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   one was given) and its interface comes up as the first time. `SessionEndGame()` ends the game
   as the original does, with an order (the command stream's EndGame): one more beat runs, then
   the simulation stands; `SessionIsGameOver()` says so. Written from the scripts' use, not read
-  from the original's code. The score screen the scripts show at a game's end does not come up
-  yet: it waits for the final score, which the simulation's scripts hand over once their
-  `IsGameOver()` is true, and the engine's is not built ("ui 10" in `REQUESTS.md`). `SessionGet
-  CommandSourceNames` / `SessionGetLocalCommandSource` name who gives orders (the script's
-  pause sign uses them). Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`.
+  from the original's code. With that last beat the simulation's scripts hand over the final
+  score, and the game's own score screen comes up (`/lua/ui/dialogs/score.lua`, reached by the
+  menu's "End Game"); its Continue leaves the game. `SessionGetCommandSourceNames` /
+  `SessionGetLocalCommandSource` name who gives orders (the script's pause sign uses them).
+  Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`, `ui/tests/score.lua`.
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

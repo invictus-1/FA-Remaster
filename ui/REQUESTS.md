@@ -229,7 +229,9 @@ time for the scripts' threads of the one beat that still runs, so the listeners'
 out with it. Blocking for the score screen only (the way from a finished game back to the menu);
 nothing else waits on it.
 
-**Status:** asked 2026-10-12.
+**Status:** done by the engine track within the hour (`docs/engine-answers.md`, "ui 10") and in
+use: the final score arrives, the score screen comes up and its Continue leaves the game
+(`ui/tests/score.lua`). Thank you.
 
 ## To the renderer track
 
