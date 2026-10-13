@@ -38,6 +38,10 @@ class StrategicIcons {
     // the ring under a selected unit: half its extent along the unit's own x and z (the blueprint's
     // SelectionSizeX, SelectionSizeZ)
     float selectionX = 0.5f, selectionZ = 0.5f;
+    // its life bar, in world units as the blueprint says them (LifeBarSize, LifeBarHeight,
+    // LifeBarOffset): how wide, how high, and how far from the unit's middle toward the eye it
+    // lies. Where the blueprint says none: by the selection's size.
+    float lifeBarSize = 1, lifeBarHeight = 0.075f, lifeBarOffset = 0.5f;
   };
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.
@@ -56,11 +60,12 @@ class StrategicIcons {
   // `blip`: the unit is known by radar alone: its symbol at any distance, without its detail unless
   // `known` (the army has seen it before and knows what it is).
   void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false, bool known = false);
-  // A life bar over a place in the world: `widthPixels` wide, `fraction` (0..1) of it filled, green
-  // down to red by how full. Drawn with the symbols.
-  // `work`: the thin bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
-  // is), in one colour, drawn just under where the life bar is.
-  void AddBar(Vec3 position, float fraction, float widthPixels, bool work = false);
+  // A life bar at a place in the world, as the original draws it: black, `widthPixels` wide and
+  // `thick` high, `fraction` (0..1) of it filled, green down to red by how full; `drop` screen
+  // pixels below the place (under the unit). Drawn with the symbols.
+  // `work`: the bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
+  // is), filled in orange.
+  void AddBar(Vec3 position, float fraction, float widthPixels, bool work = false, float drop = 0, float thick = 4);
   // A mark over a place in the world, whatever the distance and whether the symbols are shown or
   // not: the game's pause picture over a paused unit. `icon` from MarkIcon; `lift`: screen pixels
   // above the place.
@@ -97,6 +102,7 @@ class StrategicIcons {
   struct Bar {
     float x, y, width, fraction;
     bool work;
+    float thick;
   };
   std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");

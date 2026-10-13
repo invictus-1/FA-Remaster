@@ -24,7 +24,29 @@ and in use the same day (`HiddenBones`: a commander no longer wears the upgrades
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
 order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
-(`paused` in the plain unit view: every paused unit wears the pause mark).
+(`paused` in the plain unit view: every paused unit wears the pause mark). 20 open (where a beam's end is
+when it hangs on an entity without a mesh: the last piece of an adjacency's link).
+
+## 20. Where a beam's ends are when they hang on an entity without a mesh (2026-10-13, not blocking)
+
+**Who asks:** the renderer. **What:** the place of a script entity that has no mesh, when a beam
+hangs on it: either such entities in `EntityViews` (with an empty mesh), or, smaller, the second
+attach point's place in the effect event (`position2`, as `position` is the first's).
+
+**Why:** adjacency (Chris: "each faction had its own adjacency graphic that showed buildings were
+connected"). `CreateAdjacencyBeams` in `/lua/EffectUtilities.lua` makes, per link, two entities
+without a mesh (the "hubs" at the two buildings' edges) and one to three nodes with one, warps them
+into place and joins neighbours with `AttachBeamEntityToEntity(a, -1, b, -1, army, beam)`. The
+nodes are in `EntityViews`; the hubs are not, so a beam whose far end is a hub cannot be drawn (the
+renderer leaves it out; before today it drew it eight units long, the blueprint's `Length`). A beam
+whose FIRST end is a hub is drawn from the event's `position`, which is right since hubs do not
+move.
+
+**Also, if it is cheap:** `LifeBarSize`, `LifeBarHeight`, `LifeBarOffset` in `BlueprintDisplay`.
+The renderer reads them from the unit's blueprint file today (the original places and sizes each
+unit's life bar by them); from the simulation they would follow what mods merge in.
+
+**Answer:** (none yet)
 
 ## 19. `paused` in the plain unit view (2026-10-13, done)
 

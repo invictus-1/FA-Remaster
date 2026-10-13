@@ -4,6 +4,37 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 15: adjacency's look, and the bars as the original has them (2026-10-13)
+
+**a. Adjacency.** The red cubes were the link's NODES (`uefadjacencynode`), drawn in the army's
+colour, and the link's BEAMS between them were missing. Now, as the original:
+- a node is drawn in its own colours (white for everything that is not a unit, the engine's answer
+  7): a small pale block;
+- the beams are drawn: thin blue lines from a building's edge over the nodes to the next
+  building's (`adjacency_uef_beam_01` for the UEF; the other factions' beams and nodes come by the
+  same way, not looked at yet).
+One piece is missing in some links: the game's script hangs each link's two ends on entities that
+have no mesh (its "hubs"), and the simulation's views list only entities with a mesh. Where a
+hub is a beam's first end, the beam stands where it was made, which is right; where it is the far
+end, that last piece is not drawn until the engine says where it is (`render/REQUESTS.md` 20).
+Before this, such pieces showed as lines eight units long. Seen in an M28 game round a UEF
+factory.
+
+**b. The bars, as in Chris's four pictures of the original.**
+- **Life bar:** under the unit, at the size, height and distance its blueprint gives it
+  (`LifeBarSize`, `LifeBarHeight`, `LifeBarOffset`, world units: a commander's is twice as high as
+  a tank's, a factory's long and thin); black, with a filling that is green, yellow at middling
+  health and red when low. With life bars on, every unit near enough to be a model has it, at full
+  health too; a selected or pointed-at unit at any distance.
+- **Work bar:** directly under the life bar (in its place when life bars are off), the same size,
+  black with an orange filling, on the unit that does the work.
+- **Not on** a unit whose script has hidden all of it: what a building is upgraded to stands in the
+  same place unseen, and the original shows the upgrading building's two bars only.
+- **Pause mark:** unchanged, over the unit's top.
+Seen side by side with his pictures: a commander with both bars, an upgrading factory with its
+thin green and orange pair, a unit in a factory with its part-filled bar. `SetLifeBars` and
+`SetWorkBars` are as they were; nothing to change on your side but your default, which you turned.
+
 ## ui, to the renderer 14: a unit's work bar and its pause mark — there (2026-10-13)
 
 Both are drawn by the renderer from the simulation; you hand over nothing per frame.
