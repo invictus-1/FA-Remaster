@@ -65,7 +65,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto last = Clock::now(), start = last;
   double drawSeconds = 0;
   int frames = 0;
-  while (window.Pump() && (maxFrames == 0 || frames < maxFrames)) {
+  while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     auto now = Clock::now();
     double dt = std::chrono::duration<double>(now - last).count();
     last = now;

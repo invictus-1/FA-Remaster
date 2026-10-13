@@ -481,7 +481,18 @@ class WorldView : public Control {
     }
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
-    RangeRingsForWorld(L, scene.hover, scene.ghosts.empty() ? nullptr : &scene.ghosts[0], &scene.rings);
+    RangeRingsForWorld(L, scene.hover, scene.ghosts.empty() ? nullptr : &scene.ghosts[0], &scene.ranges);
+    {  // (the eye's distance at the camera's nearest and farthest zoom)
+      Camera* c = GetCameraObject(L, cameraName);
+      const float zoom = c->zoom;
+      c->zoom = kNearZoom;
+      scene.zoomNear = EyeDistance(c);
+      c->zoom = MaxZoom(c);
+      scene.zoomFar = EyeDistance(c);
+      c->zoom = zoom;
+    }
+    // The meshes the game's script has placed in the world, and the marks of orders just given.
+    WorldMeshesForWorld(L, &scene.meshes);
     source->SetScene(scene);
     pixels_ = source->Draw(cam, w, h);
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;

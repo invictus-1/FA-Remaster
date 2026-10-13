@@ -366,9 +366,25 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   unit of the player's in it. What a ring measures goes by the filter's name as in the original:
   the weapons of a range category (the greatest EffectiveRadius or MaxRadius, the least
   MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
-  They are drawn as plain circles through the picture's source (`WorldScene::rings`). Not the
-  original's yet: overlapping rings joined into one outline with a glow, the line's thickness
-  by the zoom, radii changed while the game runs, and the rings of "Miscellaneous".
+  They go to the picture's source in groups (`WorldScene::ranges`: a filter in one colour, with
+  the script's glow byte and its thickness numbers), which the renderer's `SetRanges` draws as
+  the original does: one outline round what a group's rings cover together. (Until that call
+  is on the main branch the host falls back to plain circles.) Not the original's yet: how
+  thickness and glow go with the zoom (the renderer's guess; `func_RenderRings` is not read),
+  radii changed while the game runs, and the rings of "Miscellaneous".
+- The meshes the game's script places in the world (`user/world_meshes.cpp`): its `WorldMesh`
+  (`InternalCreateWorldMesh` and the `CUIWorldMesh` methods: the factories' rally points, the
+  marks under the cursor) and `AddCommandFeedbackBlip`, the mark where an order lands, which
+  is gone when its time is over. The engine side keeps what the script sets and hands the list
+  over with every scene (`WorldScene::meshes`); the renderer's `SetWorldMeshes` draws each by
+  its shader's name. Written from the scripts' use, not read from the original's code; of the
+  `GetInterpolated...` methods only the position is built.
+- The numbered groups: the keys' console commands `UI_MakeSelectionSet <name>` and
+  `UI_ApplySelectionSet <name>` (FA exe 0x834a80, 0x834c10; Ctrl-1 and 1 in the default key map)
+  pass the name on, as a string, to the game's selection script, which keeps the sets; the
+  units' own `AddSelectionSet` / `RemoveSelectionSet` / `HasSelectionSet` / `GetSelectionSets`
+  were there already. `ExitApplication` ends the program (the main menu's Exit, the game menu's
+  exit to Windows): the host's loops stop after the frame.
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the
@@ -380,8 +396,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 414 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 117 are logged stubs. (`--list-bindings` counts
+- 429 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+  the units', as a first version); the other 102 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

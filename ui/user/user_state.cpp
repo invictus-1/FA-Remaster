@@ -39,6 +39,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterSoundBindings(L);
   RegisterUserUnitBindings(L);
   RegisterRangeBindings(L);
+  RegisterWorldMeshBindings(L);
   RegisterMapPreviewBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);

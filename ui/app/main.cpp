@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
                          fullScreen);
     if (done < 0) ok = false;
   } else {
-    for (; done < o.frames; ++done) {
+    for (; done < o.frames && !ui::ExitRequested(); ++done) {
       shown->Frame(1.0 / 60.0);
       session.Advance(1.0 / 60.0);
       listen();

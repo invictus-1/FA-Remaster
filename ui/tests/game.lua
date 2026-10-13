@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 2200 --log out.log
+--            --frames 2400 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -372,6 +372,23 @@ local function run()
     SelectUnits(nil)
     cam:Reset()
 
+    -- the numbered groups: the keys' commands pass the name on to the game's selection script
+    check("Ctrl-1 makes group 1", moho64ui_KeyMapAction("Ctrl-1"), "UI_MakeSelectionSet 1")
+    check("1 calls it back", moho64ui_KeyMapAction("1"), "UI_ApplySelectionSet 1")
+    SelectUnits({cdr})
+    ConExecute("UI_MakeSelectionSet 1")
+    check("UI_MakeSelectionSet puts the selection into the set", cdr:HasSelectionSet("1"), true)
+    SelectUnits(nil)
+    ConExecute("UI_ApplySelectionSet 1")
+    sel = GetSelectedUnits()
+    check("UI_ApplySelectionSet selects the set", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    ConExecute("UI_ApplySelectionSet 2")
+    check("an empty set leaves the selection", count(), 1)
+    SelectUnits(nil)
+    ConExecute("UI_MakeSelectionSet 1")
+    check("made from nothing the set is empty again", cdr:HasSelectionSet("1"), false)
+    cam:Reset()
+
     -- range rings: the game's script has named its filters and switched the three cases on; a
     -- selected unit gets the rings of the filters it is in, measured from its blueprint
     local filters = import("/lua/ui/game/rangeoverlayparams.lua").RangeOverlayParams
@@ -404,6 +421,40 @@ local function run()
     SetOverlayFilters({})
     check("switched off again: none", table.getn(moho64ui_RangeRings()), 0)
     ConExecute("range_RenderSelected true")
+
+    -- the meshes the script places in the world, and the marks where orders land
+    local WorldMesh = import("/lua/ui/controls/worldmesh.lua").WorldMesh
+    local function meshes(shader)
+        local n, last = 0, nil
+        for _, m in moho64ui_WorldMeshes() do
+            if m.shader == shader then n, last = n + 1, m end
+        end
+        return n, last
+    end
+    local before = meshes("RallyPoint")
+    local flag = WorldMesh()
+    flag:SetMesh({MeshName = '/meshes/game/flag02d_lod0.scm', TextureName = '/meshes/game/flag02d_albedo.dds', ShaderName = 'RallyPoint', UniformScale = 0.1})
+    flag:SetLifetimeParameter(10)
+    flag:SetStance(at2)
+    flag:SetHidden(false)
+    local n1, placed = meshes("RallyPoint")
+    check("a WorldMesh of the script's is given to the picture", n1, before + 1)
+    check("with its mesh, place and scale", placed.mesh == '/meshes/game/flag02d_lod0.scm' and math.abs(placed.x - at2[1]) < 0.01
+        and math.abs(placed.z - at2[3]) < 0.01 and math.abs(placed.scale - 0.1) < 0.001 and placed.lifetime == 10, true)
+    flag:SetHidden(true)
+    check("hidden it is not", flag:IsHidden() and meshes("RallyPoint") == before, true)
+    flag:SetHidden(false)
+    flag:Destroy()
+    check("destroyed it is gone", meshes("RallyPoint"), before)
+    local marks = meshes("CommandFeedback2")
+    AddCommandFeedbackBlip({Position = at2, MeshName = '/meshes/game/crosshair02d_lod0.scm',
+        TextureName = '/meshes/game/crosshair02d_albedo.dds', ShaderName = 'CommandFeedback2', UniformScale = 0.5}, 1.0)
+    check("AddCommandFeedbackBlip shows a mark", meshes("CommandFeedback2"), marks + 1)
+    WaitSeconds(0.2)
+    local _, mark = meshes("CommandFeedback2")
+    check("whose age counts", mark ~= nil and mark.age > 0.1 and mark.age < 0.7, true)
+    WaitSeconds(1.0)
+    check("and which goes when its time is over", meshes("CommandFeedback2"), marks)
 
     -- pause: asked for like an order, so it holds from a beat on; the game's time stands
     check("the game runs", SessionIsPaused(), false)
