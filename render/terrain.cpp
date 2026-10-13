@@ -23,10 +23,13 @@ constexpr int kMaxPatches = 1024;           // per draw call (the size of the sh
 //    to the ground's own normal, which the map file stores as a texture;
 //  - light: sun * max(0, N.L) + ambience (+ specular), scaled by the map's lighting multiplier, with the
 //    "shadow fill" colour filling what the light leaves; then the water ramp tints by water depth.
+//  - the look it calls TTerrainGlow (a campaign map's glowing ground) is TTerrain with one change:
+//    the second stratum's picture drifts in a slow small circle, and its alpha says how much that
+//    stratum glows instead of how dull it is.
 const char kShader[] = R"hlsl(
 cbuffer TerrainConstants : register(b1) {
   float4 mapSize;        // width, height, 1 / width, 1 / height
-  float4 params;         // x: world height of the largest height value, y: 1 for the XP look
+  float4 params;         // x: world height of the largest height value, y: 1 for the XP look, z: 1 for the glowing look
   float4 specularColor;
   float4 albedoTile[10]; // x: repeats per world unit
   float4 normalTile[9];
@@ -89,7 +92,20 @@ float4 PS(VOut i) : SV_Target {
   #define NORMAL(n) (normalMaps[n].Sample(samplerAniso, xz * normalTile[n].x) * 2 - 1)
   float4 albedo = ALBEDO(0);
   albedo = lerp(albedo, ALBEDO(1), low.x);
-  albedo = lerp(albedo, ALBEDO(2), low.y);
+  float4 second = ALBEDO(2);
+  float3 glowing = 0;
+  if (params.z > 0.5) {
+    // the glowing look: the second stratum's picture goes round a circle of a hundredth of itself,
+    // once in fifty seconds; how much it glows is its alpha, read with the circle's two parts
+    // swapped (so the glow wanders against the picture), and it counts as fully shiny
+    float2 drift;
+    sincos(time * 0.125, drift.x, drift.y);
+    drift *= 0.01;
+    second = albedoMaps[2].Sample(samplerAniso, xz * albedoTile[2].x + drift);
+    glowing = second.rgb * (albedoMaps[2].Sample(samplerAniso, xz * albedoTile[2].x + drift.yx).a * low.y);
+    second.a = 0;
+  }
+  albedo = lerp(albedo, second, low.y);
   albedo = lerp(albedo, ALBEDO(3), low.z);
   albedo = lerp(albedo, ALBEDO(4), low.w);
   albedo = lerp(albedo, ALBEDO(5), high.x);
@@ -132,7 +148,8 @@ float4 PS(VOut i) : SV_Target {
   if (look > 0.5) {
     // the modern look: the ground is a rough, non-metal surface
     float roughness = 1 - 0.5 * gloss * saturate(specularColor.x * 2);
-    float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, 0, N, i.world, shadow);
+    // (ground that glows gives its own light, by day and by night)
+    float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
     // full sunlight), so that shallows keep the map's water colours
 #ifdef MODERN_WATER
@@ -156,7 +173,8 @@ float4 PS(VOut i) : SV_Target {
   float3 specularXp = pow(saturate(dot(reflect(toPixel, N), sun)), 80) * gloss * specularColor.a * specularColor.rgb;
   float3 lightXp = lightMultiplier * diffuse + shadowFill * (1 - diffuse);
   float3 colorXp = lightXp * (albedo.rgb + specularXp);
-  float3 color = lerp(colorPlain, colorXp, xp);
+  // (the glowing look: the original marks the pixel to be spread as glow; here it is added)
+  float3 color = lerp(colorPlain, colorXp, xp) + glowing * 0.6;
   return float4(lerp(color, ramp.rgb, ramp.a), 1);
 }
 )hlsl";
@@ -255,8 +273,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   waterRamp_ = map->water.present ? textures_->Get(map->water.ramp, textures_->Black()) : textures_->Black();
   for (int i = 0; i < 10; ++i) albedo_[i] = textures_->Get(map->albedo[i].texture, textures_->Black());
   for (int i = 0; i < 9; ++i) normal_[i] = textures_->Get(map->normal[i].texture, textures_->FlatNormal());
-  shaderKind_ = map->shader == "TTerrainXP" ? 1 : 0;
-  if (map->shader != "TTerrain" && map->shader != "TTerrainXP")
+  shaderKind_ = map->shader == "TTerrainXP" ? 1 : map->shader == "TTerrainGlow" ? 2 : 0;
+  if (map->shader != "TTerrain" && map->shader != "TTerrainXP" && map->shader != "TTerrainGlow")
     fprintf(stderr, "render: the map asks for the terrain look \"%s\", which is not written yet; using TTerrain\n", map->shader.c_str());
 
   // the tree of nodes: per level, each node's lowest and highest ground (for culling and for distances)
@@ -365,7 +383,8 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   c.mapSize[2] = 1.0f / static_cast<float>(m.width);
   c.mapSize[3] = 1.0f / static_cast<float>(m.height);
   c.params[0] = 65535.0f * m.heightScale;
-  c.params[1] = static_cast<float>(shaderKind_);
+  c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
+  c.params[2] = shaderKind_ == 2 ? 1.0f : 0.0f;
   c.specularColor[0] = m.lighting.specular.x;
   c.specularColor[1] = m.lighting.specular.y;
   c.specularColor[2] = m.lighting.specular.z;

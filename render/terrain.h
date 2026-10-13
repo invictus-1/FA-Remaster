@@ -58,7 +58,7 @@ class Terrain {
   uint32_t gridIndexCount_ = 0;
   gfx::Texture heightTexture_, normalMap_, maskLow_, maskHigh_, waterMap_, waterRamp_;
   gfx::Texture albedo_[10], normal_[9];
-  int shaderKind_ = 0;  // 0: TTerrain (4 strata), 1: TTerrainXP (8 strata)
+  int shaderKind_ = 0;  // 0: TTerrain (4 strata), 1: TTerrainXP (8 strata), 2: TTerrainGlow (TTerrain, the second stratum glowing)
   std::vector<Level> levels_;
   std::vector<float> ranges_;  // per level: the distance up to which it is used
   std::vector<Patch> patches_;
