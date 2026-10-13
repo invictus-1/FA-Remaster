@@ -435,3 +435,16 @@ simulation's (a projectile or an effect of the UEF's building), and yours or the
 Still to do on my side, for when a player switches the depth option on: give the statistic
 (the ground's height under the cursor, the sea bed under water) so the column shows over water
 as in the original.
+
+### 8. From Chris: the UEF build box's purple, toned down
+Chris, 2026-10-13, after a live game on main 2cd926a (his words): the box is as described, "the
+only purple is as it builds. I think we should make the purple a bit more toned down just cause
+the blue wiring as it builds is super cool." His picture shows the upper two thirds of the box
+filled with a strong violet that covers the light-blue wire frame behind it, while the lower third
+(where the frame shows clearly) is what he likes.
+
+Asked for: the violet of the box and its slices weaker (more see-through, or less saturated), so
+that the wire frame reads through it over the whole height. You noted this yourself as a question
+for the colour pass; he has now answered it. Not blocking.
+
+**Status:** asked 2026-10-13.

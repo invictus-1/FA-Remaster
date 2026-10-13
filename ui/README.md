@@ -134,7 +134,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original's order (one list ordered by Depth, hidden ones left out); Bitmap and Text follow the
   original's placement (texture stretched over the rectangle without its border ring; the text
   baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
-  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed). The item list draws
+  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed) and .png (FAF's newer interface pictures; checked against a reference decoder on the game's files: mean difference 0.04 of 255). The item list draws
   as read from the original; the edit field, border and scrollbar draw by inference, marked in
   the source, and agree with the screenshots where those show them.
 - Checked against the original: a lossless screenshot of the original game's main menu (3840x2160,
