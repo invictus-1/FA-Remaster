@@ -27,8 +27,9 @@ straightened by the same change; lightning bolts are strips of one width and wer
 He had found the beams fine in between: from a low camera the strip is seen along its length and
 the skew hardly shows; from straight above it shows in full.
 
-Still as it was, and not asked: where a shaft runs into the ground it ends in a hard line (plain
-only in fog).
+Where a shaft runs into the ground it used to end in a hard line (plain only in fog). Chris, asked:
+"Yeah soften it a bit". Done with the next commit: shafts are drawn as particles are, testing the
+scene's depth themselves, and fade out over half a world unit before what they meet.
 
 ## ui, to the renderer 16: the range rings' thickness beside the original's (2026-10-13)
 

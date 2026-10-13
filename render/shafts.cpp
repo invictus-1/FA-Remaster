@@ -18,6 +18,14 @@ struct Shaft {
 cbuffer Shafts : register(b2) {
   Shaft shafts[256];
 };
+cbuffer ShaftSet : register(b1) {
+  float4 meeting;  // x: over how many world units a shaft fades where it meets something solid; y: the camera's near distance
+};
+#ifdef MSAA
+Texture2DMS<float> sceneDepth : register(t3);
+#else
+Texture2D<float> sceneDepth : register(t3);
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -44,7 +52,37 @@ VOut VS(uint id : SV_VertexID) {
   return o;
 }
 
-float4 PS(VOut i) : SV_Target {
+// How much of the shaft shows at this pixel: of the pixel's samples, those where nothing solid is
+// in front of it (`coverage`); and less where it is about to meet something, so that it fades into
+// the ground instead of being cut off along a hard line (as particles do).
+float Meets(VOut i, out uint coverage) {
+  coverage = 0;
+  float nearest = 1e9;
+#ifdef MSAA
+  int2 pixel = int2(i.position.xy);
+  for (uint s = 0; s < SAMPLES; ++s) {
+    float d = sceneDepth.Load(pixel, s);
+    float gap = (d > 0 ? meeting.y / d : 1e9) - i.position.w;
+    if (gap > 0) {
+      coverage |= 1u << s;
+      nearest = min(nearest, gap);
+    }
+  }
+#else
+  float d = sceneDepth.Load(int3(i.position.xy, 0));
+  float gap = (d > 0 ? meeting.y / d : 1e9) - i.position.w;
+  if (gap > 0) {
+    coverage = 1;
+    nearest = gap;
+  }
+#endif
+  return coverage == 0 ? 0 : saturate(nearest / max(meeting.x, 1e-3));
+}
+
+float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
+  float meets = Meets(i, coverage);
+  if (meets <= 0) discard;
+  i.color.rgb *= meets * meets * (3 - 2 * meets);
   float across = saturate(1 - abs(i.at.x) / max(i.at.z, 1e-5));
   float along = 1 - i.at.y;
   // (the far end is wider: the same light over more air, so it thins twice over)
@@ -56,12 +94,13 @@ float4 PS(VOut i) : SV_Target {
 }  // namespace
 
 bool Shafts::Init(std::string* error) {
-  std::string source = std::string(kViewShaderBlock) + kShader;
+  std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.name = "shafts";
   pd.vertexSource = pd.pixelSource = source;
   pd.cull = gfx::Cull::None;
-  pd.depthWrite = false;
+  pd.depthTest = pd.depthWrite = false;  // (the shader tests the scene's depth itself)
+  pd.depthTarget = false;
   pd.blend = gfx::Blend::Additive;
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
@@ -77,10 +116,13 @@ void Shafts::AddBolt(Vec3 from, Vec3 to, float halfWidth, Vec3 color) {
   shafts_.push_back({{from.x, from.y, from.z, halfWidth}, {to.x, to.y, to.z, halfWidth}, {color.x, color.y, color.z, 1}});
 }
 
-void Shafts::Draw(const View& view) {
+void Shafts::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
   if (shafts_.empty()) return;
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
+  const float set[4] = {soften, zNear, 0, 0};
+  device_->SetConstants(1, set, sizeof set);
+  device_->SetTexture(3, sceneDepth);
   for (size_t at = 0; at < shafts_.size(); at += kBatch) {
     const size_t n = std::min(kBatch, shafts_.size() - at);
     device_->SetConstants(2, shafts_.data() + at, static_cast<uint32_t>(n * sizeof(Shaft)));
