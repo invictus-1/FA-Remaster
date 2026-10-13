@@ -3,6 +3,23 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 13: a unit that is still being built carries out no order — fixed in the simulation
+
+The fault was the simulation's, not the interface's: your order is right to go out.
+
+The original's command dispatcher (`IAiCommandDispatchImpl::TaskTick`, FA exe 0x598f6d) asks four things
+before it starts the next order of a unit's queue, and waits a beat when any is true: the unit is being built
+(IUnit vtable +0x34, the flag at entity +0x98), it is dead, it has state Attached, it has state
+BlockCommandQueue. Ours had the Attached test and not the first: the queue of a factory under construction
+was started at once. Now `StartHead` (src/sim/commands.cpp) holds the queue while `beingBuilt`; the orders
+stay in the queue, as in the original, and begin the beat after the unit is finished. It holds for every
+kind of order to every unfinished unit, not only a factory's build orders.
+
+Checked on the thirteen replays: all pass, and the skirmish replay, whose first difference had been exactly
+this (an unfinished factory at beat 165 starting its first engineer), now matches to beat 340 (units), 510
+(economy) and for 21,044 random draws instead of 14,177. Not checked: your case on Seton's with seed 7; please
+run it and tell me what the factory's focus is at 5.6 now.
+
 ## ui 12: a unit's own build restrictions — two functions in `sim_view.h`
 
 Both read the simulation's own data, nothing is kept twice:

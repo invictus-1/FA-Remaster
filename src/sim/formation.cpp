@@ -982,6 +982,10 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
     Logf(LogLevel::Info, "formu %u self %u F %p g %p slot %.3f %.3f leader %u cap %.4f mult %.4f mid %.4f pos %.3f %.3f follow %d",
          sim.tick(), EntityRef(u), static_cast<void*>(F), static_cast<void*>(g), u->formSlot.x, u->formSlot.z, u->formLeader, ms, mult,
          g ? g->mid : -1.0f, u->position.x, u->position.z, LandNavFollowingSlot(u) ? 1 : 0);
+  if (dbg >= 0 && static_cast<long>(u->id) == dbg && F)
+    Logf(LogLevel::Info, "formu %u   formation '%s' type %d is a form %d, %zu units, holds this unit %d, groups %zu + %zu, group speed %.4f",
+         sim.tick(), F->script.c_str(), F->type, FormationIsForm(*F) ? 1 : 0, F->units.size(), Contains(*F, u, false) ? 1 : 0,
+         F->groups[0].size(), F->groups[1].size(), g ? g->speed : -1.0f);
 }
 
 }  // namespace moho

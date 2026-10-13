@@ -325,6 +325,14 @@ void StartHead(Sim& sim, Unit* u) {
     u->headState = kNotStarted;
     return;
   }
+  // IAiCommandDispatchImpl::TaskTick 0x598f6d: nothing is dispatched while the unit is being built (IUnit vtable
+  // +0x34 = the being-built flag, entity +0x98). Orders given to a factory under construction wait in its queue
+  // until it stands. (Seen in a live game: the unfinished factory began the unit ordered from it, and its
+  // builder with it.)
+  if (u->beingBuilt) {
+    u->headState = kNotStarted;
+    return;
+  }
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
