@@ -153,13 +153,20 @@ float3 Swell(float2 xz) {
 }
 
 // Foam's lace: noise of four sizes, each turned against the last so that no grid shows, the fine
-// ones drifting. 0..1, mostly about a half.
-float Lace(float2 q) {
+// ones drifting. 0..1, mostly about a half. grain: how much water one pixel covers (world units):
+// a size of noise finer than two pixels is left at its mean, or from far up every pixel would draw
+// its own value and the sea would be salted with white points (Chris, 2026-10-13).
+float Lace(float2 q, float grain) {
   float2 a = float2(q.x * 0.80 - q.y * 0.60, q.x * 0.60 + q.y * 0.80);
   float2 b = float2(q.x * 0.28 + q.y * 0.96, -q.x * 0.96 + q.y * 0.28);
   float t = time * 0.12;
-  return CloudNoise(float3(q * 2.3, t)) * 0.40 + CloudNoise(float3(a * 5.9 + t, t * 1.7)) * 0.28 +
-         CloudNoise(float3(b * 13.7 - t * 2, t * 2.3)) * 0.20 + CloudNoise(float3(q * 31.0 + t * 3, t * 3.1)) * 0.12;
+  float4 shown = saturate(1.5 - grain * float4(2.3, 5.9, 13.7, 31.0) * 2);
+  float4 n = 0.5;
+  if (shown.x > 0) n.x = CloudNoise(float3(q * 2.3, t));
+  if (shown.y > 0) n.y = CloudNoise(float3(a * 5.9 + t, t * 1.7));
+  if (shown.z > 0) n.z = CloudNoise(float3(b * 13.7 - t * 2, t * 2.3));
+  if (shown.w > 0) n.w = CloudNoise(float3(q * 31.0 + t * 3, t * 3.1));
+  return dot(lerp(0.5, n, shown), float4(0.40, 0.28, 0.20, 0.12));
 }
 
 float3 WorldAt(float2 pixel, float depth) {
@@ -227,7 +234,8 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // how high the water stands here just now, against the sheet: where the bed is higher, the
   // water has run back from it (the waterline moves up and down the shore with the swell)
   // (and unevenly, by the foam's own lace: a waterline is never a ruled line)
-  float lace = Lace(xz + N.xz * 0.12);
+  float grain = max(length(ddx(xz)), length(ddy(xz)));
+  float lace = Lace(xz + N.xz * 0.12, grain);
   float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
   float deep = i.world.y + level - bed.y;
   if (deep <= 0) {
@@ -269,7 +277,12 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float edge = saturate(1 - deep / 0.5);
   // (how much of the lace is foam: nearly all of it only in the last hand's breadth of water)
   float much = edge * edge * edge * 0.6 + saturate(1 - deep / 0.05) * 0.3;
-  float foam = smoothstep(1.05 - much * 1.1, 1.30 - much * 1.1, lace + 0.42) * (0.55 + 0.45 * edge);
+  // (open water, away from every shore: only wisps of it are left, soft at their edges, on the
+  // swell's crests and near the eye; from far up the sea is one blue - Chris, 2026-10-13: "too
+  // sparkly ... the white should blend in more")
+  float open = saturate(1 - much * 8);
+  float wisps = 0.3 * saturate(swell.x * 9 + 0.3) * saturate(1.2 - distance / 150);
+  float foam = smoothstep(1.05 - much * 1.1 - 0.04 * open, 1.30 - much * 1.1 + 0.14 * open, lace + 0.42) * (0.55 + 0.45 * edge) * lerp(1, wisps, open);
   float fronts = pow(saturate(sin(deep * 20 - time * 1.5 + lace * 3.0) * 0.5 + 0.5), 5) * edge;
   foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
   color = lerp(color, (light + lamps) * 0.85, foam * 0.94);

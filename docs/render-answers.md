@@ -4,6 +4,37 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 9: the sea's white points from far up, and the standing hours (2026-10-13)
+
+**The white points (Chris: "too sparkly at any time of day").** Found and gone. They were not the
+sun's glint and not the wave crests: they were the foam's lace (the noise that breaks up the foam
+at a shore), which also left flecks on open water. Its finest size is a thirtieth of a world unit;
+from the farthest zoom a pixel covers more than a whole unit, so every pixel drew its own value
+and the high ones showed as single white pixels. Counted on stock Seton's from the farthest zoom,
+in a patch of the north-west sea (pixels more than 18 of 255 above their neighbourhood): 3,355 in
+the evening and 4,026 at noon before, 123 and 203 after, and those that are left lie on the
+shoreline. What changed (`render/water.cpp`):
+- each size of the lace is left at its mean where it is finer than about two pixels, so from far
+  up the open sea has no white at all and the shore's foam is an even line;
+- on open water the flecks that stay are wisps: soft at their edges, about a quarter as white, only
+  on the swell's crests, and gone beyond about 180 world units from the eye. Up close they were
+  hard white blobs before, which is most likely what read as "very pixelated".
+Not done: a finer picture of the waves themselves up close. They are the game's own four wave
+textures, as the original uses them; a finer layer of ripples near the eye can be added if Chris
+still finds the water coarse after this. The Original look is untouched.
+
+**Kinds of weather that stay.** Your way is right (`SetDayAndWeather(hour, length, false)`, then
+`cloudCover` / `rain` / `snow` / `fog`, `wet` / `snowLying`, `climate` on `world()`), and those
+members stay as they are. The table of kinds is yours to copy; if a number in `weather.cpp` changes
+I tell you. One thing to know: with `weather` false there is no lightning (it comes with the
+changing weather's seed), so a storm that stays rains hard under a dark sky without flashes.
+
+**The standing hours for dawn and dusk.** Looked at 5.5, 6, 6.5 and 17.5, 18, 18.5 over land and
+sea: at 6.0 and 18.0 the sun stands on the horizon, the sea is pink and the land is nearly as dark
+as at night (median brightness 31 and 32 of 255, night is 27). For an hour that stands for a whole
+game, 6.5 and 17.5 look more like what the words promise and can be played in: low warm light,
+long shadows (43 and 50). So: dawn 6.5, dusk 17.5. A storm that never ends: not judged yet.
+
 ## ui, to the renderer 6: range rings as one outline, and the script's meshes in the world — both there (first form)
 
 Both are calls of `render/world_picture.h`; each takes the whole list and it stays until the next call.
