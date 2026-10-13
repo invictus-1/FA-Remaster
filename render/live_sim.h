@@ -64,6 +64,7 @@ class LiveSim {
   bool FrameAt(double tick, Frame* out);
   // The effect events of the beats computed since the last call, in order (each says its beat).
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
+  void TakePropEvents(std::vector<FramePropEvent>* out) { frames_.TakePropEvents(out); }
   // How the blueprints look as the simulation has them, once the game has started; handed over once.
   void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
   // The army the picture is for (from 1; 0: none, everything shows): see SimFrames::SetFocusArmy.

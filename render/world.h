@@ -15,6 +15,7 @@
 // is under a point of it (Project, GroundAt, UnitAt, UnitsIn).
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -98,6 +99,14 @@ class World {
   void Begin(const Camera& camera, int width, int height, float time, double clock);
   // A game's units (as models, with their strategic icons), projectiles and beams.
   void AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors);
+  // How the scenery changed (SimFrames::TakePropEvents): each takes hold when the frame begun has
+  // reached its beat. Wreckage appears, a burnt tree turns black, a fallen one lies, what is
+  // reclaimed goes.
+  void AddPropEvents(const std::vector<FramePropEvent>& events);
+  int propsChanged = 0, propsGone = 0;  // since the map was opened
+  int MadeProps() const { return static_cast<int>(madeProps_.size()); }  // props made in the game that stand now
+  // Where wreckage lies now (at most `most` places): for looking at it in the viewer.
+  std::vector<Vec3> WreckPlaces(size_t most) const;
   void Render();
 
   // --- where things are, for the frame last begun (x, y in pixels of its width and height) ---
@@ -210,7 +219,7 @@ class World {
   Camera camera;   // this frame's
 
  private:
-  struct PlacedProp {
+  struct PlacedProp {  // (model null: not there - its files could not be read, or it is gone)
     const Model* model;
     Mat4 world;
   };
@@ -223,7 +232,11 @@ class World {
   const moho::Vfs* vfs_;
   bool haveMap_ = false;
   gfx::Texture environment_, sky_, selectionRing_;
-  std::vector<PlacedProp> props_;
+  std::vector<PlacedProp> props_;  // the map's, by their index in the map file's list
+  std::unordered_map<uint32_t, PlacedProp> madeProps_;  // made during the game (wreckage), by entity id
+  std::deque<FramePropEvent> propEvents_;  // told, and not yet due
+  const Model* PropModel(const std::string& blueprint, const std::string& mesh);
+  void ApplyPropEvent(const FramePropEvent& event);
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet
   std::vector<Pickable> pickables_;
   float time_ = 0;

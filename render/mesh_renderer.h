@@ -34,6 +34,7 @@ class MeshRenderer {
   // `teamColor` is rgb in 0..1; `built` is the fraction complete (1 for a finished unit).
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
   // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
+  // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr);
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
   // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them
@@ -41,7 +42,9 @@ class MeshRenderer {
   void Prepare(const std::vector<const View*>& views);
   // Draws the list as `view` sees it: into the scene, or (`shadowPass`) into a shadow map, where
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
-  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false);
+  // `glass`: only the see-through levels (ModelLod::glass: shields, frames of light), which the
+  // ordinary pass leaves out: after the water, over what is behind them, writing no depth.
+  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false);
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -88,7 +91,7 @@ class MeshRenderer {
   void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
-  gfx::Pipeline pipeline_, blended_, leaves_, shadow_;
+  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_;
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;

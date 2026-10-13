@@ -239,6 +239,21 @@ const Model* ModelCache::Mesh(const std::string& meshPath, const std::string& al
   return FromDisplay(key, base, entry);
 }
 
+const Model* ModelCache::Wreck(const Model* of, bool ownScale) {
+  if (!of || !of->ok) return of;
+  auto& kept = wrecks_[ownScale ? 1 : 0];
+  auto it = kept.find(of);
+  if (it != kept.end()) return it->second.get();
+  auto wreck = std::make_unique<Model>(*of);  // (the same buffers and textures)
+  if (!ownScale) wreck->scale = 1;
+  wreck->lights.clear();
+  for (ModelLod& lod : wreck->lods) {
+    lod.wreck = true;
+    lod.sway = 0;  // (a burnt tree does not wave)
+  }
+  return kept.emplace(of, std::move(wreck)).first->second.get();
+}
+
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
@@ -363,8 +378,17 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
       lod.teamMask = false;
+    } else if (kind == "shieldfill") {
+      lod.hidden = true;
+    } else if (kind.compare(0, 6, "shield") == 0 || kind.find("shieldimpact") != std::string::npos) {
+      // a shield's bubble (and the patch that flashes where it is hit), tinted by whose it is
+      lod.blend = lod.glass = lod.shield = true;
+      lod.teamMask = false;
+      if (kind.find("aeon") != std::string::npos) lod.shieldTint = {0.35f, 1.0f, 0.75f};
+      else if (kind.find("cybran") != std::string::npos) lod.shieldTint = {1.0f, 0.2f, 0.12f};
+      else if (kind.find("seraphim") != std::string::npos) lod.shieldTint = {0.95f, 0.85f, 0.55f};
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
-      lod.blend = lod.frame = true;
+      lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
     } else if (kind == "alphafade") {  // a see-through box that fades (the UEF's teleport): by its albedo's alpha
       lod.blend = lod.vertexNormals = true;

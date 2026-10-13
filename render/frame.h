@@ -34,6 +34,9 @@ struct FrameUnit {
   // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,
   // 8 seen now, 0x10 seen at some time, ...). 0xff: the picture is for no one army, everything shows.
   uint8_t recon = 0xff;
+  // The mesh blueprint its script set on it in place of its own (index into Frame::blueprints; 0:
+  // none). A personal shield sets the unit's shielded mesh while it is up.
+  uint32_t mesh = 0;
   bool Seen() const { return (recon & 8) != 0; }
   bool Blip() const { return (recon & 8) == 0 && (recon & 7) != 0; }  // known by radar, sonar or omni only
   bool SeenBefore() const { return (recon & 8) == 0 && (recon & 0x10) != 0; }  // not seen now, but it was
@@ -62,6 +65,36 @@ struct FrameProjectile {
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
   bool seen = true;               // by the army the picture is for
+  // What a script made of its size, on top of its blueprint's own scale (the UEF's box of light is
+  // sized to what is built in it): the engine's scale x draw scale, grown by its scale velocity.
+  float scale[3] = {1, 1, 1};
+};
+
+// Something a script made that has a mesh and is neither a unit, a projectile nor a prop: a shield's
+// bubble, a mark, a piece of a death (the engine's EntityView).
+struct FrameEntity {
+  uint32_t id = 0;
+  uint32_t mesh = 0;     // index into Frame::blueprints: the mesh blueprint's id ("/effects/entities/shield01/shield01_mesh")
+  uint32_t army = 0xff;  // from 0; 0xff: none
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};
+  float scale[3] = {1, 1, 1};  // the engine's scale x draw scale (a shield's size is its draw scale)
+  bool shield = false;
+  bool seen = true;            // by the army the picture is for (its place's answer)
+};
+
+// How the scenery changed in a beat (the engine's PropEvent): a prop made after the start (wreckage),
+// one whose mesh or place changed (a burnt tree, a tree knocked over), one that is gone. A prop of
+// the map is named by its index in the map file's list of props.
+struct FramePropEvent {
+  enum Kind { Create, Change, Destroy } kind = Create;
+  uint32_t tick = 0;  // the beat it was told in
+  uint32_t id = 0;
+  int mapIndex = -1;  // -1: made after the start
+  std::string blueprint, mesh;  // mesh: what a script set in place of the blueprint's own ("": nothing)
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};
+  float scale[3] = {1, 1, 1};  // the engine's scale x draw scale
 };
 
 // A weapon's beam while it is on.
@@ -114,6 +147,7 @@ struct Frame {
   float blend = 0;                      // how far the moment shown is from this beat to the next, 0..1
   std::vector<FrameProjectile> projectiles;  // moved on to the moment shown
   std::vector<FrameBeam> beams;
+  std::vector<FrameEntity> entities;         // moved on to the moment shown
   // Blueprint ids the units ("uel0201") and projectiles ("/projectiles/.../x_proj.bp") refer to.
   // The list only grows, so an index stays valid.
   const std::vector<std::string>* blueprints = nullptr;

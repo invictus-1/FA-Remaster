@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "frame.h"
@@ -40,7 +41,7 @@ class SimFrames {
   // focus army any more. False: nothing new.
   bool TakeSight(std::vector<uint8_t>* grid, int* cells);
   // After every beat, on the simulation's thread. For the scripts' effects the simulation must have
-  // had `collectEffects` set from before its first beat.
+  // had `collectEffects` set from before its first beat, and for the scenery's changes `collectProps`.
   void Beat(const moho::Sim& sim);
 
   uint32_t FirstTick() const;  // of the beats kept
@@ -50,6 +51,8 @@ class SimFrames {
   bool FrameAt(double tick, Frame* out);
   // The effect events of the beats since the last call, in order (each says its beat).
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
+  // How the scenery changed in the beats since the last call, in order (each says its beat).
+  void TakePropEvents(std::vector<FramePropEvent>* out);
   // How the blueprints look, once: the list is handed over and this object's is emptied.
   void TakeLooks(std::vector<BlueprintLook>* out);
   // Each army's colour, by army index from 0; empty until ReadArmies.
@@ -64,6 +67,7 @@ class SimFrames {
     std::vector<FrameBone> bones;  // what the units' spans point into
     std::vector<FrameProjectile> projectiles;
     std::vector<FrameBeam> beams;
+    std::vector<FrameEntity> entities;
   };
   struct Scratch;  // the simulation's view structures, kept out of this header
   std::unique_ptr<Scratch> scratch_;
@@ -84,6 +88,9 @@ class SimFrames {
   bool sightNew_ = false, sightWasOn_ = false;
   uint32_t sightBeat_ = 0;
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
+  std::vector<FramePropEvent> propEvents_;      // not yet taken
+  std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
+  std::unordered_map<uint32_t, uint32_t> growingSince_;  // projectiles whose size changes with time: the beat first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
 };
 
