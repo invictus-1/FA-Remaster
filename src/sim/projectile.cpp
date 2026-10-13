@@ -842,6 +842,9 @@ int l_weapon_CreateProjectile(lua_State* L) {
   const std::string& type = w->ovDamageType.empty() ? w->bp->damageType : w->ovDamageType;
   Projectile* p = sim.CreateProjectile(L, *w->projBp, u->army, u, pos, q, damage, radius, type, w->target,
                                        w->bp->ignoresAlly);
+  if (dbgProj)
+    Logf(LogLevel::Info, "wproj %u unit %u   made %u %s destroy queued %d", sim.tick(), u->id, p ? p->id : 0,
+         w->projBp->id.c_str(), p ? static_cast<int>(p->destroyQueued) : -1);
   if (!p || p->destroyQueued) return PushProj(L, p);
   if (w->bp->muzzleVelocity != 0) {
     Vec3 tp = TargetPos(sim, w->target, false);

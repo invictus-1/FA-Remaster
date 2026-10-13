@@ -330,7 +330,14 @@ bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec
 Entity* TargetEntity(Sim& sim, const AiTarget& t) {
   if (t.type != 1 || !t.entityId) return nullptr;
   Entity* e = sim.FindEntity(t.entityId);
-  return e && !e->destroyQueued ? e : nullptr;
+  // CAiTarget::GetEntity 0x5e2ce0 is the weak pointer and nothing else: an entity a script destroyed is still
+  // there until the beat's destroy queue deletes it, and HasTarget 0x5e2a10 asks only a unit (dead?) or a blip.
+  // So a shell destroyed in the weapon stage is aimed at once more in the same beat's manipulator stage, and a
+  // tracking shell made with it as its target is not without a target (the Cybran missile deflector destroys
+  // the missile and fires its copy "at" it in one script function). Units stay as they were here: gone once
+  // their destruction is queued (not read for them).
+  if (e && e->destroyQueued && e->kind == Entity::Kind::Unit) return nullptr;
+  return e;
 }
 // CAiTarget::HasTarget 0x5e2a10
 bool HasTarget(Sim& sim, const AiTarget& t) {
