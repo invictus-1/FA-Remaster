@@ -352,13 +352,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   menu's background film off, the script makes no such control and nothing is shown. The film
   itself is still not decoded. `MOHO64UI_BACKDROP_AT=<seconds>` starts that far along the
   camera's way (for pictures of it).
-- Life bars over units (the renderer's own bars: `WorldPicture::SetLifeBars`): the console
-  command `UI_RenderUnitBars`, which the game's key map binds to Alt-L ("toggle_lifebars"). OURS
-  differs from the original in one thing, by the project's choice: the bars are off until the
-  player switches them on (the original's script switches them on with every game). The command
-  without a value turns the player's switch over and keeps it in the preferences
-  (`moho64ui_life_bars`); a script's `UI_RenderUnitBars false` puts the bars away (a cinematic)
-  and `true` gives back what the player chose.
+- Life bars over units, ON by default as in the original (the renderer's own bars:
+  `WorldPicture::SetLifeBars`; its work bars and pause marks are on apart from them): the console
+  command `UI_RenderUnitBars`, which the game's key map binds to Alt-L ("toggle_lifebars"). The
+  command without a value turns the player's switch over and keeps it in the preferences
+  (`moho64ui_unit_bars`); a script's `UI_RenderUnitBars false` puts the bars away (a cinematic)
+  and `true` gives back what the player chose. (For a day the bars were off at first, by a
+  choice that Chris took back on 2026-10-13.)
 - Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).

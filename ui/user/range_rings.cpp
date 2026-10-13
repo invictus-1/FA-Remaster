@@ -30,6 +30,13 @@
 // - the radii are the blueprint's: a radius a script has changed, or intel switched off, is not
 //   followed (the original asks the live unit); a weapon that an enhancement adds is left out,
 //   before and after the enhancement;
+// - "Defense" (0x7ec980) also reads a float of the unit blueprint at +0x458: taken here as
+//   Economy.MaxBuildDistance, how far a builder reaches. Why: the Economy block's fields end
+//   with MaxBuildDistance at its +0x7c (the field table at 0x521f00 .. 0x522095), and in Chris's
+//   picture of the original (2026-10-13) the commander's ring in the Defense colour measures 10
+//   against its omni ring of 24: its MaxBuildDistance. INFERRED from those two; where the
+//   Economy block begins in the blueprint is not read. The ring is the larger of that and the
+//   countermeasure weapons' reach.
 // - "Defense" is taken as the weapons of RangeCategory UWRC_Countermeasure and "AllMilitary" as
 //   every weapon with a range category; the original's other sources for these two and for
 //   "Miscellaneous" (blueprint fields at +0x458, +0x460, +0x468, not named yet) are left out;
@@ -142,6 +149,11 @@ bool Measure(lua_State* L, const std::string& blueprint, const std::string& filt
         }
         lua_pop(L, 1);
       }
+    }
+    if (filter == "Defense") {  // and how far a builder reaches (see the head of this file)
+      lua_pushstring(L, "Economy");
+      lua_rawget(L, bp);
+      if (lua_istable(L, -1)) *outer = std::max(*outer, Field(L, lua_gettop(L), "MaxBuildDistance"));
     }
   } else {
     lua_pushstring(L, "Intel");

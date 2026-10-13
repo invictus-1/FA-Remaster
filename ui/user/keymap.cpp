@@ -358,22 +358,23 @@ void KeyMapKeyUp(lua_State* L, int vk) { Map(L).down.erase(vk); }
 
 // The life bars over units. In the original UI_RenderUnitBars is a console variable: the game's
 // script sets it true when a game's interface comes up and false for a cinematic, and the key
-// bound to "toggle_lifebars" (Alt-L) runs it without a value, which turns it over. OURS differs
-// in one thing, by the project's choice: the bars are OFF until the player switches them on. So
-// the player's switch is kept apart from the scripts' doing: the command without a value turns
-// the player's switch over (kept in the preferences as `moho64ui_life_bars`, so it holds for the
-// next game); `false` puts the bars away and `true` gives back what the player chose.
+// bound to "toggle_lifebars" (Alt-L) runs it without a value, which turns it over. Here the
+// player's switch is kept apart from the scripts' doing: the command without a value turns the
+// player's switch over (kept in the preferences as `moho64ui_unit_bars`, so it holds for the
+// next game); `false` puts the bars away and `true` gives back what the player chose. The bars
+// are ON until the player switches them off, as in the original (Chris, 2026-10-13; for a day
+// they were off at first under the key `moho64ui_life_bars`, which is no longer read).
 namespace {
-const char* const kLifeBarsKey = "moho64ui_life_bars";
+const char* const kLifeBarsKey = "moho64ui_unit_bars";
 
 bool LifeBarsChosen(lua_State* L) {
   UserState* user = UserState::From(L);
   if (user->lifeBars < 0) {
     int top = lua_gettop(L);
-    user->lifeBars = 0;
+    user->lifeBars = 1;
     lua_getglobal(L, "GetPreference");
     lua_pushstring(L, kLifeBarsKey);
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, 1);
     if (lua_pcall(L, 2, 1, 0) == 0) user->lifeBars = lua_toboolean(L, -1) ? 1 : 0;
     lua_settop(L, top);
   }

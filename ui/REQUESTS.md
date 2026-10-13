@@ -751,14 +751,26 @@ look in their place (for the UEF as he knows it: the linking lines between the t
 What they are on the simulation's side (entities with a mesh, beams, emitters) is for you and
 the engine to say; if they reach you as something you have no look for, tell me which.
 
-b. The work bar. He had not seen yours yet when he wrote this (his build was older), and asks
-for the original's: "If I recall in the og game when a building or acu was upgrading there was a
-black bar that filled I think with orange on the bottom of the unit/building we need that ...
-Buildings need the percent bar too as in the upgrade." So: a black bar that fills with ORANGE,
-BELOW the unit or building (yours is over its top, light blue), for buildings as for units. He
-offers to start the original and take pictures; I have asked him for one, and send it when it is
-there. Until then his words are the measure. Also from him: "Pause button still needs the pause
-icon on the unit its pausing": that is your pause mark, in his program since main 7a2f089.
+b. The bars over units, as the original has them: Chris took four pictures of the original for
+this (`original_bars_1` to `_4` in the folder of his others) and decided: "For health bars i
+forgot it was default in game so lets make it default in our new stuff and place it exactly how
+the og is." So the life bars are ON by default from now (my switch's default is turned; Alt+L
+still switches them), and both bars are wanted as the original draws them. What the pictures
+show:
+- the life bar lies BELOW the unit (at its lower edge on screen), about as wide as the unit: a
+  black bar with a filling in bright green, which is yellow at middling health (a unit being
+  built in a factory, picture 3) and red when low (a building under construction, pictures 1
+  and 4: the filling is a short red piece at the left);
+- the work bar lies directly UNDER the life bar, the same width, a little thinner: black with an
+  ORANGE filling from the left. It shows for the unit that does the work: the commander and the
+  engineer while they build (pictures 1, 2, 4: "The orange bar under the acu is the progress of
+  the building being built"), a factory that upgrades or builds (picture 2: under its green life
+  bar);
+- every unit on screen has its life bar, at full health too (picture 4: the tanks).
+Your work bar is over the unit's top and light blue; he had not seen it when he wrote his first
+note. Asked for: both bars placed and coloured as in his pictures. Also from him: "Pause button
+still needs the pause icon on the unit its pausing": that is your pause mark, in his program
+since main 7a2f089.
 
 Not blocking.
 
