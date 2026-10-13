@@ -115,6 +115,23 @@ void DoDamagePoint(Sim& sim, lua_State* L, const DamageSpec& d, Entity* target, 
   if (target->kind == Entity::Kind::Unit) damage = amount * sim.ArmorMult(static_cast<Unit*>(target), d.type);
   if (d.instigator && d.instigator->army) AddStat(d.instigator->army, "DamageStats_TotalDamageDealt", damage);
   if (d.instigator && target->army) AddStat(target->army, "DamageStats_TotalDamageReceived", damage);
+  {
+    // MOHO64_DEBUG_DAMAGE=<entity id>: every damage that entity is dealt (who, how much, the script's call chain)
+    static const long dbgDmg = getenv("MOHO64_DEBUG_DAMAGE") ? atol(getenv("MOHO64_DEBUG_DAMAGE")) : -1;
+    if (dbgDmg >= 0 && static_cast<long>(target->id) == dbgDmg) {
+      std::string where;
+      lua_Debug ar;
+      for (int lvl = 0; lvl < 6 && lua_getstack(L, lvl, &ar); ++lvl) {
+        lua_getinfo(L, "Sl", &ar);
+        if (ar.currentline > 0) where += std::string(where.empty() ? "" : " < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+      }
+      const Entity* I = d.instigator;
+      Logf(LogLevel::Info, "damage %u to %u: %.3f (%s) by %s %d from %.2f %.2f %.2f; %s", sim.tick(), target->id, damage,
+           d.type.c_str(),
+           !I ? "nobody" : I->kind == Entity::Kind::Projectile ? "shell" : I->kind == Entity::Kind::Unit ? "unit" : "entity",
+           I ? static_cast<int>(I->id) : -1, d.origin.x, d.origin.y, d.origin.z, where.c_str());
+    }
+  }
   if (damage > 0 && target->HasLuaObject()) {
     PushObject(L, d.instigator && d.instigator->HasLuaObject() ? d.instigator : nullptr);
     lua_pushnumber(L, damage);
@@ -371,7 +388,7 @@ namespace {
 
 CollisionBeam* B(lua_State* L) { return CheckObject<CollisionBeam>(L, 1); }
 
-Vec3 BeamMuzzle(CollisionBeam* b, Quat* rot) {
+Vec3 BeamMuzzle(Sim& sim, CollisionBeam* b, Quat* rot) {
   Vec3 p;
   Quat q;
   Unit* u = b->weapon ? b->weapon->unit : nullptr;
@@ -379,6 +396,11 @@ Vec3 BeamMuzzle(CollisionBeam* b, Quat* rot) {
     *rot = b->orientation;
     return b->position;
   }
+  // (The muzzle bone by the unit's pose of THIS beat: the unit's manipulators have had their turn before the
+  // beam's. Tried twice and wrong, 2026-10-13: the pose of the beat before with the unit's place of the beat
+  // before (Experimental stops matching at 452, Naval at 148), and the pose of the beat before with the unit's
+  // place of this beat (Experimental 423, Naval 137).)
+  (void)sim;
   BoneWorld(u, b->attachBone, &p, &q);
   *rot = q;
   return p;
@@ -392,7 +414,8 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   float Lr = w->bp->maximumBeamLength > 0 ? w->bp->maximumBeamLength
              : (w->ovMaxRadius >= 0 ? w->ovMaxRadius : w->bp->maxRadius);
   Quat q;
-  Vec3 P = BeamMuzzle(b, &q);
+  Vec3 P = BeamMuzzle(sim, b, &q);
+  sim.HoldShape(b);  // (its committed transform stays what the beat began with: BoneWorld)
   b->position = P;
   b->orientation = q;
   Vec3 dir = Forward(q);
@@ -464,6 +487,16 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     type = ttype;
   }
   b->length = D;
+  {
+    // MOHO64_DEBUG_BEAM=<a>-<b>: every beam check in ticks a..b (whose, from where, which way, what it meets)
+    static const char* dbg = getenv("MOHO64_DEBUG_BEAM");
+    static const uint32_t dbgA = dbg ? static_cast<uint32_t>(atol(dbg)) : 1u;
+    static const uint32_t dbgB = dbg && strchr(dbg, '-') ? static_cast<uint32_t>(atol(strchr(dbg, '-') + 1)) : 0u;
+    if (sim.tick() >= dbgA && sim.tick() <= dbgB)
+      Logf(LogLevel::Info, "beam %u unit %u %s from %.4f %.4f %.4f dir %.5f %.5f %.5f meets %s %d%s at %.3f", sim.tick(),
+           owner->id, w->bp->label.c_str(), P.x, P.y, P.z, dir.x, dir.y, dir.z, ImpactTypeName(type),
+           target ? static_cast<int>(target->id) : -1, target && target->dead ? " (dead)" : "", D);
+  }
   lua_pushstring(L, ImpactTypeName(type));
   PushObject(L, target && target->HasLuaObject() ? target : nullptr);
   sim.CallMethod(L, b, "OnImpact", 2);
@@ -504,8 +537,21 @@ int l_beam_init(lua_State* L) {
   b->attachBone = bone;
   return 0;
 }
+// MOHO64_DEBUG_BEAM=<a>-<b> also logs the scripts' Enable / Disable calls in those ticks
+static void BeamSwitchLog(lua_State* L, const CollisionBeam* b, const char* what) {
+  static const char* dbg = getenv("MOHO64_DEBUG_BEAM");
+  if (!dbg) return;
+  static const uint32_t dbgA = static_cast<uint32_t>(atol(dbg));
+  static const uint32_t dbgB = strchr(dbg, '-') ? static_cast<uint32_t>(atol(strchr(dbg, '-') + 1)) : 0u;
+  Sim& sim = *S(L);
+  if (sim.tick() < dbgA || sim.tick() > dbgB) return;
+  Logf(LogLevel::Info, "beam %u unit %u %s %s (was %s, counter %d, interval %d)", sim.tick(),
+       b->weapon && b->weapon->unit ? b->weapon->unit->id : 0u, b->weapon && b->weapon->bp ? b->weapon->bp->label.c_str() : "?",
+       what, b->enabled ? "on" : "off", b->counter, b->interval);
+}
 int l_beam_Enable(lua_State* L) {
   CollisionBeam* b = B(L);
+  BeamSwitchLog(L, b, "Enable");
   S(L)->CallMethod(L, b, "OnEnable", 0);
   b->enabled = true;
   b->counter = b->interval;
@@ -513,6 +559,7 @@ int l_beam_Enable(lua_State* L) {
 }
 int l_beam_Disable(lua_State* L) {
   CollisionBeam* b = B(L);
+  BeamSwitchLog(L, b, "Disable");
   S(L)->CallMethod(L, b, "OnDisable", 0);
   b->enabled = false;
   return 0;
@@ -550,7 +597,9 @@ void BeamTick(Sim& sim, CollisionBeam* b) {
   UnitWeapon* w = b->weapon;
   if (!w || !w->HasLuaObject() || !w->unit || w->unit->destroyQueued) return;
   Quat q;
-  b->position = BeamMuzzle(b, &q);
+  const Vec3 muzzle = BeamMuzzle(sim, b, &q);
+  sim.HoldShape(b);
+  b->position = muzzle;
   b->orientation = q;
   if (!b->enabled) return;
   int old = b->counter++;

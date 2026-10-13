@@ -396,9 +396,15 @@ Vec3 EntityVelocity(const Entity* e) {
 
 void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   if (e->kind == Entity::Kind::Beam) {  // bones 1 and 2: the end of the beam
-    *rot = e->orientation;
-    *pos = bone >= 1 ? Add(e->position, Mul(Forward(e->orientation), static_cast<const CollisionBeam*>(e)->length))
-                     : e->position;
+    // Inside a beat a beam's transform, as its script and everybody else read it, is the committed one: where the
+    // beat before left it (its own check of this beat works on the new one). FAF's CollisionBeam.OnImpact places
+    // its area damage at self:GetPosition(1): so a beam's splash at its far end trails the turret by one beat,
+    // while a direct hit lands at once. (Seen in the original's beam lines: start and end at a check are the
+    // muzzle and direction of the beat before.)
+    const Vec3& bp = e->shapeHeld ? e->shapePos : e->position;
+    const Quat& bq = e->shapeHeld ? e->shapeOri : e->orientation;
+    *rot = bq;
+    *pos = bone >= 1 ? Add(bp, Mul(Forward(bq), static_cast<const CollisionBeam*>(e)->length)) : bp;
     return;
   }
   if (bone < 0 || !e->skeleton || bone >= e->skeleton->Count()) {
