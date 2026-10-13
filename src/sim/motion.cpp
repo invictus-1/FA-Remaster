@@ -586,6 +586,8 @@ void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
   m.pathIndex = 0;
   m.passThrough = through;
   m.hasWaypoint = true;
+  m.steerWpSet = true;
+  m.steerWp = p;
   m.driveTick = 0;
   GoalCell(*m.bp, p.x, p.z, &m.goalCellX, &m.goalCellZ);
   m.newSegment = true;  // the steering takes it at its next tick (DriveToNextWaypoint)
@@ -595,6 +597,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   UnitMotion& m = u->motion;
   m.hasGoal = false;
   m.hasWaypoint = false;
+  m.steerWpSet = false;  // (Execute's tail 0x5a43ef calls the navigator's MakeIdle: SetWaypoints(0, 0))
   m.navDriven = false;
   m.path.clear();
   SteeringStop(m);
@@ -1114,6 +1117,7 @@ void SteeringClearWaypoints(Sim& sim, Unit* u) {
   m.path.clear();
   m.pathIndex = 0;
   m.hasWaypoint = false;
+  m.steerWpSet = false;
   m.newSegment = false;
   if (!m.hasSpline) return;
   m.colType = 0;

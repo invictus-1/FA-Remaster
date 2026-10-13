@@ -166,6 +166,11 @@ struct UnitMotion {
   std::shared_ptr<LandNav> nav;
   bool navDriven = false;    // the current move belongs to the navigator
   bool hasWaypoint = false;  // the steering has a waypoint (else it coasts)
+  // The steering's last waypoint as the original keeps it (GetWaypoint 0x5d2170: its list's last entry, or zero
+  // while the list is empty): SetWaypoints 0x5d29c0 alone writes it, so it stands after the unit arrived there
+  // and goes only with SetWaypoints(0, 0) (a stop). The navigator's Execute compares its target with it.
+  bool steerWpSet = false;
+  Vec3 steerWp;
   // CalcMoveCommon's hard rule: a step from a cell the footprint fits into one it does not is
   // undone and the unit is pushed back a little; while pushed it coasts.
   bool pushed = false, wasMoving = false;

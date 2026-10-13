@@ -311,6 +311,9 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   n.path.clear();
   n.state = 0;
   n.wait = 0;
+  // 0x5ad9c0: the target is the cell the unit stood in at its last Execute (+0x28 := +0x24)
+  n.target = n.cur;
+  n.hasTarget = true;
   // 0x5ada19: the unit's PathFinding and ProblemGettingToGoal states go with the path (a search cut short by a
   // new goal does not leave PathFinding standing)
   u->unitStates.erase("PathFinding");
@@ -460,7 +463,6 @@ void SetTargetPoint(LandNav& n, int i) {
   n.state = 5;
   n.wait = 0;
   n.adjacent = Manhattan(n.cur, n.target) <= 1;
-  n.targetChanged = true;
 }
 
 // TryAdvanceTargetPoint 0x5af7e0
@@ -548,7 +550,6 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
     if (!n.hasTarget || n.target != n.cur) {
       n.target = n.cur;
       n.hasTarget = true;
-      n.targetChanged = true;
     }
     n.waiting = true;
     return 0;
@@ -560,10 +561,7 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   if (n.hasTarget && n.target == s) {
     n.lastFollow = p;
     // the target position is the slot's (+0x84): a new position in the same cell is a new steering waypoint
-    if (n.following && n.followCell == s && (n.followPos.x != p.x || n.followPos.z != p.z)) {
-      n.followPos = p;
-      n.targetChanged = true;
-    }
+    if (n.following && n.followCell == s && (n.followPos.x != p.x || n.followPos.z != p.z)) n.followPos = p;
     return 1;
   }
   float dd = Dist(n.cur, s);
@@ -578,7 +576,6 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
     n.advanceDist = 0.5f * dd;
     n.target = s;
     n.hasTarget = true;
-    n.targetChanged = true;
     n.following = true;
     n.lastFollow = p;
     n.followPos = p;
@@ -605,8 +602,7 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   n.cur = CellOf(u, u->position.x, u->position.z);
   if (n.thinkDelay > 0) {
     if (--n.thinkDelay == 0) RequestPath(sim, u, n, n.requestMode);
-    if (!n.hasTarget || n.target != n.cur) n.targetChanged = true;  // (0x5ae37f) the target is the own cell
-    n.target = n.cur;
+    n.target = n.cur;  // (0x5ae37f) the target is the own cell
     n.hasTarget = true;
     return;
   }
@@ -616,9 +612,14 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   }
   while (n.path.size() > 1 && Dist(n.path[0], n.cur) >= Dist(n.path[1], n.cur) && UnitClearTo(sim, u, n, n.path[1]))
     Pop(n, 1);
-  if (n.state != 5 && n.state != 6) return;
+  if (n.state != 5 && n.state != 6) {  // (0x5ae477) no path is being followed: the target is the own cell
+    n.target = n.cur;
+    n.hasTarget = true;
+    return;
+  }
   if (!n.path.empty() && n.cur == n.path.back()) {
     n.state = 0;
+    n.target = n.cur;  // (0x5ae498)
     return;
   }
   float d = n.hasTarget ? Dist(n.cur, n.target) : kInf;
@@ -689,47 +690,36 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
 
 // Execute 0x5a4280: the steering gets the new waypoint; a finished path ends the move
 void Execute(Sim& sim, Unit* u, LandNav& n) {
-  n.targetChanged = false;
   UpdateCurrentPosition(sim, u, n);
   n.prevPos = u->position;
   // 0x5a4342: while the goal still waits for its search (path state 2: a formation's path delay, the thinking
-  // beat) the steering is told nothing; the navigator stays "thinking" and hands the target over afterwards
-  if (n.targetChanged && n.active && n.state == 2) n.targetPending = true;
-  // 0x5a434c: what decides is whether the navigator's target differs from the steering's waypoint (memcmp
-  // 0x4f0a50 of the two points), not whether the target changed this beat. A formation member that sat out its
-  // path delay with its own cell as its target has given the steering nothing yet: in the beat its search starts
-  // the own cell goes over, its status becomes 2, and the first waypoint of the path is then a drive-through one.
-  // (Only while it is still "thinking" here: ours' steering does not keep its last waypoint after arriving.)
-  if (!n.targetChanged && !n.targetPending && n.active && n.state != 2 && n.thinking && n.hasTarget) {
-    const Vec3 wp0 = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z}
-                                                              : WorldOf(sim, u, n.target);
-    const UnitMotion& m0 = u->motion;
-    const bool same0 = m0.hasWaypoint && !m0.path.empty() && m0.path.back().x == wp0.x && m0.path.back().y == wp0.y &&
-                       m0.path.back().z == wp0.z;
-    if (!same0) n.targetPending = true;
-  }
-  if ((n.targetChanged || n.targetPending) && n.active && n.state != 2) {
-    n.targetPending = false;
-    bool inGoal = InGoal(n, n.target);
-    bool f9e = n.thinking ? false : n.spliced < 0;
-    bool through = inGoal ? n.speedThroughGoal : f9e;
-    if (Dbg())
-      Logf(LogLevel::Info, "nav: tick %u unit %u through: in goal %d (through goal %d) thinking %d spliced %d", sim.tick(), u->id,
-           inGoal ? 1 : 0, n.speedThroughGoal ? 1 : 0, n.thinking ? 1 : 0, n.spliced);
-    n.thinking = false;
-    // following a formation slot: the target position is the slot's own (not the cell centre)
-    Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z} : WorldOf(sim, u, n.target);
-    // the steering gets it only when it differs from its last waypoint (GetWaypoint 0x5d2170): the same
-    // point re-set by TryAdvance makes no new batch
+  // beat) the steering is told nothing. Else (0x5a434c) what decides is whether the navigator's target point
+  // differs from the steering's last waypoint (memcmp 0x4f0a50 of the two; GetWaypoint 0x5d2170), not whether
+  // the target changed this beat: then the steering gets it and the status becomes 2 (ours: thinking off). The
+  // target is the unit's own cell whenever no path is being followed, so a unit whose search runs brakes on the
+  // cell it is in, cell after cell while it still rolls; and a formation member that sat out its path delay on
+  // its own cell hands that cell over in the beat its search starts, so that the path's first waypoint is then
+  // a drive-through one.
+  if (n.active && n.state != 2 && n.hasTarget) {
+    // following a formation slot: the target position is the slot's own (not the cell centre; 0x5ad8b0)
+    const Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z}
+                                                             : WorldOf(sim, u, n.target);
     const UnitMotion& m = u->motion;
-    bool same = m.hasWaypoint && !m.path.empty() && m.path.back().x == wp.x && m.path.back().y == wp.y && m.path.back().z == wp.z;
+    const bool same = m.steerWpSet && m.steerWp.x == wp.x && m.steerWp.y == wp.y && m.steerWp.z == wp.z;
     if (!same) {
+      bool inGoal = InGoal(n, n.target);
+      bool f9e = n.thinking ? false : n.spliced < 0;
+      bool through = inGoal ? n.speedThroughGoal : f9e;
+      if (Dbg())
+        Logf(LogLevel::Info, "nav: tick %u unit %u through: in goal %d (through goal %d) thinking %d spliced %d", sim.tick(), u->id,
+             inGoal ? 1 : 0, n.speedThroughGoal ? 1 : 0, n.thinking ? 1 : 0, n.spliced);
+      n.thinking = false;
       MotionSetWaypoint(sim, u, wp, through);
       u->motion.wpInGoal = inGoal;
+      if (Dbg())
+        Logf(LogLevel::Info, "nav: tick %u unit %u target (%d,%d) through %d cur (%d,%d) path %zu", sim.tick(), u->id,
+             n.target.x, n.target.z, through ? 1 : 0, n.cur.x, n.cur.z, n.path.size());
     }
-    if (Dbg())
-      Logf(LogLevel::Info, "nav: tick %u unit %u target (%d,%d) through %d cur (%d,%d) path %zu", sim.tick(), u->id,
-           n.target.x, n.target.z, through ? 1 : 0, n.cur.x, n.cur.z, n.path.size());
   }
   if (n.state < 2) {
     bool ok = n.state == 0;
@@ -834,7 +824,6 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   n.goal[3] = single ? gc.z + 1 : z1;
   n.speedThroughGoal = speedThrough;
   n.thinking = true;
-  n.targetPending = false;
   n.problem = false;
   n.retries = n.replans = 0;
   n.hasDeadEnd = false;
