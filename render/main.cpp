@@ -68,8 +68,8 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
-// --find shield|wreck  with a game: once it is where --tick asks, the camera goes to the first shield's bubble or
-//           the first wreck there is (to look at them without knowing where they are)
+// --find shield|wreck|<unit id>  with a game: once it is where --tick asks, the camera goes to the first shield's bubble,
+//           the first wreck or the first unit of that kind there is (to look at them without knowing where they are)
 // --hide-bone <bone>  placed units are drawn with that bone and all that hangs on it hidden (as a script's
 //           HideBone does; a name or a number, as for --turn)
 // --shielded  placed units are drawn with a personal shield up
@@ -1007,6 +1007,13 @@ int main(int argc, char** argv) {
           camera.target = wrecks[0];
           camera.distance = 14;
         }
+      } else if (frame.blueprints) {  // a unit's blueprint id: the first unit of that kind
+        for (const FrameUnit& u : frame.units)
+          if (u.blueprint < frame.blueprints->size() && (*frame.blueprints)[u.blueprint] == opt.find) {
+            camera.target = {u.position[0], u.position[1], u.position[2]};
+            camera.distance = 9;
+            break;
+          }
       }
     }
     if (!haveMap) DrawTestScene(draw);

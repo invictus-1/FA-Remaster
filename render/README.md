@@ -420,6 +420,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   camera to the first one in a game. Not there: a shield's flash where it is hit beyond the
   game's own patch; the bubbles are not sorted by distance among themselves; the original's
   personal shield is a second, larger copy of the mesh with a pattern running over it.
+- Parts of a model its script hides (the engine's `HiddenBones`, units only, as in the original):
+  `SimFrames` puts a unit's hidden bones into its pose's list (`FrameBone::hidden`), and what
+  follows such a bone is drawn at no size at its joint, in the picture and in the shadow. So a
+  commander shows only the upgrades it has, a factory's folded parts stay away. A unit with a
+  hidden bone is drawn through the posed path (it has bones' rows) even when nothing moves.
+  `--hide-bone <bone>` in the viewer does it by hand on placed units.
 - A projectile's size as its script set it (`FrameProjectile::scale`): the UEF's box of light is
   as large as what is built in it.
 - Two of the original's effect shaders on models (`models.cpp`, by the shader's name):
