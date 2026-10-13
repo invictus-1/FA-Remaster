@@ -7,6 +7,10 @@
 // it, and a pixel looks only at the lights of the square its place on the ground is in. The grid
 // and the lights go to the shaders in one buffer (lighting.h reads it).
 //
+// The beams of the lamps nearest to what the camera looks at also cast shadows: each of those has a
+// small shadow map of its own, a picture of the depth of units and scenery as the lamp sees them.
+// (The ground is not in it: a lamp low over the ground would shadow all of it with itself.)
+//
 // Only the modern look uses them. The original game has no such lights: there the "light particle"
 // of an explosion is a glow laid on the ground (decals.h), which the original look keeps.
 #pragma once
@@ -38,7 +42,9 @@ class Lights {
   // tenths of the way out from its middle and fading to nothing at its edge, reaching `radius`
   // along the beam; and `glow` of it to all sides within a fifth of the radius, so that the lamp's
   // own surroundings are not left dark.
-  void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow);
+  // `carrier`: the middle of the bounding sphere of what the lamp rides on, which casts no shadow
+  // in its beam (or a lamp set into a hull would be shadowed by the hull).
+  void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier = nullptr);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far).
@@ -51,6 +57,16 @@ class Lights {
   void Build(View* view);
   // Binds the lights' buffer for the pass just begun (every scene pass whose shaders light surfaces).
   void Bind();
+  // The lamps' shadows. PlaceShadows (after the frame's lamps are added, before Build) picks the
+  // beams nearest to what the camera looks at, at most kLampShadows, and returns how many; the host
+  // then draws what casts shadows into each one's pass with its view. `view` is the scene's (levels
+  // of detail are measured from the camera in these passes too).
+  static constexpr int kLampShadows = 8;
+  static constexpr int kLampShadowSize = 512;  // lighting.h's shader steps by 1 / this
+  int PlaceShadows(const Camera& camera, const View& view);
+  const View& ShadowView(int i) const { return shadowViews_[i]; }
+  gfx::PassDesc ShadowPass(int i) const;
+  gfx::Texture ShadowMap() const { return shadowMap_; }
 
   float strength = 3.0f;      // how bright a flash of full ramp colour is
   float reach = 3.0f;         // a flash's radius, in sizes of its glow
@@ -65,6 +81,9 @@ class Lights {
     float glow = 1;       // a beam: the share that still shines to all sides close to the lamp
     Vec3 direction;       // a beam: where it points
     float cosEdge = -2;   // a beam: the cosine of half its opening angle; below -1: it shines to all sides
+    Vec3 carrier;         // a beam: the middle of what it rides on (hasCarrier), which does not shadow it
+    bool hasCarrier = false;
+    int shadow = -1;      // a beam: which shadow map is its own this frame, or -1
   };
   struct FlashLight {
     const std::vector<Vec3>* ramp;  // colour x alpha along its time
@@ -78,6 +97,10 @@ class Lights {
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   gfx::Buffer buffer_;
+  gfx::Texture shadowMap_;
+  View shadowViews_[kLampShadows];
+  Mat4 shadowMatrix_[kLampShadows];  // world -> a lamp's map (x, y over w: where in the map; z over w: depth)
+  int shadowCount_ = 0;
   std::vector<Light> lights_;
   std::vector<FlashLight> flashes_;
   std::unordered_map<std::string, std::vector<Vec3>> ramps_;

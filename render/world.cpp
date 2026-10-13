@@ -317,7 +317,10 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
                   pose ? "posed" : "at rest", along.x, along.y, along.z, forward.x, forward.y, forward.z);
         }
       }
-      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow);
+      // (the unit itself does not shadow its lamps' beams: it is named by the middle of the ball its
+      // model lies in, as the mesh renderer counts it)
+      const Vec3 middle = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
+      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow, &middle);
       // the beam in the air: faint in clear night air, plainer in rain, snow and fog
       const float air = 0.03f + 0.16f * fog + 0.08f * rain + 0.09f * snow;
       const float reach = light.radius * model->scale * 0.75f;
@@ -930,11 +933,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
 
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
+  lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   {  // the bones of posed models, once for all the frame's passes
     std::vector<const View*> views{&view};
     if (shadowed)
       for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
+    for (int i = 0; i < lampShadowsDrawn; ++i) views.push_back(&lights.ShadowView(i));
     meshes.Prepare(views);
   }
   particles.Update(clock_, &view);
@@ -948,9 +953,15 @@ void World::Render() {
       meshes.Draw(shadows.CascadeView(i), environment_, true);
     }
   }
+  // the lamps' shadow maps: units and scenery as each lamp sees them
+  for (int i = 0; i < lampShadowsDrawn; ++i) {
+    device_->BeginPass(lights.ShadowPass(i));
+    meshes.Draw(lights.ShadowView(i), environment_, true);
+  }
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
+  device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
   device_->SetTexture(kEnvironmentSlot, sky_);
   lights.Bind();
   if (haveMap_) {
@@ -995,6 +1006,7 @@ void World::Render() {
       post.BeginColorOnly();
       lights.Bind();
       device_->SetTexture(kShadowMapSlot, shadows.Map());
+      device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
       water.DrawModern(view, camera, post.Behind(), post.Depth());
       post.ContinueScene();
       lights.Bind();

@@ -13,6 +13,7 @@ inline constexpr gfx::Format kSceneFormat = gfx::Format::RGBA16F;
 // builds its pipelines; every pipeline that draws into the scene is built for it.
 inline int gSceneSamples = 4;
 // Texture registers every scene shader may read; the frame code binds them, the renderers leave them alone.
+inline constexpr int kLampShadowSlot = 27;   // the lamps' shadow maps (lights.h), one array layer per lamp
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade
 inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip levels (blurrier going down)
 inline constexpr int kMaxCascades = 4;
@@ -190,6 +191,14 @@ struct View {
   // its shadow can fall on reads that map, so this cascade need not draw it. coveredHalf 0: none.
   Vec3 coveredRight, coveredUp;  // the sun's sideways axes
   float coveredX = 0, coveredY = 0, coveredHalf = 0;
+  // A lamp's shadow view only: what is wholly farther than `reach` from `reachFrom` is beyond the
+  // lamp's light and need not be drawn. reach 0: no such limit.
+  Vec3 reachFrom;
+  float reach = 0;
+  // And what the lamp rides on is not drawn into its map (a lamp set into a hull would be shadowed
+  // by the hull): the thing whose bounding sphere has its middle at `carrier`. hasCarrier false: none.
+  Vec3 carrier;
+  bool hasCarrier = false;
   bool CoveredByNearer(Vec3 centre, float radius) const {
     return coveredHalf > 0 && std::fabs(Dot(centre, coveredRight) - coveredX) + radius <= coveredHalf &&
            std::fabs(Dot(centre, coveredUp) - coveredY) + radius <= coveredHalf;
