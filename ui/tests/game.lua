@@ -75,6 +75,8 @@ local function run()
     check("what it can build is a category", EntityCategoryContains(buildable, cdr:GetUnitId()), false)
     local factory = string.sub(cdr:GetUnitId(), 1, 2) .. "b0101"  -- the faction's first land factory
     check("a commander can build its land factory", EntityCategoryContains(buildable, factory), true)
+    -- (its blueprint names tier 2 and 3 as well; its script has taken them away until its upgrades)
+    check("but not what its upgrades will bring: the tier 2 power generator", EntityCategoryContains(buildable, string.sub(cdr:GetUnitId(), 1, 2) .. "b1201"), false)
     -- (units that build nothing still give a category: the game's script asks it without looking)
     local _, _, nothing = GetUnitCommandData({})
     check("what nothing can build is a category too, an empty one", EntityCategoryContains(nothing, factory), false)

@@ -285,7 +285,11 @@ if you know it joins differently, say so).
 Blocking in this sense: until then the build menus of commanders and of factories offer things
 that cannot be built, which reads as a broken game to a player.
 
-**Status:** open.
+**Status:** done by the engine track the same day (`docs/engine-answers.md`, main 4a16b63):
+`UnitRestrictedBlueprints(sim, unit)` and `UnitMayBuild(sim, unit, blueprint)`. Built in:
+`GetUnitCommandData` takes each unit's restricted blueprints off its own sets before joining
+the selection's, then the army's. Confirmed in a new game as the engine asked: a UEF commander's
+category holds ueb1101 and not ueb1201 (`ui/tests/game.lua`). Thank you.
 
 ## To the renderer track
 
@@ -596,3 +600,20 @@ your water (the map brings the wave normal maps and the water map); and weather 
 itself is drawn from the game's seed in spells of five minutes, the first always fair, with rain
 and storms about one spell in five and snow only in the cold climate, so a short game can pass
 without rain.
+
+### 11. From Chris, later the same day: the rebuilt commander's lights, and the army colour's glow
+After a game with the rebuilt UEF commander (EEL0001, the BlackOps one) at night in rain; four
+more pictures, unnamed this time (Screenshot_4 to _7 in the same folder as request 10's).
+1. In his words: "commander lights are well wonky it should be front facing and shine the
+   ground." His picture: the commander seen from above and behind, a lamp glowing at the end of
+   each arm, and two cones of light that leave it to the LEFT and to the RIGHT, sideways, none
+   ahead of it.
+2. "the red glow which is the army color is a bit strong I think it should be toned done a bit
+   maybe 20%." His pictures: the ground round the commander and round a small UEF building is
+   tinted red for about two unit lengths around. He added afterwards: "the flashlights from what
+   I've seen on the units are perfect in glow and strength so no issues there just glow needs to
+   be toned down". So: the headlights stay as they are; the army-coloured glow on the ground
+   about a fifth weaker.
+Not blocking. From my side for your count of previews: the green ghosts of buildings ordered and
+not begun now show for all of the player's builders, selected or not (his wish, "like the og
+game"), up to 400.

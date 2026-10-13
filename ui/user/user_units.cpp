@@ -47,6 +47,10 @@ struct UnitStore : UserState::Extra {
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
   std::string queueKey;                   // that queue as it was last handed to the script
+  // The buildings the player's units have been ordered to build and have not begun, as of beat
+  // `orderedTick` (worked out once a beat, for the world's picture).
+  std::vector<WorldGhost> ordered;
+  uint32_t orderedTick = 0xffffffffu;
 };
 
 UnitStore& Store(lua_State* L) {
@@ -389,7 +393,8 @@ int l_GetUnitCommandData(lua_State* L) {
   lua_settop(L, 1);
   lua_newtable(L);  // 2: orders
   lua_newtable(L);  // 3: toggles
-  lua_pushnil(L);   // 4: buildable category
+  lua_pushnil(L);   // 4: buildable category (made at the end, from `total`)
+  std::vector<uint64_t> total(static_cast<size_t>(CategoryWordCount()), 0);
   // In the blueprints as the engine keeps them, a set of orders or toggles is a bit set written
   // as text: the one name when a single bit is set, else the number.
   static const char* const kOrders[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard", "RULEUCC_Patrol",
@@ -440,6 +445,10 @@ int l_GetUnitCommandData(lua_State* L) {
       collect("CommandCaps", 2, kOrders, 24);
       collect("ToggleCaps", 3, kToggles, 9);
     }
+    // What it can build: the sets its blueprint names, less what the unit itself may not build now
+    // (its script's AddBuildRestriction: a commander without its upgrades, a factory before its
+    // own; the engine's UnitRestrictedBlueprints).
+    std::vector<uint64_t> mine(total.size(), 0), part;
     lua_pushstring(L, "Economy");
     lua_gettable(L, -2);
     if (lua_istable(L, -1)) {
@@ -453,30 +462,20 @@ int l_GetUnitCommandData(lua_State* L) {
             lua_pop(L, 1);
             break;
           }
-          lua_getglobal(L, "ParseEntityCategory");
-          lua_insert(L, -2);
-          if (lua_pcall(L, 1, 1, 0) != 0) {
-            lua_pop(L, 1);
-            continue;
-          }
-          if (lua_isnil(L, 4)) {
-            lua_replace(L, 4);
-          } else if (lua_getmetatable(L, -1)) {  // sum = sum + this one
-            lua_pushstring(L, "__add");
-            lua_rawget(L, -2);
-            lua_pushvalue(L, 4);
-            lua_pushvalue(L, -4);
-            if (lua_pcall(L, 2, 1, 0) == 0) lua_replace(L, 4);
-            else lua_pop(L, 1);
-            lua_pop(L, 2);
-          } else {
-            lua_pop(L, 1);
-          }
+          if (ParseCategory(L, lua_tostring(L, -1), part))
+            for (size_t w = 0; w < mine.size() && w < part.size(); ++w) mine[w] |= part[w];
+          lua_pop(L, 1);
         }
       }
       lua_pop(L, 1);
     }
     lua_pop(L, 2);
+    if (Sim* sim = TheSim(L)) {
+      for (const std::string& id : UnitRestrictedBlueprints(*sim, u->view.id))
+        if (ParseCategory(L, id.c_str(), part))
+          for (size_t w = 0; w < mine.size() && w < part.size(); ++w) mine[w] &= ~part[w];
+    }
+    for (size_t w = 0; w < total.size(); ++w) total[w] |= mine[w];
   }
   for (int i = 0, n = 0; i < 24; ++i)
     if (masks[2] & (1u << i)) {
@@ -488,23 +487,18 @@ int l_GetUnitCommandData(lua_State* L) {
       lua_pushstring(L, kToggles[i]);
       lua_rawseti(L, 3, ++n);
     }
-  if (lua_isnil(L, 4)) {  // nothing can be built: the empty category (a category all the same: the
-    PushCategory(L);      // game's script hands it to EntityCategoryContains unasked, gamemain.lua 658)
-    lua_replace(L, 4);
-  }
   // What the player's army may not build is taken off (the engine's list of restricted blueprints).
   if (Sim* sim = TheSim(L)) {
-    for (const std::string& id : RestrictedBlueprints(*sim, sim->focusArmy + 1)) {
-      if (!lua_getmetatable(L, 4)) break;
-      lua_pushstring(L, "__sub");
-      lua_rawget(L, -2);
-      lua_pushvalue(L, 4);
-      lua_getglobal(L, "ParseEntityCategory");
-      lua_pushstring(L, id.c_str());
-      if (lua_pcall(L, 1, 1, 0) == 0 && lua_pcall(L, 2, 1, 0) == 0) lua_replace(L, 4);
-      lua_settop(L, 4);
-    }
+    std::vector<uint64_t> part;
+    for (const std::string& id : RestrictedBlueprints(*sim, sim->focusArmy + 1))
+      if (ParseCategory(L, id.c_str(), part))
+        for (size_t w = 0; w < total.size() && w < part.size(); ++w) total[w] &= ~part[w];
   }
+  // (Always a category, also when nothing can be built: the game's script hands it to
+  // EntityCategoryContains without looking, gamemain.lua 658.)
+  uint64_t* words = PushCategory(L);
+  for (size_t w = 0; w < total.size(); ++w) words[w] = total[w];
+  lua_replace(L, 4);
   lua_settop(L, 4);
   return 3;
 }
@@ -1617,24 +1611,8 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
     UnitStateView s;
     if (!UnitStateOf(*sim, u->view.id, &s)) continue;
     float from[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
-    bool first = true;
     for (const CommandView& c : s.queue) {
       if (!c.hasPosition) continue;
-      // A building ordered and not begun shows where it will stand, as players know it from the
-      // original (its rule for it is not read). The one being built is there itself: the first
-      // order of a unit that has something it works on.
-      const bool begun = first && s.focus != 0xffffffffu;
-      first = false;
-      if (ghosts && static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && !begun && ghosts->size() < 200) {
-        bool there = false;
-        for (const WorldGhost& g : *ghosts) there = there || (g.blueprint == c.blueprint && g.position[0] == c.position[0] && g.position[2] == c.position[2]);
-        if (!there) {
-          WorldGhost g;
-          g.blueprint = c.blueprint;
-          for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
-          ghosts->push_back(g);
-        }
-      }
       // First version of the colours: move light blue, attack red, patrol green, building white,
       // reclaim yellow, the rest grey. (The original's are still to be looked up.)
       uint32_t color = 0xffc0c0c0u;
@@ -1652,6 +1630,36 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
       lines->push_back(line);
     }
   }
+  // A building ordered and not begun shows where it will stand, whether its builder is selected
+  // or not (Chris, 2026-10-13: as the original game shows them; the original's own rule is not
+  // read). The one being built is there itself: the first order of a unit that has something it
+  // works on. Worked out once a beat, over all of the player's units that have orders.
+  if (!ghosts) return;
+  if (store.orderedTick != sim->tick()) {
+    store.orderedTick = sim->tick();
+    store.ordered.clear();
+    for (auto& entry : store.units) {
+      const UserUnit* u = entry.second.get();
+      if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0) continue;
+      UnitStateView s;
+      if (!UnitStateOf(*sim, u->view.id, &s)) continue;
+      bool first = true;
+      for (const CommandView& c : s.queue) {
+        if (!c.hasPosition) continue;
+        const bool begun = first && s.focus != 0xffffffffu;
+        first = false;
+        if (static_cast<CommandType>(c.type) != CommandType::BuildMobile || c.blueprint.empty() || begun || store.ordered.size() >= 400) continue;
+        bool there = false;
+        for (const WorldGhost& g : store.ordered) there = there || (g.blueprint == c.blueprint && g.position[0] == c.position[0] && g.position[2] == c.position[2]);
+        if (there) continue;
+        WorldGhost g;
+        g.blueprint = c.blueprint;
+        for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
+        store.ordered.push_back(g);
+      }
+    }
+  }
+  ghosts->insert(ghosts->end(), store.ordered.begin(), store.ordered.end());
 }
 
 // After a beat: the interface's units follow the simulation's.

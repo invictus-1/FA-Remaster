@@ -200,8 +200,8 @@ void ExpandCurrentSelection(lua_State* L);
 bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);
 // For the world's picture: the selected units' entity ids, and the lines of their orders (from
 // each unit to where its orders take it, coloured by the kind of order).
-// `ghosts` (may be null): the buildings the selected units have been ordered to build and have
-// not begun, each where it will stand.
+// `ghosts` (may be null): the buildings the player's units, selected or not, have been ordered to
+// build and have not begun, each where it will stand.
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr);
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
