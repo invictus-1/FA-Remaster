@@ -203,6 +203,8 @@ void SetNewTargetLayer(Sim& sim, Unit* u, int layer);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// The look rotation 0x50b480: forward along the direction, the world's up (motion.cpp).
+Quat LookQuat(float dx, float dy, float dz);
 // Unit::GetVelocity 0x6a9c90 (entity vtbl+0x3c): a unit with a land motion not on the Air layer reports m+0x38,
 // otherwise the last tick's displacement
 const Vec3& UnitVelocity(const Unit* u);
