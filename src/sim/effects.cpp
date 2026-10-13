@@ -81,6 +81,7 @@ struct LiveEffect {
 struct EffectLog {
   std::vector<EffectEvent> events;
   std::vector<std::pair<uint32_t, int>> where;  // per event: the entity and bone its position follows until taken
+  std::vector<std::pair<uint32_t, int>> where2;  // the same for a beam's other end (0: none)
   std::vector<LiveEffect> live;
   uint32_t nextId = 0;
 };
@@ -114,6 +115,15 @@ void SetPosition(EffectEvent& ev, const Entity* e, int bone) {
   ev.position[0] = p.x;
   ev.position[1] = p.y;
   ev.position[2] = p.z;
+}
+void SetPosition2(EffectEvent& ev, const Entity* e, int bone) {  // a beam's other end
+  Vec3 p;
+  Quat q;
+  BoneWorld(e, bone, &p, &q);
+  ev.hasPosition2 = true;
+  ev.position2[0] = p.x;
+  ev.position2[1] = p.y;
+  ev.position2[2] = p.z;
 }
 void AddText(EffectEvent& ev, const char* s) {
   if (ev.text.empty()) ev.text = s;
@@ -162,7 +172,9 @@ uint32_t RecordCreate(lua_State* L, const Factory& f) {
   if (e1) ev.entity = e1->id;
   if (e2) ev.entity2 = e2->id;
   if (e1 && !fixed) SetPosition(ev, e1, ev.bone);
+  if (e2) SetPosition2(ev, e2, ev.bone2);
   fx.where.push_back({e1 && !fixed ? EntityRef(e1) : 0u, ev.bone});
+  fx.where2.push_back({e2 ? EntityRef(e2) : 0u, ev.bone2});
   if (f.attached && e1) fx.live.push_back({ev.id, EntityRef(e1)});
   fx.events.push_back(std::move(ev));
   return fx.nextId;
@@ -175,6 +187,7 @@ EffectEvent& RecordCall(uint32_t id, const char* name) {
   ev.id = id;
   ev.name = name;
   fx.where.push_back({0u, -1});
+  fx.where2.push_back({0u, -1});
   fx.events.push_back(std::move(ev));
   return fx.events.back();
 }
@@ -185,6 +198,7 @@ void RecordDestroy(uint32_t id) {
   ev.id = id;
   ev.name = "Destroy";
   fx.where.push_back({0u, -1});
+  fx.where2.push_back({0u, -1});
   fx.events.push_back(std::move(ev));
   for (size_t i = 0; i < fx.live.size(); ++i)
     if (fx.live[i].id == id) {
@@ -440,6 +454,8 @@ void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {
   EffectLog& fx = Fx();
   // where the things made this beat are now
   for (size_t i = 0; i < fx.events.size(); ++i) {
+    if (fx.where2[i].first)
+      if (const Entity* e = sim.FindEntity(fx.where2[i].first)) SetPosition2(fx.events[i], e, fx.where2[i].second);
     if (!fx.where[i].first) continue;
     if (const Entity* e = sim.FindEntity(fx.where[i].first)) SetPosition(fx.events[i], e, fx.where[i].second);
   }
@@ -461,6 +477,7 @@ void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {
   out->clear();
   out->swap(fx.events);
   fx.where.clear();
+  fx.where2.clear();
 }
 
 }  // namespace moho

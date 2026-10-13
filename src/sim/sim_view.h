@@ -215,6 +215,10 @@ struct EffectEvent {
   // Create: where that point is when the list is taken (the entity's bone in this beat's pose; where it was at
   // the call if the entity is gone by then), or the position given (decals)
   float position[3] = {0, 0, 0};
+  // Create with a second entity (AttachBeamEntityToEntity): where its point is, taken the same way. The far end
+  // can be an entity EntityViews does not list (one without a mesh: the hubs of adjacency's links).
+  bool hasPosition2 = false;
+  float position2[3] = {0, 0, 0};
   std::vector<float> numbers;  // the call's other numbers, in order
   std::string text, text2;     // the call's other strings, in order (a parameter's name; a second texture)
 };
@@ -307,6 +311,7 @@ struct BlueprintDisplay {
   int iconSortPriority = 0;      // StrategicIconSortPriority
   float iconFadeInZoom = 0;      // Display.Mesh.IconFadeInZoom
   float selectionSizeX = 0, selectionSizeZ = 0;
+  float lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;  // LifeBarSize, LifeBarHeight, LifeBarOffset
 };
 // Every unit, projectile and prop blueprint whose Display.MeshBlueprint names a mesh blueprint with LODs, in
 // blueprint order.

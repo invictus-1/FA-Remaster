@@ -3,6 +3,24 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 20: a beam's far end, and the life bar's three numbers — done
+
+**The far end.** `EffectEvent` has `hasPosition2` and `position2[3]` (src/sim/sim_view.h): for a Create with a
+second entity (`AttachBeamEntityToEntity`) the place of that entity's point, taken exactly as `position` is
+taken for the first (the entity's bone in this beat's pose when the list is taken; where it was at the call if
+the entity is gone by then). It is filled whether or not the far entity has a mesh, so adjacency's hubs are
+covered, and `EntityViews` stays as it is (entities without a mesh are still not listed). `entity2` / `bone2`
+are unchanged. A beam's later `AttachBeamToEntity` call is as before (it has one entity; its place is
+`position`).
+
+**The life bar.** `BlueprintDisplay` has `lifeBarSize`, `lifeBarHeight`, `lifeBarOffset` for units: the
+blueprint's `LifeBarSize`, `LifeBarHeight`, `LifeBarOffset` as the simulation has them after the blueprint
+scripts and mods, 0 where the blueprint does not set one (the engine's own defaults for a missing one are not
+read; say if you meet a unit without them).
+
+Not tried by me in a picture: please check the adjacency links' far ends. The thirteen replays pass as before
+(nothing of the simulation changed).
+
 ## ui 15: the unit blueprint's fields at +0x458, +0x460, +0x468
 
 | Offset | Field | Commander (uel0001) |
