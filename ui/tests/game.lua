@@ -501,6 +501,19 @@ local function run()
     check("switched off again: none", table.getn(moho64ui_RangeRings()), 0)
     ConExecute("range_RenderSelected true")
 
+    -- scenery that can be reclaimed: the simulation names the tree or rock at a place
+    do
+        local at, found = cdr:GetPosition(), nil
+        for dx = -30, 30, 3 do
+            for dz = -30, 30, 3 do
+                found = found or moho64ui_ReclaimableAt(at[1] + dx, at[3] + dz, 1.5)
+            end
+        end
+        check("a tree or rock near the commander is found, with its entity and what it holds",
+            found ~= nil and found.id > 0 and string.find(found.blueprint, "_prop.bp", 1, true) ~= nil and found.mass >= 0 and found.energy >= 0, true)
+        check("and bare air far off the map is not", moho64ui_ReclaimableAt(-500, -500, 1), nil)
+    end
+
     -- the meshes the script places in the world, and the marks where orders land
     local WorldMesh = import("/lua/ui/controls/worldmesh.lua").WorldMesh
     local function meshes(shader)

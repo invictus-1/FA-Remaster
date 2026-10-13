@@ -866,6 +866,15 @@ class WorldView : public Control {
     return UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0);
   }
 
+  // So many pixels of the view, in map units at the place the camera looks at.
+  float MapUnitsOf(lua_State* L, int pixels) {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    Camera* c = GetCameraObject(L, cameraName);
+    const float width = std::max(1.0f, static_cast<float>(r.x1 - r.x0));
+    return c ? c->zoom * static_cast<float>(pixels) / width : 0;
+  }
+
   // Events: the script first, as for every control. Then the world view's own part, of which this
   // much is built: a press of the right button gives the selected units the order that fits what
   // is under the cursor (RightClickOrder: attack an enemy, reclaim, repair, guard, else move
@@ -920,6 +929,11 @@ class WorldView : public Control {
       // (With Alt held, a right click that would be a move is FAF's attack-move.)
       if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
       if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
+      // can reclaim: reclaim it. (As players know it from the original; its code for what is
+      // under the cursor beside units is not read. The cursor must be ON it, within a few
+      // pixels: a click beside a tree stays a move.)
+      if (under == 0xffffffffu && !miniMap && IssueReclaimAtPlace(L, world, MapUnitsOf(L, 4), !e.shift)) return true;
       return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
     }
     if (!e.left) return false;
@@ -953,6 +967,11 @@ class WorldView : public Control {
       const std::string order = name.substr(8);
       const uint32_t under = miniMap ? 0xffffffffu : UnitUnder(L, e.x, e.y);
       if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
+      // with more room than a right click gets (the player has said what is meant). With nothing
+      // there the order still goes out with the place, as the original sends it (the simulation
+      // ends it at once when the place is in sight).
+      if (order == "Reclaim" && !miniMap && IssueReclaimAtPlace(L, world, std::max(1.0f, MapUnitsOf(L, 14)), !e.shift)) return true;
       return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
     }
     if (!mode.empty() || miniMap) return false;

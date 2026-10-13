@@ -517,7 +517,18 @@ such an order (refuse it, or reclaim what lies at the place)? Ours should not ha
 
 Not blocking, but reclaim is not usable in a game until the first part is there.
 
-**Status:** open.
+**Status:** done by the engine track within the hour (`docs/engine-answers.md`, "ui 19"; main
+37ab93a): `ReclaimableAt(sim, at, within, &view)` names the reclaimable prop at a place, with
+its entity, box and the mass and energy left; and a Reclaim with a place and no entity now ends
+at once when the place is in sight, as the original's does (0x61f02e). Built on it (main after
+this entry): the Reclaim button on a tree, rock or wreck takes the nearest within 14 pixels (at
+least one map unit), a right click one within 4 pixels when the selection can reclaim; both
+send Reclaim on the entity. Tried in my build, same game as before: by the button the commander
+walks 8.9 to a pine and takes its 2.0 mass and 10 energy; by a right click the next one; the
+button on bare ground gives no order. Not tried: a wreck (none stands in an idle game), and
+the fog (the lookup does not ask what the army sees; not filtered yet). On the beam Chris saw:
+the interface never sent an entity-less Reclaim (my IssueOrder refuses it), so what he clicked
+went out as something else or not at all; if he sees it again I send you unit, prop and beat.
 
 ## To the renderer track
 

@@ -1145,6 +1145,46 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
   return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string());
 }
 
+bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool clear) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  UnitStore& store = Store(L);
+  const uint32_t kReclaim = 0x100000;
+  uint32_t caps = 0;
+  for (UserUnit* u : store.selection) {
+    if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
+    UnitStateView state;
+    if (StateOf(L, u, &state)) caps |= state.commandCaps;
+  }
+  if (!(caps & kReclaim)) return false;
+  ReclaimableView prop;
+  if (!ReclaimableAt(*sim, at, within, &prop)) return false;
+  return IssueOrder(L, "Reclaim", prop.position[0], prop.position[1], prop.position[2], prop.id, clear, std::string());
+}
+
+// moho64ui_ReclaimableAt(x, z, within) -> nil, or {id, blueprint, x, z, mass, energy} of the
+// tree, rock or wreck the simulation finds there: the host's own function for tests.
+int l_ReclaimableAtForTests(lua_State* L) {
+  Sim* sim = TheSim(L);
+  ReclaimableView prop;
+  const float at[3] = {static_cast<float>(luaL_checknumber(L, 1)), 0, static_cast<float>(luaL_checknumber(L, 2))};
+  if (!sim || !ReclaimableAt(*sim, at, static_cast<float>(luaL_optnumber(L, 3, 0)), &prop)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_newtable(L);
+  auto number = [&](const char* k, double d) {
+    lua_pushstring(L, k);
+    lua_pushnumber(L, d);
+    lua_rawset(L, -3);
+  };
+  number("id", prop.id), number("x", prop.position[0]), number("z", prop.position[2]), number("mass", prop.mass), number("energy", prop.energy);
+  lua_pushstring(L, "blueprint");
+  lua_pushstring(L, prop.blueprint.c_str());
+  lua_rawset(L, -3);
+  return 1;
+}
+
 // What a right click orders (func_GetRightMouseButtonAction, FA exe 0x81ec00), by the unit under
 // the cursor and by what the selected units can do between them (their command bits together):
 //   an enemy: Attack if they can attack (and it lives);
@@ -1158,8 +1198,8 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
 // the simulation's view does not give; without it engineers reclaim, as players know it), the
 // transport and ferry cases (0x81d280, 0x81d660, 0x81da20), whether the selection's weapons reach
 // the target's layer (CanAttackTarget 0x8c0d30: when they do not, the original gives no order),
-// an attack order's marker under the cursor, the option "switch_right_click_behavior", and things
-// that are not units (wreckage, trees): the picture answers for units only.
+// an attack order's marker under the cursor, the option "switch_right_click_behavior". Things that
+// are not units (wreckage, trees, rocks) are the world view's to ask for: IssueReclaimAtPlace.
 std::string RightClickOrder(lua_State* L, uint32_t under) {
   Sim* sim = TheSim(L);
   if (!sim) return std::string();
@@ -2087,6 +2127,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
+  lua_register(L, "moho64ui_ReclaimableAt", l_ReclaimableAtForTests);
   SetGlobal(L, "GetArmyAvatars", l_GetArmyAvatars);
   SetGlobal(L, "GetIdleEngineers", l_GetIdleEngineers);
   SetGlobal(L, "GetIdleFactories", l_GetIdleFactories);

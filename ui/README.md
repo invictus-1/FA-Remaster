@@ -241,8 +241,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   by the original's rule (read from its code): attack an enemy, reclaim what can be reclaimed,
   repair a unit being built, guard (help) another unit of one's own, else move there;
   `GetRightMouseButtonOrder` gives the script the same answer for the cursor. Left out of that
-  rule so far: capture, loading into transports and ferries, whether the weapons can reach the
-  target, and wreckage and trees (the picture answers for units only). A left click follows the script's
+  rule so far: capture, loading into transports and ferries, and whether the weapons can reach
+  the target. A tree, a rock or a wreck is reclaimed too: the simulation names the reclaimable
+  thing at a place (`ReclaimableAt`), and a right click right on one, with a unit selected that
+  can reclaim, or the Reclaim button's click near one, sends the order on it (which thing the
+  original's cursor takes is not read; the cursor and the rollover text for scenery are not
+  built). A left click follows the script's
   command mode, asked the way the original asks (`commandmode.GetCommandMode`): an order's
   button or key (move, attack, patrol, guard, repair, reclaim, capture: for the unit under the
   cursor when there is one, else for the place, INFERRED; FAF's attack-move and abilities, which
@@ -331,6 +335,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `Heard`). The original also has a sight check (its `snd_CheckLOS`: a sound at a place the
   army does not see is not played) and a cut-off by the camera's distance that a blueprint
   names (`LodCutoff`; the game's values for these are 10000, so it cuts nothing).
+  A sound that is not placed in the world follows the game's curve by the camera's distance
+  where its cue names one: the planet's rumble the game starts (it loops for good) is full
+  from far up and 20 dB less from near, as the game's files say; ours had played it at full
+  level from everywhere, which read as shooting far off.
   SET BY EAR, not read: the hums of working buildings (the game's "ActiveLoops" categories: a
   power generator, a mass extractor) are played 16 dB lower and only while the camera's eye is
   within 40 of the place it looks at. Everything that could be read (the cue, the categories as

@@ -314,6 +314,27 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
   }
   int handle = nextHandle_++;
   handles_[handle] = voices;
+  // (With MOHO64UI_SOUND_LOG: every sound that is not of the world, the interface's own, the
+  // music and the scripts' PlaySound, by its cue, category and wave.)
+  if (!position && std::getenv("MOHO64UI_SOUND_LOG"))
+    Logf(LogLevel::Info, "moho64ui: sound: plain %s/%s, category %s, %.1f dB, wave %s%s", bankName.c_str(), cueName.c_str(),
+         category >= 0 ? categories_[static_cast<size_t>(category)].name.c_str() : "none", sound.volume, lastWave_.c_str(),
+         prepareOnly ? " (prepared)" : "");
+  // A sound that is not placed in the world but follows the camera's distance (the game's
+  // curve by "CameraDistance": the planet's rumble that the game starts with, full from far up
+  // and 20 dB less from near) is kept, to be set again as the camera moves.
+  if (!position) {
+    std::vector<uint32_t> byCamera;
+    for (uint32_t offset : sound.curves) {
+      auto curve = curves_.find(offset);
+      if (curve != curves_.end() && curve->second.parameter == 0 && curve->second.variable == "CameraDistance") byCamera.push_back(offset);
+    }
+    if (!byCamera.empty()) {
+      byCamera_[handle] = byCamera;
+      const float g = Linear(ByCamera(byCamera));
+      for (int v : voices) mixer_.Place(v, g, g);
+    }
+  }
   if (position) {
     Placed& p = placed_[handle];
     p.position[0] = position[0], p.position[1] = position[1], p.position[2] = position[2];
@@ -389,7 +410,36 @@ void SoundSystem::StopWorld() {
 
 // Every playing sound of the world gets its loudness and its side again; a running sound that has
 // come into hearing starts, one that has gone out of it ends.
+// What the game's curves by "CameraDistance" give now (decibels). The variable is the camera's
+// distance to the place it looks at (0x8ac226); before a game's camera has said where it is, the
+// value the game's settings file starts it with (576.76: about -12 dB by the one curve there is).
+float SoundSystem::ByCamera(const std::vector<uint32_t>& curves) const {
+  float distance = 576.76f;
+  if (listening_) {
+    const float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
+    distance = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+  }
+  float decibels = 0;
+  for (uint32_t offset : curves) {
+    auto it = curves_.find(offset);
+    if (it != curves_.end()) decibels += it->second.At(distance);
+  }
+  return decibels;
+}
+
 void SoundSystem::UpdateWorld() {
+  for (auto it = byCamera_.begin(); it != byCamera_.end();) {
+    auto voices = handles_.find(it->first);
+    bool alive = false;
+    const float g = Linear(ByCamera(it->second));
+    if (voices != handles_.end())
+      for (int v : voices->second) {
+        if (!mixer_.Alive(v)) continue;
+        alive = true;
+        mixer_.Place(v, g, g);
+      }
+    it = alive ? std::next(it) : byCamera_.erase(it);
+  }
   for (auto it = placed_.begin(); it != placed_.end();) {
     auto voices = handles_.find(it->first);
     bool alive = false;
