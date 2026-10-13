@@ -671,8 +671,11 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     n.poke = false;  // 0x5aebaa: a target taken clears the steering's push report (else it forces one every beat)
     return;
   }
-  if (n.stuck > 30) {
+  if (n.stuck > 30) {  // (0x5aebb9: given up; the target is the own cell, which Execute then hands over)
     n.state = 0;
+    n.target = n.cur;
+    n.hasTarget = true;
+    n.wait = 0;
     return;
   }
   if (n.poke) {
