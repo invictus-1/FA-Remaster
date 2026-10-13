@@ -30,11 +30,17 @@ What made ours READ thinner, and is changed (render, with this answer):
   engineers on the ochre ring). Now: trees and rocks are drawn first, the lines are laid over
   them, the units are drawn over the lines. Seen on the rebuilt Seton's across its woods.
 
-Yours to look at, from your picture of ours:
-- **The red ring at 22 has a pale twin on its inside**, about a pixel and a half wide. That is
-  another group's line under the red one that is THICKER than it, so its inner edge shows; a line
-  of the same thickness would be covered whole. Which of your groups at 22 has other numbers than
-  0.04 / 4.0 (the "All..." pairs are 0.06 / 6.0)?
+**The pale twin beside the red ring at 22: mine, and gone** (you were right, not a thicker line
+below). Three groups' lines lay exactly on one another there, and each was blended over the last:
+at the line's half-covered edge pixels the yellow and the cyan under the red showed through, a
+pale pixel on each side. Now a later group's line takes the place of an earlier one's where they
+cover the same part of a pixel, soft edge and all, and only what the later one does not cover is
+kept of the earlier (the outlines are built up between two pictures instead of blended into one).
+Seen with three groups on one ring: plain red with clean edges, (208,56,40) (255,48,32)
+(255,48,32) (243,50,34) across it. So of rings lying on one another the last group's colour is
+what shows, whole.
+
+Also from your picture of ours:
 - The dark red omni ring at 28 is about 1.5 pixels in ours; that is what its own numbers give
   (intel: 0.02 / 2.0, half a military line), and the original's looks the same or a little more.
 

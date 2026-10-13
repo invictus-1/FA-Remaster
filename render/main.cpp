@@ -485,7 +485,14 @@ int main(int argc, char** argv) {
     fire.rings = {{at + Vec3{-14, 0, 0}, 22, 0}, {at + Vec3{12, 0, 6}, 22, 8}, {at + Vec3{2, 0, -4}, 9, 0}, {at + Vec3{40, 0, -30}, 15, 0}};
     radar.color = 0xff20e0ffu;
     radar.rings = {{at + Vec3{0, 0, 10}, 60, 0}, {at + Vec3{70, 0, 20}, 45, 0}};
-    world.ranges.groups = {fire, radar};
+    // (and two more groups lying exactly on one of the fire rings, drawn before it: the later line
+    // must take their place whole, with no second colour beside it)
+    RangeGroup yellow, cyan;
+    yellow.color = 0xffffff00u;
+    yellow.rings = {{at + Vec3{40, 0, -30}, 15, 0}};
+    cyan.color = 0xff00ffffu;
+    cyan.rings = {{at + Vec3{40, 0, -30}, 15, 0}};
+    world.ranges.groups = {yellow, cyan, fire, radar};
     // ... and the meshes the game's script places: a rally point's flag, and an order's mark half way through its life
     PlacedMesh flag, mark;
     flag.mesh = "/meshes/game/flag02d_lod0.scm";

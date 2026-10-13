@@ -67,7 +67,7 @@ class Ranges {
   gfx::Device* device_;
   gfx::Pipeline mask_, gather_, lay_;
   gfx::Buffer cube_;
-  gfx::Texture maskTarget_, lines_;
+  gfx::Texture maskTarget_, lines_, linesBefore_;  // (the outlines, and the picture of them one group back)
   int width_ = 0, height_ = 0;
   bool built_ = false;
 };
