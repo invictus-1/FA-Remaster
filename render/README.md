@@ -445,7 +445,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   program's own table before a level is sorted into a look (`REQUESTS.md` 17). Glass ("GlassAlpha":
   the domes of the Aeon's torpedo launchers, windows) is lit like a unit and seen through by its
   albedo's alpha and its glow, in the pass after the water; the viewer's `--ranges` stands a dome
-  with a cube behind it. A shell is drawn at the
+  with a cube behind it. Three more looks that the scene does not light (`ModelLod::unlit`): "Flat"
+  (the first game's "TMeshNoLighting": some missiles) shows its texture's own colours;
+  "UEFQuantumGate" is a see-through field whose texture slides with a finer copy taken away from
+  it; "PhalanxEffect" (the Cybran missile zapper's ball) two textures sliding over a faint ball.
+  `--ranges` stands the field and the three balls beside the dome. Still plain lit models:
+  "Effect" and "Explosion" (the first game's nuke shock ring and explosion meshes, which FAF's
+  scripts no longer make) and "CommandFeedback4". A shell is drawn at the
   size the simulation holds for it (`FrameProjectile::size`, the engine's `ProjectileView::size`:
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`

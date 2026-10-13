@@ -70,7 +70,8 @@ StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away (-1: glass, seen through by its alpha and glow), y: 1 = lit by the mesh's normals only (2: a frame of light,
                 // 3: a shield's bubble, 4: a slab that fades, 5: a nuke's ball of fire, 6: a nuke's sliding
-                // shell; none of them is lit),
+                // shell, 7: its texture's own colours, 8: a quantum gate's field, 9: a zapper's ball; none of
+                // them is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -202,6 +203,31 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   i.color.a = min(i.color.a, 1);
+  if (kind.y > 6.5) {
+    // not lit by the scene: what the textures say, as bright as the hour lets a thing be seen
+    float seen = falling.w > 0 ? falling.w : 1;
+    float4 own = albedoMap.Sample(samplerAniso, i.uv.xy);
+    float3 c;
+    float alpha = 1;
+    if (kind.y > 8.5) {
+      // a zapper's ball: two textures sliding over it at different speeds, faint
+      float4 first = albedoMap.Sample(samplerAniso, i.uv.xy + float2(-0.05, 0) * time);
+      float3 second = normalsMap.Sample(samplerAniso, i.uv.xy + float2(-0.05, -0.025) * time).rgb;
+      c = (first.rgb + second) * first.a;
+      alpha = 0.2;
+    } else if (kind.y > 7.5) {
+      // a quantum gate's field: its texture sliding upward, a four times finer second one sliding
+      // across taken away from it; seen through, as much as the texture's alpha says at rest
+      float3 field = albedoMap.Sample(samplerAniso, i.uv.xy + float2(0, 0.025) * time).rgb;
+      float3 fine = normalsMap.Sample(samplerAniso, i.uv.xy * 4 + float2(0.025, 0.025) * time).rgb;
+      c = max(field - fine, 0);
+      alpha = 0.4 * own.a;
+    } else {
+      clip(own.a - kind.x);
+      c = own.rgb;
+    }
+    return float4(look > 0.5 ? pow(max(c, 0), 2.2) * 1.3 * seen : c, alpha);
+  }
   if (kind.y > 4.5) {
     // a nuclear explosion's ball of fire; its age in seconds comes as the instance's colour
     float age = i.color.r;
@@ -688,7 +714,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[16] = {lod->alphaCut, lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[16] = {lod->alphaCut, lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};

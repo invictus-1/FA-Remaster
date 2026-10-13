@@ -1096,6 +1096,15 @@ int main(int argc, char** argv) {
       lights.Add({at.x, groundHeight(at.x, at.z) + 1.2f, at.z}, 6,
                  Vec3{0.5f + 0.5f * std::cos(hue), 0.5f + 0.5f * std::cos(hue + 2.1f), 0.5f + 0.5f * std::cos(hue + 4.2f)} * 3.0f);
     }
+    if (opt.ranges) {  // (... and with the test rings: a quantum gate's field and the Cybran zapper's three balls)
+      const Vec3 base{opt.cam[0] + 6, (world.HaveMap() ? world.GroundHeight(opt.cam[0] + 6, opt.cam[1] + 6) : 0) + 1.2f, opt.cam[1] + 6};
+      static const char* const kTest[] = {"/effects/entities/forcefield01/forcefield01_mesh.bp", "/effects/entities/cybranphalanxsphere01/cybranphalanxsphere01_mesh.bp",
+                                          "/effects/entities/cybranphalanxsphere01/cybranphalanxsphere02_mesh.bp", "/effects/entities/cybranphalanxsphere01/cybranphalanxsphere03_mesh.bp"};
+      for (int k = 0; k < 4; ++k) {
+        const Model* model = models.Blueprint(kTest[k]);
+        if (model && model->ok) meshes.Add(model, Mat4::FromTRS(base + Vec3{static_cast<float>(k) * 3.5f, 0, 0}, Quat{}, model->scale * (k ? 1.2f : 1.0f)), {1, 1, 1});
+      }
+    }
     for (PlacedUnit& u : placedUnits) {
       Pose pose;
       if (u.turned < 0 && animation.frames > 0) {

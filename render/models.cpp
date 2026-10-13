@@ -441,9 +441,14 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind.find("alpha") != std::string::npos) {  // NormalMappedAlpha and its relatives: alpha test above 0x80
       lod.alphaCut = 128.0f / 255;
       lod.teamMask = false;
-    } else if (kind == "flat") {  // unlit in the original, cut where the alpha is not above 0x7F (drawn lit here)
+    } else if (kind == "flat") {  // its texture's own colours, cut where the alpha is not above 0x7F
       lod.alphaCut = 127.0f / 255;
       lod.teamMask = false;
+      lod.unlit = 1;
+    } else if (kind == "uefquantumgate" || kind == "phalanxeffect") {
+      lod.blend = lod.glass = true;
+      lod.teamMask = false;
+      lod.unlit = kind == "uefquantumgate" ? 2 : 3;
     } else if (kind.find("terrain") != std::string::npos || kind.find("tmesh") != std::string::npos || kind.find("clutter") != std::string::npos ||
                kind == "normalmappedglow" || kind == "effect" || kind == "explosion") {
       lod.teamMask = false;  // rocks and other scenery
