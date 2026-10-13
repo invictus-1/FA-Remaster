@@ -378,6 +378,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
       lod.teamMask = false;
+    } else if (kind.find("aeonbuildpuddle") != std::string::npos) {  // the Aeon's pool of liquid metal
+      lod.chrome = true;
+      lod.teamMask = false;
     } else if (kind == "shieldfill") {
       lod.hidden = true;
     } else if (kind.compare(0, 6, "shield") == 0 || kind.find("shieldimpact") != std::string::npos) {

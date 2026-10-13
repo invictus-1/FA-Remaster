@@ -76,7 +76,7 @@ cbuffer MeshKind : register(b3) {
                 // w: 1 = the map's border (ModelLod::border)
   float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units;
                 // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
-  float4 kind4; // x: 1 = wreckage; y, z, w: a shield's tint
+  float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool); y, z, w: a shield's tint
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -260,7 +260,7 @@ float4 Shade(VOut i, bool front) {
   }
   // wreckage: burnt. No team colour; soot in patches by the place on the model.
   float soot = 1;
-  if (kind4.x > 0.5) {
+  if (kind4.x > 0.5 && kind4.x < 1.5) {
     soot = CloudNoise(i.shape * 9) * 0.6 + CloudNoise(i.shape * 31) * 0.4;
     teamMask = 0;
     if (faction == 3) albedo.a = 0;
@@ -329,7 +329,12 @@ float4 Shade(VOut i, bool front) {
       roughness = 0.55;
       emission = base * spec.b * 2.5;
     }
-    if (kind4.x > 0.5) {  // wreckage: most of its colour gone, dark where the soot is thick with a little rust, dull
+    if (kind4.x > 1.5) {  // liquid metal
+      base = float3(0.72, 0.75, 0.78);
+      metallic = 1;
+      roughness = 0.14;
+      emission = 0;
+    } else if (kind4.x > 0.5) {  // wreckage: most of its colour gone, dark where the soot is thick with a little rust, dull
       float grey = dot(base, float3(0.3, 0.6, 0.1));
       base = lerp(float3(grey, grey, grey), base, 0.35) * lerp(0.12, 0.55, soot);
       base = lerp(base, float3(0.09, 0.05, 0.03), 0.25 * (1 - soot));
@@ -372,6 +377,7 @@ float4 Shade(VOut i, bool front) {
   if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;
   float highlight = saturate(dot(reflect(-sunDirection, N), toCamera));
+  if (kind4.x > 1.5) return float4(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), 1);  // liquid metal
   if (kind.z < 0.5 && faction == 3) {  // Seraphim
     float3 ambience = sunAmbience + (1 - sunAmbience) * shadowFill;
     float3 seraphim = albedo.rgb * ambience + environment * spec.r * lerp(0.35, 1, edge) +
@@ -631,7 +637,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     float kind[16] = {lod->alphaCut, lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
-                            lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
+                            lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
     {  // (the model's foot and height, for a unit under construction)
       const Model* of = items_[at].entry->model;
       kind[10] = of->boundsMin.y;
