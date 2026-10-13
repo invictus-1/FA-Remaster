@@ -572,6 +572,14 @@ void Impact(Sim& sim, Projectile* p) {
   lua_pushstring(L, ImpactTypeName(type));
   PushObject(L, e && !e->destroyQueued && e->HasLuaObject() ? e : nullptr);
   sim.CallMethod(L, p, "OnImpact", 2);
+  // 0x69e084: after the script, the weapon that fired it hears how the shot went (its acquire task listens:
+  // CAiAttackerImpl::TransmitProjectileImpactEvent 0x5d7800 hooked it up when the shell was made)
+  if (UnitWeapon* w = p->weapon) {
+    const Unit* lu = p->launcher && p->launcher->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p->launcher) : nullptr;
+    if (lu && !lu->destroyQueued && !lu->combatGone &&
+        std::find(lu->weapons.begin(), lu->weapons.end(), w) != lu->weapons.end())
+      WeaponImpactEvent(sim, w, ShotEvent(sim, type, p->target, e, true));
+  }
 }
 
 // MotionTick 0x69bdd0
@@ -965,6 +973,10 @@ int l_SetNewTarget(lua_State* L) {
   p->target = AiTarget{};
   p->target.type = 1;
   p->target.entityId = EntityRef(e);
+  // 0x6a196d: the new target is built with CAiTarget::UpdateTarget, which picks one of the entity's target points
+  // (a draw when it is a unit with target bones). FAF's Projectile.RetargetThread comes here a beat after a
+  // homing shell lost its target, with what its weapon aims at now: one draw per torpedo of a salvo.
+  p->target.aimBone = TargetPointBone(*S(L), e);
   return 0;
 }
 int l_SetNewTargetGround(lua_State* L) {

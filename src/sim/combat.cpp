@@ -815,6 +815,17 @@ int TargetPointDraw(Sim& sim, Entity* e) {
   return static_cast<int>(sim.IntRange(static_cast<uint32_t>(cb.targetBones.size())));
 }
 
+// CAiTarget::UpdateTarget 0x5d55b0 for a target that keeps its pick (a shell's): the draw, and the bone it names
+// (-1: no target bones, or no unit).
+int TargetPointBone(Sim& sim, Entity* e) {
+  const int idx = TargetPointDraw(sim, e);
+  if (idx < 0 || !e) return -1;
+  if (e->kind == Entity::Kind::Blip) e = static_cast<ReconBlip*>(e)->source;
+  if (!e || e->kind != Entity::Kind::Unit || !e->skeleton) return -1;
+  const CombatBpData& cb = CB(static_cast<Unit*>(e));
+  return idx < static_cast<int>(cb.targetBones.size()) ? e->skeleton->Find(cb.targetBones[static_cast<size_t>(idx)]) : -1;
+}
+
 namespace {
 
 void WeaponCall(Sim& sim, UnitWeapon* w, const char* method) {
@@ -896,6 +907,102 @@ static void WakeFireThread(UnitWeapon* w) {
     }
 }
 
+// UnitWeapon::PickNewTargetAimSpot 0x6d5de0: which of its target's target points the weapon aims at (one draw
+// when the target has target bones)
+static void PickNewTargetAimSpot(Sim& sim, UnitWeapon* w) {
+  Entity* e = TargetEntity(sim, w->target);
+  int aimBone = -1;
+  if (w->bp->aboveWaterTargetsOnly) PickPointAboveWater(sim, e, &aimBone, false);
+  else if (w->bp->belowWaterTargetsOnly) PickPointBelowWater(sim, e, &aimBone, false);
+  else aimBone = PickAimBone(sim, e);
+  w->target.aimBone = aimBone;
+}
+
+static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt);
+
+// CAcquireTargetTask's impact listener (0x5d97f0 for a shell, 0x5d9830 for a beam; the handler 0x5d9630), only
+// for a weapon with ReTargetOnMiss. A shot that hit its target (0) or something that does not count (2) clears
+// the weapon's miss count and the task's put-off. A MISS (1) while neither the unit nor the target has moved and
+// the target is not in the air counts one up and makes the weapon aim at another of the target's points; the
+// unit's first weapon on the unit's ordered target is put off for 30 beats after 5 misses (the attack task then
+// hears "cannot hit from here"), any weapon drops and blacklists its own target after 10.
+void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
+  if (!w || !w->bp || !w->bp->reTargetOnMiss || !w->unit) return;
+  if (event != 1) {
+    if (event == 0 || event == 2) {
+      w->suppress = 0;
+      w->missCount = 0;
+    }
+    return;
+  }
+  Unit* u = w->unit;
+  auto moved = [](const Entity* e) {
+    if (e->kind == Entity::Kind::Unit) {
+      const Unit* x = static_cast<const Unit*>(e);
+      return x->position.x != x->lastPosition.x || x->position.y != x->lastPosition.y ||
+             x->position.z != x->lastPosition.z;
+    }
+    if (e->kind == Entity::Kind::Projectile) {
+      const Projectile* x = static_cast<const Projectile*>(e);
+      return x->position.x != x->prevPos.x || x->position.y != x->prevPos.y || x->position.z != x->prevPos.z;
+    }
+    return false;
+  };
+  if (!u->weapons.empty() && u->weapons[0] == w) {  // (weapon +0xa4 == 0: the unit's first weapon)
+    Entity* de = u->desiredTarget.type == 1 ? TargetEntity(sim, u->desiredTarget) : nullptr;
+    if (de && IsMobile(u) && !moved(u) && EntityLayerBit(de) != 16 && !moved(de)) {
+      if (++w->missCount > 5) w->suppress = 30;  // ([0xf599ec])
+      else PickNewTargetAimSpot(sim, w);
+      return;
+    }
+  }
+  Entity* te = TargetEntity(sim, w->target);
+  if (!te || moved(u) || EntityLayerBit(te) == 16 || moved(te)) return;
+  if (++w->missCount > 10) {
+    // 0x6d77b0: on the blacklist for 10 target changes, then no target
+    const uint32_t ref = EntityRef(te);
+    bool found = false;
+    for (auto& b : w->blacklist)
+      if (b.id == ref) {
+        b.counter = 10;
+        found = true;
+      }
+    if (!found) w->blacklist.push_back({ref, te->position, 10});
+    SetTarget(sim, w, AiTarget{});
+    return;
+  }
+  PickNewTargetAimSpot(sim, w);
+}
+
+// Whether a shot met what it was sent at (0x62a900). An entity target: the entity hit (impact type 5 and up) is
+// the target, or hangs on it. A ground target: nothing was hit, and the impact is terrain, water, air or
+// underwater. No target: yes.
+bool ShotHitTarget(Sim& sim, int impactType, const AiTarget& t, const Entity* hit) {
+  if (t.type == 1) {
+    if (!hit || impactType < 5) return false;
+    const Entity* te = TargetEntity(sim, t);
+    if (hit == te) return true;
+    if (hit->kind == Entity::Kind::Unit) {
+      const Unit* hu = static_cast<const Unit*>(hit);
+      const Entity* parent = hu->parentId ? sim.FindEntity(hu->parentId) : nullptr;
+      return parent == te;  // (both gone counts as met, as in the original)
+    }
+    return te == nullptr;
+  }
+  if (t.type == 2) return !hit && impactType >= 1 && impactType <= 4;
+  return true;
+}
+
+// The event a shot sends (Projectile::Impact 0x69e084, CollisionBeamEntity::CheckCollision 0x673337): 0 it met
+// its target, 2 it met a shield (entity id family 4) or, a shell, another shell (impact types 5 and 6): no
+// verdict, 1 it missed.
+int ShotEvent(Sim& sim, int impactType, const AiTarget& t, const Entity* hit, bool shell) {
+  if (ShotHitTarget(sim, impactType, t, hit)) return 0;
+  if (shell && (impactType == 5 || impactType == 6)) return 2;
+  if (hit && hit->kind == Entity::Kind::Shield) return 2;
+  return 1;
+}
+
 // UnitWeapon::SetTarget 0x6d5f30
 static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   if (w->target == nt) return;
@@ -911,12 +1018,7 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
     const Unit* tu = static_cast<const Unit*>(e);
     w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
   }
-  // PickNewTargetAimSpot 0x6d5de0
-  int aimBone = -1;
-  if (w->bp->aboveWaterTargetsOnly) PickPointAboveWater(sim, e, &aimBone, false);
-  else if (w->bp->belowWaterTargetsOnly) PickPointBelowWater(sim, e, &aimBone, false);
-  else aimBone = PickAimBone(sim, e);
-  w->target.aimBone = aimBone;
+  PickNewTargetAimSpot(sim, w);
   if (e && !e->dead) ++e->shooters;
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   WakeFireThread(w);

@@ -36,6 +36,13 @@ struct UnitCommand;
 // Unit::PickTargetPoint 0x6aaf50 via CAiTarget::UpdateTarget 0x5d55b0 for an entity target (a unit, or a recon
 // blip's source unit): IntRange(#AI.TargetBones) -> index, or -1 without a draw (structure_draws.md 1).
 int TargetPointDraw(Sim& sim, Entity* e);
+int TargetPointBone(Sim& sim, Entity* e);  // the same draw, as the bone of the target it names (-1 none)
+// A shot's verdict for the weapon that fired it (ReTargetOnMiss): ShotEvent says which (0 hit the target, 1
+// missed, 2 no verdict) from the impact type, the shot's target and what it met; WeaponImpactEvent is the
+// weapon's acquire task hearing it.
+struct AiTarget;
+int ShotEvent(Sim& sim, int impactType, const AiTarget& target, const Entity* hit, bool shell);
+void WeaponImpactEvent(Sim& sim, class UnitWeapon* w, int event);
 // The direction a standing unit turns its body to for a weapon slaved to the body (false: none).
 bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir);
 

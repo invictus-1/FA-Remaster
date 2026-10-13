@@ -500,6 +500,10 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   lua_pushstring(L, ImpactTypeName(type));
   PushObject(L, target && target->HasLuaObject() ? target : nullptr);
   sim.CallMethod(L, b, "OnImpact", 2);
+  // 0x673337: the weapon hears whether the beam met its target (ReTargetOnMiss)
+  if (!owner->destroyQueued && !owner->combatGone &&
+      std::find(owner->weapons.begin(), owner->weapons.end(), w) != owner->weapons.end())
+    WeaponImpactEvent(sim, w, ShotEvent(sim, type, w->target, target, false));
 }
 
 // CollisionBeamEntity.__init(self, spec)
