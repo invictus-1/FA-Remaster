@@ -44,7 +44,11 @@ class MeshRenderer {
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
   // `glass`: only the see-through levels (ModelLod::glass: shields, frames of light), which the
   // ordinary pass leaves out: after the water, over what is behind them, writing no depth.
-  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false);
+  // `part`: 0 everything, 1 the scenery alone (what was added while `addingScenery` was set: trees,
+  // rocks), 2 everything else. The scene draws the scenery first, so that what lies on the ground
+  // (range rings) can be laid over the trees and under the units, as the original has it.
+  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false, int part = 0);
+  bool addingScenery = false;
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -81,6 +85,7 @@ class MeshRenderer {
     Instance instance;
     Pose pose;
     bool posed = false;
+    bool scenery = false;
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
   };
   struct Item {
