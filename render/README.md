@@ -325,7 +325,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   surface is seen through it, bent a little by the waves, and loses its red and then its green by
   how much water lies between (so shallows are clear and the deep is dark, by the real depth
   and not by a painted depth picture: the ground under it is no longer tinted by the map's
-  water ramp in this look); the sky is mirrored (the computed one, or the map's), and so is what
+  water ramp in this look; the colours are fixed numbers, a turquoise over the shallows going to
+  a deep navy, chosen by Chris on the remastered Seton's, and the same for every map for now); the sky is mirrored (the computed one, or the map's), and so is what
   the picture shows in the mirrored direction, land and units, found by walking through the
   picture's depth; foam lies where the water is shallow, along the shore and round whatever
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
@@ -334,6 +335,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   behind something); no wakes behind ships. Lamps and flashes light the water and glint on
   its waves. In rain
   the surface is roughened and drops make rings on it. The original look keeps the original's formula.
+- Glow (bloom, modern look; `Post::glow`): what is brighter than the screen can show spreads a
+  soft glow round itself: lamps, flashes, the sun on the water. The finished picture is made
+  smaller in five steps, keeping at the first only what is too bright, and the small pictures are
+  laid back over each other; the sum is added before the picture is mapped to the screen. About
+  0.13 ms a frame at 1920 x 1080.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader
