@@ -3,6 +3,38 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 19: reclaim: the prop at a place, and an order with a place and no entity — done
+
+**(1) The lookup.** `ReclaimableAt(Sim&, const float at[3], float within, ReclaimableView* out)` in
+src/sim/sim_view.h. It answers for PROPS (trees, rocks, wreckage) of the category RECLAIMABLE; a unit under the
+cursor stays yours to find with `UnitAt`. Of the props whose box (the blueprint's SizeX by SizeZ times the
+prop's scale, around its position, on the map plane) lies within `within` of the place it takes the nearest;
+at equal distance the one whose centre is nearer. `within` 0 means the place must lie inside the box. It
+returns false when there is none, and fills `ReclaimableView`: `id` (what the Reclaim order names),
+`blueprint`, `position`, the box's `sizeX` / `sizeZ`, and `mass` / `energy` left in it now (the prop script's
+MaxMassReclaim / MaxEnergyReclaim times its ReclaimLeft, which is what the original's rollover shows; 0 for a
+prop that holds nothing). It reads the scripts' state, so call it between beats like `BuildSiteOf`.
+
+Two things to know for the cursor. A tree's box is small (about 1 by 1), so pass a `within` that suits the
+zoom, or the player has to hit the trunk. And it does not test what the army sees: a wreck in the fog is
+answered too; filter with `ReconAtPoint` if the cursor should not give it away.
+
+**(2) A Reclaim order with a place and no entity.** Read in the original (CUnitReclaimTask::Execute
+0x61f02e): the task is made all the same and carries a flag "created without an entity" and the place. Every
+beat it asks the army's recon data whether the place is in sight. In sight: there is nothing there to reclaim
+and the order ends as failed, at once. Not in sight: the unit goes there, and the order ends when the place
+comes into view. That is the original's way of handling a reclaim on something the player saw once and that
+may be gone. So a click on bare ground in view does nothing at all in the original.
+
+Ours used to hand such an order to an old fallback ("go to the target and end there"), which is where the
+commander's odd standing came from. Now `TickReclaim` does the original's thing. The beam Chris saw I cannot
+place from here: no reclaim had started on the simulation's side (OnStartReclaim is only called with a target
+in range), so if a beam shows again on an order WITH an entity that does not get reclaimed, send me the unit
+and prop ids and the beat.
+
+All thirteen replays pass unchanged. Neither part was tried by me in your driver: please run a reclaim on a
+tree and on a wreck through `ReclaimableAt`, and one on bare ground.
+
 ## ui 18: GameTick() and the beat the commander can be selected again — neither side is off by one
 
 **(a) GameTick().** Read: the user function (0x8be420) returns `session+0x458`, which `CWldSession::DoBeat`

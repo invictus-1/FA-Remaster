@@ -1,9 +1,11 @@
 #include "sim/sim_view.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/intel.h"
 #include "sim/script_bits.h"
@@ -522,6 +524,52 @@ bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], flo
   site[1] = s.y;
   site[2] = s.z;
   if (canBuild) *canBuild = CanBuildStructureAt(sim, *bp, s.x, s.z);
+  return true;
+}
+
+bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out) {
+  lua_State* L = sim.L();
+  const float reach = (within > 0 ? within : 0.0f) + 16.0f;  // (no prop's box is wider than that)
+  Prop* best = nullptr;
+  float bestEdge = 0, bestCentre = 0, bestSx = 0, bestSz = 0;
+  sim.ForPropsInRect(at[0] - reach, at[2] - reach, at[0] + reach, at[2] + reach, [&](Prop* p) {
+    if (p->destroyQueued || !p->blueprint || !p->HasLuaObject()) return;
+    if (!BpInCategory(sim, p->blueprint, "RECLAIMABLE")) return;
+    const int top = lua_gettop(L);
+    sim.blueprints().PushTable(L, *p->blueprint);
+    const float sx = NumField(L, lua_gettop(L), "SizeX", 1.0f) * p->scale[0];
+    const float sz = NumField(L, lua_gettop(L), "SizeZ", 1.0f) * p->scale[2];
+    lua_settop(L, top);
+    const float dx = std::fabs(at[0] - p->position.x), dz = std::fabs(at[2] - p->position.z);
+    const float ex = std::max(0.0f, dx - sx * 0.5f), ez = std::max(0.0f, dz - sz * 0.5f);
+    const float edge = std::sqrt(ex * ex + ez * ez), centre = std::sqrt(dx * dx + dz * dz);
+    if (edge > (within > 0 ? within : 0.0f)) return;
+    if (best && (edge > bestEdge || (edge == bestEdge && centre >= bestCentre))) return;
+    best = p;
+    bestEdge = edge;
+    bestCentre = centre;
+    bestSx = sx;
+    bestSz = sz;
+  });
+  if (!best) return false;
+  if (out) {
+    out->id = best->id;
+    out->blueprint = best->blueprint->id;
+    out->position[0] = best->position.x;
+    out->position[1] = best->position.y;
+    out->position[2] = best->position.z;
+    out->sizeX = bestSx;
+    out->sizeZ = bestSz;
+    const int top = lua_gettop(L);
+    PushObject(L, best);
+    if (lua_istable(L, -1)) {
+      const int t = lua_gettop(L);
+      const float left = NumField(L, t, "ReclaimLeft", 1.0f);
+      out->mass = NumField(L, t, "MaxMassReclaim", 0.0f) * left;
+      out->energy = NumField(L, t, "MaxEnergyReclaim", 0.0f) * left;
+    }
+    lua_settop(L, top);
+  }
   return true;
 }
 

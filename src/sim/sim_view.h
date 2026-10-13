@@ -323,6 +323,21 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out);
 // read through the scripts' state. It does not say whether a given builder may build it (RestrictedBlueprints,
 // the unit's live caps) or can reach it.
 bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild);
+// For a reclaim order and its cursor: the prop (tree, rock, wreckage) of the category RECLAIMABLE at a place.
+// Among the props whose box (the blueprint's SizeX x SizeZ times the prop's scale, around its position, on the
+// map plane) lies within `within` of the place, the one nearest to it; with several at the same distance, the
+// one whose centre is nearer. False: none. mass / energy: what is left in it now (the prop script's
+// MaxMassReclaim / MaxEnergyReclaim times its ReclaimLeft; 0 for a prop that holds nothing). Units are not
+// looked at: a unit under the cursor is the host's to find. Not const: the values are read from the scripts'
+// state.
+struct ReclaimableView {
+  uint32_t id = 0xffffffff;       // the prop's entity id (what a Reclaim order names)
+  std::string blueprint;          // the prop blueprint's id
+  float position[3] = {0, 0, 0};
+  float sizeX = 0, sizeZ = 0;     // the box it was tested with
+  float mass = 0, energy = 0;
+};
+bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out);
 // The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
 // Sim::collectEffects set from before the first beat.
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);

@@ -1438,7 +1438,19 @@ void Sim::Tick() {
         // parent's layer (CUnitMotion::MotionTick 0x6ba1ad: SetLayer(parent's), every beat; a parent UNIT's only
         // when the child is not what that unit works on, 0x6ba1a2, which is left to the transport code here).
         const bool onProjectile = p->kind == Entity::Kind::Projectile;
-        if (onProjectile && u->ownBone >= 0) AttachedTransform(u, bp, bq, &np, &nq);
+        if (onProjectile && u->ownBone >= 0) {
+          Vec3 cp;
+          Quat cq;
+          AttachedTransform(u, bp, bq, &np, &nq, &cp, &cq);
+          static const long dbgAtt2 = getenv("MOHO64_DEBUG_ATTACHED") ? atol(getenv("MOHO64_DEBUG_ATTACHED")) : -1;
+          if (dbgAtt2 >= 0 && static_cast<long>(u->id) == dbgAtt2)
+            Logf(LogLevel::Info,
+                 "attached %u   on shell %u bone %d (skeleton %d) own bone %d: P %.9g %.9g %.9g q %.9g %.9g %.9g %.9g | C %.9g %.9g "
+                 "%.9g q %.9g %.9g %.9g %.9g | out %.9g %.9g %.9g q %.9g %.9g %.9g %.9g | posed %d base %.9g %.9g %.9g",
+                 tick_, p->id, u->parentBone, p->skeleton ? p->skeleton->Count() : -1, u->ownBone, bp.x, bp.y, bp.z, bq.x,
+                 bq.y, bq.z, bq.w, cp.x, cp.y, cp.z, cq.x, cq.y, cq.z, cq.w, np.x, np.y, np.z, nq.x, nq.y, nq.z, nq.w,
+                 u->poseSet ? 1 : 0, u->poseBasePos.x, u->poseBasePos.y, u->poseBasePos.z);
+        }
         u->position = np;
         u->orientation = nq;
       }
