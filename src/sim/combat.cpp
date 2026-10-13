@@ -2214,7 +2214,15 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         AttackUpdate(sim, u, t, target);
         return 1;
       }
-      if (w && WithinWeaponRange(sim, w, target)) {
+      // ... or the unit is within Air.EngageDistance of the target, 2D (IsWithinHorizontalDistance 0x5f2f00 at
+      // 0x5f39e6): an aircraft takes its target, and with it flies its attack runs, as soon as it is that near,
+      // long before a weapon reaches. The blueprint's default is 0: never for what has no Air section.
+      const auto engageNear = [&] {
+        const Vec3 tp = TargetPos(sim, target, false);
+        const float dx = u->position.x - tp.x, dz = u->position.z - tp.z;
+        return CB(u).engageDistance > std::sqrt(dz * dz + dx * dx);
+      };
+      if ((w && WithinWeaponRange(sim, w, target)) || engageNear()) {
         bool any = false;
         for (UnitWeapon* x : u->weapons) any = any || (x->bp && CanAttackTarget(sim, x, target));
         if (!any) return -1;
