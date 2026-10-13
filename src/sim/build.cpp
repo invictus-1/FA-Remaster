@@ -2472,8 +2472,11 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       if (Unit* w = FindUnitAny(sim, t.workId)) w->unitStates.erase("NoReclaim");
     }
     if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
-  } else if (t.started && Alive(u)) {
-    StopBuild(sim, L, u, t, success);
+  } else {
+    // CFactoryBuildTask's dtor 0x5fa010: Busy and Building off, the work progress back to 0, THEN OnStopBuild.
+    // (A factory stopped half way through a unit kept its last progress here: the work bar stayed under it.)
+    if (t.type == CommandType::BuildFactory && Alive(u)) u->workProgress = 0;
+    if (t.started && Alive(u)) StopBuild(sim, L, u, t, success);
   }
   if (t.reclaimStarted && Alive(u)) {
     Entity* e = sim.FindEntity(t.goalId);
@@ -2490,7 +2493,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       u->unitStates.erase("Guarding");  // (the legacy assist tasks; the guard's own dtor does this for it)
       u->unitStates.erase("AssistingCommander");
     }
-    if (t.type != CommandType::BuildFactory) u->workProgress = 0;
+    u->workProgress = 0;
     StopMovingIfTask(u, t);
   }
   if (!t.child && (t.type == CommandType::BuildAssist || t.type == CommandType::AssistCommander) && u->guardedId)

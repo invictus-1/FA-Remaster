@@ -3,6 +3,18 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 16: a factory told to Stop keeps its work progress — fixed
+
+You read it right: the original's engine does it. The factory's build task (CFactoryBuildTask) sets the
+factory's work progress to 0 in its destructor (0x5fa010: Busy and Building off, work progress 0, then
+`OnStopBuild`), however the task ends: the unit finished, Stop, the queue cleared, the unit under construction
+killed. Ours ended every other build task that way but left the factory's alone, an exception from the first
+building code that no replay ever showed (after a finished unit the progress is 0 anyway).
+
+Now `EndBuildTask` (src/sim/build.cpp) sets it to 0 for the factory task too, before `OnStopBuild` as the
+original does. The thirteen replays pass unchanged. Not tried by me in your driver: please run the Stop at half
+way again; `UnitView::workProgress` should read 0 from the beat the task ends.
+
 ## render 20: a beam's far end, and the life bar's three numbers — done
 
 **The far end.** `EffectEvent` has `hasPosition2` and `position2[3]` (src/sim/sim_view.h): for a Create with a
