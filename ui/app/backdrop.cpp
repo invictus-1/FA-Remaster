@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -36,7 +38,40 @@ const uint32_t* Backdrop::Latest(int width, int height) {
     shown_ = ready_;
     shownW_ = readyW_, shownH_ = readyH_, shownCount_ = readyCount_;
   }
-  return shownW_ == width && shownH_ == height && !shown_.empty() ? shown_.data() : nullptr;
+  if (shownW_ == width && shownH_ == height && !shown_.empty()) return shown_.data();
+  if (liveSeen_) return nullptr;  // (between two showings of this run: black, then the picture comes in)
+  if (stillTriedW_ != width || stillTriedH_ != height) LoadStill(width, height);
+  if (stillW_ != width || stillH_ != height) return nullptr;
+  if (!stillShown_) Logf(LogLevel::Info, "moho64ui: the menu's background: the kept picture is shown until the map is read");
+  stillShown_ = true;
+  return still_.data();
+}
+
+namespace {
+std::filesystem::path StillFile(int width, int height) {
+  std::error_code ec;
+  std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+  return dir / ("moho64ui_backdrop_" + std::to_string(width) + "x" + std::to_string(height) + ".raw");
+}
+}  // namespace
+
+// The kept picture: two 32-bit numbers (width, height), then the pixels.
+void Backdrop::LoadStill(int width, int height) {
+  stillTriedW_ = width, stillTriedH_ = height;
+  stillW_ = stillH_ = 0;
+  std::ifstream in(StillFile(width, height), std::ios::binary);
+  int32_t size[2] = {0, 0};
+  if (!in.read(reinterpret_cast<char*>(size), sizeof size) || size[0] != width || size[1] != height) return;
+  still_.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+  if (!in.read(reinterpret_cast<char*>(still_.data()), static_cast<std::streamsize>(still_.size() * 4))) return;
+  stillW_ = width, stillH_ = height;
+}
+
+void Backdrop::SaveStill(const std::vector<uint32_t>& pixels, int width, int height) {
+  std::ofstream out(StillFile(width, height), std::ios::binary | std::ios::trunc);
+  int32_t size[2] = {width, height};
+  out.write(reinterpret_cast<const char*>(size), sizeof size);
+  out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size() * 4));
 }
 
 bool Backdrop::WaitUntilReady(double seconds) {
@@ -100,7 +135,14 @@ void Backdrop::Run() {
     }
     if (resting) {
       shownSince = frameStart;
-      Logf(LogLevel::Info, "moho64ui: the menu's background is shown, %dx%d", w, h);
+      bool afterStill = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        afterStill = stillShown_ && !liveSeen_;
+      }
+      // (Taking over from the kept picture of the same view: at full strength at once.)
+      if (afterStill) shownSince = frameStart - std::chrono::seconds(10);
+      Logf(LogLevel::Info, "moho64ui: the menu's background is shown, %dx%d%s", w, h, afterStill ? " (after the kept picture)" : "");
     }
     resting = false;
     // The camera's way: once round the middle of the map in five minutes, looking the way it
@@ -133,6 +175,17 @@ void Backdrop::Run() {
       }
       readyW_ = w, readyH_ = h;
       ++readyCount_;
+      // This run's first picture, at full strength, is kept for the next start.
+      if (!liveSeen_ && !stillSaved_ && t < 2.0 && along == 0) {
+        std::vector<uint32_t> keep(pixels.size());
+        for (size_t i = 0; i < pixels.size(); ++i) {
+          uint32_t p = pixels[i];
+          keep[i] = 0xff000000u | (((p & 0x00ff00ffu) * 200u >> 8) & 0x00ff00ffu) | (((p & 0x0000ff00u) * 200u >> 8) & 0x0000ff00u);
+        }
+        SaveStill(keep, w, h);
+        stillSaved_ = true;
+      }
+      liveSeen_ = true;
     }
     std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(33));  // thirty a second is plenty
   }

@@ -4,9 +4,12 @@
 // not decoded; the new background was chosen to come first).
 //
 // The picture is made on a thread of its own, with a graphics device of its own, so the menu
-// never waits for it: the menu takes the newest finished picture each frame. Until the first one
-// is ready the background is black, as it was. While nobody asks for a picture (another screen is
-// up) none is made.
+// never waits for it: the menu takes the newest finished picture each frame. Reading the map takes
+// a few seconds; until the first picture is ready the menu shows the first picture of the run
+// before, kept as a file in the system's folder for temporary files (the camera starts at the same
+// place every time, so the moving picture takes over from it without a jump); without such a file
+// the background is black and the picture comes in from black. While nobody asks for a picture
+// (another screen is up) none is made.
 #pragma once
 #include <atomic>
 #include <chrono>
@@ -51,6 +54,14 @@ class Backdrop : public BackdropSource {
   std::vector<uint32_t> shown_;    // the caller's copy of it
   int shownW_ = 0, shownH_ = 0;
   uint64_t shownCount_ = 0;
+  // The kept first picture of an earlier run (see above): read once for the size asked, shown
+  // only until this run's first picture is there.
+  std::vector<uint32_t> still_;
+  int stillW_ = 0, stillH_ = 0;
+  int stillTriedW_ = 0, stillTriedH_ = 0;
+  bool stillShown_ = false, liveSeen_ = false, stillSaved_ = false;
+  void LoadStill(int width, int height);
+  void SaveStill(const std::vector<uint32_t>& pixels, int width, int height);
 };
 
 }  // namespace moho::ui

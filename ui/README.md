@@ -309,8 +309,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`app/backdrop.*`), so the menu never waits for it: the Movie control takes the newest finished
   picture each frame (`BackdropSource` in `maui/world_source.h`), darkened so the menu's own signs
   stand out, and coming in from black over a second and a half (again whenever the menu comes
-  back from another screen: while nobody shows it, no picture is made). Until the first picture is there
-  (about four seconds after the start: the map is read first) the background is black as before.
+  back from another screen: while nobody shows it, no picture is made). Reading the map takes
+  some seconds: until this run's first picture is there, the menu shows the first picture of the
+  run before, kept as a file in the system's folder for temporary files
+  (`moho64ui_backdrop_<width>x<height>.raw`); the camera starts at the same place every time, so
+  the moving picture takes over from it. Without such a file the background is black as before.
   It ends when a game starts. Only that one film is replaced; with the game's option for the
   menu's background film off, the script makes no such control and nothing is shown. The film
   itself is still not decoded. `MOHO64UI_BACKDROP_AT=<seconds>` starts that far along the
