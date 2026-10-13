@@ -3,6 +3,24 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render, a question by message: `SetEmitterCurveParam(name, a, b)` — it REPLACES the curve by one key
+
+Read now (it was "not read" in the answers to render 9 and 10). FA exe 0x66def0
+(`IEffect:SetEmitterCurveParam`, four arguments with the effect itself):
+
+1. the name is looked up in the emitter's curve-parameter names (0x8d9fd0); an unknown name is a
+   script error;
+2. a NEW, empty curve is made on the stack and one key is put into it (0x5151b0, which inserts by x
+   and then recomputes the curve's lowest and highest y): **the key is (x = 0, y = the third argument,
+   z = the fourth argument)**;
+3. the effect's own "set curve parameter" (vtable +0x38) is called with the parameter's index and
+   that curve: the emitter's curve is replaced, its old keys are gone. Nothing is scaled.
+
+So what you do (the named curve becomes one key, x 0, y = height, z = size) is the original's
+behaviour. With one key the curve is constant over the particle's or emitter's life: y is the value
+and z its random range, as in every key of that curve in the blueprint. Not seen in that function: an
+x range being set on the new curve; it is whatever an empty curve starts with.
+
 ## render 15: hidden bones — done
 
 `sim/sim_view.h`:
@@ -677,8 +695,9 @@ PARTICLERESISTANCE. All are floats; the flags count as set when greater than 0. 
 RESISTANCE, SIZE, X_POSITION, Y_POSITION, Z_POSITION, BEGINSIZE, ENDSIZE, ROTATION, ROTATION_RATE,
 FRAMERATE, TEXTURESELECTION, RAMPSELECTION (each with the suffix `_CURVE`).
 
-Not read: how `SetEmitterCurveParam(name, height, size)` and `ResizeEmitterCurve` rewrite a curve, the
-"camera sees it" test itself, beams and trails. Ask for whichever you need.
+Not read: how `ResizeEmitterCurve` rewrites a curve, the "camera sees it" test itself, beams and trails.
+Ask for whichever you need. (`SetEmitterCurveParam` is read since: it replaces the curve by one key, see
+the entry at the top of this file.)
 
 ## render 8: the effects the scripts create — done (emitters, beams, trails, light particles, decals)
 
