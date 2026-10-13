@@ -78,6 +78,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
     window.Present(*target);
     updatePointer(current());
+    window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
     // About 60 frames per second; the software backend has no vertical sync to wait for.

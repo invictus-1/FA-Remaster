@@ -214,6 +214,11 @@ class UiManager {
   // The mouse at the screen's edge moves the view (set by a host whose window fills the screen
   // and keeps the mouse inside; in a window on the desktop the mouse just leaves).
   bool edgeScroll = false;
+  // The interface asks the host to hold the mouse pointer: hidden and kept where it is, while the
+  // mouse's moves still arrive (as a place that goes on past the screen's edge). The world view
+  // sets it while the camera is dragged or turned, as the original does ("scrubbing", FA exe
+  // 0x86de30); a live window follows it.
+  bool holdPointer = false;
 
  private:
 };

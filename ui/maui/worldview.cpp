@@ -345,6 +345,18 @@ int l_CamRestoreSettings(lua_State* L) {
   lua_pop(L, 1);
   return 0;
 }
+// HoldRotation(): the camera keeps the turn it has (0x7ac580); RevertRotation(): it swings back
+// to north up (the scripts call this after a zoom to a unit and in cinematics).
+int l_CamHoldRotation(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  if (!c->turned) c->turnedPitch = ZoomPitchOf(c);
+  c->turned = true, c->swingBack = false;
+  return 0;
+}
+int l_CamRevertRotation(lua_State* L) {
+  RevertCamera(CheckCamera(L, 1));
+  return 0;
+}
 int l_CamNothing(lua_State* L) {
   CheckCamera(L, 1);
   return 0;
@@ -558,6 +570,7 @@ class WorldView : public Control {
   void DragRelease(lua_State* L, const UiEvent& e) override {
     if (cameraDrag_) {
       cameraDrag_ = false;
+      UserState::From(L)->ui().holdPointer = false;
       return;
     }
     std::vector<uint32_t> ids;
@@ -610,8 +623,10 @@ class WorldView : public Control {
         }
         spinning_ = true;
         spinX_ = e.x, spinY_ = e.y;
+        UserState::From(L)->ui().holdPointer = true;
       } else if (spinning_) {
         spinning_ = false;
+        UserState::From(L)->ui().holdPointer = false;
         RevertCamera(c);
       }
       return false;
@@ -627,6 +642,7 @@ class WorldView : public Control {
       if (miniMap) return false;
       cameraDrag_ = true;
       lastX_ = e.x, lastY_ = e.y;
+      UserState::From(L)->ui().holdPointer = true;
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;
     }
@@ -838,7 +854,7 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     // The mouse at the screen's edge (the original: its switch 0xf57a8c, the option
     // "screen_edge_pans_main_view", and only on a screen the game fills).
     UiManager& ui = UserState::From(L)->ui();
-    if (ui.edgeScroll && ProfileOption(L, "screen_edge_pans_main_view", true)) {
+    if (ui.edgeScroll && !ui.holdPointer && ProfileOption(L, "screen_edge_pans_main_view", true)) {
       if (ui.mouseX <= 0) dx += rate;
       if (ui.mouseY <= 0) dy += rate;
       if (ui.mouseX >= static_cast<float>(ui.width() - 1)) dx -= rate;
@@ -861,6 +877,7 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   // Space let go while the mouse stands still: the turn swings back.
   if (v && v->spinning_ && !KeyIsDown(L, kKeySpace)) {
     v->spinning_ = false;
+    UserState::From(L)->ui().holdPointer = false;
     RevertCamera(c);
   }
   // The way back (0x7a99eb): heading and lean go towards north up and the zoom's lean by a tenth
@@ -1010,7 +1027,9 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, cam, "SetMaxZoomMult", l_CamSetMaxZoomMult);
   SetMethod(L, cam, "SaveSettings", l_CamSaveSettings);
   SetMethod(L, cam, "RestoreSettings", l_CamRestoreSettings);
-  for (const char* name : {"EnableEaseInOut", "DisableEaseInOut", "HoldRotation", "RevertRotation", "SetAccMode", "Spin",
+  SetMethod(L, cam, "HoldRotation", l_CamHoldRotation);
+  SetMethod(L, cam, "RevertRotation", l_CamRevertRotation);
+  for (const char* name : {"EnableEaseInOut", "DisableEaseInOut", "SetAccMode", "Spin",
                            "UseGameClock", "UseSystemClock"})
     SetMethod(L, cam, name, l_CamNothing);
 

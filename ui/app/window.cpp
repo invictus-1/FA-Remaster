@@ -46,6 +46,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   auto key = [&](const UiEvent& e) { return w->callbacks.key ? w->callbacks.key(e) : false; };
   auto button = [&](bool left, bool middle, bool right, bool pressed, bool dbl) {
     UiEvent e = MouseEvent(wp, lp);
+    if (w->holding()) w->HeldPlace(&e.x, &e.y);  // a held pointer: the place its moves add up to
     e.left = left, e.middle = middle, e.right = right;  // for a button event: the button it is about
     if (pressed) SetCapture(hwnd);
     else ReleaseCapture();
@@ -55,9 +56,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE:
       w->closed = true;
       return 0;
-    case WM_MOUSEMOVE:
-      if (w->callbacks.mouseMove) w->callbacks.mouseMove(MouseEvent(wp, lp));
+    case WM_MOUSEMOVE: {
+      UiEvent e = MouseEvent(wp, lp);
+      // A held pointer is put back after every move; the move itself is passed on.
+      if (w->holding() && !w->HeldMove(static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp)), &e.x, &e.y)) return 0;
+      if (w->callbacks.mouseMove) w->callbacks.mouseMove(e);
       return 0;
+    }
     case WM_LBUTTONDOWN: button(true, false, false, true, false); return 0;
     case WM_LBUTTONDBLCLK: button(true, false, false, true, true); return 0;
     case WM_LBUTTONUP: button(true, false, false, false, false); return 0;
@@ -178,6 +183,38 @@ bool Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX,
   return made != nullptr || !pixels;
 }
 
+void Window::HoldPointer(bool hold) {
+  if (hold == holding_ || !hwnd_) return;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  POINT p;
+  GetCursorPos(&p);
+  if (hold) {
+    ScreenToClient(hwnd, &p);
+    holdX_ = p.x, holdY_ = p.y;
+    heldX_ = static_cast<float>(p.x), heldY_ = static_cast<float>(p.y);
+    holding_ = true;
+    SetCursor(nullptr);
+  } else {
+    holding_ = false;
+    POINT back{holdX_, holdY_};
+    ClientToScreen(hwnd, &back);
+    SetCursorPos(back.x, back.y);
+    SetCursor(static_cast<HCURSOR>(pointer()));
+  }
+}
+
+// A move of the mouse while the pointer is held: its step is added to the held place and the
+// pointer is put back. False for the message the putting back itself makes.
+bool Window::HeldMove(int clientX, int clientY, float* x, float* y) {
+  if (clientX == holdX_ && clientY == holdY_) return false;
+  heldX_ += static_cast<float>(clientX - holdX_), heldY_ += static_cast<float>(clientY - holdY_);
+  *x = heldX_, *y = heldY_;
+  POINT back{holdX_, holdY_};
+  ClientToScreen(static_cast<HWND>(hwnd_), &back);
+  SetCursorPos(back.x, back.y);
+  return true;
+}
+
 void Window::HidePointer(bool hidden) {
   if (hidden == pointerHidden_) return;
   pointerHidden_ = hidden;
@@ -269,6 +306,8 @@ bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }
 void Window::HidePointer(bool) {}
+void Window::HoldPointer(bool) {}
+bool Window::HeldMove(int, int, float*, float*) { return false; }
 }  // namespace moho::ui
 
 #endif

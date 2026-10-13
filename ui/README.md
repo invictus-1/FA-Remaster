@@ -244,8 +244,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four
   times as fast, Alt holds it), at the original's amount per frame taken at 60 frames a second,
   so that the speed does not go with the frame rate as the original's does. Dragging with the
-  middle button moves the view with the mouse (the ground stays under the pointer; the original
-  also holds the pointer in place meanwhile, which is not built). With `--fullscreen` the window
+  middle button moves the view with the mouse (the ground stays under the pointer). While the
+  camera is dragged or turned a live window holds the pointer as the original does: hidden and
+  kept in place, the mouse's moves still counted, so a drag has no end at the screen's edge. With `--fullscreen` the window
   fills the main screen without a frame and keeps the mouse inside while it is in front; the
   mouse at the screen's edge then moves the view, as in the original. The profile's options
   `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. The camera turns

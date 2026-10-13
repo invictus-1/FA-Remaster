@@ -39,7 +39,15 @@ class Window {  // (the host's one window)
   // (False when the system could not make a pointer of the image: its arrow shows then.)
   bool SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY);
   void HidePointer(bool hidden);
-  void* pointer() const { return pointerHidden_ ? nullptr : pointer_ ? pointer_ : arrow_; }
+  void* pointer() const { return pointerHidden_ || holding_ ? nullptr : pointer_ ? pointer_ : arrow_; }
+  // Hold the pointer: it is hidden and stays where it is; the mouse's moves go on arriving as a
+  // place that moves on from there (past the window's edge too). Letting go shows it again where
+  // it was held.
+  void HoldPointer(bool hold);
+  bool holding() const { return holding_; }
+  // (For the window's own message handling while it holds: the place the mouse's moves add up to.)
+  bool HeldMove(int clientX, int clientY, float* x, float* y);
+  void HeldPlace(float* x, float* y) const { *x = heldX_, *y = heldY_; }
 
   Callbacks callbacks;
   bool closed = false;
@@ -51,6 +59,9 @@ class Window {  // (the host's one window)
   std::map<std::pair<const uint32_t*, int>, void*> pointers_;  // those made so far, by image and hot spot; ours to destroy
   void* arrow_ = nullptr;    // the system's
   bool pointerHidden_ = false;
+  bool holding_ = false;
+  int holdX_ = 0, holdY_ = 0;      // where the pointer is held, in the window
+  float heldX_ = 0, heldY_ = 0;    // where the mouse's moves have taken its place since
 
  public:
   bool fullScreen = false;
