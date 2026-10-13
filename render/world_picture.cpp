@@ -133,6 +133,10 @@ void WorldPicture::SetBuildPreviews(const std::vector<BuildPreview>& previews) {
 
 void WorldPicture::SetFocusArmy(int army) { impl_->frames.SetFocusArmy(army); }
 
+void WorldPicture::SetLifeBars(bool on) {
+  if (impl_->world) impl_->world->lifeBars = on;
+}
+
 void WorldPicture::SetHover(uint32_t entity, int kind) {
   if (!impl_->world) return;
   impl_->world->hover = entity;

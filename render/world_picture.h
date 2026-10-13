@@ -65,6 +65,9 @@ class WorldPicture {
   // or an ally's, 2 an enemy's, 3 anyone else's). Kind 0 or an id that is no unit's: no mark. A
   // selected unit keeps its selection brackets.
   void SetHover(uint32_t entity, int kind);
+  // Life bars over units (selected, under the mouse, or damaged and near): on at first; a player's
+  // switch for them is the interface's.
+  void SetLifeBars(bool on);
   // Buildings shown as ghosts while their site is chosen: green where the site is free, red where not.
   struct BuildPreview {
     std::string blueprint;  // the unit's blueprint id ("ueb0101")

@@ -60,6 +60,7 @@
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
 //           only as it knows them (seen, a blip on radar, or not at all)
+// Key B: life bars over units on and off.
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
@@ -647,6 +648,7 @@ int main(int argc, char** argv) {
           if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;
           if (e.key == 'H') shadowsOn = !shadowsOn;
+          if (e.key == 'B') world.lifeBars = !world.lifeBars;
           if (e.key == 'T') {
             if (dayOn) dayShift += 1;
             dayOn = true;

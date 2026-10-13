@@ -53,7 +53,8 @@ usual test game has `FogOfWar = "none"`, where every unit comes back as seen.
 
 ## not asked for, but there: life bars
 
-`World::lifeBars` (on unless set false; through `WorldPicture::world()`): a small bar over a unit,
+`WorldPicture::SetLifeBars(on)` (on at first; Chris wants them as something a player can switch on
+and off, the original's way of reading a unit's life being the panel at the bottom left): a small bar over a unit,
 green down to red by its health against its most, for the selected units, the unit under the mouse
 (`SetHover`), and damaged units while they are near enough to be seen as models. Only for units the
 focus army sees now. They are the renderer's own bars, not the original's pictures; if the
