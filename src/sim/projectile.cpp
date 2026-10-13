@@ -228,12 +228,6 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->expireTick = tick_ + static_cast<uint32_t>(std::max(0.0f, std::nearbyint(Uniform(*this, b.lifetime, b.lifetimeRange) * 10)));
   p->launcher = launcher && launcher->kind == Entity::Kind::Projectile ? static_cast<Projectile*>(launcher)->launcher
                                                                         : launcher;
-  // A CHILD shell made while the pass runs, of a shell the pass has already come by and that is not the one whose
-  // step is running (a shot-down missile's debris, made by the missile's script when another shell's impact kills
-  // it), waits for the next beat. (A shell a unit's script makes in the pass does take its step in it: seen in the
-  // air battle replay.)
-  if (inProjectilePass && launcher && launcher->kind == Entity::Kind::Projectile && launcher != steppingProjectile)
-    p->waitsPass = static_cast<const Projectile*>(launcher)->passTick == tick_;
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);
@@ -712,27 +706,18 @@ void ProjectilesTick(Sim& sim) {
   // By index over the live list: an impact's script may create projectiles (fragmentation shells), and the entity
   // stage reaches a task that was added during its pass in that same pass: a child shell makes its first step in
   // the beat it is made. (Destroyed ones leave the list at the end of the beat only.)
-  // But not a child of a shell that has had its step: a cruise missile killed by an anti-missile's impact later
-  // in the pass drops its debris from its OnKilled (CreateChildProjectile), and that piece does not move until
-  // the next beat. Seen: such a piece of debris, made at 38 above the sea, reaches the water a beat later in the
-  // original than one that fell from the first beat on. (As if a child's task were linked in behind its parent's:
-  // not read in the exe; the two cases and the air battle's unit-made shells are what is known.)
-  sim.inProjectilePass = true;
+  // That holds for every shell made in the pass (CTaskStage 0x409ac0: a thread made while the stage runs is
+  // linked at its new end), also for the debris a shot-down missile drops from OnKilled; what looked like such a
+  // piece waiting a beat was where it starts: at its parent's place of the beat's START (l_CreateChildProjectile).
   for (size_t i = 0; i < sim.projectiles.size(); ++i) {
     Projectile* p = sim.projectiles[i];
-    p->passTick = sim.tick();
     if (p->destroyQueued || !p->HasLuaObject()) continue;
-    if (p->waitsPass) {
-      p->waitsPass = false;
-      continue;
-    }
     sim.HoldShape(p);
     p->heldVel = EntityVelocity(p);
     sim.steppingProjectile = p;
     MotionTick(sim, p);
   }
   sim.steppingProjectile = nullptr;
-  sim.inProjectilePass = false;
 }
 
 // ---- launch bindings ------------------------------------------------------------------------------
@@ -916,8 +901,16 @@ int l_CreateChildProjectile(lua_State* L) {
     lua_pushnil(L);
     return 1;
   }
-  return PushProj(L, sim.CreateProjectile(L, *bp, p->army, p, p->position, p->orientation, p->damage,
-                                          p->damageRadius, p->damageType, p->target, true));
+  // 0x6a3c71..0x6a3cb9: the child's transform is the parent's CURRENT one (parent+0x9c), which a step taken
+  // earlier in this beat has not changed yet (the step wrote the pending transform; AdvanceCoords commits it).
+  // So debris dropped from OnKilled by a missile that an anti-missile hits later in the pass starts where the
+  // missile was when the beat began, facing as it faced then, and takes its first step in this pass like any
+  // shell made in it. (The shell whose own step is running makes its children where that step has put it:
+  // fragments at the impact, as before.)
+  const bool held = p->shapeHeld && p != sim.steppingProjectile;
+  return PushProj(L, sim.CreateProjectile(L, *bp, p->army, p, held ? p->shapePos : p->position,
+                                          held ? p->shapeOri : p->orientation, p->damage, p->damageRadius,
+                                          p->damageType, p->target, true));
 }
 int l_GetVelocity(lua_State* L) {
   Vec3 v = EntityVelocity(P(L));

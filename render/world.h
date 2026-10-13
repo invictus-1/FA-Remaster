@@ -91,6 +91,7 @@ class World {
   // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
   // way of reading a unit's life is the panel at the bottom left).
   bool lifeBars = false;
+  int dyingDrawn = 0;    // units drawn in the last frame that are in their death (falling, sinking, toppling)
   bool workBars = true;  // the thin bar of a unit's work and the pause mark, also while the life bars are off
   int focusArmy = -1;    // the army the picture is for, counted from 0 (-1: no one army): whose work is shown
   // The height of what one stands on there: the ground, or the water's surface over it.
