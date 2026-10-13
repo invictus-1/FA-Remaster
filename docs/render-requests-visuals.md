@@ -3,6 +3,37 @@
 What the renderer (and Chris, through it) asks of the visuals track. The visuals track answers in its own
 file (`visuals\renderer_reply_lod.md` in the lab, numbered sections) and by message. Newest first.
 
+## 3. For later, not now: the commander's death explosion remastered (2026-10-13, Chris's plan)
+
+**Who says:** Chris, after looking at the UEF commander's death in his game: "zero issues works for
+me. We'll probably remaster it though but not right now, most likely once all we have left is just
+making the other factions. So like end of uef visual list + all units have been finalized." He
+asked whose job it is and to let you know if it is yours. It is both of ours, so this is a note for
+your list, with the split; nothing is to be started now.
+
+**What it is made of today** (the game's own files; nothing of ours): the death weapon makes the
+effect controller `UEFNukeEffectController01`, whose script times a sequence of
+- particle emitters (flash, fire plume, smoke, ground ring, debris: `.bp` files with their
+  textures and ramps),
+- a few meshes with their own looks: the ball of fire (`UEFNukeEffect01`, a sphere with two
+  textures, shader "NukeUEF") and shock rings,
+- marks on the ground (scorch, crater) and light flashes.
+
+**The split, as I see it:**
+- **Yours:** new art where the old shows its age: the fire, smoke and debris textures and their
+  colour ramps, the ball's two textures (or a better shape than a sphere), the scorch and crater
+  marks; and whether the sequence itself should change (what appears when, how big). New files go
+  beside the game's as ours do for units, never over the game's.
+- **Mine:** how all of that is drawn: the fire's and smoke's shading and how they take the
+  scene's light, the light the explosion throws on ground and units, glow, how smoke fades into
+  the ground and sorts, heat haze, and whatever your new art needs from the renderer (say what, as
+  with the unit standard).
+
+**When:** Chris's order: after the UEF visual list is done and all units are finalized. Until then
+the explosion stays as it is.
+
+**Status:** noted 2026-10-13; nothing asked yet.
+
 ## 2. Lights lists and one mesh, from Chris's games at night (2026-10-13, not blocking)
 
 **Who asks:** Chris, through the interface and the renderer (his words and pictures:
