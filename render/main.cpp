@@ -1011,6 +1011,16 @@ int main(int argc, char** argv) {
           camera.target = wrecks[0];
           camera.distance = 14;
         }
+      } else if (opt.find == "uefbuild" && frame.blueprints) {  // a UEF building a third to two thirds built
+        for (const FrameUnit& u : frame.units) {
+          if (u.blueprint >= frame.blueprints->size() || u.fractionComplete < 0.3f || u.fractionComplete > 0.7f) continue;
+          const std::string& id = (*frame.blueprints)[u.blueprint];
+          if (id.size() > 2 && id[0] == 'u' && id[1] == 'e' && id[2] == 'b') {
+            camera.target = {u.position[0], u.position[1], u.position[2]};
+            camera.distance = 16;
+            break;
+          }
+        }
       } else if (frame.blueprints) {  // a unit's blueprint id: the first unit of that kind
         for (const FrameUnit& u : frame.units)
           if (u.blueprint < frame.blueprints->size() && (*frame.blueprints)[u.blueprint] == opt.find) {

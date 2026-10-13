@@ -69,6 +69,7 @@ struct FrameProjectile {
   // What a script made of its size, on top of its blueprint's own scale (the UEF's box of light is
   // sized to what is built in it): the engine's scale x draw scale, grown by its scale velocity.
   float scale[3] = {1, 1, 1};
+  float age = 0;  // seconds since it was first seen (what fades with time goes by it)
 };
 
 // Something a script made that has a mesh and is neither a unit, a projectile nor a prop: a shield's

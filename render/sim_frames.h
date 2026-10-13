@@ -90,7 +90,7 @@ class SimFrames {
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   std::vector<FramePropEvent> propEvents_;      // not yet taken
   std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
-  std::unordered_map<uint32_t, uint32_t> growingSince_;  // projectiles whose size changes with time: the beat first seen (the simulation's thread only)
+  std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;  // projectiles: the beat each was first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
 };
 

@@ -393,8 +393,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
       lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
-    } else if (kind == "alphafade") {  // a see-through box that fades (the UEF's teleport): by its albedo's alpha
-      lod.blend = lod.vertexNormals = true;
+    } else if (kind == "alphafade") {  // a see-through slab that fades with its age: the UEF's build slices, its teleport box
+      lod.blend = lod.glass = lod.fades = true;
       lod.teamMask = false;
     } else if (kind == "mapimager") {  // the machinery around the map
       lod.border = true;
