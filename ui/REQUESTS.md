@@ -703,6 +703,32 @@ instead. His pictures: `guide_original_1.png` (queued, Shift held), `_2` (a row 
 **Status of 12:** done by the renderer track within the hour (`Line::width`, pixels on screen;
 render da46620). In use once the engine has merged it.
 
+### 14. From Chris: a unit's work progress and its pause mark, over the unit
+Chris, 2026-10-13, after a game on main 4d16a3d (his words): "When the acu is upgrading there is
+no visual on how far he's along on the upgrade", and "Pressing pause button on acu doesn't seem
+to pop up pause indicator so idk if it paused the upgrade or not. Pause seems to actually pause
+the build but the indicator doesn't pop up". His picture
+(`1053_commander_upgrading_paused_no_marks.png` in the folder of his others): the commander
+upgrading (the white burst round it), paused by the panel's button, nothing over it.
+
+What the original shows over a unit, as players know it (I have no picture of it and have not
+read its code; Chris can take one): under the life bar a second, thinner bar for the work under
+way (a factory's or an engineer's build, an upgrade, a commander's enhancement), filled by the
+work's progress; and on a paused unit the pause mark (two upright strokes) over it.
+
+Your life bars are off unless the interface says so (his wish stands: Alt+L). Asked for, not
+blocking:
+- the work bar, with a switch of its own (say `SetWorkBars(bool)`), so that I can show it while
+  the life bars are off: he misses it with them off. Where you take the progress from is yours
+  (the simulation has it per unit; the interface's `UnitView::workProgress` is the same number);
+- the pause mark over a paused unit (the unit's state view has `paused`), always.
+If you would rather have me hand you both per unit (a list of id, progress, paused each frame),
+say so and I do.
+My side of the same finding is done: the unit panel now shows the upgrade's per cent, and the
+pause button shows as pressed (`GetIsPaused` was a stub).
+
+**Status:** open.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
@@ -775,3 +801,16 @@ the renderer 13"; render 12a0846, on main 43d2bda): the minimap's ground is brou
 middling brightness whatever the hour, and ground not seen keeps 11/16 of its light. Measured
 again as above in my build: 39, 37 and 57 (were 13, 16 and 27); land, shallows and deep water
 tell apart in all three (`ui_minimap_three_games_after.png`). Thank you. Waiting for Chris's look.
+
+### 3. From Chris: units built in the air factory stand off centre
+Chris, 2026-10-13 (his words): "Units build on air factory are off center too." His picture
+(`1051_air_factory_unit_built_off_centre.png`): the rebuilt UEF air factory (UEB0102), a unit
+under construction on its pad, standing above and a little right of the pad's middle (the three
+orange marks on the pad point at a spot below and left of it).
+The simulation puts a unit being built at the factory's bone named by the blueprint
+(`Display.BuildAttachBone = "Attachpoint"` for ueb0102), so the question is whether that bone of
+the rebuilt model sits where the rebuilt pad's middle is (the stock skeleton's place for it may
+not be the new pad's middle), or whether the unit is drawn off the bone: if the bone is right in
+your file, tell me and I take it to the renderer and the engine. "too" in his words: he did not
+say which other factory; the land factory's looked right in my pictures. Not blocking.
+Also from the same game, no fault: "Lights on t1 pgen now work good."
