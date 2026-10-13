@@ -341,9 +341,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
   net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
   before. Limits: mirrored things are only those in the picture (nothing from outside it or
-  behind something). What moves on the water trails a wake of foam (`wakes.h`: one flat shape
-  behind it, by how fast it goes now; it is drawn straight back, so a turning ship drags its
-  wake round with it). Lamps and flashes light the water and glint on
+  behind something). What moves on the water trails a wake of foam (`wakes.h`: flat pieces laid
+  along the places it has been in the last seconds, so the wake curves behind a ship that
+  turns; longer and stronger the faster it goes). Lamps and flashes light the water and glint on
   its waves. In rain
   the surface is roughened and drops make rings on it. The original look keeps the original's formula.
 - Glow (bloom, modern look; `Post::glow`): what is brighter than the screen can show spreads a
