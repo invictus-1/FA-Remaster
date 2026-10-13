@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 
 #include "core/log.h"
@@ -177,6 +178,8 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
+  pace.rate = session.gameSpeed;
+  pace.adjustable = session.adjustableSpeed;
 #ifdef MOHO64UI_WORLD_PICTURE
   if (wantPicture) {
     auto t3 = std::chrono::steady_clock::now();
@@ -219,7 +222,7 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
 
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
-  due_ += seconds;
+  due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {
     due_ -= 0.1;

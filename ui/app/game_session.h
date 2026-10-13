@@ -47,6 +47,9 @@ class GameSession {
   // What plays the world's sounds (the host's sound system); nullptr: the simulation is not asked
   // for them. Set before a game is launched.
   sound::SoundSystem* sounds = nullptr;
+  // The game's pace: set from the game's option at launch, changed by the interface where that
+  // option allows it; Advance runs the beats that fast.
+  GamePace pace;
   void PlayBeatSounds();  // the simulation's sounds of the beat just run (called by the session itself)
   WorldSource* world() const;
 

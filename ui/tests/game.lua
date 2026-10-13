@@ -4,7 +4,8 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 2000 --log out.log
+--            --frames 2200 --log out.log
+-- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
 local failed = 0
@@ -370,6 +371,48 @@ local function run()
     check("UI_ExpandCurrentSelection keeps what is selected", count(), 1)
     SelectUnits(nil)
     cam:Reset()
+
+    -- pause: asked for like an order, so it holds from a beat on; the game's time stands
+    check("the game runs", SessionIsPaused(), false)
+    local gamemain = import("/lua/ui/game/gamemain.lua")
+    local oldOnPause, heardPause = gamemain.OnPause, false
+    gamemain.OnPause = function(by, left)
+        heardPause = true
+        oldOnPause(by, left)
+    end
+    SessionRequestPause()
+    WaitSeconds(0.5)
+    check("SessionRequestPause pauses it", SessionIsPaused(), true)
+    local stood = GetGameTimeSeconds()
+    WaitSeconds(0.5)
+    check("the game's time stands while paused", GetGameTimeSeconds(), stood)
+    check("the game's script has heard of the pause", heardPause, true)
+    gamemain.OnPause = oldOnPause
+    SessionResume()
+    WaitSeconds(0.5)
+    check("SessionResume lets it go on", SessionIsPaused() == false and GetGameTimeSeconds() > stood, true)
+    -- the game's speed, in the speed keys' steps: only where the game's option lets it be changed
+    local mayChange = SessionGetScenarioInfo().Options.GameSpeed == "adjustable"
+    check("the speed at the start", GetGameSpeed(), 0)
+    SetGameSpeed(10)
+    check("SetGameSpeed (only with GameSpeed = adjustable)", GetGameSpeed(), mayChange and 10 or 0)
+    local t0 = GetGameTimeSeconds()
+    WaitSeconds(1)
+    local ran = GetGameTimeSeconds() - t0
+    check("ten steps up run the game ten times as fast", mayChange and (ran > 8 and ran < 11) or (ran > 0.8 and ran < 1.2), true)
+    ConExecute("WLD_ResetSimRate")
+    check("WLD_ResetSimRate", GetGameSpeed(), 0)
+    ConExecute("WLD_IncreaseSimRate")
+    check("WLD_IncreaseSimRate", GetGameSpeed(), mayChange and 1 or 0)
+    ConExecute("WLD_DecreaseSimRate")
+    ConExecute("WLD_DecreaseSimRate")
+    check("WLD_DecreaseSimRate", GetGameSpeed(), mayChange and -1 or 0)
+    ConExecute("WLD_GameSpeed 99")
+    check("WLD_GameSpeed keeps to at most 50", GetGameSpeed(), mayChange and 50 or 0)
+    ConExecute("WLD_GameSpeed -99")
+    check("and at least -10", GetGameSpeed(), mayChange and -10 or 0)
+    ConExecute("WLD_GameSpeed 0")
+    check("back to normal", GetGameSpeed(), 0)
 
     -- the life bars over units: off until the player switches them on (ours); the scripts' own
     -- "false" / "true" put them away and give back what the player chose

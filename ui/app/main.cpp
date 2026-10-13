@@ -291,6 +291,7 @@ int main(int argc, char** argv) {
     gameCfg.sim = session.sim();
     gameCfg.commandSource = session.commandSource();
     gameCfg.world = session.world();
+    gameCfg.pace = &session.pace;
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());

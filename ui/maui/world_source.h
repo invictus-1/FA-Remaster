@@ -51,6 +51,15 @@ struct WorldScene {
   bool lifeBars = false;
 };
 
+// A game's pace, kept by the host (the original's client manager keeps it, FA exe 0x53e590):
+// the speed in the steps the speed keys count (the game runs 10^(rate / 10) times as fast as
+// normal: WLD_GetSimRate 0x88d0b0), and whether the players may change it (the game option
+// GameSpeed = "adjustable"; "fast" starts at 4).
+struct GamePace {
+  int rate = 0;
+  bool adjustable = false;
+};
+
 // A moving picture for the front end's background (the host's: app/backdrop.h): the newest one
 // of exactly that size, 0xAARRGGBB rows from the top, valid until the next call; nullptr while
 // there is none of that size yet.

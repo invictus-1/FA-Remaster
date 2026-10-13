@@ -357,8 +357,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original's curve, 0x7a8940, is not read), and the player's wheel or drag ends such a move.
   Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
   structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.
-- 409 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 122 are logged stubs. (`--list-bindings` counts
+- Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
+  go into the player's orders like every command, so the simulation pauses with a beat; the
+  game's script hears of it from the sync table and shows its own sign (the Pause key runs the
+  script's `TogglePause`). The speed is the host's (`GamePace`, as the original's client manager
+  keeps it): in the speed keys' steps, the game runs 10^(rate / 10) times as fast (0x88d0b0).
+  `SetGameSpeed`, `GetGameSpeed`, and the console commands `WLD_IncreaseSimRate`,
+  `WLD_DecreaseSimRate`, `WLD_ResetSimRate`, `WLD_GameSpeed <n>` with the original's bounds (-10
+  to 50) are built. As in the original the speed only changes where the game's option
+  `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
+  asked for, not the speed the simulation manages; at high speeds the host runs at most ten
+  beats a frame.
+- 412 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 119 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

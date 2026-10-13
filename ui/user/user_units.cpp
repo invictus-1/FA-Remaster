@@ -753,6 +753,12 @@ std::string TakeOrders(lua_State* L) {
   return store.writer ? store.writer->Take() : std::string();
 }
 
+void RequestSessionPause(lua_State* L, bool pause) {
+  if (!TheSim(L)) return;
+  if (pause) Writer(L).RequestPause();
+  else Writer(L).Resume();
+}
+
 // commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
 // engine issued for the player, as a table. First version of that table: CommandType (the
 // order's name), Clear, Target = {Type = "Position", Position} or {Type = "Entity", EntityId,

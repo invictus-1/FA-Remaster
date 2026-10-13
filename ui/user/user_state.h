@@ -27,6 +27,7 @@ namespace moho::ui {
 
 class WorldSource;
 class BackdropSource;
+struct GamePace;
 struct WorldLine;
 class UiManager;
 namespace sound {
@@ -54,6 +55,8 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // The running game's pace (the host's); nullptr: there is no game.
+    GamePace* pace = nullptr;
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;
@@ -188,6 +191,14 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
 // each unit to where its orders take it, coloured by the kind of order).
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);
 std::string TakeOrders(lua_State* L);
+// The player asks for the game to pause or to go on (user_units.cpp): written into the orders
+// like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
+// FA exe 0x8942b0 / 0x894330).
+void RequestSessionPause(lua_State* L, bool pause);
+// The game's speed in the speed keys' steps, and setting it (session_bindings.cpp): only where
+// the game's option lets the players change it (the client manager's byte +0x454).
+int GameSpeedOf(lua_State* L);
+void SetGameSpeedTo(lua_State* L, int rate);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
 
