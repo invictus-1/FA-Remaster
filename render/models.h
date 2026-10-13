@@ -82,6 +82,7 @@ struct ModelLod {
   bool shield = false;         // "Shield...": a shield's bubble: a faint tinted shell, brighter toward its rim
   Vec3 shieldTint{0.25f, 0.5f, 1.0f};
   bool hidden = false;         // "ShieldFill": the original draws it into the depth alone; here it is not drawn
+  bool chrome = false;         // "AeonBuildPuddle": the pool of liquid metal an Aeon building rises from
   bool wreck = false;          // wreckage (ModelCache::Wreck): burnt and dull, no team colour, no glow
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)

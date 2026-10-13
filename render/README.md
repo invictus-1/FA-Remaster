@@ -250,8 +250,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the picture (or, hanging on a unit or a shot, farther from the camera than its `LODCutoff`)
   throws nothing out, and makes up the last ticks when it is seen again. Of the scripts' changes to
   a running emitter, `ScaleEmitter`, `OffsetEmitter` and `SetEmitterParam` with `POSITION_X/Y/Z`,
-  `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on. Not yet:
-  `SetEmitterCurveParam`, `ResizeEmitterCurve`. Particles that bend what is behind them (blend
+  `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on, and
+  `SetEmitterCurveParam(name, height, size)`: that curve of that emitter becomes the one value
+  with that random spread (`Particles::SetCurve`; how the original rewrites the curve is not
+  read out of it: this is what the scripts' uses ask for, an effect spread over a unit's size,
+  a rate set to one number; 1,311 such calls in four game-minutes of the M28 test game). Not
+  acted on: `ResizeEmitterCurve`, `SetBeamParam`, which the game's scripts do not call. Particles that bend what is behind them (blend
   mode 5: the shimmer over heat, a shock wave's ring; 46 of the game's emitters) are drawn after
   the others with a copy of the picture as it is then: each shows that picture taken a little
   to the side by its texture's red and green (half a hundredth of the picture at most, the
@@ -367,10 +371,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   half. The team colour comes in over the last tenth. What is not there yet casts no shadow.
   These are not the original's pictures: its build looks (half see-through hulls with moving
   textures laid over them) were read for what each faction's is about and for the numbers
-  kept (the Aeon's sinking and size, the Seraphim's size, the team colour's last tenth). Not
-  drawn: the builders' beams and the UEF's frame of light round a building, which come with
-  the game's effects; the Aeon's pool on the ground. A unit that a mod draws without a team
-  mask is only darker while it is built.
+  kept (the Aeon's sinking and size, the Seraphim's size, the team colour's last tenth). The
+  UEF's frame of light and the Aeon's pool are the game's own objects and are drawn as such
+  (the pool, shader `AeonBuildPuddle`, as liquid metal: `ModelLod::chrome`); the builders'
+  beams come with the game's effects. A unit that a mod draws without a team mask is only
+  darker while it is built.
 - Range rings as one outline (`ranges.h`, `World::ranges.groups`, `WorldPicture::SetRanges`;
   `--ranges` in the viewer shows two test groups): all the rings of a group show as the outline
   of the ground they cover together, an inner radius cuts a hole with its own outline, the

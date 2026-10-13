@@ -1048,6 +1048,7 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), frame.entities.size());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (haveLive && opt.debug) {  // (where to look for them)
+        printf("; %d emitter curves set by scripts", effects.curvesSet);
         for (const Vec3& p : world.WreckPlaces(6)) printf("; wreck at %.0f, %.0f", p.x, p.z);
         int shields = 0;
         for (const FrameEntity& f : frame.entities)

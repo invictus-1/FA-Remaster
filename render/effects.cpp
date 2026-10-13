@@ -118,7 +118,12 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       else if (parameter == "POSITION_Y") e.offset.y = n[0];
       else if (parameter == "POSITION_Z") e.offset.z = n[0];
       else if (e.kind == Kind::Emitter) particles_->SetParam(e.handle, parameter, n[0]);
-      // (SetEmitterCurveParam, ResizeEmitterCurve, SetBeamParam: not acted on yet)
+      // (ResizeEmitterCurve, SetBeamParam: not acted on; the game's scripts call neither)
+    } else if (event.name == "SetEmitterCurveParam" && n.size() >= 2) {
+      if (e.kind == Kind::Emitter) {
+        particles_->SetCurve(e.handle, event.text, n[0], n[1]);
+        ++curvesSet;
+      }
     } else if (event.name == "AttachBeamToEntity") {  // a beam made without a place gets one
       e.entity = event.entity;
       e.bone = event.bone;

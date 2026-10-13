@@ -38,6 +38,7 @@ class Effects {
 
   int live = 0;        // effects being kept
   int started = 0;     // since the beginning
+  int curvesSet = 0;   // SetEmitterCurveParam calls acted on
   int notShown = 0;    // events for kinds of effect that are not drawn yet (decals of kinds other than albedo and normals, anything new)
   float cpuMs = 0;     // Update on the processor, averaged over the last frames
   bool verbose = false;  // says each kind of light flash and decal once, as it first appears
