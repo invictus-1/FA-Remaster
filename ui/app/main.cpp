@@ -29,6 +29,9 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/control.h"
+#ifdef MOHO64UI_WORLD_PICTURE
+#include "render/remasters.h"
+#endif
 #include "script/script_state.h"
 #include "sim/session.h"
 #include "sound/sound_system.h"
@@ -61,11 +64,18 @@ bool windowed = false;            // --window: run live in a window until it is 
 bool noSound = false;             // --no-sound: a live window without the sound device
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
-// --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds>
-// / --no-weather: a day that passes and weather that changes in a game's picture. Without them
-// a game has the map's own fixed light.
-float dayStartHour = -1, dayLengthSeconds = 1200;
-bool weather = true;
+// --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
+// 0: the hour stands still> / --weather <kind> (changing, cold, dry, none, clear, cloudy, overcast,
+// rain, storm, fog, snow) / --no-weather: the day and the weather in the picture of a game whose
+// configuration does not say (a game from the lobby says: its options RemasterDayStart,
+// RemasterDayLength, RemasterWeather). Without them such a game has the map's own fixed light.
+ui::GameSession::Sky sky;
+// --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
+// (maps in the making). --remasters <folder>: the remastered units' own files, one folder per
+// unit (render/remasters.h). --own <folder>: this program's own files (ui/data); without it they
+// are looked for beside the program.
+std::vector<std::string> moreMaps;
+std::string remastersFolder, ownFolder;
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -199,10 +209,14 @@ int main(int argc, char** argv) {
     else if (a == "--fullscreen") fullScreen = windowed = true;
     else if (a == "--backdrop") wantBackdrop = 1;
     else if (a == "--no-backdrop") wantBackdrop = 0;
-    else if (a == "--day-weather") dayStartHour = 9;
-    else if (a == "--day") dayStartHour = static_cast<float>(std::atof(next().c_str()));
-    else if (a == "--day-length") dayLengthSeconds = static_cast<float>(std::atof(next().c_str()));
-    else if (a == "--no-weather") weather = false;
+    else if (a == "--day-weather") sky.startHour = 9;
+    else if (a == "--day") sky.startHour = static_cast<float>(std::atof(next().c_str()));
+    else if (a == "--day-length") sky.dayLengthSeconds = static_cast<float>(std::atof(next().c_str()));
+    else if (a == "--weather") sky.weather = next();
+    else if (a == "--no-weather") sky.weather = "none";
+    else if (a == "--maps") moreMaps.push_back(next());
+    else if (a == "--remasters") remastersFolder = next();
+    else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -234,6 +248,28 @@ int main(int argc, char** argv) {
   cfg.width = width;
   cfg.height = height;
   if (!RunInit(o, vfs, cfg.hookDirs)) return 1;
+  for (const std::string& folder : moreMaps) {
+    if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
+  }
+  // This program's own files: what it adds to the game's scripts (ui/data/hook, taken as one more
+  // hook folder, so the game's files stay as they are). Beside the program, or in its source tree.
+  if (ownFolder.empty()) {
+    char exe[MAX_PATH] = {0};
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string dir = exe;
+    const size_t cut = dir.find_last_of("/\\");
+    dir = cut == std::string::npos ? "." : dir.substr(0, cut);
+    for (const std::string& candidate : {dir + "/data", dir + "/../ui/data"}) {
+      if (ownFolder.empty() && hostfs::IsDirectory(candidate + "/hook")) ownFolder = candidate;
+    }
+  }
+  if (!ownFolder.empty() && vfs.Mount(ownFolder, "/moho64ui")) cfg.hookDirs.push_back("/moho64ui/hook");
+  else Logf(LogLevel::Warning, "moho64ui: this program's own files were not found (--own <folder>): the lobby has no day and weather options");
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!remastersFolder.empty()) {
+    Logf(LogLevel::Info, "moho64ui: remastered units: %d from %s", render::MountRemasters(&vfs, remastersFolder), hostfs::DisplayPath(remastersFolder).c_str());
+  }
+#endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   if (!o.modsFile.empty()) {
     std::ifstream f(o.modsFile);
@@ -259,7 +295,7 @@ int main(int argc, char** argv) {
   session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.wantPicture = !noWorld;
-  session.dayStartHour = dayStartHour, session.dayLengthSeconds = dayLengthSeconds, session.weather = weather;
+  session.sky = sky;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread

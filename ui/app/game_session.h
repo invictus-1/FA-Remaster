@@ -54,12 +54,22 @@ class GameSession {
   // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
   // renderer).
   bool wantPicture = true;
-  // A day that passes and weather that changes in the picture (the renderer's
-  // WorldPicture::SetDayAndWeather): the hour the game starts at (negative: the map's own fixed
-  // light, as the original has it), how long a whole day takes in game seconds, and whether the
-  // weather changes by itself. It is only seen. Set before a game is launched.
-  float dayStartHour = -1, dayLengthSeconds = 1200;
-  bool weather = true;
+  // The day and the weather in the picture (the renderer's WorldPicture::SetDayAndWeather and its
+  // world's settings). They are only seen. `sky` is what a game gets whose configuration says
+  // nothing (set before a game is launched); a game's options RemasterDayStart, RemasterDayLength
+  // and RemasterWeather (the lobby's, ui/data/hook) go before it.
+  struct Sky {
+    // The hour the game starts at, 0..24 (6 sunrise, 18 sunset); negative: the map's own fixed
+    // light, as the original has it, and no weather.
+    float startHour = -1;
+    // How long a whole day takes in game seconds; 0: the hour stands still.
+    float dayLengthSeconds = 1200;
+    // "changing" (by itself: rain and storms), "cold" (by itself: snow in place of rain), "dry"
+    // (by itself: mostly clear), or one kind that stays: "none" (fair), "clear", "cloudy",
+    // "overcast", "rain", "storm", "fog", "snow".
+    std::string weather = "changing";
+  };
+  Sky sky;
   // What plays the world's sounds (the host's sound system); nullptr: the simulation is not asked
   // for them. Set before a game is launched.
   sound::SoundSystem* sounds = nullptr;
@@ -132,6 +142,7 @@ class GameSession {
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;
+  Sky skyNow_;  // the running game's (kept for Relaunch)
   bool StartSession(const SessionDescription& session, const std::vector<std::string>& uids, std::string* why);
 };
 

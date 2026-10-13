@@ -47,4 +47,19 @@ check("Destroy", IsDestroyed(uidLobby), true)
 check("the wrong number of arguments is an error", pcall(InternalCreateLobby, LobbyComm.LobbyComm, "None", 0), false)
 lobby:Destroy()
 
+-- The program's own game options (ui/data/hook): in the game's list beside the game's own, each
+-- with a default that is one of its values.
+local options = {}
+for _, option in import('/lua/ui/lobby/lobbyOptions.lua').globalOpts do
+    options[option.key] = option
+end
+check("the game's own options are there", options.FogOfWar ~= nil and options.Victory ~= nil, true)
+for _, key in {'RemasterDayStart', 'RemasterDayLength', 'RemasterWeather'} do
+    local option = options[key]
+    local default = option and option.values[option.default]
+    check("the option " .. key .. " is in the list with a default", default ~= nil, true)
+end
+check("the day starts in the morning unless chosen", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'morning')
+check("a day takes twenty minutes unless chosen", options.RemasterDayLength.values[options.RemasterDayLength.default], '20')
+
 LOG("TEST done: " .. failed .. " failed")

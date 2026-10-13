@@ -58,17 +58,32 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
-         [--day-weather | --day <hour>] [--day-length <seconds>] [--no-weather]
+         [--day-weather | --day <hour>] [--day-length <seconds>] [--weather <kind>] [--no-weather]
+         [--maps <folder>] [--remasters <folder>] [--own <folder>]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
   frames). Without it the host runs headless on its own clock.
 - `--screenshot file.png` draws the head once at the end and saves the picture.
-- `--day-weather`: a game's picture has a day that passes (it starts at nine in the morning; a
-  whole day takes twenty minutes of game time) and weather that changes by itself (the renderer's
-  `SetDayAndWeather`; it is only seen). `--day <hour>` starts at another hour, `--day-length
-  <seconds>` sets the day's length in game seconds (0: the hour stands), `--no-weather` leaves the
-  weather fair. Without any of them a game has the map's own fixed light, as the original.
+- The day and the weather of a game's picture (the renderer's; they are only seen) are GAME
+  OPTIONS, chosen in the lobby with the game's other options: Time of Day (the map's own fixed
+  light as in the original, dawn, morning, noon, afternoon, dusk, night, random), Length of Day
+  (the hour stands still, or 5 to 120 minutes of game time) and Weather (changing by itself in a
+  temperate, cold or dry way, or one kind for the whole game: none, clear, cloudy, overcast, rain,
+  storm, fog, snow). They are this program's additions to the game's list
+  (`ui/data/hook/lua/ui/lobby/lobbyOptions.lua`, a hook file: the game's own file is not touched)
+  and travel in the game's options as `RemasterDayStart`, `RemasterDayLength`, `RemasterWeather`.
+  A game from the lobby starts in the morning, with a day of twenty minutes and changing weather,
+  unless chosen otherwise.
+- `--day-weather`, `--day <hour>`, `--day-length <seconds>` (0: the hour stands), `--weather
+  <kind>` (changing, cold, dry, none, clear, cloudy, overcast, rain, storm, fog, snow),
+  `--no-weather`: the same for a game whose configuration does not say (a recorded one given with
+  `--session`). Without them such a game has the map's own fixed light.
+- `--maps <folder>` (may be given more than once): more map folders beside the game's own at
+  `/maps` (maps in the making); they show in the lobby's map list. `--remasters <folder>`: the
+  remastered units' own files, one folder per unit (`render/remasters.h`), in games and in the
+  menu's background. `--own <folder>`: this program's own files (`ui/data`); without it they are
+  looked for beside the program (`data`) and in the source tree (`../ui/data`).
 - `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
   on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
@@ -110,6 +125,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - `tests/`: Lua tests run in the user state.
 - `tools/`: generators and scanners.
 - `REQUESTS.md`: what the interface needs from the other tracks.
+- `data/`: this program's own files, mounted at `/moho64ui`. `data/hook` is one more hook folder:
+  a file there is read after the game's file of the same path, so the game's files stay as they
+  are (today: the lobby's day and weather options).
 
 ## Status
 

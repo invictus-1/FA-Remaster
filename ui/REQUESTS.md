@@ -477,3 +477,45 @@ for the colour pass; he has now answered it. Not blocking.
 **Status:** done by the renderer track within the hour (`docs/render-answers.md`, "ui, to the
 renderer 8": the slices at 0.28 of their texture's alpha and their lilac half way to a pale blue)
 and in the program Chris plays since main 3d312b7. Thank you. Waiting for his look.
+
+### 9. From Chris: the water from far up is too sparkly; and what he chose for day and weather
+Chris, 2026-10-13, after a game with the day and the weather on (stock Seton's Clutch, the
+farthest zoom, the whole map in view, evening light). His picture shows the open sea covered
+evenly with small white points, like stars or salt, over all of the deep water; he circled the
+north-west sea. His words: "for the ocean/water I think it looks too sparkly at any time of day we
+should have it not render those white parts once you're high up enough and tone it down quite a
+bit. So when you're closer you see it but the entire ocean is just not it. Cause if you look at
+real oceans from high up its very blue without all that white. I think we should make the white
+blend in more and if possible increase textures resolution cause if you go up close it looks very
+pixelated". He adds that it may not hold for the rebuilt map, of which he had not seen a view from
+straight above; he sees that map in the interface's game from today (below).
+
+Asked for, not blocking:
+- from far up, no white points on the open water (or so few and so soft that the sea reads as one
+  blue); they may show from near;
+- the white that stays blended in more;
+- close to the water, a finer look (he reads it as pixelated there).
+If the points are the sun's or the moon's glints on the wave normals, sampled too coarsely from
+far: that is what he sees. The interface only gives you the camera; nothing of this is mine.
+
+**What Chris chose for day and weather** (you asked): all of it is to be the players' choice,
+"that way people get exactly what they want". So it is three game options in the lobby now
+(`ui/data/hook/lua/ui/lobby/lobbyOptions.lua`, read in `ui/app/game_session.cpp`):
+- Time of Day: the map's own light (no day, no weather), dawn 6, morning 9 (the default), noon,
+  afternoon 15, dusk 18, night 0, or drawn from the game's seed;
+- Length of Day: the hour stands still, or 5 to 120 minutes of game time (default 20);
+- Weather: changing by itself (your three climates: temperate is the default, cold, dry), or one
+  kind for the whole game: none (your "fair"), clear, cloudy, overcast, rain, storm, fog, snow.
+How I do the kinds that stay, so you can say if it is wrong: `SetDayAndWeather(hour, length,
+false)`, then on `world()` the clouds, rain, snow and fog of your own table of kinds
+(`weather.cpp`, kKinds, copied as numbers) and `wet` / `snowLying` at 1 where it rains or snows,
+so the ground starts as that weather leaves it. The climate goes into `world()->climate`. If you
+would rather own this (a call that takes a kind), say so and I use it.
+Two things I cannot judge and leave to you: whether 6.0 and 18.0 are the hours that look most like
+dawn and dusk when the hour stands still, and whether a storm that never ends is bearable to look
+at for a whole game.
+
+Also done on your request of today: `--remasters <folder>` (your `MountRemasters`, before the
+menu's background and before a game's picture; 88 units mounted here) and `--maps <folder>` (more
+map folders at `/maps`, as your viewer's), both in every launcher Chris uses. The rebuilt
+Seton's is in the lobby's map list and has a launcher of its own.

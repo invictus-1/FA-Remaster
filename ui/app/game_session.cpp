@@ -17,6 +17,7 @@
 #include "sim/terrain.h"
 
 #ifdef MOHO64UI_WORLD_PICTURE
+#include "render/world.h"
 #include "render/world_picture.h"
 #endif
 
@@ -175,6 +176,32 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     lua_pop(L, 2);
   }
   lua_pop(L, 1);
+
+  // The day and the weather: the game's options where it has them (the lobby's Remaster...
+  // options), the host's own otherwise.
+  skyNow_ = sky;
+  lua_getfield(L, config, "GameOptions");
+  if (lua_istable(L, -1)) {
+    auto option = [&](const char* key) -> std::string {
+      lua_getfield(L, -1, key);
+      std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+      lua_pop(L, 1);
+      return v;
+    };
+    const std::string start = option("RemasterDayStart"), length = option("RemasterDayLength"), weather = option("RemasterWeather");
+    if (start == "map") skyNow_.startHour = -1;
+    else if (start == "dawn") skyNow_.startHour = 6.0f;
+    else if (start == "morning") skyNow_.startHour = 9.0f;
+    else if (start == "noon") skyNow_.startHour = 12.0f;
+    else if (start == "afternoon") skyNow_.startHour = 15.0f;
+    else if (start == "dusk") skyNow_.startHour = 18.0f;
+    else if (start == "night") skyNow_.startHour = 0.0f;
+    else if (start == "random") skyNow_.startHour = static_cast<float>(session.header.seed % 96u) * 0.25f;  // every player draws the same
+    if (length == "still") skyNow_.dayLengthSeconds = 0;
+    else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
+    if (!weather.empty()) skyNow_.weather = weather;
+  }
+  lua_pop(L, 1);
   if (!StartSession(session, uids, why)) return false;
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
@@ -253,7 +280,32 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);
-      if (dayStartHour >= 0) pic->picture.SetDayAndWeather(dayStartHour, dayLengthSeconds, weather);
+      if (skyNow_.startHour >= 0) {
+        // Weather that changes by itself is the renderer's (by the game's seed and clock); one
+        // kind that stays is set on its world here, with the values its own kinds have
+        // (render/weather.cpp, kKinds), and with what that weather has done to the ground by now.
+        struct Kind {
+          const char* name;
+          float clouds, rain, snow, fog;
+        };
+        static const Kind kKinds[] = {{"none", 0.35f, 0, 0, 0},     {"clear", 0.10f, 0, 0, 0},      {"cloudy", 0.65f, 0, 0, 0},
+                                      {"overcast", 0.92f, 0, 0, 0.1f}, {"rain", 0.85f, 0.5f, 0, 0},  {"storm", 1.0f, 1.0f, 0, 0.25f},
+                                      {"fog", 0.5f, 0, 0, 1.0f},    {"snow", 0.9f, 0, 0.8f, 0.1f}};
+        const std::string& kind = skyNow_.weather;
+        const bool byItself = kind == "changing" || kind == "cold" || kind == "dry";
+        pic->picture.SetDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, byItself);
+        if (render::World* w = pic->picture.world()) {
+          w->climate = kind == "cold" ? render::Climate::Cold : kind == "dry" ? render::Climate::Dry : render::Climate::Temperate;
+          for (const Kind& k : kKinds) {
+            if (kind != k.name) continue;
+            w->cloudCover = k.clouds, w->rain = k.rain, w->snow = k.snow, w->fog = k.fog;
+            w->wet = k.rain > 0 ? 1.0f : 0.0f;
+            w->snowLying = k.snow > 0 ? 1.0f : 0.0f;
+          }
+        }
+        Logf(LogLevel::Info, "moho64ui: session: the day starts at %.2f h, a day takes %.0f game seconds, weather \"%s\"",
+             skyNow_.startHour, skyNow_.dayLengthSeconds, kind.c_str());
+      }
       pic->picture.Beat(*sim_);
       picture_ = std::move(pic);
       Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
