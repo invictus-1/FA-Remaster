@@ -852,14 +852,28 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
                  {"Patrol", CommandType::Patrol, false},
                  {"AggressiveMove", CommandType::AggressiveMove, false},
                  {"BuildMobile", CommandType::BuildMobile, false},
+                 // (orders of their buttons alone: the commander's overcharge, a missile or a
+                 // nuke at a place, a teleport; they go out as the order with its target, what
+                 // the unit does with it is the simulation's)
+                 {"OverCharge", CommandType::OverCharge, false},
+                 {"Tactical", CommandType::Tactical, false},
+                 {"Nuke", CommandType::Nuke, false},
+                 {"Teleport", CommandType::Teleport, false},
+                 {"Sacrifice", CommandType::Sacrifice, true},
                  {"Guard", CommandType::Guard, true},
                  {"Repair", CommandType::Repair, true},
                  {"Reclaim", CommandType::Reclaim, true},
                  {"Capture", CommandType::Capture, true}};
   const char* name = nullptr;
   CommandType type = CommandType::None;
+  auto same = [](const std::string& a, const char* b) {  // (the order button's name is RULEUCC_Overcharge, the order's OverCharge)
+    size_t i = 0;
+    for (; i < a.size() && b[i]; ++i)
+      if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+    return i == a.size() && !b[i];
+  };
   for (const auto& o : kOrders)
-    if (order == o.name && (entity != 0xffffffffu || !o.atUnit)) name = o.name, type = o.type;
+    if (same(order, o.name) && (entity != 0xffffffffu || !o.atUnit)) name = o.name, type = o.type;
   if (!name) return false;
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
