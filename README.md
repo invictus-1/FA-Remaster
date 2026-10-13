@@ -29,7 +29,7 @@ The work runs in three tracks that share this repository, plus one outside it:
 
 | Track | Folder | Program | State |
 |---|---|---|---|
-| Simulation | `src/` | `moho64` | Plays whole AI games headless; checked against the original on 13 replays, 2 of them identical to the last beat |
+| Simulation | `src/` | `moho64` | Plays whole AI games headless; checked against the original on 13 replays, 3 of them identical to the last beat |
 | Renderer | `render/` | `moho64view` | Direct3D 12; ground, water, units, effects, shadows; the original look and a modern one; day and night, weather |
 | Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound; 405 of 531 engine functions built |
 | Remastered art | not in this repository | – | New models and a remade map, made separately; the renderer has what they need |
@@ -73,7 +73,7 @@ The new engine writes the same recording for the same replay, and a tool names t
 the two differ, and what differs. Thirteen replays are compared after every change to the
 simulation; a change that makes any of them differ earlier is not accepted as it is.
 
-First beat on which any unit differs from the original (10 beats = 1 second), 2026-10-12:
+First beat on which any unit differs from the original (10 beats = 1 second), 2026-10-13:
 
 | Replay | First difference |
 |---|---|
@@ -89,7 +89,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Eight-army AI game | beat 344 |
 | Experimental units, second set | beat 167 |
 | Skirmish against an AI | beat 165 |
-| Naval battle (1,079 beats) | beat 149 |
+| Naval battle (1,079 beats) | beat 150 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed
