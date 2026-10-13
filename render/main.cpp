@@ -68,6 +68,7 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
+// --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
 //           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
@@ -148,6 +149,7 @@ struct Options {
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
   float snowLying = -1;                 // --snow-lying
+  float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
@@ -243,6 +245,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
+    else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
     else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
@@ -942,7 +945,7 @@ int main(int argc, char** argv) {
         pose.now = pose.next = u.bones.data();
         pose.nowCount = pose.nextCount = u.bones.size();
       }
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.built, u.turned >= 0 ? &pose : nullptr);
       world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }

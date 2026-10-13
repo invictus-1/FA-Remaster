@@ -353,6 +353,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   run across the land with it (noise that drifts downwind, so a wood bends in waves).
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
+- Units under construction, by faction (`mesh_renderer.cpp`, `BuildSolid`; `--built <0..1>` in
+  the viewer for placed units). UEF: built from the ground up, a line of light at the level of
+  the work, above it only a blue lattice of light. Cybran: put together plate by plate, a new
+  plate glowing red for a moment, a red lattice where a plate is missing. Aeon: rises out of the
+  ground, a little smaller at first, as liquid metal that sets over the last quarter. Seraphim:
+  grows from a quarter of its size, dark and glowing, and takes its surface over the second
+  half. The team colour comes in over the last tenth. What is not there yet casts no shadow.
+  These are not the original's pictures: its build looks (half see-through hulls with moving
+  textures laid over them) were read for what each faction's is about and for the numbers
+  kept (the Aeon's sinking and size, the Seraphim's size, the team colour's last tenth). Not
+  drawn: the builders' beams and the UEF's frame of light round a building, which come with
+  the game's effects; the Aeon's pool on the ground. A unit that a mod draws without a team
+  mask is only darker while it is built.
 - Range rings as one outline (`ranges.h`, `World::ranges.groups`, `WorldPicture::SetRanges`;
   `--ranges` in the viewer shows two test groups): all the rings of a group show as the outline
   of the ground they cover together, an inner radius cuts a hole with its own outline, the
@@ -465,7 +478,7 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 Known gaps, to be closed in the steps they belong to:
 
 - Units: played from a recording, every model stands in its rest pose (a recording has no bone
-  poses; the running simulation gives them). A unit under construction is only darker. With a recording, army colours are a fixed
+  poses; the running simulation gives them). With a recording, army colours are a fixed
   list (the running simulation gives the game's own).
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
 - Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
