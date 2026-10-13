@@ -515,8 +515,13 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
       // shell asks them too: FAF's torpedo decoy (DepthCharge in defaultantiprojectile.lua, a sphere riding on the
       // anti-torpedo shell) and its missile flare answer no to OnCollisionCheck and turn the shell onto their
       // owner with SetNewTarget; the Loyalist's MissileRedirect works the same way.
-      for (Entity* se : sim.scriptEntities)
-        if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
+      // NEWEST FIRST, as the collision grid hands a cell's entities out (its lists are walked from the back): when
+      // a torpedo crosses three decoy spheres in one step each of them turns it, and the last one asked keeps it.
+      // Seen: the original's torpedo ended on the OLDEST decoy's shell, which reached the sea floor in that same
+      // beat, so the torpedo lost that target, took its weapon's again and struck a submarine; ours ended on the
+      // newest and chased it.
+      for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
+        if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) cands.push_back(*it);
       for (Entity* e : cands) {
         // (an entity whose Destroy is queued is still in the world until the beat's end and is met like any
         // other: an anti-torpedo runs into the sphere of a torpedo that struck its ship earlier in this pass)
@@ -1026,6 +1031,15 @@ int l_SetNewTarget(lua_State* L) {
   // (a draw when it is a unit with target bones). FAF's Projectile.RetargetThread comes here a beat after a
   // homing shell lost its target, with what its weapon aims at now: one draw per torpedo of a salvo.
   p->target.aimBone = TargetPointBone(*S(L), e);
+  if (getenv("MOHO64_DEBUG_PROJ")) {  // who gives a shell a new target, and from which script line
+    luaL_where(L, 1);
+    const std::string at1 = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    luaL_where(L, 2);
+    const std::string at2 = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 2);
+    Logf(LogLevel::Info, "pdbg %u %u SetNewTarget %u (%s) from %s< %s", S(L)->tick(), p->id, e ? e->id : 0,
+         e && e->blueprint ? e->blueprint->id.c_str() : "?", at1.c_str(), at2.c_str());
+  }
   return 0;
 }
 int l_SetNewTargetGround(lua_State* L) {
