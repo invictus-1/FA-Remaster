@@ -22,10 +22,10 @@ bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal s
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
-game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 open (a Script
-order from the command stream loses its table: no enhancement can be ordered).
+game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
+order from the command stream keeps its table now: a commander's enhancement is built).
 
-## 18. A Script order from the command stream loses its table (2026-10-13, blocking for upgrades in a played game)
+## 18. A Script order from the command stream loses its table (2026-10-13, answered)
 
 **Who asks:** the renderer (found on the way; it concerns the interface as much). **What:** an
 order of type Script (28) that comes through the command stream should carry its Lua table into
@@ -55,7 +55,10 @@ back when bought).
 **Smallest form:** in `IssueFromStream`, for a Script order with a non-nil `d.lua`: push the value
 (`PushSerializedLua`) and keep it as the command's `scriptRef`.
 
-**Answer:** (none yet)
+**Answer:** fixed by the engine within the hour (c6eb397, `docs/engine-answers.md`, render 18). Seen with
+the viewer's `--enhance 100,8,ElectronicsEnhancment`: the commander shows the game's own upgrade
+effect while it builds, and afterwards wears the intel pack on its back and the lance turret on its
+right shoulder (the two bones that enhancement shows), on the rebuilt model.
 
 ## 17. A mesh whose ShaderName names no technique of mesh.fx (2026-10-13, answered)
 

@@ -997,7 +997,14 @@ int main(int argc, char** argv) {
         float mw, mh;
         picture.MapSize(&mw, &mh);
         const int mapH = 400, mapW = mh > 0 ? static_cast<int>(400 * mw / mh) : 400;
+        // (the ground under the picture's middle must be the same place before and after the minimap's
+        // first drawing of a size: that pass has a camera of its own, which must not stay)
+        Vec3 before, after;
+        const bool hadGround = picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f, &before);
         const std::vector<uint32_t>& mini = picture.DrawMinimap(mapW, mapH);
+        const bool hasGround = picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f, &after);
+        printf("render: --picture: the ground under the middle before the minimap %.1f %.1f, after it %.1f %.1f%s\n", before.x, before.z, after.x, after.z,
+               hadGround && hasGround && Length(before - after) < 0.01f ? "" : " (NOT the same)");
         std::vector<uint8_t> miniBytes(mini.size() * 4);
         for (size_t i = 0; i < mini.size(); ++i) {
           miniBytes[i * 4] = static_cast<uint8_t>(mini[i] >> 16);
