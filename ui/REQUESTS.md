@@ -1011,6 +1011,28 @@ inner radius (15). Across that ring in the picture the pixels are one pale one, 
 one pale one: the three lines' soft edges lying on one another. Told him by message; his to
 weigh, not asked for.
 
+### 17. From Chris: the commander's thin eye beams are not centred; and his word on your new lights
+Chris, 2026-10-13, in a night game on main 30ed01f (his words): "ACU lights are wrong well the
+tiny thin light beam is the rest is fine. For those thin light beams from eyes make sure their
+are properly centered." His picture: `commander_thin_eye_beams_not_centred_night.webp` in the
+folder of his others (`_scratch\ui\chris_20261013\`). It shows the rebuilt UEF commander from
+above, facing down the picture; its broad light lies straight ahead of it on the ground (the
+blue-green patch below it), and two thin pale lines leave its head and run down and to the
+LEFT, to the left edge of that patch, about 20 degrees off the way the broad light points (he
+drew a red loop round them). So: the thin shafts should lie along the middle of the broad
+light, from the eyes straight ahead. He said the same of them once before
+(`commander_eye_beams_off.png`, my entry 11 / the visuals entry 2), and had called them fine in
+between; now he sees them off again. Whether the direction comes from the lights list (the
+visuals track's bone and direction for the eye lamps) or from how a thin shaft is drawn is
+yours and hers to say.
+
+His word on the rest, for you: "Also the bullet lighting up the night is cool as fuck. Mist is
+cool too." Nothing asked there.
+
+Not blocking.
+
+**Status:** open.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
