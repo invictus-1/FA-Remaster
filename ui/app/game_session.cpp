@@ -78,6 +78,7 @@ struct GameSession::Picture : WorldSource {
     picture.SetShapes(lines, {});
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
+    picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);

@@ -424,6 +424,7 @@ class WorldView : public Control {
     WorldScene scene;
     SelectionForWorld(L, &scene.selection, &scene.lines);
     scene.borders = user->mapBorders;
+    scene.lifeBars = LifeBarsShown(L);
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();

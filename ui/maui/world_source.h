@@ -46,6 +46,9 @@ struct WorldScene {
   // The map's border: the mesh blueprints the game script named with MapBorderAdd (the machinery
   // around the map, by the interface's skin), to be drawn around the map as the original does.
   std::vector<std::string> borders;
+  // Life bars over units (the selected ones, the one under the mouse, damaged ones near by): the
+  // player's switch (UI_RenderUnitBars).
+  bool lifeBars = false;
 };
 
 // A moving picture for the front end's background (the host's: app/backdrop.h): the newest one

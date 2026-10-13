@@ -6,6 +6,7 @@
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
 --            --frames 1850 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
+-- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -298,6 +299,23 @@ local function run()
     moho64ui_MouseMove(1100, 440)
     moho64ui_Key(32, "", "up")
     check("from far out Space and the mouse do not turn it", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+
+    -- the life bars over units: off until the player switches them on (ours); the scripts' own
+    -- "false" / "true" put them away and give back what the player chose
+    local barsAtFirst = moho64ui_LifeBars()
+    if barsAtFirst then ConExecute('UI_RenderUnitBars') end
+    check("life bars are off (the game's script has run UI_RenderUnitBars true)", moho64ui_LifeBars(), false)
+    check("the key for them is bound", moho64ui_KeyMapAction("Alt-L"), "UI_RenderUnitBars")
+    ConExecute('UI_RenderUnitBars')
+    check("the player's switch shows them", moho64ui_LifeBars(), true)
+    ConExecute('UI_RenderUnitBars false')
+    check("a script puts them away", moho64ui_LifeBars(), false)
+    ConExecute('UI_RenderUnitBars true')
+    check("and gives them back", moho64ui_LifeBars(), true)
+    ConExecute('UI_RenderUnitBars')
+    ConExecute('UI_RenderUnitBars true')
+    check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
+    if barsAtFirst then ConExecute('UI_RenderUnitBars') end
     LOG("TEST done: " .. failed .. " failed")
 end
 
