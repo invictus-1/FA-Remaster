@@ -98,4 +98,10 @@ READY and SEEN 2026-10-13 (its section "16 - READY"): in the viewer beside the B
 the M28 game without its upgrades (hidden bones), through the new `--remasters` option, which loads
 every unit's `export/moho64` folder for a game. Its two questions answered: a light on a hidden bone
 stays dark (since today); the textures are taken from the export folder, so the old set in LabVisuals
-need not be replaced. Still to see: each upgrade bought in a game.
+need not be replaced. SEEN 2026-10-13 in games (the viewer's `--enhance`, after the engine's fix of
+Script orders): every first-level upgrade bought on the rebuilt model shows its part and nothing
+else: ImprovedEngineering (Engineering_Suite), CombatEngineering (Flamer and the suite),
+TorpedoLauncher, AntiMatterCannon (HAC), GatlingEnergyCannon, ShieldBattery (with the personal
+shield's glow), ClusterMissilePack (Back_SalvoLauncher), ElectronicsEnhancment (Back_IntelPack,
+Right_Lance_Turret); JuryRiggedZephyr shows none, as its blueprint says. Not bought: the second and
+third levels (Back_MissilePack_B01 and Left_Lance_Turret come only with those).

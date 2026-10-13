@@ -92,7 +92,13 @@ its flashes and bolts.
 sea: at 6.0 and 18.0 the sun stands on the horizon, the sea is pink and the land is nearly as dark
 as at night (median brightness 31 and 32 of 255, night is 27). For an hour that stands for a whole
 game, 6.5 and 17.5 look more like what the words promise and can be played in: low warm light,
-long shadows (43 and 50). So: dawn 6.5, dusk 17.5. A storm that never ends: not judged yet.
+long shadows (43 and 50). So: dawn 6.5, dusk 17.5. A storm that never ends, judged later the same
+day (a block of tanks from zoom 60 at noon, dusk and midnight, against clear weather): it can be
+played in. The eye adapts, so the picture is hardly darker than in clear weather (median 57 against
+63 at noon, 34 against 33 at midnight); what it costs is colour (everything goes grey) and a veil of
+rain streaks over the whole picture, through which small units are harder to pick out than by day.
+Lightning comes about every 22 seconds now. Left as it is, since Chris likes the rain; if a whole
+game of it tires him, the rain's density from far up is the thing to thin.
 
 ## ui, to the renderer 6: range rings as one outline, and the script's meshes in the world — both there (first form)
 
