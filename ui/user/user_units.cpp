@@ -1145,7 +1145,9 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
   return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string());
 }
 
-bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool clear) {
+namespace {
+// The reclaimable thing at a place, if the selection holds a unit of the player's that can reclaim.
+bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableView* prop) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
   UnitStore& store = Store(L);
@@ -1156,10 +1158,18 @@ bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool cle
     UnitStateView state;
     if (StateOf(L, u, &state)) caps |= state.commandCaps;
   }
-  if (!(caps & kReclaim)) return false;
+  return (caps & kReclaim) && ReclaimableAt(*sim, at, within, prop);
+}
+}  // namespace
+
+bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool clear) {
   ReclaimableView prop;
-  if (!ReclaimableAt(*sim, at, within, &prop)) return false;
+  if (!ReclaimTargetAt(L, at, within, &prop)) return false;
   return IssueOrder(L, "Reclaim", prop.position[0], prop.position[1], prop.position[2], prop.id, clear, std::string());
+}
+bool CanReclaimAtPlace(lua_State* L, const float at[3], float within) {
+  ReclaimableView prop;
+  return ReclaimTargetAt(L, at, within, &prop);
 }
 
 // moho64ui_ReclaimableAt(x, z, within) -> nil, or {id, blueprint, x, z, mass, energy} of the

@@ -1079,7 +1079,17 @@ int l_ViewRightMouseButtonOrder(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   std::string mode, name, order;
   v->CommandMode(L, &mode, &name);  // none while the script is in a command mode, as the original
-  if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) order = RightClickOrder(L, v->UnitUnder(L, ui.mouseX, ui.mouseY));
+  if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) {
+    const uint32_t under = v->UnitUnder(L, ui.mouseX, ui.mouseY);
+    order = RightClickOrder(L, under);
+    // (over a tree, a rock or a wreck that the selection can reclaim, the click reclaims it:
+    // the same test as the click's own, so the cursor says what the click will do)
+    float world[3];
+    if (under == 0xffffffffu && !order.empty() && !v->miniMap) {
+      v->Unproject(L, ui.mouseX, ui.mouseY, world);
+      if (CanReclaimAtPlace(L, world, v->MapUnitsOf(L, 4))) order = "RULEUCC_Reclaim";
+    }
+  }
   if (order.empty()) lua_pushnil(L);
   else lua_pushstring(L, order.c_str());
   return 1;

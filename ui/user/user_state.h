@@ -196,6 +196,8 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 // selected units get a Reclaim order naming it; false when nothing reclaimable is there or the
 // selection holds no unit that can reclaim.
 bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool clear);
+// The same question without the order: would a reclaim there take something? (For the cursor.)
+bool CanReclaimAtPlace(lua_State* L, const float at[3], float within);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 // `byPriority`: only those of the best selection priority among them (a selection by box).
