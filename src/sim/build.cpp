@@ -11,7 +11,8 @@
 //   water, water layers where the ground is above water - MinWaterDepth; extractors need a deposit
 //   of their kind under their footprint, other structures may not touch one.
 // - CAiBrain::CanBuildStructureAt (0x57cbb0): the location is free (OCCUPY_Check and no structure
-//   occupying the footprint) and no structure's footprint overlaps the new skirt.
+//   occupying the footprint) and no structure's SKIRT overlaps the new skirt (so nothing can be set
+//   inside a factory's square; two skirts may touch).
 // - Unit::CanBuild (0x6a9e50): the target is in the builder's Economy.BuildableCategory, minus the
 //   unit's and the army's build restrictions.
 // - A builder works on its focus every tick (CBuildTaskHelper::UpdateWorkProgress 0x5f5bf0):
@@ -200,24 +201,48 @@ Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p) {
   return r;
 }
 
+namespace {
+// 0x720770: does the skirt rect R meet (strictly) the skirt rect of a unit that is not mobile? The candidates are
+// the units the collision grid holds in R's cells (0x4fcb40: the rect truncated, 4 x 4 cells, at least one cell
+// each way); a dead one that is still there counts.
+bool AnyStructureSkirtOverlaps(Sim& sim, lua_State* L, const FRect& R) {
+  auto lo = [](float v) { return std::clamp(static_cast<int>(v) >> 2, 0, 0xffff); };
+  auto len = [](float v, int c0) { return std::max(1, std::min(((static_cast<int>(v) + 3) >> 2) - c0, 0xffff - c0)); };
+  const int cx0 = lo(R.x0), cz0 = lo(R.z0);
+  const int cw = len(R.x1, cx0), ch = len(R.z1, cz0);
+  const bool grid = sim.entityGrid().ready();
+  bool hit = false;
+  sim.ForUnitsInRect(R.x0 - 32, R.z0 - 32, R.x1 + 32, R.z1 + 32, [&](Unit* e) {
+    if (hit || !e->blueprint) return;
+    if (e->motion.bp && e->motion.bp->mobile()) return;
+    if (grid && e->gridSeen && !(e->gridX0 < cx0 + cw && cx0 < e->gridX0 + e->gridW && e->gridZ0 < cz0 + ch && cz0 < e->gridZ0 + e->gridH))
+      return;
+    const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+    if (r.x1 > R.x0 && R.x1 > r.x0 && r.z1 > R.z0 && R.z1 > r.z0 && R.x1 > R.x0 && R.z0 < R.z1 && r.x1 > r.x0 && r.z0 < r.z1)
+      hit = true;
+  });
+  return hit;
+}
+}  // namespace
+
+// FootprintFitsStructure 0x720d90 (structure_placement.md 4): the ground (OCCUPY_Check), then no standing
+// structure's SKIRT may meet the new one's skirt, then the footprint against the occupancy bits. The mobile build
+// task asks this before it creates the unit (0x5f7aec), and CanBuildStructureAt begins with it.
 bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
   lua_State* L = sim.L();
   const UnitBpData& d = GetUnitBpData(L, bp);
   if (!StructureLayers(sim, bp, d, x, z)) return false;
   const NamedFootprint& fp = Footprint(bp);
   int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
+  if (AnyStructureSkirtOverlaps(sim, L, SkirtRect(bp, d, x, z))) return false;
   return !sim.navigation().AnyStructureIn(ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
 
+// CAiBrain::CanBuildStructureAt 0x57cbb0 with relation 3: FootprintFitsStructure, then the skirt against the skirts
+// of the live structures once more (the same rule, so nothing new for ours). NOT MODELLED: the brain's own pending
+// structure plans (brain+0x98), which the original also keeps the new skirt off.
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z) {
-  if (!LocationIsFree(sim, bp, x, z)) return false;
-  const UnitBpData& d = GetUnitBpData(sim.L(), bp);
-  FRect sk = SkirtRect(bp, d, x, z);
-  for (const auto& r : sim.navigation().Structures())
-    if (sk.x0 < static_cast<float>(r.x1) && static_cast<float>(r.x0) < sk.x1 && sk.z0 < static_cast<float>(r.z1) &&
-        static_cast<float>(r.z0) < sk.z1)
-      return false;
-  return true;
+  return LocationIsFree(sim, bp, x, z);
 }
 
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {

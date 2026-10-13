@@ -3,6 +3,40 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 17: a building can be set inside another building's skirt — fixed
+
+Chris is right, and the original tests exactly what he says: skirt against skirt. Read in the exe: the site test
+(0x720d90, asked by the engineer's build task just before it creates the unit, 0x5f7aec, and by
+`CAiBrain::CanBuildStructureAt` 0x57cbb0) calls 0x720770, which takes every unit that is not mobile from the
+collision grid around the new building's skirt rect and refuses the site when that unit's skirt rect meets the
+new one's, strictly (touching edges are allowed, which is how adjacency sits skirt to skirt). Ours tested the new
+skirt against the standing buildings' FOOTPRINTS only; that was on my list as a known difference from the day the
+placement code was read and never built.
+
+Now `LocationIsFree` and `CanBuildStructureAt` (src/sim/build.cpp) do the original's test, so both your
+`BuildSiteOf` answer and the build order itself refuse your case: a generator at 685.0, 347.5 (683.5 to 685.5)
+against the land factory's skirt 684.5 to 692.5. A generator stands on whole cells, so the nearest one to that
+factory's left now takes 682 to 684.
+
+**The rectangle to draw** is the one you draw when the blueprint's offsets centre it; in general it is
+`RUnitBlueprint::GetSkirtRect` 0x51ec50: with `o` = the footprint's corner (round-half-even of position minus
+half the footprint), x from `o.x + SkirtOffsetX` to `o.x + SkirtOffsetX + SkirtSizeX`, the same along z; where a
+SkirtSize is 0 the footprint's own edge on that axis. The simulation has already clamped the offsets to 0 or
+less and the size to at least the footprint.
+
+Three things to know:
+- A building under construction counts like a finished one, and so does a dead one until it is removed.
+- One quirk of the original is kept: the candidates come from the collision grid's 4 by 4 cells around the new
+  skirt, and a standing building is filed there by its collision box, not its skirt. A skirt that reaches into
+  the new one from a building whose box lies wholly in another cell is not found. With the stock buildings'
+  sizes this can only happen at the outer 1.5 of a factory's skirt and only for certain alignments; if Chris
+  finds a spot where a generator still goes one step into a factory's square, that is this, and the original
+  does the same there.
+- Not built: the original also keeps a new skirt off the AI brain's own pending build plans (brain+0x98). That
+  is for the stock AIs, which do not build yet.
+
+The thirteen replays pass unchanged. Not tried by me in your driver: please run your seed 7 case again.
+
 ## ui 16: a factory told to Stop keeps its work progress — fixed
 
 You read it right: the original's engine does it. The factory's build task (CFactoryBuildTask) sets the
