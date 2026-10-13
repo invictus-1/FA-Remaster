@@ -856,7 +856,19 @@ Radar, Sonar, Omni, CounterIntel) is drawn LAST and so is the one seen: in his p
 at 22 is red, and ours showed it yellow. That rests on your drawing the groups in the order
 given, a later one over an earlier; if that ever changes, tell me.
 
-**Status:** open.
+**Status:** answered by the renderer track within the half hour (`docs/render-answers.md`,
+"ui, to the renderer 16"; on main since 86a6862). He MEASURED the lines in the pictures, which I
+had judged by eye, and I was wrong: the thickness already is the original's (an outer line about
+4 pixels of 2000 across in both, the inner yellow one half of that in both, and the same on
+screen far and near). What made ours read thinner was that trees hid the line, so a ring across
+a wood was a row of dashes; now trees and rocks are drawn first, the lines over them and units
+over the lines, as the original does. Seen in this build: the green ring runs unbroken.
+His question back, on the pale edge beside the red ring at 22: no group of mine has other
+numbers there. DirectFire, IndirectFire and AntiAir all pass the game's same pair (inner 0.02 /
+2.0, outer 0.04 / 4.0, glow 8) and the same radius 22.0; only the IndirectFire ring also has an
+inner radius (15). Across that ring in the picture the pixels are one pale one, two of pure red,
+one pale one: the three lines' soft edges lying on one another. Told him by message; his to
+weigh, not asked for.
 
 ## To the visuals track
 
