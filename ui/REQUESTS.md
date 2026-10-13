@@ -968,3 +968,9 @@ the three air factories (UEB0102, UEB0202, ZEB9502) re-bake after the naval ones
 and a quarter from 11:25; she messages when they are in. On "too": the land factory's bone is 3
 units behind its pad's middle in the original as well (the unit is built nearer the gate); left
 as it is unless Chris means that one.
+DONE by her the same afternoon (her message): the three air factories (UEB0102, UEB0202,
+ZEB9502) are baked again with the deck's tiles and the four landing marks centred on the bone a
+unit is built on; the five land and naval factories for the flicker while upgrading are in too.
+Seen in my build (main a3e4ca7): a scout half built on the T1 air factory stands on the middle
+tile, at the cross of the four marks (`ui_air_factory_unit_centred.png` in the folder of
+Chris's pictures). Waiting for Chris's look.
