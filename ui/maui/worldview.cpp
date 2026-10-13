@@ -846,6 +846,8 @@ class WorldView : public Control {
       std::string order = RightClickOrder(L, under);
       if (order.rfind("RULEUCC_", 0) != 0) return false;
       order = order.substr(8);
+      // (With Alt held, a right click that would be a move is FAF's attack-move.)
+      if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
       if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
       return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
     }

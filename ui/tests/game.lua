@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 3300 --log out.log
+--            --frames 3400 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -619,6 +619,14 @@ local function run()
     local attackMove = (cdr:GetCommandQueue() or {})[1]
     check("an attack-move reaches the unit as an aggressive move", attackMove ~= nil and attackMove.type, "AggressiveMove")
     check("and its mode has ended", CM.GetCommandMode()[1], false)
+    IssueCommand("UNITCOMMAND_Stop")
+    WaitSeconds(0.3)
+    -- the same by Alt and a right click on the ground, with no mode
+    moho64ui_MouseButton("Right", true, attackAt.x, attackAt.y, "Alt")
+    moho64ui_MouseButton("Right", false, attackAt.x, attackAt.y, "Alt")
+    WaitSeconds(0.5)
+    attackMove = (cdr:GetCommandQueue() or {})[1]
+    check("Alt and a right click on the ground is an attack-move too", attackMove ~= nil and attackMove.type, "AggressiveMove")
     IssueCommand("UNITCOMMAND_Stop")
     WaitSeconds(0.3)
 

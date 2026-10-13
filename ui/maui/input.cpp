@@ -352,7 +352,12 @@ int l_MouseButton(lua_State* L) {
   e.left = button == "Left";
   e.middle = button == "Middle";
   e.right = button == "Right";
-  bool twice = lua_isstring(L, 5) && std::string(lua_tostring(L, 5)).find("Double") != std::string::npos;
+  // (the fifth argument may name "Double" and the keys held with the click: Shift, Ctrl, Alt)
+  const std::string with = lua_isstring(L, 5) ? lua_tostring(L, 5) : "";
+  bool twice = with.find("Double") != std::string::npos;
+  if (with.find("Shift") != std::string::npos) e.shift = true;
+  if (with.find("Ctrl") != std::string::npos) e.ctrl = true;
+  if (with.find("Alt") != std::string::npos) e.alt = true;
   MouseButton(L, UserState::From(L)->ui(), e, pressed, twice);
   return 0;
 }

@@ -1016,6 +1016,40 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
   return true;
 }
 
+// FAF's attack-move by Alt and a right click: the same Script order as its button's, with the
+// Lua value real replays hold for it ({TaskName = "AttackMove", UserValidated = true, Location}).
+// INFERRED: FAF's patched program makes the order itself for this click (no order mode is on, so
+// the verifying script is not the one to ask); which of its code does it is not read.
+bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  for (UserUnit* u : Store(L).selection)
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
+  if (ids.empty()) return false;
+  const int top = lua_gettop(L);
+  lua_newtable(L);
+  lua_pushstring(L, "TaskName");
+  lua_pushstring(L, "AttackMove");
+  lua_rawset(L, -3);
+  lua_pushstring(L, "UserValidated");
+  lua_pushboolean(L, 1);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "Location");
+  PushVector(L, x, y, z);
+  lua_rawset(L, -3);
+  StreamIssueData d;
+  d.type = static_cast<int>(CommandType::Script);
+  d.target.type = 2;
+  d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
+  SerializeLua(L, top + 1, &d.lua);
+  Writer(L).IssueCommand(ids, d, clear);
+  ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, top + 1);
+  lua_settop(L, top);
+  return true;
+}
+
 // What the player's army knows of a unit now (the engine's ReconOf bits; its own and its allies'
 // units: everything). The picture shows a unit by the same answer: the unit while it is seen, a
 // blip while it is on radar, sonar or omni alone, nothing otherwise.
