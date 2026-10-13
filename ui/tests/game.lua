@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 2600 --log out.log
+--            --frames 3000 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -531,6 +531,62 @@ local function run()
     ConExecute('UI_RenderUnitBars true')
     check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
     if barsAtFirst then ConExecute('UI_RenderUnitBars') end
+
+    -- the minimap: hidden until the player's button shows it (the profile's 'stratview'); a left
+    -- press on it sends the main camera there and a held button keeps it under the pointer; a
+    -- right click on it is an order to the place under it
+    local minimap = import("/lua/ui/game/minimap.lua")
+    local mapShownAtFirst = not minimap.controls.displayGroup:IsHidden()
+    if not mapShownAtFirst then minimap.ToggleMinimap() end
+    WaitSeconds(0.3)
+    check("the minimap's window shows after its switch", minimap.controls.displayGroup:IsHidden(), false)
+    local mini = minimap.controls.miniMap
+    local function onMini(fx, fy) return mini.Left() + (mini.Right() - mini.Left()) * fx, mini.Top() + (mini.Bottom() - mini.Top()) * fy end
+    local function camAt() local p = cam:GetFocusPosition() return p[1], p[3] end
+    -- (the place of the map under a point of the minimap: the whole map, in its own proportion,
+    -- in the middle of the view)
+    local mapSize = SessionGetScenarioInfo().size
+    local function placeOnMini(fx, fy)
+        local w, h = mini.Right() - mini.Left(), mini.Bottom() - mini.Top()
+        local side = math.min(w, h * mapSize[1] / mapSize[2])
+        local high = side * mapSize[2] / mapSize[1]
+        return (fx * w - (w - side) / 2) / side * mapSize[1], (fy * h - (h - high) / 2) / high * mapSize[2]
+    end
+    UIZoomTo({cdr}, 0)  -- (from its farthest the camera has nowhere to go: look at the commander first)
+    WaitSeconds(0.3)
+    local mx, my = onMini(0.4, 0.6)
+    moho64ui_MouseMove(mx, my)
+    moho64ui_MouseButton("Left", true, mx, my)
+    WaitSeconds(0.2)
+    local ax, az = camAt()
+    local ux, uz = placeOnMini(0.4, 0.6)
+    check("a left press on the minimap sends the main camera to the place under it", math.abs(ax - ux) < 12 and math.abs(az - uz) < 12, true)
+    mx, my = onMini(0.6, 0.4)
+    moho64ui_MouseMove(mx, my)
+    WaitSeconds(0.2)
+    local bx, bz = camAt()
+    check("while the button is held the camera follows the pointer", bx > ax + 20 and bz < az - 20, true)
+    moho64ui_MouseButton("Left", false, mx, my)
+    moho64ui_MouseMove(mx + 30, my + 30)
+    WaitSeconds(0.2)
+    local cx, cz = camAt()
+    check("and stays where the button was let go", cx == bx and cz == bz, true)
+    SelectUnits({cdr})
+    mx, my = onMini(0.55, 0.5)
+    ux, uz = placeOnMini(0.55, 0.5)
+    moho64ui_MouseMove(mx, my)
+    moho64ui_MouseButton("Right", true, mx, my)
+    moho64ui_MouseButton("Right", false, mx, my)
+    WaitSeconds(0.4)
+    local miniOrder = (cdr:GetCommandQueue() or {})[1]
+    check("a right click on the minimap orders the selected unit to the place under it", miniOrder ~= nil and miniOrder.type == "Move"
+        and math.abs(miniOrder.position[1] - ux) < 12 and math.abs(miniOrder.position[3] - uz) < 12, true)
+    if not mapShownAtFirst then minimap.ToggleMinimap() end
+    -- (back to the commander for what follows)
+    local home = cdr:GetPosition()
+    IssueCommand("UNITCOMMAND_Stop")
+    cam:Reset()
+    WaitSeconds(0.3)
 
     -- a row of buildings: in build mode a left press marks the first site, and letting go
     -- elsewhere orders one on every free site between the two

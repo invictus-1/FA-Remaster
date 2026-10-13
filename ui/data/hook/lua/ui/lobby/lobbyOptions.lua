@@ -2,7 +2,7 @@
 -- (this file is a hook: the program reads it after the game's /lua/ui/lobby/lobbyOptions.lua, which
 -- stays as it is). They are only seen: nothing in the simulation depends on them. The program
 -- reads them from the game's options when it starts the game's picture (ui/app/game_session.cpp).
-table.insert(globalOpts, {
+table.insert(globalOpts, 1, {
     default = 1,
     label = "Time of Day",
     help = "The hour the game starts at",
@@ -19,7 +19,7 @@ table.insert(globalOpts, {
     },
 })
 
-table.insert(globalOpts, {
+table.insert(globalOpts, 2, {
     default = 4,
     label = "Length of Day",
     help = "How long a whole day and night take in game time",
@@ -32,7 +32,7 @@ table.insert(globalOpts, {
     },
 })
 
-table.insert(globalOpts, {
+table.insert(globalOpts, 3, {
     default = 1,
     label = "Weather",
     help = "The weather of the game. With the map's own light there is none",
