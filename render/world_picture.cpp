@@ -298,10 +298,22 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.mapGround.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
     const size_t count = std::min(m.mapGround.size(), m.capture.size() / 4);
     const uint8_t* p = m.capture.data();
-    for (size_t i = 0; i < count; ++i, p += 4) m.mapGround[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
+    // a map is read, not looked at: its ground is brought up to a middling brightness whatever the
+    // hour (never dimmed, at most four times as bright), and its dark end lifted a little, so that
+    // land and water can be told apart at night and under the fog of war too
+    double sum = 0;
+    for (size_t i = 0; i < count; ++i) sum += 0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2];
+    const float mean = count ? static_cast<float>(sum / static_cast<double>(count)) : 96.0f;
+    const float gain = std::clamp(96.0f / std::max(mean, 1.0f), 1.0f, 4.0f);
+    uint8_t lifted[256];
+    for (int v = 0; v < 256; ++v)
+      lifted[v] = static_cast<uint8_t>(std::min(255.0f, 255.0f * std::pow(std::min(static_cast<float>(v) * gain / 255.0f, 1.0f), 0.8f)) + 0.5f);
+    for (size_t i = 0; i < count; ++i, p += 4)
+      m.mapGround[i] = 0xff000000u | static_cast<uint32_t>(lifted[p[0]]) << 16 | static_cast<uint32_t>(lifted[p[1]]) << 8 | lifted[p[2]];
   }
   m.mapPixels = m.mapGround;
-  // what the focus army does not see, darkened as in the main picture
+  // what the focus army does not see is darker, but less so than in the main picture: 11/16 of its
+  // light (7/8 under radar or sonar), so the whole map stays readable from the first second
   if (!m.seen.empty() && m.seenCells > 0 && m.mapX1 != m.mapX0 && m.mapY1 != m.mapY0) {
     const float sx = static_cast<float>(m.seenCells) / (m.mapX1 - m.mapX0), sy = static_cast<float>(m.seenCells) / (m.mapY1 - m.mapY0);
     for (int y = 0; y < height; ++y) {
@@ -314,8 +326,8 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
         if (cx < 0 || cx >= m.seenCells || (row[cx] & kSightNow)) continue;
         const uint32_t p = out[x];
         if (!(row[cx] & kSightEver) && w.unexplored) out[x] = (p & 0xff000000u) | ((p >> 4) & 0x000f0f0fu);  // never seen: next to none of it
-        else if (row[cx] & (kSightRadar | kSightSonar)) out[x] = (p & 0xff000000u) | (((p >> 1) & 0x007f7f7fu) + ((p >> 2) & 0x003f3f3fu));  // under radar or sonar: three quarters
-        else out[x] = (p & 0xff000000u) | ((p >> 1) & 0x007f7f7fu);  // half its light
+        else if (row[cx] & (kSightRadar | kSightSonar)) out[x] = (p & 0xff000000u) | ((p & 0x00ffffffu) - ((p >> 3) & 0x001f1f1fu));
+        else out[x] = (p & 0xff000000u) | (((p >> 1) & 0x007f7f7fu) + ((p >> 3) & 0x001f1f1fu) + ((p >> 4) & 0x000f0f0fu));
       }
     }
   }
