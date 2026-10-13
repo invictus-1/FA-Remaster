@@ -3826,7 +3826,10 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
   // target that began to move one beat later than "its new place" would make it.
   // The aim point rides on the target's hull, so it is taken through the transform the beat began with (position
   // and orientation): out of the hull's frame of now, back in with the held one.
-  if (const Entity* te = TargetEntity(sim, w->target); te && te->shapeHeld) {
+  // (Only for a target WITHOUT a target point: a target bone comes out of the target's pose, Unit::GetTargetPoint
+  // 0x6ab340 -> 0x6aa5c0, and the pose is this beat's once the target has had its turn. Seen: a destroyer's hull
+  // following the turret of a turning battleship one beat late.)
+  if (const Entity* te = TargetEntity(sim, w->target); te && te->shapeHeld && w->target.aimBone == -1) {
     const Vec3 local = Rotate(Conj(te->orientation), Sub(tp, te->position));
     tp = Add(te->shapePos, Rotate(te->shapeOri, local));
   }
