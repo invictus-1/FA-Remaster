@@ -1059,7 +1059,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
-      if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), frame.entities.size());
+      if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (haveLive && opt.debug) {  // (where to look for them)
         printf("; %d emitter curves set by scripts", effects.curvesSet);

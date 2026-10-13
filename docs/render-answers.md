@@ -65,6 +65,16 @@ the list when its time is over (at `age >= lifetime` a feedback mark is not draw
 `LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
 the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
 
+## ui, to the renderer 8: the UEF build box's violet toned down — done
+
+Chris's wish: the box and the blue wiring are right; the violet over the upper part of the box,
+where the slices are, was too strong and hid the wire frame. Done on branch render: the slices
+(shader `AlphaFade`) are drawn at 0.28 of their texture's alpha instead of 0.7, and their lilac is
+taken half way to a pale blue. Several still lie over each other at the level of the work, as
+the script makes them, but together they are a faint haze and the lattice reads through over the
+whole height. Seen in the M28 game on three buildings. If he wants them weaker still or gone, it
+is one number (`mesh_renderer.cpp`, the `kind.y > 3.5` branch).
+
 ## on your "To the renderer 7" (2026-10-12): the shapes were the simulation's, as you thought
 
 Thank you for looking; you were right and my note was wrong about where they came from. The

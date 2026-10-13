@@ -126,6 +126,11 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
                      {0, 0, 0, 1}}};
       props_.push_back({model, world});
     }
+    // ... listed by squares of the map
+    propCellsX_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.width) / kPropCell)));
+    propCellsZ_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.height) / kPropCell)));
+    propCells_.assign(static_cast<size_t>(propCellsX_) * static_cast<size_t>(propCellsZ_), {});
+    for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
   }
   sky_ = textures.SkyCube(haveMap_ ? map.skyCubemap : std::string());
   {  // the ring under a selected unit: a thin white circle, soft at both edges
@@ -423,10 +428,31 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
   }
-  for (const PlacedProp& p : props_)
-    if (p.model) meshes.Add(p.model, p.world, {1, 1, 1});
-  for (const auto& made : madeProps_)
-    if (made.second.model) meshes.Add(made.second.model, made.second.world, {1, 1, 1});
+  // (only the squares near what the camera sees: a square counts when it, widened by the largest
+  // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
+  propCellsSeen = propsAdded = 0;
+  if (!propCells_.empty()) {
+    const float margin = propReach_ + 30;
+    for (int cz = 0; cz < propCellsZ_; ++cz)
+      for (int cx = 0; cx < propCellsX_; ++cx) {
+        const PropCell& cell = propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)];
+        if (cell.ofMap.empty() && cell.made.empty()) continue;
+        const Vec3 lo{static_cast<float>(cx) * kPropCell - margin, ranges.low - 20, static_cast<float>(cz) * kPropCell - margin};
+        const Vec3 hi{static_cast<float>(cx + 1) * kPropCell + margin, ranges.high + 60, static_cast<float>(cz + 1) * kPropCell + margin};
+        if (!view.BoxVisible(lo, hi)) continue;
+        ++propCellsSeen;
+        for (uint32_t i : cell.ofMap) {
+          meshes.Add(props_[i].model, props_[i].world, {1, 1, 1});
+          ++propsAdded;
+        }
+        for (uint32_t id : cell.made) {
+          auto made = madeProps_.find(id);
+          if (made == madeProps_.end() || !made->second.model) continue;
+          meshes.Add(made->second.model, made->second.world, {1, 1, 1});
+          ++propsAdded;
+        }
+      }
+  }
   if (haveMap_)
     for (const std::string& border : borders) {
       const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
@@ -483,6 +509,40 @@ std::vector<Vec3> World::WreckPlaces(size_t most) const {
   return places;
 }
 
+int World::PropCellAt(const Mat4& world) const {
+  if (propCells_.empty()) return -1;
+  const int cx = std::clamp(static_cast<int>(world.m[0][3] / kPropCell), 0, propCellsX_ - 1);
+  const int cz = std::clamp(static_cast<int>(world.m[2][3] / kPropCell), 0, propCellsZ_ - 1);
+  return cz * propCellsX_ + cx;
+}
+
+// Puts a prop that has a model into its square's list (`key`: its index in props_, or a made one's
+// entity id), and takes one out again.
+void World::ListProp(PlacedProp* prop, uint32_t key, bool made) {
+  prop->cell = prop->model ? PropCellAt(prop->world) : -1;
+  if (prop->cell < 0) return;
+  PropCell& cell = propCells_[static_cast<size_t>(prop->cell)];
+  (made ? cell.made : cell.ofMap).push_back(key);
+  // how far it reaches from its place: its bounds' far corner, by the matrix's largest scale
+  const Model* m = prop->model;
+  float scale = 0;
+  for (int k = 0; k < 3; ++k) scale = std::max(scale, Length(Vec3{prop->world.m[0][k], prop->world.m[1][k], prop->world.m[2][k]}));
+  propReach_ = std::max(propReach_, std::max(Length(m->boundsMin), Length(m->boundsMax)) * scale);
+}
+
+void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {
+  if (prop->cell < 0 || static_cast<size_t>(prop->cell) >= propCells_.size()) return;
+  PropCell& cell = propCells_[static_cast<size_t>(prop->cell)];
+  std::vector<uint32_t>& list = made ? cell.made : cell.ofMap;
+  for (size_t i = 0; i < list.size(); ++i)
+    if (list[i] == key) {
+      list[i] = list.back();
+      list.pop_back();
+      break;
+    }
+  prop->cell = -1;
+}
+
 void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
   for (const FramePropEvent& e : events) propEvents_.push_back(e);
 }
@@ -512,6 +572,13 @@ const Model* World::PropModel(const std::string& blueprint, const std::string& m
 void World::ApplyPropEvent(const FramePropEvent& e) {
   const bool ofMap = e.mapIndex >= 0;
   if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
+  // (out of its square's list first; it is listed again where it is now)
+  if (ofMap) {
+    UnlistProp(&props_[static_cast<size_t>(e.mapIndex)], static_cast<uint32_t>(e.mapIndex), false);
+  } else {
+    auto had = madeProps_.find(e.id);
+    if (had != madeProps_.end()) UnlistProp(&had->second, e.id, true);
+  }
   if (e.kind == FramePropEvent::Destroy) {
     if (ofMap) props_[static_cast<size_t>(e.mapIndex)].model = nullptr;
     else madeProps_.erase(e.id);
@@ -525,8 +592,14 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) placed.world.m[row][k] *= e.scale[k];
   }
-  if (ofMap) props_[static_cast<size_t>(e.mapIndex)] = placed;
-  else madeProps_[e.id] = placed;
+  if (ofMap) {
+    props_[static_cast<size_t>(e.mapIndex)] = placed;
+    ListProp(&props_[static_cast<size_t>(e.mapIndex)], static_cast<uint32_t>(e.mapIndex), false);
+  } else {
+    PlacedProp& kept = madeProps_[e.id];
+    kept = placed;
+    ListProp(&kept, e.id, true);
+  }
   ++propsChanged;
 }
 

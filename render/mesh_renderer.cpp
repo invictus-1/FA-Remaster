@@ -204,8 +204,11 @@ float4 Shade(VOut i, bool front) {
     // a slab of light that fades (the UEF's build slices): its texture's colour, see-through by
     // the texture's alpha and by how much of it is left (the instance says: its age's doing)
     float4 slab = albedoMap.Sample(samplerAniso, i.uv.xy);
-    float3 glow = look > 0.5 ? pow(max(slab.rgb, 0), 2.2) * 1.3 * (falling.w > 0 ? falling.w : 1) : slab.rgb;
-    return float4(glow, slab.a * saturate(i.color.a) * 0.7);
+    // (weak, and its lilac taken half way to a pale blue: several lie over each other at the level
+    // of the work, and what is being built must read through them - Chris, 2026-10-13)
+    float3 pale = lerp(slab.rgb, float3(0.55, 0.75, 1.0), 0.5);
+    float3 glow = look > 0.5 ? pow(max(pale, 0), 2.2) * 1.3 * (falling.w > 0 ? falling.w : 1) : pale;
+    return float4(glow, slab.a * saturate(i.color.a) * 0.28);
   }
   if (kind.y > 2.5) {
     // a shield's bubble: a faint shell in its faction's tint, stronger where it is seen edge on,

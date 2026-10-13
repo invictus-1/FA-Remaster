@@ -413,7 +413,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   game 31,762 single trees stood five game-minutes in where a few thousand groups had; the
   whole map then takes 6.0 ms a frame at 1280 x 800 instead of about 3 (21,782 models drawn).
   A fallen tree sinks a hundredth of a unit every beat until it is gone, so some hundred props
-  change every beat; `SimFrames` keeps only the newest change of a prop that waits. Not there: a wreck's sinking or
+  change every beat; `SimFrames` keeps only the newest change of a prop that waits. The scenery
+  is listed by squares of the map (32 units a side, `World::propCells_`), and each frame only
+  the squares near what the camera sees are gone through (a square widened by the largest
+  prop's reach and by 30 units for a shadow thrown into the picture): near a wreck in that game
+  4,495 props of 52 squares instead of all 30,000, 2.6 ms a frame instead of 8; the whole map
+  seen at once costs what it did. Not there: a wreck's sinking or
   burning, and anything of a remastered unit's wreck but its own model blackened.
 - What scripts make that has a mesh (the engine's `EntityViews`, `Frame::entities`): drawn as its
   mesh blueprint's model where the simulation has it, at the scale and draw scale the script
@@ -443,8 +448,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   over it (`ModelLod::frame`); and `AlphaFade` (`ModelLod::fades`): the UEF's slices of light at
   the level of the work, lilac by the game's texture, see-through, whole for two seconds and
   then fading at 0.145 a second as in the original (by `FrameProjectile::age`; the script
-  makes one every 1.2 seconds and each lives six). On a building that is built fast they still
-  pile up into a strong lilac block over what was just built: a matter for the colour pass. The other
+  makes one every 1.2 seconds and each lives six). They are drawn weak (0.28 of the texture's
+  alpha) and their lilac half way to a pale blue, so that what is being built reads through
+  them over the box's whole height (Chris, 2026-10-13: the box and the lattice are right, the
+  violet over them was too strong). The other
   effect shaders but the shields' (glass, glows) are drawn as plain models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
@@ -543,14 +550,15 @@ Known gaps, to be closed in the steps they belong to:
   poses; the running simulation gives them). With a recording, army colours are a fixed
   list (the running simulation gives the game's own).
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
-- Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
-  The symbol's name is read from the `.bp` file, so a change a mod's script makes to it is not seen.
+- Strategic icons: from a recording the symbol's name is read from the `.bp` file, so a change a
+  mod's script makes to it is not seen (a running game gives the name).
 - Blended far-away cards are not sorted by distance.
 - Shadows: a cascade leaves out what casts wholly inside the square the cascade before it covers
   (that map has it, and every surface its shadow can reach reads that map). What straddles the
   edge is still drawn in both.
-- Water: no refraction and no reflected units yet (both need drawing into textures); the fresnel term
-  is the usual bias-and-power form, where the original uses a lookup texture not yet understood.
+- Water of the original look: no refraction and no reflected units; the fresnel term is the usual
+  bias-and-power form, where the original uses a lookup texture not yet understood. (The modern
+  look's water, above, sees through and mirrors what is on screen.)
 - The map's decals (Seton's Clutch: 1,233 albedo and 1,003 normal ones). By default only the
   normal decals are drawn. The albedo decals can be (`--map-decals all`), but as drawn today they
   make the ground far busier than the game's (judged by someone who knows the map; why is not
