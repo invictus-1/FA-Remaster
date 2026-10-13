@@ -30,16 +30,17 @@
 // - the radii are the blueprint's: a radius a script has changed, or intel switched off, is not
 //   followed (the original asks the live unit); a weapon that an enhancement adds is left out,
 //   before and after the enhancement;
-// - "Defense" (0x7ec980) also reads a float of the unit blueprint at +0x458: taken here as
-//   Economy.MaxBuildDistance, how far a builder reaches. Why: the Economy block's fields end
-//   with MaxBuildDistance at its +0x7c (the field table at 0x521f00 .. 0x522095), and in Chris's
-//   picture of the original (2026-10-13) the commander's ring in the Defense colour measures 10
-//   against its omni ring of 24: its MaxBuildDistance. INFERRED from those two; where the
-//   Economy block begins in the blueprint is not read. The ring is the larger of that and the
-//   countermeasure weapons' reach.
-// - "Defense" is taken as the weapons of RangeCategory UWRC_Countermeasure and "AllMilitary" as
-//   every weapon with a range category; the original's other sources for these two and for
-//   "Miscellaneous" (blueprint fields at +0x458, +0x460, +0x468, not named yet) are left out;
+// - "Defense" (0x7ec980): half the blueprint's Defense.Shield.ShieldSize where there is one (the
+//   float at +0x458, times 0.5: a shield's radius), else the weapons as below. "Miscellaneous"
+//   (0x7ed430): AI.StagingPlatformScanRadius (+0x468) where it is above 0, else
+//   AI.GuardScanRadius (+0x460). (The fields' names are the engine track's, from the blueprint's
+//   layout: docs/engine-answers.md, "ui 15".) The game's own scripts make the Miscellaneous ring
+//   the BUILD RANGE of engineers and commanders: /lua/system/blueprints-units.lua sets
+//   StagingPlatformScanRadius = Economy.MaxBuildDistance + the footprint's size + 1 for them and
+//   adds the category OVERLAYMISC, and the game's filter list gives that ring its colour.
+// - "Defense" without a shield is taken as the weapons of RangeCategory UWRC_Countermeasure and
+//   "AllMilitary" as every weapon with a range category (the original's weapon test for these
+//   two is not read to the end);
 // - switched-on filters show the player's own units only (whose units the original shows is
 //   not read).
 #include <algorithm>
@@ -150,10 +151,24 @@ bool Measure(lua_State* L, const std::string& blueprint, const std::string& filt
         lua_pop(L, 1);
       }
     }
-    if (filter == "Defense") {  // and how far a builder reaches (see the head of this file)
-      lua_pushstring(L, "Economy");
+    if (filter == "Defense") {  // a shield's radius goes before the weapons (0x7ec980)
+      float shield = 0;
+      lua_pushstring(L, "Defense");
       lua_rawget(L, bp);
-      if (lua_istable(L, -1)) *outer = std::max(*outer, Field(L, lua_gettop(L), "MaxBuildDistance"));
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "Shield");
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) shield = Field(L, lua_gettop(L), "ShieldSize") * 0.5f;
+      }
+      if (shield > 0) *inner = 0, *outer = shield;
+    }
+  } else if (filter == "Miscellaneous") {  // (0x7ed430; the build range, by the game's scripts)
+    lua_pushstring(L, "AI");
+    lua_rawget(L, bp);
+    if (lua_istable(L, -1)) {
+      int ai = lua_gettop(L);
+      *outer = Field(L, ai, "StagingPlatformScanRadius");
+      if (!(*outer > 0)) *outer = Field(L, ai, "GuardScanRadius");
     }
   } else {
     lua_pushstring(L, "Intel");

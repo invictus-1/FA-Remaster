@@ -367,7 +367,21 @@ Not explained by me in the same picture: a thick red ring at 18.6 on that scale 
 fire weapons say 22), a thin yellow one at 12.9 and a wide green one at 51.7. If you know what a
 live unit answers for its weapons' reach (unit vtable +0x44: class, min, max), that may be it.
 
-**Status:** open.
+**Status:** answered by the engine track within the half hour (`docs/engine-answers.md`,
+"ui 15", with the table of where every block of the unit blueprint begins): +0x458 is
+Defense.Shield.ShieldSize, +0x460 AI.GuardScanRadius, +0x468 AI.StagingPlatformScanRadius; the
+Economy block begins at +0x4e8, so MaxBuildDistance is +0x564 and "Defense" does not read it.
+My guess was wrong and is taken out. Built in its place (ui/user/range_rings.cpp): "Defense" =
+half the shield's size where there is one (the extractor multiplies by 0.5), else the weapons;
+"Miscellaneous" = StagingPlatformScanRadius where above 0, else GuardScanRadius. And the build
+range is found: the game's own scripts (/lua/system/blueprints-units.lua) set
+StagingPlatformScanRadius = MaxBuildDistance + the footprint's size + 1 for engineers and
+commanders and put them into OVERLAYMISC, so the Miscellaneous ring IS the build range: 12 for
+the UEF commander. With 12 as the scale, his picture's thick red ring is 22.3: the direct fire
+weapons' 22. (MaxBuildDistance at +0x564 is read by the world view's own drawing at 0x853f56:
+a plain circle round each selected builder in the "buildanchored" mode.) Still not explained in
+the picture: the two thin rings (yellow at 15.4, dark red at 28.6 on that scale: each 1.28 times
+a thick one) and the wide green one at 62. Thank you.
 
 ## To the renderer track
 
