@@ -44,7 +44,7 @@ const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPer
 const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
 // Turning with the keys (the same frame function): Insert and Delete, 10 a frame, twice that with
 // Ctrl; with Space and the mouse only below a zoom of 125 (0xf57aa0).
-const int kKeySpace = 32, kKeyInsert = 324, kKeyDelete = 127;
+const int kKeySpace = 32, kKeyInsert = 324, kKeyDelete = 127, kKeyShift = 306;
 const float kKeyTurn = 10.0f, kKeyTurnFast = 2.0f, kSpinBelowZoom = 125.0f;
 
 // A camera looks at a place on the map (`focus`). Its `zoom` is how much of the world it shows
@@ -457,8 +457,13 @@ class WorldView : public Control {
     // orders, and while a building is being placed its ghost where the mouse points (by the
     // picture before this one), green where it can stand.
     WorldScene scene;
-    std::vector<WorldGhost> ordered;
-    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered);
+    // (The selected units' orders show while Shift is held, as in the original: the lines from
+    // order to order, and a blue outline round the site of every building among them.)
+    std::vector<WorldGhost> ordered, queued;
+    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued);
+    if (sim) {
+      for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff2a8cffu, &scene.lines);
+    }
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
@@ -486,6 +491,9 @@ class WorldView : public Control {
     }
     // (The building about to be placed comes first: the range rings below take it from there.)
     const bool placing = !scene.ghosts.empty();
+    // Round each building being placed, the outline of the ground it takes: green where it can
+    // stand, red where not (the guide of the original, by Chris's pictures of it).
+    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, *sim, g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
     scene.ghosts.insert(scene.ghosts.end(), ordered.begin(), ordered.end());
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
@@ -624,6 +632,31 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     PanCamera(GetCameraObject(L, cameraName), e.x - lastX_, e.y - lastY_, r.x1 - r.x0);
     lastX_ = e.x, lastY_ = e.y;
+  }
+  // The outline of the ground a building takes at a site, as lines on the ground: a rectangle of
+  // the building's room (BuildSpacingOf: in a row the outlines touch, as in the original), each
+  // side in pieces of at most one map unit so that it follows the ground.
+  void SiteOutline(lua_State* L, Sim& sim, const WorldGhost& site, uint32_t color, std::vector<WorldLine>* lines) {
+    float sizeX = 1, sizeZ = 1;
+    BuildSpacingOf(L, site.blueprint, &sizeX, &sizeZ);
+    const float x0 = site.position[0] - sizeX / 2, z0 = site.position[2] - sizeZ / 2;
+    auto side = [&](float ax, float az, float bx, float bz) {
+      const int pieces = std::max(1, static_cast<int>(std::ceil(std::max(std::fabs(bx - ax), std::fabs(bz - az)))));
+      for (int i = 0; i < pieces; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(pieces), t1 = static_cast<float>(i + 1) / static_cast<float>(pieces);
+        WorldLine line;
+        line.a[0] = ax + (bx - ax) * t0, line.a[2] = az + (bz - az) * t0;
+        line.b[0] = ax + (bx - ax) * t1, line.b[2] = az + (bz - az) * t1;
+        line.a[1] = sim.map() ? sim.map()->TerrainHeight(line.a[0], line.a[2]) : site.position[1];
+        line.b[1] = sim.map() ? sim.map()->TerrainHeight(line.b[0], line.b[2]) : site.position[1];
+        line.color = color;
+        lines->push_back(line);
+      }
+    };
+    side(x0, z0, x0 + sizeX, z0);
+    side(x0 + sizeX, z0, x0 + sizeX, z0 + sizeZ);
+    side(x0 + sizeX, z0 + sizeZ, x0, z0 + sizeZ);
+    side(x0, z0 + sizeZ, x0, z0);
   }
   // Building in a row: a left press in a build mode marks the first site; let go on the spot, the
   // building is ordered there; let go elsewhere, one is ordered on every free site of the row

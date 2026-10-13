@@ -202,7 +202,11 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
 // each unit to where its orders take it, coloured by the kind of order).
 // `ghosts` (may be null): the buildings the player's units, selected or not, have been ordered to
 // build and have not begun, each where it will stand.
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr);
+// `queueShown`: the selected units' orders are to be seen (the original shows them while Shift is
+// held): only then `lines` are given, and `queued` (may be null) gets the sites of the buildings
+// in those orders, begun or not.
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
+                       bool queueShown = true, std::vector<WorldGhost>* queued = nullptr);
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);

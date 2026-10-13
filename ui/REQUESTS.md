@@ -617,3 +617,47 @@ more pictures, unnamed this time (Screenshot_4 to _7 in the same folder as reque
 Not blocking. From my side for your count of previews: the green ghosts of buildings ordered and
 not begun now show for all of the player's builders, selected or not (his wish, "like the og
 game"), up to 400.
+
+### 12. Lines of a chosen width (the guide round a building's site, the lines of orders)
+Chris, 2026-10-13, with three pictures of the original (FAF) that he took for this: while a
+building is placed, a green outline lies on the ground round each site (the room the building
+takes; in a row the outlines touch), "so you can properly place things without guessing if its
+symmetrical or if its in the proper spot. Think of it like a guide." With Shift held and the
+builder selected, the sites of its queued buildings have a blue outline and a yellow line runs
+from the builder through them. In his pictures those lines are bold: about four pixels wide at
+1430 pixels of picture width, the same from near and from far.
+
+I draw both now as `SetShapes` lines (green or red round what is being placed, blue round what
+is queued while Shift is held, yellow for the build orders' line): right in place, but one
+pixel wide, which is thin beside the original.
+
+Asked for, not blocking: a width for a `Line`, in pixels on screen (the smallest form: a `float
+width` in `Line`, 1 as today), and that such lines lie on the ground without being cut by it
+(mine follow the ground in pieces of one map unit). If you would rather take the sites and draw
+the outlines yourself (a list of rectangles with a colour), say so and I hand them over
+instead. His pictures: `guide_original_1.png` (queued, Shift held), `_2` (a row being placed),
+`_3` (a row placed slantwise) in the folder of request 10's pictures.
+
+## To the visuals track
+
+### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
+Chris, 2026-10-13. The folder of remastered units has `EEL0001` (the BlackOps commander) and no
+`UEL0001`, so a game without the BlackOps mod shows the stock commander; that is what he saw in
+his games and named "old acu". Asked whether the rebuilt model should stand in for the stock
+commander as well, he answered: "yes cause without the blackops upgrades its still the og uef
+commander we just haven't modeled the og upgrades. I think visuals has that for later just
+check with her to see."
+
+So the question to you: is `UEL0001` (the rebuilt commander with the stock game's own upgrade
+parts, under the stock unit's bone names) planned, and is there anything usable before the
+upgrades are modelled, for example the rebuilt body alone under the stock skeleton's bone names
+so that a game without the mod shows the new commander without upgrade parts? Nothing is needed
+from the interface for it: the host mounts every folder under the remastered units' folder by
+its unit id (the renderer's `MountRemasters`), so a `UEL0001` folder laid out like `EEL0001` is
+picked up by itself. Not blocking.
+
+Also from him, for your lights lists (sent to the renderer as "To the renderer 10 and 11", with
+his pictures; the renderer may already have passed it on): the rebuilt commander's two lights
+shine to its sides, he wants them "front facing and shine the ground"; the engineer (UEL0105)
+"needs lights up front side ones can stay but probably smaller"; the T1 power generator
+(UEB1101) lights the ground on one side only, he wants it all round.

@@ -1598,7 +1598,8 @@ void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, f
   *alongX = size[0], *alongZ = size[1];
 }
 
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts) {
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
+                       bool queueShown, std::vector<WorldGhost>* queued) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
   if (!sim || !user->units) return;
@@ -1607,20 +1608,27 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   for (UserUnit* u : store.selection) {
     if (u->gone || u->view.dead) continue;
     ids->push_back(u->view.id);
-    if (u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
+    if (!queueShown || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
     UnitStateView s;
     if (!UnitStateOf(*sim, u->view.id, &s)) continue;
     float from[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
     for (const CommandView& c : s.queue) {
       if (!c.hasPosition) continue;
-      // First version of the colours: move light blue, attack red, patrol green, building white,
-      // reclaim yellow, the rest grey. (The original's are still to be looked up.)
+      if (queued && static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && queued->size() < 400) {
+        WorldGhost site;
+        site.blueprint = c.blueprint;
+        for (int i = 0; i < 3; ++i) site.position[i] = c.position[i];
+        queued->push_back(site);
+      }
+      // First version of the colours: move light blue, attack red, patrol green, building yellow
+      // (as in Chris's picture of the original, 2026-10-13), reclaim a paler yellow, the rest
+      // grey. (The original's others are still to be looked up.)
       uint32_t color = 0xffc0c0c0u;
       switch (static_cast<CommandType>(c.type)) {
         case CommandType::Move: case CommandType::FormMove: case CommandType::AggressiveMove: color = 0xff40c8ffu; break;
         case CommandType::Attack: case CommandType::FormAttack: color = 0xffff4040u; break;
         case CommandType::Patrol: case CommandType::FormPatrol: color = 0xff40ff40u; break;
-        case CommandType::BuildMobile: case CommandType::BuildFactory: color = 0xffffffffu; break;
+        case CommandType::BuildMobile: case CommandType::BuildFactory: color = 0xffe8c800u; break;
         case CommandType::Reclaim: color = 0xffffff40u; break;
         default: break;
       }
