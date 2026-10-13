@@ -3,6 +3,52 @@
 What the renderer (and Chris, through it) asks of the visuals track. The visuals track answers in its own
 file (`visuals\renderer_reply_lod.md` in the lab, numbered sections) and by message. Newest first.
 
+## 2. Lights lists and one mesh, from Chris's games at night (2026-10-13, not blocking)
+
+**Who asks:** Chris, through the interface and the renderer (his words and pictures:
+`ui/REQUESTS.md` "To the renderer 10" and "11"; the pictures are in the lab under
+`_scratch\ui\chris_20261013\`). The renderer draws each of these as its `<ID>_lights.bp` says (checked
+lamp by lamp in the viewer: `moho64view --remasters <work> --map ... --time-of-day 23 --place <id>
+--pitch 75 --heading 0`, and `MOHO64_DEBUG_LAMPS=1` prints every beam's direction beside the way the
+unit faces). So these are the lists', not the drawing's:
+
+a. **EEL0001, the rebuilt commander** ("commander lights are well wonky it should be front facing and
+   shine the ground"): its two `Head` lamps have `Direction = { 0.92, 0, 0.39 }` and `{ -0.92, 0,
+   0.39 }`, that is 67 degrees out to each side. Wanted: both ahead (`{ 0, y, 1 }`, tilted a little
+   down so the ground in front is lit), as a commander's eyes would look.
+b. **UEB0101, the T1 land factory** ("Random flashlight on factory"): the first entry,
+   `Lf_pad_lamp.002`, is a `head` beam of radius 90 from the middle of the build pad pointing
+   diagonally out (`{ 0.70, 0, 0.72 }`): at night it is a searchlight lying across the ground to the
+   front right, pointing at nothing. A pad lamp is a marker, not a headlight: all-round and small, or
+   left out. He also circled the lamp's white lens in the middle of the pad as a stray white point.
+c. **UEB1101, the T1 power generator** ("the light only shines in one direction ... since the whole
+   thing is lit it should all pin together all side"): the two `window` lights are both on `B03` and
+   both point to -z, so the ground is lit on one side only. Wanted: the same all round (a window
+   light per petal, or one all-round light of that strength in place of them).
+d. **UEL0201, the tank** ("phantom light on the side"): `S_tur_visorlamp_lens` on the turret has
+   `Direction = { 0.17, 0.44, -0.88 }`, backward and upward: it lays a faint patch on the ground
+   behind the tank. Wanted: ahead with the turret, or not a beam.
+e. **UEL0105, the engineer** ("needs lights up front, side ones can stay but probably smaller"): its
+   list has three beams ahead and none to the sides, and the viewer draws them ahead, yet his game
+   showed a cone to each side. That one is being looked at on the renderer's side; no change asked
+   of you until it is found.
+f. **UEB0101 while it upgrades** ("Texture glitch while upgrading flickering"): the game plays the
+   factory's own upgrade animation, which moves parts of the T1 model. On the remastered model a
+   tall block with a black top then stands on the left of the pad, and the top of the middle tower
+   shows a dark triangle; both flicker (faces lying in the same plane, it seems). Wanted: a look at
+   the parts that ride on the upgrade animation's bones (`moho64view --place ueb0101 --bones`
+   lists the bones; the animation is the blueprint's `AnimationUpgrade`).
+
+**Also from him, for your knowledge:** the headlights' strength and glow are "perfect"; the
+army-coloured glow on the ground was a fifth too strong and is weakened on the renderer's side.
+The stock commander UEL0001 has no lights because it has no remaster; whether the rebuilt model
+should also stand in for UEL0001 is his to say.
+
+**A rule that would settle a, b and d at the source:** a lamp's beam direction taken from which
+way the unit drives or the turret points, not from which way the glowing piece's face looks.
+
+**Status:** asked 2026-10-13.
+
 ## 1. The rebuilt UEF commander (EEL0001) set up for the game (2026-10-12, Chris's wish, not blocking)
 
 **Who asks:** Chris, through the renderer: "there should be a new uef model ... I'm pretty sure visual chat

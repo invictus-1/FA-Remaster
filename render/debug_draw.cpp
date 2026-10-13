@@ -1,5 +1,7 @@
 #include "debug_draw.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace render {
@@ -50,11 +52,16 @@ bool DebugDraw::Init(std::string* error) {
   pd.cull = gfx::Cull::None;
   lines_ = device_->CreatePipeline(pd, error);
   if (!lines_) return false;
+  pd.name = "wide lines";
+  pd.topology = gfx::Topology::Triangles;
+  wide_ = device_->CreatePipeline(pd, error);
+  if (!wide_) return false;
   gfx::BufferDesc bd;
   bd.stride = sizeof(Vertex);
   bd.dynamic = true;
   solidBuffer_ = device_->CreateBuffer(bd);
   lineBuffer_ = device_->CreateBuffer(bd);
+  wideBuffer_ = device_->CreateBuffer(bd);
   return true;
 }
 
@@ -62,6 +69,8 @@ void DebugDraw::Line(Vec3 a, Vec3 b, uint32_t color) {
   lineVertices_.push_back({a, {}, color});
   lineVertices_.push_back({b, {}, color});
 }
+
+void DebugDraw::WideLine(Vec3 a, Vec3 b, uint32_t color, float pixels) { wide_lines_.push_back({a, b, color, pixels}); }
 
 // Faces wound counter-clockwise seen from outside (in the right-handed world).
 void DebugDraw::Box(Vec3 center, Vec3 half, uint32_t color) {
@@ -88,6 +97,32 @@ void DebugDraw::Flush(const View& view) {
     device_->SetVertexBuffer(solidBuffer_);
     device_->Draw(static_cast<uint32_t>(solidVertices_.size()));
     solidVertices_.clear();
+  }
+  if (!wide_lines_.empty()) {
+    // each a ribbon across the line of sight, as wide at either end as its pixels are there
+    const float perPixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1));
+    for (const Wide& w : wide_lines_) {
+      const Vec3 along = w.b - w.a;
+      Vec3 side = Cross(along, (w.a + w.b) * 0.5f - view.eye);
+      const float length = Length(side);
+      if (length < 1e-6f) continue;
+      side = side * (1 / length);
+      const float ha = 0.5f * w.pixels * perPixel * Length(w.a - view.eye), hb = 0.5f * w.pixels * perPixel * Length(w.b - view.eye);
+      const Vec3 sa = side * ha, sb = side * hb;
+      // (each end half a width longer, so that two lines meeting at a corner close it)
+      const Vec3 on = along * (1 / std::max(Length(along), 1e-6f));
+      const Vec3 a = w.a - on * ha, b = w.b + on * hb;
+      for (Vec3 p : {a - sa, a + sa, b + sb, a - sa, b + sb, b - sb}) wideVertices_.push_back({p, {}, w.color});
+    }
+    wide_lines_.clear();
+  }
+  if (!wideVertices_.empty()) {
+    device_->SetPipeline(wide_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->UpdateBuffer(wideBuffer_, wideVertices_.data(), static_cast<uint32_t>(wideVertices_.size() * sizeof(Vertex)));
+    device_->SetVertexBuffer(wideBuffer_);
+    device_->Draw(static_cast<uint32_t>(wideVertices_.size()));
+    wideVertices_.clear();
   }
   if (!lineVertices_.empty()) {
     device_->SetPipeline(lines_);

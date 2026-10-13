@@ -133,12 +133,14 @@ float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b) { return Draw01(seed, a
 float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke) {
   if (rain < 0.7f || seconds < 0) return 0;
   // time in stretches of seven seconds; a stretch may have one stroke, the likelier the harder it rains
+  // (in a full storm about one in three stretches, a stroke every 22 seconds or so: it was four in
+  // five, and Chris found that too often, 2026-10-13)
   float flash = 0;
   const int64_t now = static_cast<int64_t>(seconds / 7);
   for (int64_t stretch = now - 1; stretch <= now; ++stretch) {
     if (stretch < 0) continue;
     const uint32_t n = static_cast<uint32_t>(stretch);
-    if (Draw01(seed, n, 31) > (rain - 0.6f) * 2) continue;
+    if (Draw01(seed, n, 31) > (rain - 0.6f) * 0.8f) continue;
     const double struck = static_cast<double>(stretch) * 7 + Draw01(seed, n, 47) * 6.5;
     const float since = static_cast<float>(seconds - struck);
     if (since < 0 || since > 0.6f) continue;

@@ -4,6 +4,44 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 12: a width for a line — there (2026-10-13)
+
+`WorldPicture::Line` has a `float width = 1`, in pixels on the screen, the same from near and from
+far. 1 (or less than 1.25) is the hairline as before; anything wider is drawn as a flat ribbon
+turned to the eye, each end half a width longer so that two lines meeting at a corner close it.
+Nothing else changes: same colours (0xAARRGGBB), still lifted 0.15 above its end points and hidden
+by what stands in front of it. A long line is still straight between its two ends, so over uneven
+ground keep handing it over in pieces of one map unit as you do; the pieces join without gaps.
+Seen in the viewer (`--ranges`): a row of site outlines four pixels wide, from zoom 45 and 160.
+I would rather you keep the rectangles on your side: you know what is placed and queued.
+
+## ui, to the renderer 10 and 11: Chris's notes on lights at night (2026-10-13)
+
+Each lamp was checked in the viewer against its unit's `<ID>_lights.bp`. Where the drawing follows
+the list, the wish went to the visuals track (`docs/render-requests-visuals.md`, 2).
+
+| Chris's note | What it is | Whose |
+|---|---|---|
+| "Random flashlight on factory" (UEB0101) | the list makes a pad lamp a headlight beam of radius 90, pointing diagonally out; the white point is that lamp's lens | visuals (asked) |
+| "Texture glitch while upgrading flickering" | the game plays the T1 factory's own upgrade animation; the remastered model's parts on those bones stand out as a block and flicker | visuals (asked) |
+| "phantom light on the side" (tank) | a turret lamp whose direction in the list is backward and up | visuals (asked) |
+| "we need acu lights" (stock UEL0001) | no remaster, so no lights list; the rebuilt one is EEL0001 | Chris / visuals |
+| engineer lights to both sides, none ahead (UEL0105) | NOT explained: the list has three beams ahead, and the viewer draws them ahead in games (800 tread lamps checked in two M28 games, all ahead). See below | renderer, open |
+| pgen lights the ground on one side | the list has its two window lights on one petal, both pointing one way | visuals (asked) |
+| "Lightning needs to be toned down on frequency" | done: in a full storm a stroke about every 22 seconds (was every 9) | renderer, done |
+| the commander's lamps go left and right (EEL0001) | the list points its two head lamps 67 degrees out to each side | visuals (asked) |
+| "the red glow which is the army color is a bit strong ... maybe 20%" | done: 0.8 of what it was; headlights untouched | renderer, done |
+
+**What I need from you for the engineer:** one run of your game with the environment variable
+`MOHO64_DEBUG_LAMPS=tread` set (it prints to stderr, up to 400 lines like `render: lamp on l_tread of
+a model with 13 bones: rest ..., turned ... (posed), beam x y z, the unit faces x y z`), with a UEF
+engineer of the player's standing at night as in Chris's picture (built by his factory, after it
+has built something). In the viewer `beam` always equals `the unit faces` for the two tread lamps.
+If your lines show another `turned` than `rest` (0, +-0.71, 0, 0.71), the pose your game hands over
+for that unit differs from what the viewer gets, and the lines say how.
+
+More previews at once (up to 400 ghosts): fine, nothing to change here.
+
 ## ui, to the renderer 9: the sea's white points from far up, and the standing hours (2026-10-13)
 
 **The white points (Chris: "too sparkly at any time of day").** Found and gone. They were not the

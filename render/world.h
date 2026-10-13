@@ -14,6 +14,7 @@
 // Between Begin and the next Begin the world also answers where things are on the screen and what
 // is under a point of it (Project, GroundAt, UnitAt, UnitsIn).
 #pragma once
+#include <cstdlib>
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -138,6 +139,7 @@ class World {
   struct Line {
     Vec3 a, b;
     uint32_t color = 0xffffffffu;
+    float width = 1;  // pixels on the screen
   };
   struct Ring {
     Vec3 centre;
@@ -286,6 +288,9 @@ class World {
   void AddBrackets(int kind, Vec3 position, const Quat& orientation, float halfX, float halfZ);
   int lampUnits_ = 0, lampUnitsBefore_ = 0;  // units whose lamps were lit this frame, and the frame before
   std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
+  // MOHO64_DEBUG_LAMPS=<part of a bone's name> (or 1 for every bone): world.cpp, AddLamps
+  const char* debugLamps_ = std::getenv("MOHO64_DEBUG_LAMPS");
+  int debugLampsTold_ = 0;
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
   double clock_ = 0;
 };

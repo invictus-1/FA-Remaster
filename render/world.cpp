@@ -287,10 +287,22 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     Vec3 tint = light.color;
     if (light.hull && armyColor) {
       tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
-      tint = tint * (1 / std::max({tint.x, tint.y, tint.z, 0.05f}));
+      // (a fifth weaker than at first: Chris, 2026-10-13, "the red glow which is the army color is a bit strong")
+      tint = tint * (0.8f / std::max({tint.x, tint.y, tint.z, 0.05f}));
     }
     if (light.cone > 0) {
       const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
+      // (MOHO64_DEBUG_LAMPS=<part of a bone's name>, or 1: the first beams whose lamp rides on such a bone, with what turned them,
+      // to find a lamp that shines the wrong way in a game)
+      if (debugLamps_ && light.bone >= 0 && debugLampsTold_ < 400 &&
+          (debugLamps_[0] == '1' || model->bones[static_cast<size_t>(light.bone)].name.find(debugLamps_) != std::string::npos)) {
+        ++debugLampsTold_;
+        const ModelBone& rest = model->bones[static_cast<size_t>(light.bone)];
+        const Vec3 forward = Rotate(orientation, Vec3{0, 0, 1});
+        fprintf(stderr, "render: lamp on %s of a model with %zu bones: rest %.2f %.2f %.2f %.2f, turned %.2f %.2f %.2f %.2f (%s), beam %.2f %.2f %.2f, the unit faces %.2f %.2f %.2f\n",
+                rest.name.c_str(), model->bones.size(), rest.rotation.x, rest.rotation.y, rest.rotation.z, rest.rotation.w, boneTurn.x, boneTurn.y, boneTurn.z, boneTurn.w,
+                pose ? "posed" : "at rest", along.x, along.y, along.z, forward.x, forward.y, forward.z);
+      }
       lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow);
       // the beam in the air: faint in clear night air, plainer in rain, snow and fog
       const float air = 0.03f + 0.16f * fog + 0.08f * rain + 0.09f * snow;
@@ -494,7 +506,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
   auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
   const Vec3 lift{0, 0.15f, 0};
-  for (const Line& l : lines) draw.Line(l.a + lift, l.b + lift, swapped(l.color));
+  for (const Line& l : lines) {
+    if (l.width > 1.25f) draw.WideLine(l.a + lift, l.b + lift, swapped(l.color), l.width);
+    else draw.Line(l.a + lift, l.b + lift, swapped(l.color));
+  }
   for (const Ring& r : rings) {
     // along the ground, in as many pieces as its size asks for
     const int pieces = std::clamp(static_cast<int>(r.radius * 2), 24, 160);
