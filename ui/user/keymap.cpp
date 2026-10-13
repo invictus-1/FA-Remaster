@@ -423,6 +423,14 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     UserState::From(L)->RunString(rest, text);
     return;
   }
+  if (Upper(name) == "UI_SELECTBYCATEGORY") {
+    SelectByCategoryCommand(L, rest);
+    return;
+  }
+  if (Upper(name) == "UI_EXPANDCURRENTSELECTION") {
+    ExpandCurrentSelection(L);
+    return;
+  }
   if (Upper(name) == "UI_RENDERUNITBARS") {
     RenderUnitBars(L, rest);
     return;

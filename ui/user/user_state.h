@@ -156,6 +156,14 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
 uint32_t UnitUnderMouse(lua_State* L);
 std::string ArmyColorOf(lua_State* L, int army);
+// The world camera (worldview.cpp): show a box of the world, at once or in `seconds` (the
+// original's camera slot 13, FA exe 0x7a83e0); the entity ids of the units in the main world
+// view's picture (false without a picture; then PlaceInCameraView says roughly whether a place
+// is in view); the place of the world under the mouse (false without a world view).
+void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], float seconds);
+bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids);
+bool PlaceInCameraView(lua_State* L, const float place[3]);
+bool MouseWorldPlace(lua_State* L, float out[3]);
 // How the unit under the mouse is to be marked (the original's choice of bracket, FA exe
 // 0x7fd3f0): 0 not at all (no such unit, or it is selected and has its mark already), 1 the
 // player's own or an ally's, 2 an enemy's, 3 a neutral's.
@@ -167,6 +175,12 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// The console commands the game's key map binds its selection keys to (user_units.cpp):
+// UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
+// words> (FA exe 0x866a30) and UI_ExpandCurrentSelection (0x866970: the player's units in view
+// of the kinds that are selected join the selection; no walls, no building being upgraded).
+void SelectByCategoryCommand(lua_State* L, const std::string& arguments);
+void ExpandCurrentSelection(lua_State* L);
 // Select the player's units of the same kind (blueprint) as `unit` among those entity ids; with
 // `add` they join the selection. False when `unit` is not one of the player's.
 bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);

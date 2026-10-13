@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1850 --log out.log
+--            --frames 2000 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
 local failed = 0
@@ -82,11 +82,17 @@ local function run()
 
     -- the world view and the camera
     local view = import("/lua/ui/game/worldview.lua").viewLeft
+    local cam = GetCamera("WorldCamera")
+    -- the game's script opens on the commander (gamemain.StartupSequence: UIZoomTo(avatars, 1));
+    -- the checks after this start from the camera's own first state
+    local opened = cam:GetFocusPosition()
+    check("the game opens with the camera on the commander, from a zoom of 40",
+        string.format("%.1f", cam:GetZoom()) == "40.0" and math.abs(opened[1] - pos[1]) < 1 and math.abs(opened[3] - pos[3]) < 1, true)
+    cam:Reset()
     local s = view:Project(pos)
     moho64ui_MouseMove(s.x, s.y)
     local w = GetMouseWorldPos()
     check("screen and world agree", math.abs(w[1] - pos[1]) < 0.5 and math.abs(w[3] - pos[3]) < 0.5, true)
-    local cam = GetCamera("WorldCamera")
     check("the same camera object for a name", GetCamera("WorldCamera") == cam, true)
     local saved = cam:SaveSettings()
     local zoom = cam:GetZoom()
@@ -299,6 +305,71 @@ local function run()
     moho64ui_MouseMove(1100, 440)
     moho64ui_Key(32, "", "up")
     check("from far out Space and the mouse do not turn it", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+
+    -- selecting by category (the keys for "all engineers", "nearest idle engineer", ...), adding
+    -- to the selection, and the camera going to units
+    local function count() return table.getn(GetSelectedUnits() or {}) end
+    local at = cdr:GetPosition()
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, false, false, false)
+    sel = GetSelectedUnits()
+    check("UISelectionByCategory selects the commander by its category", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    UISelectionByCategory("NAVAL", false, false, false, false)
+    check("a category nothing is in selects nothing", count(), 0)
+    UISelectionByCategory("NAVAL", true, false, false, false)
+    check("nothing found leaves nothing selected", count(), 0)
+    AddSelectUnits({cdr})
+    check("AddSelectUnits adds to the selection", count(), 1)
+    UISelectionByCategory("NAVAL", true, false, false, false)
+    check("adding nothing keeps the selection", count(), 1)
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, false, false, true)
+    check("with mustBeIdle only when it has nothing to do", count() == 1, cdr:IsIdle())
+    SelectUnits(nil)
+    UISelectionByCategory("ALLUNITS", false, false, true, false)
+    check("nearestToMouse selects one unit", count(), 1)
+    cam:SnapTo(at, nil, 60)
+    WaitSeconds(0.2)
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, true, false, false)
+    check("in view: the commander on screen is found", count(), 1)
+    cam:SnapTo({at[1] > 512 and at[1] - 300 or at[1] + 300, at[2], at[3]}, nil, 60)
+    WaitSeconds(0.2)
+    UISelectionByCategory("COMMAND", false, true, false, false)
+    check("in view: off screen it is not", count(), 0)
+    UIZoomTo({cdr}, 0)
+    local zf = cam:GetFocusPosition()
+    check("UIZoomTo shows a unit from a zoom of 40", string.format("%.1f", cam:GetZoom()), "40.0")
+    check("with the unit in the middle", math.abs(zf[1] - at[1]) < 0.01 and math.abs(zf[3] - at[3]) < 0.01, true)
+    cam:SnapTo(at, nil, 300)
+    UIZoomTo({cdr}, 0.5)
+    WaitSeconds(0.1)
+    local midway = cam:GetZoom()
+    WaitSeconds(0.7)
+    check("with seconds the camera takes that time", midway > 60 and midway < 300 and string.format("%.1f", cam:GetZoom()) == "40.0", true)
+    SelectUnits(nil)
+    cam:SnapTo(at, nil, 300)
+    UISelectAndZoomTo(cdr, 0)
+    sel = GetSelectedUnits()
+    check("UISelectAndZoomTo selects the unit", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    check("and shows it from near", cam:GetZoom() > 40 and cam:GetZoom() < 50, true)
+    -- the console commands the selection keys are bound to
+    check("Ctrl-B is bound to the command", moho64ui_KeyMapAction("Ctrl-B"), "UI_SelectByCategory ENGINEER")
+    SelectUnits(nil)
+    ConExecute("UI_SelectByCategory COMMAND")
+    check("UI_SelectByCategory selects by category", count(), 1)
+    ConExecute("UI_SelectByCategory +excludeengineers LAND MOBILE")
+    check("+excludeengineers leaves the commander out", count(), 0)
+    ConExecute("UI_SelectByCategory LAND MOBILE")
+    check("words side by side narrow the category", count(), 1)
+    SelectUnits(nil)
+    cam:SnapTo(at, nil, 300)
+    ConExecute("UI_SelectByCategory +nearest +goto COMMAND")
+    check("+nearest +goto selects it and the camera goes there", count() == 1 and cam:GetZoom() > 40 and cam:GetZoom() < 50, true)
+    ConExecute("UI_ExpandCurrentSelection")
+    check("UI_ExpandCurrentSelection keeps what is selected", count(), 1)
+    SelectUnits(nil)
+    cam:Reset()
 
     -- the life bars over units: off until the player switches them on (ours); the scripts' own
     -- "false" / "true" put them away and give back what the player chose
