@@ -22,7 +22,7 @@ cbuffer Shafts : register(b2) {
 struct VOut {
   float4 position : SV_Position;
   float2 at : TEXCOORD0;  // x: -1..1 across; y: 0 at the lamp .. 1 at the far end
-  float3 color : TEXCOORD1;
+  float4 color : TEXCOORD1;  // w: 1 = a bolt's piece (no fading along it)
 };
 
 VOut VS(uint id : SV_VertexID) {
@@ -35,7 +35,7 @@ VOut VS(uint id : SV_VertexID) {
   VOut o;
   o.position = mul(viewProj, float4(p + side * (uv.x * lerp(s.from.w, s.to.w, uv.y)), 1));
   o.at = uv;
-  o.color = s.color.rgb;
+  o.color = s.color;
   return o;
 }
 
@@ -43,7 +43,8 @@ float4 PS(VOut i) : SV_Target {
   float across = saturate(1 - abs(i.at.x));
   float along = 1 - i.at.y;
   // (the far end is wider: the same light over more air, so it thins twice over)
-  return float4(i.color * (across * across * across * along * along * saturate(i.at.y * 12 + 0.25)), 1);
+  if (i.color.w > 0.5) return float4(i.color.rgb * (across * across), 1);
+  return float4(i.color.rgb * (across * across * across * along * along * saturate(i.at.y * 12 + 0.25)), 1);
 }
 )hlsl";
 
@@ -65,6 +66,10 @@ bool Shafts::Init(std::string* error) {
 
 void Shafts::Add(Vec3 from, Vec3 to, float halfWidthFrom, float halfWidthTo, Vec3 color) {
   shafts_.push_back({{from.x, from.y, from.z, halfWidthFrom}, {to.x, to.y, to.z, halfWidthTo}, {color.x, color.y, color.z, 0}});
+}
+
+void Shafts::AddBolt(Vec3 from, Vec3 to, float halfWidth, Vec3 color) {
+  shafts_.push_back({{from.x, from.y, from.z, halfWidth}, {to.x, to.y, to.z, halfWidth}, {color.x, color.y, color.z, 1}});
 }
 
 void Shafts::Draw(const View& view) {

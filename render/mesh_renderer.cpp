@@ -107,7 +107,9 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     float size = length(float3(n.row0.x, n.row1.x, n.row2.x)) / kind3.y;  // its height in the world
     float beat = dot(float2(n.row0.w, n.row2.w), float2(0.11, 0.07));
     float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
-    float gust = 0.35 + 0.9 * falling.x + 0.3 * falling.y;
+    // (it comes in gusts that run across the land with the wind)
+    float2 foot = float2(n.row0.w, n.row2.w);
+    float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
   }
   o.position = mul(viewProj, float4(o.world, 1));

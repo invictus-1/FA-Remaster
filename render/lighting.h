@@ -16,6 +16,10 @@ inline const char kLightingShaderBlock[] = R"hlsl(
 #ifndef SURFACE_SNOW
 #define SURFACE_SNOW 1.0
 #endif
+// Whether water gathers on this kind of surface when it is wet (the ground says 1; a unit's roof does not).
+#ifndef SURFACE_PUDDLES
+#define SURFACE_PUDDLES 0.0
+#endif
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
@@ -115,6 +119,14 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   [branch] if (weather.x + weather.y > 0) {
     float upward = saturate(N.y * 1.5 - 0.2);
     albedo *= 1 - 0.25 * weather.x;
+    // puddles: where the ground is level, in patches that grow as it gets wetter: still water, which
+    // mirrors the sky
+    float puddle = SURFACE_PUDDLES * smoothstep(0.90, 0.97, N.y) * smoothstep(1.24 - 0.45 * weather.x, 1.34 - 0.45 * weather.x, CloudNoise(float3(world.xz * 0.45, 3.7)) + CloudNoise(float3(world.xz * 1.7, 8.1)) * 0.35);
+    if (puddle > 0) {
+      N = normalize(lerp(N, float3(0, 1, 0), puddle));
+      albedo *= 1 - 0.45 * puddle;
+      roughness = lerp(roughness, 0.07, puddle);
+    }
     roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
     float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
