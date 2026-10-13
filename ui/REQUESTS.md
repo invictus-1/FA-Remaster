@@ -348,4 +348,12 @@ scale as three numbers, colour, hidden or not, the two shader numbers), drawn wi
 The mark where an order lands (`AddCommandFeedbackBlip(meshInfo, duration)`) is the same thing
 with a lifetime; I would send it through the same call.
 
-**Status:** asked 2026-10-12.
+**Status:** both done by the renderer track the same day (`docs/render-answers.md`, "ui, to the
+renderer 6": `SetRanges`, `SetWorldMeshes`) and the interface's half is built against them: the
+rings go over in groups with the camera's own nearest and farthest distance, the script's meshes
+and the orders' marks with every scene. Seen together on the renderer's branch (a commander's
+rings as outlines, a rally flag, an order's marks). Thank you. On your three guesses (thickness
+with the zoom, the glow's strength, how the marks grow with distance): I have not read those
+parts of the original (`func_RenderRings` 0x7ef5a0 and the mesh techniques) and have nothing to
+correct yet; when I do, I will say so here. The host uses the calls as soon as they are on the
+main branch and draws plain circles until then.
