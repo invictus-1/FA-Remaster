@@ -129,6 +129,10 @@ struct FrameEffectEvent {
   uint32_t entity = 0xffffffff, entity2 = 0xffffffff;  // what it is on, and a beam's other end (0xffffffff: none)
   int bone = -1, bone2 = -1;
   float position[3] = {0, 0, 0};  // Create: where the attach point was
+  // Create, with a second entity: where that far end was (the engine says it also for an entity
+  // that has no mesh and so is in no list: the hubs of an adjacency's link)
+  bool hasPosition2 = false;
+  float position2[3] = {0, 0, 0};
   bool seen = true;               // Create: the army the picture is for sees that place
   std::vector<float> numbers;
   std::string text, text2;
@@ -150,6 +154,7 @@ struct BlueprintLook {
   int iconPriority = 0;
   float iconFadeIn = 0;
   float selectionX = 0, selectionZ = 0;
+  float lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;  // a unit's life bar, world units (0: not said)
 };
 
 struct Frame {

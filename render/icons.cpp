@@ -133,15 +133,10 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
     if (s.selectionX > 0) kind->selectionX = s.selectionX;
     if (s.selectionZ > 0) kind->selectionZ = s.selectionZ;
-    // (the life bar's size is not among what the simulation says: from the unit's file)
-    kind->lifeBarSize = kind->selectionX * 2;
-    kind->lifeBarOffset = kind->selectionZ;
-    BpValue file;
-    if (auto text = vfs_->ReadFile(blueprintPath); text && ReadBlueprintFile(*text, &file)) {
-      kind->lifeBarSize = static_cast<float>(file["LifeBarSize"].NumberOr(kind->lifeBarSize));
-      kind->lifeBarHeight = static_cast<float>(file["LifeBarHeight"].NumberOr(kind->lifeBarHeight));
-      kind->lifeBarOffset = static_cast<float>(file["LifeBarOffset"].NumberOr(kind->lifeBarOffset));
-    }
+    // (its life bar as the simulation's blueprint says it; where that says none, by the selection's size)
+    kind->lifeBarSize = s.lifeBarSize > 0 ? s.lifeBarSize : kind->selectionX * 2;
+    if (s.lifeBarHeight > 0) kind->lifeBarHeight = s.lifeBarHeight;
+    kind->lifeBarOffset = s.lifeBarOffset > 0 ? s.lifeBarOffset : kind->selectionZ;
     return kind;
   }
   auto text = vfs_->ReadFile(blueprintPath);
@@ -164,8 +159,9 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   return kind;
 }
 
-void StrategicIcons::Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ) {
-  said_[blueprintPath] = {icon, priority, fadeIn, selectionX, selectionZ};
+void StrategicIcons::Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ,
+                            float lifeBarSize, float lifeBarHeight, float lifeBarOffset) {
+  said_[blueprintPath] = {icon, priority, fadeIn, selectionX, selectionZ, lifeBarSize, lifeBarHeight, lifeBarOffset};
   kinds_.erase(blueprintPath);  // read anew the next time a unit of that kind is shown
 }
 

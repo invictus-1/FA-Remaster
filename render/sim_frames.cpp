@@ -121,6 +121,9 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
     look.iconFadeIn = d.iconFadeInZoom;
     look.selectionX = d.selectionSizeX;
     look.selectionZ = d.selectionSizeZ;
+    look.lifeBarSize = d.lifeBarSize;
+    look.lifeBarHeight = d.lifeBarHeight;
+    look.lifeBarOffset = d.lifeBarOffset;
     looks.push_back(std::move(look));
   }
   std::lock_guard<std::mutex> lock(mutex_);
@@ -183,6 +186,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     f.bone = v.bone;
     f.bone2 = v.bone2;
     std::memcpy(f.position, v.position, sizeof f.position);
+    f.hasPosition2 = v.hasPosition2;
+    std::memcpy(f.position2, v.position2, sizeof f.position2);
     f.numbers = std::move(v.numbers);
     f.text = std::move(v.text);
     f.text2 = std::move(v.text2);

@@ -172,6 +172,8 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   e.bone = event.bone;
   e.bone2 = event.bone2;
   e.position = V(event.position);
+  e.hasEnd = event.hasPosition2;
+  e.end = V(event.position2);
   e.blueprint = event.blueprint;
   AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation);  // (the orientation, when the entity is still there)
   e.position = V(event.position);
@@ -303,8 +305,10 @@ void Effects::Update(double tick, const Frame& frame) {
         // between two things; with the second one gone the original falls back to the form on one thing
         if (e.entity2 != kNone && AttachPoint(frame, e.entity2, e.bone2, &end, &unused)) {
           e.everEnd = true;
+        } else if (e.entity2 != kNone && !e.everEnd && e.hasEnd) {
+          end = e.end;  // (its far end is a thing the frame never lists: it stands where the simulation said)
         } else if (e.entity2 != kNone && !e.everEnd) {
-          break;  // (its far end is a thing the frame never listed: where it ends is not known)
+          break;  // (... and where that is was not said)
         } else {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});

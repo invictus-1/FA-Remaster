@@ -13,14 +13,15 @@ colour, and the link's BEAMS between them were missing. Now, as the original:
 - the beams are drawn: thin blue lines from a building's edge over the nodes to the next
   building's (`adjacency_uef_beam_01` for the UEF; the other factions' beams and nodes come by the
   same way, not looked at yet).
-One piece is missing in some links: the game's script hangs each link's two ends on entities that
-have no mesh (its "hubs"), and the simulation's views list only entities with a mesh. Where a
-hub is a beam's first end, the beam stands where it was made, which is right; where it is the far
-end, that last piece is not drawn until the engine says where it is (`render/REQUESTS.md` 20).
-Before this, such pieces showed as lines eight units long. Seen in an M28 game round a UEF
-factory.
+The links are whole: the game's script hangs each link's two ends on entities that have no mesh
+(its "hubs"), which no list of the simulation's names; the engine now says where a beam's far
+end is in the event itself (`render/REQUESTS.md` 20, done the same hour), and the last stretch to
+each building's edge is drawn. Seen in an M28 game round a UEF factory.
 
 **b. The bars, as in Chris's four pictures of the original.**
+- **Centred under the unit** (corrected after your picture `ui_life_bars_shifted_left.png`: they
+  were placed toward the eye, which pulled the bars of units at the picture's sides inward; now
+  straight down the screen from the unit, wherever it stands). Nothing was offset on your side.
 - **Life bar:** under the unit, at the size, height and distance its blueprint gives it
   (`LifeBarSize`, `LifeBarHeight`, `LifeBarOffset`, world units: a commander's is twice as high as
   a tank's, a factory's long and thin); black, with a filling that is green, yellow at middling

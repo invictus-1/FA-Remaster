@@ -159,7 +159,8 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
   for (const BlueprintLook& look : looks) {
     models.SetLook(look);
     if (look.kind != 0) continue;
-    icons.Define(models.UnitBlueprintPath(look.id), look.icon, look.iconPriority, look.iconFadeIn, look.selectionX, look.selectionZ);
+    icons.Define(models.UnitBlueprintPath(look.id), look.icon, look.iconPriority, look.iconFadeIn, look.selectionX, look.selectionZ, look.lifeBarSize,
+                 look.lifeBarHeight, look.lifeBarOffset);
     ++units;
   }
   if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);

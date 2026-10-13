@@ -61,6 +61,8 @@ class Effects {
     // script hangs beams on things the frame does not list: the hubs of an adjacency's link have
     // no mesh. Its own end then stays where it was made; with a far end never found it is not drawn.)
     bool everHere = false, everEnd = false;
+    bool hasEnd = false;  // the event said where the far end was
+    Vec3 end;
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);

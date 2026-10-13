@@ -50,7 +50,8 @@ class StrategicIcons {
   int BlipIcon(const std::string& name);
   // Says what the kind of that blueprint file shows, in place of reading the file (the values the
   // simulation has). `icon` empty: none; `fadeIn`, `selectionX`, `selectionZ` 0: not said.
-  void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ);
+  void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ,
+              float lifeBarSize = 0, float lifeBarHeight = 0, float lifeBarOffset = 0);
 
   // Empties the list; `view` is what the frame is seen with.
   void Begin(const View& view);
@@ -123,7 +124,7 @@ class StrategicIcons {
   struct Said {  // what Define was told, until a unit of that kind is first shown
     std::string icon;
     int priority = 0;
-    float fadeIn = 0, selectionX = 0, selectionZ = 0;
+    float fadeIn = 0, selectionX = 0, selectionZ = 0, lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;
   };
   std::unordered_map<std::string, Said> said_;
 
