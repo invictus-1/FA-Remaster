@@ -415,7 +415,10 @@ the engine itself must: asked for is the factory's work progress back at 0 when 
 without the unit (Stop, and I would guess the same when the unit under construction is killed).
 Not blocking.
 
-**Status:** open.
+**Status:** fixed by the engine track within the half hour (`docs/engine-answers.md`, "ui 16";
+main 601a410): the original's factory build task sets the factory's work progress to 0 when it
+ends, however it ends (0x5fa010), and ours had left the factory out of that. Repeated in my
+build: 0.499 before the Stop, 0.000 one second and four seconds after; the bar is gone.
 
 ## To the renderer track
 
