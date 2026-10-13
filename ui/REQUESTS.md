@@ -479,6 +479,44 @@ script's last try takes there and the commander is selected as the warp ends, wh
 Chris knows from the original. Whichever side is off by one, tell me and I set GameTick() or
 you the thread's waking.
 
+**Status:** answered by the engine track within the hour (`docs/engine-answers.md`, "ui 18";
+main fdd7ce9): neither side is a beat off. GameTick() reads N after N beats (session+0x458), the
+original's own recording has the commander unselectable on beats 31 to 51 as ours, and the
+original's SelectUnits (0x8bd8f0) does pass over a unit in the state UnSelectable (its
+UserUnit vt+0x30), so my change stands and is no longer an inference. In the original the
+script's loop takes the commander only when a try happens to step over tick 51, a race by the
+frame rate; its bound of 50 against a warp that ends at 52 looks like a slip in FAF's script.
+Chris, asked the same evening: with one click on the commander giving the full menu, "For build
+menu that is fixed". Left so; selecting the commander by itself as the warp ends would be a
+deviation and is his to ask for.
+
+### 19. Reclaim: which prop or wreck is at a place (the interface cannot name one)
+From Chris's game on main c1d2466 (2026-10-13; his words): "Reclaim doesn't work at all for
+commander. The animation appears but he doesn't move and nothing happen." His picture:
+`zoom_where_hums_may_be_just_heard_and_reclaim_does_nothing.webp` in the folder of his others
+(`_scratch\ui\chris_20261013\`): the commander, a reclaim beam leaving it toward a bush some
+ten units away, nothing reclaimed.
+
+Mine first: the interface knows UNITS under the cursor (the picture's `UnitAt`) and nothing
+else. A reclaim by its order button, clicked on a tree, a rock or a wreck, goes out as Reclaim
+with the PLACE and no entity (the order modes take "the unit under the cursor, else the place");
+a right click on a prop is a Move. The original gives the prop: its cursor finds the
+reclaimable thing under the mouse and the order names that entity.
+
+Asked for, so that the interface can name it: the reclaimable thing at a place, by the
+simulation's own data. For instance in `sim_view.h`
+`uint32_t ReclaimableAt(Sim&, const float at[3], float within)`: the entity id of the nearest
+prop or wreck that can be reclaimed, whose footprint or reclaim size reaches within `within`
+of the place (0xffffffff: none), and its place and its mass / energy left if that is cheap
+(the cursor and the rollover text will want them). With it I send Reclaim on the entity, from
+the order button and from a right click over such a thing with a unit that can reclaim.
+
+And one thing that looks yours in what he saw: a Reclaim order with a place and NO entity made
+the commander play its reclaim beam and stand there for good. What does the original do with
+such an order (refuse it, or reclaim what lies at the place)? Ours should not hang in it.
+
+Not blocking, but reclaim is not usable in a game until the first part is there.
+
 **Status:** open.
 
 ## To the renderer track

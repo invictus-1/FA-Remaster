@@ -330,8 +330,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   inferred: that the listener's place is the camera's eye (`sound/sound_system.cpp`, at
   `Heard`). The original also has a sight check (its `snd_CheckLOS`: a sound at a place the
   army does not see is not played) and a cut-off by the camera's distance that a blueprint
-  names (`LodCutoff`; the
-  game's values for these are 10000, so it cuts nothing). A running sound follows its unit and
+  names (`LodCutoff`; the game's values for these are 10000, so it cuts nothing).
+  SET BY EAR, not read: the hums of working buildings (the game's "ActiveLoops" categories: a
+  power generator, a mass extractor) are played 16 dB lower and only while the camera's eye is
+  within 40 of the place it looks at. Everything that could be read (the cue, the categories as
+  the game's own sound library multiplies them, the curves, the sharing between the ears, the
+  rule for starting) leaves them far louder than Chris hears them in the original; what still
+  differs is not found (`sound/sound_system.cpp`, at `kHumTrim`). A running sound follows its unit and
   plays only while it can be heard. Whose sounds:
   the player's and the allies' always; anything else only when the player's army sees it now
   (the simulation's own recon, the engine's `ReconOf` / `ReconAt`); what is only on radar or

@@ -100,12 +100,15 @@ class SoundSystem {
     std::string bank, cue;
     float position[3] = {0, 0, 0};
     int handle = 0;
+    int hum = -1;  // 1: a working building's hum (the "ActiveLoops" categories), 0: not, -1: not looked up yet
   };
   int PlayCue(const std::string& bank, const std::string& cue, bool prepareOnly, const float* position);
   // A world sound's loudness (decibels) and its share for each ear, from the listener's place.
   float Heard(const std::vector<uint32_t>& curves, const float position[3], float* left, float* right) const;
   void UpdateWorld();
   bool MayStartLoop(const float position[3]) const;
+  int CategoryOfCue(const std::string& bank, const std::string& cue);
+  bool IsHumCategory(int category) const;
   int CategoryByName(const std::string& name) const;
   std::string Find(const std::string& file) const;
   void UpdateCategories();
