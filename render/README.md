@@ -322,6 +322,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   stays drawn where it stood, and a unit seen before keeps its own icon as a blip. Not yet:
   ground seen before looks like ground never seen; a remembered building follows the real one's
   state at once.
+- Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
+  trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
+  the model, each on its own beat by where it stands, harder when it rains or snows; their
+  shadows move with them. One wind over the whole map, from one side; no gusts running across
+  the land yet.
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the

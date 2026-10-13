@@ -389,10 +389,18 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.shaderName = "LabPBR";
     }
     if (!lod.labPbr && !lod.specular) lod.specular = textures_->Black();
+    if (kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha") lod.sway = 1;
     lod.plainMaterial = lod.labPbr && !lod.specular;
     if (lod.plainMaterial) lod.specular = textures_->Black();
     m->lods.push_back(std::move(lod));
   }
+  // a model that sways does so at every level (or it would stand still from afar and jump when
+  // the level changes), by its height
+  if (!m->lods.empty() && m->lods[0].sway > 0)
+    for (ModelLod& l : m->lods) {
+      l.sway = m->lods[0].sway;
+      l.swayHeight = std::max(m->boundsMax.y, 1e-3f);
+    }
   m->ok = !m->lods.empty();
   // the four-level standard (LOD0 above 250 pixels, LOD1 to 100, LOD2 to 30, LOD3 below)
   if (previewed && m->lods.size() == 4) m->levelPixels = {250, 100, 30};
