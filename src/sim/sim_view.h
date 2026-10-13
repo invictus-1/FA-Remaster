@@ -49,6 +49,7 @@ struct UnitView {
   bool dead = false;
   bool beingBuilt = false;
   bool selectable = true;  // not in the 'UnSelectable' state
+  bool paused = false;     // Unit:SetPaused (the same flag as UnitStateView::paused)
   int queueLength = 0;     // commands in its queue
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
   // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own

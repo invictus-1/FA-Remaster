@@ -74,6 +74,7 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.dead = u->dead;
     v.beingBuilt = u->beingBuilt;
     v.selectable = u->unitStates.count("UnSelectable") == 0;
+    v.paused = u->paused;
     v.queueLength = static_cast<int>(u->commands.size());
     v.headCommand = u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type);
     v.mesh = u->mesh;

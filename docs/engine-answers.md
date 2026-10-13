@@ -3,6 +3,13 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 19: `paused` in the plain unit view — done
+
+`UnitView::paused` (src/sim/sim_view.h), filled by `UnitViews` from the same flag `UnitStateView::paused` reads
+(`Unit:SetPaused`). Every unit has it, with or without work or orders, so the per-unit `UnitStateOf` call for the
+pause mark can go. Nothing else in the view changed; the simulation is untouched (the thirteen replays pass as
+before).
+
 ## render 18 (and the interface's enhancement orders): a Script order keeps its Lua table now — fixed
 
 You read it right, and the fault was the simulation's: the command stream's reader took the order's Lua value
