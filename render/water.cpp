@@ -185,6 +185,8 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 sunLight = ToLinear(sunColor) * (lightMultiplier * modern.x);
   float3 skyLight = skyZenith.w > 0.5 ? SkyAmbient(float3(0, 1, 0)) : sunLight * 0.3;
   float3 light = skyLight + sunLight * (saturate(sunDirection.y) * 0.6 * shadow);
+  // lamps and flashes near the water: their light on its body and foam, and their glint on its waves
+  float3 lamps = SmallLights(i.world, N, -toPixel, float3(0.5, 0.5, 0.5), float3(0.04, 0.04, 0.04), 0.0016, 0.1, saturate(dot(N, -toPixel)) + 1e-4);
 
   // what is behind, straight on and bent by the waves; the bending is left out where it would
   // bring in something that stands in front of the water
@@ -212,7 +214,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // what the water takes from it, and the water's own colour in its place
   float3 kept = exp(-through * float3(0.50, 0.16, 0.11));
   float3 tint = lerp(float3(0.02, 0.10, 0.14), ToLinear(saturate(surfaceColor.rgb)) * 0.3, 0.5);
-  float3 body = tint * light * (0.32 * (1 - exp(-through * 0.25)));
+  float3 body = tint * (light + lamps) * (0.32 * (1 - exp(-through * 0.25)));
   float3 color = under * kept + body;
 
   // foam: at the shore and round what stands in the water, in moving patches, with a line that
@@ -221,7 +223,8 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float patches = saturate(CloudNoise(float3(xz * 2.2 + time * 0.15, time * 0.3)) * 1.6 - 0.3);
   float lapping = pow(saturate(sin(deep * 18 - time * 1.2) * 0.5 + 0.5), 6) * shore;
   float foam = saturate(shore * shore * patches * 1.5 + lapping * 0.5 * patches + crest);
-  color = lerp(color, light * 0.85, foam);
+  color = lerp(color, (light + lamps) * 0.85, foam);
+  color += lamps * 0.35;
   color += light * (rings * 0.04);
 
   // the mirror: the sky, and what the picture shows that way

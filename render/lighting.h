@@ -60,38 +60,10 @@ float3 EnvironmentBrdf(float3 f0, float roughness, float nDotV) {
   return f0 * ab.x + ab.y;
 }
 
-// The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
-// Returns linear colour, unbounded.
-float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
-  shadow *= CloudShadow(world);  // (a computed sky's clouds)
-  // the weather on the surface: wet is darker and shinier; snow lies on what faces up
-  [branch] if (weather.x + weather.y > 0) {
-    float upward = saturate(N.y * 1.5 - 0.2);
-    albedo *= 1 - 0.25 * weather.x;
-    roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
-    float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
-    albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
-    metallic *= 1 - lying;
-    roughness = lerp(roughness, 0.7, lying);
-  }
-  float3 V = normalize(cameraPosition - world);
-  float3 L = sunDirection;
-  float3 H = normalize(V + L);
-  float nDotV = saturate(dot(N, V)) + 1e-4;
-  float nDotL = saturate(dot(N, L));
-  float nDotH = saturate(dot(N, H));
-  float vDotH = saturate(dot(V, H));
-  roughness = clamp(roughness, 0.06, 1);
-  float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
-  float3 diffuseColor = albedo * (1 - metallic);
-
-  // the sun: GGX highlight, Smith visibility, Schlick fresnel, Lambert diffuse
-  float a = roughness * roughness, a2 = a * a;
-  float d = nDotH * nDotH * (a2 - 1) + 1;
-  float D = a2 / (3.14159265 * d * d);
-  float k = a * 0.5;
-  float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
-  float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
+// The small lights (lights.h) on a surface: those of the square of ground the place is over.
+// `diffuseColor` and `f0`: what the surface gives back of light from all sides and mirrored;
+// `a2` and `k`: its roughness as the highlight's formulas take it; `nDotV`: how it faces the eye.
+float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3 f0, float a2, float k, float nDotV) {
   float3 small = 0;
   // the small lights of the square of ground this place is over
   [branch] if (lightGrid.w > 0.5) {
@@ -132,6 +104,42 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       }
     }
   }
+  return small;
+}
+
+// The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
+// Returns linear colour, unbounded.
+float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
+  shadow *= CloudShadow(world);  // (a computed sky's clouds)
+  // the weather on the surface: wet is darker and shinier; snow lies on what faces up
+  [branch] if (weather.x + weather.y > 0) {
+    float upward = saturate(N.y * 1.5 - 0.2);
+    albedo *= 1 - 0.25 * weather.x;
+    roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
+    float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
+    albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
+    metallic *= 1 - lying;
+    roughness = lerp(roughness, 0.7, lying);
+  }
+  float3 V = normalize(cameraPosition - world);
+  float3 L = sunDirection;
+  float3 H = normalize(V + L);
+  float nDotV = saturate(dot(N, V)) + 1e-4;
+  float nDotL = saturate(dot(N, L));
+  float nDotH = saturate(dot(N, H));
+  float vDotH = saturate(dot(V, H));
+  roughness = clamp(roughness, 0.06, 1);
+  float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+  float3 diffuseColor = albedo * (1 - metallic);
+
+  // the sun: GGX highlight, Smith visibility, Schlick fresnel, Lambert diffuse
+  float a = roughness * roughness, a2 = a * a;
+  float d = nDotH * nDotH * (a2 - 1) + 1;
+  float D = a2 / (3.14159265 * d * d);
+  float k = a * 0.5;
+  float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
+  float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
+  float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
   // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
   // dark paint of middling roughness shows more sheen than colour)
