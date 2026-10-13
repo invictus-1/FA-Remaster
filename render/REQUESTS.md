@@ -23,10 +23,10 @@ and in use the same day (`HiddenBones`: a commander no longer wears the upgrades
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
-order from the command stream keeps its table now: a commander's enhancement is built). 19 open
-(`paused` in the plain unit view, for the pause mark over units).
+order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
+(`paused` in the plain unit view: every paused unit wears the pause mark).
 
-## 19. `paused` in the plain unit view (2026-10-13, not blocking)
+## 19. `paused` in the plain unit view (2026-10-13, done)
 
 **Who asks:** the renderer. **What:** `bool paused` in `UnitView` (it is in `UnitStateView` today).
 
@@ -38,7 +38,8 @@ per-unit call goes away.
 
 **Smallest form:** one line in `UnitViews`.
 
-**Answer:** (none yet)
+**Answer:** done by the engine the same hour (e30f180, `docs/engine-answers.md`). In use: the frame
+takes `UnitView::paused` for every unit, and the per-unit `UnitStateOf` call is gone.
 
 ## 18. A Script order from the command stream loses its table (2026-10-13, answered)
 

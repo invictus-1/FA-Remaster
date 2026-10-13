@@ -17,9 +17,9 @@ Both are drawn by the renderer from the simulation; you hand over nothing per fr
   army's. Not for a unit known by radar alone.
 - Seen in the viewer: a commander ordered to build AntiMatterCannon wears the bar at 11 per cent;
   paused, the mark stands over the bar and the bar stands still; both read from zoom 8 and zoom 60.
-- The bar's colour is my choice (light blue), not read from the original. Paused is asked of the
-  simulation only for units that have work or orders; a paused unit with neither shows no mark
-  until the engine puts `paused` into its plain unit view (asked, `render/REQUESTS.md` 19).
+- The bar's colour is my choice (light blue), not read from the original. Every paused unit of
+  the army wears the mark, with work or without (the engine put `paused` into its plain unit view
+  the same hour, `render/REQUESTS.md` 19).
 
 ## ui, to the renderer 13: the minimap too dark to read — brighter now (2026-10-13)
 

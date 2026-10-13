@@ -32,7 +32,7 @@ struct FrameUnit {
   bool dead = false;
   bool beingBuilt = false;
   // How far its work is (a build, an upgrade, an enhancement), 0..1; 0: none. And whether the
-  // player has paused it (asked of the simulation only for units that have work or orders).
+  // player has paused it.
   float workProgress = 0;
   bool paused = false;
   // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,
