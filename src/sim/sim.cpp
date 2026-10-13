@@ -1294,8 +1294,22 @@ void Sim::Tick() {
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   g_prof.Lap(10);
   const std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: motion may create or destroy nothing)
+  // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
+  // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
+  // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the
+  // beam, is dead BEFORE its own beat - it does not move or turn in it and takes no resources; a unit older than
+  // the beam has had its beat. So the beams take their turn here, between the units, by creation handle. (Seen: a
+  // destroyer whose target a beam of an older ship kills stops turning in that very beat; and an experimental
+  // that earns a rank with its own beam regenerates at the old rate that beat.)
+  const std::vector<CollisionBeam*> entityBeams = beams;
+  size_t entityBeamAt = 0;
+  auto beamsBefore = [&](uint32_t handle) {
+    while (entityBeamAt < entityBeams.size() && entityBeams[entityBeamAt]->handle < handle)
+      BeamTick(*this, entityBeams[entityBeamAt++]);
+  };
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
+    beamsBefore(u->handle);
     if (u->destroyQueued) continue;
     // (lastPosition = the entity's coords before this beat's motion. On a unit's first beat that is where it was
     // CREATED: an attach in the same beat, a factory putting its new unit on the build bone, only writes the
@@ -1313,7 +1327,10 @@ void Sim::Tick() {
     u->lastPosTick = tick_;
     HoldShape(u);
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
-    if (u->parentId && u->attachFull) continue;  // transport cargo: after every unit moved
+    if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
+      UnitEconomyTick(*this, u);
+      continue;
+    }
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
     const Quat prevOri = u->orientation;
@@ -1359,10 +1376,15 @@ void Sim::Tick() {
     PoseAdvance(u);
     if (!u->builderArms.empty()) BuilderArmsTick(*this, u, u->lastPosition, prevOri);
     UnitAimTick(*this, u);
+    // the unit's own beat: economy events, regeneration or decay, consumption and production (health regen /
+    // decay and HandleResourceManagement 0x6aaac0, after the manipulators)
+    UnitEconomyTick(*this, u);
+    if (u->destroyQueued) continue;
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
     // ... and a pod with an empty queue orders itself to assist (0x6a921a; pod_assist.md 1)
     if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
   }
+  beamsBefore(0xffffffffu);  // the beams younger than every unit
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   if (anyAttached) {
     AttachedUnitsTick(*this);
@@ -1407,23 +1429,7 @@ void Sim::Tick() {
   g_prof.Lap(4);
   AnimTick(*this);
   gridDirty_ = true;
-  // the units' own beat: economy events, regeneration or decay, consumption and production
-  // The entity stage runs its tasks in creation order, units, collision beams and projectiles alike. A collision
-  // beam is made with its weapon, so it comes after its owner and before every unit made later: a beam that kills
-  // a younger unit does so BEFORE that unit's own beat (the victim then takes no resources that beat), one that
-  // kills an older unit after it. Beams therefore go in between the units' beats, by creation handle; all of them
-  // are older than the shells in flight, which follow.
-  {
-    const std::vector<Unit*> order = MotionOrder();  // (part of Unit::MotionTick in the original)
-    const std::vector<CollisionBeam*> bs = beams;
-    size_t bi = 0;
-    for (size_t i = 0; i < order.size(); ++i) {
-      while (bi < bs.size() && bs[bi]->handle < order[i]->handle) BeamTick(*this, bs[bi++]);
-      if (!order[i]->destroyQueued) UnitEconomyTick(*this, order[i]);
-    }
-    g_prof.Lap(5);
-    while (bi < bs.size()) BeamTick(*this, bs[bi++]);
-  }
+  g_prof.Lap(5);
   g_prof.Lap(7);
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.

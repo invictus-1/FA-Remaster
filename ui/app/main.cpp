@@ -7,11 +7,13 @@
 //   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--stage userinit|setup|frontend]
 //            [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]
 //            [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -20,6 +22,7 @@
 #include <shlobj.h>
 #endif
 
+#include "app/backdrop.h"
 #include "app/game_session.h"
 #include "app/window.h"
 #include "core/hostfs.h"
@@ -56,6 +59,8 @@ bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
 bool noSound = false;             // --no-sound: a live window without the sound device
+bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
+int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -186,6 +191,9 @@ int main(int argc, char** argv) {
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
     else if (a == "--no-sound") noSound = true;
+    else if (a == "--fullscreen") fullScreen = windowed = true;
+    else if (a == "--backdrop") wantBackdrop = 1;
+    else if (a == "--no-backdrop") wantBackdrop = 0;
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -208,9 +216,10 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [-- game arguments]\n");
+                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
     return 2;
   }
+  if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
   Vfs vfs;
   ui::UserState::Config cfg;
   cfg.width = width;
@@ -243,6 +252,13 @@ int main(int argc, char** argv) {
   session.wantPicture = !noWorld;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
+  // The front end's background: the world's picture of a map behind the main menu, on a thread
+  // of its own. In a live window unless told otherwise; not when a game starts at once.
+  std::unique_ptr<ui::Backdrop> backdrop;
+  if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && sessionIn.empty() && !noWorld) {
+    backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
+    cfg.backdrop = backdrop.get();
+  }
   ui::UserState user(&vfs, cfg);
   bool ok = user.Boot();
   if (ok && o.stage != "userinit") ok = user.StartMainScript();
@@ -267,6 +283,7 @@ int main(int argc, char** argv) {
   ui::UserState* shown = &user;
   auto startGameInterface = [&]() {
     if (game || !session.running()) return;
+    if (backdrop) backdrop->Stop();  // the game has its own picture of the world
     ui::UserState::Config gameCfg = cfg;
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
@@ -308,7 +325,8 @@ int main(int argc, char** argv) {
                            listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            startGameInterface();
-                         });
+                         },
+                         fullScreen);
     if (done < 0) ok = false;
   } else {
     for (; done < o.frames; ++done) {
@@ -323,6 +341,11 @@ int main(int argc, char** argv) {
   if (dumpUi) shown->ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture
     ui::SoftwareTarget target(width, height);
+    if (backdrop && !game) {  // the background's first picture takes a moment: ask for it, then wait
+      shown->ui().Render(shown->L(), target, 0);
+      backdrop->WaitUntilReady(30.0);
+      target.Clear(0xff000000u);
+    }
     shown->ui().Render(shown->L(), target, 0);
     if (!game) session.DrawStatus(target);
     {  // the mouse pointer where the mouse is (a live window leaves it to the system)

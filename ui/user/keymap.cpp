@@ -356,6 +356,63 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
 
 void KeyMapKeyUp(lua_State* L, int vk) { Map(L).down.erase(vk); }
 
+// The life bars over units. In the original UI_RenderUnitBars is a console variable: the game's
+// script sets it true when a game's interface comes up and false for a cinematic, and the key
+// bound to "toggle_lifebars" (Alt-L) runs it without a value, which turns it over. OURS differs
+// in one thing, by the project's choice: the bars are OFF until the player switches them on. So
+// the player's switch is kept apart from the scripts' doing: the command without a value turns
+// the player's switch over (kept in the preferences as `moho64ui_life_bars`, so it holds for the
+// next game); `false` puts the bars away and `true` gives back what the player chose.
+namespace {
+const char* const kLifeBarsKey = "moho64ui_life_bars";
+
+bool LifeBarsChosen(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (user->lifeBars < 0) {
+    int top = lua_gettop(L);
+    user->lifeBars = 0;
+    lua_getglobal(L, "GetPreference");
+    lua_pushstring(L, kLifeBarsKey);
+    lua_pushboolean(L, 0);
+    if (lua_pcall(L, 2, 1, 0) == 0) user->lifeBars = lua_toboolean(L, -1) ? 1 : 0;
+    lua_settop(L, top);
+  }
+  return user->lifeBars > 0;
+}
+
+void RenderUnitBars(lua_State* L, const std::string& value) {
+  UserState* user = UserState::From(L);
+  std::string v;
+  for (char ch : value)
+    if (!std::isspace(static_cast<unsigned char>(ch))) v.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+  if (v == "TRUE" || v == "1" || v == "ON") {
+    user->lifeBarsPutAway = false;
+  } else if (v == "FALSE" || v == "0" || v == "OFF") {
+    user->lifeBarsPutAway = true;
+  } else {  // no value: the player's switch
+    user->lifeBars = LifeBarsChosen(L) ? 0 : 1;
+    user->lifeBarsPutAway = false;
+    int top = lua_gettop(L);
+    lua_getglobal(L, "SetPreference");
+    lua_pushstring(L, kLifeBarsKey);
+    lua_pushboolean(L, user->lifeBars > 0);
+    lua_pcall(L, 2, 0, 0);
+    lua_settop(L, top);
+    lua_getglobal(L, "SavePreferences");
+    lua_pcall(L, 0, 0, 0);
+    lua_settop(L, top);
+  }
+}
+
+// moho64ui_LifeBars(): whether the life bars are shown now. The host's own function for tests.
+int l_LifeBars(lua_State* L) {
+  lua_pushboolean(L, LifeBarsShown(L));
+  return 1;
+}
+}  // namespace
+
+bool LifeBarsShown(lua_State* L) { return LifeBarsChosen(L) && !UserState::From(L)->lifeBarsPutAway; }
+
 void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   size_t a = text.find_first_not_of(" \t");
   if (a == std::string::npos) return;
@@ -364,6 +421,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   std::string rest = b == std::string::npos ? std::string() : text.substr(b + 1);
   if (Upper(name) == "UI_LUA") {
     UserState::From(L)->RunString(rest, text);
+    return;
+  }
+  if (Upper(name) == "UI_RENDERUNITBARS") {
+    RenderUnitBars(L, rest);
     return;
   }
   if (Upper(name) == "STARTCOMMANDMODE") {  // StartCommandMode <mode> <name>: commandmode.StartCommandMode(mode, {name = name})
@@ -412,6 +473,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   SetGlobal(L, "ConExecute", l_ConExecute);
   SetGlobal(L, "ConExecuteSave", l_ConExecute);
   lua_register(L, "moho64ui_KeyMapAction", l_KeyMapAction);
+  lua_register(L, "moho64ui_LifeBars", l_LifeBars);
 }
 
 }  // namespace moho::ui

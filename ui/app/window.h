@@ -24,7 +24,11 @@ class Window {  // (the host's one window)
 
   ~Window();
   // Open a window whose inside is width x height pixels. False when there is no window system.
-  bool Create(int width, int height, const char* title, Callbacks callbacks);
+  // `fullScreen`: without a frame, over the whole main screen (give that screen's size, see
+  // ScreenSize), and the mouse is kept inside while the window is the one in front.
+  bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false);
+  // The main screen's size in pixels; false when there is no window system.
+  static bool ScreenSize(int* width, int* height);
   // Handle the waiting window messages (the callbacks run from here). False once the window is closed.
   bool Pump();
   // Show the target's pixels.
@@ -35,7 +39,15 @@ class Window {  // (the host's one window)
   // (False when the system could not make a pointer of the image: its arrow shows then.)
   bool SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY);
   void HidePointer(bool hidden);
-  void* pointer() const { return pointerHidden_ ? nullptr : pointer_ ? pointer_ : arrow_; }
+  void* pointer() const { return pointerHidden_ || holding_ ? nullptr : pointer_ ? pointer_ : arrow_; }
+  // Hold the pointer: it is hidden and stays where it is; the mouse's moves go on arriving as a
+  // place that moves on from there (past the window's edge too). Letting go shows it again where
+  // it was held.
+  void HoldPointer(bool hold);
+  bool holding() const { return holding_; }
+  // (For the window's own message handling while it holds: the place the mouse's moves add up to.)
+  bool HeldMove(int clientX, int clientY, float* x, float* y);
+  void HeldPlace(float* x, float* y) const { *x = heldX_, *y = heldY_; }
 
   Callbacks callbacks;
   bool closed = false;
@@ -47,6 +59,13 @@ class Window {  // (the host's one window)
   std::map<std::pair<const uint32_t*, int>, void*> pointers_;  // those made so far, by image and hot spot; ours to destroy
   void* arrow_ = nullptr;    // the system's
   bool pointerHidden_ = false;
+  bool holding_ = false;
+  int holdX_ = 0, holdY_ = 0;      // where the pointer is held, in the window
+  float heldX_ = 0, heldY_ = 0;    // where the mouse's moves have taken its place since
+
+ public:
+  bool fullScreen = false;
+  void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
 };
 
 class UserState;
@@ -55,7 +74,8 @@ class UserState;
 // between frames. `eachFrame` (may be empty) is called once per frame after
 // the interface has drawn, with the real time that passed and the picture before it is shown.
 // Returns the frames shown, or -1 when no window opened.
+// `fullScreen`: the window fills the main screen (width and height are then that screen's).
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
-              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame);
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false);
 
 }  // namespace moho::ui

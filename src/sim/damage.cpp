@@ -284,6 +284,12 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   u->killCleanup = true;
   if (!u->beingBuilt) AdjacencyLost(sim, L, u);
   ForgetUnitCommands(u);
+  // the emptied queue's event (Unit::UpdateSpeedThroughStatus 0x6ac940) reaches a killed aircraft too: with nothing
+  // queued its speed-through flag goes (seen: five patrolling aircraft killed in one beat, each 1 -> 0)
+  if (u->motion.air) {
+    u->motion.airSpeedThrough = false;
+    u->motion.air->fullSpeed = false;
+  }
   u->unitStates.erase("Moving");  // (the move task goes with the queue: a unit killed on its way is not "Moving")
   u->unitStates.erase("Patrolling");  // (nor "Patrolling": the patrol task goes the same way)
   u->unitStates.erase("Guarding");    // (nor guarding)

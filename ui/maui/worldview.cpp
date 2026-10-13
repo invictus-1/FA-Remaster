@@ -42,6 +42,10 @@ const float kDegrees = 0.0174533f, kPi = 3.14159265f;
 // the frame rate; here it is by time, at what the original does at 60 frames a second.
 const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
 const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
+// Turning with the keys (the same frame function): Insert and Delete, 10 a frame, twice that with
+// Ctrl; with Space and the mouse only below a zoom of 125 (0xf57aa0).
+const int kKeySpace = 32, kKeyInsert = 324, kKeyDelete = 127;
+const float kKeyTurn = 10.0f, kKeyTurnFast = 2.0f, kSpinBelowZoom = 125.0f;
 
 // A camera looks at a place on the map (`focus`). Its `zoom` is how much of the world it shows
 // across the longer side of its view, in map units (so the nearest zoom, 5, shows a strip five
@@ -58,6 +62,11 @@ class Camera : public ScriptObject {
   float aspect = 16.0f / 9.0f;    // width / height of the view that shows it
   float anchorX = 0, anchorY = 0; // the place on screen a zoom goes towards (the wheel's)
   bool anchored = false;
+  // Turned by hand (Space and the mouse, Insert and Delete): the lean is then `turnedPitch` and no
+  // longer follows the zoom; `swingBack`: it is on its way back to north up (the original's bytes
+  // +0x33d and +0x33e).
+  bool turned = false, swingBack = false;
+  float turnedPitch = 0;
   bool placed = false;  // false until the map's size or a script put it somewhere
 };
 
@@ -74,7 +83,8 @@ float ZoomBlend(const Camera* c) {
   return (std::log(ClampZoom(c, c->zoom)) - lnNear) / (lnFar - lnNear);
 }
 // The lean: 40 degrees above the ground when nearest, straight down when farthest (0x7a995c).
-float PitchOf(const Camera* c) { return (kNearPitch + ZoomBlend(c) * (kFarPitch - kNearPitch)) * kDegrees; }
+float ZoomPitchOf(const Camera* c) { return (kNearPitch + ZoomBlend(c) * (kFarPitch - kNearPitch)) * kDegrees; }
+float PitchOf(const Camera* c) { return c->turned ? c->turnedPitch : ZoomPitchOf(c); }
 // The upright field of view. The original's angle (65 degrees nearest, 60 farthest) is across the
 // longer side of the view (its projection, FA exe 0x4efdd0, shrinks the other side by the aspect).
 // The eye's distance from the focus (FA exe 0x7aa33f: zoom / (2 tan(fov / 2)), kept at +0x35c).
@@ -128,7 +138,26 @@ void Place(lua_State* L, Camera* c) {
   c->focus[0] = (w - 1) * 0.5f;
   c->focus[2] = (h - 1) * 0.5f;
   c->heading = kPi;
+  c->turned = c->swingBack = false;
   c->zoom = c->targetZoom = MaxZoom(c);
+}
+
+// Turning by hand (FA exe 0x7a6ce0): the heading by dx, the lean by dy, both at cam_SpinSpeed (360
+// degrees) for a view's width of them; the lean stays between cam_MinSpinPitch (0.1) and almost
+// straight down. Letting go (0x7a6e40) starts the way back.
+const float kSpinSpeed = 360.0f, kMinSpinPitch = 0.1f, kMaxSpinPitch = 1.5608f;
+void SpinCamera(Camera* c, float dx, float dy, float viewWidth) {
+  if (viewWidth <= 0) return;
+  float k = kSpinSpeed / viewWidth * kDegrees;
+  if (!c->turned) c->turnedPitch = ZoomPitchOf(c);
+  c->heading -= dx * k;
+  while (c->heading < -kPi) c->heading += 2 * kPi;
+  while (c->heading > kPi) c->heading -= 2 * kPi;
+  c->turnedPitch = std::max(kMinSpinPitch, std::min(c->turnedPitch + dy * k, kMaxSpinPitch));
+  c->turned = true, c->swingBack = false;
+}
+void RevertCamera(Camera* c) {
+  if (c->turned) c->swingBack = true;
 }
 
 // The camera of a name; made on first use, with a script table whose methods are moho.CameraImpl's.
@@ -316,6 +345,18 @@ int l_CamRestoreSettings(lua_State* L) {
   lua_pop(L, 1);
   return 0;
 }
+// HoldRotation(): the camera keeps the turn it has (0x7ac580); RevertRotation(): it swings back
+// to north up (the scripts call this after a zoom to a unit and in cinematics).
+int l_CamHoldRotation(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  if (!c->turned) c->turnedPitch = ZoomPitchOf(c);
+  c->turned = true, c->swingBack = false;
+  return 0;
+}
+int l_CamRevertRotation(lua_State* L) {
+  RevertCamera(CheckCamera(L, 1));
+  return 0;
+}
 int l_CamNothing(lua_State* L) {
   CheckCamera(L, 1);
   return 0;
@@ -374,7 +415,7 @@ class WorldView : public Control {
     Sim* sim = user->config().sim;
     if (sim && sim->map()) cam.target[1] = sim->map()->TerrainHeight(cam.target[0], cam.target[2]);
     bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
-                cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
+                cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
     // What the picture shows beside the world: marks under the selected units, the lines of their
@@ -383,6 +424,7 @@ class WorldView : public Control {
     WorldScene scene;
     SelectionForWorld(L, &scene.selection, &scene.lines);
     scene.borders = user->mapBorders;
+    scene.lifeBars = LifeBarsShown(L);
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();
@@ -487,7 +529,7 @@ class WorldView : public Control {
   bool PictureIsCurrent(lua_State* L) {
     if (!pixels_) return false;
     WorldCamera cam = CameraFor(L);
-    return cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading &&
+    return cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
            cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
   }
   // `fresh` false: the picture last drawn will do when it is of the camera as it is now (the
@@ -510,16 +552,40 @@ class WorldView : public Control {
   // between the two places are. With Shift they join the selection.
   float pressX_ = 0, pressY_ = 0;
   bool pressShift_ = false;
-  void DragRelease(lua_State* L, const UiEvent& e) override {
-    if (!EnsurePicture(L)) return;
-    WorldSource* source = UserState::From(L)->config().world;
+  // Dragging with the middle button moves the view with the mouse: the ground stays under the
+  // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
+  // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
+  // that the drag has no end at the screen's edge; here the pointer moves.
+  bool cameraDrag_ = false;
+  float lastX_ = 0, lastY_ = 0;
+  // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
+  bool spinning_ = false;
+  float spinX_ = 0, spinY_ = 0;
+  void DragMove(lua_State* L, const UiEvent& e) override {
+    if (!cameraDrag_) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    PanCamera(GetCameraObject(L, cameraName), e.x - lastX_, e.y - lastY_, r.x1 - r.x0);
+    lastX_ = e.x, lastY_ = e.y;
+  }
+  void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (cameraDrag_) {
+      cameraDrag_ = false;
+      UserState::From(L)->ui().holdPointer = false;
+      // A turn with Space that was under way starts anew from where the mouse is now (its last
+      // place is from before the drag: turning by the way since would be a jump).
+      spinning_ = false;
+      return;
+    }
     std::vector<uint32_t> ids;
     if (std::fabs(e.x - pressX_) < 4 && std::fabs(e.y - pressY_) < 4) {
-      uint32_t id = source->UnitAt(e.x - r.x0, e.y - r.y0);
+      uint32_t id = UnitUnder(L, e.x, e.y);
       if (id != 0xffffffffu) ids.push_back(id);
     } else {
+      if (!EnsurePicture(L)) return;
+      WorldSource* source = UserState::From(L)->config().world;
+      Rect r;
+      GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
       source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
                       std::max(pressY_, e.y) - r.y0, &ids);
     }
@@ -549,12 +615,41 @@ class WorldView : public Control {
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
+    if (e.type == EventType::MouseMotion && !miniMap) {
+      // With Space held the mouse turns the camera, from near only (a zoom under 125) as in the
+      // original (0x870970); letting Space go lets it swing back.
+      Camera* c = GetCameraObject(L, cameraName);
+      if (KeyIsDown(L, kKeySpace) && c->zoom < kSpinBelowZoom) {
+        if (spinning_) {
+          Rect r;
+          GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+          SpinCamera(c, e.x - spinX_, e.y - spinY_, r.x1 - r.x0);
+        }
+        spinning_ = true;
+        spinX_ = e.x, spinY_ = e.y;
+        UserState::From(L)->ui().holdPointer = true;
+      } else if (spinning_) {
+        spinning_ = false;
+        UserState::From(L)->ui().holdPointer = false;
+        RevertCamera(c);
+      }
+      return false;
+    }
     if (e.type == EventType::WheelRotation && e.wheelDelta != 0) {
       // The wheel zooms, towards the place under the cursor when it zooms in (see AdvanceCamera).
       ZoomByWheel(GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
       return true;
     }
-    if (e.type != EventType::ButtonPress) return false;
+    // (A second press soon after the first comes as a double click: it is a press too.)
+    if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return false;
+    if (e.middle) {
+      if (miniMap) return false;
+      cameraDrag_ = true;
+      lastX_ = e.x, lastY_ = e.y;
+      UserState::From(L)->ui().holdPointer = true;
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
+    }
     float world[3];
     Unproject(L, e.x, e.y, world);
     if (e.right) {
@@ -586,7 +681,19 @@ class WorldView : public Control {
       return true;
     }
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
-    if (!mode.empty() || !UserState::From(L)->config().world || miniMap) return false;
+    if (!mode.empty() || miniMap) return false;
+    if (e.type == EventType::ButtonDClick) {
+      // A double click on one of the player's units selects all of its kind that are on screen
+      // (with Shift: adds them). As players know it from the original; its code for it is not read.
+      uint32_t under = UnitUnder(L, e.x, e.y);
+      if (under != 0xffffffffu) {
+        Rect r;
+        GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+        std::vector<uint32_t> onScreen;
+        if (EnsurePicture(L)) UserState::From(L)->config().world->UnitsIn(0, 0, r.x1 - r.x0, r.y1 - r.y0, &onScreen);
+        if (SelectSameKind(L, under, onScreen, e.shift)) return true;
+      }
+    }
     pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;
     UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
     return true;
@@ -694,6 +801,22 @@ WorldView* ViewOf(Control* c, const std::string& camera) {
   return nullptr;
 }
 
+// An option of the player's profile that is a switch (0 or 1, or "off" / "on"); `fallback` when
+// the profile does not have it.
+bool ProfileOption(lua_State* L, const char* key, bool fallback) {
+  int top = lua_gettop(L);
+  bool on = fallback;
+  lua_getglobal(L, "GetOptions");
+  lua_pushstring(L, key);
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0) {
+    if (lua_isnumber(L, -1)) on = lua_tonumber(L, -1) != 0;
+    else if (lua_isboolean(L, -1)) on = lua_toboolean(L, -1) != 0;
+    else if (lua_isstring(L, -1)) on = std::string(lua_tostring(L, -1)) != "off" && std::string(lua_tostring(L, -1)) != "Off";
+  }
+  lua_settop(L, top);
+  return on;
+}
+
 // One frame of a camera (FA exe 0x7a95f0). The zoom goes towards its target by its logarithm
 // (base 2): per second cam_ZoomSpeedSmall plus cam_ZoomSpeedLarge times what is left, so a long
 // way goes fast and the end is soft. Zooming in, the focus goes towards the ground under the
@@ -726,16 +849,52 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     c->focus[0] = under[0] + (c->focus[0] - under[0]) * f;
     c->focus[2] = under[2] + (c->focus[2] - under[2]) * f;
   }
-  // The arrow keys move the view that takes the camera's commands; Alt holds it still. (Of the
-  // original's frame function this much is built; not the screen's edges, which it follows only
-  // on a full screen, nor turning with Insert and Delete or with Space and the mouse.)
+  // The arrow keys and the screen's edges move the view that takes the camera's commands; Alt
+  // holds it still. (Of the original's frame function this much is built; not turning with
+  // Insert and Delete or with Space and the mouse.)
   if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt)) {
     float rate = kKeyPan * (KeyIsDown(L, kKeyCtrl) ? kKeyPanFast : 1.0f) * kPanFramesPerSecond * seconds;
-    float dx = (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
-    float dy = (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
+    float dx = 0, dy = 0;
+    // The mouse at the screen's edge (the original: its switch 0xf57a8c, the option
+    // "screen_edge_pans_main_view", and only on a screen the game fills).
+    UiManager& ui = UserState::From(L)->ui();
+    if (ui.edgeScroll && !ui.holdPointer && ProfileOption(L, "screen_edge_pans_main_view", true)) {
+      if (ui.mouseX <= 0) dx += rate;
+      if (ui.mouseY <= 0) dy += rate;
+      if (ui.mouseX >= static_cast<float>(ui.width() - 1)) dx -= rate;
+      if (ui.mouseY >= static_cast<float>(ui.height() - 1)) dy -= rate;
+    }
+    // The arrow keys (its switch 0xf57887, the option "arrow_keys_pan_main_view").
+    if (ProfileOption(L, "arrow_keys_pan_main_view", true)) {
+      dx += (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
+      dy += (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
+    }
     Rect r;
     v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);
+    // Insert and Delete turn the camera; it stays turned (nothing swings it back but Space let go
+    // or a reset, as in the original).
+    float turn = kKeyTurn * (KeyIsDown(L, kKeyCtrl) ? kKeyTurnFast : 1.0f) * kPanFramesPerSecond * seconds;
+    if (KeyIsDown(L, kKeyInsert)) SpinCamera(c, turn, 0, r.x1 - r.x0);
+    else if (KeyIsDown(L, kKeyDelete)) SpinCamera(c, -turn, 0, r.x1 - r.x0);
+  }
+  // Space let go while the mouse stands still: the turn swings back.
+  if (v && v->spinning_ && !KeyIsDown(L, kKeySpace)) {
+    v->spinning_ = false;
+    UserState::From(L)->ui().holdPointer = false;
+    RevertCamera(c);
+  }
+  // The way back (0x7a99eb): heading and lean go towards north up and the zoom's lean by a tenth
+  // of a radian a frame (here: as much in a sixtieth of a second), and it is over when both are there.
+  if (c->swingBack) {
+    float step = 0.1f * kPanFramesPerSecond * seconds;
+    float wanted = ZoomPitchOf(c), north = c->heading > 0 ? kPi : -kPi;
+    c->turnedPitch = std::max(c->turnedPitch - step, std::min(wanted, c->turnedPitch + step));
+    c->heading = std::max(c->heading - step, std::min(north, c->heading + step));
+    if (std::fabs(c->heading - north) < 0.1f && std::fabs(c->turnedPitch - wanted) < 0.1f) {
+      c->heading = kPi;
+      c->turned = c->swingBack = false;
+    }
   }
   ClampFocus(c);
 }
@@ -872,7 +1031,9 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, cam, "SetMaxZoomMult", l_CamSetMaxZoomMult);
   SetMethod(L, cam, "SaveSettings", l_CamSaveSettings);
   SetMethod(L, cam, "RestoreSettings", l_CamRestoreSettings);
-  for (const char* name : {"EnableEaseInOut", "DisableEaseInOut", "HoldRotation", "RevertRotation", "SetAccMode", "Spin",
+  SetMethod(L, cam, "HoldRotation", l_CamHoldRotation);
+  SetMethod(L, cam, "RevertRotation", l_CamRevertRotation);
+  for (const char* name : {"EnableEaseInOut", "DisableEaseInOut", "SetAccMode", "Spin",
                            "UseGameClock", "UseSystemClock"})
     SetMethod(L, cam, name, l_CamNothing);
 

@@ -57,12 +57,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
-         [--no-sound]
+         [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
   frames). Without it the host runs headless on its own clock.
 - `--screenshot file.png` draws the head once at the end and saves the picture.
+- `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
+  on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
   `uimain.SetupUI()`, `frontend` (the default) adds `uimain.StartFrontEndUI()`. `--frames N` then
   runs N frames (controls' `OnFrame`, script threads) at 60 frames per second of its own clock.
@@ -98,7 +100,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   banks `.xsb` with their cues, the categories of `SupCom.xgs`), `mixer.*` adds the playing
   sounds up, `device_win.cpp` hands the result to Windows' sound output, `sound_system.*` plays a
   cue of a bank and keeps the categories' volumes.
-- `app/main.cpp`: the host `moho64ui`.
+- `app/main.cpp`: the host `moho64ui`. `app/backdrop.*`: the main menu's moving background.
 - `tests/`: Lua tests run in the user state.
 - `tools/`: generators and scanners.
 - `REQUESTS.md`: what the interface needs from the other tracks.
@@ -234,7 +236,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
-  left click selects a unit and dragging selects a box. The camera follows the original's rules,
+  left click selects a unit and dragging selects a box; a double click on one of the player's
+  units selects all of its kind on screen. The camera follows the original's rules,
   read from its code: its zoom is the width of world the view shows (the eye stands at zoom /
   (2 tan(fov / 2))); it starts as far out as it goes (the map takes 1 / 1.4 of the view: 0.7083
   of the height here, 0.7087 on a screenshot of the original), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
@@ -242,8 +245,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the target zoom nearer by 2^-0.4 and the zoom glides after it, towards the ground under the
   cursor when zooming in; the focus stays on the map. The arrow keys move the view (Ctrl four
   times as fast, Alt holds it), at the original's amount per frame taken at 60 frames a second,
-  so that the speed does not go with the frame rate as the original's does. Turning the camera,
-  moving it with the screen's edge or the middle button, and timed moves are not built. The interface hands the picture what it adds to
+  so that the speed does not go with the frame rate as the original's does. Dragging with the
+  middle button moves the view with the mouse (the ground stays under the pointer). While the
+  camera is dragged or turned a live window holds the pointer as the original does: hidden and
+  kept in place, the mouse's moves still counted, so a drag has no end at the screen's edge. With `--fullscreen` the window
+  fills the main screen without a frame and keeps the mouse inside while it is in front; the
+  mouse at the screen's edge then moves the view, as in the original. The profile's options
+  `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. The camera turns
+  as the original's: with Space held the mouse turns and leans it (from near only, a zoom under
+  125; a full turn for a view's width) and it swings back to north up when Space is let go;
+  Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
+  turns the world is not checked against the original. Timed moves are not built. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
@@ -289,6 +301,27 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   has it drawn in. The world view the mouse is over runs its script's `OnUpdateCursor` every
   frame, as the original's frame function does, and the script picks the pointer by the command
   mode and by what a right click would order (attack over an enemy, and so on).
+- The front end's new background (ours, not the original's): where the main menu's script plays
+  its background film (`/movies/main_menu.sfd`, a Movie control under everything else), the host
+  shows the game's own world instead: the renderer's picture of Seton's Clutch in the evening
+  light, the camera going once round the middle of the map in five minutes, low over the shores.
+  The picture is made on a thread of its own with a graphics device of its own
+  (`app/backdrop.*`), so the menu never waits for it: the Movie control takes the newest finished
+  picture each frame (`BackdropSource` in `maui/world_source.h`), darkened so the menu's own signs
+  stand out, and coming in from black over a second and a half (again whenever the menu comes
+  back from another screen: while nobody shows it, no picture is made). Until the first picture is there
+  (about four seconds after the start: the map is read first) the background is black as before.
+  It ends when a game starts. Only that one film is replaced; with the game's option for the
+  menu's background film off, the script makes no such control and nothing is shown. The film
+  itself is still not decoded. `MOHO64UI_BACKDROP_AT=<seconds>` starts that far along the
+  camera's way (for pictures of it).
+- Life bars over units (the renderer's own bars: `WorldPicture::SetLifeBars`): the console
+  command `UI_RenderUnitBars`, which the game's key map binds to Alt-L ("toggle_lifebars"). OURS
+  differs from the original in one thing, by the project's choice: the bars are off until the
+  player switches them on (the original's script switches them on with every game). The command
+  without a value turns the player's switch over and keeps it in the preferences
+  (`moho64ui_life_bars`); a script's `UI_RenderUnitBars false` puts the bars away (a cinematic)
+  and `true` gives back what the player chose.
 - Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
@@ -296,6 +329,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
   (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the
   farthest zoom the map lies in its machinery with the frame around it, as in the original.
+- The picture is the player's: the renderer is told the player's army (`SetFocusArmy`) and shows
+  other armies' units as that army knows them (the unit while it is seen, a blip while it is on
+  radar or sonar alone, nothing otherwise), and the mouse follows it: a unit the army knows
+  nothing of is not under the mouse, a blip tells whose it is and not what it is. The unit under
+  the mouse gets the original's brackets (`SetHover`: the player's and allies' highlighted, an
+  enemy's red, others neutral), by the original's rule for which.
 - `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
   blueprint, health, economy, what it works on, its army and colour; the fields as the original
   writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by

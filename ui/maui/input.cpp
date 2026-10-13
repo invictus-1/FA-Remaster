@@ -337,7 +337,8 @@ int l_MouseMove(lua_State* L) {
   return 0;
 }
 
-// moho64ui_MouseButton(button, pressed, x, y): button is "Left", "Middle" or "Right"
+// moho64ui_MouseButton(button, pressed, x, y [, modifiers]): button is "Left", "Middle" or
+// "Right"; modifiers names any of Shift, Ctrl, Alt, and "Double" for the second press of a double click
 int l_MouseButton(lua_State* L) {
   std::string button = luaL_checkstring(L, 1);
   bool pressed = lua_toboolean(L, 2) != 0;
@@ -345,7 +346,8 @@ int l_MouseButton(lua_State* L) {
   e.left = button == "Left";
   e.middle = button == "Middle";
   e.right = button == "Right";
-  MouseButton(L, UserState::From(L)->ui(), e, pressed, false);
+  bool twice = lua_isstring(L, 5) && std::string(lua_tostring(L, 5)).find("Double") != std::string::npos;
+  MouseButton(L, UserState::From(L)->ui(), e, pressed, twice);
   return 0;
 }
 

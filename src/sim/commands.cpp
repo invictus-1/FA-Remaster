@@ -675,6 +675,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t) {
   c.targetId = 0;
   c.targetPoint = -1;
+  c.targetViaBlip = false;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
@@ -682,7 +683,10 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
       // on units, so a real blip stands for its unit; a jammer's fake blip is not a target yet.
       if (e->kind == Entity::Kind::Blip) {
         auto* b = static_cast<ReconBlip*>(e);
-        if (!b->fake && b->source && !b->source->destroyQueued) e = b->source;
+        if (!b->fake && b->source && !b->source->destroyQueued) {
+          e = b->source;
+          c.targetViaBlip = true;
+        }
       }
       c.targetId = EntityRef(e);
       c.pos = e->position;
@@ -1211,7 +1215,9 @@ int l_SetMult(lua_State* L) {
   float v = static_cast<float>(luaL_checknumber(L, 2));
   if (Which == 0) u->motion.speedMult = v;
   else if (Which == 1) u->motion.accMult = v;
-  else u->motion.turnMult = v;
+  else if (Which == 2) u->motion.turnMult = v;
+  else if (Which == 3) u->motion.breakOffTriggerMult = v;
+  else u->motion.breakOffDistanceMult = v;
   return 0;
 }
 
@@ -1455,6 +1461,8 @@ void RegisterCommandBindings(lua_State* L) {
   SetMethod(L, "Unit", "SetSpeedMult", l_SetMult<0>);
   SetMethod(L, "Unit", "SetAccMult", l_SetMult<1>);
   SetMethod(L, "Unit", "SetTurnMult", l_SetMult<2>);
+  SetMethod(L, "Unit", "SetBreakOffTriggerMult", l_SetMult<3>);
+  SetMethod(L, "Unit", "SetBreakOffDistanceMult", l_SetMult<4>);
   SetMethod(L, "Unit", "SetImmobile", l_SetImmobile);
   SetMethod(L, "Unit", "IsMobile", l_IsMobile);
   SetMethod(L, "Unit", "GetNavigator", l_GetNavigator);

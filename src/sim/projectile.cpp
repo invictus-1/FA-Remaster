@@ -27,6 +27,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/air.h"
 #include "sim/blueprints.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
@@ -48,6 +49,7 @@ int CallMethodBool(Sim& sim, lua_State* L, ScriptObject* obj, const char* method
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
+Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
 
 const char* ImpactTypeName(int t) {
@@ -233,6 +235,12 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     Vec3 v = Mul(EntityVelocity(p->launcher), 10);
     if (HasTarget(*this, target) && p->launcher->kind == Entity::Kind::Unit) {
       Vec3 T = TargetPos(*this, target, false);
+      // a mobile target is led by the launcher's Air.PredictAheadForBombDrop seconds (0x62cd40)
+      const Unit* lu0 = static_cast<const Unit*>(p->launcher);
+      const float ahead = lu0->motion.air && lu0->motion.air->bp ? lu0->motion.air->bp->predictAheadForBombDrop : 0;
+      if (ahead > 0 && target.mobile)
+        if (Entity* te = TargetEntity(*this, target); te && te->kind == Entity::Kind::Unit)
+          T = PredictAhead(*this, static_cast<Unit*>(te), ahead, true);
       Vec3 dd{T.x - p->launcher->position.x, 0, T.z - p->launcher->position.z};
       v = Mul(Norm(dd), Len(v));
     }
@@ -317,17 +325,11 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   } else if (blip) {
     p->lastTargetPos = blip->position;
   } else {
-    Vec3 t = TargetPos(sim, p->target, false);
-    // A target WITHOUT an aim bone is the entity's own position, and an entity that already took its step in
-    // this beat still stands, for the original, where the beat began (its transform is committed in step 13):
-    // the point is taken out of the hull's frame of now and put back in with the held one. (With an aim bone
-    // the point comes from the unit's pose, which did move with the unit's own step: the Experimental replay
-    // needs that, the Transports replay the other.)
-    if (const Entity* te0 = TargetEntity(sim, p->target);
-        te0 && te0->shapeHeld && p->target.aimBone < 0 && !IsNaN(t)) {
-      const Vec3 local = Rotate(Conj(te0->orientation), Sub(t, te0->position));
-      t = Add(te0->shapePos, Rotate(te0->shapeOri, local));
-    }
+    // A target WITHOUT an aim bone is taken from the entity's own transform, and an entity that already took its
+    // step in this beat still stands, for the original, where the beat began (its transform is committed in step
+    // 13). (With an aim bone the point comes from the unit's pose, which did move with the unit's own step: the
+    // Experimental replay needs that, the Transports replay the other.)
+    Vec3 t = TargetPosBeatStart(sim, p->target);
     if (!IsNaN(t)) p->lastTargetPos = t;
   }
   Vec3 aim = p->lastTargetPos;
@@ -354,6 +356,14 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       float oy = static_cast<float>(sim.FRand(-Z, Z));
       float oz = static_cast<float>(sim.FRand(-Z, Z));
       p->zigOffset = {ox, oy, oz};
+      if (getenv("MOHO64_DEBUG_PROJ")) {
+        const Entity* e0 = p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
+        const Unit* tu = e0 && e0->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e0) : nullptr;
+        Logf(LogLevel::Info, "pdbg %u %u zigzag (launcher %u, target unit %d%s, dead %d destroy queued %d)", sim.tick(),
+             p->id, p->launcher ? p->launcher->id : 0u, tu ? static_cast<int>(tu->id) : -1,
+             p->target.viaBlip ? " via its blip" : "", tu ? static_cast<int>(tu->dead) : -1,
+             tu ? static_cast<int>(tu->destroyQueued) : -1);
+      }
       p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
     }
     float s = std::min(Len(Sub(aim, pos)) / Z, 1.0f);
@@ -763,10 +773,12 @@ int l_weapon_CreateProjectile(lua_State* L) {
   else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) q = Orient(Norm(w->solution));
   float R = w->firingRandomness;
   static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;
-  if (dbgProj)
-    Logf(LogLevel::Info, "wproj %u unit %u %s weapon %s randomness %g moving %d", sim.tick(), u->id,
-         u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str(), R,
-         static_cast<int>(u->unitStates.count("Moving")));
+  if (dbgProj) {
+    const Vec3 tpDbg = w->target.type ? TargetPos(sim, w->target, false) : Vec3{};
+    Logf(LogLevel::Info, "wproj %u unit %u %s weapon %s randomness %g moving %d target type %d point %.9g %.9g %.9g",
+         sim.tick(), u->id, u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str(), R,
+         static_cast<int>(u->unitStates.count("Moving")), w->target.type, tpDbg.x, tpDbg.y, tpDbg.z);
+  }
   if (R > 0) {
     float g1 = Gauss(sim), g2 = Gauss(sim);
     float pitch = g1 * R * kPi / 180, yaw = g2 * R * kPi / 180;

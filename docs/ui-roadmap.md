@@ -106,8 +106,9 @@ The original runs a session's interface in its own script state, separate from t
 
 - Sound: the game's sound banks, playing, stopping and pausing cues, voices, volumes, music, world
   sounds at their place (about 20 functions). Needs a choice of audio backend.
-- Movies: the game's .sfd files (MPEG video with its sound track) for briefings and the menu background,
-  or the new front-end background asked for.
+- Movies: the game's .sfd files (MPEG video with its sound track) for briefings and the menu background.
+- **Done:** the new front-end background asked for: the game's own world behind the main menu, a
+  map in the evening light with the camera gliding over it (see `ui/README.md`).
 
 ## Stage 7: everything around a match
 

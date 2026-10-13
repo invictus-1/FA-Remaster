@@ -26,6 +26,7 @@ class ThreadScheduler;
 namespace moho::ui {
 
 class WorldSource;
+class BackdropSource;
 struct WorldLine;
 class UiManager;
 namespace sound {
@@ -53,6 +54,9 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // What is shown where the front end plays its background film (the main menu's): a moving
+    // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
+    BackdropSource* backdrop = nullptr;
     // What plays the sounds the scripts ask for (the host's, one for all states); nullptr: nothing does.
     sound::SoundSystem* sound = nullptr;
   };
@@ -84,6 +88,11 @@ class UserState {
   std::unique_ptr<Extra> units;
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
   std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
+  // The life bars over units (the console command UI_RenderUnitBars, user/keymap.cpp): the
+  // player's own switch (-1: not read from the preferences yet) and whether a script has them
+  // put away for now.
+  int lifeBars = -1;
+  bool lifeBarsPutAway = false;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -158,6 +167,9 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// Select the player's units of the same kind (blueprint) as `unit` among those entity ids; with
+// `add` they join the selection. False when `unit` is not one of the player's.
+bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);
 // For the world's picture: the selected units' entity ids, and the lines of their orders (from
 // each unit to where its orders take it, coloured by the kind of order).
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);

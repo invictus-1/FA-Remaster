@@ -106,6 +106,7 @@ struct AirMotion {
   // navigator (CAiNavigatorAir)
   bool steering = false;     // status 2
   uint32_t destEntity = 0;   // SetDestUnit's entity: the target follows it every beat until the next SetGoal
+  bool reaimAtDest = false;  // it was at its target at the last beat's end and has a destination: re-aim, not arrive
   bool inFormation = false;  // navigator +0x88: follows its formation slot (air_nav 4.3)
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;
@@ -154,7 +155,7 @@ void AirAbort(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
 void AirSpeedThroughEvent(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.
-Vec3 PredictAhead(Sim& sim, Unit* u, float t);
+Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other = false);
 // Warp: re-sync the body and the terrain height.
 void AirWarp(Sim& sim, Unit* u);
 // CUnitMotion::ProcessFuelLevels 0x6b9940 (fuel.md 3): burn in the air, refuel on the ground or

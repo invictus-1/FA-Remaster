@@ -369,6 +369,20 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   }
   return NaNVec();
 }
+
+// The same point for code that runs inside the motion pass (flight, a projectile's steering). An entity's new
+// transform is committed at the beat's end, so a target WITHOUT an aim bone - the centre of its collision
+// primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
+// has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
+Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
+  if (t.type == 1 && t.aimBone < 0)
+    if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
+      if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
+        return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
+      return e->shapePos;
+    }
+  return TargetPos(sim, t, false);
+}
 }  // namespace combat
 
 Vec3 EntityVelocity(const Entity* e) {
@@ -759,6 +773,11 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
     if (w->bp->needToComputeBombDrop && HasTarget(sim, w->target)) {
       if (!u->unitStates.count("MakingAttackRun")) return false;
       Vec3 T = TargetPos(sim, w->target, false);
+      // a mobile target is led: where it will be in Air.PredictAheadForBombDrop seconds (0x62cd40). (Weapons
+      // run before the beat's moves: nothing is held yet, committed and current are the same here.)
+      if (cb.predictAheadForBombDrop > 0 && w->target.mobile)
+        if (Entity* te = TargetEntity(sim, w->target); te && te->kind == Entity::Kind::Unit)
+          T = PredictAhead(sim, static_cast<Unit*>(te), cb.predictAheadForBombDrop, true);
       Vec3 R = CalcBombDrop(u, T);
       if (IsNaN(R)) return false;
       float d = DistXZ(u->position, R), thr = w->bp->bombDropThreshold;
@@ -976,6 +995,15 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
         if (std::find(ordered.begin(), ordered.end(), t) == ordered.end()) ordered.push_back(t);
     u->blipCache.swap(ordered);
   }
+  {
+    // MOHO64_DEBUG_BLIPCACHE=<unit id>: every rebuild of that unit's list of enemies in reach
+    static const long dbgId = getenv("MOHO64_DEBUG_BLIPCACHE") ? atol(getenv("MOHO64_DEBUG_BLIPCACHE")) : -1;
+    if (dbgId >= 0 && static_cast<long>(u->id) == dbgId) {
+      std::string ids;
+      for (const Unit* t : u->blipCache) ids += " " + std::to_string(t->id);
+      Logf(LogLevel::Info, "blipcache %u unit %u period %d reach %.3f:%s", sim.tick(), u->id, period, R, ids.c_str());
+    }
+  }
   return u->blipCache;
 }
 
@@ -1169,13 +1197,32 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   }
   if (reporter) ReportState(u, code);
   if (w->suppress > 0) --w->suppress;
-  if (u->unitStates.count("Attacking") &&
-      ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1))
-    return 1;
+  // MOHO64_DEBUG_ACQTICK=<tick>: every acquire task that runs in that beat, and how far it gets
+  static const long dbgAcqTick = getenv("MOHO64_DEBUG_ACQTICK") ? atol(getenv("MOHO64_DEBUG_ACQTICK")) : -1;
+  const bool dbgAcq2 = dbgAcqTick >= 0 && static_cast<long>(sim.tick()) == dbgAcqTick;
+  const bool engaging = u->unitStates.count("Attacking") &&
+                        ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1);
+  const bool keeps = !engaging && !b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 &&
+                     CanAttackTarget(sim, w, w->target) && HasTarget(sim, w->target) &&
+                     !TargetExempt(u, TargetEntity(sim, w->target));
+  if (dbgAcq2) {
+    const Entity* ce = w->target.type == 1 ? sim.FindEntity(w->target.entityId) : nullptr;
+    const Entity* de = d.type == 1 ? sim.FindEntity(d.entityId) : nullptr;
+    Logf(LogLevel::Info, "acqtick %u unit %u%s %s code %d period %d holds %d%s wants %d%s -> %s", sim.tick(), u->id,
+         u->dead ? " (dead)" : "", b.label.c_str(), code, period, ce ? static_cast<int>(ce->id) : -1,
+         ce && ce->dead ? " (dead)" : "", de ? static_cast<int>(de->id) : -1, de && de->dead ? " (dead)" : "",
+         engaging ? "engaging, again next beat" : keeps ? "keeps its target" : "looks for a target");
+    if (b.autoInitiateAttackCommand)  // what CheckAutoInitiate looks at: the unit's orders
+      for (const auto& c : u->commands) {
+        const Entity* te = c->targetId ? sim.FindEntity(c->targetId) : nullptr;
+        Logf(LogLevel::Info, "acqtick %u unit %u   order type %d target %d%s%s", sim.tick(), u->id,
+             static_cast<int>(c->type), te ? static_cast<int>(te->id) : c->targetId ? -2 : -1,
+             te && te->dead ? " (dead)" : "", c->targetViaBlip ? " via its blip" : "");
+      }
+  }
+  if (engaging) return 1;
   // keep the current target
-  if (!b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 && CanAttackTarget(sim, w, w->target) &&
-      HasTarget(sim, w->target) && !TargetExempt(u, TargetEntity(sim, w->target)))
-    return ret;
+  if (keeps) return ret;
   if (u->fireState == 1) {
     SetTarget(sim, w, AiTarget{});
     return ret;
@@ -1330,11 +1377,12 @@ void WeaponsTick(Sim& sim) {
 
 // SetDesiredTarget 0x5d75b0
 static void SetDesiredTarget(Sim& sim, Unit* u, const AiTarget& t) {
+  // A PLAYER's order on an enemy unit holds the army's recon blip of it (the watch: weapons that take the order's
+  // target report the blip, weapons that found the same unit themselves report the unit): the target comes with
+  // viaBlip set from the command (CommandTarget). An order the engine made itself from what a weapon found (the
+  // auto-initiated attack) names the unit: its missiles lose their target the moment the unit dies (seen: one
+  // zig-zag draw less in the beat an interceptor died), where a blip's outlive the unit.
   u->desiredTarget = t;
-  // an order's enemy unit is held as the army's recon blip of it (the watch: weapons that take the order's
-  // target report the blip, weapons that found the same unit themselves report the unit)
-  if (Entity* e = TargetEntity(sim, t))
-    if (e->kind == Entity::Kind::Unit && e->army && u->army && IsEnemy(u->army, e->army)) u->desiredTarget.viaBlip = true;
   bool has = HasTarget(sim, t);
   for (UnitWeapon* w : u->weapons) {
     if (!w->bp) continue;
@@ -1872,6 +1920,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
       if (e->kind == Entity::Kind::Unit) {
         Unit* tu = static_cast<Unit*>(e);
         a.mobile = IsMobile(tu);
+        a.viaBlip = t.targetViaBlip;
         // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
@@ -2242,11 +2291,15 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 
 // new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
+  // both callers (CUnitPatrolTask::TaskTick 0x61c229, CUnitGuardTask::SetEnemy 0x61390f) first build a CAiTarget of
+  // the enemy they found (UpdateTarget 0x5d55b0: one target-point draw when it has AI.TargetBones), then make the task
+  const int targetPoint = TargetPointDraw(sim, e);
   if (u->weapons.empty() || !e) return nullptr;
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Attack;
   t->order = "Attack";
   t->goalId = EntityRef(e);
+  t->targetPoint = targetPoint;
   t->site = e->position;
   t->child = true;
   InitAttack(sim, u, *t, false);
@@ -2262,6 +2315,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Attack";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2279,6 +2333,7 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "FireAt";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2388,6 +2443,7 @@ BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Attack";
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
+  t->targetViaBlip = c.targetViaBlip;
   t->site = e->position;
   InitAttack(sim, u, *t, false);
   for (size_t i = 0; i < u->weapons.size(); ++i)
@@ -2463,8 +2519,9 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
     WeaponCall(sim, u->weapons[static_cast<size_t>(t.adata->ocWeapon)], "OnDisableWeapon");  // dtor 0x5f41e4
   // the task's teardown clears its unit states also when the unit died (seen: a killed unit's queue empties and
   // "Attacking" goes in the same beat)
+  // (MakingAttackRun is not the task's: only the flight code sets it and clears it, in its own pass; a killed
+  // aircraft keeps it)
   u->unitStates.erase("Attacking");
-  u->unitStates.erase("MakingAttackRun");
   if (u->dead || u->destroyQueued) return;
   // the dtor 0x5f4160: IgnoreFormation(false), attacker.Stop() 0x5d56f0 = SetDesiredTarget(none) whatever the
   // desired target was (every weapon is told SetTarget(none): one that still holds a target, also a long dead

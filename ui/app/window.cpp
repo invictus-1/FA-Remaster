@@ -46,6 +46,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   auto key = [&](const UiEvent& e) { return w->callbacks.key ? w->callbacks.key(e) : false; };
   auto button = [&](bool left, bool middle, bool right, bool pressed, bool dbl) {
     UiEvent e = MouseEvent(wp, lp);
+    if (w->holding()) w->HeldPlace(&e.x, &e.y);  // a held pointer: the place its moves add up to
     e.left = left, e.middle = middle, e.right = right;  // for a button event: the button it is about
     if (pressed) SetCapture(hwnd);
     else ReleaseCapture();
@@ -55,9 +56,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE:
       w->closed = true;
       return 0;
-    case WM_MOUSEMOVE:
-      if (w->callbacks.mouseMove) w->callbacks.mouseMove(MouseEvent(wp, lp));
+    case WM_MOUSEMOVE: {
+      UiEvent e = MouseEvent(wp, lp);
+      // A held pointer is put back after every move; the move itself is passed on.
+      if (w->holding() && !w->HeldMove(static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp)), &e.x, &e.y)) return 0;
+      if (w->callbacks.mouseMove) w->callbacks.mouseMove(e);
       return 0;
+    }
     case WM_LBUTTONDOWN: button(true, false, false, true, false); return 0;
     case WM_LBUTTONDBLCLK: button(true, false, false, true, true); return 0;
     case WM_LBUTTONUP: button(true, false, false, false, false); return 0;
@@ -108,6 +113,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_ERASEBKGND:
       return 1;  // every frame covers the whole window
+    case WM_ACTIVATE:  // in front: the mouse stays inside a window that fills the screen; behind: it is free
+      if (w->fullScreen) w->KeepMouseInside(LOWORD(wp) != WA_INACTIVE);
+      break;
     case WM_SETCURSOR:
       if (LOWORD(lp) == HTCLIENT) {  // inside the window: the interface's pointer
         SetCursor(static_cast<HCURSOR>(w->pointer()));
@@ -123,6 +131,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }  // namespace
 
 Window::~Window() {
+  if (fullScreen) ClipCursor(nullptr);
   if (hwnd_) DestroyWindow(static_cast<HWND>(hwnd_));
   for (auto& entry : pointers_)
     if (entry.second) DestroyIcon(static_cast<HICON>(entry.second));
@@ -174,14 +183,67 @@ bool Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX,
   return made != nullptr || !pixels;
 }
 
+void Window::HoldPointer(bool hold) {
+  if (hold == holding_ || !hwnd_) return;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  POINT p;
+  GetCursorPos(&p);
+  if (hold) {
+    ScreenToClient(hwnd, &p);
+    holdX_ = p.x, holdY_ = p.y;
+    heldX_ = static_cast<float>(p.x), heldY_ = static_cast<float>(p.y);
+    holding_ = true;
+    SetCursor(nullptr);
+  } else {
+    holding_ = false;
+    POINT back{holdX_, holdY_};
+    ClientToScreen(hwnd, &back);
+    SetCursorPos(back.x, back.y);
+    SetCursor(static_cast<HCURSOR>(pointer()));
+  }
+}
+
+// A move of the mouse while the pointer is held: its step is added to the held place and the
+// pointer is put back. False for the message the putting back itself makes.
+bool Window::HeldMove(int clientX, int clientY, float* x, float* y) {
+  if (clientX == holdX_ && clientY == holdY_) return false;
+  heldX_ += static_cast<float>(clientX - holdX_), heldY_ += static_cast<float>(clientY - holdY_);
+  *x = heldX_, *y = heldY_;
+  POINT back{holdX_, holdY_};
+  ClientToScreen(static_cast<HWND>(hwnd_), &back);
+  SetCursorPos(back.x, back.y);
+  return true;
+}
+
 void Window::HidePointer(bool hidden) {
   if (hidden == pointerHidden_) return;
   pointerHidden_ = hidden;
   SetPointer(nullptr, 0, 0, 0, 0);  // (drops the image: the host sets it again when it is shown)
 }
 
-bool Window::Create(int width, int height, const char* title, Callbacks cb) {
+bool Window::ScreenSize(int* width, int* height) {
+  SetProcessDPIAware();
+  *width = GetSystemMetrics(SM_CXSCREEN), *height = GetSystemMetrics(SM_CYSCREEN);
+  return *width > 0 && *height > 0;
+}
+
+void Window::KeepMouseInside(bool keep) {
+  if (!keep || !hwnd_) {
+    ClipCursor(nullptr);
+    return;
+  }
+  RECT rc;
+  GetClientRect(static_cast<HWND>(hwnd_), &rc);
+  POINT a{rc.left, rc.top}, b{rc.right, rc.bottom};
+  ClientToScreen(static_cast<HWND>(hwnd_), &a);
+  ClientToScreen(static_cast<HWND>(hwnd_), &b);
+  RECT clip{a.x, a.y, b.x, b.y};
+  ClipCursor(&clip);
+}
+
+bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full) {
   callbacks = std::move(cb);
+  fullScreen = full;
   SetProcessDPIAware();  // one interface pixel is one screen pixel
   timeBeginPeriod(1);    // sleeps of a millisecond, so the frame loop can keep 60 frames per second
   HINSTANCE inst = GetModuleHandleW(nullptr);
@@ -192,13 +254,13 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb) {
   wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
   wc.lpszClassName = L"moho64ui";
   RegisterClassW(&wc);
-  DWORD style = WS_OVERLAPPEDWINDOW;
+  DWORD style = full ? WS_POPUP : WS_OVERLAPPEDWINDOW;  // no frame when it fills the screen
   RECT rc{0, 0, width, height};
   AdjustWindowRect(&rc, style, FALSE);
   wchar_t wtitle[256];
   MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
-  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left,
-                              rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
+  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, full ? 0 : CW_USEDEFAULT, full ? 0 : CW_USEDEFAULT,
+                              rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
   arrow_ = wc.hCursor;
@@ -237,11 +299,15 @@ void Window::Present(const SoftwareTarget& target) {
 
 namespace moho::ui {
 Window::~Window() {}
-bool Window::Create(int, int, const char*, Callbacks) { return false; }
+bool Window::Create(int, int, const char*, Callbacks, bool) { return false; }
+bool Window::ScreenSize(int*, int*) { return false; }
+void Window::KeepMouseInside(bool) {}
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }
 void Window::HidePointer(bool) {}
+void Window::HoldPointer(bool) {}
+bool Window::HeldMove(int, int, float*, float*) { return false; }
 }  // namespace moho::ui
 
 #endif

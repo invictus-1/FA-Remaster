@@ -1,10 +1,12 @@
 -- The in-game interface on a running game, checked from the script side of a launched game's
 -- state: the session's facts, units, selection, the panels' data, the world view and a move order.
 -- It needs a recorded game configuration (what --session-out writes when a game is launched from
--- the lobby) with the player in the first slot:
+-- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
+-- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1650 --log out.log
+--            --frames 1850 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
+-- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -124,6 +126,14 @@ local function run()
     WaitSeconds(0.3)
     moho64ui_Key(317, "", "up")
     check("the up arrow moves it north", cam:GetFocusPosition()[3] < g[3] - 1, true)
+    -- dragging with the middle button moves the view with the mouse: the ground stays under the pointer
+    local d0 = cam:GetFocusPosition()
+    moho64ui_MouseButton("Middle", true, 900, 500)
+    moho64ui_MouseMove(880, 500)
+    moho64ui_MouseButton("Middle", false, 880, 500)
+    local d1 = cam:GetFocusPosition()
+    local shown = cam:GetZoom() / view.Width()  -- map units per pixel
+    check("a middle-button drag 20 pixels to the left moves the view east by as much", math.abs((d1[1] - d0[1]) - 20 * shown) < 0.01 and math.abs(d1[3] - d0[3]) < 0.01, true)
     cam:RestoreSettings(saved)
     WaitSeconds(0.1)
 
@@ -210,26 +220,102 @@ local function run()
     WaitSeconds(0.3)
     s = view:Project(there)
     moho64ui_MouseMove(s.x, s.y)
-    check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
-    -- the mouse pointer: the world view's script chooses it every frame while the mouse is over it
     WaitSeconds(0.2)
-    local pointer = moho64ui_Cursor()
-    check("the pointer over an enemy is the attack pointer", string.find(pointer or "", "/cursors/attack", 1, true) ~= nil, true)
-    moho64ui_MouseMove(s.x - 300, s.y)
-    WaitSeconds(0.2)
-    pointer = moho64ui_Cursor()
-    check("over the ground it is the plain one again", string.find(pointer or "", "/cursors/attack", 1, true), nil)
-    moho64ui_MouseMove(s.x, s.y)
-    moho64ui_MouseButton("Right", true, s.x, s.y)
-    moho64ui_MouseButton("Right", false, s.x, s.y)
-    WaitSeconds(1)
-    queue = cdr:GetCommandQueue()
-    check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    local pointer
+    if SessionGetScenarioInfo().Options.FogOfWar == "none" then
+        -- a game without fog of war: the enemy across the map is seen, and the mouse is told of it
+        check("over an enemy it attacks", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+        local info = GetRolloverInfo()
+        check("the info under the mouse is the enemy commander's", info ~= nil and info.entityId, "1048576")
+        -- the mouse pointer: the world view's script chooses it every frame while the mouse is over it
+        pointer = moho64ui_Cursor()
+        check("the pointer over an enemy is the attack pointer", string.find(pointer or "", "/cursors/attack", 1, true) ~= nil, true)
+        moho64ui_MouseMove(s.x - 300, s.y)
+        WaitSeconds(0.2)
+        pointer = moho64ui_Cursor()
+        check("over the ground it is the plain one again", string.find(pointer or "", "/cursors/attack", 1, true), nil)
+        moho64ui_MouseMove(s.x, s.y)
+        moho64ui_MouseButton("Right", true, s.x, s.y)
+        moho64ui_MouseButton("Right", false, s.x, s.y)
+        WaitSeconds(1)
+        queue = cdr:GetCommandQueue()
+        check("and the right click gives the attack order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Attack")
+    else
+        -- with fog of war the player's army knows nothing of a commander across the map: it is not
+        -- under the mouse, nothing is told of it, and a right click there is a move
+        check("an enemy the army does not see is not attacked by a right click", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
+        check("nothing is told of it", GetRolloverInfo(), nil)
+        pointer = moho64ui_Cursor()
+        check("and the pointer stays the plain one", string.find(pointer or "", "/cursors/attack", 1, true), nil)
+        moho64ui_MouseButton("Right", true, s.x, s.y)
+        moho64ui_MouseButton("Right", false, s.x, s.y)
+        WaitSeconds(1)
+        queue = cdr:GetCommandQueue()
+        check("the right click there is a move order", table.getn(queue) .. " " .. tostring(queue[1] and queue[1].type), "1 Move")
+    end
     IssueUnitCommand({cdr}, "Stop")
     cam:RestoreSettings(saved)
 
     SelectUnits(nil)
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)
+    -- clicks in the world: a click on a unit selects it, a double click all of its kind on screen
+    here = cdr:GetPosition()
+    cam:SnapTo(here, nil, 80)
+    WaitSeconds(0.3)
+    s = view:Project(here)
+    moho64ui_MouseButton("Left", true, s.x, s.y)
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    sel = GetSelectedUnits()
+    check("a click on the commander selects it", sel ~= nil and sel[1] == cdr, true)
+    SelectUnits(nil)
+    moho64ui_MouseButton("Left", true, s.x, s.y, "Double")
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    sel = GetSelectedUnits()
+    check("a double click selects its kind on screen (here: the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    SelectUnits(nil)
+    -- turning the camera: Space held and the mouse (a full turn for a view's width, the lean with
+    -- the mouse's height); it swings back when Space is let go
+    local turn0 = cam:SaveSettings()
+    moho64ui_Key(32, "", "down")
+    moho64ui_MouseMove(900, 500)
+    moho64ui_MouseMove(1100, 440)
+    local turn1 = cam:SaveSettings()
+    check("Space and the mouse turn the camera", math.abs((turn0.Heading - turn1.Heading) - 200 * 2 * math.pi / view.Width()) < 0.001, true)
+    check("and lean it", turn1.Pitch < turn0.Pitch - 0.1, true)
+    moho64ui_Key(32, "", "up")
+    WaitSeconds(0.5)
+    local turn2 = cam:SaveSettings()
+    check("it swings back when Space is let go", math.abs(turn2.Heading - turn0.Heading) < 0.001 and math.abs(turn2.Pitch - turn0.Pitch) < 0.001, true)
+    moho64ui_Key(324, "", "down")
+    WaitSeconds(0.3)
+    moho64ui_Key(324, "", "up")
+    local turn3 = cam:SaveSettings().Heading
+    WaitSeconds(0.3)
+    check("Insert turns it, and it stays turned", turn3 < turn0.Heading - 0.2 and cam:SaveSettings().Heading == turn3, true)
+    cam:Reset()
+    check("Reset brings north up again", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+    moho64ui_Key(32, "", "down")
+    moho64ui_MouseMove(900, 500)
+    moho64ui_MouseMove(1100, 440)
+    moho64ui_Key(32, "", "up")
+    check("from far out Space and the mouse do not turn it", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+
+    -- the life bars over units: off until the player switches them on (ours); the scripts' own
+    -- "false" / "true" put them away and give back what the player chose
+    local barsAtFirst = moho64ui_LifeBars()
+    if barsAtFirst then ConExecute('UI_RenderUnitBars') end
+    check("life bars are off (the game's script has run UI_RenderUnitBars true)", moho64ui_LifeBars(), false)
+    check("the key for them is bound", moho64ui_KeyMapAction("Alt-L"), "UI_RenderUnitBars")
+    ConExecute('UI_RenderUnitBars')
+    check("the player's switch shows them", moho64ui_LifeBars(), true)
+    ConExecute('UI_RenderUnitBars false')
+    check("a script puts them away", moho64ui_LifeBars(), false)
+    ConExecute('UI_RenderUnitBars true')
+    check("and gives them back", moho64ui_LifeBars(), true)
+    ConExecute('UI_RenderUnitBars')
+    ConExecute('UI_RenderUnitBars true')
+    check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
+    if barsAtFirst then ConExecute('UI_RenderUnitBars') end
     LOG("TEST done: " .. failed .. " failed")
 end
 

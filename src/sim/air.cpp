@@ -35,6 +35,7 @@ namespace combat {
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
+Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
 }  // namespace combat
 
@@ -43,6 +44,12 @@ namespace {
 constexpr float kInf = std::numeric_limits<float>::infinity();
 constexpr int kLand = 1, kSeabed = 2, kSub = 4, kWater = 8, kAir = 0x10;
 constexpr float kGravityY = -4.9f;
+
+// A target's point as the flight code sees it. The flight code runs inside the motion pass, and an entity's new
+// transform is committed only at the beat's end: a target WITHOUT an aim bone (the centre of its collision
+// primitive) stands and lies, for the original, as the beat began even when the target has already taken its
+// step. (With an aim bone the point comes from the pose, which moved with the target's own step.)
+Vec3 TargetPosNow(Sim& sim, const AiTarget& t) { return combat::TargetPosBeatStart(sim, t); }
 
 int LayerBits(const std::string& l) {
   if (l == "Land") return kLand;
@@ -987,10 +994,11 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
   float R = b.startTurnDistance * a.circleRatio;
   Entity* focus = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
   if (focus && (State(u, "Building") || State(u, "Repairing"))) {
-    cx = focus->position.x;
-    cz = focus->position.z;
+    const Vec3& fp = focus->shapeHeld ? focus->shapePos : focus->position;  // as the beat began (see TargetPosNow)
+    cx = fp.x;
+    cz = fp.z;
   } else if (combat::HasTarget(sim, target)) {
-    Vec3 tp = combat::TargetPos(sim, target, false);
+    Vec3 tp = TargetPosNow(sim, target);
     cx = tp.x;
     cz = tp.z;
     UnitWeapon* w = nullptr;
@@ -1183,7 +1191,7 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   Entity* E = combat::TargetEntity(sim, tgt);
   if (E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air") {
     Unit* tu = static_cast<Unit*>(E);
-    float tgtY = tu->motion.air ? h + tu->motion.air->bp->elevation : combat::TargetPos(sim, tgt, false).y;
+    float tgtY = tu->motion.air ? h + tu->motion.air->bp->elevation : TargetPosNow(sim, tgt).y;
     float want = b.elevation * 0.5f + h;
     return std::max(want, tgtY) - u->position.y;
   }
@@ -1191,10 +1199,12 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   return (h + b.elevation) - u->position.y;
 }
 
+// "position != previous position" of ANOTHER entity (entity+0xac against +0xc8): both are the transforms the
+// beat began with, whether or not that entity has already taken its step in this beat
 bool MovedThisTick(const Entity* e) {
   if (e->kind != Entity::Kind::Unit) return false;
   const Unit* t = static_cast<const Unit*>(e);
-  return !IsZeroBits(t->motion.lastMove);
+  return !IsZeroBits(t->motion.velCommitted);
 }
 
 // CUnitMotion::ComputeAirCombatTactics 0x6bcdb0
@@ -1204,13 +1214,21 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   uint32_t now = sim.tick();
   float speed = u->motion.speedMult * b.maxAirspeed;
   Vec3 pos = u->position;
-  Vec3 tp = combat::TargetPos(sim, tgt, false);
+  Vec3 tp = TargetPosNow(sim, tgt);
   Vec3 diff{tp.x - pos.x, tp.y - pos.y, tp.z - pos.z};
-  float d3 = std::sqrt((diff.x * diff.x + diff.y * diff.y) + diff.z * diff.z);
-  float d2 = std::sqrt(diff.x * diff.x + diff.z * diff.z);
-  Vec3 dir3 = Normalized(diff);
-  float trig = 1.0f * b.breakOffTrigger;
-  float brk = 1.0f * b.breakOffDistance;
+  // the squares are summed (x^2 + z^2) + y^2 here, for the distance and again for the direction (0x6bce66,
+  // 0x6bcf02: inline code, not the vector helpers); the direction is the difference times 1 / length. Summed in
+  // another order the direction times the distance misses the difference by a last bit or two, which is a last
+  // bit in the desired velocity and, beats later, the other side of a comparison
+  float d3 = std::sqrt((diff.x * diff.x + diff.z * diff.z) + diff.y * diff.y);
+  float d2 = std::sqrt(diff.z * diff.z + diff.x * diff.x);
+  Vec3 dir3{};
+  if (d3 > 0.0f) {
+    const float inv = 1.0f / d3;
+    dir3 = {inv * diff.x, diff.y * inv, diff.z * inv};
+  }
+  float trig = u->motion.breakOffTriggerMult * b.breakOffTrigger;
+  float brk = u->motion.breakOffDistanceMult * b.breakOffDistance;
   int s = a.combatState;
   Entity* E = combat::TargetEntity(sim, tgt);
   bool eAir = E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air";
@@ -1224,14 +1242,32 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         if (E && tgt.mobile) {
           float t = 1.0f;
           if (b.predictAheadForBombDrop > 0 && !eAir) t = b.predictAheadForBombDrop;
-          Vec3 p = E->kind == Entity::Kind::Unit ? PredictAhead(sim, static_cast<Unit*>(E), t) : Vec3{};
+          Vec3 p = E->kind == Entity::Kind::Unit ? PredictAhead(sim, static_cast<Unit*>(E), t, true) : Vec3{};
           out = {p.x - pos.x, p.y - pos.y, p.z - pos.z};
         } else {
           out = {dir3.x * d3, dir3.y * d3, dir3.z * d3};
         }
+        const Vec3 raw = out;
         out.y = elev(out);
+        const Vec3 lifted = out;
         if (s == 2 && eAir && MovedThisTick(E)) SetLength(out, std::max(d3, b.minAirspeed));
         else SetLength(out, speed);
+        {
+          static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+          if (dbgId >= 0 && static_cast<long>(u->id) == dbgId && E && E->kind == Entity::Kind::Unit) {
+            const Unit* tu = static_cast<const Unit*>(E);
+            const PhysBody* tb = tu->motion.air ? &tu->motion.air->body : nullptr;
+            Logf(LogLevel::Info, "tactics %u out: state %d raw %.9g %.9g %.9g y %.9g len %.9g -> %.9g %.9g %.9g | target held "
+                 "%d pos %.9g %.9g %.9g held %.9g %.9g %.9g vel now %.9g %.9g %.9g committed %.9g %.9g %.9g q %.9g %.9g "
+                 "%.9g %.9g L %.9g %.9g %.9g invI %.9g %.9g %.9g",
+                 now, s, raw.x, raw.y, raw.z, lifted.y, (s == 2 && eAir && MovedThisTick(E)) ? std::max(d3, b.minAirspeed) : speed,
+                 out.x, out.y, out.z, static_cast<int>(tu->shapeHeld), tu->position.x, tu->position.y, tu->position.z,
+                 tu->shapePos.x, tu->shapePos.y, tu->shapePos.z, tu->motion.lastMove.x, tu->motion.lastMove.y,
+                 tu->motion.lastMove.z, tu->motion.velCommitted.x, tu->motion.velCommitted.y, tu->motion.velCommitted.z,
+                 tb ? tb->q.w : 0, tb ? tb->q.x : 0, tb ? tb->q.y : 0, tb ? tb->q.z : 0, tb ? tb->L.x : 0, tb ? tb->L.y : 0,
+                 tb ? tb->L.z : 0, tb ? tb->invI[0] : 0, tb ? tb->invI[1] : 0, tb ? tb->invI[2] : 0);
+          }
+        }
         break;
       }
       case 3:
@@ -1239,6 +1275,12 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         ++a.combatCounter;
         out = {dir3.x * d3, dir3.y * d3, dir3.z * d3};
         out.y = elev(out);
+        {
+          static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+          if (dbgId >= 0 && static_cast<long>(u->id) == dbgId)
+            Logf(LogLevel::Info, "tactics %u out: state %d diff %.9g %.9g %.9g dir3 %.9g %.9g %.9g d3 %.9g lifted %.9g %.9g %.9g to %.9g",
+                 now, s, diff.x, diff.y, diff.z, dir3.x, dir3.y, dir3.z, d3, out.x, out.y, out.z, b.minAirspeed);
+        }
         SetLength(out, b.minAirspeed);
         break;
       case 5:
@@ -1277,6 +1319,15 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   bool breakOff = (s == 1 && trig > d3) || (b.breakOffIfNearNewTarget && s == 0 && brk > d2) ||
                   (s == 2 && dotF < 0.0f) ||
                   (a.combatCounter > EngineFloor(b.sustainedTurnThreshold * 10.0f));
+  {
+    // MOHO64_DEBUG_TACTICS=<unit id>: what the attack-run state machine sees each beat
+    static const long dbgId = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+    if (dbgId >= 0 && static_cast<long>(u->id) == dbgId)
+      Logf(LogLevel::Info, "tactics %u unit %u state %d target %u bone %d tp %.9g %.9g %.9g pos %.9g %.9g %.9g d3 %.9g d2 %.9g "
+           "trig %.9g brk %.9g dotF %.9g counter %d timer %u break %d",
+           now, u->id, s, E ? E->id : 0u, tgt.aimBone, tp.x, tp.y, tp.z, pos.x, pos.y, pos.z, d3, d2, trig, brk, dotF,
+           a.combatCounter, a.combatTimer, static_cast<int>(breakOff));
+  }
   if (!breakOff) {
     if (a.combatTimer >= now) {
       if (!facing || s == 6) return output();
@@ -1284,7 +1335,8 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     if (facing) {
       s = 1;
       if (eAir && MovedThisTick(E)) {
-        QuatW q = ToW(E->orientation);
+        // (the target's committed orientation: as the beat began, also when it has turned already)
+        QuatW q = ToW(E->shapeHeld ? E->shapeOri : E->orientation);
         Vec3 Fe{2 * (q.w * q.y + q.z * q.x), 2 * (q.z * q.y - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
         if ((Fe.x * fwd.x + Fe.y * fwd.y) + Fe.z * fwd.z > 0.0f) s = 2;
       }
@@ -1961,23 +2013,36 @@ void AirAbort(Sim& sim, Unit* u) {
   u->motion.hasGoal = false;
 }
 
-Vec3 PredictAhead(Sim& sim, Unit* u, float t) {
+Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   (void)sim;
-  Vec3 p = u->position;
-  if (!u->motion.air) return p;
-  const PhysBody& pb = A(u).body;
-  // world angular velocity: R * (invI (.) R^T L)
-  QuatW conj{pb.q.w, -pb.q.x, -pb.q.y, -pb.q.z};
-  Vec3 lb = MultQuadVec(conj, pb.L);
-  Vec3 wb{lb.x * pb.invI[0], lb.y * pb.invI[1], lb.z * pb.invI[2]};
-  Vec3 w = MultQuadVec(pb.q, wb);
+  // asked of ANOTHER unit inside the motion pass: its position and its last displacement are those the beat
+  // began with (the transform is committed at the beat's end), its body's turn rate is the one of now
+  Vec3 p = other && u->shapeHeld ? u->shapePos : u->position;
+  // every unit with a motion has the body (unit+0x4b0, unit+0x1fc): a walking or driving unit is carried on
+  // along its velocity too, its body just never turns (seen: bombers leading a commander who starts to walk)
+  if (!u->motion.air && !(u->motion.bp && u->motion.bp->mobile())) return p;
+  Vec3 w{};
+  if (u->motion.air) {
+    const PhysBody& pb = A(u).body;
+    // world angular velocity 0x697e70: R * (invI (.) R^T L), through the axes of the orientation (VAxes3), each
+    // sum in the original's order: the prediction below turns ten times by it, and a last bit here is a last
+    // bit in an attacker's desired velocity
+    const Axes ax = VAxes3(pb.q);
+    const Vec3& L = pb.L;
+    const float la = (L.x * ax.X.x + L.y * ax.X.y) + L.z * ax.X.z;
+    const float lb = (L.z * ax.Y.z + L.y * ax.Y.y) + L.x * ax.Y.x;
+    const float lc = (L.z * ax.Z.z + L.y * ax.Z.y) + L.x * ax.Z.x;
+    const float wa = pb.invI[0] * la, wb = pb.invI[1] * lb, wc = pb.invI[2] * lc;
+    w = {(ax.Z.x * wc + ax.Y.x * wb) + wa * ax.X.x, (ax.Z.y * wc + ax.Y.y * wb) + wa * ax.X.y,
+         (ax.Z.z * wc + ax.Y.z * wb) + wa * ax.X.z};
+  }
   // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
   // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
   // transport coming down on its landing spot (layer Land) is "not moving" for this
-  Vec3 v = u->layer == "Air" ? u->motion.lastMove : u->motion.vel;
+  Vec3 v = u->layer == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : u->motion.vel;
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
-  QuatW q{c, 0, s, 0};
+  QuatW q{c, 0.0f * s, 1.0f * s, 0.0f * s};  // 0x570750: the axis (0, 1, 0) times the sine
   float n = t * 10.0f;
   while (n > 0.0f) {
     v = MultQuadVec(q, v);
@@ -2033,8 +2098,16 @@ void AirMotionTick(Sim& sim, Unit* u) {
       const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
       if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER"))
         SetTarget(sim, u, now, Vec3{}, 0);
+      // ... and anybody who would have ARRIVED (AtTarget, last beat's end) does not, while there is a destination
+      // entity: the target is taken from the entity again (0x5a50d0: "if dest: Update...; return" in place of
+      // status 0). So within its arrival radius - a second of flight for a fighter at speed - an aircraft follows
+      // its destination beat by beat, chaser or not. (Seen: the flight record's target of a patrolling fighter
+      // that attacks a passing aircraft is that aircraft's place of the beat before, every beat.)
+      else if (a.reaimAtDest)
+        SetTarget(sim, u, now, Vec3{}, 0);
     }
   }
+  a.reaimAtDest = false;
   Transform T{ToW(u->orientation), u->position};
   Vec3 start = u->position;
   bool idle = u->commands.empty();
@@ -2086,6 +2159,14 @@ void AirMotionTick(Sim& sim, Unit* u) {
       auto cell = [&](float v, int s) { return static_cast<int>(std::nearbyint(v - s * 0.5f)); };
       at = cell(a.target.x, ab.footprintX) == cell(a.goal.x, ab.footprintX) &&
            cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
+    }
+    if (at && a.destEntity) {
+      // a destination entity: no arrival, the navigator takes its target from the entity again (next beat, above)
+      const Entity* de = sim.FindEntity(a.destEntity);
+      if (de && !de->destroyQueued) {
+        a.reaimAtDest = true;
+        at = false;
+      }
     }
     if (at) {
       a.steering = false;
