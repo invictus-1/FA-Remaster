@@ -366,8 +366,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
 - Units under construction, by faction (`mesh_renderer.cpp`, `BuildSolid`; `--built <0..1>` in
-  the viewer for placed units). UEF: built from the ground up, a line of light at the level of
-  the work, above it only a blue lattice of light. Cybran: put together plate by plate, a new
+  the viewer for placed units). UEF: built from the top down (as the game's own box of light
+  sinks round what is not there yet), a line of light at the level of the work, below it only
+  a blue lattice of light. Cybran: put together plate by plate, a new
   plate glowing red for a moment, a red lattice where a plate is missing. Aeon: rises out of the
   ground, a little smaller at first, as liquid metal that sets over the last quarter. Seraphim:
   grows from a quarter of its size, dark and glowing, and takes its surface over the second
@@ -439,7 +440,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Two of the original's effect shaders on models (`models.cpp`, by the shader's name):
   `UEFBuildCube`, the UEF's box of light round what it builds (a projectile): a see-through
   blue box, its texture's clouds drifting as what can be seen through, fine lines running
-  over it (`ModelLod::frame`); and `AlphaFade`, see-through by its texture's alpha. The other
+  over it (`ModelLod::frame`); and `AlphaFade` (`ModelLod::fades`): the UEF's slices of light at
+  the level of the work, lilac by the game's texture, see-through, whole for two seconds and
+  then fading at 0.145 a second as in the original (by `FrameProjectile::age`; the script
+  makes one every 1.2 seconds and each lives six). On a building that is built fast they still
+  pile up into a strong lilac block over what was just built: a matter for the colour pass. The other
   effect shaders but the shields' (glass, glows) are drawn as plain models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the

@@ -320,13 +320,16 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
     // its size: what the script set, and what its scale velocity has added since it was first seen
     // (the simulation does not apply that itself)
-    float grown = 0;
-    if (v.scaleVelocity[0] != 0 || v.scaleVelocity[1] != 0 || v.scaleVelocity[2] != 0)
-      grown = static_cast<float>(sim.tick() - growingSince_.emplace(v.id, sim.tick()).first->second) * 0.1f;
+    auto since = shellSince_.find(v.id);
+    const uint32_t first = since != shellSince_.end() ? since->second : sim.tick();
+    shellSinceNext_[v.id] = first;
+    p.age = static_cast<float>(sim.tick() - first) * 0.1f;
+    const float grown = p.age;
     for (int k = 0; k < 3; ++k) p.scale[k] = std::max(v.scale[k] + v.scaleVelocity[k] * grown, 0.0f) * v.drawScale;
     beat.projectiles.push_back(p);
   }
-  if (growingSince_.size() > 4096) growingSince_.clear();  // (ids of shells long gone; a shell still flying starts over, which is rare)
+  shellSince_.swap(shellSinceNext_);  // (only those there this beat are kept)
+  shellSinceNext_.clear();
   // what scripts made that has a mesh: shields' bubbles and the like
   moho::EntityViews(sim, &e.entities);
   beat.entities.reserve(e.entities.size());
@@ -431,8 +434,10 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   // projectiles fly on along their velocity for the part of the beat that has passed (a beat is a tenth of a second)
   out->projectiles = a.projectiles;
   const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
-  for (FrameProjectile& p : out->projectiles)
+  for (FrameProjectile& p : out->projectiles) {
     for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
+    p.age += ahead;
+  }
   out->beams = a.beams;
   // the scripts' entities: each moved toward where it is in the next beat (there are few)
   out->entities = a.entities;

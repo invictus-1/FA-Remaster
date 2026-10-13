@@ -40,9 +40,10 @@ constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader'
 // A unit under construction (its fraction complete rides in the colour's alpha) is drawn by whose
 // it is. The original has a look of its own for each faction's building, and these keep to what
 // each of them is about without copying it:
-//   UEF (and whatever has no faction's look): built from the ground up. Under the level of the
-//     work the finished surface, with a line of light at the level; above it only a blue lattice
-//     of light with a band running up it, and nothing between its lines.
+//   UEF (and whatever has no faction's look): built from the top down, as the original's box of
+//     light sinks round what is not there yet. Above the level of the work the finished surface,
+//     with a line of light at the level; below it only a blue lattice of light with a band
+//     running up it, and nothing between its lines.
 //   Cybran: put together plate by plate, in no order; a new plate glows red for a moment, and
 //     where a plate is missing there is a red lattice.
 //   Aeon: it rises out of the ground, a little smaller at first, as liquid metal that sets into
@@ -68,7 +69,7 @@ cbuffer Instances : register(b2) {
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light,
-                // 3: a shield's bubble; neither is lit),
+                // 3: a shield's bubble, 4: a slab that fades; none of them is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -172,10 +173,11 @@ float BuildSolid(int faction, float f, float3 shape, out float3 work) {
     work = float3(1.0, 0.12, 0.05) * (wire * (1.5 + 0.5 * sin(time * 5 + shape.y * 30)));
     return wire > 0.3 ? 0 : -1;
   }
-  // the UEF, and whatever else: from the ground up
-  float level = f * 1.04 - 0.02;
-  if (shape.y <= level) {
-    work = float3(0.25, 0.6, 1.0) * (saturate(1 - (level - shape.y) / 0.035) * 3);
+  // the UEF, and whatever else: from the top down, as the game's own box of light sinks round what is
+  // not there yet and its slices of light mark the level of the work
+  float level = f * 1.04 - 0.02, down = 1 - shape.y;
+  if (down <= level) {
+    work = float3(0.25, 0.6, 1.0) * (saturate(1 - (level - down) / 0.035) * 3);
     return 1;
   }
   float3 g = abs(frac(shape * 10) - 0.5);
@@ -198,6 +200,13 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   i.color.a = min(i.color.a, 1);
+  if (kind.y > 3.5) {
+    // a slab of light that fades (the UEF's build slices): its texture's colour, see-through by
+    // the texture's alpha and by how much of it is left (the instance says: its age's doing)
+    float4 slab = albedoMap.Sample(samplerAniso, i.uv.xy);
+    float3 glow = look > 0.5 ? pow(max(slab.rgb, 0), 2.2) * 1.3 * (falling.w > 0 ? falling.w : 1) : slab.rgb;
+    return float4(glow, slab.a * saturate(i.color.a) * 0.7);
+  }
   if (kind.y > 2.5) {
     // a shield's bubble: a faint shell in its faction's tint, stronger where it is seen edge on,
     // with its texture's pattern drifting over it at two sizes against each other
@@ -214,8 +223,8 @@ float4 Shade(VOut i, bool front) {
     float cloud = albedoMap.Sample(samplerLinear, drift * 0.35).a;
     float2 g = abs(frac(drift * 6) - 0.5);
     float wire = 1 - smoothstep(0.0, 0.05, min(g.x, g.y));
-    float3 light = lerp(float3(0.12, 0.3, 0.9), float3(0.4, 0.75, 1.0), wire) * (falling.w > 0 ? falling.w : 1);
-    return float4(look > 0.5 ? light * (0.6 + 1.2 * wire) : light, saturate(0.45 * cloud + 0.35 * wire));
+    float3 light = lerp(float3(0.08, 0.42, 0.95), float3(0.45, 0.8, 1.0), wire) * (falling.w > 0 ? falling.w : 1);
+    return float4(look > 0.5 ? light * (0.6 + 1.2 * wire) : light, saturate(0.28 * cloud + 0.35 * wire));
   }
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
@@ -634,7 +643,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[16] = {lod->alphaCut, lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[16] = {lod->alphaCut, lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};

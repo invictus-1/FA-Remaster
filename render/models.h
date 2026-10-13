@@ -84,6 +84,7 @@ struct ModelLod {
   bool hidden = false;         // "ShieldFill": the original draws it into the depth alone; here it is not drawn
   bool chrome = false;         // "AeonBuildPuddle": the pool of liquid metal an Aeon building rises from
   bool wreck = false;          // wreckage (ModelCache::Wreck): burnt and dull, no team colour, no glow
+  bool fades = false;          // "AlphaFade": a see-through slab that fades with its age (the UEF's build slices)
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
