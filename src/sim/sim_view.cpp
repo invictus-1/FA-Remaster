@@ -287,20 +287,24 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
   };
   UnitStateView v;
   v.id = u->id;
-  v.queue.reserve(u->commands.size());
-  for (const auto& c : u->commands) {
+  auto viewOf = [&](const UnitCommand& c) {
     CommandView q;
-    q.id = c->id;
-    q.type = static_cast<int>(c->type);
-    q.hasPosition = c->hasPos;
-    q.position[0] = c->pos.x;
-    q.position[1] = c->pos.y;
-    q.position[2] = c->pos.z;
-    q.entity = idOf(c->targetId);
-    q.blueprint = c->blueprintId;
-    q.count = c->count;
-    v.queue.push_back(std::move(q));
-  }
+    q.id = c.id;
+    q.type = static_cast<int>(c.type);
+    q.hasPosition = c.hasPos;
+    q.position[0] = c.pos.x;
+    q.position[1] = c.pos.y;
+    q.position[2] = c.pos.z;
+    q.entity = idOf(c.targetId);
+    q.blueprint = c.blueprintId;
+    q.count = c.count;
+    return q;
+  };
+  v.queue.reserve(u->commands.size());
+  for (const auto& c : u->commands) v.queue.push_back(viewOf(*c));
+  v.hasFactoryQueue = u->isFactoryBuilder;
+  v.factoryQueue.reserve(u->factoryCommands.size());
+  for (const auto& c : u->factoryCommands) v.factoryQueue.push_back(viewOf(*c));
   v.focus = idOf(u->focusId);
   v.guarded = idOf(u->guardedId);
   v.creator = idOf(u->creatorId);

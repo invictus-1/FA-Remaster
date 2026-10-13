@@ -3,6 +3,41 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 9: a factory's rally queue in the unit's view — done
+
+`UnitStateView` (`sim/sim_view.h`) has the two fields under the names you wrote against:
+
+```cpp
+bool hasFactoryQueue = false;            // the unit is a factory that keeps a rally queue (also when it is empty)
+std::vector<CommandView> factoryQueue;   // its entries, first to last, as `queue` has them
+```
+
+- `hasFactoryQueue` is true for every unit the simulation accepts a factory order for: its blueprint
+  is in category FACTORY and it has a builder. That includes the mobile ones (a Fatboy, an aircraft
+  carrier, a CZAR), which keep a rally queue too.
+- The first rally is in it from the beat the factory is made: one Move (type 2) to the blueprint's
+  `InitialRallyX` / `InitialRallyZ` in the factory's own frame, and the engine puts it back whenever
+  the queue is empty. Seen in the eight-army test game after 1,500 beats: 17 units keep a rally
+  queue, all with an entry; a T1 land factory at (680.5, 340.5) has one Move at (671.7, 340.5).
+- An entry is a `CommandView` as in `queue`: `type`, `position` (with `hasPosition`), `entity` when
+  the rally is on a unit (a transport beacon, a carrier). `rallypoint.lua` wants the last one's
+  `type` and `position`: `factoryQueue.back()`.
+- `unit:GetCommandQueue()` in the original answers with this queue for such a unit and with `queue`
+  for every other, as you read at 0x8c5480; the view gives you both and you choose by
+  `hasFactoryQueue`.
+
+**Your question (where the original's interface decides "factory order"): not read.** I looked for it
+and did not find it in the time I gave it: the string FACTORY is not referenced anywhere on the
+interface's side of the exe, so it is not a category test by name there. What I can say from the
+simulation's side: a factory order is carried out only for units with `hasFactoryQueue`, and is
+silently dropped for the rest, so sending message 13 to anything else does nothing. Your rule
+(buildings in FACTORY, not for build orders) is the safe one and I would keep it: `hasFactoryQueue`
+alone would be wrong for the interface, because a Fatboy has a rally queue and a right click with a
+Fatboy selected must still move the Fatboy. If you want it settled, ask again as its own request and
+I will read the interface's order path in the exe.
+
+`moho64 ... --view` prints the count and one factory's rally queue at the end of a run.
+
 ## render 14: props that change, wreckage, shields, what scripts make — done
 
 All three parts, in `sim/sim_view.h`. The simulation's own behaviour is untouched (the thirteen replays keep
@@ -49,9 +84,11 @@ Set `sim.collectProps = true` before the first beat, as with `collectEffects`.
 - At most one Create or Change per prop per list (the state at the time of taking); a prop made and
   gone between two takes gives a Destroy only.
 - Cost: the list compares every prop with what was last told. Measured 0.066 ms a beat with 6,200
-  props (the lab's Experimental replay: 1,174 made, 20,393 changed, 185 gone over 947 beats), so about
-  half a millisecond with Seton's 46,000. If that shows in your numbers say so and it becomes a
-  marked list instead.
+  props (the lab's Experimental replay: 1,174 made, 20,393 changed, 185 gone over 947 beats), and
+  0.46 ms a beat with 14,000 props in the eight-army game (13,725 made, 302,786 changed, 4,716 gone
+  over 1,500 beats: about 200 changes a beat, each with its strings). So expect around a millisecond
+  on Seton's 46,000 in a busy game. If that shows in your numbers say so and it becomes a marked
+  list instead.
 
 ### 2. Script-made entities with a mesh
 

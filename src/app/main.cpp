@@ -89,6 +89,29 @@ int RunRules(Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vect
 // --view: what a host that shows the game would have read (sim/sim_view.h, Sim::TakeSync), as log lines.
 void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& lastSync) {
   Logf(LogLevel::Info, "view: %zu sync tables, %zu bytes in all, the last %zu bytes", syncBeats, syncBytes, lastSync.size());
+  {  // factories and their rally queues, as UnitStateView has them at the end of the run
+    std::vector<UnitView> units;
+    UnitViews(sim, &units);
+    size_t factories = 0, withRally = 0;
+    std::string sample;
+    for (const UnitView& uv : units) {
+      UnitStateView s;
+      if (!UnitStateOf(sim, uv.id, &s) || !s.hasFactoryQueue) continue;
+      ++factories;
+      if (s.factoryQueue.empty()) continue;
+      ++withRally;
+      if (sample.empty()) {
+        const CommandView& last = s.factoryQueue.back();
+        char b[300];
+        std::snprintf(b, sizeof b, "unit %#x %s at %.1f %.1f %.1f: rally queue of %zu, the last type %d at %.1f %.1f %.1f; own queue %zu",
+                      uv.id, uv.blueprint.c_str(), uv.position[0], uv.position[1], uv.position[2], s.factoryQueue.size(),
+                      last.type, last.position[0], last.position[1], last.position[2], s.queue.size());
+        sample = b;
+      }
+    }
+    Logf(LogLevel::Info, "view: %zu units keep a rally queue, %zu of them with something in it", factories, withRally);
+    if (!sample.empty()) Logf(LogLevel::Info, "view: %s", sample.c_str());
+  }
   if (!lastSync.empty()) {
     ScriptState st(ScriptState::Kind::User, nullptr);
     lua_State* L = st.L();

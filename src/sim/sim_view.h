@@ -150,6 +150,14 @@ struct CommandView {
 struct UnitStateView {
   uint32_t id = 0;
   std::vector<CommandView> queue;
+  // A factory's rally queue (the orders its products are given when they leave it), first to last; the engine
+  // puts the first rally in it when the factory is made, and again whenever the queue is empty
+  // (SetUpInitialRally: a Move to the blueprint's InitialRallyX / InitialRallyZ in the factory's own frame).
+  // hasFactoryQueue: the unit is a factory that keeps one, also when it
+  // is empty. The original's script call unit:GetCommandQueue() answers with THIS queue for such a unit and
+  // with `queue` for every other.
+  bool hasFactoryQueue = false;
+  std::vector<CommandView> factoryQueue;
   uint32_t focus = 0xffffffff;    // what it builds, repairs, reclaims, captures (GetFocus)
   uint32_t guarded = 0xffffffff;  // the unit it guards (GetGuardedEntity)
   uint32_t creator = 0xffffffff;  // the factory, engineer or upgrading unit that made it (GetCreator)
@@ -244,7 +252,7 @@ void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 void EntityViews(const Sim& sim, std::vector<EntityView>* out);
 // The scenery's changes since the last call (see PropEvent). Take it once per beat, after Tick(), with
 // Sim::collectProps set from before the first beat. (It compares every prop with what was last told: measured
-// 0.066 ms a beat with 6,200 props, so about half a millisecond with 46,000.)
+// 0.066 ms a beat with 6,200 props in a small fight, 0.46 ms with 14,000 props and 200 changes a beat.)
 void PropEvents(Sim& sim, std::vector<PropEvent>* out);
 // One unit's state for the panels (false: no such unit). Not const: the live caps are read through the scripts'
 // state. Ask for the units on screen, not for all of them every beat.
