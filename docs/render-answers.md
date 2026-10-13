@@ -54,8 +54,11 @@ colour, and the link's BEAMS between them were missing. Now, as the original:
 - a node is drawn in its own colours (white for everything that is not a unit, the engine's answer
   7): a small pale block;
 - the beams are drawn: thin blue lines from a building's edge over the nodes to the next
-  building's (`adjacency_uef_beam_01` for the UEF; the other factions' beams and nodes come by the
-  same way, not looked at yet).
+  building's (`adjacency_uef_beam_01` for the UEF). The other three factions looked at later the
+  same day in M28 games: the Cybran's red lines from generator to factory, the Aeon's thin pale
+  lines with small white nodes, the Seraphim's glowing white node at each generator (it has no
+  beam, by the game's script) all draw. The round ornaments on the ground about Aeon and Seraphim
+  buildings are those factions' own building pads, not part of the links.
 The links are whole: the game's script hangs each link's two ends on entities that have no mesh
 (its "hubs"), which no list of the simulation's names; the engine now says where a beam's far
 end is in the event itself (`render/REQUESTS.md` 20, done the same hour), and the last stretch to

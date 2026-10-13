@@ -88,6 +88,7 @@
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
 // V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
+#include <map>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -1255,6 +1256,12 @@ int main(int argc, char** argv) {
           if (q.sized && std::max(q.size[0], std::max(q.size[1], q.size[2])) > 6 && frame.blueprints && q.blueprint < frame.blueprints->size() && big++ < 6)
             printf("; shell %s of size %.1f, %.1f, %.1f at %.0f, %.0f", (*frame.blueprints)[q.blueprint].c_str(), q.size[0], q.size[1], q.size[2], q.position[0], q.position[2]);
         printf("; camera at %.0f, %.0f", camera.target.x, camera.target.z);
+        {  // (what the scripts have made that has a mesh, by mesh: to tell what a shape in the picture is)
+          std::map<std::string, int> made;
+          for (const FrameEntity& f : frame.entities)
+            if (frame.blueprints && f.mesh < frame.blueprints->size()) ++made[(*frame.blueprints)[f.mesh]];
+          for (const auto& m : made) printf("; %d x %s", m.second, m.first.c_str());
+        }
       }
       if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
