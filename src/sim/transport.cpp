@@ -843,6 +843,58 @@ void AttachParentGone(Sim& sim, Unit* u) {
 // ---------------------------------------------------------------------------------------------
 // Attached units each tick (Entity::TaskTick: the attach transform; CUnitMotion Attached state)
 
+void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer) { SetUnitLayer(sim, u, layer); }
+
+// Where a unit attached by its own bone stands: the parent bone's world transform (Pp, Pq) x the inverse of the
+// unit's own bone transform. Cp / Cq (optional): that own bone transform, for traces.
+void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Quat* outQ, Vec3* outCp, Quat* outCq) {
+  Vec3 Cp;
+  Quat Cq;
+  BoneLocal(u, u->ownBone, &Cp, &Cq);
+  if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
+    // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
+    // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
+    // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
+    // they change with where the unit is.
+    Vec3 Wp;
+    Quat Wq;
+    BoneWorld(u, u->ownBone, &Wp, &Wq);
+    const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
+    const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
+    const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
+    const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
+    Cq = ComposeQ(iq, Wq);
+    const Vec3 r = RotateM(iq, Wp);
+    Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
+  }
+  // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
+  // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
+  // the child's own bone transform (0x676850), in the original's order of operations; the position is rotated
+  // with the quaternion BEFORE it is normalised (0x4edaa0). The last bits matter: a unit let go in the air
+  // starts its fall with the last step it made here.
+  const float cx = -0.0f - Cq.x, cy = -0.0f - Cq.y, cz = -0.0f - Cq.z;
+  Quat q;
+  q.w = ((Pq.w * Cq.w - Pq.x * cx) - Pq.y * cy) - Pq.z * cz;
+  q.x = ((Pq.y * cz + Pq.w * cx) + Pq.x * Cq.w) - Pq.z * cy;
+  q.y = ((Pq.z * cx + Pq.w * cy) + Pq.y * Cq.w) - Pq.x * cz;
+  q.z = ((Pq.x * cy + Pq.w * cz) + Pq.z * Cq.w) - Pq.y * cx;
+  const Vec3 rv = RotateM(q, Vec3{-0.0f - Cp.x, -0.0f - Cp.y, -0.0f - Cp.z});
+  Vec3 pos{rv.x + Pp.x, Pp.y + rv.y, Pp.z + rv.z};
+  {
+    const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+    if (len > 9.99999997e-07f) {
+      const float inv = 1.0f / len;
+      q = {q.x * inv, inv * q.y, inv * q.z, q.w * inv};
+    } else {
+      q = {0, 0, 0, 0};
+    }
+  }
+  *outPos = pos;
+  *outQ = q;
+  if (outCp) *outCp = Cp;
+  if (outCq) *outCq = Cq;
+}
+
 void AttachedUnitsTick(Sim& sim) {
   for (int pass = 0; pass < 2; ++pass)  // (cargo of cargo follows on the second pass)
     for (Unit* u : sim.units()) {
@@ -867,45 +919,9 @@ void AttachedUnitsTick(Sim& sim) {
       else BoneWorld(p, u->parentBone, &Pp, &Pq);
       Vec3 Cp;
       Quat Cq;
-      BoneLocal(u, u->ownBone, &Cp, &Cq);
-      if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
-        // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
-        // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
-        // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
-        // they change with where the unit is.
-        Vec3 Wp;
-        Quat Wq;
-        BoneWorld(u, u->ownBone, &Wp, &Wq);
-        const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
-        const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
-        const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
-        const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
-        Cq = ComposeQ(iq, Wq);
-        const Vec3 r = RotateM(iq, Wp);
-        Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
-      }
-      // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
-      // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
-      // the child's own bone transform (0x676850), in the original's order of operations; the position is rotated
-      // with the quaternion BEFORE it is normalised (0x4edaa0). The last bits matter: a unit let go in the air
-      // starts its fall with the last step it made here.
-      const float cx = -0.0f - Cq.x, cy = -0.0f - Cq.y, cz = -0.0f - Cq.z;
       Quat q;
-      q.w = ((Pq.w * Cq.w - Pq.x * cx) - Pq.y * cy) - Pq.z * cz;
-      q.x = ((Pq.y * cz + Pq.w * cx) + Pq.x * Cq.w) - Pq.z * cy;
-      q.y = ((Pq.z * cx + Pq.w * cy) + Pq.y * Cq.w) - Pq.x * cz;
-      q.z = ((Pq.x * cy + Pq.w * cz) + Pq.z * Cq.w) - Pq.y * cx;
-      const Vec3 rv = RotateM(q, Vec3{-0.0f - Cp.x, -0.0f - Cp.y, -0.0f - Cp.z});
-      Vec3 pos{rv.x + Pp.x, Pp.y + rv.y, Pp.z + rv.z};
-      {
-        const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
-        if (len > 9.99999997e-07f) {
-          const float inv = 1.0f / len;
-          q = {q.x * inv, inv * q.y, inv * q.z, q.w * inv};
-        } else {
-          q = {0, 0, 0, 0};
-        }
-      }
+      Vec3 pos;
+      AttachedTransform(u, Pp, Pq, &pos, &q, &Cp, &Cq);
       {  // MOHO64_DEBUG_ATTACH=<unit id>: the attach step's inputs and result as bits
         static const long dbg = getenv("MOHO64_DEBUG_ATTACH") ? atol(getenv("MOHO64_DEBUG_ATTACH")) : -1;
         if (dbg >= 0 && static_cast<long>(u->id) == dbg) {

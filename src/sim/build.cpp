@@ -2943,8 +2943,12 @@ int l_AttachBoneTo(lua_State* L) {
     Vec3 bp;
     Quat bq;
     BoneWorld(parent, u->parentBone, &bp, &bq);
-    u->position = bp;
-    u->orientation = bq;
+    Vec3 np = bp;
+    Quat nq = bq;
+    // (on a projectile the unit hangs by its own bone: see the attached branch of Sim::Tick's unit loop)
+    if (parent->kind == Entity::Kind::Projectile && u->ownBone >= 0) AttachedTransform(u, bp, bq, &np, &nq);
+    u->position = np;
+    u->orientation = nq;
   }
   S(L)->MarkUnitsMoved();
   return 0;

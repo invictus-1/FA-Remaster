@@ -84,6 +84,12 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 void AttachedUnitsTick(Sim& sim);
 // A script-attached unit whose parent no longer exists: free motion again (a flyer) or a fall, on the Air layer.
 void AttachParentGone(Sim& sim, Unit* u);
+// An attached unit takes its parent's layer (with the script's OnLayerChange when it changes).
+void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer);
+// Entity::CalculateAttachedTransform 0x67a020 for a unit attached by its own bone (Unit::ownBone) to a parent bone
+// whose world transform is (parentPos, parentOri).
+void AttachedTransform(Unit* u, const Vec3& parentPos, const Quat& parentOri, Vec3* pos, Quat* ori,
+                       Vec3* ownPos = nullptr, Quat* ownOri = nullptr);
 // Motion of a falling (detached) land unit: true while it falls.
 bool LandBallisticTick(Sim& sim, Unit* u);
 // Unit::Kill hooks: before SetDead (cargo leaves its transport) and after it (the dying unit's

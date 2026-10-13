@@ -1431,8 +1431,24 @@ void Sim::Tick() {
           const Unit* pu = static_cast<const Unit*>(p);
           if (pu->motion.bp) bp = vm::Add(bp, vm::RotateM(bq, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f}));
         }
-        u->position = bp;
-        u->orientation = bq;
+        Vec3 np = bp;
+        Quat nq = bq;
+        // On something that is no unit (FAF's sinker projectile under a wreck): the unit hangs by its OWN bone
+        // (AttachBoneTo's first argument), so a wreck taken at bone 0 stays where it was, and it takes the
+        // parent's layer (CUnitMotion::MotionTick 0x6ba1ad: SetLayer(parent's), every beat; a parent UNIT's only
+        // when the child is not what that unit works on, 0x6ba1a2, which is left to the transport code here).
+        const bool onProjectile = p->kind == Entity::Kind::Projectile;
+        if (onProjectile && u->ownBone >= 0) AttachedTransform(u, bp, bq, &np, &nq);
+        u->position = np;
+        u->orientation = nq;
+        if (onProjectile && map_ && map_->hasWater) {
+          // The projectile's layer as its place says it now: above the water Air, else Water. (Ours keeps a
+          // projectile's layer from where it was made until it crosses the surface in flight; the sinker is made
+          // some beats before it is warped under the wreck. Seen: a ship's wreck taken 0.022 above the water goes
+          // to Air in the beat it is attached, an aircraft's wreck lying on the surface stays in Water.)
+          const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
+          if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
+        }
       }
       u->motion.vel = {};
     } else if (u->parentId) {
