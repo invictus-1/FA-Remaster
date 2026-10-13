@@ -54,7 +54,7 @@ struct MotionBlueprint {
   float elevation = 0;
   float diveSurfaceSpeed = 1;         // Physics.DiveSurfaceSpeed (P+0x24)
   float layerChangeOffset = -0.1f;    // Physics.LayerChangeOffsetHeight (P+0x74)
-  float layerTransitionDuration = 0;  // Physics.LayerTransitionDuration (P+0x78; the blend is not done)
+  float layerTransitionDuration = 0;  // Physics.LayerTransitionDuration (P+0x78), seconds: the layer blend's length
   bool rotateOnSpot = false, standUpright = false, sinkLower = false, rotateBodyWhileMoving = false;
   float rotateOnSpotThreshold = 0.5f;
   float backUpDistance = 0;
@@ -81,6 +81,14 @@ struct UnitMotion {
   float fx = 0, fz = 1;  // steering facing (unit vector in xz): the direction it drives
   float bx = 0, bz = 1;  // body facing (= fx, fz unless RotateBodyWhileMoving with a TurnFacingRate)
   bool needSnap = true;  // place on the ground at the next tick (after creation / warp)
+  // A change between Water and Land of a unit with Physics.LayerTransitionDuration (the Cybran destroyer that
+  // walks ashore): m+0x11c the blend's beat counter (0: none), m+0x120 the transform it began with, m+0x13c the
+  // one it ends on. While it runs the unit is moved along the blend and takes no spline point (motion.cpp).
+  bool heldLatch = false;  // steering+0xa0: the spline was dropped because the unit is immobile or stunned
+  float layerBlend = 0;
+  Vec3 blendFromPos, blendToPos;
+  Quat blendFromOri, blendToOri;
+  bool snapTerrain = false;  // (SnapUnit for the blend's end: the ground itself, also for a floating type)
   Vec3 prevPos;          // m+0x2c: where the last move ended (a spline point: its terrain y); vel = pos - prevPos
   bool prevPosSet = false;
   Vec3 accel;            // m+0x44: this tick's change of vel (spline-point moves; 0 when blocked)

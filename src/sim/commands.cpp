@@ -1267,13 +1267,13 @@ int l_SetMult(lua_State* L) {
 }
 
 // Unit:SetImmobile(flag) 0x6c6770: sets or clears the unit state Immobile (1), nothing else. (Ours also keeps a
-// flag and stops the motion at once.)
+// flag.) The move goes on underneath: the steering drops its spline while the state lasts and makes a fresh
+// one after it (ProcessSplineMovement), the navigator and the order stay.
 int l_SetImmobile(lua_State* L) {
   Unit* u = U(L);
   u->immobile = lua_toboolean(L, 2) != 0;
   if (u->immobile) {
     u->unitStates.insert("Immobile");
-    MotionStop(u);
   } else {
     u->unitStates.erase("Immobile");
   }
