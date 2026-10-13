@@ -717,9 +717,14 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1;
       if (life || work) {
         // (the size, height and place the unit's blueprint gives its life bar, in world units: the bar
-        // lies that far from the unit's middle toward the eye, along the ground)
+        // lies that far from the unit's middle down the screen, along the ground)
         const float perPixel = std::max(2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away, 1e-5f);
-        Vec3 toEye{view.eye.x - position.x, 0, view.eye.z - position.z};
+        // (straight down the screen for every unit, wherever in the picture it stands: against the
+        // camera's up, along the ground. Toward the eye itself would pull the bars of units at the
+        // picture's sides inward, off their units.)
+        Vec3 right, up, back;
+        camera.Axes(&right, &up, &back);
+        Vec3 toEye{-up.x, 0, -up.z};
         const float flat = Length(toEye);
         toEye = flat > 1e-3f ? toEye * (1 / flat) : Vec3{0, 0, 1};
         const Vec3 at = position + toEye * kind->lifeBarOffset;
