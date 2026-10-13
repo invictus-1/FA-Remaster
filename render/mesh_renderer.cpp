@@ -195,6 +195,9 @@ void ShadowPS(VOut i) {
 }
 
 float4 Shade(VOut i, bool front) {
+  // (a finished unit whose personal shield is up says so with an alpha above 1)
+  bool shielded = i.color.a > 1.5;
+  i.color.a = min(i.color.a, 1);
   if (kind.y > 2.5) {
     // a shield's bubble: a faint shell in its faction's tint, stronger where it is seen edge on,
     // with its texture's pattern drifting over it at two sizes against each other
@@ -347,6 +350,11 @@ float4 Shade(VOut i, bool front) {
       }
       emission += work * 2;
     }
+    if (shielded) {  // its personal shield: light of its faction's shield along its outline, breathing slowly
+      float3 tint = faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0);
+      float outline = pow(1 - saturate(dot(toCamera, N)), 3);  // (only where the surface turns away from the eye)
+      emission += tint * ((0.03 + 1.1 * outline) * (0.8 + 0.2 * sin(time * 2.2)) * (falling.w > 0 ? falling.w : 1));
+    }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
@@ -359,6 +367,7 @@ float4 Shade(VOut i, bool front) {
     float shade = lerp(saturate(dot(sunDirection, N)), 1, spec.b);
     return float4(shade * (albedo.rgb + albedo.a) + 0.02, 1);
   }
+  if (shielded) work += (faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0)) * (0.03 + 0.6 * pow(1 - saturate(dot(toCamera, N)), 3));
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
   if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;

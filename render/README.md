@@ -413,9 +413,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   on, with its texture's pattern drifting over it; `ShieldFill` is not drawn. See-through
   models (`ModelLod::glass`: these and the UEF's box of light) are drawn in a pass of their own
   after the water, from both sides, writing no depth, so the sea and what is behind show
-  through them. Not there: a personal shield (the mesh a script sets on the unit itself,
-  `UnitView::mesh`), a shield's flash where it is hit beyond the game's own patch, and the
-  bubbles are not sorted by distance among themselves.
+  through them. A personal shield (the mesh a script sets on the unit itself, `UnitView::mesh`,
+  `FrameUnit::mesh`: taken for a shield when its name says so) is light of the faction's
+  shield tint along the unit's outline, breathing slowly; the unit keeps its own look
+  (`--shielded` in the viewer for placed units). The viewer's `--find shield|wreck` sends the
+  camera to the first one in a game. Not there: a shield's flash where it is hit beyond the
+  game's own patch; the bubbles are not sorted by distance among themselves; the original's
+  personal shield is a second, larger copy of the mesh with a pattern running over it.
 - A projectile's size as its script set it (`FrameProjectile::scale`): the UEF's box of light is
   as large as what is built in it.
 - Two of the original's effect shaders on models (`models.cpp`, by the shader's name):

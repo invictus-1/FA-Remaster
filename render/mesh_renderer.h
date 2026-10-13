@@ -34,6 +34,7 @@ class MeshRenderer {
   // `teamColor` is rgb in 0..1; `built` is the fraction complete (1 for a finished unit).
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
   // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
+  // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr);
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
   // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them

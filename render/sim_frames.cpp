@@ -260,6 +260,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.id = v.id;
     if (focus > 0) u.recon = static_cast<uint8_t>(moho::ReconOf(sim, focus, v.id) & 0x7f);
     u.blueprint = nameOf(v.blueprint);
+    if (!v.mesh.empty()) u.mesh = nameOf(v.mesh);
     std::memcpy(u.position, v.position, sizeof u.position);
     std::memcpy(u.orientation, v.orientation, sizeof u.orientation);
     u.health = v.health;

@@ -68,6 +68,9 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
+// --find shield|wreck  with a game: once it is where --tick asks, the camera goes to the first shield's bubble or
+//           the first wreck there is (to look at them without knowing where they are)
+// --shielded  placed units are drawn with a personal shield up
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
@@ -148,9 +151,11 @@ struct Options {
   int focus = 0;                        // --focus
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
+  bool shielded = false;                // --shielded
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
+  std::string find;                     // --find
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
@@ -191,6 +196,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
+    else if (a == "--shielded") o->shielded = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--look") {
@@ -244,6 +250,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
+    else if (a == "--find") o->find = v;
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
@@ -963,7 +970,7 @@ int main(int argc, char** argv) {
         pose.now = pose.next = u.bones.data();
         pose.nowCount = pose.nextCount = u.bones.size();
       }
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.built, u.turned >= 0 ? &pose : nullptr);
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, u.turned >= 0 ? &pose : nullptr);
       world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
@@ -978,6 +985,23 @@ int main(int argc, char** argv) {
       effects.Update(playTick, frame);
     }
     if (playing) world.AddFrame(frame, armyColors);
+    // --find: once the game is where it was asked to be, the camera goes to the first such thing
+    if (!opt.find.empty() && haveLive && !(automatic && liveBusy) && frameCount == 1) {
+      if (opt.find == "shield") {
+        for (const FrameEntity& f : frame.entities)
+          if (f.shield) {
+            camera.target = {f.position[0], f.position[1], f.position[2]};
+            camera.distance = f.scale[0] * 2.4f;
+            break;
+          }
+      } else if (opt.find == "wreck") {
+        const std::vector<Vec3> wrecks = world.WreckPlaces(1);
+        if (!wrecks.empty()) {
+          camera.target = wrecks[0];
+          camera.distance = 14;
+        }
+      }
+    }
     if (!haveMap) DrawTestScene(draw);
     world.Render();
 

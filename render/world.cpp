@@ -611,7 +611,15 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, fractionComplete, asRemembered ? nullptr : &pose);
+      // a personal shield: the script has set a shield's mesh on the unit (the name says so; FAF
+      // sets other meshes on units too)
+      bool shielded = false;
+      if (u.mesh && u.mesh < frame.blueprints->size() && fractionComplete >= 1 && u.Seen()) {
+        std::string set = (*frame.blueprints)[u.mesh];
+        for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        shielded = set.find("shield") != std::string::npos;
+      }
+      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, shielded ? 3.0f : fractionComplete, asRemembered ? nullptr : &pose);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {

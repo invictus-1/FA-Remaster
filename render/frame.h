@@ -34,6 +34,9 @@ struct FrameUnit {
   // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,
   // 8 seen now, 0x10 seen at some time, ...). 0xff: the picture is for no one army, everything shows.
   uint8_t recon = 0xff;
+  // The mesh blueprint its script set on it in place of its own (index into Frame::blueprints; 0:
+  // none). A personal shield sets the unit's shielded mesh while it is up.
+  uint32_t mesh = 0;
   bool Seen() const { return (recon & 8) != 0; }
   bool Blip() const { return (recon & 8) == 0 && (recon & 7) != 0; }  // known by radar, sonar or omni only
   bool SeenBefore() const { return (recon & 8) == 0 && (recon & 0x10) != 0; }  // not seen now, but it was
