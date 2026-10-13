@@ -1029,16 +1029,18 @@ void World::Render() {
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
-  shafts.Draw(view);
-  if (hide.find("particles") == std::string::npos) {
-    // into the scene's colour alone: they test the scene's depth themselves and fade where they
-    // meet something solid
+  {
+    // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
+    // themselves and fade where they meet something solid
     post.BeginColorOnly();
-    particles.Draw(view, post.Depth(), camera.zNear);
-    // those that bend what is behind them (the shimmer over heat): with the picture as it is now
-    if (particles.Bending() && post.CopyBehind()) {
-      post.BeginColorOnly();
-      particles.DrawBending(view, post.Behind(), post.Depth(), camera.zNear);
+    shafts.Draw(view, post.Depth(), camera.zNear);
+    if (hide.find("particles") == std::string::npos) {
+      particles.Draw(view, post.Depth(), camera.zNear);
+      // those that bend what is behind them (the shimmer over heat): with the picture as it is now
+      if (particles.Bending() && post.CopyBehind()) {
+        post.BeginColorOnly();
+        particles.DrawBending(view, post.Behind(), post.Depth(), camera.zNear);
+      }
     }
     post.ContinueScene();
     lights.Bind();
