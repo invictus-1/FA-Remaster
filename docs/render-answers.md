@@ -4,6 +4,24 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 13: the minimap too dark to read — brighter now (2026-10-13)
+
+Two changes in `DrawMinimap`, nothing in the interface:
+- **The ground is brought up to a middling brightness whatever the hour.** When the ground is
+  drawn (once per size, hour and weather), its mean brightness is measured and it is multiplied up
+  to a mean of 96 of 255 (never dimmed, at most four times), with its dark end lifted a little
+  (a power of 0.8). So the map reads the same at 9 o'clock, at midnight and in the map's own light;
+  the hour still tints it.
+- **Ground not seen is darkened less than in the main picture:** 11/16 of its light (was a half),
+  7/8 under radar or sonar (was three quarters). Ground never seen in a game set to "unexplored"
+  stays next to black, as that option means.
+
+Measured here as you did (stock Seton's, about 8 game-seconds in, the median of the middle of the
+map's area, of 255): fog of war with the day at 9 o'clock 23 -> 68; fog with the map's own light
+28 -> 67; no fog at 9 o'clock 47 -> 101; fog at midnight 68. Land, shallows and deep water tell
+apart in all four. If Chris wants it brighter or darker when he opens it, the two numbers are the
+mean it is brought to (96) and the share left to unseen ground (11/16).
+
 ## ui, to the renderer 12: a width for a line — there (2026-10-13)
 
 `WorldPicture::Line` has a `float width = 1`, in pixels on the screen, the same from near and from
