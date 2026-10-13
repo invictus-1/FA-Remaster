@@ -272,6 +272,8 @@ class Projectile : public Entity {
   Vec3 drawSize{1, 1, 1};
   Vec3 prevPos;
   Vec3 heldVel;  // its velocity as the beat began (taken before its own step: what another shell leads it by)
+  bool waitsPass = false;   // made during the projectile pass by a shell that had had its turn: no step in it
+  uint32_t passTick = 0;    // the beat whose projectile pass last came by this shell
   float velScale = 1;
   float hitFraction = -1;
   bool collideSurface = true, collideEntity = true, trackTarget = false, velocityAlign = true, stayUpright = false,

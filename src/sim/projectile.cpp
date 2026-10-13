@@ -180,6 +180,12 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->blueprint = &bp;
   p->army = army;
   p->id = ReserveId(army, 0x1);
+  {  // MOHO64_DEBUG_PROJ: every shell made, with the beat and where
+    static const bool dbgMade = getenv("MOHO64_DEBUG_PROJ") != nullptr;
+    if (dbgMade)
+      Logf(LogLevel::Info, "pdbg %u %u made %s at %.9g %.9g %.9g by %u", tick_, p->id, bp.id.c_str(), pos.x, pos.y, pos.z,
+           launcher ? launcher->id : 0u);
+  }
   // the script object: Entity::Entity 0x677c90 resolves the script class (0x677360, importing its module) and
   // creates the object first, so a module's import-time Random calls come before the ctor's draws below
   PushScriptClass(L, bp, "/lua/sim/projectile.lua", "Projectile");
@@ -222,6 +228,12 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->expireTick = tick_ + static_cast<uint32_t>(std::max(0.0f, std::nearbyint(Uniform(*this, b.lifetime, b.lifetimeRange) * 10)));
   p->launcher = launcher && launcher->kind == Entity::Kind::Projectile ? static_cast<Projectile*>(launcher)->launcher
                                                                         : launcher;
+  // A CHILD shell made while the pass runs, of a shell the pass has already come by and that is not the one whose
+  // step is running (a shot-down missile's debris, made by the missile's script when another shell's impact kills
+  // it), waits for the next beat. (A shell a unit's script makes in the pass does take its step in it: seen in the
+  // air battle replay.)
+  if (inProjectilePass && launcher && launcher->kind == Entity::Kind::Projectile && launcher != steppingProjectile)
+    p->waitsPass = static_cast<const Projectile*>(launcher)->passTick == tick_;
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);
@@ -700,13 +712,27 @@ void ProjectilesTick(Sim& sim) {
   // By index over the live list: an impact's script may create projectiles (fragmentation shells), and the entity
   // stage reaches a task that was added during its pass in that same pass: a child shell makes its first step in
   // the beat it is made. (Destroyed ones leave the list at the end of the beat only.)
+  // But not a child of a shell that has had its step: a cruise missile killed by an anti-missile's impact later
+  // in the pass drops its debris from its OnKilled (CreateChildProjectile), and that piece does not move until
+  // the next beat. Seen: such a piece of debris, made at 38 above the sea, reaches the water a beat later in the
+  // original than one that fell from the first beat on. (As if a child's task were linked in behind its parent's:
+  // not read in the exe; the two cases and the air battle's unit-made shells are what is known.)
+  sim.inProjectilePass = true;
   for (size_t i = 0; i < sim.projectiles.size(); ++i) {
     Projectile* p = sim.projectiles[i];
+    p->passTick = sim.tick();
     if (p->destroyQueued || !p->HasLuaObject()) continue;
+    if (p->waitsPass) {
+      p->waitsPass = false;
+      continue;
+    }
     sim.HoldShape(p);
     p->heldVel = EntityVelocity(p);
+    sim.steppingProjectile = p;
     MotionTick(sim, p);
   }
+  sim.steppingProjectile = nullptr;
+  sim.inProjectilePass = false;
 }
 
 // ---- launch bindings ------------------------------------------------------------------------------

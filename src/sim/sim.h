@@ -188,6 +188,10 @@ class Sim {
                                      Quat q, float damage, float damageRadius, const std::string& damageType,
                                      const AiTarget& target, bool ignoresAlly);
   std::vector<class Projectile*> projectiles;  // live projectiles, in creation order
+  // The shell whose step is running in the projectile pass (null outside the pass): a shell made during the pass
+  // by anything else takes its first step in the next beat (ProjectilesTick).
+  class Projectile* steppingProjectile = nullptr;
+  bool inProjectilePass = false;
   std::vector<class ShieldEntity*> shields;    // shield entities (area damage pre-pass, collisions)
   std::vector<class CollisionBeam*> beams;
   std::vector<Prop*> props;
