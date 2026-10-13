@@ -1197,13 +1197,32 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   }
   if (reporter) ReportState(u, code);
   if (w->suppress > 0) --w->suppress;
-  if (u->unitStates.count("Attacking") &&
-      ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1))
-    return 1;
+  // MOHO64_DEBUG_ACQTICK=<tick>: every acquire task that runs in that beat, and how far it gets
+  static const long dbgAcqTick = getenv("MOHO64_DEBUG_ACQTICK") ? atol(getenv("MOHO64_DEBUG_ACQTICK")) : -1;
+  const bool dbgAcq2 = dbgAcqTick >= 0 && static_cast<long>(sim.tick()) == dbgAcqTick;
+  const bool engaging = u->unitStates.count("Attacking") &&
+                        ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1);
+  const bool keeps = !engaging && !b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 &&
+                     CanAttackTarget(sim, w, w->target) && HasTarget(sim, w->target) &&
+                     !TargetExempt(u, TargetEntity(sim, w->target));
+  if (dbgAcq2) {
+    const Entity* ce = w->target.type == 1 ? sim.FindEntity(w->target.entityId) : nullptr;
+    const Entity* de = d.type == 1 ? sim.FindEntity(d.entityId) : nullptr;
+    Logf(LogLevel::Info, "acqtick %u unit %u%s %s code %d period %d holds %d%s wants %d%s -> %s", sim.tick(), u->id,
+         u->dead ? " (dead)" : "", b.label.c_str(), code, period, ce ? static_cast<int>(ce->id) : -1,
+         ce && ce->dead ? " (dead)" : "", de ? static_cast<int>(de->id) : -1, de && de->dead ? " (dead)" : "",
+         engaging ? "engaging, again next beat" : keeps ? "keeps its target" : "looks for a target");
+    if (b.autoInitiateAttackCommand)  // what CheckAutoInitiate looks at: the unit's orders
+      for (const auto& c : u->commands) {
+        const Entity* te = c->targetId ? sim.FindEntity(c->targetId) : nullptr;
+        Logf(LogLevel::Info, "acqtick %u unit %u   order type %d target %d%s%s", sim.tick(), u->id,
+             static_cast<int>(c->type), te ? static_cast<int>(te->id) : c->targetId ? -2 : -1,
+             te && te->dead ? " (dead)" : "", c->targetViaBlip ? " via its blip" : "");
+      }
+  }
+  if (engaging) return 1;
   // keep the current target
-  if (!b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 && CanAttackTarget(sim, w, w->target) &&
-      HasTarget(sim, w->target) && !TargetExempt(u, TargetEntity(sim, w->target)))
-    return ret;
+  if (keeps) return ret;
   if (u->fireState == 1) {
     SetTarget(sim, w, AiTarget{});
     return ret;
@@ -2272,11 +2291,15 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 
 // new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
+  // both callers (CUnitPatrolTask::TaskTick 0x61c229, CUnitGuardTask::SetEnemy 0x61390f) first build a CAiTarget of
+  // the enemy they found (UpdateTarget 0x5d55b0: one target-point draw when it has AI.TargetBones), then make the task
+  const int targetPoint = TargetPointDraw(sim, e);
   if (u->weapons.empty() || !e) return nullptr;
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Attack;
   t->order = "Attack";
   t->goalId = EntityRef(e);
+  t->targetPoint = targetPoint;
   t->site = e->position;
   t->child = true;
   InitAttack(sim, u, *t, false);
