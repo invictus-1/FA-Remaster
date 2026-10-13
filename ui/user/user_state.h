@@ -29,7 +29,8 @@ class WorldSource;
 class BackdropSource;
 struct GamePace;
 struct WorldLine;
-struct WorldRing;
+struct WorldRangeGroup;
+struct WorldMeshView;
 struct WorldGhost;
 class UiManager;
 namespace sound {
@@ -92,6 +93,7 @@ class UserState {
   };
   std::unique_ptr<Extra> units;
   std::unique_ptr<Extra> ranges;  // the range rings' filters and switches (range_rings.cpp)
+  std::unique_ptr<Extra> worldMeshes;  // the script's meshes in the world (world_meshes.cpp)
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
   std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
   // The life bars over units (the console command UI_RenderUnitBars, user/keymap.cpp): the
@@ -208,7 +210,12 @@ bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float posi
 // (0xffffffff: none) and the building about to be placed (nullptr: none).
 void RegisterRangeBindings(lua_State* L);
 bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::string& value);
-void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRing>* out);
+void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out);
+// The meshes the game's script places in the world (world_meshes.cpp): InternalCreateWorldMesh
+// and its methods, AddCommandFeedbackBlip; and the list to draw now (hidden ones left out, an
+// order's mark gone when its time is over).
+void RegisterWorldMeshBindings(lua_State* L);
+void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).

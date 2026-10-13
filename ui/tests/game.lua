@@ -422,6 +422,40 @@ local function run()
     check("switched off again: none", table.getn(moho64ui_RangeRings()), 0)
     ConExecute("range_RenderSelected true")
 
+    -- the meshes the script places in the world, and the marks where orders land
+    local WorldMesh = import("/lua/ui/controls/worldmesh.lua").WorldMesh
+    local function meshes(shader)
+        local n, last = 0, nil
+        for _, m in moho64ui_WorldMeshes() do
+            if m.shader == shader then n, last = n + 1, m end
+        end
+        return n, last
+    end
+    local before = meshes("RallyPoint")
+    local flag = WorldMesh()
+    flag:SetMesh({MeshName = '/meshes/game/flag02d_lod0.scm', TextureName = '/meshes/game/flag02d_albedo.dds', ShaderName = 'RallyPoint', UniformScale = 0.1})
+    flag:SetLifetimeParameter(10)
+    flag:SetStance(at2)
+    flag:SetHidden(false)
+    local n1, placed = meshes("RallyPoint")
+    check("a WorldMesh of the script's is given to the picture", n1, before + 1)
+    check("with its mesh, place and scale", placed.mesh == '/meshes/game/flag02d_lod0.scm' and math.abs(placed.x - at2[1]) < 0.01
+        and math.abs(placed.z - at2[3]) < 0.01 and math.abs(placed.scale - 0.1) < 0.001 and placed.lifetime == 10, true)
+    flag:SetHidden(true)
+    check("hidden it is not", flag:IsHidden() and meshes("RallyPoint") == before, true)
+    flag:SetHidden(false)
+    flag:Destroy()
+    check("destroyed it is gone", meshes("RallyPoint"), before)
+    local marks = meshes("CommandFeedback2")
+    AddCommandFeedbackBlip({Position = at2, MeshName = '/meshes/game/crosshair02d_lod0.scm',
+        TextureName = '/meshes/game/crosshair02d_albedo.dds', ShaderName = 'CommandFeedback2', UniformScale = 0.5}, 1.0)
+    check("AddCommandFeedbackBlip shows a mark", meshes("CommandFeedback2"), marks + 1)
+    WaitSeconds(0.2)
+    local _, mark = meshes("CommandFeedback2")
+    check("whose age counts", mark ~= nil and mark.age > 0.1 and mark.age < 0.7, true)
+    WaitSeconds(1.0)
+    check("and which goes when its time is over", meshes("CommandFeedback2"), marks)
+
     -- pause: asked for like an order, so it holds from a beat on; the game's time stands
     check("the game runs", SessionIsPaused(), false)
     local gamemain = import("/lua/ui/game/gamemain.lua")

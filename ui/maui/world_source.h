@@ -34,17 +34,42 @@ struct WorldLine {
   float a[3], b[3];
   uint32_t color;  // 0xAARRGGBB
 };
-// A circle lying on the ground (a range ring).
-struct WorldRing {
+// Range rings: the rings of one of the game's range filters in one colour. They show as one
+// outline round the ground they cover together; an inner radius cuts a hole.
+struct WorldRangeRing {
   float centre[3];
   float radius;
-  uint32_t color;  // 0xAARRGGBB
+  float innerRadius;  // 0: none
+};
+struct WorldRangeGroup {
+  uint32_t color = 0xffffffffu;      // 0xAARRGGBB
+  int glow = 0;                      // 0..255, the first byte of the script's colour
+  float outer[2] = {0.04f, 4.0f};    // the outline's thickness at the nearest and the farthest zoom
+  float inner[2] = {0.04f, 4.0f};    // a hole's outline's
+  std::vector<WorldRangeRing> rings;
+};
+// A mesh the game's script has placed in the world (its WorldMesh, or the mark where an order
+// landed); how it is drawn goes by the shader's name.
+struct WorldMeshView {
+  std::string mesh, texture, shader;
+  float uniformScale = 1;
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};  // a quaternion x, y, z, w
+  float scale[3] = {1, 1, 1};
+  uint32_t color = 0xffffffffu;
+  bool hidden = false;
+  float lifetime = 0, age = 0;  // seconds given with SetLifetimeParameter (0: none), and how many have passed
+  float fractionComplete = 1;
 };
 struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
   std::vector<WorldLine> lines;
-  std::vector<WorldRing> rings;
+  // The range rings, and the camera's distances at its nearest and its farthest zoom (the rings'
+  // thickness goes between its two numbers with them).
+  std::vector<WorldRangeGroup> ranges;
+  float zoomNear = 10, zoomFar = 1000;
+  std::vector<WorldMeshView> meshes;
   // The unit under the mouse, to be marked as the original marks it (brackets around it by how
   // its army stands to the player's): 0xffffffff for none. Kinds: 1 the player's own or an
   // ally's, 2 an enemy's, 3 a neutral's. A selected unit is not named here: it has its mark.

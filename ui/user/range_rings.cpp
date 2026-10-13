@@ -22,9 +22,11 @@
 //   the mouse, normal colour).
 //
 // First form, OURS where it differs:
-// - the rings are plain circles of the picture's source: the original draws the union of
-//   overlapping rings as one outline with a glow and a thickness by the zoom (the filter's
-//   Inner / Outer numbers and the colour's first byte), which are kept but not drawn;
+// - the rings go to the picture's source in groups, one for a filter in one colour, with the
+//   filter's Inner / Outer numbers and the colour's first byte (the glow): the renderer draws a
+//   group as one outline round what its rings cover together, as the original does (its
+//   func_RenderRings 0x7ef5a0 is not read: how thickness and glow go with the zoom is the
+//   renderer's guess);
 // - the radii are the blueprint's: a radius a script has changed, or intel switched off, is not
 //   followed (the original asks the live unit); a weapon that an enhancement adds is left out,
 //   before and after the enhancement;
@@ -54,8 +56,9 @@ namespace {
 
 struct RangeFilter {
   std::vector<uint64_t> categories;
-  uint32_t normal = 0xffffffffu, select = 0xffffffffu, rollover = 0xffffffffu;  // 0xAARRGGBB, drawn opaque
-  float inner[2] = {0, 0}, outer[2] = {0, 0};  // line thickness near and far (kept, not drawn)
+  // As the script gives them: the first byte is the glow amount, then red, green, blue.
+  uint32_t normal = 0x00ffffffu, select = 0x00ffffffu, rollover = 0x00ffffffu;
+  float inner[2] = {0, 0}, outer[2] = {0, 0};  // line thickness at the nearest and the farthest zoom
 };
 
 struct RangeStore : UserState::Extra {
@@ -71,11 +74,11 @@ RangeStore& Store(lua_State* L) {
   return static_cast<RangeStore&>(*user->ranges);
 }
 
-// "aarrggbb" or "rrggbb" -> the colour, opaque (the first byte is the original's glow amount).
+// "ggrrggbb" or "rrggbb" -> glow amount (first byte), red, green, blue.
 uint32_t ColorOf(lua_State* L, int idx) {
   const char* s = lua_tostring(L, idx);
-  if (!s) return 0xffffffffu;
-  return 0xff000000u | (static_cast<uint32_t>(std::strtoul(s, nullptr, 16)) & 0x00ffffffu);
+  if (!s) return 0x00ffffffu;
+  return static_cast<uint32_t>(std::strtoul(s, nullptr, 16));
 }
 
 // t[name] as a number (0 when it is none); the table is at stack index t.
@@ -185,15 +188,24 @@ bool InFilter(lua_State* L, const RangeFilter& f, const std::string& blueprint) 
          CategoryHas(f.categories.data(), bp->entityIndex);
 }
 
-void AddRings(std::vector<WorldRing>* out, const float at[3], float inner, float outer, uint32_t color) {
-  for (float radius : {outer, inner}) {
-    if (!(radius > 0)) continue;
-    WorldRing ring;
-    for (int i = 0; i < 3; ++i) ring.centre[i] = at[i];
-    ring.radius = radius;
-    ring.color = color;
-    out->push_back(ring);
+// A ring into the group of its filter and colour (made when it is the first).
+void AddRing(std::vector<WorldRangeGroup>* out, std::map<std::pair<std::string, uint32_t>, size_t>* groups,
+             const std::string& name, const RangeFilter& f, uint32_t color, const float at[3], float inner, float outer) {
+  auto slot = groups->find({name, color});
+  if (slot == groups->end()) {
+    WorldRangeGroup g;
+    g.color = 0xff000000u | (color & 0x00ffffffu);
+    g.glow = static_cast<int>(color >> 24);
+    g.outer[0] = f.outer[0], g.outer[1] = f.outer[1];
+    g.inner[0] = f.inner[0], g.inner[1] = f.inner[1];
+    slot = groups->emplace(std::make_pair(name, color), out->size()).first;
+    out->push_back(std::move(g));
   }
+  WorldRangeRing ring;
+  for (int i = 0; i < 3; ++i) ring.centre[i] = at[i];
+  ring.radius = outer;
+  ring.innerRadius = inner > 0 ? inner : 0;
+  (*out)[slot->second].rings.push_back(ring);
 }
 
 // SetOverlayFilter(name, categories, normalColor, selectColor, rolloverColor, innerNear, innerFar,
@@ -220,30 +232,30 @@ int l_SetOverlayFilters(lua_State* L) {
   }
   return 0;
 }
-// moho64ui_RangeRings() -> the rings as they would be drawn now, each {x, z, radius, color
-// ("rrggbb")}: the host's own function for tests.
+// moho64ui_RangeRings() -> the rings as they would be drawn now, each {x, z, radius, inner,
+// color ("rrggbb"), glow, group (its group's number)}: the host's own function for tests.
 int l_RangeRings(lua_State* L) {
-  std::vector<WorldRing> rings;
-  RangeRingsForWorld(L, UnitUnderMouse(L), nullptr, &rings);
+  std::vector<WorldRangeGroup> groups;
+  RangeRingsForWorld(L, UnitUnderMouse(L), nullptr, &groups);
   lua_newtable(L);
   int n = 0;
-  for (const WorldRing& r : rings) {
-    lua_newtable(L);
-    lua_pushstring(L, "x");
-    lua_pushnumber(L, r.centre[0]);
-    lua_rawset(L, -3);
-    lua_pushstring(L, "z");
-    lua_pushnumber(L, r.centre[2]);
-    lua_rawset(L, -3);
-    lua_pushstring(L, "radius");
-    lua_pushnumber(L, r.radius);
-    lua_rawset(L, -3);
-    char color[16];
-    std::snprintf(color, sizeof color, "%06x", r.color & 0x00ffffffu);
-    lua_pushstring(L, "color");
-    lua_pushstring(L, color);
-    lua_rawset(L, -3);
-    lua_rawseti(L, -2, ++n);
+  for (size_t g = 0; g < groups.size(); ++g) {
+    for (const WorldRangeRing& r : groups[g].rings) {
+      lua_newtable(L);
+      auto number = [&](const char* k, double d) {
+        lua_pushstring(L, k);
+        lua_pushnumber(L, d);
+        lua_rawset(L, -3);
+      };
+      number("x", r.centre[0]), number("z", r.centre[2]), number("radius", r.radius), number("inner", r.innerRadius);
+      number("glow", groups[g].glow), number("group", static_cast<double>(g + 1));
+      char color[16];
+      std::snprintf(color, sizeof color, "%06x", groups[g].color & 0x00ffffffu);
+      lua_pushstring(L, "color");
+      lua_pushstring(L, color);
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, ++n);
+    }
   }
   return 1;
 }
@@ -264,7 +276,7 @@ bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::
   return true;
 }
 
-void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRing>* out) {
+void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out) {
   UserState* user = UserState::From(L);
   Sim* sim = user->config().sim;
   if (!sim || !user->ranges) return;
@@ -299,14 +311,18 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
   }
   if (store.highlighted && hover != 0xffffffffu) named(hover, true);
   float inner = 0, outer = 0;
-  for (const auto& [key, color] : colors)
-    if (UserUnitFacts(L, key.first, &blueprint, at, &army) && RadiiOf(L, store, blueprint, key.second, &inner, &outer))
-      AddRings(out, at, inner, outer, color);
+  std::map<std::pair<std::string, uint32_t>, size_t> groups;
+  for (const auto& [key, color] : colors) {
+    auto f = store.filters.find(key.second);
+    if (f != store.filters.end() && UserUnitFacts(L, key.first, &blueprint, at, &army) &&
+        RadiiOf(L, store, blueprint, key.second, &inner, &outer))
+      AddRing(out, &groups, key.second, f->second, color, at, inner, outer);
+  }
   if (store.build && build)
     for (const auto& [name, f] : store.filters)
       if (name != "AllMilitary" && name != "AllIntel" && InFilter(L, f, build->blueprint) &&
           RadiiOf(L, store, build->blueprint, name, &inner, &outer))
-        AddRings(out, build->position, inner, outer, f.normal);
+        AddRing(out, &groups, name, f, f.normal, build->position, inner, outer);
 }
 
 void RegisterRangeBindings(lua_State* L) {
