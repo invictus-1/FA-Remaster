@@ -66,6 +66,8 @@ bool StrategicIcons::Init(std::string* error) {
   bd.dynamic = true;
   buffer_ = device_->CreateBuffer(bd);
   atlasPixels_.assign(static_cast<size_t>(kAtlasSize) * kAtlasSize * 4, 0);
+  // the last pixel: plain mid-grey, which the shader draws in whatever colour is asked (the bars)
+  for (int c = 0; c < 4; ++c) atlasPixels_[atlasPixels_.size() - 4 + static_cast<size_t>(c)] = c < 3 ? 128 : 255;
   return true;
 }
 
@@ -158,11 +160,12 @@ void StrategicIcons::Define(const std::string& blueprintPath, const std::string&
 void StrategicIcons::Begin(const View& view) {
   view_ = view;
   listed_.clear();
+  bars_.clear();
   pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
 }
 
-void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height, bool blip) const {
-  const int icon = blip && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
+void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height, bool blip, bool known) const {
+  const int icon = blip && !known && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
   if (icon < 0) return;
   const Rect& r = rects_[static_cast<size_t>(icon)];
   auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -188,9 +191,20 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip) {
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels) {
+  const Mat4& m = view_.constants.viewProj;
+  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
+  if (w <= 1e-4f) return;
+  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
+  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
+  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
+  bars_.push_back({x, y, widthPixels, std::clamp(fraction, 0.0f, 1.0f)});
+}
+
+void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip, bool known) {
   if (kind->icon < 0) return;
-  const int icon = blip && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
+  const int icon = blip && !known && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
   // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on
   const float distance = Length(position - view_.eye);
   const float from = kind->fadeIn * (1 - fadeShare);
@@ -212,8 +226,9 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
 }
 
 void StrategicIcons::Draw() {
+  if (!showSymbols) listed_.clear();
   drawn = static_cast<int>(listed_.size());
-  if (listed_.empty()) return;
+  if (listed_.empty() && bars_.empty()) return;
   if (atlasChanged_) {  // symbols were added: the texture is made anew (a game uses a few dozen, early on)
     if (atlas_) device_->Destroy(atlas_);
     gfx::TextureDesc td;
@@ -249,6 +264,18 @@ void StrategicIcons::Draw() {
     const float u1 = static_cast<float>(r.x + r.width) * texel, v1 = static_cast<float>(r.y + r.height) * texel;
     const Vertex a{x0, y0, u0, v0, l.color}, b{x1, y0, u1, v0, l.color}, c{x1, y1, u1, v1, l.color}, d{x0, y1, u0, v1, l.color};
     for (const Vertex& v : {a, b, c, a, c, d}) vertices_.push_back(v);
+  }
+  // the life bars, over the symbols: a dark frame and the filled part in it
+  const float grey = (static_cast<float>(kAtlasSize) - 0.5f) * texel;
+  auto rect = [&](float x0, float y0, float x1, float y1, uint32_t color) {
+    const Vertex a{x0, y0, grey, grey, color}, b{x1, y0, grey, grey, color}, c{x1, y1, grey, grey, color}, d{x0, y1, grey, grey, color};
+    for (const Vertex& v : {a, b, c, a, c, d}) vertices_.push_back(v);
+  };
+  for (const Bar& bar : bars_) {
+    const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half, y0 = std::floor(bar.y) - 2 * pixel_;
+    rect(x0 - pixel_, y0 - pixel_, x0 + 2 * half + pixel_, y0 + 3 * pixel_, 0xd0000000u);
+    const uint32_t color = bar.fraction > 0.5f ? 0xff30e040u : bar.fraction > 0.25f ? 0xff20d8f0u : 0xff3030f0u;  // 0xAABBGGRR
+    if (bar.fraction > 0) rect(x0, y0, x0 + std::max(pixel_, 2 * half * bar.fraction), y0 + 2 * pixel_, color);
   }
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view_.constants, sizeof view_.constants);

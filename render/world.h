@@ -82,6 +82,9 @@ class World {
   // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
   uint32_t hover = 0xffffffffu;
   int hoverKind = 0;
+  // Life bars over the units that are selected or pointed at, and over damaged ones while they are
+  // near enough to be seen as models.
+  bool lifeBars = true;
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 

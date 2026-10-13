@@ -318,8 +318,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   hidden, and the ground the army does not see is darkened (`sight.h`: a grid of what it sees,
   asked of the engine twice a second, and one pass over the picture). What is made at a place the
   army does not see (an explosion, a flash, a mark) is not made. The minimap is darkened the
-  same way, and its ground follows the hour and the weather. Not yet: ground seen before looks
-  like ground never seen; buildings seen once are not remembered.
+  same way, and its ground follows the hour and the weather. A building seen before
+  stays drawn where it stood, and a unit seen before keeps its own icon as a blip. Not yet:
+  ground seen before looks like ground never seen; a remembered building follows the real one's
+  state at once.
+- Life bars (`World::lifeBars`): a small bar, green down to red, over selected and pointed-at
+  units and over damaged ones that are near enough to be seen as models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by

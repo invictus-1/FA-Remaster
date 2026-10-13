@@ -235,16 +235,17 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
   // every unit's icon on it
   if (m.frame.blueprints) {
     for (const FrameUnit& u : m.frame.units) {
-      if (u.dead || (!u.Seen() && !u.Blip())) continue;
       const std::string& blueprint = (*m.frame.blueprints)[u.blueprint];
       if (blueprint.empty()) continue;
+      const bool remembered = u.SeenBefore() && blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+      if (u.dead || (!u.Seen() && !u.Blip() && !remembered)) continue;
       if (u.blueprint >= m.iconKinds.size()) m.iconKinds.resize(m.frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = m.iconKinds[u.blueprint];
       if (!kind) kind = w.icons.ForBlueprint(w.models.UnitBlueprintPath(blueprint));
       float x, y;
       if (!MinimapProject({u.position[0], u.position[1], u.position[2]}, &x, &y)) continue;
       const Vec3 color = m.armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : m.armyColors[u.Army() % m.armyColors.size()];
-      w.icons.Blit(kind, color, w.selected.count(u.id) != 0, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, u.Blip());
+      w.icons.Blit(kind, color, w.selected.count(u.id) != 0, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, u.Blip() && !remembered, u.SeenBefore());
     }
   }
   return m.mapPixels;

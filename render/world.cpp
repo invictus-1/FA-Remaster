@@ -404,18 +404,33 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (u.dead) continue;
     // of another army's unit only what the army the picture is for knows: the unit when it is seen,
     // its blip when it is on radar, sonar or omni alone, nothing otherwise
-    const bool blip = u.Blip();
-    if (!u.Seen() && !blip) continue;
+    const std::string& blueprint = (*frame.blueprints)[u.blueprint];
+    // (what the army has seen before it remembers: a building stays where it stood, drawn as it
+    // was; a unit keeps its own icon when it is a blip. A building: by the third letter of its
+    // id, "ueb0101", the game's own way of naming them - units of mods that name otherwise are
+    // not remembered)
+    const bool known = u.SeenBefore();
+    const bool remembered = known && blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+    const bool blip = u.Blip() && !remembered;
+    if (!u.Seen() && !blip && !remembered) continue;
     const Vec3 position{u.position[0], u.position[1], u.position[2]};
     const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
     const Vec3 color = colorOf(u.Army());
-    const std::string& blueprint = (*frame.blueprints)[u.blueprint];
     if (!blueprint.empty()) {  // its strategic icon, when it is far enough away
       if (u.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
-      icons.Add(kind, position, color, isSelected, blip);
+      icons.Add(kind, position, color, isSelected, blip, known);
+      // its life bar: when it is selected or pointed at, or damaged and near enough to be a model
+      if (lifeBars && u.Seen() && u.maxHealth > 0) {
+        const float away = Length(position - view.eye);
+        if (isSelected || u.id == hover || (u.health < u.maxHealth * 0.999f && away < kind->fadeIn * 0.9f)) {
+          const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away;
+          const float wide = std::clamp(kind->selectionX * 2.2f / std::max(perPixel, 1e-5f), 18.0f, 72.0f);
+          icons.AddBar(position + Vec3{0, kind->selectionZ * 1.1f + 0.4f, 0}, u.health / u.maxHealth, wide);
+        }
+      }
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
@@ -438,7 +453,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
-      if (u.fractionComplete >= 1) AddLamps(model, position, orientation, &pose, &color);
+      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour
@@ -541,7 +556,8 @@ void World::Render() {
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
   post.Present(view);
-  if (iconsOn) icons.Draw();  // on the finished picture, as the original draws them
+  icons.showSymbols = iconsOn;
+  icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
 }
 
 bool World::Project(Vec3 p, float* x, float* y) const {

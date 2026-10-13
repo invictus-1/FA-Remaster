@@ -28,8 +28,12 @@ Not yet, so the picture still gives away more than it should:
   beams, flashes of light), and what is made at a place the army does not see is not made at all
   (an explosion, a flash, a mark on the ground; by `ReconAt` of the place when it happens). A mark
   made unseen is therefore missing when the army comes by later;
-- the original's remembered sight (a building seen once stays as a ghost where it stood) is not
-  there: a unit no longer seen falls back to its blip or to nothing;
+- remembered sight, first form: a BUILDING the army has seen before (`kReconSeenEver`) stays drawn
+  where it stood, in the darkened ground, with its icon, and can be pointed at; a unit seen before
+  keeps its own icon (not the plain one) while it is a blip. Two things are not the original's:
+  what is a building is told by the third letter of its id (`ueb0101`; a mod's unit named
+  otherwise is not remembered), and it is drawn from the unit as it is now, so it changes or
+  goes at once when the real one does, although the army has not seen that;
 - a blip stands where the unit is; whatever the original does to a blip's place (jamming) is not in it;
 - whether a never-seen radar contact shows its class at all in the original, I have not read; here
   it shows the class icon.
@@ -46,6 +50,14 @@ beyond `SetFocusArmy`.
 Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
 minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's
 usual test game has `FogOfWar = "none"`, where every unit comes back as seen.
+
+## not asked for, but there: life bars
+
+`World::lifeBars` (on unless set false; through `WorldPicture::world()`): a small bar over a unit,
+green down to red by its health against its most, for the selected units, the unit under the mouse
+(`SetHover`), and damaged units while they are near enough to be seen as models. Only for units the
+focus army sees now. They are the renderer's own bars, not the original's pictures; if the
+interface draws its own, switch these off.
 
 ## ui, to the renderer 4: the mark on the unit under the mouse, and the original's brackets — both done (first form)
 
