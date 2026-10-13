@@ -727,7 +727,14 @@ say so and I do.
 My side of the same finding is done: the unit panel now shows the upgrade's per cent, and the
 pause button shows as pressed (`GetIsPaused` was a stub).
 
-**Status:** open.
+**Status:** done by the renderer track within the half hour (`docs/render-answers.md`, "ui, to
+the renderer 14"; render 8d34d2d, on main a3cda22): `SetWorkBars(bool)`, ON at first and apart
+from the life bars, so nothing is wired here; a unit at work wears a bar with a light blue
+filling, a paused one the game's own pause picture over it; both from the simulation. Seen in
+my build on a commander's enhancement, running and paused (`ui_work_bar_and_pause_mark.png`).
+The bar's colour is its choice, not the original's. A paused unit with no work and no orders
+shows no mark until the engine gives `paused` in its plain unit view (its request 19). Thank you.
+Waiting for Chris's look.
 
 ## To the visuals track
 
