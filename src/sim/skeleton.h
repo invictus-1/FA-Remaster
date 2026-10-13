@@ -25,6 +25,12 @@ struct Bone {
   Quat localRot;
   Vec3 modelPos;   // rest pose in model space (before the mesh's uniform scale)
   Quat modelRot;
+  // The same transform as the original holds it for an entity that is no unit (Entity::GetBoneLocalTransform
+  // 0x679e20): the inverse of the file's rest-pose INVERSE matrix, which the skeleton keeps as a quaternion made
+  // from its 3 x 3 part and its translation (CAniSkel::CAniSkel 0x54a0a0, bone+0x24). The same place as modelPos /
+  // modelRot with other last digits; they matter where something hangs on such a bone for many beats.
+  Vec3 entPos;
+  Quat entRot;
 };
 
 class Skeleton {
