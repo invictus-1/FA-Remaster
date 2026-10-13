@@ -86,10 +86,10 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Submarines | beat 465 |
 | Missiles | beat 408 |
 | Eight-army AI game | beat 344 |
+| Air battle (1,216 beats) | beat 251 |
 | Experimental units, second set | beat 167 |
 | Skirmish against an AI | beat 165 |
-| Air battle (1,216 beats) | beat 149 |
-| Naval battle (1,079 beats) | beat 145 |
+| Naval battle (1,079 beats) | beat 149 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed
