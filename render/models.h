@@ -71,6 +71,9 @@ struct ModelLod {
   bool blend = false;          // drawn blended over what is behind, by the albedo's alpha
   bool border = false;         // "MapImager": the machinery a map lies in: lit by the sun's angle alone, its
                                // albedo's alpha added to its colour, glowing where the specular's blue says
+  float sway = 0;              // how much it sways in the wind (the original's "Undulating..." trees, the
+                               // remaster's foliage): 0 not at all, 1 as a tree does
+  float swayHeight = 1;        // the model's height in its own units: the sway grows from the foot to there
   bool leaves = false;         // "LabPBRAlpha": a remastered surface with holes: seen from both sides (lit as
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)

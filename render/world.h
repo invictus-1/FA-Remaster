@@ -215,6 +215,9 @@ class World {
     Vec3 place;
     float speed = 0;
     double clock = 0;
+    Vec3 trail[12];      // where it was, the newest first, one every third of a second of the game
+    int trailCount = 0;
+    double trailClock = 0;
   };
   std::unordered_map<uint32_t, Moving> moving_;
   // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the

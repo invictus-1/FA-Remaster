@@ -462,7 +462,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         Moving& m = moving_[u.id];
         const double dt = clock_ - m.clock;
         if (dt > 1e-4 && dt < 1.0) m.speed += (Length(position - m.place) / static_cast<float>(dt) - m.speed) * 0.2f;
-        else if (dt >= 1.0 || dt < 0) m.speed = 0;
+        else if (dt >= 1.0 || dt < 0) {
+          m.speed = 0;
+          m.trailCount = 0;
+        }
         if (dt != 0) {
           m.place = position;
           m.clock = clock_;
@@ -473,7 +476,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           const Vec3 level = Normalize(Vec3{back.x, 0, back.z});
           const float halfX = (model->boundsMax.x - model->boundsMin.x) * 0.5f * model->scale, halfZ = (model->boundsMax.z - model->boundsMin.z) * 0.5f * model->scale;
           const Vec3 stern{position.x + level.x * halfZ * 0.6f, map.water.elevation + 0.03f, position.z + level.z * halfZ * 0.6f};
-          wakes.Add(stern, level, std::min(m.speed * 1.8f, 14.0f) + halfZ, halfX * 0.7f, std::min(m.speed / 2.5f, 1.0f));
+          // where it has been: a place kept every third of a second, the wake laid along them
+          if (clock_ - m.trailClock > 0.33 || m.trailCount == 0) {
+            for (int k = std::min(m.trailCount, 11); k > 0; --k) m.trail[k] = m.trail[k - 1];
+            m.trail[0] = stern;
+            m.trailCount = std::min(m.trailCount + 1, 12);
+            m.trailClock = clock_;
+          }
+          Vec3 places[13];
+          places[0] = stern;
+          for (int k = 0; k < m.trailCount; ++k) places[k + 1] = m.trail[k];
+          const float length = std::min(m.speed * 1.8f, 14.0f) + halfZ, strength = std::min(m.speed / 2.5f, 1.0f);
+          if (m.trailCount >= 2) wakes.AddPath(places, m.trailCount + 1, length, halfX * 0.7f, strength);
+          else wakes.Add(stern, level, length, halfX * 0.7f, strength);
         }
       }
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));

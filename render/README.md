@@ -322,6 +322,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   stays drawn where it stood, and a unit seen before keeps its own icon as a blip. Not yet:
   ground seen before looks like ground never seen; a remembered building follows the real one's
   state at once.
+- Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
+  trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
+  the model, each on its own beat by where it stands, harder when it rains or snows; their
+  shadows move with them. One wind over the whole map, from one side; no gusts running across
+  the land yet.
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
@@ -334,11 +339,16 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the picture shows in the mirrored direction, land and units, found by walking through the
   picture's depth; foam lies where the water is shallow, along the shore and round whatever
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
-  net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
-  before. Limits: mirrored things are only those in the picture (nothing from outside it or
-  behind something). What moves on the water trails a wake of foam (`wakes.h`: one flat shape
-  behind it, by how fast it goes now; it is drawn straight back, so a turning ship drags its
-  wake round with it). Lamps and flashes light the water and glint on
+  net of light; the sun or moon glints. The small waves are the map's four moving normal maps, as before; over them runs a
+  swell of four trains of longer waves, which tilts the surface and carries the waterline up
+  and down the shore (the sheet is drawn a little above the water's level, and where the water
+  stands lower just now is worked out per pixel); the shore's foam is fine lace with fronts
+  running in toward the land, thick only at the very waterline, where the water thins out to
+  nothing. The surface itself is still one flat sheet: the swell does not lift it, so from low
+  down the horizon of the water is a ruled line. Limits: mirrored things are only those in the picture (nothing from outside it or
+  behind something). What moves on the water trails a wake of foam (`wakes.h`: flat pieces laid
+  along the places it has been in the last seconds, so the wake curves behind a ship that
+  turns; longer and stronger the faster it goes). Lamps and flashes light the water and glint on
   its waves. In rain
   the surface is roughened and drops make rings on it. The original look keeps the original's formula.
 - Glow (bloom, modern look; `Post::glow`): what is brighter than the screen can show spreads a

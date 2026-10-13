@@ -121,6 +121,8 @@ TextureCube sky : register(t5);
 Texture2D behind : register(t6);
 Texture2DMS<float> sceneDepth : register(t7);
 
+static const float kRise = 0.07;  // how far the swell carries the water above and below its level
+
 struct VOut {
   float4 position : SV_Position;
   float3 world : TEXCOORD0;
@@ -128,9 +130,36 @@ struct VOut {
 
 VOut VS(float2 corner : POSITION) {
   VOut o;
-  o.world = float3(corner.x * mapSize.x, surfaceColor.w, corner.y * mapSize.y);
+  // (the sheet lies as high as the swell's crests reach; where the water stands lower just now is
+  // worked out per pixel)
+  o.world = float3(corner.x * mapSize.x, surfaceColor.w + kRise, corner.y * mapSize.y);
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
+}
+
+// The swell: four trains of waves crossing the water, longer ones faster. x: the height; y, z: how
+// it slopes along x and z.
+float3 Swell(float2 xz) {
+  static const float4 trains[4] = {  // the way it runs (x, z), its length, its height
+    float4(0.86, 0.50, 23.0, 0.060), float4(0.60, 0.80, 13.0, 0.040), float4(0.97, -0.24, 7.5, 0.022), float4(0.31, 0.95, 4.3, 0.012)};
+  float3 sum = 0;
+  for (int k = 0; k < 4; ++k) {
+    float turns = 6.2832 / trains[k].z;
+    float phase = dot(trains[k].xy, xz) * turns - time * 0.55 * sqrt(trains[k].z) * turns;
+    sum.x += trains[k].w * sin(phase);
+    sum.yz += trains[k].xy * (trains[k].w * turns * cos(phase));
+  }
+  return sum;
+}
+
+// Foam's lace: noise of four sizes, each turned against the last so that no grid shows, the fine
+// ones drifting. 0..1, mostly about a half.
+float Lace(float2 q) {
+  float2 a = float2(q.x * 0.80 - q.y * 0.60, q.x * 0.60 + q.y * 0.80);
+  float2 b = float2(q.x * 0.28 + q.y * 0.96, -q.x * 0.96 + q.y * 0.28);
+  float t = time * 0.12;
+  return CloudNoise(float3(q * 2.3, t)) * 0.40 + CloudNoise(float3(a * 5.9 + t, t * 1.7)) * 0.28 +
+         CloudNoise(float3(b * 13.7 - t * 2, t * 2.3)) * 0.20 + CloudNoise(float3(q * 31.0 + t * 3, t * 3.1)) * 0.12;
 }
 
 float3 WorldAt(float2 pixel, float depth) {
@@ -161,9 +190,13 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
              + waves[1].Sample(samplerLinear, (xz + movement[1].xy * time) * normalRepeat.y)
              + waves[2].Sample(samplerLinear, (xz + movement[2].xy * time) * normalRepeat.z)
              + waves[3].Sample(samplerLinear, (xz + movement[3].xy * time) * normalRepeat.w);
-  float crest = saturate(sum.a - 1) * (1 - water.a) * 0.4;
+  float crest = saturate(sum.a - 1) * (1 - water.a) * 0.25;
   float3 N = normalize((2 * sum.xyz - 4).xzy);
   N = normalize(lerp(float3(0, 1, 0), N, water.r));
+  // the swell: it tilts the surface (more than its true slope: seen from above, the tilt is all
+  // that shows of it), calmer where the map says the water is (lakes), higher when it rains
+  float3 swell = Swell(xz) * ((0.35 + 0.65 * water.r) * (1 + 1.2 * falling.x));
+  N = normalize(N + float3(-swell.y, 0, -swell.z) * 2.5);
   // rain: every small square of water has a drop falling into it again and again; its ring runs
   // outward, tilting the surface, and the whole surface is roughened
   float rings = 0;
@@ -191,7 +224,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // what is behind, straight on and bent by the waves; the bending is left out where it would
   // bring in something that stands in front of the water
   float3 bed = WorldAt(i.position.xy, depthBehind);
-  float deep = max(i.world.y - bed.y, 0);
+  // how high the water stands here just now, against the sheet: where the bed is higher, the
+  // water has run back from it (the waterline moves up and down the shore with the swell)
+  // (and unevenly, by the foam's own lace: a waterline is never a ruled line)
+  float lace = Lace(xz + N.xz * 0.12);
+  float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
+  float deep = i.world.y + level - bed.y;
+  if (deep <= 0) {
+    coverage = 0;
+    discard;
+  }
   float2 uv = i.position.xy * viewport.zw;
   float2 bent = uv + N.xz * (0.035 * saturate(deep * 1.5) / (1 + distance * 0.02));
   float depthBent = sceneDepth.Load(int2(bent * viewport.xy), 0);
@@ -201,7 +243,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   }
   float3 bedBent = WorldAt(bent * viewport.xy, depthBent);
   float through = min(length(bedBent - i.world), 80);
-  float deepBent = max(i.world.y - bedBent.y, 0);
+  float deepBent = max(i.world.y + level - bedBent.y, 0);
   float3 under = behind.SampleLevel(samplerLinearClamp, bent, 0).rgb;
 
   // the bright net on a shallow bed in sunlight
@@ -221,13 +263,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 own = lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), saturate(1 - exp(-through / 5.0)));
   float3 color = lerp(under * kept, own * (light + lamps) * 0.6, hidden);
 
-  // foam: at the shore and round what stands in the water, in moving patches, with a line that
-  // runs in toward the land; and the waves' crests
-  float shore = saturate(1 - deep / 0.35) * step(1e-4, deep);
-  float patches = saturate(CloudNoise(float3(xz * 2.2 + time * 0.15, time * 0.3)) * 1.6 - 0.3);
-  float lapping = pow(saturate(sin(deep * 18 - time * 1.2) * 0.5 + 0.5), 6) * shore;
-  float foam = saturate(shore * shore * patches * 1.5 + lapping * 0.5 * patches + crest);
-  color = lerp(color, (light + lamps) * 0.85, foam);
+  // foam: at the shore and round what stands in the water. Thick at the waterline and thinning to
+  // lace over the first half unit of depth; fronts of it run in toward the land, broken by the
+  // same lace; and the waves' crests
+  float edge = saturate(1 - deep / 0.5);
+  // (how much of the lace is foam: nearly all of it only in the last hand's breadth of water)
+  float much = edge * edge * edge * 0.6 + saturate(1 - deep / 0.05) * 0.3;
+  float foam = smoothstep(1.05 - much * 1.1, 1.30 - much * 1.1, lace + 0.42) * (0.55 + 0.45 * edge);
+  float fronts = pow(saturate(sin(deep * 20 - time * 1.5 + lace * 3.0) * 0.5 + 0.5), 5) * edge;
+  foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
+  color = lerp(color, (light + lamps) * 0.85, foam * 0.94);
   color += lamps * 0.35;
   color += light * (rings * 0.04);
 
@@ -263,8 +308,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float fresnel = 0.02 + 0.98 * pow(1 - facing, 5);
   color = lerp(color, mirror, fresnel * (1 - foam));
   // the sun's (or the moon's) glint
-  color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 1.5 * shadow * (1 - foam));
-  return float4(ThroughAir(color, distance), 1);
+  color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
+  // at its very edge the water thins out to nothing over what is behind it
+  color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAir(color, distance), saturate(deep / 0.035));
+  return float4(color, 1);
 }
 )hlsl";
 

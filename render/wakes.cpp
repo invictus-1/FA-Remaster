@@ -9,9 +9,11 @@ constexpr size_t kBatch = 256;
 
 const char kShader[] = R"hlsl(
 struct Wake {
-  float4 from;  // xyz: at the stern; w: half the width there
-  float4 to;    // xyz: where it ends; w: half the width there
-  float4 side;  // xyz: sideways, level, length 1; w: how strong it is
+  float4 from;      // xyz: where this piece begins; w: half the width there
+  float4 to;        // xyz: where it ends; w: half the width there
+  float4 sideFrom;  // xyz: sideways at its beginning, level, length 1; w: how strong the wake is
+  float4 sideTo;    // xyz: sideways at its end
+  float4 range;     // x, y: how far along the whole wake it begins and ends (0 at the stern .. 1)
 };
 cbuffer Wakes : register(b2) {
   Wake wakes[256];
@@ -29,9 +31,9 @@ VOut VS(uint id : SV_VertexID) {
   float2 uv = corner == 0 ? float2(-1, 0) : corner == 1 ? float2(1, 0) : corner == 2 ? float2(1, 1)
             : corner == 3 ? float2(-1, 0) : corner == 4 ? float2(1, 1) : float2(-1, 1);
   VOut o;
-  o.world = lerp(w.from.xyz, w.to.xyz, uv.y) + w.side.xyz * (uv.x * lerp(w.from.w, w.to.w, uv.y));
+  o.world = lerp(w.from.xyz, w.to.xyz, uv.y) + lerp(w.sideFrom.xyz, w.sideTo.xyz, uv.y) * (uv.x * lerp(w.from.w, w.to.w, uv.y));
   o.position = mul(viewProj, float4(o.world, 1));
-  o.at = float3(uv, w.side.w);
+  o.at = float3(uv.x, lerp(w.range.x, w.range.y, uv.y), w.sideFrom.w);
   return o;
 }
 
@@ -74,7 +76,34 @@ void Wakes::Add(Vec3 stern, Vec3 back, float length, float halfWidth, float stre
   const Vec3 side = Normalize(Vec3{back.z, 0, -back.x});
   const Vec3 end = stern + back * length;
   // (it opens to both sides as it trails: one in five)
-  wakes_.push_back({{stern.x, stern.y, stern.z, halfWidth}, {end.x, end.y, end.z, halfWidth + length * 0.2f}, {side.x, side.y, side.z, strength}});
+  wakes_.push_back({{stern.x, stern.y, stern.z, halfWidth}, {end.x, end.y, end.z, halfWidth + length * 0.2f}, {side.x, side.y, side.z, strength},
+                    {side.x, side.y, side.z, 0}, {0, 1, 0, 0}});
+}
+
+void Wakes::AddPath(const Vec3* places, int count, float length, float halfWidth, float strength) {
+  if (count < 2 || length <= 0 || strength <= 0) return;
+  float gone = 0;
+  Vec3 sideBefore{0, 0, 0};
+  bool first = true;
+  for (int i = 0; i + 1 < count && gone < length; ++i) {
+    Vec3 a = places[i], b = places[i + 1];
+    Vec3 way = b - a;
+    way.y = 0;
+    float piece = Length(way);
+    if (piece < 0.02f) continue;
+    const Vec3 level = way * (1 / piece);
+    if (gone + piece > length) {  // the last piece ends where the wake does
+      b = a + level * (length - gone);
+      piece = length - gone;
+    }
+    const Vec3 side = Normalize(Vec3{level.z, 0, -level.x});
+    if (first) sideBefore = side;
+    first = false;
+    wakes_.push_back({{a.x, a.y, a.z, halfWidth + gone * 0.2f}, {b.x, b.y, b.z, halfWidth + (gone + piece) * 0.2f},
+                      {sideBefore.x, sideBefore.y, sideBefore.z, strength}, {side.x, side.y, side.z, 0}, {gone / length, (gone + piece) / length, 0, 0}});
+    sideBefore = side;
+    gone += piece;
+  }
 }
 
 void Wakes::Draw(const View& view) {

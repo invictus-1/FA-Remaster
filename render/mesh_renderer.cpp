@@ -58,6 +58,7 @@ cbuffer MeshKind : register(b3) {
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
                 // y: 1 = leaves (ModelLod::leaves); z: 1 = a remastered level without its material texture;
                 // w: 1 = the map's border (ModelLod::border)
+  float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -99,6 +100,16 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   }
   VOut o;
   o.world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
+  [branch] if (kind3.x > 0) {
+    // the wind: the higher on the model, the farther it is carried; every tree on its own beat (by
+    // where it stands), with a slow swing and a quicker one over it; harder when it rains
+    float high = saturate(p.y * kind3.y);
+    float size = length(float3(n.row0.x, n.row1.x, n.row2.x)) / kind3.y;  // its height in the world
+    float beat = dot(float2(n.row0.w, n.row2.w), float2(0.11, 0.07));
+    float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
+    float gust = 0.35 + 0.9 * falling.x + 0.3 * falling.y;
+    o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
+  }
   o.position = mul(viewProj, float4(o.world, 1));
   float3x3 r = float3x3(n.row0.xyz, n.row1.xyz, n.row2.xyz);
   o.normal = mul(r, normal);
@@ -460,8 +471,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    const float kind[8] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
-                           static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f};
+    const float kind[12] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+                            static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
+                            lod->sway, 1 / lod->swayHeight, 0, 0};
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
