@@ -640,11 +640,28 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   ++frameStamp_;
   rememberedGone.clear();
+  dyingDrawn = 0;
   bool noFocus = false;
   for (const FrameUnit& u : frame.units) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {
       if (u.Seen()) remembered_.erase(u.id);  // (the army saw it go)
+      // A unit that is dying is there until its death is over: a plane falling out of the sky, a ship
+      // going down, a walker toppling. Drawn as the simulation moves and poses it, without anything
+      // that belongs to a live unit (symbol, bars, lamps, wake; it cannot be pointed at).
+      const std::string& dying = (*frame.blueprints)[u.blueprint];
+      const Model* body = u.Seen() && !dying.empty() ? models.Unit(dying) : nullptr;
+      if (body && body->ok) {
+        Pose pose;
+        pose.now = frame.bones.data() + u.firstBone;
+        pose.nowCount = u.boneCount;
+        pose.next = frame.bones.data() + u.nextFirstBone;
+        pose.nextCount = u.nextBoneCount;
+        pose.blend = frame.blend;
+        meshes.Add(body, Mat4::FromTRS({u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]}, body->scale),
+                   colorOf(u.Army()), u.fractionComplete, &pose);
+        ++dyingDrawn;
+      }
       continue;
     }
     // of another army's unit only what the army the picture is for knows: the unit when it is seen,

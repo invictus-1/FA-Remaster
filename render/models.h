@@ -91,6 +91,12 @@ struct ModelLod {
   // (nukeShell: how often the texture repeats, how fast it slides, from what age it fades).
   int nuke = 0;
   Vec3 nukeShell{1, 0, 0};
+  // Three more of the game's looks that are not lit by the scene: 1 "Flat" (the first game's
+  // "TMeshNoLighting": some missiles): its texture's own colours, cut by its alpha; 2
+  // "UEFQuantumGate": a see-through field, its texture sliding with a finer copy taken away from
+  // it; 3 "PhalanxEffect": a faint see-through ball (the Cybran's missile zapper), two textures
+  // sliding over it.
+  int unlit = 0;
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
