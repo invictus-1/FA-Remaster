@@ -455,7 +455,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 434 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+- 435 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
   the units', as a first version); the other 97 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
