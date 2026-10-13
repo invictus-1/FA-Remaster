@@ -64,6 +64,8 @@ float4 Down(VOut i) : SV_Target {
   for (int k = 0; k < 4; ++k) {
     float2 at = i.uv + glow.xy * float2(k & 1 ? 1 : -1, k & 2 ? 1 : -1);
     float3 s = source.SampleLevel(samplerLinearClamp, at, 0).rgb;
+    // (a pixel that is no number at all, or endless, must not be spread over the picture)
+    if (!(dot(s, float3(1, 1, 1)) < 1e6)) s = 0;
     if (glow.z > 0.5) {
       // what of it is beyond what the screen shows, as the picture will be exposed
       float bright = max(s.r, max(s.g, s.b)) * modern.z;

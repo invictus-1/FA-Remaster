@@ -43,6 +43,7 @@
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
+#include "wakes.h"
 #include "water.h"
 
 namespace moho {
@@ -83,8 +84,9 @@ class World {
   uint32_t hover = 0xffffffffu;
   int hoverKind = 0;
   // Life bars over the units that are selected or pointed at, and over damaged ones while they are
-  // near enough to be seen as models.
-  bool lifeBars = true;
+  // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
+  // way of reading a unit's life is the panel at the bottom left).
+  bool lifeBars = false;
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 
@@ -182,6 +184,7 @@ class World {
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
   bool sightShown = true; // (off for a picture that is darkened by other means: the minimap's ground)
   Shafts shafts;          // lamps' beams seen in the air
+  Wakes wakes;            // the foam behind what moves on the water
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's
@@ -207,6 +210,13 @@ class World {
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
   float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
+  // where each unit was at the frame before and how fast it went (for the wakes): by entity id
+  struct Moving {
+    Vec3 place;
+    float speed = 0;
+    double clock = 0;
+  };
+  std::unordered_map<uint32_t, Moving> moving_;
   // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the
   // kinds of `hoverKind`; corners in the picture's order: top left, top right, bottom left, bottom right.
   gfx::Texture brackets_[4][4];
