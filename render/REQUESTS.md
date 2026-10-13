@@ -16,8 +16,10 @@ is read once the game has started; models and strategic icons take their names f
 running game needs no `--display` log any more). 12 done and in use
 (`SessionSeed` seeds the weather once a game has started). 13 answered (the whole map seen for
 three seconds at the start is the M28 AI's own script, in the original too; the renderer does not
-count a look in which every place is seen as exploring). 14 is open (everything else that has
-a mesh: props that come and go, wreckage, shields, what scripts make).
+count a look in which every place is seen as exploring). 14 done and in use (`PropEvents`,
+`EntityViews`, a projectile's scale: wreckage, trees that burn, fall and are reclaimed, shields'
+bubbles, the UEF's box of light at its size; not used yet: `UnitView::mesh`, so a personal shield
+does not show).
 
 ## 14. Everything else that has a mesh: props that change, wreckage, shields, what scripts make (2026-10-12)
 

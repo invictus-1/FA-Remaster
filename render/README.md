@@ -389,12 +389,40 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
   (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
   the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
+- Scenery that changes (the engine's `PropEvents`, `World::AddPropEvents`; the simulation must
+  have `collectProps` set before its first beat). The map's props are still read from the map
+  file, kept in the file's order, and the simulation names one by its index there: one that is
+  reclaimed or destroyed goes; one that changed is placed anew (FAF lifts every prop that sits
+  below the ground up to it at the start, so most of a map's props are told once); a tree
+  knocked over comes with a new orientation every beat while it falls. A burnt tree and a dead
+  unit's wreck are the game's "<mesh>_wreck" meshes, which it makes of every mesh: here the same
+  model drawn as wreckage (`ModelCache::Wreck`, `ModelLod::wreck`): most of its colour gone, soot
+  in patches by the place on the model, a little rust, dull, no team colour, nothing glowing.
+  That look is ours; the original multiplies the lit albedo with a noise texture. Each change
+  takes hold when the frame shown has reached its beat. What it costs: FAF's groups of trees
+  break up into single trees when they are touched, reclaimed or shot at, and in the M28 test
+  game 31,762 single trees stood five game-minutes in where a few thousand groups had; the
+  whole map then takes 6.0 ms a frame at 1280 x 800 instead of about 3 (21,782 models drawn).
+  A fallen tree sinks a hundredth of a unit every beat until it is gone, so some hundred props
+  change every beat; `SimFrames` keeps only the newest change of a prop that waits. Not there: a wreck's sinking or
+  burning, and anything of a remastered unit's wreck but its own model blackened.
+- What scripts make that has a mesh (the engine's `EntityViews`, `Frame::entities`): drawn as its
+  mesh blueprint's model where the simulation has it, at the scale and draw scale the script
+  set. A shield's bubble (shaders `ShieldUEF`, `ShieldAeon`, `ShieldCybran`, `ShieldSeraphim`,
+  the impact patches) is a faint shell in its faction's tint, stronger where it is seen edge
+  on, with its texture's pattern drifting over it; `ShieldFill` is not drawn. See-through
+  models (`ModelLod::glass`: these and the UEF's box of light) are drawn in a pass of their own
+  after the water, from both sides, writing no depth, so the sea and what is behind show
+  through them. Not there: a personal shield (the mesh a script sets on the unit itself,
+  `UnitView::mesh`), a shield's flash where it is hit beyond the game's own patch, and the
+  bubbles are not sorted by distance among themselves.
+- A projectile's size as its script set it (`FrameProjectile::scale`): the UEF's box of light is
+  as large as what is built in it.
 - Two of the original's effect shaders on models (`models.cpp`, by the shader's name):
   `UEFBuildCube`, the UEF's box of light round what it builds (a projectile): a see-through
   blue box, its texture's clouds drifting as what can be seen through, fine lines running
-  over it (`ModelLod::frame`); and `AlphaFade`, see-through by its texture's alpha. The box
-  is drawn at its file's size: the size the script gives it is not handed over yet
-  (`REQUESTS.md`, 14). The other effect shaders (shields, glass, glows) are drawn as plain models.
+  over it (`ModelLod::frame`); and `AlphaFade`, see-through by its texture's alpha. The other
+  effect shaders but the shields' (glass, glows) are drawn as plain models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by

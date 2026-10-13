@@ -96,6 +96,11 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   m.world->Begin(camera, width, height, static_cast<float>(shown * 0.1), shown * 0.1);
   if (playing) {
     m.frames.TakeEffectEvents(&m.events);
+    {  // how the scenery changed
+      std::vector<FramePropEvent> changed;
+      m.frames.TakePropEvents(&changed);
+      if (!changed.empty()) m.world->AddPropEvents(changed);
+    }
     m.world->effects.Queue(std::move(m.events));
     m.world->effects.Update(shown, m.frame);
     m.world->AddFrame(m.frame, m.armyColors);

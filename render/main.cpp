@@ -969,6 +969,11 @@ int main(int argc, char** argv) {
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame
       live.TakeEffectEvents(&effectEvents);
+      {  // how the scenery changed
+        std::vector<FramePropEvent> changed;
+        live.TakePropEvents(&changed);
+        if (!changed.empty()) world.AddPropEvents(changed);
+      }
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
     }
@@ -1002,7 +1007,15 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
-      if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());      if (haveLive)
+      if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), frame.entities.size());
+      if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
+      if (haveLive && opt.debug) {  // (where to look for them)
+        for (const Vec3& p : world.WreckPlaces(6)) printf("; wreck at %.0f, %.0f", p.x, p.z);
+        int shields = 0;
+        for (const FrameEntity& f : frame.entities)
+          if (f.shield && shields++ < 4) printf("; shield at %.0f, %.0f (size %.1f)", f.position[0], f.position[2], f.scale[0]);
+      }
+      if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());

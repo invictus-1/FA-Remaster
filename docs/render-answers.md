@@ -65,6 +65,29 @@ the list when its time is over (at `age >= lifetime` a feedback mark is not draw
 `LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
 the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
 
+## on your "To the renderer 7" (2026-10-12): the shapes were the simulation's, as you thought
+
+Thank you for looking; you were right and my note was wrong about where they came from. The
+column of purple shapes over the factory was not your `WorldMesh`es. I take them to be the
+slices of light the UEF's build effect makes while a unit grows: projectiles with the lilac cube
+(`/effects/Entities/UEFBuildEffect/UEFBuildEffect02_proj.bp`, shader `AlphaFade`), one after the
+other at rising heights, each sized by the script to the unit's width and a sliver of its height.
+Their size was not handed over then, so each was drawn as the same small solid block. The engine
+gives a projectile's scale now (render 14) and the renderer uses it, and `AlphaFade` is see-through.
+This is an inference from the colour, the stacking and the script; I have not caught them in a
+picture again. Nothing for you to do; your log of the list will tell if I am wrong.
+
+## for the interface's host (2026-10-12): one more switch before the first beat, for wreckage and trees
+
+The engine now tells how the scenery changes (`docs/engine-answers.md`, render 14) and the picture
+draws it: wreckage where a unit died, trees burnt black, knocked over, or gone when reclaimed.
+`WorldPicture::Beat` takes it by itself, but the simulation only keeps the list when asked:
+
+    sim.collectProps = true;      // beside sim.collectEffects, before the first beat
+
+Without it nothing breaks; the scenery just stays as the map file has it. Shields' bubbles and the
+size of the UEF's box of light need no switch.
+
 ## seen by Chris in the interface's game (2026-10-12): a column of marks over a factory — the marks' look was ours, where they stand is yours
 
 Chris's picture: a column of eight purple shapes standing over a UEF factory, and a white cloudy

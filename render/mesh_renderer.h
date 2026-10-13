@@ -41,7 +41,9 @@ class MeshRenderer {
   void Prepare(const std::vector<const View*>& views);
   // Draws the list as `view` sees it: into the scene, or (`shadowPass`) into a shadow map, where
   // only depth is written. `environment` is the cube map the original look reflects in shiny parts.
-  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false);
+  // `glass`: only the see-through levels (ModelLod::glass: shields, frames of light), which the
+  // ordinary pass leaves out: after the water, over what is behind them, writing no depth.
+  void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false);
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -88,7 +90,7 @@ class MeshRenderer {
   void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
-  gfx::Pipeline pipeline_, blended_, leaves_, shadow_;
+  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_;
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;

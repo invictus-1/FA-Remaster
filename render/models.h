@@ -78,6 +78,11 @@ struct ModelLod {
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
+  bool glass = false;          // see-through, drawn after the water without writing depth (frames of light, shields)
+  bool shield = false;         // "Shield...": a shield's bubble: a faint tinted shell, brighter toward its rim
+  Vec3 shieldTint{0.25f, 0.5f, 1.0f};
+  bool hidden = false;         // "ShieldFill": the original draws it into the depth alone; here it is not drawn
+  bool wreck = false;          // wreckage (ModelCache::Wreck): burnt and dull, no team colour, no glow
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
@@ -121,6 +126,10 @@ class ModelCache {
   // A model from a mesh file and an albedo texture named outright, with a shader's name (what the
   // game's interface script places in the world, placed.h). One level; `uniformScale` is its scale.
   const Model* Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale = 1);
+  // The same model as wreckage (the game's "..._mesh_wreck": the mesh with a burnt look). `ownScale`: keep
+  // the model's scale (a burnt tree); otherwise it is 1 and whoever places it gives the size (a dead
+  // unit's wreck: the script sizes the prop).
+  const Model* Wreck(const Model* of, bool ownScale);
   // Reads the mesh and texture names of blueprints as the simulation has them after the game's
   // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models
   // listed there take their names from it instead of from the .bp file. Returns the levels read.
@@ -148,6 +157,7 @@ class ModelCache {
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
   std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
+  std::unordered_map<const Model*, std::unique_ptr<Model>> wrecks_[2];  // by the model it is of: [1] with its own scale
 };
 
 }  // namespace render

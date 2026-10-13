@@ -67,7 +67,8 @@ cbuffer Instances : register(b2) {
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
-  float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light, not lit),
+  float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light,
+                // 3: a shield's bubble; neither is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -75,6 +76,7 @@ cbuffer MeshKind : register(b3) {
                 // w: 1 = the map's border (ModelLod::border)
   float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units;
                 // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
+  float4 kind4; // x: 1 = wreckage; y, z, w: a shield's tint
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -193,6 +195,15 @@ void ShadowPS(VOut i) {
 }
 
 float4 Shade(VOut i, bool front) {
+  if (kind.y > 2.5) {
+    // a shield's bubble: a faint shell in its faction's tint, stronger where it is seen edge on,
+    // with its texture's pattern drifting over it at two sizes against each other
+    float rim = pow(1 - abs(dot(normalize(i.normal), normalize(cameraPosition - i.world))), 2.5);
+    float pattern = saturate(albedoMap.Sample(samplerLinear, i.uv.xy * 3 + float2(0.01, 0.03) * time).r *
+                             albedoMap.Sample(samplerLinear, i.uv.xy * 7 - float2(0.02, 0.013) * time).g * 2.5);
+    float3 tint = kind4.yzw * (falling.w > 0 ? falling.w : 1);
+    return float4(look > 0.5 ? tint * (0.8 + 2.0 * rim + 1.2 * pattern) : tint, saturate(0.05 + 0.45 * rim + 0.18 * pattern));
+  }
   if (kind.y > 1.5) {
     // a frame of light (the UEF's box round what it builds): see-through and blue, its texture's
     // clouds drifting over it as what can be seen through, fine lines running along it
@@ -243,6 +254,16 @@ float4 Shade(VOut i, bool front) {
     if (faction == 3) albedo.a = teamMask;
     else spec.a = teamMask;
     built = faction == 3 ? lerp(0.35, 1, solid) : 1;
+  }
+  // wreckage: burnt. No team colour; soot in patches by the place on the model.
+  float soot = 1;
+  if (kind4.x > 0.5) {
+    soot = CloudNoise(i.shape * 9) * 0.6 + CloudNoise(i.shape * 31) * 0.4;
+    teamMask = 0;
+    if (faction == 3) albedo.a = 0;
+    else spec.a = 0;
+    spec.b = 0;  // (nothing on it glows any more)
+    built = look > 0.5 ? 1 : lerp(0.18, 0.55, soot);
   }
   float3 toCamera = normalize(cameraPosition - i.world);
   // toward the silhouette (0 facing the camera, 1 edge on), and the Seraphim team colour's strength by it
@@ -304,6 +325,14 @@ float4 Shade(VOut i, bool front) {
       metallic = 0.4;
       roughness = 0.55;
       emission = base * spec.b * 2.5;
+    }
+    if (kind4.x > 0.5) {  // wreckage: most of its colour gone, dark where the soot is thick with a little rust, dull
+      float grey = dot(base, float3(0.3, 0.6, 0.1));
+      base = lerp(float3(grey, grey, grey), base, 0.35) * lerp(0.12, 0.55, soot);
+      base = lerp(base, float3(0.09, 0.05, 0.03), 0.25 * (1 - soot));
+      metallic *= 0.3;
+      roughness = lerp(0.8, 0.95, soot);
+      emission = 0;
     }
     if (building) {
       if (faction == 1) {  // Aeon: liquid metal that sets
@@ -393,6 +422,13 @@ bool MeshRenderer::Init(std::string* error) {
   pd.blend = gfx::Blend::Alpha;
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
+  pd.name = "models, see-through";
+  pd.cull = gfx::Cull::None;  // (a bubble's far side shows through its near side)
+  pd.depthWrite = false;
+  glass_ = device_->CreatePipeline(pd, error);
+  if (!glass_) return false;
+  pd.cull = gfx::Cull::Back;
+  pd.depthWrite = true;
   pd.name = "models, leaves";
   pd.blend = gfx::Blend::Opaque;
   pd.cull = gfx::Cull::None;
@@ -506,8 +542,10 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   entries_.push_back(e);
 }
 
-void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass) {
-  if (shadowPass) {
+void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass, bool glass) {
+  if (glass) {
+    // (counted with the scene's)
+  } else if (shadowPass) {
     if (countedScene_) shadowTriangles = 0;
     countedScene_ = false;
   } else {
@@ -545,6 +583,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
         ++level;
     }
     const ModelLod* lod = &lods[level];
+    if (lod->hidden || lod->glass != glass) continue;
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) continue;
     items_.push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
@@ -564,9 +603,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    const int wanted = shadowPass ? 0 : lod->blend ? 2 : lod->leaves ? 1 : 0;
+    const int wanted = shadowPass ? 0 : glass ? 3 : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
+      device_->SetPipeline(wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
@@ -575,9 +614,10 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[12] = {lod->alphaCut, lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[16] = {lod->alphaCut, lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
-                            lod->sway, 1 / lod->swayHeight, 0, 1};
+                            lod->sway, 1 / lod->swayHeight, 0, 1,
+                            lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
     {  // (the model's foot and height, for a unit under construction)
       const Model* of = items_[at].entry->model;
       kind[10] = of->boundsMin.y;

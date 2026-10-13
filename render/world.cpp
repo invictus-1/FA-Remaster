@@ -115,7 +115,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     // the map's props (trees, rocks, wrecks): where each stands does not change
     for (const MapProp& p : map.props) {
       const Model* model = models.Blueprint(p.blueprint);
-      if (!model->ok) continue;
+      if (!model->ok) {  // (kept in the list all the same: the simulation names a prop by its place in it)
+        props_.push_back({nullptr, Mat4::Identity()});
+        continue;
+      }
       const Vec3 s = p.scale * model->scale;
       Mat4 world = {{{p.axisX.x * s.x, p.axisY.x * s.y, p.axisZ.x * s.z, p.position.x},
                      {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, p.position.y},
@@ -415,7 +418,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   icons.Begin(view);
   lights.Begin(clock);
   pickables_.clear();
-  for (const PlacedProp& p : props_) meshes.Add(p.model, p.world, {1, 1, 1});
+  // the scenery's changes that are due by now, then the scenery
+  while (!propEvents_.empty() && static_cast<double>(propEvents_.front().tick) * 0.1 <= clock + 1e-6) {
+    ApplyPropEvent(propEvents_.front());
+    propEvents_.pop_front();
+  }
+  for (const PlacedProp& p : props_)
+    if (p.model) meshes.Add(p.model, p.world, {1, 1, 1});
+  for (const auto& made : madeProps_)
+    if (made.second.model) meshes.Add(made.second.model, made.second.world, {1, 1, 1});
   if (haveMap_)
     for (const std::string& border : borders) {
       const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
@@ -460,6 +471,63 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       before = p;
     }
   }
+}
+
+std::vector<Vec3> World::WreckPlaces(size_t most) const {
+  std::vector<Vec3> places;
+  for (const auto& made : madeProps_) {
+    if (places.size() >= most) break;
+    const Model* m = made.second.model;
+    if (m && !m->lods.empty() && m->lods[0].wreck) places.push_back({made.second.world.m[0][3], made.second.world.m[1][3], made.second.world.m[2][3]});
+  }
+  return places;
+}
+
+void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
+  for (const FramePropEvent& e : events) propEvents_.push_back(e);
+}
+
+// The model of a prop as the simulation has it now: its blueprint's own, or the mesh a script set
+// in its place. The game makes a burnt version of every mesh under the name "<mesh>_wreck": a dead
+// unit's wreck is the prop DefaultWreckage with "/units/<id>/<id>_mesh_wreck", a burnt tree its
+// own blueprint with its own mesh's wreck.
+const Model* World::PropModel(const std::string& blueprint, const std::string& mesh) {
+  if (mesh.empty()) return models.Blueprint(blueprint);
+  std::string low = mesh;
+  for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (low.size() > 6 && low.compare(low.size() - 6, 6, "_wreck") == 0) {
+    std::string of = blueprint;
+    for (char& c : of) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (of.find("defaultwreckage") == std::string::npos) return models.Wreck(models.Blueprint(blueprint), true);
+    const size_t slash = low.rfind('/');
+    std::string id = low.substr(slash == std::string::npos ? 0 : slash + 1);
+    const size_t end = id.rfind("_mesh_wreck");
+    if (end != std::string::npos) id.resize(end);
+    return models.Wreck(models.Unit(id), false);
+  }
+  const Model* named = vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp")) ? models.Blueprint(mesh + ".bp") : nullptr;
+  return named && named->ok ? named : models.Blueprint(blueprint);
+}
+
+void World::ApplyPropEvent(const FramePropEvent& e) {
+  const bool ofMap = e.mapIndex >= 0;
+  if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
+  if (e.kind == FramePropEvent::Destroy) {
+    if (ofMap) props_[static_cast<size_t>(e.mapIndex)].model = nullptr;
+    else madeProps_.erase(e.id);
+    ++propsGone;
+    return;
+  }
+  const Model* model = PropModel(e.blueprint, e.mesh);
+  PlacedProp placed{model && model->ok ? model : nullptr, Mat4::Identity()};
+  if (placed.model) {
+    placed.world = Mat4::FromTRS({e.position[0], e.position[1], e.position[2]}, Quat{e.orientation[0], e.orientation[1], e.orientation[2], e.orientation[3]}, model->scale);
+    for (int row = 0; row < 3; ++row)
+      for (int k = 0; k < 3; ++k) placed.world.m[row][k] *= e.scale[k];
+  }
+  if (ofMap) props_[static_cast<size_t>(e.mapIndex)] = placed;
+  else madeProps_[e.id] = placed;
+  ++propsChanged;
 }
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
@@ -624,11 +692,26 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
       // unit gets its army's colour (docs/engine-answers.md, render 7)
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), {1, 1, 1});
+      Mat4 at = Mat4::FromTRS(position, orientation, model->scale);
+      for (int row = 0; row < 3; ++row)  // (the size a script gave it: the UEF's box of light round what it builds)
+        for (int k = 0; k < 3; ++k) at.m[row][k] *= p.scale[k];
+      meshes.Add(model, at, {1, 1, 1});
     } else if (!effects.OnEntity(p.id)) {
       const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
     }
+  }
+  // what scripts made that has a mesh: shields' bubbles and the like, each its mesh blueprint's model
+  for (const FrameEntity& f : frame.entities) {
+    if (!f.seen || f.mesh >= frame.blueprints->size()) continue;
+    const std::string& mesh = (*frame.blueprints)[f.mesh];
+    if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) continue;  // (a script may write the name in any case)
+    const Model* model = models.Blueprint(mesh + ".bp");
+    if (!model->ok) continue;
+    Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
+    for (int row = 0; row < 3; ++row)
+      for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
+    meshes.Add(model, at, f.army == 0xff ? Vec3{1, 1, 1} : colorOf(f.army));
   }
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {
@@ -714,6 +797,8 @@ void World::Render() {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight);
   }
+  // what is see-through (shields' bubbles, frames of light): over everything solid and the water
+  meshes.Draw(view, environment_, false, true);
   if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);

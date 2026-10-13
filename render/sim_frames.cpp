@@ -66,6 +66,8 @@ struct SimFrames::Scratch {
   std::vector<moho::ProjectileView> projectiles;
   std::vector<moho::BeamView> beams;
   std::vector<moho::EffectEvent> effects;
+  std::vector<moho::EntityView> entities;
+  std::vector<moho::PropEvent> props;
   std::unordered_map<uint32_t, uint32_t> poseOf;  // unit id -> index in poses, this beat
   std::unordered_map<std::string, uint32_t> nameIndex;
 };
@@ -290,7 +292,49 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(p.position, v.position, sizeof p.position);
     std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
+    // its size: what the script set, and what its scale velocity has added since it was first seen
+    // (the simulation does not apply that itself)
+    float grown = 0;
+    if (v.scaleVelocity[0] != 0 || v.scaleVelocity[1] != 0 || v.scaleVelocity[2] != 0)
+      grown = static_cast<float>(sim.tick() - growingSince_.emplace(v.id, sim.tick()).first->second) * 0.1f;
+    for (int k = 0; k < 3; ++k) p.scale[k] = std::max(v.scale[k] + v.scaleVelocity[k] * grown, 0.0f) * v.drawScale;
     beat.projectiles.push_back(p);
+  }
+  if (growingSince_.size() > 4096) growingSince_.clear();  // (ids of shells long gone; a shell still flying starts over, which is rare)
+  // what scripts made that has a mesh: shields' bubbles and the like
+  moho::EntityViews(sim, &e.entities);
+  beat.entities.reserve(e.entities.size());
+  for (const moho::EntityView& v : e.entities) {
+    if (v.mesh.empty()) continue;
+    FrameEntity f;
+    f.id = v.id;
+    f.mesh = nameOf(v.mesh);
+    f.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
+    std::memcpy(f.position, v.position, sizeof f.position);
+    std::memcpy(f.orientation, v.orientation, sizeof f.orientation);
+    for (int k = 0; k < 3; ++k) f.scale[k] = v.scale[k] * v.drawScale;
+    f.shield = v.shield;
+    // (for the army the picture is for: where it sees. The script's own say on who sees it,
+    // SetVizTo..., is 'Intel' for whoever is not its owner's side, which comes to the same; 'Never' is kept)
+    if (focus > 0) f.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0 && v.vizFocus != 2;
+    beat.entities.push_back(f);
+  }
+  // how the scenery changed (the engine's list is emptied by taking it, which is why the simulation is not const here)
+  moho::PropEvents(const_cast<moho::Sim&>(sim), &e.props);
+  std::vector<FramePropEvent> propEvents;
+  propEvents.reserve(e.props.size());
+  for (moho::PropEvent& v : e.props) {
+    FramePropEvent f;
+    f.kind = v.kind == moho::PropEvent::Create ? FramePropEvent::Create : v.kind == moho::PropEvent::Change ? FramePropEvent::Change : FramePropEvent::Destroy;
+    f.tick = sim.tick();
+    f.id = v.id;
+    f.mapIndex = v.mapIndex;
+    f.blueprint = std::move(v.blueprint);
+    f.mesh = std::move(v.mesh);
+    std::memcpy(f.position, v.position, sizeof f.position);
+    std::memcpy(f.orientation, v.orientation, sizeof f.orientation);
+    for (int k = 0; k < 3; ++k) f.scale[k] = v.scale[k] * v.drawScale;
+    propEvents.push_back(std::move(f));
   }
   beat.beams.reserve(e.beams.size());
   for (const moho::BeamView& v : e.beams) {
@@ -304,6 +348,22 @@ void SimFrames::Beat(const moho::Sim& sim) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (std::string& n : fresh) names_.push_back(std::move(n));
   for (FrameEffectEvent& f : events) effectEvents_.push_back(std::move(f));
+  // (a change of a prop that has one waiting, not yet taken, takes its place: a fallen tree sinks a
+  // little every beat, and whoever draws only now and then needs where it is, not where it was)
+  for (FramePropEvent& f : propEvents) {
+    if (f.kind == FramePropEvent::Change) {
+      auto waiting = propWaiting_.find(f.id);
+      if (waiting != propWaiting_.end() && waiting->second < propEvents_.size() && propEvents_[waiting->second].id == f.id &&
+          propEvents_[waiting->second].kind == FramePropEvent::Change) {
+        propEvents_[waiting->second] = std::move(f);
+        continue;
+      }
+      propWaiting_[f.id] = propEvents_.size();
+    } else {
+      propWaiting_.erase(f.id);
+    }
+    propEvents_.push_back(std::move(f));
+  }
   beats_.push_back(std::move(beat));
   while (beats_.size() > kBeatsKept) beats_.pop_front();
 }
@@ -324,6 +384,7 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   out->bones.clear();
   out->projectiles.clear();
   out->beams.clear();
+  out->entities.clear();
   out->blend = 0;
   for (size_t i = namesForFrames_.size(); i < names_.size(); ++i) namesForFrames_.push_back(names_[i]);
   out->blueprints = &namesForFrames_;
@@ -347,7 +408,23 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   for (FrameProjectile& p : out->projectiles)
     for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
   out->beams = a.beams;
+  // the scripts' entities: each moved toward where it is in the next beat (there are few)
+  out->entities = a.entities;
+  if (b)
+    for (FrameEntity& f : out->entities)
+      for (const FrameEntity& next : b->entities) {
+        if (next.id != f.id) continue;
+        for (int k = 0; k < 3; ++k) f.position[k] += (next.position[k] - f.position[k]) * t;
+        break;
+      }
   return true;
+}
+
+void SimFrames::TakePropEvents(std::vector<FramePropEvent>* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  out->swap(propEvents_);
+  propWaiting_.clear();
 }
 
 void SimFrames::TakeEffectEvents(std::vector<FrameEffectEvent>* out) {
