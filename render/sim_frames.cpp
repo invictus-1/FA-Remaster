@@ -236,6 +236,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(u.position, v.position, sizeof u.position);
     std::memcpy(u.orientation, v.orientation, sizeof u.orientation);
     u.health = v.health;
+    u.maxHealth = v.maxHealth;
     u.fractionComplete = v.fractionComplete;
     u.dead = v.dead;
     u.beingBuilt = v.beingBuilt;

@@ -17,7 +17,7 @@ struct FrameUnit {
   uint32_t blueprint = 0;  // index into Frame::blueprints
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};  // quaternion x, y, z, w
-  float health = 0;
+  float health = 0, maxHealth = 0;
   float fractionComplete = 1;           // below 1 while under construction
   uint32_t layer = 0;                   // 1 land, 2 seabed, 4 sub, 8 water, 0x10 air, 0x20 orbit
   uint64_t states = 0;                  // the original's unit-state bits
@@ -28,6 +28,7 @@ struct FrameUnit {
   uint8_t recon = 0xff;
   bool Seen() const { return (recon & 8) != 0; }
   bool Blip() const { return (recon & 8) == 0 && (recon & 7) != 0; }  // known by radar, sonar or omni only
+  bool SeenBefore() const { return (recon & 8) == 0 && (recon & 0x10) != 0; }  // not seen now, but it was
   // Its bones that do not stand at rest, as spans of Frame::bones: at this frame's beat, and at the
   // beat after it (the picture shows the pose Frame::blend of the way from one to the other).
   // Both empty: the unit stands in its model's rest pose.

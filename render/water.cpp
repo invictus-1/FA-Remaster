@@ -209,13 +209,17 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float n1 = CloudNoise(float3(q * 1.3 + time * 0.30, time * 0.25));
   float n2 = CloudNoise(float3(q * 1.3 - time * 0.25 + 7, time * 0.20 + 3));
   float net = pow(saturate(1 - abs(n1 - n2) * 5), 4);
-  under *= 1 + net * 1.3 * saturate(deepBent * 3) * exp(-deepBent * 0.35) * shadow * saturate(sunDirection.y * 3);
+  under *= 1 + net * 0.6 * saturate(deepBent * 3) * exp(-deepBent * 0.35) * shadow * saturate(sunDirection.y * 3);
 
-  // what the water takes from it, and the water's own colour in its place
-  float3 kept = exp(-through * float3(0.50, 0.16, 0.11));
-  float3 tint = lerp(float3(0.02, 0.10, 0.14), ToLinear(saturate(surfaceColor.rgb)) * 0.3, 0.5);
-  float3 body = tint * (light + lamps) * (0.32 * (1 - exp(-through * 0.25)));
-  float3 color = under * kept + body;
+  // what the water takes from it, and the water's own colour in its place. The numbers are the
+  // depth colours Chris chose on the remastered Seton's (the visuals track's water ramp, put on
+  // record in its reply, section 15): red is gone after about 3 of depth, green after 8, blue
+  // after 10; the bed is hidden by 1 - exp(-depth / 7.5); the water itself goes from a turquoise
+  // over the shallows to a deep navy
+  float3 kept = exp(-through * float3(1 / 3.0, 1 / 8.0, 1 / 10.0));
+  float hidden = 1 - exp(-through / 7.5);
+  float3 own = lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), saturate(1 - exp(-through / 5.0)));
+  float3 color = lerp(under * kept, own * (light + lamps) * 0.6, hidden);
 
   // foam: at the shore and round what stands in the water, in moving patches, with a line that
   // runs in toward the land; and the waves' crests

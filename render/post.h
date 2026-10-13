@@ -32,10 +32,18 @@ class Post {
   // Begins the window's pass and draws the scene's picture into it. More may be drawn on top after.
   void Present(const View& view);
 
+  // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
+  // sun on water): how much of it is added; 0: none.
+  float glow = 0.5f;
+
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_;
   gfx::Texture color_, depth_, drawn_, behind_;
+  static constexpr int kGlowSteps = 5;
+  gfx::Pipeline glowDown_, glowUp_;
+  gfx::Texture glowSteps_[kGlowSteps], black_;
+  int glowWidth_[kGlowSteps] = {}, glowHeight_[kGlowSteps] = {};
   int width_ = 0, height_ = 0;
 };
 

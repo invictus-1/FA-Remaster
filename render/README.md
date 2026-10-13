@@ -318,14 +318,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   hidden, and the ground the army does not see is darkened (`sight.h`: a grid of what it sees,
   asked of the engine twice a second, and one pass over the picture). What is made at a place the
   army does not see (an explosion, a flash, a mark) is not made. The minimap is darkened the
-  same way, and its ground follows the hour and the weather. Not yet: ground seen before looks
-  like ground never seen; buildings seen once are not remembered.
+  same way, and its ground follows the hour and the weather. A building seen before
+  stays drawn where it stood, and a unit seen before keeps its own icon as a blip. Not yet:
+  ground seen before looks like ground never seen; a remembered building follows the real one's
+  state at once.
+- Life bars (`World::lifeBars`): a small bar, green down to red, over selected and pointed-at
+  units and over damaged ones that are near enough to be seen as models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by
   how much water lies between (so shallows are clear and the deep is dark, by the real depth
   and not by a painted depth picture: the ground under it is no longer tinted by the map's
-  water ramp in this look); the sky is mirrored (the computed one, or the map's), and so is what
+  water ramp in this look; the colours are fixed numbers, a turquoise over the shallows going to
+  a deep navy, chosen by Chris on the remastered Seton's, and the same for every map for now); the sky is mirrored (the computed one, or the map's), and so is what
   the picture shows in the mirrored direction, land and units, found by walking through the
   picture's depth; foam lies where the water is shallow, along the shore and round whatever
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
@@ -334,6 +339,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   behind something); no wakes behind ships. Lamps and flashes light the water and glint on
   its waves. In rain
   the surface is roughened and drops make rings on it. The original look keeps the original's formula.
+- Glow (bloom, modern look; `Post::glow`): what is brighter than the screen can show spreads a
+  soft glow round itself: lamps, flashes, the sun on the water. The finished picture is made
+  smaller in five steps, keeping at the first only what is too bright, and the small pictures are
+  laid back over each other; the sum is added before the picture is mapped to the screen. About
+  0.13 ms a frame at 1920 x 1080.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
   viewer's `--border <mesh blueprint>` draw it, placed as the original places it; its shader

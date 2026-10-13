@@ -53,11 +53,15 @@ class StrategicIcons {
   // A unit of that kind at that place in the world, of an army with that colour (rgb in 0..1).
   // Nothing is listed while the unit is nearer than its kind's distance, or out of the picture.
   // `selected`: its selected form, where the game's files have one.
-  // `blip`: the unit is known by radar alone: its symbol without detail, at any distance.
-  void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false);
+  // `blip`: the unit is known by radar alone: its symbol at any distance, without its detail unless
+  // `known` (the army has seen it before and knows what it is).
+  void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false, bool known = false);
+  // A life bar over a place in the world: `widthPixels` wide, `fraction` (0..1) of it filled, green
+  // down to red by how full. Drawn with the symbols.
+  void AddBar(Vec3 position, float fraction, float widthPixels);
   // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
   // middle at (x, y): for pictures made without the graphics card (a minimap).
-  void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false) const;
+  void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false, bool known = false) const;
   // Draws the list into the current pass, which must be the window's.
   void Draw();
 
@@ -67,6 +71,7 @@ class StrategicIcons {
   // A symbol comes in over this share of its distance, ending at the distance (0.1: from 90% of it).
   float fadeShare = 0.1f;
   int drawn = 0;  // symbols in the last Draw
+  bool showSymbols = true;  // false: Draw leaves the symbols out (the life bars are still drawn)
 
  private:
   struct Rect {
@@ -82,6 +87,10 @@ class StrategicIcons {
     float x, y, u, v;
     uint32_t color;
   };
+  struct Bar {
+    float x, y, width, fraction;
+  };
+  std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");
 
   gfx::Device* device_;
