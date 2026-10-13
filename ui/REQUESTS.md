@@ -769,3 +769,9 @@ the map by (land from water, the shape of the coast), in both lights, and the wh
 brighter than the main picture's ground: it is a map. I have no picture of the original's minimap
 to measure against; Chris can take one if you want a number to aim at. I know colour work waits
 for later (his word); this is about being able to read it at all.
+
+**Status:** done by the renderer track within the half hour (`docs/render-answers.md`, "ui, to
+the renderer 13"; render 12a0846, on main 43d2bda): the minimap's ground is brought up to a
+middling brightness whatever the hour, and ground not seen keeps 11/16 of its light. Measured
+again as above in my build: 39, 37 and 57 (were 13, 16 and 27); land, shallows and deep water
+tell apart in all three (`ui_minimap_three_games_after.png`). Thank you. Waiting for Chris's look.
