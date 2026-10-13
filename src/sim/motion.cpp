@@ -881,13 +881,17 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
       nfx = nfz = 0.0f;
     }
   }
+  // (the limited turn 0x6992c0 is handed TurnInfo's difference vector as it is, target - place, not a unit
+  // vector: when the turn ends inside the step the facing becomes that vector times |facing| / |vector|, and
+  // with a unit vector in its place the last digit of a ship's heading on a straight run differed)
+  const float rtx = dist > 0 ? dx : tx, rtz = dist > 0 ? dz : tz;
   if (!g.reverse) {
-    RotateToward(nfx, nfz, tx, tz, turn);
+    RotateToward(nfx, nfz, rtx, rtz, turn);
     g.fx = nfx;
     g.fz = nfz;
   } else {
     float bx = -nfx, bz = -nfz;
-    RotateToward(bx, bz, tx, tz, turn);
+    RotateToward(bx, bz, rtx, rtz, turn);
     g.fx = -bx;
     g.fz = -bz;
   }
@@ -1051,9 +1055,12 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   } else {
     g.p = u->position;
     g.vel = {V.x, 0, V.z};
+    // (TurnInfo's forward, normalised by 0x6999f0: times 1 / length. A division gives another last digit on some
+    // headings, and the first point of a fresh batch then turns a ship one float step beside the original's.)
     float l = std::sqrt(D.x * D.x + D.z * D.z);
-    g.fx = l > 1e-6f ? D.x / l : 0;
-    g.fz = l > 1e-6f ? D.z / l : 1;
+    const float li = l > 9.99999997e-07f ? 1.0f / l : 0.0f;
+    g.fx = l > 9.99999997e-07f ? D.x * li : 0;
+    g.fz = l > 9.99999997e-07f ? D.z * li : 1;
     g.bx = g.fx;
     g.bz = g.fz;
     ChooseStart(b, P, g, dot, frac, V.x * D.x + V.y * D.y + V.z * D.z < 0.0f);
@@ -1692,6 +1699,13 @@ void MotionTick(Sim& sim, Unit* u) {
       } else {
         if (brakePoint) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
         else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
+        {
+          // MOHO64_DEBUG_FACING=<unit id>: the point's direction and the quaternion made of it, all digits
+          static const long dbgFace = getenv("MOHO64_DEBUG_FACING") ? atol(getenv("MOHO64_DEBUG_FACING")) : -1;
+          if (dbgFace >= 0 && static_cast<long>(u->id) == dbgFace)
+            fprintf(stderr, "facing: tick %u dir %.9g %.9g (brake %d) -> q %.9g %.9g %.9g %.9g\n", sim.tick(), q.bx, q.bz,
+                    brakePoint ? 1 : 0, u->orientation.x, u->orientation.y, u->orientation.z, u->orientation.w);
+        }
         m.bx = q.bx;
         m.bz = q.bz;
       }
