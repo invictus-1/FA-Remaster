@@ -285,7 +285,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   125; a full turn for a view's width) and it swings back to north up when Space is let go;
   Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
   turns the world is not checked against the original. Timed moves are not built. The interface hands the picture what it adds to
-  the world: the selected units (a ring under each), the lines of their orders (while Shift is held, as in the original, with a blue outline round each queued building's site), the outline of the ground a building being placed takes (green or red), and the ghost of
+  the world: the selected units (a ring under each), the lines of their orders (while Shift is held, as in the original, in the colours and with the marks of the game's own table `commandgraphparams.lua`, and a blue outline round each queued building's site), the outline of the ground a building being placed takes (green or red), and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
   where the building cannot stand. The order goes out when the left button is let go: let go

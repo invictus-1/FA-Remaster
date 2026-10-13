@@ -210,8 +210,17 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
 // `queueShown`: the selected units' orders are to be seen (the original shows them while Shift is
 // held): only then `lines` are given, and `queued` (may be null) gets the sites of the buildings
 // in those orders, begun or not.
+// `waypoints` (may be null): the mark of each of those orders at its place, as the game's own table
+// says (/lua/ui/game/commandgraphparams.lua: a texture and a colour per kind of order); the lines
+// take their colour from the same table.
+struct WorldWaypoint {
+  float position[3] = {0, 0, 0};
+  std::string texture;
+  uint32_t color = 0xffffffffu;  // 0xAARRGGBB
+  float scale = 1;
+};
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
-                       bool queueShown = true, std::vector<WorldGhost>* queued = nullptr);
+                       bool queueShown = true, std::vector<WorldGhost>* queued = nullptr, std::vector<WorldWaypoint>* waypoints = nullptr);
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);

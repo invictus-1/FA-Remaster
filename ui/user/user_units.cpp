@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "draw/draw.h"
 #include "maui/world_source.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
@@ -47,6 +48,9 @@ struct UnitStore : UserState::Extra {
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
   std::string queueKey;                   // that queue as it was last handed to the script
+  // What the game's table says of how each kind of order is drawn (commandgraphparams.lua), as
+  // looked up so far: key "UNITCOMMAND_Move/orderline_selected_color" -> its text ("" for none).
+  std::map<std::string, std::string> graphParams;
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
   std::vector<WorldGhost> ordered;
@@ -1181,6 +1185,56 @@ const struct {
     {"AggressiveMove", CommandType::AggressiveMove}, {"FormAggressiveMove", CommandType::FormAggressiveMove},
     {"AssistMove", CommandType::AssistMove}, {"SpecialAction", CommandType::SpecialAction}, {"Dock", CommandType::Dock},
 };
+const char* CommandName(CommandType type) {
+  for (const auto& c : kCommandNames)
+    if (c.type == type) return c.name;
+  return nullptr;
+}
+
+// A value of the game's table of how orders are drawn (/lua/ui/game/commandgraphparams.lua,
+// CommandGraphParams): the entry of the order ("UNITCOMMAND_Move"), else of the entry its
+// inherit_from names, and so on; else the entry "default". Empty: the table has none.
+std::string CommandGraphParam(lua_State* L, const std::string& command, const char* key) {
+  UnitStore& store = Store(L);
+  const std::string cacheKey = command + "/" + key;
+  auto cached = store.graphParams.find(cacheKey);
+  if (cached != store.graphParams.end()) return cached->second;
+  std::string value;
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandgraphparams.lua");
+  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "CommandGraphParams");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      const int table = lua_gettop(L);
+      std::string entry = command;
+      for (int hops = 0; hops < 8 && !entry.empty(); ++hops) {
+        lua_pushstring(L, entry.c_str());
+        lua_gettable(L, table);
+        std::string next = entry == "default" ? "" : "default";
+        bool found = false;
+        if (lua_istable(L, -1)) {
+          lua_pushstring(L, key);
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1) || lua_isnumber(L, -1)) value = lua_tostring(L, -1), found = true;
+          lua_pop(L, 1);
+          lua_pushstring(L, "inherit_from");
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1)) next = lua_tostring(L, -1);
+          lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (found) break;
+        entry = next;
+      }
+    }
+  }
+  lua_settop(L, top);
+  store.graphParams[cacheKey] = value;
+  return value;
+}
+
 bool CommandByName(std::string name, CommandType* type, const char** plain) {
   if (name.rfind("UNITCOMMAND_", 0) == 0) name = name.substr(12);
   for (const auto& c : kCommandNames)
@@ -1764,7 +1818,7 @@ void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, f
 }
 
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
-                       bool queueShown, std::vector<WorldGhost>* queued) {
+                       bool queueShown, std::vector<WorldGhost>* queued, std::vector<WorldWaypoint>* waypoints) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
   if (!sim || !user->units) return;
@@ -1785,17 +1839,24 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
         for (int i = 0; i < 3; ++i) site.position[i] = c.position[i];
         queued->push_back(site);
       }
-      // First version of the colours: move light blue, attack red, patrol green, building yellow
-      // (as in Chris's picture of the original, 2026-10-13), reclaim a paler yellow, the rest
-      // grey. (The original's others are still to be looked up.)
+      // The line's colour and the mark at the order's place are the game's own: its table of
+      // how each kind of order is drawn (the colour of a selected unit's orders, which these are).
       uint32_t color = 0xffc0c0c0u;
-      switch (static_cast<CommandType>(c.type)) {
-        case CommandType::Move: case CommandType::FormMove: case CommandType::AggressiveMove: color = 0xff40c8ffu; break;
-        case CommandType::Attack: case CommandType::FormAttack: color = 0xffff4040u; break;
-        case CommandType::Patrol: case CommandType::FormPatrol: color = 0xff40ff40u; break;
-        case CommandType::BuildMobile: case CommandType::BuildFactory: color = 0xffe8c800u; break;
-        case CommandType::Reclaim: color = 0xffffff40u; break;
-        default: break;
+      if (const char* kind = CommandName(static_cast<CommandType>(c.type))) {
+        const std::string command = std::string("UNITCOMMAND_") + kind;
+        const std::string lineColor = CommandGraphParam(L, command, "orderline_selected_color");
+        if (!lineColor.empty()) color = ParseColor(lineColor);
+        const std::string texture = CommandGraphParam(L, command, "waypoint_texture");
+        if (waypoints && !texture.empty() && waypoints->size() < 600) {
+          WorldWaypoint mark;
+          for (int i = 0; i < 3; ++i) mark.position[i] = c.position[i];
+          mark.texture = texture;
+          const std::string markColor = CommandGraphParam(L, command, "waypoint_selected_color");
+          if (!markColor.empty()) mark.color = ParseColor(markColor);
+          const std::string scale = CommandGraphParam(L, command, "waypoint_selected_scale");
+          if (!scale.empty()) mark.scale = static_cast<float>(std::atof(scale.c_str()));
+          waypoints->push_back(mark);
+        }
       }
       WorldLine line;
       for (int i = 0; i < 3; ++i) line.a[i] = from[i], line.b[i] = c.position[i], from[i] = c.position[i];

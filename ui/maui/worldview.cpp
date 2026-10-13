@@ -463,7 +463,8 @@ class WorldView : public Control {
     // (The selected units' orders show while Shift is held, as in the original: the lines from
     // order to order, and a blue outline round the site of every building among them.)
     std::vector<WorldGhost> ordered, queued;
-    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued);
+    waypoints_.clear();
+    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued, &waypoints_);
     if (sim) {
       for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff2a8cffu, &scene.lines);
     }
@@ -572,6 +573,23 @@ class WorldView : public Control {
     if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    // The marks of the selected units' orders, each at its order's place (while the queue shows):
+    // the game's own textures for them, at their own size, over the picture.
+    if (waypoints_.empty()) return;
+    WorldSource* source = UserState::From(L)->config().world;
+    target.SetClip(r);
+    for (const WorldWaypoint& mark : waypoints_) {
+      float x = 0, y = 0;
+      if (!source->Project(mark.position, &x, &y)) continue;
+      const Image& image = LoadTexture(ScriptState::From(L)->vfs(), mark.texture);
+      if (!image.valid()) continue;
+      // (At half the texture's size: so large they are in Chris's picture of the original, 2026-10-13.
+      // INFERRED: the original's rule for their size, and whether it goes with the zoom, is not read.)
+      const float w = static_cast<float>(image.width) * mark.scale * 0.5f, h = static_cast<float>(image.height) * mark.scale * 0.5f;
+      const float left = std::floor(r.x0 + x - w / 2), top = std::floor(r.y0 + y - h / 2);
+      target.DrawImage(image, {0, 0, static_cast<float>(image.width), static_cast<float>(image.height)}, {left, top, left + w, top + h}, mark.color);
+    }
+    target.ClearClip();
   }
 
   // On a minimap: the outline of the ground the main view shows, its four corners joined (a
@@ -666,6 +684,7 @@ class WorldView : public Control {
   // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
   // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
   // that the drag has no end at the screen's edge; here the pointer moves.
+  std::vector<WorldWaypoint> waypoints_;  // the marks of the orders shown with the picture last made
   bool cameraDrag_ = false, miniDrag_ = false;
   float lastX_ = 0, lastY_ = 0;
   // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
