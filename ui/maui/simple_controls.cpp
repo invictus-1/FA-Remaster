@@ -1,4 +1,5 @@
 // Border, Histogram and Movie.
+#include <cctype>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -6,8 +7,10 @@
 #include "core/vfs.h"
 #include "maui/control.h"
 #include "maui/texture_info.h"
+#include "maui/world_source.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
+#include "user/user_state.h"
 
 namespace moho::ui {
 namespace {
@@ -180,7 +183,23 @@ class Movie : public Control {
   LazyVar movieWidth, movieHeight;
   std::string file;
   bool loaded = false, playing = false, loop = false;
+  bool asked = false;  // Play was called (whether or not the file could be read)
   float frameRate = 0;
+  // The film is not decoded. Where the main menu plays its background film, the host's moving
+  // picture is shown instead (UserState::Config::backdrop): the new front-end background.
+  void Draw(lua_State* L, DrawTarget& target) override {
+    BackdropSource* backdrop = UserState::From(L)->config().backdrop;
+    if (!backdrop || !asked) return;
+    std::string name = file;
+    for (char& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string menu = "/main_menu.sfd";
+    if (name.size() < menu.size() || name.compare(name.size() - menu.size(), menu.size(), menu) != 0) return;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+    if (w <= 0 || h <= 0) return;
+    if (const uint32_t* pixels = backdrop->Latest(w, h)) target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+  }
   void MakeVars(lua_State* L) {
     AddLazyVar(L, movieWidth, "MovieWidth");
     AddLazyVar(L, movieHeight, "MovieHeight");
@@ -239,10 +258,12 @@ int l_Movie_Loop(lua_State* L) {
 int l_Movie_Play(lua_State* L) {
   Movie* c = CheckControl<Movie>(L, 1);
   c->playing = c->loaded;
+  c->asked = true;
   return 0;
 }
 int l_Movie_Stop(lua_State* L) {
-  CheckControl<Movie>(L, 1)->playing = false;
+  Movie* c = CheckControl<Movie>(L, 1);
+  c->playing = c->asked = false;
   return 0;
 }
 int l_Movie_GetFrameRate(lua_State* L) {

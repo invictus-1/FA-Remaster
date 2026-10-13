@@ -57,12 +57,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
-         [--no-sound] [--fullscreen]
+         [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
   frames). Without it the host runs headless on its own clock.
 - `--screenshot file.png` draws the head once at the end and saves the picture.
+- `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
+  on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
   `uimain.SetupUI()`, `frontend` (the default) adds `uimain.StartFrontEndUI()`. `--frames N` then
   runs N frames (controls' `OnFrame`, script threads) at 60 frames per second of its own clock.
@@ -98,7 +100,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   banks `.xsb` with their cues, the categories of `SupCom.xgs`), `mixer.*` adds the playing
   sounds up, `device_win.cpp` hands the result to Windows' sound output, `sound_system.*` plays a
   cue of a bank and keeps the categories' volumes.
-- `app/main.cpp`: the host `moho64ui`.
+- `app/main.cpp`: the host `moho64ui`. `app/backdrop.*`: the main menu's moving background.
 - `tests/`: Lua tests run in the user state.
 - `tools/`: generators and scanners.
 - `REQUESTS.md`: what the interface needs from the other tracks.
@@ -299,6 +301,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   has it drawn in. The world view the mouse is over runs its script's `OnUpdateCursor` every
   frame, as the original's frame function does, and the script picks the pointer by the command
   mode and by what a right click would order (attack over an enemy, and so on).
+- The front end's new background (ours, not the original's): where the main menu's script plays
+  its background film (`/movies/main_menu.sfd`, a Movie control under everything else), the host
+  shows the game's own world instead: the renderer's picture of Seton's Clutch in the evening
+  light, the camera going once round the middle of the map in five minutes, low over the shores.
+  The picture is made on a thread of its own with a graphics device of its own
+  (`app/backdrop.*`), so the menu never waits for it: the Movie control takes the newest finished
+  picture each frame (`BackdropSource` in `maui/world_source.h`), darkened so the menu's own signs
+  stand out, and coming in from black over a second and a half (again whenever the menu comes
+  back from another screen: while nobody shows it, no picture is made). Until the first picture is there
+  (about four seconds after the start: the map is read first) the background is black as before.
+  It ends when a game starts. Only that one film is replaced; with the game's option for the
+  menu's background film off, the script makes no such control and nothing is shown. The film
+  itself is still not decoded. `MOHO64UI_BACKDROP_AT=<seconds>` starts that far along the
+  camera's way (for pictures of it).
 - Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).

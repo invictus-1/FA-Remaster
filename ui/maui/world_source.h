@@ -48,6 +48,15 @@ struct WorldScene {
   std::vector<std::string> borders;
 };
 
+// A moving picture for the front end's background (the host's: app/backdrop.h): the newest one
+// of exactly that size, 0xAARRGGBB rows from the top, valid until the next call; nullptr while
+// there is none of that size yet.
+class BackdropSource {
+ public:
+  virtual ~BackdropSource() = default;
+  virtual const uint32_t* Latest(int width, int height) = 0;
+};
+
 class WorldSource {
  public:
   virtual ~WorldSource() = default;

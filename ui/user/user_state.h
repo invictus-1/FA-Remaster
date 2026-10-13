@@ -26,6 +26,7 @@ class ThreadScheduler;
 namespace moho::ui {
 
 class WorldSource;
+class BackdropSource;
 struct WorldLine;
 class UiManager;
 namespace sound {
@@ -53,6 +54,9 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // What is shown where the front end plays its background film (the main menu's): a moving
+    // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
+    BackdropSource* backdrop = nullptr;
     // What plays the sounds the scripts ask for (the host's, one for all states); nullptr: nothing does.
     sound::SoundSystem* sound = nullptr;
   };
