@@ -751,3 +751,21 @@ in the folder of his others (`_scratch\ui\chris_20261013\`):
    build pad, the one he circled before.
 3. `unit_built_in_unfinished_factory.png` is not for you (the engine's).
 "Other than that everything else works and looks right." Not blocking.
+
+### 13. The minimap is too dark to read at a game's start (fog of war)
+Found by the interface chat, 2026-10-13, not by Chris (he has not opened the minimap yet; its
+button is in the game's small panel under the resource bar). Measured on the minimap's picture
+as `DrawMinimap` gives it, stock Seton's, seed 7, game time about 8 seconds, the middle of the
+map's area, median of 255:
+- FogOfWar "explored" (the lobby's default) with the day and the weather on, 9 o'clock: 13;
+- FogOfWar "explored", the map's own light: 16;
+- FogOfWar "none", day and weather on: 27.
+In a live window at 1600 x 900 the first reads as a black square with the commander's icon on it;
+the coast can hardly be told from the sea. Pictures: `ui_minimap_three_games.png` (the three
+above, left to right) and `ui_live_window_minimap_dark.png` in the folder of Chris's pictures.
+
+Asked for, not blocking: ground the player has not seen yet bright enough on the minimap to read
+the map by (land from water, the shape of the coast), in both lights, and the whole of it rather
+brighter than the main picture's ground: it is a map. I have no picture of the original's minimap
+to measure against; Chris can take one if you want a number to aim at. I know colour work waits
+for later (his word); this is about being able to read it at all.
