@@ -78,6 +78,12 @@ class Particles {
   // EMITIFVISIBLE; names it does not act on are ignored).
   void SetScale(uint32_t emitter, float scale);
   void SetParam(uint32_t emitter, const std::string& name, float value);
+  // A script's SetEmitterCurveParam(name, height, size) on a running emitter: that curve of this
+  // emitter alone ("Y_POSITION_CURVE", "ROTATION_RATE_CURVE", ...) becomes the one value `height`
+  // with the random spread `size`, for all of the emitter's time. (How the original rewrites the
+  // curve is not read out of it; this is what the scripts' uses of the call ask for: an effect
+  // spread over a unit's height, a rate set to one number.)
+  void SetCurve(uint32_t emitter, const std::string& name, float height, float size);
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
@@ -134,6 +140,8 @@ class Particles {
     float carry = 0;     // the fraction of a particle left over from the last tick
     bool stopped = false;
     bool hidden = false;
+    // curves a script set on this emitter in place of its blueprint's (SetCurve)
+    std::vector<std::pair<EmitterCurve EmitterBlueprint::*, EmitterCurve>> curves;
   };
   const EmitterBlueprint* Blueprint(const std::string& path);
   Emitter* Find(uint32_t id);

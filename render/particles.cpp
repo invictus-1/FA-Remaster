@@ -288,6 +288,39 @@ void Particles::SetParam(uint32_t emitter, const std::string& name, float value)
   else if (n == "EMITIFVISIBLE") e->emitIfVisible = value > 0;
 }
 
+void Particles::SetCurve(uint32_t emitter, const std::string& name, float height, float size) {
+  Emitter* e = Find(emitter);
+  if (!e) return;
+  std::string n = name;
+  for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (n.size() > 6 && n.compare(n.size() - 6, 6, "_CURVE") == 0) n.resize(n.size() - 6);
+  static const struct {
+    const char* name;
+    EmitterCurve EmitterBlueprint::* curve;
+  } kCurves[] = {{"XDIR", &EmitterBlueprint::xDirection}, {"YDIR", &EmitterBlueprint::yDirection}, {"ZDIR", &EmitterBlueprint::zDirection},
+                 {"EMITRATE", &EmitterBlueprint::emitRate}, {"LIFETIME", &EmitterBlueprint::particleLifetime}, {"VELOCITY", &EmitterBlueprint::velocity},
+                 {"X_ACCEL", &EmitterBlueprint::xAccel}, {"Y_ACCEL", &EmitterBlueprint::yAccel}, {"Z_ACCEL", &EmitterBlueprint::zAccel},
+                 {"RESISTANCE", &EmitterBlueprint::resistanceCurve}, {"SIZE", &EmitterBlueprint::size},
+                 {"X_POSITION", &EmitterBlueprint::xPos}, {"Y_POSITION", &EmitterBlueprint::yPos}, {"Z_POSITION", &EmitterBlueprint::zPos},
+                 {"BEGINSIZE", &EmitterBlueprint::startSize}, {"ENDSIZE", &EmitterBlueprint::endSize},
+                 {"ROTATION", &EmitterBlueprint::initialRotation}, {"ROTATION_RATE", &EmitterBlueprint::rotationRate},
+                 {"FRAMERATE", &EmitterBlueprint::frameRate}, {"TEXTURESELECTION", &EmitterBlueprint::textureSelection},
+                 {"RAMPSELECTION", &EmitterBlueprint::rampSelection}};
+  for (const auto& known : kCurves) {
+    if (n != known.name) continue;
+    EmitterCurve set;
+    set.xRange = (e->blueprint->*known.curve).xRange;
+    set.keys.push_back({0, height, size});
+    for (auto& have : e->curves)
+      if (have.first == known.curve) {
+        have.second = set;
+        return;
+      }
+    e->curves.emplace_back(known.curve, set);
+    return;
+  }
+}
+
 void Particles::Move(uint32_t emitter, Vec3 position, const Quat& orientation) {
   if (Emitter* e = Find(emitter)) {
     e->position = position;
@@ -317,9 +350,15 @@ void Particles::Emit(Emitter* emitter, int tick) {
     return x < 0 ? x + emitter->repeatTime : x;
   };
   float x = curveTime(static_cast<float>(tick));
-  auto read = [&](const EmitterCurve& curve) {
+  auto read = [&](const EmitterCurve& ofBlueprint) {
+    const EmitterCurve* curve = &ofBlueprint;
+    for (const auto& set : emitter->curves)  // (one a script set on this emitter takes the blueprint's place)
+      if (&(bp.*set.first) == curve) {
+        curve = &set.second;
+        break;
+      }
     float value, spread;
-    curve.At(x, &value, &spread);
+    curve->At(x, &value, &spread);
     return value + (Random() - 0.5f) * spread;
   };
   const float wanted = std::max(0.0f, read(bp.emitRate)) + emitter->carry;
