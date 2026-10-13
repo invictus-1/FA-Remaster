@@ -919,7 +919,9 @@ void Sim::GenerateArmyStart(Army* a) {
 // The map's own props (trees, rocks, wrecks placed in the editor).
 void Sim::CreateMapProps() {
   int missing = 0;
+  int mapIndex = -1;
   for (const auto& mp : map_->props) {
+    ++mapIndex;  // its place in the map file's list, counted with the ones that have no blueprint here
     const BlueprintInfo* bp = bps_.Find(mp.blueprint);
     if (!bp) {
       if (++missing <= 5) Logf(LogLevel::Debug, "moho64: map prop blueprint not found: %s", mp.blueprint.c_str());
@@ -943,7 +945,17 @@ void Sim::CreateMapProps() {
       float s = std::sqrt(1.0f + r22 - r00 - r11) * 2;
       q = {(r02 + r20) / s, (r12 + r21) / s, 0.25f * s, (r10 - r01) / s};
     }
-    CreateProp(state_->L(), *bp, mp.position, q, mp.scale);
+    if (Prop* p = CreateProp(state_->L(), *bp, mp.position, q, mp.scale)) {
+      // (for PropEvents: a host has this one from the map file, as the file has it)
+      p->mapIndex = mapIndex;
+      p->viewSent = true;
+      p->viewPos = mp.position;
+      p->viewOri = q;
+      p->viewScale[0] = mp.scale.x;
+      p->viewScale[1] = mp.scale.y;
+      p->viewScale[2] = mp.scale.z;
+      p->viewScale[3] = 1;
+    }
   }
   if (missing) Logf(LogLevel::Debug, "moho64: %d map props have no blueprint", missing);
 }
@@ -986,9 +998,12 @@ void Sim::ProcessDestroyQueue() {
     } else if (e->kind == Entity::Kind::Beam) {
       beams.erase(std::remove(beams.begin(), beams.end(), static_cast<CollisionBeam*>(e)), beams.end());
     } else if (e->kind == Entity::Kind::Prop) {
+      if (collectProps) propsGone.emplace_back(e->id, static_cast<Prop*>(e)->mapIndex);
       props.erase(std::remove(props.begin(), props.end(), static_cast<Prop*>(e)), props.end());
       propGridDirty_ = true;
     }
+    if (e->kind == Entity::Kind::Shield || e->kind == Entity::Kind::Entity)
+      scriptEntities.erase(std::remove(scriptEntities.begin(), scriptEntities.end(), e), scriptEntities.end());
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);

@@ -611,6 +611,26 @@ int l_SetScale(lua_State* L) {
   e->scale[2] = static_cast<float>(luaL_optnumber(L, 4, s));
   return 0;
 }
+// Entity:SetMesh(meshBlueprint, keepActor), Entity:SetDrawScale(scale), Entity:SetVizToFocusPlayer / Allies /
+// Enemies / Neutrals('Always' | 'Never' | 'Intel'): what the entity is drawn as, how large, and for whom. Kept
+// for a host that draws the game (EntityViews, PropEvents, UnitView::mesh); the simulation does not go by them
+// (an entity's bones stay those of its blueprint's mesh).
+int l_SetMesh(lua_State* L) {
+  Entity* e = E(L);
+  e->mesh = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+  return 0;
+}
+int l_SetDrawScale(lua_State* L) {
+  E(L)->drawScale = static_cast<float>(luaL_checknumber(L, 2));
+  return 0;
+}
+template <int Which>
+int l_SetVizTo(lua_State* L) {
+  Entity* e = E(L);
+  const char* s = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+  e->viz[Which] = !strcmp(s, "Always") ? 1 : !strcmp(s, "Never") ? 2 : !strcmp(s, "Intel") ? 3 : 0;
+  return 0;
+}
 // ---- bones ------------------------------------------------------------------------------------
 // Bone 0 is the root; an entity without a mesh has just that one. -1 means the entity itself.
 
@@ -1023,6 +1043,12 @@ void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "GetReclaimablesInRect", l_GetReclaimablesInRect);
   SetMethod(L, "Entity", "GetScale", l_GetScale);
   SetMethod(L, "Entity", "SetScale", l_SetScale);
+  SetMethod(L, "Entity", "SetMesh", l_SetMesh);
+  SetMethod(L, "Entity", "SetDrawScale", l_SetDrawScale);
+  SetMethod(L, "Entity", "SetVizToFocusPlayer", l_SetVizTo<0>);
+  SetMethod(L, "Entity", "SetVizToAllies", l_SetVizTo<1>);
+  SetMethod(L, "Entity", "SetVizToEnemies", l_SetVizTo<2>);
+  SetMethod(L, "Entity", "SetVizToNeutrals", l_SetVizTo<3>);
   SetMethod(L, "Entity", "GetBoneCount", l_GetBoneCount);
   SetMethod(L, "Entity", "CreatePropAtBone", l_CreatePropAtBone);
   SetMethod(L, "Entity", "IsValidBone", l_IsValidBone);
@@ -1606,6 +1632,7 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   owned_.push_back(std::move(owned));
   RegisterEntity(e);
   if (shield) shields.push_back(static_cast<ShieldEntity*>(e));
+  scriptEntities.push_back(e);
   return e;
 }
 

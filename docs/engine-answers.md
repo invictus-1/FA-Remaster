@@ -3,6 +3,125 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 14: props that change, wreckage, shields, what scripts make — done
+
+All three parts, in `sim/sim_view.h`. The simulation's own behaviour is untouched (the thirteen replays keep
+their marks); three script calls that did nothing before are now kept for you: `Entity:SetMesh`,
+`Entity:SetDrawScale` and `Entity:SetVizToFocusPlayer` / `Allies` / `Enemies` / `Neutrals`.
+
+### 1. Props, as events
+
+```cpp
+struct PropEvent {
+  enum Kind { Create, Change, Destroy } kind;
+  uint32_t id;            // the prop's entity id
+  int mapIndex;           // its place in the map file's prop list (from 0); -1: made after the start
+  std::string blueprint;  // Create, Change: the prop blueprint's id (its path)
+  std::string mesh;       // Create, Change: the mesh Entity:SetMesh gave it, "" = its blueprint's own
+  float position[3], orientation[4] /* x y z w */, scale[3], drawScale;   // Create, Change
+};
+void PropEvents(Sim& sim, std::vector<PropEvent>* out);   // once per beat, after Tick()
+```
+
+Set `sim.collectProps = true` before the first beat, as with `collectEffects`.
+
+- **How the map's props are matched: by index.** The simulation makes them in the map file's order, so
+  `mapIndex` is the entry's index in the file's prop list, counted from 0 over EVERY entry of the file
+  (an entry whose blueprint the simulation cannot find is skipped but still counted). You keep drawing
+  them from the file; nothing is listed for them at the start.
+- **Create**: a prop made after the start (wreckage, `CreateProp`, `CreatePropHPR`,
+  `CreatePropAtBone`), with what it is when the list is taken. Wreckage is the prop blueprint
+  `/props/defaultwreckage/defaultwreckage_prop.bp` with the dead unit's wreck mesh in `mesh` (for
+  example `/units/urs0201/urs0201_mesh_wreck`) and the script's scale.
+- **Change**: the prop's mesh, position, orientation, scale or draw scale is no longer what you were
+  last told (for a map prop: what the file has). The whole state is given again. What makes changes:
+  - a burnt tree: `SetMesh` to the blueprint's `Display.MeshBlueprintWrecked`;
+  - a tree knocked over: the script calls `Entity:FallDown`, and the engine then turns the prop about
+    its own origin (its foot) a little each beat until it lies flat; you get one Change per beat while
+    it falls, with the orientation of that beat. There is no separate "falling" state to draw;
+  - **expect one Change for many map props on the first take.** FAF's prop script lifts every prop
+    that sits below the ground to the ground's height when it is made (`Prop.OnCreate`: "we never
+    want things hiding underground"), and map files have many such, often by a hair. On the lab's
+    test map 5,025 of about 5,000 map props came that way on beat 1. That is where the simulation has
+    them, so it is where they should be drawn.
+- **Destroy**: the prop is gone (reclaimed, destroyed, a tree burnt out). Only `id` and `mapIndex` are
+  filled.
+- At most one Create or Change per prop per list (the state at the time of taking); a prop made and
+  gone between two takes gives a Destroy only.
+- Cost: the list compares every prop with what was last told. Measured 0.066 ms a beat with 6,200
+  props (the lab's Experimental replay: 1,174 made, 20,393 changed, 185 gone over 947 beats), so about
+  half a millisecond with Seton's 46,000. If that shows in your numbers say so and it becomes a
+  marked list instead.
+
+### 2. Script-made entities with a mesh
+
+```cpp
+struct EntityView {
+  uint32_t id;
+  bool shield;            // made by _c_CreateShield (a shield bubble)
+  std::string mesh;       // the mesh blueprint, as Entity:SetMesh last gave it
+  int army;               // 1-based, 0 = none
+  float position[3], orientation[4] /* x y z w */;
+  float scale[3];         // Entity:SetScale
+  float drawScale;        // Entity:SetDrawScale
+  uint32_t parent;        // the entity it is attached to (id), 0xffffffff = none
+  int parentBone;         // -1: the entity itself
+  uint8_t vizFocus, vizAllies, vizEnemies, vizNeutrals;   // 0 never called, 1 'Always', 2 'Never', 3 'Intel'
+};
+void EntityViews(const Sim& sim, std::vector<EntityView>* out);   // once per beat, after Tick()
+```
+
+Every entity made with `_c_CreateEntity` or `_c_CreateShield` (FAF's `Entity` and `Shield` classes) that
+has a mesh set now, in creation order; one without a mesh (a vision marker, a sound carrier) is left
+out. Position and orientation are the simulation's for the beat; for an attached one that is its
+parent's bone with `SetParentOffset` applied, so you can draw it where it is given without following
+the parent yourself. Seen in the same replay: at most 3 at one beat, among them
+`/effects/entities/CzarShield/CzarShield_mesh` (a shield, draw scale 26, attached to its unit, viz
+Always / Always / Intel / Intel) and `/effects/entities/Shield01/Shield01z_mesh` (an entity, draw scale
+25).
+
+- **Size.** A shield bubble's size is `drawScale` (FAF calls `SetDrawScale(size)`); `scale` is what
+  `SetScale` gave and is 1 for them. Draw at `scale * drawScale`.
+- **Who sees it.** The four `viz` numbers are the script's calls as given; the simulation does not
+  decide for you. `'Intel'` means "as the army's intel on it allows": use `ReconOf(sim, focus, id)` for
+  the entity (for one that is not a unit that is the recon at its place). Not built: the original's
+  own rule for an entity nobody set anything on; treat 0 as 'Always' for allies and focus and 'Intel'
+  for the rest, which is what FAF sets explicitly on shields.
+
+### A unit's mesh
+
+`UnitView::mesh`: the mesh blueprint the unit's script last set with `SetMesh` ("" = none set, draw the
+blueprint's own). A personal shield sets the unit's shielded mesh and sets the plain one back when it
+goes down. Note that FAF sets a mesh on many units at creation (in the test replay 15 units had one,
+for instance a mod's commander: `/mods/blackopsfaf-acus/units/eel0001/eel0001_mesh`), so a filled
+field does not by itself mean "shielded": compare with the blueprint's own mesh.
+
+### 3. A projectile's scale
+
+`ProjectileView` has three more fields:
+
+- `scale[3]`: `Entity:SetScale(x, y, z)` as last set. 1, 1, 1 unless a script set it (the UEF's build
+  box, sized to the unit) or the blueprint's `MeshScaleRange` drew another size at launch.
+- `drawScale`: `Entity:SetDrawScale`.
+- `scaleVelocity[3]`, per second: `Projectile:SetScaleVelocity`, or the blueprint's `MeshScaleVelocity`
+  as drawn at launch. The simulation does not apply it (nothing in it goes by a shell's drawn size),
+  so `scale` stays as set and you add `scaleVelocity` x the seconds since you first saw the shell.
+
+All of it is on top of the blueprint's `Display.UniformScale`: draw at `UniformScale * scale *
+drawScale`.
+
+### Not in this
+
+- The pieces of a death that are projectiles come through `ProjectileViews` already; the ones made as
+  props or entities come through the two lists above.
+- `HideBone` / `ShowBone` are still not handed over (the scripts hide and show parts of meshes with
+  them); say so if you want them, as a per-unit list of hidden bones.
+- The decal note you found is right and the table in the answer to render 8 is corrected: the type is
+  in `text` when the script gave no second texture, in `text2` when it did.
+
+Try it: `moho64 ... --view` prints the counts, the time the prop list took and one sample of each
+kind at the end of a run.
+
 ## render 13: the whole map is seen for three seconds at the start — it is M28's own script
 
 Not the engine and not the `FogOfWar` option: the AI mod does it, and it does the same in the original.
@@ -502,7 +621,7 @@ What each function fills (the argument order is the original's own help text, re
 | `CreateAttachedBeam` | yes | | the texture | length, thickness | |
 | `CreateBeamToEntityBone` | yes | yes | the texture | thickness | |
 | `CreateLightParticle`, `CreateLightParticleIntel` | yes | | the texture | size, lifetime | the ramp |
-| `CreateDecal` | none; `position` given | | texture 1 | heading, sizeX, sizeZ, lod, duration, fidelity | texture 2, then the type in `text2` |
+| `CreateDecal` | none; `position` given | | texture 1 | heading, sizeX, sizeZ, lod, duration, fidelity | texture 2 in `text` and the type in `text2`; when the script gave no second texture (nearly always) the type is in `text` and `text2` is empty: the strings fill the two fields in order and an empty one takes no place |
 | `CreateSplat` | none; `position` given | | the texture | heading, sizeX, sizeZ, lod, duration, fidelity | |
 | `CreateSplatOnBone(entity, offset, bone, ...)` | yes | | the texture | offset x, y, z, sizeX, sizeZ, lod, duration | |
 

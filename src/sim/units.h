@@ -219,6 +219,14 @@ class Unit : public Entity {
 class Prop : public Entity {
  public:
   Prop() { typeBits |= kTypeProp; }
+  // For PropEvents (sim/sim_view.h): its place in the map file's prop list (-1: made after the start), and what
+  // the host was last told of it.
+  int mapIndex = -1;
+  bool viewSent = false;
+  Vec3 viewPos;
+  Quat viewOri;
+  float viewScale[4] = {1, 1, 1, 1};  // scale x, y, z and the draw scale
+  std::string viewMesh;
 };
 
 class ShieldEntity : public Entity {

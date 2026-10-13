@@ -233,6 +233,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   sim.collectSync = o.view;
   sim.collectEffects = o.view;
   sim.collectSounds = o.view;
+  sim.collectProps = o.view;
+  size_t propCount[3] = {0, 0, 0}, propMapOnes[3] = {0, 0, 0}, entMax = 0, entShieldMax = 0, unitMeshMax = 0;
+  std::string propSample[3], entSample[2], unitMeshSample;
+  std::map<std::string, size_t> entMeshes;
+  double propSeconds = 0;
   size_t sndCount[3] = {0, 0, 0};
   std::string sndSample[2];
   size_t syncBeats = 0, syncBytes = 0;
@@ -344,6 +349,57 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
           sndSample[ev.kind] = sb;
         }
       }
+      {  // scenery and script-made entities
+        std::vector<PropEvent> pe;
+        const auto t0 = std::chrono::steady_clock::now();
+        PropEvents(sim, &pe);
+        propSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        for (const PropEvent& ev : pe) {
+          ++propCount[ev.kind];
+          if (ev.mapIndex >= 0) ++propMapOnes[ev.kind];
+          if (propSample[ev.kind].empty()) {
+            char pb[400];
+            static const char* const kNames[] = {"made", "changed", "gone"};
+            std::snprintf(pb, sizeof pb, "tick %u prop %#x %s (map index %d) %s mesh '%s' at %.2f %.2f %.2f quat %.3f %.3f %.3f %.3f scale %.2f",
+                          sim.tick(), ev.id, kNames[ev.kind], ev.mapIndex, ev.blueprint.c_str(), ev.mesh.c_str(),
+                          ev.position[0], ev.position[1], ev.position[2], ev.orientation[0], ev.orientation[1],
+                          ev.orientation[2], ev.orientation[3], ev.scale[0]);
+            propSample[ev.kind] = pb;
+          }
+        }
+        std::vector<EntityView> ents;
+        EntityViews(sim, &ents);
+        size_t sh = 0;
+        for (const EntityView& ev : ents) {
+          if (ev.shield) ++sh;
+          if (entMeshes.size() < 40 || entMeshes.count(ev.mesh)) ++entMeshes[ev.mesh];
+          std::string& sample = entSample[ev.shield ? 1 : 0];
+          if (sample.empty()) {
+            char eb[400];
+            std::snprintf(eb, sizeof eb, "tick %u %s %#x mesh '%s' army %d at %.2f %.2f %.2f scale %.2f draw scale %.2f on %#x bone %d viz %d %d %d %d",
+                          sim.tick(), ev.shield ? "shield" : "entity", ev.id, ev.mesh.c_str(), ev.army, ev.position[0],
+                          ev.position[1], ev.position[2], ev.scale[0], ev.drawScale, ev.parent, ev.parentBone, ev.vizFocus,
+                          ev.vizAllies, ev.vizEnemies, ev.vizNeutrals);
+            sample = eb;
+          }
+        }
+        entMax = std::max(entMax, ents.size());
+        entShieldMax = std::max(entShieldMax, sh);
+        std::vector<UnitView> uv;
+        UnitViews(sim, &uv);
+        size_t withMesh = 0;
+        for (const UnitView& v : uv)
+          if (!v.mesh.empty()) {
+            ++withMesh;
+            if (unitMeshSample.empty()) {
+              char ub[300];
+              std::snprintf(ub, sizeof ub, "tick %u unit %#x %s has mesh '%s' set", sim.tick(), v.id, v.blueprint.c_str(),
+                            v.mesh.c_str());
+              unitMeshSample = ub;
+            }
+          }
+        unitMeshMax = std::max(unitMeshMax, withMesh);
+      }
       size_t bones = 0;
       for (const auto& up : poses) bones += up.bones.size();
       char buf[256];
@@ -388,6 +444,18 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
          sndCount[2]);
     for (const std::string& line : sndSample)
       if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
+    Logf(LogLevel::Info, "view: prop events: %zu made, %zu changed (%zu of the map's), %zu gone (%zu of the map's); "
+         "%zu props now; the list took %.3f ms a beat",
+         propCount[0], propCount[1], propMapOnes[1], propCount[2], propMapOnes[2], sim.props.size(),
+         done ? propSeconds * 1000.0 / done : 0.0);
+    for (const std::string& line : propSample)
+      if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
+    Logf(LogLevel::Info, "view: script entities with a mesh: most at one beat %zu (%zu shields); units with a mesh set: %zu",
+         entMax, entShieldMax, unitMeshMax);
+    for (const auto& [name, n] : entMeshes) Logf(LogLevel::Info, "view:   %s (entity beats %zu)", name.c_str(), n);
+    for (const std::string& line : entSample)
+      if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
+    if (!unitMeshSample.empty()) Logf(LogLevel::Info, "view: %s", unitMeshSample.c_str());
   }
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);

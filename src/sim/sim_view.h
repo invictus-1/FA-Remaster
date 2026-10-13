@@ -51,6 +51,47 @@ struct UnitView {
   bool selectable = true;  // not in the 'UnSelectable' state
   int queueLength = 0;     // commands in its queue
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
+  // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own
+  std::string mesh;
+};
+
+// An entity a script made that is neither unit, projectile nor prop (a shield bubble, a build frame, the pieces
+// of a death): every one that has a mesh set now, in creation order. Position and orientation are the
+// simulation's own for this beat (an attached one: its parent's bone with Entity:SetParentOffset applied).
+struct EntityView {
+  uint32_t id = 0;
+  bool shield = false;    // made by _c_CreateShield (a shield bubble)
+  std::string mesh;       // the mesh blueprint, as Entity:SetMesh last gave it
+  int army = 0;           // 1-based, 0 = none
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};  // x, y, z, w
+  float scale[3] = {1, 1, 1};           // Entity:SetScale
+  float drawScale = 1;                  // Entity:SetDrawScale
+  uint32_t parent = 0xffffffff;         // the entity it is attached to (its id), 0xffffffff = none
+  int parentBone = -1;                  // that entity's bone (-1: the entity itself)
+  // SetVizToFocusPlayer / Allies / Enemies / Neutrals as last called: 0 never called, 1 'Always', 2 'Never',
+  // 3 'Intel'. Whom that hides it from is the host's to work out from the entity's army and the viewer's.
+  uint8_t vizFocus = 0, vizAllies = 0, vizEnemies = 0, vizNeutrals = 0;
+};
+
+// How the scenery changed since the list was last taken. Listed only while Sim::collectProps is set (set it
+// before the first beat, or props that went before it are not told). The map's own props are made in the map
+// file's order, so one of them is named by its index in the file's prop list (from 0, counting every entry of
+// the file); a host that drew them from the file needs no list at the start. Create: a prop made after the
+// start (wreckage, a script's CreateProp), with what it is now. Change: a prop whose mesh (SetMesh: a burnt
+// tree), position, orientation (a tree knocked over turns about its foot, a little every beat while it falls)
+// or scale is no longer what was last told, or, for a map prop, what the file has. Destroy: it is gone
+// (reclaimed, destroyed, burnt out). At most one Create or Change per prop per list.
+struct PropEvent {
+  enum Kind { Create, Change, Destroy } kind = Create;
+  uint32_t id = 0;        // the prop's entity id
+  int mapIndex = -1;      // its place in the map file's prop list; -1: made after the start
+  std::string blueprint;  // Create, Change: the prop blueprint's id (its path)
+  std::string mesh;       // Create, Change: the mesh blueprint Entity:SetMesh gave it, "" = its blueprint's own
+  float position[3] = {0, 0, 0};
+  float orientation[4] = {0, 0, 0, 1};  // x, y, z, w
+  float scale[3] = {1, 1, 1};           // the map file's, or Entity:SetScale
+  float drawScale = 1;                  // Entity:SetDrawScale
 };
 
 // One bone of a unit's pose of this beat, where it differs from the rest pose: the bone's transform RELATIVE
@@ -73,6 +114,15 @@ struct ProjectileView {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
+  // Entity:SetScale(x, y, z) as last set (1, 1, 1 unless a script set it, or the blueprint's MeshScaleRange drew
+  // another size at launch), and Entity:SetDrawScale. Both are on top of the blueprint's own
+  // Display.UniformScale: draw the mesh at UniformScale * scale * drawScale.
+  float scale[3] = {1, 1, 1};
+  float drawScale = 1;
+  // Projectile:SetScaleVelocity, or the blueprint's MeshScaleVelocity as drawn at launch: how fast the scale
+  // grows, per second. The simulation does not apply it (nothing in it goes by a shell's drawn size), so `scale`
+  // stays as set: a host adds scaleVelocity * (seconds since it first saw the shell).
+  float scaleVelocity[3] = {0, 0, 0};
 };
 
 // A weapon's collision beam while it is on: from its muzzle to where it ends this beat.
@@ -190,6 +240,12 @@ void UnitPoses(const Sim& sim, std::vector<UnitPose>* out);
 // The projectiles in flight (creation order) and the beams that are on.
 void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
 void BeamViews(const Sim& sim, std::vector<BeamView>* out);
+// Script-made entities with a mesh (see EntityView). Take it once per beat, after Tick().
+void EntityViews(const Sim& sim, std::vector<EntityView>* out);
+// The scenery's changes since the last call (see PropEvent). Take it once per beat, after Tick(), with
+// Sim::collectProps set from before the first beat. (It compares every prop with what was last told: measured
+// 0.066 ms a beat with 6,200 props, so about half a millisecond with 46,000.)
+void PropEvents(Sim& sim, std::vector<PropEvent>* out);
 // One unit's state for the panels (false: no such unit). Not const: the live caps are read through the scripts'
 // state. Ask for the units on screen, not for all of them every beat.
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);

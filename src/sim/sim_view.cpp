@@ -76,7 +76,83 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.selectable = u->unitStates.count("UnSelectable") == 0;
     v.queueLength = static_cast<int>(u->commands.size());
     v.headCommand = u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type);
+    v.mesh = u->mesh;
     out->push_back(std::move(v));
+  }
+}
+
+void EntityViews(const Sim& sim, std::vector<EntityView>* out) {
+  out->clear();
+  for (const Entity* e : sim.scriptEntities) {
+    if (e->destroyQueued || e->mesh.empty()) continue;
+    EntityView v;
+    v.id = e->id;
+    v.shield = e->kind == Entity::Kind::Shield;
+    v.mesh = e->mesh;
+    v.army = e->army ? e->army->index : 0;
+    v.position[0] = e->position.x;
+    v.position[1] = e->position.y;
+    v.position[2] = e->position.z;
+    v.orientation[0] = e->orientation.x;
+    v.orientation[1] = e->orientation.y;
+    v.orientation[2] = e->orientation.z;
+    v.orientation[3] = e->orientation.w;
+    for (int i = 0; i < 3; ++i) v.scale[i] = e->scale[i];
+    v.drawScale = e->drawScale;
+    if (e->attachParent)
+      if (const Entity* p = sim.FindEntity(e->attachParent)) {
+        v.parent = p->id;
+        v.parentBone = e->attachBone;
+      }
+    v.vizFocus = e->viz[0];
+    v.vizAllies = e->viz[1];
+    v.vizEnemies = e->viz[2];
+    v.vizNeutrals = e->viz[3];
+    out->push_back(std::move(v));
+  }
+}
+
+void PropEvents(Sim& sim, std::vector<PropEvent>* out) {
+  out->clear();
+  for (const auto& g : sim.propsGone) {
+    PropEvent ev;
+    ev.kind = PropEvent::Destroy;
+    ev.id = g.first;
+    ev.mapIndex = g.second;
+    out->push_back(std::move(ev));
+  }
+  sim.propsGone.clear();
+  for (Prop* p : sim.props) {
+    if (p->destroyQueued) continue;
+    const bool same = p->viewSent && p->viewPos.x == p->position.x && p->viewPos.y == p->position.y &&
+                      p->viewPos.z == p->position.z && p->viewOri.x == p->orientation.x &&
+                      p->viewOri.y == p->orientation.y && p->viewOri.z == p->orientation.z &&
+                      p->viewOri.w == p->orientation.w && p->viewScale[0] == p->scale[0] &&
+                      p->viewScale[1] == p->scale[1] && p->viewScale[2] == p->scale[2] &&
+                      p->viewScale[3] == p->drawScale && p->viewMesh == p->mesh;
+    if (same) continue;
+    PropEvent ev;
+    ev.kind = p->viewSent ? PropEvent::Change : PropEvent::Create;
+    ev.id = p->id;
+    ev.mapIndex = p->mapIndex;
+    if (p->blueprint) ev.blueprint = p->blueprint->id;
+    ev.mesh = p->mesh;
+    ev.position[0] = p->position.x;
+    ev.position[1] = p->position.y;
+    ev.position[2] = p->position.z;
+    ev.orientation[0] = p->orientation.x;
+    ev.orientation[1] = p->orientation.y;
+    ev.orientation[2] = p->orientation.z;
+    ev.orientation[3] = p->orientation.w;
+    for (int i = 0; i < 3; ++i) ev.scale[i] = p->scale[i];
+    ev.drawScale = p->drawScale;
+    out->push_back(std::move(ev));
+    p->viewSent = true;
+    p->viewPos = p->position;
+    p->viewOri = p->orientation;
+    for (int i = 0; i < 3; ++i) p->viewScale[i] = p->scale[i];
+    p->viewScale[3] = p->drawScale;
+    p->viewMesh = p->mesh;
   }
 }
 
@@ -172,6 +248,11 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.velocity[0] = p->velocity.x;
     v.velocity[1] = p->velocity.y;
     v.velocity[2] = p->velocity.z;
+    for (int i = 0; i < 3; ++i) v.scale[i] = p->scale[i];
+    v.drawScale = p->drawScale;
+    v.scaleVelocity[0] = p->scaleVel.x;
+    v.scaleVelocity[1] = p->scaleVel.y;
+    v.scaleVelocity[2] = p->scaleVel.z;
     out->push_back(std::move(v));
   }
 }

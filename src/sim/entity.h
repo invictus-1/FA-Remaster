@@ -46,6 +46,12 @@ class Entity : public ScriptObject {
   int positionRef = LUA_NOREF;
   lua_State* positionState = nullptr;
   float scale[3] = {1, 1, 1};
+  // What a host that draws the game is told of the entity (sim/sim_view.h); the simulation reads none of it:
+  // Entity:SetMesh's mesh blueprint ("" = its own blueprint's), Entity:SetDrawScale, and SetVizToFocusPlayer /
+  // Allies / Enemies / Neutrals (0 never set, 1 'Always', 2 'Never', 3 'Intel').
+  std::string mesh;
+  float drawScale = 1;
+  uint8_t viz[4] = {0, 0, 0, 0};
   const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)
   float meshScale = 1;                 // Display.UniformScale: model units -> world
   float health = 0, maxHealth = 0;

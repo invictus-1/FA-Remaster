@@ -191,6 +191,12 @@ class Sim {
   std::vector<class ShieldEntity*> shields;    // shield entities (area damage pre-pass, collisions)
   std::vector<class CollisionBeam*> beams;
   std::vector<Prop*> props;
+  // entities the scripts made that are neither unit, projectile nor prop (_c_CreateEntity, _c_CreateShield), in
+  // creation order: for EntityViews (sim/sim_view.h)
+  std::vector<Entity*> scriptEntities;
+  // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
+  bool collectProps = false;
+  std::vector<std::pair<uint32_t, int>> propsGone;
   template <class F>
   void ForPropsInRect(float x0, float z0, float x1, float z1, F&& f) {
     if (propGridDirty_) RebuildPropGrid();
