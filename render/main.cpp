@@ -72,6 +72,7 @@
 //           the first wreck or the first unit of that kind there is (to look at them without knowing where they are)
 // --hide-bone <bone>  placed units are drawn with that bone and all that hangs on it hidden (as a script's
 //           HideBone does; a name or a number, as for --turn)
+// --soften <n>  over how many world units particles fade where they meet something solid (0.6; next to 0: a hard cut)
 // --shielded  placed units are drawn with a personal shield up
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
@@ -159,6 +160,7 @@ struct Options {
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
   std::string find;                     // --find
+  float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
   float heading = 25, pitch = 32;  // degrees: from where placed units are looked at when no --cam is given
@@ -258,6 +260,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--find") o->find = v;
+    else if (a == "--soften") o->soften = static_cast<float>(atof(v));
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
@@ -429,6 +432,7 @@ int main(int argc, char** argv) {
   world.cloudCover = opt.clouds;
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
+  if (opt.soften >= 0) world.particles.soften = opt.soften;
   if (opt.ranges) {  // range rings to look at, round where the camera starts
     const Vec3 at{opt.cam[0], 0, opt.cam[1]};
     RangeGroup fire, radar;
