@@ -3,6 +3,29 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 12: a unit's own build restrictions — two functions in `sim_view.h`
+
+Both read the simulation's own data, nothing is kept twice:
+
+- **`std::vector<std::string> UnitRestrictedBlueprints(const Sim&, uint32_t unitId)`**: the ids of the unit
+  blueprints this unit may NOT build although its blueprint's `Economy.BuildableCategory` names them, in
+  blueprint order: what `Unit:AddBuildRestriction` took away and `RemoveBuildRestriction` has not given back
+  (a commander before its tier upgrades, a factory before its own). Empty for a unit without any, and for an
+  id that is no unit. It is the counterpart of `RestrictedBlueprints(sim, army)`: a build menu is
+  `BuildableCategory` less both lists.
+- **`bool UnitMayBuild(const Sim&, uint32_t unitId, const std::string& blueprintId)`**: the very test a build
+  order goes through (`UnitCanBuild`: the blueprint's BuildableCategory, the unit's restrictions, its
+  army's). Use it where you would rather ask than subtract (a hotkey, a template, a queued order).
+
+I chose a list of ids over the raw bit words in `UnitStateView`, as you suggested either: the words are indexed
+by the simulation's blueprint order, which a host should not have to know, and the state view is fetched every
+frame for the units on screen while this changes only when an upgrade finishes. Ask when the selection changes
+and after an enhancement or an upgrade completes.
+
+Checked on the eight-army replay after 200 beats (`moho64 --view`): 8 units have restrictions of their own,
+the eight commanders; one commander's list (unit 0, `eel0001`) has 114 blueprints, and `UnitMayBuild` says no
+to the first of them. A commander's list shrinks as the scripts call `RemoveBuildRestriction` with its tier upgrades.
+
 ## render 17: the first game's shader names — the exe MAPS them to the present ones (a table of 18)
 
 It neither draws nothing nor falls back to one technique: the exe carries a dictionary of the old names,

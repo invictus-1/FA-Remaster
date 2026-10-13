@@ -277,6 +277,15 @@ void PropEvents(Sim& sim, std::vector<PropEvent>* out);
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
 // The ids of the unit blueprints an army may not build (AddBuildRestriction), in blueprint order. army: 1-based.
 std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army);
+// The ids of the unit blueprints ONE UNIT may not build although its blueprint's Economy.BuildableCategory names
+// them: its own restrictions (Unit:AddBuildRestriction / RemoveBuildRestriction, as the commanders' and the
+// factories' scripts set them: a commander without the tier 2 upgrade, a factory before its upgrade), in
+// blueprint order. Empty for a unit with none, and for an id that is no unit. The army's restrictions
+// (RestrictedBlueprints) are a separate list: a build menu takes BuildableCategory less both.
+std::vector<std::string> UnitRestrictedBlueprints(const Sim& sim, uint32_t unitId);
+// Whether that unit may build that blueprint now: the simulation's own test for a build order (the blueprint's
+// BuildableCategory, the unit's restrictions and its army's). False for an unknown unit or blueprint.
+bool UnitMayBuild(const Sim& sim, uint32_t unitId, const std::string& blueprintId);
 // The seed the simulation's random stream was started with: the same for every player of a game and in its
 // replay (the replay header holds it), different from game to game. For things that are only seen and must look
 // the same to everyone (weather). Valid after Start(). Reading it draws nothing from the stream.

@@ -385,6 +385,32 @@ std::vector<std::string> RestrictedBlueprints(const Sim& sim, int army) {
   return out;
 }
 
+std::vector<std::string> UnitRestrictedBlueprints(const Sim& sim, uint32_t unitId) {
+  std::vector<std::string> out;
+  const Entity* e = sim.FindEntityById(unitId);
+  if (!e || e->kind != Entity::Kind::Unit) return out;
+  const Unit* u = static_cast<const Unit*>(e);
+  if (!u->bpData) return out;
+  const auto& buildable = u->bpData->buildable;
+  const auto& allowed = u->buildAllowed;
+  const SimBlueprints& bps = sim.blueprints();
+  for (int i = 0; i < bps.EntityCount(); ++i) {
+    const BlueprintInfo* bp = bps.ByEntityIndex(i);
+    if (!bp || bp->kind != BpKind::Unit) continue;
+    const size_t w = static_cast<size_t>(i) >> 6;
+    const uint64_t bit = uint64_t(1) << (i & 63);
+    if (w < buildable.size() && (buildable[w] & bit) && w < allowed.size() && !(allowed[w] & bit)) out.push_back(bp->id);
+  }
+  return out;
+}
+
+bool UnitMayBuild(const Sim& sim, uint32_t unitId, const std::string& blueprintId) {
+  const Entity* e = sim.FindEntityById(unitId);
+  if (!e || e->kind != Entity::Kind::Unit) return false;
+  const BlueprintInfo* bp = sim.blueprints().Find(blueprintId);
+  return bp && bp->kind == BpKind::Unit && UnitCanBuild(static_cast<const Unit*>(e), *bp);
+}
+
 namespace {
 // field `key` of the table at `idx` as a string ("" when it is not one) / a number (`def` when it is not one)
 std::string StrField(lua_State* L, int idx, const char* key) {

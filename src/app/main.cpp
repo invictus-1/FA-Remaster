@@ -186,6 +186,21 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
     if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());
   }
+  {  // a unit's own build restrictions (a commander before its upgrades, a factory before its own)
+    size_t with = 0;
+    std::string sample;
+    for (const UnitView& u : units) {
+      const std::vector<std::string> r = UnitRestrictedBlueprints(sim, u.id);
+      if (r.empty()) continue;
+      if (++with <= 3) {
+        char buf[200];
+        std::snprintf(buf, sizeof buf, " unit %#x %s: %zu (first %s, may build it %d)", u.id, u.blueprint.c_str(), r.size(),
+                      r.front().c_str(), UnitMayBuild(sim, u.id, r.front()) ? 1 : 0);
+        sample += buf;
+      }
+    }
+    Logf(LogLevel::Info, "view: %zu units have build restrictions of their own;%s", with, sample.c_str());
+  }
   {  // what each army knows of the others' units
     std::vector<UnitView> uv;
     UnitViews(sim, &uv);
