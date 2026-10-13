@@ -252,9 +252,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   a running emitter, `ScaleEmitter`, `OffsetEmitter` and `SetEmitterParam` with `POSITION_X/Y/Z`,
   `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on, and
   `SetEmitterCurveParam(name, height, size)`: that curve of that emitter becomes the one value
-  with that random spread (`Particles::SetCurve`; how the original rewrites the curve is not
-  read out of it: this is what the scripts' uses ask for, an effect spread over a unit's size,
-  a rate set to one number; 1,311 such calls in four game-minutes of the M28 test game). Not
+  with that random spread (`Particles::SetCurve`; the original does the same: a new curve with
+  the one key, `docs/engine-answers.md`; 1,311 such calls in four game-minutes of the M28
+  test game). Particles are drawn into the scene's colour alone and test the scene's depth
+  themselves, sample by sample of a pixel, so that they can fade over `Particles::soften`
+  (0.6) world units where they are about to meet the ground or a unit instead of being cut
+  off along a line (`--soften <n>` in the viewer; next to 0 shows the old hard cut). Not
   acted on: `ResizeEmitterCurve`, `SetBeamParam`, which the game's scripts do not call. Particles that bend what is behind them (blend
   mode 5: the shimmer over heat, a shock wave's ring; 46 of the game's emitters) are drawn after
   the others with a copy of the picture as it is then: each shows that picture taken a little
@@ -555,8 +558,7 @@ Known gaps, to be closed in the steps they belong to:
   map file is its centre (as a centre 97% of the erosion decals lie on land, as a corner about
   85%); which way its heading turns; that the other two rotation numbers do nothing. The map
   editor's other decal kinds (glow, water masks) are not drawn.
-- Effects: scripts' changes to emitter curves are ignored; particles are not sorted by distance
-  and do not soften where they meet the ground.
+- Effects: particles are not sorted by distance.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
 - Ambient occlusion (modern look, `--ao 0..1`, key O) is computed from the picture's depth and

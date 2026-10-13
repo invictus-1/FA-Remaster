@@ -813,13 +813,17 @@ void World::Render() {
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   shafts.Draw(view);
   if (hide.find("particles") == std::string::npos) {
-    particles.Draw(view);
+    // into the scene's colour alone: they test the scene's depth themselves and fade where they
+    // meet something solid
+    post.BeginColorOnly();
+    particles.Draw(view, post.Depth(), camera.zNear);
     // those that bend what is behind them (the shimmer over heat): with the picture as it is now
     if (particles.Bending() && post.CopyBehind()) {
-      post.ContinueScene();
-      lights.Bind();
-      particles.DrawBending(view, post.Behind());
+      post.BeginColorOnly();
+      particles.DrawBending(view, post.Behind(), post.Depth(), camera.zNear);
     }
+    post.ContinueScene();
+    lights.Bind();
   }
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened

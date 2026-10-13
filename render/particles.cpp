@@ -27,12 +27,19 @@ cbuffer ParticleSet : register(b1) {
                         // z: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied,
                         // 4: it has none of its own and bends what is behind it),
                         // w: brightness of what glows in the modern look
-  float4 sheet;         // x: 1 / frames, y: 1 / strips, z: 1 = particles are slowed as by air
+  float4 sheet;         // x: 1 / frames, y: 1 / strips, z: 1 = particles are slowed as by air,
+                        // w: the camera's near distance (the scene's depth is that over the distance)
+  float4 meeting;       // x: over how many world units a particle fades where it meets something solid
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
 Texture2D rampTexture : register(t1);
 Texture2D behindTexture : register(t2);  // (bending particles only)
+#ifdef MSAA
+Texture2DMS<float> sceneDepth : register(t3);
+#else
+Texture2D<float> sceneDepth : register(t3);
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -88,7 +95,36 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   return o;
 }
 
-float4 PS(VOut i) : SV_Target {
+// How much of the particle shows at this pixel: of the pixel's samples, those where nothing solid is
+// in front of it (`coverage`); and less where it is about to meet something, so that it fades into
+// the ground and into units instead of being cut off along a hard line.
+float Meets(VOut i, out uint coverage) {
+  coverage = 0;
+  float nearest = 1e9;
+#ifdef MSAA
+  int2 pixel = int2(i.position.xy);
+  for (uint s = 0; s < SAMPLES; ++s) {
+    float d = sceneDepth.Load(pixel, s);
+    float gap = (d > 0 ? sheet.w / d : 1e9) - i.position.w;
+    if (gap > 0) {
+      coverage |= 1u << s;
+      nearest = min(nearest, gap);
+    }
+  }
+#else
+  float d = sceneDepth.Load(int3(i.position.xy, 0));
+  float gap = (d > 0 ? sheet.w / d : 1e9) - i.position.w;
+  if (gap > 0) {
+    coverage = 1;
+    nearest = gap;
+  }
+#endif
+  return coverage == 0 ? 0 : saturate(nearest / max(meeting.x, 1e-3));
+}
+
+float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
+  float meets = Meets(i, coverage);
+  if (meets <= 0) discard;
   if (options.z > 3.5) {
     // it bends what is behind it: the picture as it was, taken a little to the side, by the
     // texture's red and green (the original's measure: half a hundredth of the picture at most);
@@ -96,10 +132,10 @@ float4 PS(VOut i) : SV_Target {
     float4 bend = particleTexture.Sample(samplerLinear, i.uv);
     float shows = bend.a * rampTexture.Sample(samplerLinearClamp, i.rampUv).a;
     float2 at = i.position.xy * viewport.zw + 0.005 * (2 * bend.rg - 1);
-    return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, shows);
+    return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, shows * meets);
   }
   float4 c = particleTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
-  if (options.z > 0.5 && options.z < 1.5) return float4(saturate(c.rgb), 1);  // darkening: what is there x (1 - this)
+  if (options.z > 0.5 && options.z < 1.5) return float4(saturate(c.rgb) * meets, 1);  // darkening: what is there x (1 - this)
   if (look > 0.5) {
     // the modern look's picture is linear light; what adds its light is given more of it, to glow
     // (what does not add light, smoke and dust, is lit by the day: darker in a computed night)
@@ -109,6 +145,8 @@ float4 PS(VOut i) : SV_Target {
       c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor() * (options.z > 2.5 ? c.a : 1), lost);
     }
   }
+  if (options.z > 2.5) c *= meets;  // (premultiplied: the colour carries its alpha)
+  else c.a *= meets;
   return c;
 }
 )hlsl";
@@ -142,11 +180,12 @@ void EmitterCurve::At(float x, float* value, float* spread) const {
 }
 
 bool Particles::Init(std::string* error) {
-  std::string source = std::string(kViewShaderBlock) + kShader;
+  std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.vertexSource = pd.pixelSource = source;
   pd.cull = gfx::Cull::None;
-  pd.depthWrite = false;
+  pd.depthTest = pd.depthWrite = false;  // (the shader tests the scene's depth itself)
+  pd.depthTarget = false;
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
   const struct {
@@ -478,7 +517,7 @@ void Particles::Update(double now, const View* view) {
   updateMs_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-void Particles::Draw(const View& view) {
+void Particles::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
   const auto t0 = std::chrono::steady_clock::now();
   // drop what is over, and gather the rest in one buffer, set after set
   const float now = static_cast<float>(now_);
@@ -501,17 +540,17 @@ void Particles::Draw(const View& view) {
     return;
   }
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
-  DrawSets(view, false, {});
+  DrawSets(view, false, {}, sceneDepth, zNear);
   const float ms = updateMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
   cpuMs = cpuMs == 0 ? ms : cpuMs * 0.95f + ms * 0.05f;
 }
 
-void Particles::DrawBending(const View& view, gfx::Texture behind) {
-  if (bending_ && behind) DrawSets(view, true, behind);
+void Particles::DrawBending(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
+  if (bending_ && behind) DrawSets(view, true, behind, sceneDepth, zNear);
 }
 
 // The sets of the last Draw: those that bend what is behind them, or all the others.
-void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind) {
+void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
   const float now = static_cast<float>(now_);
   const std::vector<std::pair<size_t, size_t>>& spans = spans_;
   // the camera's sideways and upward directions, from the rows of the view-projection matrix
@@ -528,16 +567,18 @@ void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind) {
     if (kind != bound) {
       device_->SetPipeline(pipelines_[kind == 4 ? 0 : kind]);
       if (bending) device_->SetTexture(2, behind);
+      device_->SetTexture(3, sceneDepth);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetShaderBuffer(buffer_);
       bound = kind;
     }
     // which of the original's vertex paths: Align, else AlignToBone (Flat with Flat), else Flat, else plain
     const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
-    const float constants[16] = {right.x, right.y, right.z, now,
+    const float constants[20] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
                                  static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
-                                 1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, 0};
+                                 1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
+                                 soften, 0, 0, 0};
     device_->SetConstants(1, constants, sizeof constants);
     device_->SetTexture(0, bp.texture);
     device_->SetTexture(1, bp.ramp);

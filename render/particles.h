@@ -80,9 +80,8 @@ class Particles {
   void SetParam(uint32_t emitter, const std::string& name, float value);
   // A script's SetEmitterCurveParam(name, height, size) on a running emitter: that curve of this
   // emitter alone ("Y_POSITION_CURVE", "ROTATION_RATE_CURVE", ...) becomes the one value `height`
-  // with the random spread `size`, for all of the emitter's time. (How the original rewrites the
-  // curve is not read out of it; this is what the scripts' uses of the call ask for: an effect
-  // spread over a unit's height, a rate set to one number.)
+  // with the random spread `size`, for all of the emitter's time, as the original does it (a new
+  // curve with that one key: docs/engine-answers.md).
   void SetCurve(uint32_t emitter, const std::string& name, float height, float size);
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
@@ -97,12 +96,16 @@ class Particles {
   // the last ticks it missed.
   void Update(double now, const View* view = nullptr);
   // Draws every living particle into the current pass, which must be the scene's.
-  void Draw(const View& view);
+  // Into a pass that has the scene's colour alone: the particles test the scene's depth themselves
+  // (`sceneDepth`, with `zNear` the camera's near distance), sample by sample, and fade over
+  // `soften` world units where they are about to meet something solid.
+  void Draw(const View& view, gfx::Texture sceneDepth, float zNear);
+  float soften = 0.6f;
   // The particles that bend what is behind them (the original's blend mode 5: the shimmer over heat,
   // a shock wave's ring): after Draw, into the scene's pass, with the picture as it was just before
   // (one sample a pixel). `Bending()`: are there any, after the last Draw.
   bool Bending() const { return bending_; }
-  void DrawBending(const View& view, gfx::Texture behind);
+  void DrawBending(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
 
   // The modern look: how much brighter than its texture a particle that adds its light is (it is
   // light, and the picture's last pass brings it back into what a screen shows).
@@ -161,7 +164,7 @@ class Particles {
   std::vector<float> rows_;
   std::vector<std::pair<size_t, size_t>> spans_;  // per set of order_, from the last Draw: first row, particle count
   bool bending_ = false;
-  void DrawSets(const View& view, bool bending, gfx::Texture behind);
+  void DrawSets(const View& view, bool bending, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
   uint32_t nextId_ = 1;
   uint32_t seed_ = 0x2545f491u;
   double now_ = 0;
