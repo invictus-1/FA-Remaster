@@ -260,6 +260,33 @@ interface's script announces "You have been defeated!" within half a second (so 
 SyncGameResult run through); the game is over at 18.0 and stands, with the final score handed
 over (EndGameThread and EndGame()). `ui/tests/defeat.lua` keeps it so. Thank you.
 
+### 12. A unit's own build restrictions in its view (the build menu offers what the unit may not build)
+Chris, 2026-10-13, in a live game: "is it normal I can't build tech 2 pgen". His log shows three
+T2 power generators (ueb1201) ordered and none begun. Most likely the builder was the commander
+(not seen, but checked: the category I give the script for it holds ueb1201): its build menu
+offered the T2 buildings, he placed one, and the simulation rightly did nothing.
+
+Why the menu offers them: `GetUnitCommandData(units)` gives the game's script the category of
+what the selected units can build. I make it from each unit's blueprint
+(`Economy.BuildableCategory`, for the UEF commander `BUILTBYCOMMANDER`, `BUILTBYTIER2COMMANDER`
+and `BUILTBYTIER3COMMANDER`) less the army's restrictions (`RestrictedBlueprints`). The unit's
+OWN restrictions are missing: the commander's script takes the tier 2 and 3 sets away with
+`self:AddBuildRestriction(...)` when it is made and gives them back with its enhancements, and
+the factories do the same for the tiers their army has no headquarters for. You keep that as
+`Unit::buildAllowed` (build.cpp, `l_UnitBuildRestriction`); the view does not show it.
+
+Asked for, the smallest form: in `UnitStateView` the unit's allowed set as it is now, e.g.
+`std::vector<uint64_t> buildAllowed` (the category words; empty: everything allowed), or a
+function `UnitMayBuild(sim, unit id, blueprint id)` if you would rather not show the words. I
+then give the script (blueprint's category AND the unit's allowed set), per unit, joined over
+the selection, as the original's `GetUnitCommandData` must (its code for it is not read by me;
+if you know it joins differently, say so).
+
+Blocking in this sense: until then the build menus of commanders and of factories offer things
+that cannot be built, which reads as a broken game to a player.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -528,3 +555,44 @@ Kinds of weather that stay: done as written above, by its word. Taken from its a
 stands at 6.5 and dusk at 17.5 (at 6.0 and 18.0 the land is nearly as dark as at night). The
 commander's death glare (my note with ui 11): two faults of the renderer's in the nuke's ball of
 fire, fixed (render 3350bfd, on main). Thank you. Waiting for Chris's look at the sea.
+
+### 10. From Chris: lights on units and buildings, a flicker while upgrading, lightning less often
+Chris, 2026-10-13, after games on the stock Seton's with the day and the weather on and the
+remastered units mounted (main 5db6a24 and after). He named each picture by what he saw in it; the
+names are his words. Overall: "everything looks right so very good work"; the rain "looks good".
+Not blocking. Where a thing is the visuals track's (a unit's lights list, a mesh), please say so
+and I pass it on, or pass it on yourself.
+
+1. "Random flashlight on factory": the UEF land factory (UEB0101) at night in rain. A white cone
+   of light starts at the factory's front right corner and lies across the ground to the right,
+   pointing at nothing. He circled a small white point in the middle of the build pad as well.
+2. "Texture glitch while upgrading flickering": the same factory while it upgrades, by day. The
+   top of the middle tower shows a dark triangle, and a red block (a part of the upgrade, it seems)
+   stands on the left of the pad with a black piece above it. It flickers.
+3. "some units haven't tested all have this phantom light on the side": a UEF tank at night. Its
+   headlights' cone lies ahead of it as it should; a second, faint patch of light lies on the
+   ground beside it, some way off, belonging to nothing.
+4. "we nee acu lights this is old acu so I'm not sure if new has it": the stock UEF commander
+   (UEL0001) at dusk, no light of its own. See the note on the commander below.
+5. "Engie needs lights up front side ones can stay but probably smaller.": the UEF engineer
+   (UEL0105) at night throws a cone to each SIDE and none ahead. Wanted: lights ahead; the side
+   ones may stay, smaller.
+6. "t1 pgen is nice but the light only shines in one direction like the spinning one. Since the
+   whole thing is lit it should all pin together all side.": the T1 power generator (UEB1101) at
+   night. Its windows glow all round, but the ground is lit on one side only (he circled the dark
+   side). Wanted: light on the ground all round, since the whole building glows.
+7. "Love the new look this is exactly what I want": a T1 power generator being built (the box,
+   the wire frame, the beams). No fault: this is the one he likes.
+8. In his words: "Lightning needs to be toned down on frequency".
+
+On the commander (4): the folder of remastered units has no UEL0001. The rebuilt UEF commander
+is EEL0001, the BlackOps one, so a game without that mod shows the stock commander, and Chris's
+launchers start games without mods. I am making him a launcher with that mod on. Whether the
+rebuilt model should also stand in for UEL0001 is a question for him and the visuals track; I ask
+him.
+
+Two things he asked that I answered from your notes; correct me if wrong: the rebuilt map uses
+your water (the map brings the wave normal maps and the water map); and weather that changes by
+itself is drawn from the game's seed in spells of five minutes, the first always fair, with rain
+and storms about one spell in five and snow only in the cold climate, so a short game can pass
+without rain.

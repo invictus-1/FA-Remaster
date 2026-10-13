@@ -59,7 +59,7 @@ for _, key in {'RemasterDayStart', 'RemasterDayLength', 'RemasterWeather'} do
     local default = option and option.values[option.default]
     check("the option " .. key .. " is in the list with a default", default ~= nil, true)
 end
-check("the day starts in the morning unless chosen", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'morning')
+check("a game has the map's own light unless chosen", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'map')
 check("a day takes twenty minutes unless chosen", options.RemasterDayLength.values[options.RemasterDayLength.default], '20')
 
 LOG("TEST done: " .. failed .. " failed")

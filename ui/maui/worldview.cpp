@@ -457,7 +457,8 @@ class WorldView : public Control {
     // orders, and while a building is being placed its ghost where the mouse points (by the
     // picture before this one), green where it can stand.
     WorldScene scene;
-    SelectionForWorld(L, &scene.selection, &scene.lines);
+    std::vector<WorldGhost> ordered;
+    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered);
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
@@ -474,14 +475,21 @@ class WorldView : public Control {
     if (sim && pixels_ && (mode == "build" || mode == "buildanchored") && !name.empty() && HitTest(ui.mouseX, ui.mouseY)) {
       float at[3];
       WorldGhost ghost;
-      if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at) && BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
-        ghost.blueprint = name;
-        scene.ghosts.push_back(ghost);
+      if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
+        if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
+          BuildRow(L, *sim, name, buildFrom_, at, &scene.ghosts);
+        } else if (BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
+          ghost.blueprint = name;
+          scene.ghosts.push_back(ghost);
+        }
       }
     }
+    // (The building about to be placed comes first: the range rings below take it from there.)
+    const bool placing = !scene.ghosts.empty();
+    scene.ghosts.insert(scene.ghosts.end(), ordered.begin(), ordered.end());
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
-    RangeRingsForWorld(L, scene.hover, scene.ghosts.empty() ? nullptr : &scene.ghosts[0], &scene.ranges);
+    RangeRingsForWorld(L, scene.hover, placing ? &scene.ghosts[0] : nullptr, &scene.ranges);
     {  // (the eye's distance at the camera's nearest and farthest zoom)
       Camera* c = GetCameraObject(L, cameraName);
       const float zoom = c->zoom;
@@ -617,7 +625,48 @@ class WorldView : public Control {
     PanCamera(GetCameraObject(L, cameraName), e.x - lastX_, e.y - lastY_, r.x1 - r.x0);
     lastX_ = e.x, lastY_ = e.y;
   }
+  // Building in a row: a left press in a build mode marks the first site; let go on the spot, the
+  // building is ordered there; let go elsewhere, one is ordered on every free site of the row
+  // from the first site to the pointer. The sites follow the line between the two, one building's
+  // room apart along the direction the line mostly runs (BuildSpacingOf), each snapped as the
+  // simulation snaps a site. As players know it from the original; how the original spaces the
+  // row is not read: INFERRED.
+  bool buildDrag_ = false, buildShift_ = false;
+  std::string buildName_;
+  float buildFrom_[3] = {0, 0, 0};
+  void BuildRow(lua_State* L, Sim& sim, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row) {
+    float alongX = 1, alongZ = 1;
+    BuildSpacingOf(L, name, &alongX, &alongZ);
+    const float dx = to[0] - from[0], dz = to[2] - from[2];
+    const float steps = std::max(std::fabs(dx) / alongX, std::fabs(dz) / alongZ);
+    const int count = std::min(static_cast<int>(steps + 0.5f), 99);
+    for (int k = 0; k <= count; ++k) {
+      const float t = steps > 0 ? static_cast<float>(k) / steps : 0.0f;
+      const float at[3] = {from[0] + dx * t, from[1], from[2] + dz * t};
+      WorldGhost ghost;
+      if (!BuildSiteOf(sim, name, at, ghost.position, &ghost.free)) return;
+      if (!row->empty() && row->back().position[0] == ghost.position[0] && row->back().position[2] == ghost.position[2]) continue;
+      ghost.blueprint = name;
+      row->push_back(ghost);
+    }
+  }
   void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (buildDrag_) {
+      buildDrag_ = false;
+      Sim* sim = UserState::From(L)->config().sim;
+      if (!sim) return;
+      float to[3];
+      Unproject(L, e.x, e.y, to);
+      std::vector<WorldGhost> row;
+      BuildRow(L, *sim, buildName_, buildFrom_, to, &row);
+      bool clear = !buildShift_;
+      for (const WorldGhost& g : row) {
+        if (!g.free) continue;
+        IssueToSelection(L, "BuildMobile", g.position[0], g.position[1], g.position[2], clear, buildName_);
+        clear = false;  // the rest of the row comes after the first
+      }
+      return;
+    }
     if (cameraDrag_) {
       cameraDrag_ = false;
       UserState::From(L)->ui().holdPointer = false;
@@ -718,11 +767,13 @@ class WorldView : public Control {
     std::string mode, name;
     CommandMode(L, &mode, &name);
     if (mode == "build" || mode == "buildanchored") {
+      // (The order goes out when the button is let go: until then the mouse may draw a row.)
       Sim* sim = UserState::From(L)->config().sim;
-      float site[3] = {world[0], world[1], world[2]};
       bool free = true;
-      if (sim && BuildSiteOf(*sim, name, world, site, &free) && !free) return true;
-      return IssueToSelection(L, "BuildMobile", site[0], site[1], site[2], !e.shift, name);
+      if (!sim || !BuildSiteOf(*sim, name, world, buildFrom_, &free)) return true;
+      buildDrag_ = true, buildName_ = name, buildShift_ = e.shift;
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
     }
     if (miniMap && mode.empty()) {  // a left click on the minimap: the main camera looks there
       Camera* main = GetCameraObject(L, "WorldCamera");

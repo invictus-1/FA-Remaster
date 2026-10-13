@@ -3,7 +3,7 @@
 -- stays as it is). They are only seen: nothing in the simulation depends on them. The program
 -- reads them from the game's options when it starts the game's picture (ui/app/game_session.cpp).
 table.insert(globalOpts, {
-    default = 3,
+    default = 1,
     label = "Time of Day",
     help = "The hour the game starts at",
     key = 'RemasterDayStart',

@@ -75,6 +75,9 @@ local function run()
     check("what it can build is a category", EntityCategoryContains(buildable, cdr:GetUnitId()), false)
     local factory = string.sub(cdr:GetUnitId(), 1, 2) .. "b0101"  -- the faction's first land factory
     check("a commander can build its land factory", EntityCategoryContains(buildable, factory), true)
+    -- (units that build nothing still give a category: the game's script asks it without looking)
+    local _, _, nothing = GetUnitCommandData({})
+    check("what nothing can build is a category too, an empty one", EntityCategoryContains(nothing, factory), false)
 
     -- the map's border: the game script names the machinery's mesh for the skin and the map's shape
     local borders = moho64ui_MapBorders()
@@ -526,6 +529,32 @@ local function run()
     ConExecute('UI_RenderUnitBars true')
     check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
     if barsAtFirst then ConExecute('UI_RenderUnitBars') end
+
+    -- a row of buildings: in build mode a left press marks the first site, and letting go
+    -- elsewhere orders one on every free site between the two
+    SelectUnits({cdr})
+    CM.StartCommandMode("build", {name = "ueb1101"})
+    local rowFrom = cdr:GetPosition()
+    rowFrom[1] = rowFrom[1] - 7
+    rowFrom[3] = rowFrom[3] - 9
+    local rowA, rowB = view:Project(rowFrom), view:Project({rowFrom[1] + 12, rowFrom[2], rowFrom[3] + 3})
+    local function buildOrders()
+        local n = 0
+        for _, c in cdr:GetCommandQueue() or {} do
+            if c.type == "BuildMobile" then n = n + 1 end
+        end
+        return n
+    end
+    local ordersBefore = buildOrders()
+    moho64ui_MouseMove(rowA.x, rowA.y)
+    moho64ui_MouseButton("Left", true, rowA.x, rowA.y)
+    WaitSeconds(0.3)
+    check("a left press in build mode orders nothing yet", buildOrders(), ordersBefore)
+    moho64ui_MouseMove(rowB.x, rowB.y)
+    moho64ui_MouseButton("Left", false, rowB.x, rowB.y)
+    WaitSeconds(0.5)
+    check("letting go elsewhere orders a row of buildings", buildOrders() >= 3, true)
+    check("and the script's build mode has ended", CM.GetCommandMode()[1], false)
 
     -- the game's end: SessionEndGame is an order; one more beat runs (its scripts hand over the
     -- final score), then the simulation stands (last, since nothing moves any more)

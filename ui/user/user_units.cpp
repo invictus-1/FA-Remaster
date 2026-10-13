@@ -488,11 +488,9 @@ int l_GetUnitCommandData(lua_State* L) {
       lua_pushstring(L, kToggles[i]);
       lua_rawseti(L, 3, ++n);
     }
-  if (lua_isnil(L, 4)) {  // nothing can be built: the empty category
-    lua_getglobal(L, "ParseEntityCategory");
-    lua_pushstring(L, "");
-    if (lua_pcall(L, 1, 1, 0) == 0) lua_replace(L, 4);
-    else lua_pop(L, 1);
+  if (lua_isnil(L, 4)) {  // nothing can be built: the empty category (a category all the same: the
+    PushCategory(L);      // game's script hands it to EntityCategoryContains unasked, gamemain.lua 658)
+    lua_replace(L, 4);
   }
   // What the player's army may not build is taken off (the engine's list of restricted blueprints).
   if (Sim* sim = TheSim(L)) {
@@ -1586,7 +1584,27 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
   return true;
 }
 
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines) {
+void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ) {
+  float size[2] = {1, 1};
+  PushBlueprint(L, blueprint);
+  if (lua_istable(L, -1)) {
+    const char* tables[2] = {"Footprint", "Physics"};
+    const char* fields[2][2] = {{"SizeX", "SizeZ"}, {"SkirtSizeX", "SkirtSizeZ"}};
+    for (int t = 0; t < 2; ++t) {
+      lua_getfield(L, -1, tables[t]);
+      for (int i = 0; i < 2 && lua_istable(L, -1); ++i) {
+        lua_getfield(L, -1, fields[t][i]);
+        if (lua_isnumber(L, -1)) size[i] = std::max(size[i], static_cast<float>(lua_tonumber(L, -1)));
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+  }
+  lua_pop(L, 1);
+  *alongX = size[0], *alongZ = size[1];
+}
+
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
   if (!sim || !user->units) return;
@@ -1599,8 +1617,24 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
     UnitStateView s;
     if (!UnitStateOf(*sim, u->view.id, &s)) continue;
     float from[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
+    bool first = true;
     for (const CommandView& c : s.queue) {
       if (!c.hasPosition) continue;
+      // A building ordered and not begun shows where it will stand, as players know it from the
+      // original (its rule for it is not read). The one being built is there itself: the first
+      // order of a unit that has something it works on.
+      const bool begun = first && s.focus != 0xffffffffu;
+      first = false;
+      if (ghosts && static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && !begun && ghosts->size() < 200) {
+        bool there = false;
+        for (const WorldGhost& g : *ghosts) there = there || (g.blueprint == c.blueprint && g.position[0] == c.position[0] && g.position[2] == c.position[2]);
+        if (!there) {
+          WorldGhost g;
+          g.blueprint = c.blueprint;
+          for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
+          ghosts->push_back(g);
+        }
+      }
       // First version of the colours: move light blue, attack red, patrol green, building white,
       // reclaim yellow, the rest grey. (The original's are still to be looked up.)
       uint32_t color = 0xffc0c0c0u;

@@ -73,8 +73,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   storm, fog, snow). They are this program's additions to the game's list
   (`ui/data/hook/lua/ui/lobby/lobbyOptions.lua`, a hook file: the game's own file is not touched)
   and travel in the game's options as `RemasterDayStart`, `RemasterDayLength`, `RemasterWeather`.
-  A game from the lobby starts in the morning, with a day of twenty minutes and changing weather,
-  unless chosen otherwise.
+  Unless chosen otherwise a game has the map's own light, as the original (Chris's choice). The
+  weather is ONE choice, so kinds that exclude each other (rain and snow) cannot be had together.
 - `--day-weather`, `--day <hour>`, `--day-length <seconds>` (0: the hour stands), `--weather
   <kind>` (changing, cold, dry, none, clear, cloudy, overcast, rain, storm, fog, snow),
   `--no-weather`: the same for a game whose configuration does not say (a recorded one given with
@@ -283,7 +283,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the world: the selected units (a ring under each), the lines of their orders, and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
-  where the building cannot stand. A minimap world view shows the renderer's minimap picture; a
+  where the building cannot stand. The order goes out when the left button is let go: let go
+  elsewhere than pressed, a ROW of the building is ordered, one on every free site between the
+  two places (shown as ghosts while the button is held; one building's room apart, the larger of
+  footprint and skirt: the original's spacing is not read, INFERRED). Buildings the selected
+  units have been ordered to build and have not begun show as ghosts where they will stand. A minimap world view shows the renderer's minimap picture; a
   left click on it moves the main camera there. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
 - Sound: the scripts' `PlaySound(Sound({Bank, Cue}))` plays the cue from the game's own sound
