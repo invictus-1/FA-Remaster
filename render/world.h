@@ -91,6 +91,8 @@ class World {
   // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
   // way of reading a unit's life is the panel at the bottom left).
   bool lifeBars = false;
+  bool workBars = true;  // the thin bar of a unit's work and the pause mark, also while the life bars are off
+  int focusArmy = -1;    // the army the picture is for, counted from 0 (-1: no one army): whose work is shown
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 
@@ -290,6 +292,7 @@ class World {
   std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
   // MOHO64_DEBUG_LAMPS=<part of a bone's name> (or 1 for every bone): world.cpp, AddLamps
   const char* debugLamps_ = std::getenv("MOHO64_DEBUG_LAMPS");
+  int pauseMark_ = -2;  // the game's pause picture among the symbols (-2: not asked for yet)
   int debugLampsTold_ = 0;
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
   double clock_ = 0;

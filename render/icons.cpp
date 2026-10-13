@@ -160,6 +160,7 @@ void StrategicIcons::Define(const std::string& blueprintPath, const std::string&
 void StrategicIcons::Begin(const View& view) {
   view_ = view;
   listed_.clear();
+  marks_.clear();
   bars_.clear();
   pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
 }
@@ -191,7 +192,7 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels) {
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bool work) {
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
   if (w <= 1e-4f) return;
@@ -199,7 +200,19 @@ void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels) {
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
-  bars_.push_back({x, y, widthPixels, std::clamp(fraction, 0.0f, 1.0f)});
+  bars_.push_back({x, y, widthPixels, std::clamp(fraction, 0.0f, 1.0f), work});
+}
+
+void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
+  if (icon < 0) return;
+  const Mat4& m = view_.constants.viewProj;
+  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
+  if (w <= 1e-4f) return;
+  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
+  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
+  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height) - lift;
+  if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
+  marks_.push_back({x, y, icon, 0xffffffffu, 0});
 }
 
 void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip, bool known) {
@@ -228,7 +241,7 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
 void StrategicIcons::Draw() {
   if (!showSymbols) listed_.clear();
   drawn = static_cast<int>(listed_.size());
-  if (listed_.empty() && bars_.empty()) return;
+  if (listed_.empty() && bars_.empty() && marks_.empty()) return;
   if (atlasChanged_) {  // symbols were added: the texture is made anew (a game uses a few dozen, early on)
     if (atlas_) device_->Destroy(atlas_);
     gfx::TextureDesc td;
@@ -252,14 +265,16 @@ void StrategicIcons::Draw() {
   for (uint32_t i = 0; i < listed_.size(); ++i) order_[starts[255 - listed_[i].priority]++] = i;
 
   vertices_.clear();
-  vertices_.reserve(listed_.size() * 6);
+  vertices_.reserve((listed_.size() + marks_.size()) * 6);
   const float texel = 1.0f / static_cast<float>(kAtlasSize);
-  for (uint32_t index : order_) {
-    const Listed& l = listed_[index];
+  // (the marks come after the symbols, over them)
+  for (size_t n = 0; n < order_.size() + marks_.size(); ++n) {
+    const Listed& l = n < order_.size() ? listed_[order_[n]] : marks_[n - order_.size()];
     const Rect& r = rects_[static_cast<size_t>(l.icon)];
+    const float big = n < order_.size() ? 1.0f : 2.0f;  // (a mark at twice its picture's size: it must be seen)
     // on whole pixels, so every pixel of the symbol covers the same number of the screen's
-    const float x0 = std::floor(l.x - static_cast<float>(r.width) * pixel_ * 0.5f + 0.5f), y0 = std::floor(l.y - static_cast<float>(r.height) * pixel_ * 0.5f + 0.5f);
-    const float x1 = x0 + static_cast<float>(r.width) * pixel_, y1 = y0 + static_cast<float>(r.height) * pixel_;
+    const float x0 = std::floor(l.x - static_cast<float>(r.width) * pixel_ * big * 0.5f + 0.5f), y0 = std::floor(l.y - static_cast<float>(r.height) * pixel_ * big * 0.5f + 0.5f);
+    const float x1 = x0 + static_cast<float>(r.width) * pixel_ * big, y1 = y0 + static_cast<float>(r.height) * pixel_ * big;
     const float u0 = static_cast<float>(r.x) * texel, v0 = static_cast<float>(r.y) * texel;
     const float u1 = static_cast<float>(r.x + r.width) * texel, v1 = static_cast<float>(r.y + r.height) * texel;
     const Vertex a{x0, y0, u0, v0, l.color}, b{x1, y0, u1, v0, l.color}, c{x1, y1, u1, v1, l.color}, d{x0, y1, u0, v1, l.color};
@@ -272,7 +287,14 @@ void StrategicIcons::Draw() {
     for (const Vertex& v : {a, b, c, a, c, d}) vertices_.push_back(v);
   };
   for (const Bar& bar : bars_) {
-    const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half, y0 = std::floor(bar.y) - 2 * pixel_;
+    const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half;
+    if (bar.work) {  // (one colour, a pixel thinner, under the life bar's place)
+      const float y0 = std::floor(bar.y) + 3 * pixel_;
+      rect(x0 - pixel_, y0 - pixel_, x0 + 2 * half + pixel_, y0 + 3 * pixel_, 0xd0000000u);
+      if (bar.fraction > 0) rect(x0, y0, x0 + std::max(pixel_, 2 * half * bar.fraction), y0 + 2 * pixel_, 0xffffd060u);
+      continue;
+    }
+    const float y0 = std::floor(bar.y) - 2 * pixel_;
     rect(x0 - pixel_, y0 - pixel_, x0 + 2 * half + pixel_, y0 + 3 * pixel_, 0xd0000000u);
     const uint32_t color = bar.fraction > 0.5f ? 0xff30e040u : bar.fraction > 0.25f ? 0xff20d8f0u : 0xff3030f0u;  // 0xAABBGGRR
     if (bar.fraction > 0) rect(x0, y0, x0 + std::max(pixel_, 2 * half * bar.fraction), y0 + 2 * pixel_, color);

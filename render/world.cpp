@@ -703,6 +703,23 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
     }
     const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
+    // its work: a bar over the unit, and the game's pause mark over a paused one (of the army the
+    // picture is for, when it is for one; the others' work is not the player's to see). Over the
+    // model's top, so a tall unit does not wear it at its waist.
+    if (workBars && !blip && u.Seen() && (u.paused || (u.workProgress > 0 && u.workProgress < 1)) &&
+        (focusArmy < 0 || static_cast<int>((u.id >> 20) & 0xff) == focusArmy)) {
+      const StrategicIcons::Kind* kind = blueprint.empty() ? nullptr : icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
+      const float half = kind ? kind->selectionX : 0.5f;
+      const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : (kind ? kind->selectionZ * 1.1f : 0.5f) + 0.4f;
+      const Vec3 over = position + Vec3{0, top, 0};
+      const float away = Length(over - view.eye);
+      const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away;
+      if (u.workProgress > 0 && u.workProgress < 1) icons.AddBar(over, u.workProgress, std::clamp(half * 2.2f / std::max(perPixel, 1e-5f), 24.0f, 80.0f), true);
+      if (u.paused) {
+        if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
+        icons.AddMark(pauseMark_, over, 16);
+      }
+    }
     float radius = 0.5f;
     Vec3 centre = position + Vec3{0, 0.4f, 0};
     if (blip) {

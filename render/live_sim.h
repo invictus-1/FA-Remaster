@@ -45,6 +45,8 @@ class LiveSim {
     uint32_t enhanceAt = 0;
     int enhanceArmy = 1;
     std::string enhancement;
+    // ... and at this beat the same unit is paused (what the pause button sends). 0 = never.
+    uint32_t pauseAt = 0;
   };
   enum class State { Loading, Running, Ended, Failed };
 
@@ -93,6 +95,7 @@ class LiveSim {
   void Run();
   void SelfDestruct(int army);
   void Enhance(int army, const std::string& enhancement);
+  void Pause(int army);
   bool Load(std::string* error);
 
   Setup setup_;

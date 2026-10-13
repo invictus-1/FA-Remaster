@@ -74,6 +74,11 @@ class WorldPicture {
   // Life bars over units (selected, under the mouse, or damaged and near): OFF at first; a player's
   // switch for them is the interface's.
   void SetLifeBars(bool on);
+  // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
+  // under where its life bar is, and the game's pause mark over a unit the player has paused. For
+  // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).
+  // On at first, and not switched by SetLifeBars.
+  void SetWorkBars(bool on);
   // A day that passes and weather that changes, both by the game's own clock (the `tick` given to
   // Draw), so that every player of a game sees the same and a paused game's day stands still.
   // `startHour`: the hour the game starts at, 0..24 (6 sunrise, 12 noon, 18 sunset); negative, as

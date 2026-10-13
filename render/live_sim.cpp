@@ -198,6 +198,22 @@ void LiveSim::Enhance(int army, const std::string& enhancement) {
              first->blueprint.c_str(), first->id, enhancement.c_str(), e.sim->tick(), first->position[0], first->position[2]);
 }
 
+// The army's first unit is paused: the pause button's message (SetPaused = true).
+void LiveSim::Pause(int army) {
+  Engine& e = *engine_;
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(*e.sim, &units);
+  const moho::UnitView* first = nullptr;
+  for (const moho::UnitView& u : units)
+    if (u.army == army && (!first || u.id < first->id)) first = &u;
+  if (!first || army < 1 || army > static_cast<int>(e.session.header.armies.size())) return;
+  moho::CommandWriter writer(e.session.header.armies[army - 1].source);
+  writer.ProcessInfoPair(first->id, "SetPaused", "true");
+  moho::ApplyCommands(*e.sim, writer.Take());
+  moho::Logf(moho::LogLevel::Info, "render: army %d's %s (entity %u) is paused at beat %u, its work at %.2f", army, first->blueprint.c_str(), first->id,
+             e.sim->tick(), first->workProgress);
+}
+
 void LiveSim::Run() {
   const auto t0 = std::chrono::steady_clock::now();
   std::string error;
@@ -238,6 +254,8 @@ void LiveSim::Run() {
       SelfDestruct(setup_.selfDestructArmy);
     } else if (setup_.enhanceAt && e.sim->tick() == setup_.enhanceAt) {
       Enhance(setup_.enhanceArmy, setup_.enhancement);
+    } else if (setup_.pauseAt && e.sim->tick() == setup_.pauseAt) {
+      Pause(setup_.enhanceArmy);
     }
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();

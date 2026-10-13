@@ -23,7 +23,22 @@ and in use the same day (`HiddenBones`: a commander no longer wears the upgrades
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
-order from the command stream keeps its table now: a commander's enhancement is built).
+order from the command stream keeps its table now: a commander's enhancement is built). 19 open
+(`paused` in the plain unit view, for the pause mark over units).
+
+## 19. `paused` in the plain unit view (2026-10-13, not blocking)
+
+**Who asks:** the renderer. **What:** `bool paused` in `UnitView` (it is in `UnitStateView` today).
+
+**Why:** the picture draws the game's pause mark over a paused unit (Chris: "Pressing pause button on
+acu doesn't seem to pop up pause indicator"). `UnitStateOf` builds a unit's whole queue to answer, so
+the renderer calls it only for units that have work or orders (and only the focus army's): a paused
+unit with neither shows no mark. With the flag in `UnitView` every paused unit shows it and the
+per-unit call goes away.
+
+**Smallest form:** one line in `UnitViews`.
+
+**Answer:** (none yet)
 
 ## 18. A Script order from the command stream loses its table (2026-10-13, answered)
 
