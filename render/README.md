@@ -283,14 +283,19 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   looks at (`weather.h`: every drop's place follows from its number and the time, nothing is kept
   or moved on the processor; the box is as large as the camera is far, so it is a picture of rain,
   not a count of drops). They bring their clouds. Surfaces get wet in a quarter of a minute of rain
-  (darker and shinier) and dry in two; snow lies after a minute on what faces up (on units and
-  trees half as much as on the ground, so that they can be told apart) and is gone in three. Fog,
+  (darker and shinier) and dry in two. Snow builds up over two and a half minutes of snowfall:
+  first a dusting in patches where the ground is level, then the patches close, steeper ground
+  last and the steepest never; where it lies thick it hides the small shapes under it (the
+  surface's normal is turned toward upright). On units and trees half as much as on the ground,
+  so that they can be told apart. It is gone in five minutes, back into patches, and the ground
+  it leaves is wet, with its puddles (`--snow-lying <0..1>` in the viewer sets how much lies).
+  It is a look only: the ground is not raised, nothing sinks in, nothing leaves tracks. Fog,
   and a little of it with rain and snow, is the air taking the colour of the sky's light with
   distance, never all of it, or the map seen from high up would be gone. All of this is in the
   light every surface shares, so nothing about a model or a map needs to be made for it. Puddles:
   where wet ground is nearly level, patches of still water that grow as it gets wetter and mirror
   the sky (the ground only; a patch's place is noise by where it is, not where water would truly
-  gather). Not yet: snow that builds up as a layer, sound.
+  gather). Not yet: sound.
   Cost: none that can be measured (1.4 to 1.5 ms a frame at 1920 x 1080, clear, storm or snow
   alike).
   Weather that changes by itself (`--weather auto`, `World::weatherAuto`): `WeatherAt(seed,

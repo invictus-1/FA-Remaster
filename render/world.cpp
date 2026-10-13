@@ -338,7 +338,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
     weatherTime_ = time;
     wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
-    snowLying = std::clamp(snowLying + (snow > 0 ? dt / 60 : -dt / 180), 0.0f, 1.0f);
+    // (snow builds up over two and a half minutes of snowfall and is gone in five; while it melts,
+    // the ground it leaves is wet)
+    snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
+    if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover);
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
