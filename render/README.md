@@ -199,7 +199,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   flashes, shots and trails, impacts, explosions and smoke. Acted on: `ScaleEmitter`,
   `OffsetEmitter`, the `LIFETIME` parameter, `AttachBeamToEntity`; the other parameter and curve
   calls are not yet. The scripts' decals and splats (scorch marks, the mass and hydrocarbon
-  markers) are laid on the ground: after the ground is drawn and before anything stands on it,
+  markers, the pads under buildings, a crater's dent as a normal decal, and the marks left
+  under a unit's parts: footprints, track prints, `CreateSplatOnBone`) are laid on the ground: after the ground is drawn and before anything stands on it,
   each one's box is drawn and the ground's place under every pixel is worked out from the
   picture's depth, so a mark follows the ground exactly and never climbs onto a unit. The
   scripts' "light particles" (the light an explosion throws around it; in the original a flat

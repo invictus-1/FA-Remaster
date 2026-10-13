@@ -174,7 +174,8 @@ bool Decals::Init(std::string* error) {
 
 gfx::Texture Decals::Resolve(const std::string& texture) {
   if (texture.empty()) return {};
-  if (texture.find('/') != std::string::npos) return vfs_->Exists(texture) ? textures_->Get(texture) : gfx::Texture{};
+  // (a path begins with a slash; a script's short name may have a folder in it: "Tarmacs/Tar12x_01_albedo")
+  if (texture[0] == '/') return vfs_->Exists(texture) ? textures_->Get(texture) : gfx::Texture{};
   for (const char* folder : {"/env/common/decals/", "/env/common/splats/"}) {
     const std::string path = std::string(folder) + texture + ".dds";
     if (vfs_->Exists(path)) return textures_->Get(path);
