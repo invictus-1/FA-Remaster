@@ -86,7 +86,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Submarines | beat 465 |
 | Missiles | beat 408 |
 | Eight-army AI game | beat 344 |
-| Air battle (1,216 beats) | beat 251 |
+| Air battle (1,216 beats) | beat 307 |
 | Experimental units, second set | beat 167 |
 | Skirmish against an AI | beat 165 |
 | Naval battle (1,079 beats) | beat 149 |
