@@ -47,7 +47,13 @@ should also stand in for UEL0001 is his to say.
 **A rule that would settle a, b and d at the source:** a lamp's beam direction taken from which
 way the unit drives or the turret points, not from which way the glowing piece's face looks.
 
-**Status:** asked 2026-10-13.
+**Status:** asked 2026-10-13. a to d DONE the same day: all the lists were rewritten by the rule (a
+vehicle's head lamp points ahead and 22 degrees down whatever its piece faces; a building has no
+beams, its pad and arm lamps are small all-round markers, its windows are taken one facing at a
+time). Seen in the viewer at night from above: the engineer, the tank and both commanders each throw
+one cone ahead and nothing else, the land factory has no searchlight, the power generator's ground
+is lit evenly. The stock commander has a stand-in of its own now (`UEL0001`: the rebuilt body on
+the stock skeleton, without the BlackOps parts). Open: f (the land factory while it upgrades).
 
 ## 1. The rebuilt UEF commander (EEL0001) set up for the game (2026-10-12, Chris's wish, not blocking)
 
