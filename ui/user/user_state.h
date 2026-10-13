@@ -133,6 +133,9 @@ void RegisterPrefsBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Time, command line, interface state, front-end data, Random (basics.cpp).
 void RegisterBasicBindings(lua_State* L);
+// A script has asked for the program to end (ExitApplication): the host's loops stop after the
+// frame. One flag for the whole program, whichever state asked.
+bool ExitRequested();
 // The world interface provider and a running session's facts (session_bindings.cpp).
 void RegisterSessionBindings(lua_State* L);
 // Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up

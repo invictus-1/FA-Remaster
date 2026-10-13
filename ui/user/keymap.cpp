@@ -413,6 +413,24 @@ int l_LifeBars(lua_State* L) {
 
 bool LifeBarsShown(lua_State* L) { return LifeBarsChosen(L) && !UserState::From(L)->lifeBarsPutAway; }
 
+namespace {
+// import(module)[function](argument): the engine calling into the game's script with one string.
+void CallScript(lua_State* L, const char* module, const char* function, const std::string& argument) {
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, module);
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, function);
+    lua_gettable(L, -2);
+    lua_pushstring(L, argument.c_str());
+    if (lua_isfunction(L, -2) && lua_pcall(L, 1, 0, top + 1) != 0)
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  }
+  lua_settop(L, top);
+}
+}  // namespace
+
 void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   size_t a = text.find_first_not_of(" \t");
   if (a == std::string::npos) return;
@@ -441,6 +459,15 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (rest.find_first_not_of(" \t") == std::string::npos) return;
     int rate = static_cast<int>(std::atof(rest.c_str()));
     SetGameSpeedTo(L, rate > 50 ? 50 : rate < -10 ? -10 : rate);
+    return;
+  }
+  // The numbered groups' commands (FA exe 0x834a80, 0x834c10): the engine only passes the name
+  // on, as a string, to the game's selection script, which keeps the sets.
+  if (Upper(name) == "UI_MAKESELECTIONSET" || Upper(name) == "UI_APPLYSELECTIONSET") {
+    size_t a = rest.find_first_not_of(" 	"), b = rest.find_last_not_of(" 	");
+    if (a == std::string::npos || !UserState::From(L)->gameInterface) return;
+    CallScript(L, "/lua/ui/game/selection.lua", Upper(name) == "UI_MAKESELECTIONSET" ? "AddCurrentSelectionSet" : "ApplySelectionSet",
+               rest.substr(a, b - a + 1));
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin

@@ -40,7 +40,8 @@ bool KeyIsDown(lua_State* L, int mauiCode);
 
 // Run a console command line. Built: UI_Lua <code> (the code runs in this state),
 // StartCommandMode <mode> <name>, UI_RenderUnitBars [true|false], UI_SelectByCategory,
-// UI_ExpandCurrentSelection. Any other command is logged once as not built.
+// UI_ExpandCurrentSelection, UI_MakeSelectionSet / UI_ApplySelectionSet <name>, the game speed's
+// WLD_ commands, the range rings' three variables. Any other command is logged once as not built.
 void ExecuteConsoleCommand(lua_State* L, const std::string& text);
 // Whether the life bars over units are to be drawn now (UI_RenderUnitBars).
 bool LifeBarsShown(lua_State* L);

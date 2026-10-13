@@ -115,5 +115,6 @@ ForkThread(function()
         check("an option that is not set is nil", GetOptions("moho64ui_no_such_option"), nil)
         Prefs.SetToCurrentProfile("options", saved)
     end
+    check("ExitApplication is the engine's", type(ExitApplication), "cfunction")
     LOG("TEST done: " .. failed .. " failed")
 end)

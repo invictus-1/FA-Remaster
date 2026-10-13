@@ -372,6 +372,23 @@ local function run()
     SelectUnits(nil)
     cam:Reset()
 
+    -- the numbered groups: the keys' commands pass the name on to the game's selection script
+    check("Ctrl-1 makes group 1", moho64ui_KeyMapAction("Ctrl-1"), "UI_MakeSelectionSet 1")
+    check("1 calls it back", moho64ui_KeyMapAction("1"), "UI_ApplySelectionSet 1")
+    SelectUnits({cdr})
+    ConExecute("UI_MakeSelectionSet 1")
+    check("UI_MakeSelectionSet puts the selection into the set", cdr:HasSelectionSet("1"), true)
+    SelectUnits(nil)
+    ConExecute("UI_ApplySelectionSet 1")
+    sel = GetSelectedUnits()
+    check("UI_ApplySelectionSet selects the set", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    ConExecute("UI_ApplySelectionSet 2")
+    check("an empty set leaves the selection", count(), 1)
+    SelectUnits(nil)
+    ConExecute("UI_MakeSelectionSet 1")
+    check("made from nothing the set is empty again", cdr:HasSelectionSet("1"), false)
+    cam:Reset()
+
     -- range rings: the game's script has named its filters and switched the three cases on; a
     -- selected unit gets the rings of the filters it is in, measured from its blueprint
     local filters = import("/lua/ui/game/rangeoverlayparams.lua").RangeOverlayParams

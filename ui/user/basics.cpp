@@ -122,9 +122,20 @@ int l_Random(lua_State* L) {
   return 1;
 }
 
+bool g_exitRequested = false;
+// ExitApplication(): the program ends (the main menu's Exit, the game menu's "exit to Windows").
+int l_ExitApplication(lua_State*) {
+  g_exitRequested = true;
+  Logf(LogLevel::Info, "moho64ui: ExitApplication");
+  return 0;
+}
+
 }  // namespace
 
+bool ExitRequested() { return g_exitRequested; }
+
 void RegisterBasicBindings(lua_State* L) {
+  SetGlobal(L, "ExitApplication", l_ExitApplication);
   SetGlobal(L, "CurrentTime", l_CurrentTime);
   SetGlobal(L, "GetSystemTimeSeconds", l_CurrentTime);
   SetGlobal(L, "GameTick", l_GameTick);
