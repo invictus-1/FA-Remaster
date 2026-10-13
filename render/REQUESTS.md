@@ -21,7 +21,32 @@ count a look in which every place is seen as exploring). 14 done and in use (`Pr
 bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 done
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
-draws at the engine's `ProjectileView::size`).
+draws at the engine's `ProjectileView::size`). 17 open (what the original draws for a `ShaderName` that
+is no technique of `mesh.fx`).
+
+## 17. A mesh whose ShaderName names no technique of mesh.fx (2026-10-13, not blocking)
+
+**Who asks:** the renderer. **What:** what the original draws when a mesh blueprint's `ShaderName`
+is not a technique of the game's `effects/mesh.fx`: nothing, a fixed fallback technique (which?),
+or a name it maps to another.
+
+**Why:** 700 odd LODs in the game's own blueprints still carry the first game's names, which
+`mesh.fx` no longer has: `TMeshAlpha` (373: trees of several map sets, the UEF's cruise missile,
+the Aeon's nuke missile, Cybran rockets), `TMeshNoNormals` (92: rocks, logs, wreckage props,
+debris), `TMeshGlow` (79), `TMeshNoLighting` (34), `TMeshExplosion`, `TMeshQuantumNuke`,
+`TMeshOuterCloud`, `TMeshAdd`, `TMeshCloud`, `TMeshShield`, `TMeshZFill`. Some of these are plainly
+seen in the original (the cruise missile), so "nothing" is unlikely, but the look decides what a
+death looks like: an Aeon commander's death (`QuantumWarheadEffect01` `TMeshQuantumNuke`,
+`QuantumWarheadEffect02` `TMeshAlpha`) shows here as a small solid dark blue blob, a Cybran's
+(`EMPFluxWarheadEffect01` / `02` `TMeshOuterCloud`) as a solid grey ball, because the renderer
+draws all `TMesh*` as plain lit models. If the original blends them, cuts them by alpha or does not
+draw them, those two are wrong.
+
+**Smallest form:** the rule (where the exe looks the technique up, and what it does on a miss), and
+if it is a fallback, its name. If the fidelity suffixes (`_HighFidelity` ...) are part of the lookup,
+that too.
+
+**Answer:** (none yet)
 
 ## 16. A projectile's scale velocity: in what unit? (2026-10-13, answered)
 
