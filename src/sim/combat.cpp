@@ -1624,6 +1624,10 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
     Quat bq;
     BoneWorld(c->unit, bone, &bp, &bq);
     v = RotateM(Conj(bq), goal);
+    static const long dbgUnit2 = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit2 >= 0 && static_cast<long>(c->unit->id) == dbgUnit2)
+      Logf(LogLevel::Info, "wdbg   frame %s %s goal %.9g %.9g %.9g bone q %.9g %.9g %.9g %.9g -> v %.9g %.9g %.9g",
+           c->label.c_str(), heading ? "yaw" : "pitch", goal.x, goal.y, goal.z, bq.x, bq.y, bq.z, bq.w, v.x, v.y, v.z);
   }
   float target;
   if (heading) {
@@ -1656,7 +1660,7 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
   float step = std::fabs(delta) > slew ? std::copysign(slew, delta) : delta;
   static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
   if (dbgUnit >= 0 && static_cast<long>(c->unit->id) == dbgUnit)
-    Logf(LogLevel::Info, "wdbg   aim %s %s cur %.6f target %.6f delta %.6f slew %.6f tol %.6f goal %.5f %.5f %.5f",
+    Logf(LogLevel::Info, "wdbg   aim %s %s cur %.9g target %.9g delta %.9g slew %.6f tol %.6f goal %.5f %.5f %.5f",
          c->label.c_str(), heading ? "yaw" : "pitch", cur, target, delta, slew, tol, goal.x, goal.y, goal.z);
   cur = WrapPi(cur + step);
   int bits = 0;

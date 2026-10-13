@@ -367,6 +367,38 @@ Quat LookQuat(float dx, float dy, float dz) {
   return Quat{q[0], q[1], q[2], w};
 }
 
+// 0x699940: the quaternion of a hull that has turned on the spot, from its new forward (d0, d1) = (x, -z) as the
+// limited turn 0x6992c0 left it, NOT normalised again: the matrix with the rows (-d1, 0, -d0), (0, 1, 0),
+// (d0, 0, -d1) through MatrixToQuat 0x4eb3f0. (The spline point's facing goes through 0x50b480 = LookQuat, which
+// normalises three times on the way: the same heading with another last digit, and a ship that has turned on the
+// spot carries that digit in every turret angle afterwards.)
+Quat TurnQuat(float d0, float d1) {
+  const float X[3] = {-0.0f - d1, 0.0f, -0.0f - d0}, Y[3] = {0.0f, 1.0f, 0.0f}, Z[3] = {d0, 0.0f, -0.0f - d1};
+  const float* A[3] = {X, Y, Z};
+  float q[3], w;
+  float tr = (A[0][0] + A[1][1]) + A[2][2];
+  if (tr > 0.0f) {
+    float r = std::sqrt(tr + 1.0f);
+    w = r * 0.5f;
+    float inv = 0.5f / r;
+    q[0] = (A[1][2] - A[2][1]) * inv;
+    q[1] = (A[2][0] - A[0][2]) * inv;
+    q[2] = (A[0][1] - A[1][0]) * inv;
+  } else {
+    static const int next[3] = {1, 2, 0};
+    int i = (A[1][1] > A[0][0]) ? 1 : 0;
+    if (A[2][2] > A[i][i]) i = 2;
+    int j = next[i], k = next[j];
+    float r = std::sqrt((A[i][i] - (A[k][k] + A[j][j])) + 1.0f);
+    float inv = 0.5f / r;
+    q[i] = r * 0.5f;
+    w = (A[j][k] - A[k][j]) * inv;
+    q[j] = (A[j][i] + A[i][j]) * inv;
+    q[k] = (A[i][k] + A[k][i]) * inv;
+  }
+  return Quat{q[0], q[1], q[2], w};
+}
+
 Quat YawQuat(float fx, float fz) {
   float h = dmath::Atan2(fx, fz);
   Quat q;
@@ -1291,9 +1323,10 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   // "face where you face" (a slaved weapon with its target inside the arc) is no turn at all.
   const Quat& q = u->orientation;
   float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
-  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
-    cx /= cl;
-    cz /= cl;
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 9.99999997e-07f) {  // 0x6999f0: times 1 / length
+    const float ci = 1.0f / cl;
+    cx *= ci;
+    cz *= ci;
   } else {
     cx = m.bx;
     cz = -m.bz;
@@ -1327,6 +1360,7 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   }
   float l = std::sqrt(nx * nx + nz * nz);
   if (l <= 0) return false;
+  m.turnQ = TurnQuat(nx, nz);  // (0x699940: from the turned vector as it is)
   m.fx = m.bx = nx / l;
   m.fz = m.bz = -nz / l;
   return true;
@@ -1344,9 +1378,10 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
   if (!SlavedFaceVector(sim, u, &fv)) fv = Vec3{dirX, 0, dirZ};
   const Quat& q = u->orientation;
   float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
-  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
-    cx /= cl;
-    cz /= cl;
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 9.99999997e-07f) {  // 0x6999f0: times 1 / length
+    const float ci = 1.0f / cl;
+    cx *= ci;
+    cz *= ci;
   } else {
     cx = m.bx;
     cz = -m.bz;
@@ -1676,7 +1711,7 @@ void MotionTick(Sim& sim, Unit* u) {
       moved = Coast(u, turned);
       if (turned) {
         m.needSnap = true;
-        u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+        u->orientation = m.turnQ;
       }
     }
     if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {

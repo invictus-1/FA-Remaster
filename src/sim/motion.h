@@ -84,6 +84,7 @@ struct UnitMotion {
   // A change between Water and Land of a unit with Physics.LayerTransitionDuration (the Cybran destroyer that
   // walks ashore): m+0x11c the blend's beat counter (0: none), m+0x120 the transform it began with, m+0x13c the
   // one it ends on. While it runs the unit is moved along the blend and takes no spline point (motion.cpp).
+  Quat turnQ;              // the hull's quaternion after this beat's turn on the spot (ArrivalTurn)
   bool heldLatch = false;  // steering+0xa0: the spline was dropped because the unit is immobile or stunned
   float layerBlend = 0;
   Vec3 blendFromPos, blendToPos;
