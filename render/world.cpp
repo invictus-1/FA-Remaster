@@ -459,6 +459,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
   propCellsSeen = propsAdded = 0;
+  meshes.addingScenery = true;  // (trees and rocks: drawn before what is laid on the ground, Render)
   if (!propCells_.empty()) {
     const float margin = propReach_ + 30;
     for (int cz = 0; cz < propCellsZ_; ++cz)
@@ -481,6 +482,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         }
       }
   }
+  meshes.addingScenery = false;
   if (haveMap_)
     for (const std::string& border : borders) {
       const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
@@ -921,12 +923,19 @@ void World::Render() {
       ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
       ranges.night = lights.night;
       ranges.Build(view, camera, post.Depth());
+      // (the trees and rocks first, the lines over them, then the units over the lines: in the
+      // original a ring shows across a wood and is hidden where a unit stands)
+      post.ContinueScene();
+      lights.Bind();
+      meshes.Draw(view, environment_, false, false, 1);
       post.BeginColorOnly();
       ranges.Lay(view, camera, post.Depth(), false);
       post.ContinueScene();
       lights.Bind();
+      meshes.Draw(view, environment_, false, false, 2);
+    } else {
+      meshes.Draw(view, environment_);
     }
-    meshes.Draw(view, environment_);
     draw.Flush(view);
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     if (look == Look::Modern && ao.strength > 0) {

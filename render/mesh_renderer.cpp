@@ -586,6 +586,7 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   if (!model || !model->ok) return;
   Entry e;
   e.model = model;
+  e.scenery = addingScenery;
   // the model's bounding sphere in the world (the matrix is a rotation with one scale)
   const Vec3 centre = (model->boundsMin + model->boundsMax) * 0.5f;
   const float scale = std::sqrt(world.m[0][0] * world.m[0][0] + world.m[1][0] * world.m[1][0] + world.m[2][0] * world.m[2][0]);
@@ -614,8 +615,8 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   entries_.push_back(e);
 }
 
-void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass, bool glass) {
-  if (glass) {
+void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass, bool glass, int part) {
+  if (glass || part == 2) {
     // (counted with the scene's)
   } else if (shadowPass) {
     if (countedScene_) shadowTriangles = 0;
@@ -633,6 +634,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
   for (Entry& e : entries_) {
     const Vec3 r{e.radius, e.radius, e.radius};
+    if (part != 0 && e.scenery != (part == 1)) continue;
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
     if (shadowPass && view.CoveredByNearer(e.centre, e.radius)) continue;  // the nearer shadow map has it
     const float pixels = 2 * e.sizeRadius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen

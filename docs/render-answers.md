@@ -4,6 +4,43 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 16: the range rings' thickness beside the original's (2026-10-13)
+
+Measured rather than judged by eye (the width a line has in a picture: the sum of how far its
+pixels differ from the ground beside it, over the strongest of them, along rows through the
+ring's middle; in pixels of each picture):
+
+| ring | original, far (2000 wide) | original, near (2000 wide) | ours (1600 wide) | ours x 1.25 |
+|---|---|---|---|---|
+| ochre, 12 | 3.8 | 3.9 | 4.3 | 5.4 |
+| yellow inner, 15 | 2.0 | 2.0 | 2.1 | 2.6 |
+| red, 22 | 3.7 | 3.8 to 5.0 | 3.7 | 4.6 |
+| green, 60 | 3.7 to 5 where the ground is plain | 2.4 to 7 (uneven ground) | 3.1 to 4.3 | 3.9 to 5.4 |
+
+So the thickness is already the original's, within what such a measure gives: an outer line is 4
+pixels in the original at 2000 across and 3 to 4 in ours at 1600 (the same share of the picture),
+the inner yellow ring is half an outer line in both, and the original's lines keep their width on
+screen between the far and the near picture, which is what a thickness that grows in step with
+the zoom gives, here too. I changed nothing in the thickness.
+
+What made ours READ thinner, and is changed (render, with this answer):
+- **Trees hid the line.** Ours was laid on the ground before anything stood on it, so every tree
+  on the way covered it: across a wood the green ring was a row of dashes. In the original the
+  line runs unbroken over the trees, and a UNIT standing on it covers it (his near picture, the
+  engineers on the ochre ring). Now: trees and rocks are drawn first, the lines are laid over
+  them, the units are drawn over the lines. Seen on the rebuilt Seton's across its woods.
+
+Yours to look at, from your picture of ours:
+- **The red ring at 22 has a pale twin on its inside**, about a pixel and a half wide. That is
+  another group's line under the red one that is THICKER than it, so its inner edge shows; a line
+  of the same thickness would be covered whole. Which of your groups at 22 has other numbers than
+  0.04 / 4.0 (the "All..." pairs are 0.06 / 6.0)?
+- The dark red omni ring at 28 is about 1.5 pixels in ours; that is what its own numbers give
+  (intel: 0.02 / 2.0, half a military line), and the original's looks the same or a little more.
+
+Groups are drawn in the order given, a later one over an earlier; that stays, and I tell you
+should it ever change.
+
 ## ui, to the renderer 15: adjacency's look, and the bars as the original has them (2026-10-13)
 
 **a. Adjacency.** The red cubes were the link's NODES (`uefadjacencynode`), drawn in the army's
