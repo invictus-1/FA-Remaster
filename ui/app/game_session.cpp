@@ -155,7 +155,6 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     *why = "a session is running already";
     return false;
   }
-  auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
   auto t0 = std::chrono::steady_clock::now();
   SessionDescription session;
   LaunchParams params;
@@ -176,7 +175,41 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     lua_pop(L, 2);
   }
   lua_pop(L, 1);
+  if (!StartSession(session, uids, why)) return false;
+  last_ = std::make_unique<SessionDescription>(session);
+  lastUids_ = uids;
+  return true;
+}
 
+void GameSession::End() {
+  if (sounds) sounds->StopWorld();
+  onSync = nullptr;
+  takeOrders = nullptr;
+  picture_.reset();
+  sim_.reset();
+  interfaceBlueprints_.reset();
+  rules_.reset();
+  pendingSync_.clear();
+  foreignLoops_.clear();
+  heardLoops_.clear();
+  due_ = 0;
+  pace = GamePace();
+}
+
+bool GameSession::Relaunch(std::string* why) {
+  if (!last_) {
+    *why = "no game was launched";
+    return false;
+  }
+  End();
+  SessionDescription again = *last_;
+  if (!seedGiven) again.header.seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  return StartSession(again, lastUids_, why);
+}
+
+bool GameSession::StartSession(const SessionDescription& session, const std::vector<std::string>& uids, std::string* why) {
+  auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+  auto t0 = std::chrono::steady_clock::now();
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, uids.size());
@@ -190,6 +223,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   sim->collectSync = true;
 #ifdef MOHO64UI_WORLD_PICTURE
   sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
+  sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
   sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
 #endif
   if (!sim->Start(session)) {
@@ -250,7 +284,7 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
 }
 
 void GameSession::Advance(double seconds) {
-  if (!sim_) return;
+  if (!sim_ || pace.ended) return;
   due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {

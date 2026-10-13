@@ -259,16 +259,18 @@ int main(int argc, char** argv) {
     backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
     cfg.backdrop = backdrop.get();
   }
-  ui::UserState user(&vfs, cfg);
-  bool ok = user.Boot();
-  if (ok && o.stage != "userinit") ok = user.StartMainScript();
-  if (ok && o.stage == "frontend") ok = user.StartFrontEnd();
+  // The front end's state. A new one is made when a game is left (the original makes a new state
+  // for every change between front end and game, FA exe 0x885de0).
+  auto front = std::make_unique<ui::UserState>(&vfs, cfg);
+  bool ok = front->Boot();
+  if (ok && o.stage != "userinit") ok = front->StartMainScript();
+  if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
-    if (auto code = hostfs::ReadFile(o.luaFile)) user.RunString(*code, "@" + o.luaFile);
+    if (auto code = hostfs::ReadFile(o.luaFile)) front->RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
   }
   if (ok && !sessionIn.empty()) {  // start a game at once from a recorded configuration (what --session-out wrote)
-    lua_State* L = user.L();
+    lua_State* L = front->L();
     std::string why;
     if (!PushGameConfigFile(L, sessionIn, &why) || !session.Launch(L, -1, &why)) {
       Logf(LogLevel::Error, "moho64ui: --session %s: %s", sessionIn.c_str(), why.c_str());
@@ -280,7 +282,7 @@ int main(int argc, char** argv) {
   // script, the rules, the root frame and the main script again, then the in-game interface.
   // The front end's state stays as it is and is no longer shown.
   std::unique_ptr<ui::UserState> game;
-  ui::UserState* shown = &user;
+  ui::UserState* shown = front.get();
   auto startGameInterface = [&]() {
     if (game || !session.running()) return;
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
@@ -313,6 +315,39 @@ int main(int argc, char** argv) {
       session.takeOrders = [&game]() { return ui::TakeOrders(game->L()); };
     }
   };
+  // A script has asked to leave the game (ExitGame) or to start it over (RestartSession): done
+  // here, between two frames. Leaving: the game's interface and the session go, and a new front
+  // end comes up with its main menu, as after the program's start. Starting over: the same
+  // launch again; its interface comes up as it did the first time.
+  auto leaveOrRestart = [&]() {
+    int request = ui::TakeSessionRequest();
+    if (!request || !session.running()) return;
+    shown = front.get();
+    game.reset();
+    sounds.StopAll();
+    if (request == 2) {
+      std::string why;
+      if (session.Relaunch(&why)) {
+        Logf(LogLevel::Info, "moho64ui: the game starts over");
+        return;
+      }
+      Logf(LogLevel::Error, "moho64ui: the game could not be started over: %s", why.c_str());
+    }
+    session.End();
+    Logf(LogLevel::Info, "moho64ui: the game is left: back to the front end");
+    if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
+      backdrop.reset();
+      backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
+      cfg.backdrop = backdrop.get();
+    }
+    auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
+    if (fresh->Boot() && fresh->StartMainScript() && fresh->StartFrontEnd()) {
+      front = std::move(fresh);
+      shown = front.get();
+    } else {
+      Logf(LogLevel::Error, "moho64ui: the front end did not come up again");
+    }
+  };
   // The world's sounds are heard from where the game's camera is.
   auto listen = [&]() {
     float eye[3], focus[3], right[3], zoom = 0;
@@ -325,6 +360,7 @@ int main(int argc, char** argv) {
                            session.Advance(seconds);
                            listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           leaveOrRestart();
                            startGameInterface();
                          },
                          fullScreen);
@@ -334,6 +370,7 @@ int main(int argc, char** argv) {
       shown->Frame(1.0 / 60.0);
       session.Advance(1.0 / 60.0);
       listen();
+      leaveOrRestart();
       startGameInterface();
     }
   }

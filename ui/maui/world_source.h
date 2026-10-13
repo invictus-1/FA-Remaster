@@ -90,6 +90,7 @@ struct WorldScene {
 struct GamePace {
   int rate = 0;
   bool adjustable = false;
+  bool ended = false;  // SessionEndGame: the game is over, no more beats are run
 };
 
 // A moving picture for the front end's background (the host's: app/backdrop.h): the newest one

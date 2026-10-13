@@ -390,6 +390,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   units' own `AddSelectionSet` / `RemoveSelectionSet` / `HasSelectionSet` / `GetSelectionSets`
   were there already. `ExitApplication` ends the program (the main menu's Exit, the game menu's
   exit to Windows): the host's loops stop after the frame.
+- Leaving a game and starting it over. `ExitGame()` and `RestartSession()` are requests to the
+  host, carried out between two frames (`app/main.cpp`): the game's interface state goes, then
+  the session (`GameSession::End`: the simulation and its picture). Leaving brings up a NEW front
+  end state with the main menu (the original makes a new state for every change between front
+  end and game, FA exe 0x885de0) and the menu's background again; starting over launches the same
+  game as before (`GameSession::Relaunch`: the kept session description, a new random seed unless
+  one was given) and its interface comes up as the first time. `SessionEndGame()` ends the game:
+  no beat runs after it and `SessionIsGameOver()` says so. Written from the scripts' use, not
+  read from the original's code; the score screen the scripts show at a game's end is not
+  checked yet. Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`.
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the
@@ -401,8 +411,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 429 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
-  the units', as a first version); the other 102 are logged stubs. (`--list-bindings` counts
+- 432 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+  the units', as a first version); the other 99 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

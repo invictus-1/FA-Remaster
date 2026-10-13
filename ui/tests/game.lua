@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 2400 --log out.log
+--            --frames 2500 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -514,6 +514,13 @@ local function run()
     ConExecute('UI_RenderUnitBars true')
     check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
     if barsAtFirst then ConExecute('UI_RenderUnitBars') end
+
+    -- the game's end: no beat runs after SessionEndGame (last, since nothing moves any more)
+    check("the game is not over", SessionIsGameOver(), false)
+    SessionEndGame()
+    local ended = GetGameTimeSeconds()
+    WaitSeconds(0.5)
+    check("SessionEndGame: the game is over and its time stands", SessionIsGameOver() and GetGameTimeSeconds() == ended, true)
     LOG("TEST done: " .. failed .. " failed")
 end
 

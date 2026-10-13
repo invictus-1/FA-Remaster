@@ -24,6 +24,10 @@ class SimBlueprints;
 class Vfs;
 }  // namespace moho
 
+namespace moho {
+struct SessionDescription;
+}
+
 namespace moho::ui {
 
 namespace sound {
@@ -39,6 +43,12 @@ class GameSession {
   // state: the scenario file is run there). False with the reason the original would give the
   // script's LaunchFailed ("NoConfig", "StartSpots"), or a description.
   bool Launch(lua_State* L, int config, std::string* why);
+  // End the running session: the simulation and its picture go. (The state of the game's
+  // interface must be gone before: it looks into both.)
+  void End();
+  // End it and start the same game again, as it was launched (a new random seed unless one was
+  // given). False with the reason when there was no launch or the start fails.
+  bool Relaunch(std::string* why);
 
   // The world's picture (the renderer's, render/world_picture.h), opened when a game is launched
   // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
@@ -113,6 +123,10 @@ class GameSession {
   size_t armies_ = 0;
   uint32_t seed_ = 0;
   double due_ = 0;  // seconds of beats not run yet
+  // The last launch, for Relaunch.
+  std::unique_ptr<SessionDescription> last_;
+  std::vector<std::string> lastUids_;
+  bool StartSession(const SessionDescription& session, const std::vector<std::string>& uids, std::string* why);
 };
 
 }  // namespace moho::ui

@@ -110,6 +110,17 @@ int l_SessionResume(lua_State* L) {
   RequestSessionPause(L, false);
   return 0;
 }
+// SessionEndGame(): the game is over: the simulation runs no further (the score screen and the
+// way out follow from the scripts). SessionIsGameOver() says so.
+int l_SessionEndGame(lua_State* L) {
+  if (GamePace* pace = UserState::From(L)->config().pace) pace->ended = true;
+  return 0;
+}
+int l_SessionIsGameOver(lua_State* L) {
+  const GamePace* pace = UserState::From(L)->config().pace;
+  lua_pushboolean(L, pace && pace->ended);
+  return 1;
+}
 int l_GetSimTicksPerSecond(lua_State* L) {
   lua_pushnumber(L, 10);
   return 1;
@@ -397,7 +408,7 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GetGameTime", l_GetGameTime);
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
-  for (const char* name : {"SessionIsReplay", "WorldIsLoading", "SessionIsMultiplayer", "SessionIsGameOver",
+  for (const char* name : {"SessionIsReplay", "WorldIsLoading", "SessionIsMultiplayer",
                            "SessionIsBeingRecorded", "SessionIsObservingAllowed", "IsObserver"})
     SetGlobal(L, name, l_False);
   SetGlobal(L, "GameTick", l_GameTick);
@@ -408,6 +419,8 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "SetGameSpeed", l_SetGameSpeed);
   SetGlobal(L, "SessionRequestPause", l_SessionRequestPause);
   SetGlobal(L, "SessionResume", l_SessionResume);
+  SetGlobal(L, "SessionEndGame", l_SessionEndGame);
+  SetGlobal(L, "SessionIsGameOver", l_SessionIsGameOver);
   SetGlobal(L, "SessionIsPaused", l_SessionIsPaused);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
   SetGlobal(L, "SessionGetScenarioInfo", l_SessionGetScenarioInfo);

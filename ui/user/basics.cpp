@@ -130,12 +130,31 @@ int l_ExitApplication(lua_State*) {
   return 0;
 }
 
+int g_sessionRequest = 0;
+// ExitGame(): the game ends and the front end comes back. RestartSession(): the same game starts
+// over. Both are the host's to do, between two frames.
+int l_ExitGame(lua_State*) {
+  g_sessionRequest = 1;
+  return 0;
+}
+int l_RestartSession(lua_State*) {
+  g_sessionRequest = 2;
+  return 0;
+}
+
 }  // namespace
 
 bool ExitRequested() { return g_exitRequested; }
+int TakeSessionRequest() {
+  int request = g_sessionRequest;
+  g_sessionRequest = 0;
+  return request;
+}
 
 void RegisterBasicBindings(lua_State* L) {
   SetGlobal(L, "ExitApplication", l_ExitApplication);
+  SetGlobal(L, "ExitGame", l_ExitGame);
+  SetGlobal(L, "RestartSession", l_RestartSession);
   SetGlobal(L, "CurrentTime", l_CurrentTime);
   SetGlobal(L, "GetSystemTimeSeconds", l_CurrentTime);
   SetGlobal(L, "GameTick", l_GameTick);

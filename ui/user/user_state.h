@@ -138,6 +138,9 @@ void RegisterBasicBindings(lua_State* L);
 // A script has asked for the program to end (ExitApplication): the host's loops stop after the
 // frame. One flag for the whole program, whichever state asked.
 bool ExitRequested();
+// A script has asked to leave the running game (ExitGame: back to the front end) or to start it
+// over (RestartSession): 1 or 2, once, then 0 again. The host acts on it between two frames.
+int TakeSessionRequest();
 // The world interface provider and a running session's facts (session_bindings.cpp).
 void RegisterSessionBindings(lua_State* L);
 // Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up
