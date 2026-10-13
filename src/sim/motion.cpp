@@ -1008,9 +1008,24 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   if (dbgPts == static_cast<long>(u->id))
     fprintf(stderr, "spline start: tick %u state %d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f cont %d\n", sim.tick(),
             g.state, g.reverse ? 1 : 0, g.p.x, g.p.z, g.vel.x, g.vel.z, g.fx, g.fz, cont ? 1 : 0);
+  // CAiPathSpline::Generate 0x5b364b: a unit of motion type AmphibiousFloating (8; the Cybran destroyer that
+  // walks ashore) whose LayerChangeOffsetHeight is below -0.5 slows down in the shallows. Per point, at the place
+  // the step starts from: with h = terrain - water, between 3 x the offset and 0 the top speed is multiplied by
+  // h / (3 x offset), not below a half; deeper, or on land, it is whole.
+  const bool shallows = b.motionType == kMotionAmphibiousFloating && -0.5f > b.layerChangeOffset && sim.map() &&
+                        sim.map()->hasWater;
   for (int n = 0;;) {
     before = PointOf(g);
-    if (!StepMove(b, P, m, g, tgt, mode)) break;
+    StepParams Pn = P;
+    if (shallows) {
+      const float deep = b.layerChangeOffset * 3.0f;
+      const float h = sim.map()->TerrainHeight(g.p.x, g.p.z) - sim.map()->waterElevation;
+      if (h > deep && 0.0f > h) {
+        const float f = h / deep;
+        Pn.maxF = P.maxF * (f > 0.5f ? f : 0.5f);
+      }
+    }
+    if (!StepMove(b, Pn, m, g, tgt, mode)) break;
     g.p.y = u->position.y;
     m.spline.push_back(PointOf(g));
     ++n;
