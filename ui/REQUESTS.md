@@ -233,6 +233,29 @@ nothing else waits on it.
 use: the final score arrives, the score screen comes up and its Continue leaves the game
 (`ui/tests/score.lua`). Thank you.
 
+### 11. Two simulation functions the victory script calls: `SetCommandSource`, `EndGame`
+A game that ends by itself does not end. Seen in a scripted game (`Victory = "demoralization"`):
+the player's commander destroys itself (the game's own way: `SimCallback ToggleSelfDestruct`
+with the unit selected), it dies, and then nothing: no defeat is announced, the game runs on.
+The simulation's log has the reason:
+```
+...\lua\simictoryconditionbstractvictorycondition.lua:341: access to nonexistent global variable "SetCommandSource"
+    ... in function `ToObserver'   (405) in function `DefeatForArmy'   unitcondition.lua(62) `EvaluateVictoryCondition'
+```
+`DefeatForArmy` calls `ToObserver` (which calls `SetArmyOutOfGame`, `ArmyIsOutOfGame`, both
+there, and `SetCommandSource(army0, source, false)`) BEFORE it tells the interface
+(`SyncGameResult`), so the monitoring thread dies with the error and neither the defeat nor a
+victory is ever reported. Further on, the same script's `EndGameThread` (line 302) calls the
+simulation's global `EndGame()`, which is not registered either (both names are only message
+names in `command_stream.cpp`).
+
+Asked for, in the simulation's Lua: `SetCommandSource(army, source, enabled)` (which sources may
+command an army) and `EndGame()` (the game is over: what the EndGame order does). Blocking for a
+game ending by victory or defeat; the interface's side (the announcement, the Score button, the
+score screen) is the scripts' and is waiting for `Sync.GameResult`.
+
+**Status:** asked 2026-10-13.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -447,4 +470,6 @@ Asked for: the violet of the box and its slices weaker (more see-through, or les
 that the wire frame reads through it over the whole height. You noted this yourself as a question
 for the colour pass; he has now answered it. Not blocking.
 
-**Status:** asked 2026-10-13.
+**Status:** done by the renderer track within the hour (`docs/render-answers.md`, "ui, to the
+renderer 8": the slices at 0.28 of their texture's alpha and their lilac half way to a pale blue)
+and in the program Chris plays since main 3d312b7. Thank you. Waiting for his look.
