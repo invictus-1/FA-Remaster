@@ -642,14 +642,25 @@ void MotionTick(Sim& sim, Projectile* p) {
     float l = Len(v);
     if (l > p->maxSpeed) v = Mul(v, p->maxSpeed / l);
   }
-  if (p->stayUpright) q = Orient(Forward(q));
+  if (p->stayUpright) {  // 0x69c1b7: the look rotation 0x50b480 of the forward
+    const Vec3 f = Forward(q);
+    q = LookQuat(f.x, f.y, f.z);
+  }
   Vec3 p0 = p->position;
   Vec3 p1 = Add(p0, Mul(Add(v, v0), 0.05f));
   float av = Len(p->angVel);
   if (av != 0) {
     if (p->velocityAlign || p->trackTarget) p->angVel = {0, 0, av};
     else if (p->stayUpright) p->angVel = {0, av, 0};
-    q = QNorm(QMul(q, FromRotVec(Mul(p->angVel, 0.1f))));
+    // 0x69c376: q x r, r = the quaternion of the rotation vector (0x697360: the vector normalised by 0x452af0, half
+    // its length, fsin / fcos), summed in the order below. The product is NOT normalised.
+    Vec3 n = Mul(p->angVel, 0.1f);
+    const float h = static_cast<float>(NormalizeExe(n)) * 0.5f;
+    const float s = dmath::Sin(h), c = dmath::Cos(h);
+    const Quat r{n.x * s, n.y * s, s * n.z, c};
+    const Quat b = q;
+    q = {((r.x * b.w + r.z * b.y) + b.x * r.w) - r.y * b.z, ((r.y * b.w + r.x * b.z) + b.y * r.w) - r.z * b.x,
+         ((r.z * b.w + r.y * b.x) + b.z * r.w) - r.x * b.y, ((r.w * b.w - r.x * b.x) - r.y * b.y) - r.z * b.z};
   }
   float w = WaterLevel(sim);
   if (p->stayUnderwater && p->underwater) p1.y = std::min(p1.y, w - 0.01f);
@@ -832,8 +843,13 @@ int l_weapon_CreateProjectile(lua_State* L) {
   Quat q;
   BoneWorld(u, bone, &pos, &q);
   const ProjBp& pb = GetProjBp(sim, L, *w->projBp);
-  if (pb.straightDown) q = Orient({0, -1, 0});
-  else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) q = Orient(Norm(w->solution));
+  // (0x6d65d0..0x6d662f: the look rotation 0x50b480 of straight down, or of the normalised solution 0x44f7e0)
+  if (pb.straightDown) {
+    q = LookQuat(0.0f, -1.0f, 0.0f);
+  } else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) {
+    const Vec3 s = Norm(w->solution);
+    q = LookQuat(s.x, s.y, s.z);
+  }
   float R = w->firingRandomness;
   static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;
   if (dbgProj) {
@@ -853,10 +869,17 @@ int l_weapon_CreateProjectile(lua_State* L) {
          u->orientation.w, u->poseSet ? 1 : 0);
   }
   if (R > 0) {
-    float g1 = Gauss(sim), g2 = Gauss(sim);
-    float pitch = g1 * R * kPi / 180, yaw = g2 * R * kPi / 180;
-    Quat dq = QMul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, pitch));
-    q = QNorm(QMul(q, dq));
+    // 0x6d667e..0x6d67d2: two Gauss draws times the randomness times [0xdff090] (degrees to radians, in that
+    // order), the rotation r = yaw about +y times pitch about +x (0x50b300 with its third angle 0: fcos / fsin of the
+    // half angles, then single products), and q x r summed in the order below. The product is NOT normalised.
+    const float g1 = Gauss(sim), g2 = Gauss(sim);
+    const float pitch = (g1 * R) * kDeg2Rad, yaw = (g2 * R) * kDeg2Rad;
+    const float cA = dmath::Cos(pitch * 0.5f), sA = dmath::Sin(pitch * 0.5f);
+    const float cB = dmath::Cos(yaw * 0.5f), sB = dmath::Sin(yaw * 0.5f);
+    const Quat r{sA * cB, sB * cA, -(sB * sA), cB * cA};
+    const Quat b = q;
+    q = {((r.z * b.y + b.x * r.w) + r.x * b.w) - r.y * b.z, ((r.x * b.z + b.y * r.w) + r.y * b.w) - r.z * b.x,
+         ((r.y * b.x + b.z * r.w) + r.z * b.w) - r.x * b.y, ((r.w * b.w - r.x * b.x) - r.y * b.y) - r.z * b.z};
   }
   float damage = w->ovDamage >= 0 ? w->ovDamage : w->bp->damage;
   float radius = w->ovDamageRadius >= 0 ? w->ovDamageRadius : w->bp->damageRadius;
