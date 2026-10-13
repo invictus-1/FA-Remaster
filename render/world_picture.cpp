@@ -179,6 +179,28 @@ void WorldPicture::SetRanges(const std::vector<RangeGroup>& groups, float zoomNe
   }
 }
 
+void WorldPicture::SetWorldMeshes(const std::vector<WorldMesh>& meshes) {
+  if (!impl_->world) return;
+  std::vector<PlacedMesh>& placed = impl_->world->placed;
+  placed.clear();
+  for (const WorldMesh& m : meshes) {
+    PlacedMesh p;
+    p.mesh = m.mesh;
+    p.texture = m.texture;
+    p.shader = m.shader;
+    p.uniformScale = m.uniformScale;
+    p.position = {m.position[0], m.position[1], m.position[2]};
+    p.orientation = {m.orientation[0], m.orientation[1], m.orientation[2], m.orientation[3]};
+    p.scale = {m.scale[0], m.scale[1], m.scale[2]};
+    p.color = {static_cast<float>((m.color >> 16) & 0xff) / 255.0f, static_cast<float>((m.color >> 8) & 0xff) / 255.0f, static_cast<float>(m.color & 0xff) / 255.0f};
+    p.hidden = m.hidden;
+    p.lifetime = m.lifetime;
+    p.age = m.age;
+    p.fractionComplete = m.fractionComplete;
+    placed.push_back(std::move(p));
+  }
+}
+
 void WorldPicture::MapSize(float* width, float* height) const {
   *width = impl_->world ? static_cast<float>(impl_->world->map.width) : 0;
   *height = impl_->world ? static_cast<float>(impl_->world->map.height) : 0;
@@ -215,10 +237,12 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     std::vector<World::Line> lines;
     std::vector<World::Ring> rings;
     std::vector<render::RangeGroup> ranges;
+    std::vector<PlacedMesh> placed;
     ghosts.swap(w.ghosts);
     lines.swap(w.lines);
     rings.swap(w.rings);
     ranges.swap(w.ranges.groups);
+    placed.swap(w.placed);
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
@@ -234,6 +258,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     lines.swap(w.lines);
     rings.swap(w.rings);
     ranges.swap(w.ranges.groups);
+    placed.swap(w.placed);
     m.mapCamera = c;
     m.mapMatrix = w.view.constants.viewProj;
     m.mapWidth = width;

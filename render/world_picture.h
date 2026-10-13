@@ -114,6 +114,26 @@ class WorldPicture {
   // `zoomNear`, `zoomFar`: the camera's distances that count as the nearest and the farthest zoom
   // (the thickness goes evenly between them and stays at its end values beyond).
   void SetRanges(const std::vector<RangeGroup>& groups, float zoomNear = 10, float zoomFar = 1000);
+  // The meshes the game's script places in the world (its WorldMesh, and the mark where an order
+  // lands): the whole list each time it changes; it is drawn until the next call. By the shader's
+  // name: "CommandFeedback", "CommandFeedback2", "RallyPoint" (unlit, over everything, larger
+  // from afar, shrinking or growing over their lifetime, the feedback ones fading) and "FakeRings"
+  // (unlit, hidden by what is in front, showing as much as its fraction-complete number says) are
+  // drawn as the original's techniques of those names; anything else as an ordinary lit model in
+  // `color`.
+  struct WorldMesh {
+    std::string mesh, texture, shader;  // MeshName, TextureName, ShaderName
+    float uniformScale = 1;
+    float position[3] = {0, 0, 0};
+    float orientation[4] = {0, 0, 0, 1};  // a quaternion x, y, z, w
+    float scale[3] = {1, 1, 1};
+    uint32_t color = 0xffffffffu;  // 0xAARRGGBB
+    bool hidden = false;
+    float lifetime = 0;            // SetLifetimeParameter's seconds (0: not set) ...
+    float age = 0;                 // ... and how many of them have passed since it was set
+    float fractionComplete = 1;    // SetFractionCompleteParameter
+  };
+  void SetWorldMeshes(const std::vector<WorldMesh>& meshes);
   // What the map lies in (the game's MapBorderAdd): the mesh blueprints to draw around the map, as
   // the original places them; empty: nothing. In the main picture only.
   void SetBorders(const std::vector<std::string>& meshBlueprints);

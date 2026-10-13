@@ -32,13 +32,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       shafts(device),
       wakes(device),
       ranges(device),
+      placedDraw(device, &models),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error) || !ranges.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -430,6 +431,19 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const Quat turn{0, std::sin(g.heading * 0.5f), 0, std::cos(g.heading * 0.5f)};
     meshes.Add(model, Mat4::FromTRS(g.position, turn, model->scale), {0.6f, 0.6f, 0.6f}, 1, nullptr, &g.tint);
   }
+  // what the script places that is an ordinary model (the others are drawn after the water, placed.h)
+  for (const PlacedMesh& p : placed) {
+    if (p.hidden || PlacedMeshes::Flat(p.shader)) continue;
+    const Model* model = models.Mesh(p.mesh, p.texture, p.shader, p.uniformScale);
+    if (!model->ok) continue;
+    Mat4 at = Mat4::FromTRS(p.position, p.orientation, model->scale);
+    for (int row = 0; row < 3; ++row) {
+      at.m[row][0] *= p.scale.x;
+      at.m[row][1] *= p.scale.y;
+      at.m[row][2] *= p.scale.z;
+    }
+    meshes.Add(model, at, p.color);
+  }
   // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
   auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
   const Vec3 lift{0, 0.15f, 0};
@@ -700,6 +714,7 @@ void World::Render() {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight);
   }
+  if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);

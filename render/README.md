@@ -364,6 +364,13 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   over the water's surface after the water. Not read out of the original: how its thickness
   goes with the zoom between the two numbers (here: evenly with the camera's distance, between
   10 and 1000 unless the host says otherwise), and how strong its glow is.
+- The meshes the game's interface script places in the world (`placed.h`, `World::placed`,
+  `WorldPicture::SetWorldMeshes`): a rally point's flag, the marks under the cursor, the mark
+  where an order lands. Each names a mesh file, an albedo texture and one of the original's
+  shaders; `CommandFeedback`, `CommandFeedback2`, `RallyPoint` (unlit, over everything, larger
+  from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
+  (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
+  the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by

@@ -218,6 +218,27 @@ const Model* ModelCache::FromDisplay(const std::string& key, const std::string& 
   return m;
 }
 
+const Model* ModelCache::Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale) {
+  const std::string mesh = moho::Vfs::Normalize(meshPath);
+  const std::string key = "mesh:" + mesh + "|" + albedoPath + "|" + shader + "|" + std::to_string(uniformScale);
+  auto it = models_.find("display:" + key);
+  if (it != models_.end()) return it->second.get();
+  DisplayEntry entry;
+  entry.scale = uniformScale;
+  LodSource lod;
+  lod.shader = shader;
+  lod.mesh = mesh;
+  if (!albedoPath.empty()) {
+    lod.albedo = moho::Vfs::Normalize(albedoPath);
+    lod.albedoNamed = true;
+  }
+  entry.lods.push_back(std::move(lod));
+  const size_t slash = mesh.rfind('/');
+  std::string base = mesh.substr(slash == std::string::npos ? 0 : slash + 1);
+  base = base.substr(0, base.rfind('.'));
+  return FromDisplay(key, base, entry);
+}
+
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file

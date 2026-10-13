@@ -421,6 +421,21 @@ int main(int argc, char** argv) {
     radar.color = 0xff20e0ffu;
     radar.rings = {{at + Vec3{0, 0, 10}, 60, 0}, {at + Vec3{70, 0, 20}, 45, 0}};
     world.ranges.groups = {fire, radar};
+    // ... and the meshes the game's script places: a rally point's flag, and an order's mark half way through its life
+    PlacedMesh flag, mark;
+    flag.mesh = "/meshes/game/flag02d_lod0.scm";
+    flag.texture = "/meshes/game/flag02d_albedo.dds";
+    flag.shader = "RallyPoint";
+    flag.uniformScale = 0.5f;
+    flag.position = at + Vec3{6, world.HaveMap() ? world.GroundHeight(at.x + 6, at.z + 10) : 0, 10};
+    mark.mesh = "/meshes/game/crosshair02d_lod0.scm";
+    mark.texture = "/meshes/game/crosshair02d_albedo.dds";
+    mark.shader = "CommandFeedback";
+    mark.uniformScale = 0.5f;
+    mark.position = at + Vec3{-8, world.HaveMap() ? world.GroundHeight(at.x - 8, at.z + 14) : 0, 14};
+    mark.lifetime = 0.7f;
+    mark.age = 0.3f;
+    world.placed = {flag, mark};
   }
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
