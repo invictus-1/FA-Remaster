@@ -18,8 +18,8 @@ running game needs no `--display` log any more). 12 done and in use
 three seconds at the start is the M28 AI's own script, in the original too; the renderer does not
 count a look in which every place is seen as exploring). 14 done and in use (`PropEvents`,
 `EntityViews`, a projectile's scale: wreckage, trees that burn, fall and are reclaimed, shields'
-bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 is
-open (hidden bones).
+bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 done
+and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
 
 ## 15. Hidden bones: the parts of a mesh a script hides and shows (2026-10-12, not blocking)
 

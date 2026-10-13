@@ -63,6 +63,8 @@ std::vector<std::string> QuotedList(const std::string& text, const std::string& 
 struct SimFrames::Scratch {
   std::vector<moho::UnitView> views;
   std::vector<moho::UnitPose> poses;
+  std::vector<moho::UnitHiddenBones> hidden;
+  std::unordered_map<uint32_t, uint32_t> hiddenOf;  // unit id -> index in hidden, this beat
   std::vector<moho::ProjectileView> projectiles;
   std::vector<moho::BeamView> beams;
   std::vector<moho::EffectEvent> effects;
@@ -159,6 +161,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
   Scratch& e = *scratch_;
   moho::UnitViews(sim, &e.views);
   moho::UnitPoses(sim, &e.poses);
+  moho::HiddenBones(sim, &e.hidden);
   moho::ProjectileViews(sim, &e.projectiles);
   moho::BeamViews(sim, &e.beams);
   moho::EffectEvents(sim, &e.effects);
@@ -187,6 +190,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
   }
   e.poseOf.clear();
   for (uint32_t i = 0; i < e.poses.size(); ++i) e.poseOf.emplace(e.poses[i].id, i);
+  e.hiddenOf.clear();
+  for (uint32_t i = 0; i < e.hidden.size(); ++i) e.hiddenOf.emplace(e.hidden[i].id, i);
   Beat_ beat;
   beat.tick = sim.tick();
   beat.units.reserve(e.views.size());
@@ -269,14 +274,34 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.dead = v.dead;
     u.beingBuilt = v.beingBuilt;
     auto posed = e.poseOf.find(v.id);
-    if (posed != e.poseOf.end()) {  // its bones that are away from rest
+    auto hides = e.hiddenOf.find(v.id);
+    if (posed != e.poseOf.end() || hides != e.hiddenOf.end()) {
+      // its bones that are away from rest, and those its script has hidden (a commander's
+      // upgrades not bought yet, a factory's folded arms): one list in rising bone order, a
+      // hidden bone said once, as hidden
       u.firstBone = static_cast<uint32_t>(beat.bones.size());
-      for (const moho::BonePose& b : e.poses[posed->second].bones) {
-        if (b.bone < 0) continue;
+      static const std::vector<moho::BonePose> noneMoved;
+      static const std::vector<int> noneHidden;
+      const std::vector<moho::BonePose>& moved = posed != e.poseOf.end() ? e.poses[posed->second].bones : noneMoved;
+      const std::vector<int>& hidden = hides != e.hiddenOf.end() ? e.hidden[hides->second].bones : noneHidden;
+      size_t im = 0, ih = 0;
+      for (;;) {
+        while (im < moved.size() && moved[im].bone < 0) ++im;
+        while (ih < hidden.size() && hidden[ih] < 0) ++ih;
+        const bool haveMoved = im < moved.size(), haveHidden = ih < hidden.size();
+        if (!haveMoved && !haveHidden) break;
         FrameBone f;
-        f.bone = static_cast<uint32_t>(b.bone);
-        std::memcpy(f.position, b.position, sizeof f.position);
-        std::memcpy(f.orientation, b.orientation, sizeof f.orientation);
+        if (haveHidden && (!haveMoved || hidden[ih] <= moved[im].bone)) {
+          f.bone = static_cast<uint32_t>(hidden[ih]);
+          f.hidden = true;
+          if (haveMoved && moved[im].bone == hidden[ih]) ++im;
+          ++ih;
+        } else {
+          const moho::BonePose& b = moved[im++];
+          f.bone = static_cast<uint32_t>(b.bone);
+          std::memcpy(f.position, b.position, sizeof f.position);
+          std::memcpy(f.orientation, b.orientation, sizeof f.orientation);
+        }
         beat.bones.push_back(f);
       }
       u.boneCount = static_cast<uint32_t>(beat.bones.size()) - u.firstBone;
