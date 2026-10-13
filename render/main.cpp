@@ -170,6 +170,7 @@ struct Options {
   float animateAt = -1;                 // ... and where in it (0..1); below 0: it plays
   int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
   int enhanceAt = 0, enhanceArmy = 1;            // --enhance
+  int pauseAt = 0;                               // --pause-at
   std::string enhancement;
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -282,6 +283,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         o->animate.resize(comma);
       }
     }
+    else if (a == "--pause-at") o->pauseAt = atoi(v);  // <beat>: the commander of --enhance's army is paused then
     else if (a == "--enhance") {  // <beat>,<army>,<enhancement>: that army's commander is ordered to build it then
       char name[128] = "";
       if (sscanf(v, "%d,%d,%127s", &o->enhanceAt, &o->enhanceArmy, name) != 3) return false;
@@ -423,6 +425,7 @@ int main(int argc, char** argv) {
     setup.enhanceAt = static_cast<uint32_t>(std::max(opt.enhanceAt, 0));
     setup.enhanceArmy = opt.enhanceArmy;
     setup.enhancement = opt.enhancement;
+    setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
     live.SetFocusArmy(opt.focus);
     picture.SetFocusArmy(opt.focus);
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
@@ -561,6 +564,7 @@ int main(int argc, char** argv) {
     world.fog = which == 4 ? 1.0f : which == 2 ? 0.25f : 0.0f;
   };
   world.weatherAuto = opt.weather == "auto";
+  world.focusArmy = opt.focus > 0 ? opt.focus - 1 : -1;  // (whose work bars and pause marks show)
   world.weatherSeed = opt.seed ? opt.seed : 1;
   world.weatherSpell = opt.weatherSpell;
   world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : Climate::Temperate;

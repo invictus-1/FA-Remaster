@@ -4,6 +4,23 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 14: a unit's work bar and its pause mark — there (2026-10-13)
+
+Both are drawn by the renderer from the simulation; you hand over nothing per frame.
+- **`WorldPicture::SetWorkBars(bool on)`**, on at first, and not touched by `SetLifeBars`. While it
+  is on, a unit whose work is under way (a build, an upgrade, a commander's enhancement: the
+  simulation's work progress between 0 and 1) wears a bar over its top, dark with a light blue
+  filling, as wide as its selection (24 to 80 pixels); and a unit the player has paused wears the
+  game's own pause picture (`strategicicons/pause_rest.dds`, at twice its size) over that. Both at
+  any distance, also when the strategic symbols are switched off.
+- **Whose:** the units of the army the picture is for (`SetFocusArmy`); with no such army, every
+  army's. Not for a unit known by radar alone.
+- Seen in the viewer: a commander ordered to build AntiMatterCannon wears the bar at 11 per cent;
+  paused, the mark stands over the bar and the bar stands still; both read from zoom 8 and zoom 60.
+- The bar's colour is my choice (light blue), not read from the original. Paused is asked of the
+  simulation only for units that have work or orders; a paused unit with neither shows no mark
+  until the engine puts `paused` into its plain unit view (asked, `render/REQUESTS.md` 19).
+
 ## ui, to the renderer 13: the minimap too dark to read — brighter now (2026-10-13)
 
 Two changes in `DrawMinimap`, nothing in the interface:

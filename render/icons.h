@@ -58,7 +58,14 @@ class StrategicIcons {
   void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false, bool known = false);
   // A life bar over a place in the world: `widthPixels` wide, `fraction` (0..1) of it filled, green
   // down to red by how full. Drawn with the symbols.
-  void AddBar(Vec3 position, float fraction, float widthPixels);
+  // `work`: the thin bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
+  // is), in one colour, drawn just under where the life bar is.
+  void AddBar(Vec3 position, float fraction, float widthPixels, bool work = false);
+  // A mark over a place in the world, whatever the distance and whether the symbols are shown or
+  // not: the game's pause picture over a paused unit. `icon` from MarkIcon; `lift`: screen pixels
+  // above the place.
+  int MarkIcon(const std::string& name) { return Icon(name); }
+  void AddMark(int icon, Vec3 position, float lift);
   // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
   // middle at (x, y): for pictures made without the graphics card (a minimap).
   void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false, bool known = false) const;
@@ -89,6 +96,7 @@ class StrategicIcons {
   };
   struct Bar {
     float x, y, width, fraction;
+    bool work;
   };
   std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");
@@ -115,7 +123,7 @@ class StrategicIcons {
 
   View view_;
   float pixel_ = 1;  // this frame's scale
-  std::vector<Listed> listed_;
+  std::vector<Listed> listed_, marks_;
   std::vector<uint32_t> order_;
   std::vector<Vertex> vertices_;
 };

@@ -273,6 +273,13 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.fractionComplete = v.fractionComplete;
     u.dead = v.dead;
     u.beingBuilt = v.beingBuilt;
+    u.workProgress = v.workProgress;
+    // (paused: only a unit that has work or orders can show it, and only the focus army's are asked
+    // when there is one; the engine's UnitStateOf is the one view that has it)
+    if ((v.workProgress > 0 || v.queueLength > 0) && (focus <= 0 || v.army == focus)) {
+      moho::UnitStateView state;
+      if (moho::UnitStateOf(const_cast<moho::Sim&>(sim), v.id, &state)) u.paused = state.paused;
+    }
     auto posed = e.poseOf.find(v.id);
     auto hides = e.hiddenOf.find(v.id);
     if (posed != e.poseOf.end() || hides != e.hiddenOf.end()) {
