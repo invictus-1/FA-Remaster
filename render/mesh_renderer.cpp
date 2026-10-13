@@ -25,10 +25,14 @@ constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader'
 //   Aeon: as above, but the light is dimmer (0.6 of the map's multiplier), the reflected environment
 //     counts once, and the highlight is (0.8, 0.85, 1.1) * (R.V)^3: a bright hull that lives from
 //     what it mirrors.
-//   Cybran ("Insect"): the sun counts twice in the light; the highlight comes from a lookup texture
-//     (not read yet: a plain power stands in) and, like the faint reflection, is absent on team colour.
+//   Cybran ("Insect"): the sun counts twice in the light; the highlight comes from the game's lookup
+//     texture (/textures/engine/insectlookup.dds, by the sun's mirror image against the eye and the sun
+//     against the surface; as stored it goes by the second alone: a warm gleam that grows to white
+//     where the sun stands straight over the surface) and, like the faint reflection, is absent on
+//     team colour. Without the game's file a plain power stands in.
 //   Seraphim: the albedo texture's ALPHA is the team mask, and its colour a dim detail picture: the
-//     surface is made of reflection (spec.r, by a view-angle ramp from a lookup texture not read yet)
+//     surface is made of reflection (spec.r, by the game's view-angle ramp, the alpha of
+//     /textures/environment/falloff_seraphim_lookup.dds: full face on, in two bands toward the edge)
 //     and of team colour that is added, stronger toward the silhouette; the sun only adds a highlight.
 //
 // Modern look: the surface as a material (metal, roughness, glow, occlusion) for lighting.h.
@@ -81,12 +85,15 @@ cbuffer MeshKind : register(b3) {
                 // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
   float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool); y, z, w: a shield's tint (a nuke's shell:
                 // how often its texture repeats, how fast it slides, from what age it fades)
+  float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
 Texture2D specularMap : register(t2);
 TextureCube environmentMap : register(t3);
 Texture2D secondaryMap : register(t4);
+Texture2D insectLookup : register(t5);
+Texture2D seraphimFalloff : register(t6);
 
 struct VIn {
   float3 position : POSITION;
@@ -452,7 +459,10 @@ float4 Shade(VOut i, bool front) {
   if (kind4.x > 1.5) return float4(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), 1);  // liquid metal
   if (kind.z < 0.5 && faction == 3) {  // Seraphim
     float3 ambience = sunAmbience + (1 - sunAmbience) * shadowFill;
-    float3 seraphim = albedo.rgb * ambience + environment * spec.r * lerp(0.35, 1, edge) +
+    // (how strongly it mirrors, by the angle it is seen at: the game's own ramp, in bands, where
+    // the game's files have it)
+    float mirrors = kind5.y > 0.5 ? seraphimFalloff.SampleLevel(samplerLinearClamp, float2(pow(1 - saturate(dot(toCamera, N)), 0.6), 0.5), 0).a : lerp(0.35, 1, edge);
+    float3 seraphim = albedo.rgb * ambience + environment * spec.r * mirrors +
                       float3(0.5, 0.6, 0.7) * pow(highlight, 9) * spec.g + i.color.rgb * rim * albedo.a;
     return float4(seraphim * built + work * (0.3 + edge), 1);
   }
@@ -466,7 +476,11 @@ float4 Shade(VOut i, bool front) {
   if (kind.z < 0.5 && faction == 2) {  // Cybran
     float3 sun = 2 * sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
     float3 cybranLight = lightMultiplier * sun + (1 - sun) * shadowFill;
-    float3 sheen = (pow(highlight, 6) * spec.g + 0.05 * spec.r * environment) * (1 - spec.a);
+    // (the highlight: the game's own lookup, by the sun's mirror image against the eye and by the
+    // sun against the surface, where the game's files have it)
+    float3 gleam = kind5.x > 0.5 ? insectLookup.SampleLevel(samplerLinearClamp, float2(dot(reflect(-sunDirection, N), toCamera), dot(sunDirection, N)), 0).rgb
+                                 : pow(highlight, 6);
+    float3 sheen = (gleam * spec.g + 0.05 * spec.r * environment) * (1 - spec.a);
     return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built + work, 1);
   }
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
@@ -698,7 +712,19 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
   device_->SetShaderBuffer(boneBuffer_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  if (!shadowPass) device_->SetTexture(3, environment ? environment : textures_->GreyCube());
+  if (!shadowPass) {
+    device_->SetTexture(3, environment ? environment : textures_->GreyCube());
+    if (!insectLookup_) {  // (once: the two lookups, or white where the game's files have none)
+      insectLookup_ = textures_->Get("/textures/engine/insectlookup.dds", gfx::Texture{});
+      haveInsectLookup_ = static_cast<bool>(insectLookup_);
+      if (!insectLookup_) insectLookup_ = textures_->White();
+      seraphimFalloff_ = textures_->Get("/textures/environment/falloff_seraphim_lookup.dds", gfx::Texture{});
+      haveSeraphimFalloff_ = static_cast<bool>(seraphimFalloff_);
+      if (!seraphimFalloff_) seraphimFalloff_ = textures_->White();
+    }
+    device_->SetTexture(5, insectLookup_);
+    device_->SetTexture(6, seraphimFalloff_);
+  }
 
   int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
   for (size_t at = 0; at < items_.size();) {
@@ -714,7 +740,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[16] = {lod->alphaCut, lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[20] = {lod->alphaCut, lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
@@ -728,6 +754,8 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       kind[10] = of->boundsMin.y;
       kind[11] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
     }
+    kind[16] = haveInsectLookup_ ? 1.0f : 0.0f;
+    kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
