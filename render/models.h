@@ -96,6 +96,9 @@ struct ModelLod {
   // "UEFQuantumGate": a see-through field, its texture sliding with a finer copy taken away from
   // it; 3 "PhalanxEffect": a faint see-through ball (the Cybran's missile zapper), two textures
   // sliding over it.
+  // "ShieldImpact" (1) and "CybranShieldImpact" (2): the patch that flashes on a shield's bubble
+  // where it is hit, its textures sliding over it by its age
+  int impact = 0;
   int unlit = 0;
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)

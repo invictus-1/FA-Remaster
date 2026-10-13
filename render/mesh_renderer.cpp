@@ -210,6 +210,34 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   i.color.a = min(i.color.a, 1);
+  if (kind.y > 9.5) {
+    // the flash on a shield where it is hit (the original's "ShieldImpact" and its Cybran kind,
+    // after what its shader computes): a patch of the bubble turned toward the hit, its age in
+    // seconds in the instance's colour. It lives two seconds; the flash is its textures sliding.
+    float age = i.color.r;
+    float dark = falling.w > 0 ? falling.w : 1;
+    float3 c;
+    float alpha;
+    if (kind.y > 10.5) {
+      // the Cybran's: its one texture read three times: still, sliding, and moved sideways by a
+      // different step for each hit; laid over what is behind it
+      float4 still = specularMap.Sample(samplerAniso, i.uv.xy);
+      float4 sliding = specularMap.Sample(samplerAniso, i.uv.xy + float2(-0.003, -0.06) * age);
+      float4 moved = specularMap.Sample(samplerAniso, i.uv.xy + float2(frac(i.color.g), 0));
+      c = sliding.rrr + still.g;
+      alpha = saturate(sliding.b * moved.r * 4.5 * saturate(1 - (age - 6) * 0.15) * still.a);
+      return float4(look > 0.5 ? pow(max(c, 0), 2.2) * 1.5 * dark : c, alpha);
+    }
+    // the others': a ring pattern (the albedo's green) sliding outward, slower as it goes, through
+    // a still coarse pattern and the patch's own outline; pale blue, adding its light
+    float4 ring = albedoMap.Sample(samplerAniso, i.uv.xy + float2(-0.003 * age, -0.15 + lerp(-0.1, -0.085, age * 0.5) * age));
+    float4 coarse = specularMap.Sample(samplerAniso, i.uv.xy * 0.25);
+    float outline = specularMap.Sample(samplerAniso, i.uv.xy).a;
+    c = float3(0, 0, 0.5) + coarse.r;
+    alpha = saturate(outline * ring.g * (coarse.r + coarse.g) * saturate(1 - (age - 2) * 0.2));
+    // (the pipeline adds what is returned as it is)
+    return float4((look > 0.5 ? pow(max(c, 0), 2.2) * 1.5 * dark : c) * alpha, 1);
+  }
   if (kind.y > 6.5) {
     // not lit by the scene: what the textures say, as bright as the hour lets a thing be seen
     float seen = falling.w > 0 ? falling.w : 1;
@@ -536,6 +564,13 @@ bool MeshRenderer::Init(std::string* error) {
   pd.name = "models, a ball of fire";  // (seen from outside only, and it hides what burns inside it)
   dome_ = device_->CreatePipeline(pd, error);
   if (!dome_) return false;
+  pd.name = "models, adding their light";  // (a shield's flash where it is hit)
+  pd.cull = gfx::Cull::None;
+  pd.depthWrite = false;
+  pd.blend = gfx::Blend::Additive;
+  adding_ = device_->CreatePipeline(pd, error);
+  if (!adding_) return false;
+  pd.depthWrite = true;
   pd.name = "models, leaves";
   pd.blend = gfx::Blend::Opaque;
   pd.cull = gfx::Cull::None;
@@ -731,9 +766,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    const int wanted = shadowPass ? 0 : glass ? (lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
+    const int wanted = shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
+      device_->SetPipeline(wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
@@ -742,7 +777,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[20] = {lod->alphaCut, lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[20] = {lod->alphaCut, lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};

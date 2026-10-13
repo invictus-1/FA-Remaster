@@ -282,6 +282,9 @@ class World {
     double trailClock = 0;
   };
   std::unordered_map<uint32_t, Moving> moving_;
+  // when each flash on a shield (a script's entity with such a mesh) was first seen, by the
+  // frames' clock: its look goes by its age
+  std::unordered_map<uint32_t, double> impactBorn_, impactBornNext_;
   // another army's building as the focus army last saw it: by entity id
   struct Remembered {
     uint32_t blueprint;  // FrameUnit::blueprint
