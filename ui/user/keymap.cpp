@@ -423,6 +423,35 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     UserState::From(L)->RunString(rest, text);
     return;
   }
+  // The speed keys' commands (FA exe 0x88d1b0, 0x88d280, 0x88d220, 0x88e150): one step up to at
+  // most 50, one step down to at least -10, back to 0, or a number brought into those bounds.
+  if (Upper(name) == "WLD_INCREASESIMRATE") {
+    if (GameSpeedOf(L) < 50) SetGameSpeedTo(L, GameSpeedOf(L) + 1);
+    return;
+  }
+  if (Upper(name) == "WLD_DECREASESIMRATE") {
+    if (GameSpeedOf(L) > -10) SetGameSpeedTo(L, GameSpeedOf(L) - 1);
+    return;
+  }
+  if (Upper(name) == "WLD_RESETSIMRATE") {
+    if (GameSpeedOf(L) != 0) SetGameSpeedTo(L, 0);
+    return;
+  }
+  if (Upper(name) == "WLD_GAMESPEED") {
+    if (rest.find_first_not_of(" \t") == std::string::npos) return;
+    int rate = static_cast<int>(std::atof(rest.c_str()));
+    SetGameSpeedTo(L, rate > 50 ? 50 : rate < -10 ? -10 : rate);
+    return;
+  }
+  if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  if (Upper(name) == "UI_SELECTBYCATEGORY") {
+    SelectByCategoryCommand(L, rest);
+    return;
+  }
+  if (Upper(name) == "UI_EXPANDCURRENTSELECTION") {
+    ExpandCurrentSelection(L);
+    return;
+  }
   if (Upper(name) == "UI_RENDERUNITBARS") {
     RenderUnitBars(L, rest);
     return;

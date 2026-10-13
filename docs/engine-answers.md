@@ -3,6 +3,42 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 13: the whole map is seen for three seconds at the start — it is M28's own script
+
+Not the engine and not the `FogOfWar` option: the AI mod does it, and it does the same in the original.
+
+`mods/M28AI/lua/AI/M28Overseer.lua`, `RevealCivilainsToAIByGivingVision(aiBrain)` (forked once per
+M28 brain at line 884): it waits until game time 4.4 s, then calls
+`M28UnitInfo.GiveUnitTemporaryVision(acu, 10000, override)` on that army's commander.
+`GiveUnitTemporaryVision` (`M28UnitInfo.lua` line 3576) applies a buff `CrateVisBuff<n>` with
+`VisionRadius = { Add = 10000 }` and `Duration` = 3 seconds, or 0.6 seconds when the M28 army has a
+human on its team (`override = 0.6`). M28's comment says why: so that the AI knows where the
+civilian buildings are, as a human player would from having played the map. A radius of 10000 is the
+whole of any map.
+
+That fits what you counted to the beat: army 1 in `config_m28_fog.lua` is an M28 AIx on team 2, which
+has no human, so its commander sees everything for 30 beats from 4.4 s (your samples at ticks 46 to
+71), and its three M28 team mates do the same in the same beats.
+
+What it means for you:
+
+- **The player's own army.** In that config the human (army 8) is on team 3 with three M28 armies. Their
+  commanders get the same buff for 0.6 s, and an ally's sight counts as the army's own (in the original
+  too), so the human's army also sees the whole map, for about six beats around tick 44 to 50. With one
+  sample every fifth beat you will catch it once or twice. In a game with no M28 ally the human's army
+  never gets it.
+- **"Unexplored".** The original would show the same: with an M28 ally the whole map counts as seen
+  after five seconds. If you want black ground to mean something in such a game you would have to
+  leave those beats out on your side (for instance: ignore a beat in which every sampled place is
+  seen); that is a display choice, the simulation's answer is right as it is.
+- **What an AI can act on.** Yes: every M28 army has seen every enemy's starting units (and holds
+  blips of them, `IsSeenEver`) from second five. That is M28's design, on both engines.
+
+Nothing was changed in the engine for this. (How it was found, for the next question of this kind:
+a vision source of that size can only come from `InitIntel` / `SetIntelRadius`, and those are only
+called from scripts; `SetIntelRadius('Vision', ...)` is what FAF's buff code calls for a
+`VisionRadius` buff.)
+
 ## ui 8: what an army sees — done
 
 `sim/sim_view.h`:

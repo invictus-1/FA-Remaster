@@ -1457,6 +1457,10 @@ void Sim::Tick() {
   }
   KillCleanupTick(*this);
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
+  // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
+  // previous, is zero from here on; seen in the original's per-beat shell log)
+  for (Projectile* p : projectiles)
+    if (p->lastMoveTick != tick()) p->prevPos = p->position;
   for (Entity* e : heldShapes_) e->shapeHeld = false;  // (vt+0x84: the collision shapes follow)
   heldShapes_.clear();
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid

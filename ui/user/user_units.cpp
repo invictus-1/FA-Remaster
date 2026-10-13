@@ -8,7 +8,10 @@
 // fuel, what is being built) answers with the plain case. SelectUnits tells the game script at
 // once (gamemain.OnSelectionChanged(old, new, added, removed), FA exe 0x869418).
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -181,6 +184,169 @@ int l_GetUnitById(lua_State* L) {
   if (it == store.units.end() || it->second->gone) lua_pushnil(L);
   else PushObject(L, it->second.get());
   return 1;
+}
+
+// AddSelectUnits(units) (FA exe 0x8bdc30): these units join the selection.
+int l_AddSelectUnits(lua_State* L) {
+  std::vector<UserUnit*> now = Store(L).selection;
+  ReadUnitList(L, 1, &now);
+  SetSelection(L, now);
+  return 0;
+}
+
+// Whether a unit is in the original's state "BeingUpgraded" (0x25): the building that an upgrade
+// is putting up in place of the old one. INFERRED from what the engine's view gives: unfinished,
+// a structure, and made by a structure (a factory's units are mobile).
+bool BeingUpgraded(lua_State* L, Sim* sim, const UserUnit* u) {
+  if (!u->view.beingBuilt || !InCategory(L, u, "STRUCTURE")) return false;
+  UnitStateView s;
+  if (!UnitStateOf(*sim, u->view.id, &s) || s.creator == 0xffffffffu) return false;
+  auto it = Store(L).units.find(s.creator);
+  return it != Store(L).units.end() && !it->second->gone && InCategory(L, it->second.get(), "STRUCTURE");
+}
+
+// The box around a unit for the camera: the original takes the model's box; here the
+// blueprint's SizeX and SizeZ about the unit's place.
+void UnitBox(lua_State* L, const UserUnit* u, float lo[3], float hi[3]) {
+  float sx = 1, sz = 1;
+  int top = lua_gettop(L);
+  PushBlueprint(L, u->view.blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "SizeX");
+    lua_rawget(L, -2);
+    if (lua_isnumber(L, -1)) sx = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    lua_pushstring(L, "SizeZ");
+    lua_rawget(L, -2);
+    if (lua_isnumber(L, -1)) sz = static_cast<float>(lua_tonumber(L, -1));
+  }
+  lua_settop(L, top);
+  const float* p = u->view.position;
+  lo[0] = p[0] - sx * 0.5f, lo[1] = p[1], lo[2] = p[2] - sz * 0.5f;
+  hi[0] = p[0] + sx * 0.5f, hi[1] = p[1], hi[2] = p[2] + sz * 0.5f;
+}
+// The world camera shows one unit: its box and 20 more on every side across (the camera's slot
+// 11, FA exe 0x7a8580).
+void ShowUnit(lua_State* L, const UserUnit* u, float seconds) {
+  float lo[3], hi[3];
+  UnitBox(L, u, lo, hi);
+  lo[0] -= 20, lo[2] -= 20, hi[0] += 20, hi[2] += 20;
+  WorldCameraShowBox(L, lo, hi, seconds);
+}
+
+// UISelectionByCategory(expression, addToCurSel, inViewFrustum, nearestToMouse, mustBeIdle)
+// (FA exe 0x866db0) and the console command UI_SelectByCategory (0x866a30), the work of both in
+// 0x8662b0: the keys for "select all engineers", "nearest idle engineer", "all on screen" and
+// their like. As read there:
+// - the units asked: those the world camera has in view, or all;
+// - of them the player's own selectable ones in the category; with mustBeIdle only finished
+//   ones with no orders (the unit's byte +0x1a2 clear and its command list empty);
+// - with nearestToMouse only the one nearest to the place of the world under the mouse;
+//   without it every one that is not a building being upgraded (unit state 0x25);
+// - with addToCurSel they join the selection, else they are the selection (none found: nothing
+//   is selected);
+// - the command's two more: without engineers and commanders (+excludeengineers), and the world
+//   camera goes to what was selected (+goto: one unit as UISelectAndZoomTo shows it, several by
+//   the box around them all). With +idle the original's camera goes from one idle unit to the
+//   next with each use (0x865590, not read): here it goes to the selection as without.
+// False when the expression cannot be read.
+bool SelectUnitsByCategory(lua_State* L, const char* expr, bool add, bool inView, bool nearest, bool idle, bool goTo,
+                           bool noEngineers) {
+  Sim* sim = TheSim(L);
+  std::vector<uint64_t> bits;
+  SimBlueprints* bps = SimBlueprints::From(L);
+  if (!sim || !bps || !ParseCategory(L, expr, bits)) return false;
+  UnitStore& store = Store(L);
+  std::vector<UserUnit*> asked;
+  std::vector<uint32_t> ids;
+  if (inView && UnitsOnScreen(L, &ids)) {
+    std::sort(ids.begin(), ids.end());
+    for (uint32_t id : ids) {
+      auto it = store.units.find(id);
+      if (it != store.units.end()) asked.push_back(it->second.get());
+    }
+  } else {
+    for (auto& [id, u] : store.units)
+      if (!inView || PlaceInCameraView(L, u->view.position)) asked.push_back(u.get());
+  }
+  std::vector<UserUnit*> now;
+  if (add) now = store.selection;
+  float mouse[3] = {0, 0, 0};
+  if (nearest) MouseWorldPlace(L, mouse);
+  UserUnit* best = nullptr;
+  float bestDistance = std::numeric_limits<float>::max();
+  for (UserUnit* u : asked) {
+    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    if (idle && (u->view.beingBuilt || u->view.queueLength != 0)) continue;
+    const BlueprintInfo* bp = bps->Find(u->view.blueprint);
+    if (!bp || bp->entityIndex < 0 || static_cast<size_t>(bp->entityIndex >> 6) >= bits.size() ||
+        !(bits[bp->entityIndex >> 6] >> (bp->entityIndex & 63) & 1))
+      continue;
+    if (noEngineers && (InCategory(L, u, "ENGINEER") || InCategory(L, u, "COMMAND"))) continue;
+    if (nearest) {
+      float dx = u->view.position[0] - mouse[0], dy = u->view.position[1] - mouse[1], dz = u->view.position[2] - mouse[2];
+      float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (d < bestDistance) bestDistance = d, best = u;
+    } else if (!BeingUpgraded(L, sim, u) && std::find(now.begin(), now.end(), u) == now.end()) {
+      now.push_back(u);
+    }
+  }
+  if (best && std::find(now.begin(), now.end(), best) == now.end()) now.push_back(best);
+  if (goTo && now.size() == 1) {
+    ShowUnit(L, now[0], 0);
+  } else if (goTo && !now.empty()) {
+    float lo[3], hi[3];
+    for (size_t i = 0; i < now.size(); ++i) {
+      float a[3], b[3];
+      UnitBox(L, now[i], a, b);
+      for (int k = 0; k < 3; ++k) lo[k] = i ? std::min(lo[k], a[k]) : a[k], hi[k] = i ? std::max(hi[k], b[k]) : b[k];
+    }
+    WorldCameraShowBox(L, lo, hi, 0);
+  }
+  SetSelection(L, now);
+  return true;
+}
+int l_UISelectionByCategory(lua_State* L) {
+  const char* expr = luaL_checkstring(L, 1);
+  if (!SelectUnitsByCategory(L, expr, lua_toboolean(L, 2) != 0, lua_toboolean(L, 3) != 0, lua_toboolean(L, 4) != 0,
+                             lua_toboolean(L, 5) != 0, false, false))
+    return luaL_error(L, "Invalid category expression: %s", expr);
+  return 0;
+}
+
+// UIZoomTo(units, [seconds]) (FA exe 0x867240): the world camera shows these units. The box it
+// is given: across, from the least to the greatest x and z of the units' places, 20 more on
+// every side; in height, their mean height with half the larger of the two spans and 20 above
+// and below. (So one unit alone is seen from a zoom of 40.)
+int l_UIZoomTo(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  if (list.empty()) return 0;
+  float lo[3], hi[3], height = 0;
+  for (size_t i = 0; i < list.size(); ++i) {
+    const float* p = list[i]->view.position;
+    for (int k = 0; k < 3; k += 2) {
+      lo[k] = i ? std::min(lo[k], p[k]) : p[k];
+      hi[k] = i ? std::max(hi[k], p[k]) : p[k];
+    }
+    height += p[1];
+  }
+  height /= static_cast<float>(list.size());
+  float half = std::max(hi[0] - lo[0], hi[2] - lo[2]) * 0.5f;
+  lo[0] -= 20, lo[2] -= 20, hi[0] += 20, hi[2] += 20;
+  lo[1] = height - half - 20, hi[1] = height + half + 20;
+  WorldCameraShowBox(L, lo, hi, lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0);
+  return 0;
+}
+
+// UISelectAndZoomTo(unit, [seconds]) (FA exe 0x866fc0): the unit becomes the selection and the
+// world camera shows it.
+int l_UISelectAndZoomTo(lua_State* L) {
+  UserUnit* u = ToUnit(L, 1);
+  if (!u || u->gone) return 0;
+  SetSelection(L, {u});
+  ShowUnit(L, u, lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0);
+  return 0;
 }
 
 // The focus army's units of a category that fit a test.
@@ -585,6 +751,37 @@ std::string TakeOrders(lua_State* L) {
   if (!user->units) return std::string();
   UnitStore& store = static_cast<UnitStore&>(*user->units);
   return store.writer ? store.writer->Take() : std::string();
+}
+
+void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  if (selectedOnly) {
+    for (UserUnit* u : store.selection)
+      if (!u->gone && !u->view.dead) ids->push_back(u->view.id);
+  } else {
+    for (auto& [id, u] : store.units)
+      if (!u->gone && !u->view.dead) ids->push_back(id);
+  }
+}
+
+bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  auto it = store.units.find(id);
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return false;
+  *blueprint = it->second->view.blueprint;
+  for (int i = 0; i < 3; ++i) position[i] = it->second->view.position[i];
+  *army = it->second->view.army;
+  return true;
+}
+
+void RequestSessionPause(lua_State* L, bool pause) {
+  if (!TheSim(L)) return;
+  if (pause) Writer(L).RequestPause();
+  else Writer(L).Resume();
 }
 
 // commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
@@ -1279,6 +1476,63 @@ void ReportQueueChange(lua_State* L) {
 
 }  // namespace
 
+void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
+  if (!TheSim(L)) return;
+  bool add = false, nearest = false, idle = false, inView = false, goTo = false, noEngineers = false;
+  std::string expr;  // the other words, a space after each: side by side they narrow the category
+  size_t at = 0;
+  while (at < arguments.size()) {
+    size_t a = arguments.find_first_not_of(" \t", at);
+    if (a == std::string::npos) break;
+    size_t b = arguments.find_first_of(" \t", a);
+    std::string word = arguments.substr(a, b == std::string::npos ? std::string::npos : b - a);
+    at = b == std::string::npos ? arguments.size() : b;
+    if (word[0] != '+') {
+      expr += word + " ";
+      continue;
+    }
+    std::string flag;
+    for (char ch : word) flag.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    if (flag == "+add") add = true;
+    else if (flag == "+nearest") nearest = true;
+    else if (flag == "+idle") idle = true;
+    else if (flag == "+inview") inView = true;
+    else if (flag == "+goto") goTo = true;
+    else if (flag == "+excludeengineers") noEngineers = true;
+    else Logf(LogLevel::Info, "Unknown modifier %s", word.c_str());
+  }
+  if (expr.empty()) return;
+  expr.pop_back();
+  if (!SelectUnitsByCategory(L, expr.c_str(), add, inView, nearest, idle, goTo, noEngineers))
+    Logf(LogLevel::Warning, "UI_SelectByCategory: invalid category expression: %s", expr.c_str());
+}
+
+void ExpandCurrentSelection(lua_State* L) {
+  Sim* sim = TheSim(L);
+  if (!sim) return;
+  UnitStore& store = Store(L);
+  std::vector<UserUnit*> now = store.selection, asked;
+  std::vector<uint32_t> ids;
+  if (UnitsOnScreen(L, &ids)) {
+    std::sort(ids.begin(), ids.end());
+    for (uint32_t id : ids) {
+      auto it = store.units.find(id);
+      if (it != store.units.end()) asked.push_back(it->second.get());
+    }
+  } else {
+    for (auto& [id, u] : store.units)
+      if (PlaceInCameraView(L, u->view.position)) asked.push_back(u.get());
+  }
+  for (UserUnit* u : asked) {
+    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    if (InCategory(L, u, "WALL") || std::find(now.begin(), now.end(), u) != now.end()) continue;
+    bool kind = false;
+    for (UserUnit* s : store.selection) kind = kind || s->view.blueprint == u->view.blueprint;
+    if (kind && !BeingUpgraded(L, sim, u)) now.push_back(u);
+  }
+  SetSelection(L, now);
+}
+
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
   Sim* sim = TheSim(L);
   if (!sim) return;
@@ -1388,6 +1642,10 @@ void RegisterUserUnitBindings(lua_State* L) {
   if (!TheSim(L)) return;
   SetGlobal(L, "GetSelectedUnits", l_GetSelectedUnits);
   SetGlobal(L, "SelectUnits", l_SelectUnits);
+  SetGlobal(L, "AddSelectUnits", l_AddSelectUnits);
+  SetGlobal(L, "UISelectionByCategory", l_UISelectionByCategory);
+  SetGlobal(L, "UIZoomTo", l_UIZoomTo);
+  SetGlobal(L, "UISelectAndZoomTo", l_UISelectAndZoomTo);
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);

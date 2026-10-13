@@ -4,7 +4,8 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 1850 --log out.log
+--            --frames 2200 --log out.log
+-- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
 local failed = 0
@@ -82,11 +83,17 @@ local function run()
 
     -- the world view and the camera
     local view = import("/lua/ui/game/worldview.lua").viewLeft
+    local cam = GetCamera("WorldCamera")
+    -- the game's script opens on the commander (gamemain.StartupSequence: UIZoomTo(avatars, 1));
+    -- the checks after this start from the camera's own first state
+    local opened = cam:GetFocusPosition()
+    check("the game opens with the camera on the commander, from a zoom of 40",
+        string.format("%.1f", cam:GetZoom()) == "40.0" and math.abs(opened[1] - pos[1]) < 1 and math.abs(opened[3] - pos[3]) < 1, true)
+    cam:Reset()
     local s = view:Project(pos)
     moho64ui_MouseMove(s.x, s.y)
     local w = GetMouseWorldPos()
     check("screen and world agree", math.abs(w[1] - pos[1]) < 0.5 and math.abs(w[3] - pos[3]) < 0.5, true)
-    local cam = GetCamera("WorldCamera")
     check("the same camera object for a name", GetCamera("WorldCamera") == cam, true)
     local saved = cam:SaveSettings()
     local zoom = cam:GetZoom()
@@ -299,6 +306,146 @@ local function run()
     moho64ui_MouseMove(1100, 440)
     moho64ui_Key(32, "", "up")
     check("from far out Space and the mouse do not turn it", string.format("%.2f", cam:SaveSettings().Heading), "3.14")
+
+    -- selecting by category (the keys for "all engineers", "nearest idle engineer", ...), adding
+    -- to the selection, and the camera going to units
+    local function count() return table.getn(GetSelectedUnits() or {}) end
+    local at = cdr:GetPosition()
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, false, false, false)
+    sel = GetSelectedUnits()
+    check("UISelectionByCategory selects the commander by its category", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    UISelectionByCategory("NAVAL", false, false, false, false)
+    check("a category nothing is in selects nothing", count(), 0)
+    UISelectionByCategory("NAVAL", true, false, false, false)
+    check("nothing found leaves nothing selected", count(), 0)
+    AddSelectUnits({cdr})
+    check("AddSelectUnits adds to the selection", count(), 1)
+    UISelectionByCategory("NAVAL", true, false, false, false)
+    check("adding nothing keeps the selection", count(), 1)
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, false, false, true)
+    check("with mustBeIdle only when it has nothing to do", count() == 1, cdr:IsIdle())
+    SelectUnits(nil)
+    UISelectionByCategory("ALLUNITS", false, false, true, false)
+    check("nearestToMouse selects one unit", count(), 1)
+    cam:SnapTo(at, nil, 60)
+    WaitSeconds(0.2)
+    SelectUnits(nil)
+    UISelectionByCategory("COMMAND", false, true, false, false)
+    check("in view: the commander on screen is found", count(), 1)
+    cam:SnapTo({at[1] > 512 and at[1] - 300 or at[1] + 300, at[2], at[3]}, nil, 60)
+    WaitSeconds(0.2)
+    UISelectionByCategory("COMMAND", false, true, false, false)
+    check("in view: off screen it is not", count(), 0)
+    UIZoomTo({cdr}, 0)
+    local zf = cam:GetFocusPosition()
+    check("UIZoomTo shows a unit from a zoom of 40", string.format("%.1f", cam:GetZoom()), "40.0")
+    check("with the unit in the middle", math.abs(zf[1] - at[1]) < 0.01 and math.abs(zf[3] - at[3]) < 0.01, true)
+    cam:SnapTo(at, nil, 300)
+    UIZoomTo({cdr}, 0.5)
+    WaitSeconds(0.1)
+    local midway = cam:GetZoom()
+    WaitSeconds(0.7)
+    check("with seconds the camera takes that time", midway > 60 and midway < 300 and string.format("%.1f", cam:GetZoom()) == "40.0", true)
+    SelectUnits(nil)
+    cam:SnapTo(at, nil, 300)
+    UISelectAndZoomTo(cdr, 0)
+    sel = GetSelectedUnits()
+    check("UISelectAndZoomTo selects the unit", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    check("and shows it from near", cam:GetZoom() > 40 and cam:GetZoom() < 50, true)
+    -- the console commands the selection keys are bound to
+    check("Ctrl-B is bound to the command", moho64ui_KeyMapAction("Ctrl-B"), "UI_SelectByCategory ENGINEER")
+    SelectUnits(nil)
+    ConExecute("UI_SelectByCategory COMMAND")
+    check("UI_SelectByCategory selects by category", count(), 1)
+    ConExecute("UI_SelectByCategory +excludeengineers LAND MOBILE")
+    check("+excludeengineers leaves the commander out", count(), 0)
+    ConExecute("UI_SelectByCategory LAND MOBILE")
+    check("words side by side narrow the category", count(), 1)
+    SelectUnits(nil)
+    cam:SnapTo(at, nil, 300)
+    ConExecute("UI_SelectByCategory +nearest +goto COMMAND")
+    check("+nearest +goto selects it and the camera goes there", count() == 1 and cam:GetZoom() > 40 and cam:GetZoom() < 50, true)
+    ConExecute("UI_ExpandCurrentSelection")
+    check("UI_ExpandCurrentSelection keeps what is selected", count(), 1)
+    SelectUnits(nil)
+    cam:Reset()
+
+    -- range rings: the game's script has named its filters and switched the three cases on; a
+    -- selected unit gets the rings of the filters it is in, measured from its blueprint
+    local filters = import("/lua/ui/game/rangeoverlayparams.lua").RangeOverlayParams
+    local bp = __blueprints[cdr:GetUnitId()]
+    local reach = 0
+    for _, w in bp.Weapon do
+        if w.RangeCategory == 'UWRC_DirectFire' and w.MaxRadius > reach then reach = w.MaxRadius end
+    end
+    local function ring(radius, color)
+        for _, r in moho64ui_RangeRings() do
+            if math.abs(r.radius - radius) < 0.01 and r.color == string.lower(string.sub(color, 3)) then return true end
+        end
+        return false
+    end
+    moho64ui_MouseMove(3, 3)
+    check("nothing selected, nothing under the mouse: no rings", table.getn(moho64ui_RangeRings()), 0)
+    SelectUnits({cdr})
+    check("the commander has a direct fire weapon", reach > 0, true)
+    check("selected: its direct fire ring, in the filter's select colour", ring(reach, filters.DirectFire.SelectColor), true)
+    check("and its omni ring", ring(bp.Intel.OmniRadius, filters.Omni.SelectColor), true)
+    local at2 = cdr:GetPosition()
+    local first = moho64ui_RangeRings()[1]
+    check("the rings lie round the unit", math.abs(first.x - at2[1]) < 0.01 and math.abs(first.z - at2[3]) < 0.01, true)
+    ConExecute("range_RenderSelected false")
+    check("range_RenderSelected false: none", table.getn(moho64ui_RangeRings()), 0)
+    SelectUnits(nil)
+    SetOverlayFilters({"DirectFire"})
+    check("a filter switched on: every unit of the player's in it, normal colour", ring(reach, filters.DirectFire.NormalColor), true)
+    check("and only that filter's", ring(bp.Intel.OmniRadius, filters.Omni.NormalColor), false)
+    SetOverlayFilters({})
+    check("switched off again: none", table.getn(moho64ui_RangeRings()), 0)
+    ConExecute("range_RenderSelected true")
+
+    -- pause: asked for like an order, so it holds from a beat on; the game's time stands
+    check("the game runs", SessionIsPaused(), false)
+    local gamemain = import("/lua/ui/game/gamemain.lua")
+    local oldOnPause, heardPause = gamemain.OnPause, false
+    gamemain.OnPause = function(by, left)
+        heardPause = true
+        oldOnPause(by, left)
+    end
+    SessionRequestPause()
+    WaitSeconds(0.5)
+    check("SessionRequestPause pauses it", SessionIsPaused(), true)
+    local stood = GetGameTimeSeconds()
+    WaitSeconds(0.5)
+    check("the game's time stands while paused", GetGameTimeSeconds(), stood)
+    check("the game's script has heard of the pause", heardPause, true)
+    gamemain.OnPause = oldOnPause
+    SessionResume()
+    WaitSeconds(0.5)
+    check("SessionResume lets it go on", SessionIsPaused() == false and GetGameTimeSeconds() > stood, true)
+    -- the game's speed, in the speed keys' steps: only where the game's option lets it be changed
+    local mayChange = SessionGetScenarioInfo().Options.GameSpeed == "adjustable"
+    check("the speed at the start", GetGameSpeed(), 0)
+    SetGameSpeed(10)
+    check("SetGameSpeed (only with GameSpeed = adjustable)", GetGameSpeed(), mayChange and 10 or 0)
+    local t0 = GetGameTimeSeconds()
+    WaitSeconds(1)
+    local ran = GetGameTimeSeconds() - t0
+    check("ten steps up run the game ten times as fast", mayChange and (ran > 8 and ran < 11) or (ran > 0.8 and ran < 1.2), true)
+    ConExecute("WLD_ResetSimRate")
+    check("WLD_ResetSimRate", GetGameSpeed(), 0)
+    ConExecute("WLD_IncreaseSimRate")
+    check("WLD_IncreaseSimRate", GetGameSpeed(), mayChange and 1 or 0)
+    ConExecute("WLD_DecreaseSimRate")
+    ConExecute("WLD_DecreaseSimRate")
+    check("WLD_DecreaseSimRate", GetGameSpeed(), mayChange and -1 or 0)
+    ConExecute("WLD_GameSpeed 99")
+    check("WLD_GameSpeed keeps to at most 50", GetGameSpeed(), mayChange and 50 or 0)
+    ConExecute("WLD_GameSpeed -99")
+    check("and at least -10", GetGameSpeed(), mayChange and -10 or 0)
+    ConExecute("WLD_GameSpeed 0")
+    check("back to normal", GetGameSpeed(), 0)
 
     -- the life bars over units: off until the player switches them on (ours); the scripts' own
     -- "false" / "true" put them away and give back what the player chose

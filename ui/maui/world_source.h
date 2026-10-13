@@ -34,10 +34,17 @@ struct WorldLine {
   float a[3], b[3];
   uint32_t color;  // 0xAARRGGBB
 };
+// A circle lying on the ground (a range ring).
+struct WorldRing {
+  float centre[3];
+  float radius;
+  uint32_t color;  // 0xAARRGGBB
+};
 struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
   std::vector<WorldLine> lines;
+  std::vector<WorldRing> rings;
   // The unit under the mouse, to be marked as the original marks it (brackets around it by how
   // its army stands to the player's): 0xffffffff for none. Kinds: 1 the player's own or an
   // ally's, 2 an enemy's, 3 a neutral's. A selected unit is not named here: it has its mark.
@@ -49,6 +56,15 @@ struct WorldScene {
   // Life bars over units (the selected ones, the one under the mouse, damaged ones near by): the
   // player's switch (UI_RenderUnitBars).
   bool lifeBars = false;
+};
+
+// A game's pace, kept by the host (the original's client manager keeps it, FA exe 0x53e590):
+// the speed in the steps the speed keys count (the game runs 10^(rate / 10) times as fast as
+// normal: WLD_GetSimRate 0x88d0b0), and whether the players may change it (the game option
+// GameSpeed = "adjustable"; "fast" starts at 4).
+struct GamePace {
+  int rate = 0;
+  bool adjustable = false;
 };
 
 // A moving picture for the front end's background (the host's: app/backdrop.h): the newest one

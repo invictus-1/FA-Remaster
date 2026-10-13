@@ -15,6 +15,7 @@
 #include "sim/replay.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
+#include "maui/world_source.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
 
@@ -83,11 +84,31 @@ int l_GetGameTimeSeconds(lua_State* L) {
   lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()) * 0.1f);
   return 1;
 }
-// GetSimRate() and GetGameSpeed(): how much faster or slower than normal the game runs, in the
-// steps the speed keys count. The host runs at normal speed: 0.
 int l_Zero(lua_State* L) {
   lua_pushnumber(L, 0);
   return 1;
+}
+// GetGameSpeed() (FA exe 0x88e260) and GetSimRate(): how much faster or slower than normal the
+// game runs, in the steps the speed keys count. (The original's GetSimRate is the speed the
+// simulation manages; here both are the speed asked for.)
+int l_GetGameSpeed(lua_State* L) {
+  lua_pushnumber(L, GameSpeedOf(L));
+  return 1;
+}
+// SetGameSpeed(rate) (FA exe 0x88e360): as given, without bounds.
+int l_SetGameSpeed(lua_State* L) {
+  SetGameSpeedTo(L, static_cast<int>(luaL_checknumber(L, 1)));
+  return 0;
+}
+// SessionRequestPause() / SessionResume() (FA exe 0x897800 / 0x8978d0). The game script hears of
+// the pause from the simulation's sync table (PausedBy), as in the original.
+int l_SessionRequestPause(lua_State* L) {
+  RequestSessionPause(L, true);
+  return 0;
+}
+int l_SessionResume(lua_State* L) {
+  RequestSessionPause(L, false);
+  return 0;
 }
 int l_GetSimTicksPerSecond(lua_State* L) {
   lua_pushnumber(L, 10);
@@ -358,6 +379,15 @@ std::string ArmyColorOf(lua_State* L, int army) {
   return color.empty() ? "ff808080" : color;
 }
 
+int GameSpeedOf(lua_State* L) {
+  const GamePace* pace = UserState::From(L)->config().pace;
+  return pace ? pace->rate : 0;
+}
+void SetGameSpeedTo(lua_State* L, int rate) {
+  GamePace* pace = UserState::From(L)->config().pace;
+  if (pace && pace->adjustable) pace->rate = rate;
+}
+
 void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "InternalCreateWldUIProvider", l_InternalCreateWldUIProvider);
   SetMethod(L, "CLuaWldUIProvider", "Destroy", l_ProviderDestroy);
@@ -373,8 +403,11 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSimTicksPerSecond", l_GetSimTicksPerSecond);
-  SetGlobal(L, "GetSimRate", l_Zero);
-  SetGlobal(L, "GetGameSpeed", l_Zero);
+  SetGlobal(L, "GetSimRate", l_GetGameSpeed);
+  SetGlobal(L, "GetGameSpeed", l_GetGameSpeed);
+  SetGlobal(L, "SetGameSpeed", l_SetGameSpeed);
+  SetGlobal(L, "SessionRequestPause", l_SessionRequestPause);
+  SetGlobal(L, "SessionResume", l_SessionResume);
   SetGlobal(L, "SessionIsPaused", l_SessionIsPaused);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
   SetGlobal(L, "SessionGetScenarioInfo", l_SessionGetScenarioInfo);

@@ -68,6 +68,11 @@ class Camera : public ScriptObject {
   bool turned = false, swingBack = false;
   float turnedPitch = 0;
   bool placed = false;  // false until the map's size or a script put it somewhere
+  // A move that takes time (the original's timed move, FA exe 0x7a74c0): from where the camera
+  // was to `moveFocus` and `moveZoom` in `moveSeconds`.
+  bool moving = false;
+  float moveFromFocus[3] = {0, 0, 0}, moveFocus[3] = {0, 0, 0};
+  float moveFromZoom = 0, moveZoom = 0, moveSeconds = 0, moveTime = 0;
 };
 
 // The farthest zoom (FA exe 0x7a7310): the map takes 1 / maxZoomMult of what would just fill the
@@ -225,11 +230,37 @@ int l_GetCamera(lua_State* L) {
 
 void SetZoomClamped(Camera* c, float z) { c->zoom = c->targetZoom = ClampZoom(c, z); }
 
+// The camera goes to a place and a zoom, at once or in `seconds` (the original's timed move:
+// TimedMoveInit 0x7a74c0, then a curve through time, SetupHermite 0x7a8940). The way's shape is
+// OURS: soft at both ends, the zoom by its logarithm; the original's curve is not read.
+void StartMove(Camera* c, const float focus[3], float zoom, float seconds) {
+  zoom = ClampZoom(c, zoom);
+  c->anchored = false;
+  if (seconds <= 0) {
+    for (int i = 0; i < 3; ++i) c->focus[i] = focus[i];
+    c->zoom = c->targetZoom = zoom;
+    c->moving = false;
+    ClampFocus(c);
+    return;
+  }
+  for (int i = 0; i < 3; ++i) c->moveFromFocus[i] = c->focus[i], c->moveFocus[i] = focus[i];
+  c->moveFromZoom = c->zoom, c->moveZoom = zoom;
+  c->moveSeconds = seconds, c->moveTime = 0;
+  c->moving = true;
+}
+// Show a box of the world (FA exe 0x7a83e0, the camera's slot 13): the focus goes to the box's
+// middle, the zoom to the larger of its width and depth.
+void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
+  float focus[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
+  StartMove(c, focus, std::max(hi[0] - lo[0], hi[2] - lo[2]), seconds);
+}
+
 // Pan (FA exe 0x7a6f00): the focus moves over the ground, to the view's left by dx and up the
 // view by dy, in parts of the zoom per width of the view. (Right and forward as the picture's
 // source has them for our heading.)
 void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
   if (viewWidth <= 0) return;
+  c->moving = false;  // (ours: the player's hand ends a timed move)
   float k = c->zoom / viewWidth * kPanSpeed, turn = c->heading - kPi, sh = std::sin(turn), ch = std::cos(turn);
   c->focus[0] += -ch * k * dx - sh * k * dy;
   c->focus[2] += sh * k * dx - ch * k * dy;
@@ -239,17 +270,21 @@ void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
 // factor 2^-cam_ZoomAmount; the zoom itself glides after it (AdvanceCamera).
 void ZoomByWheel(Camera* c, float notches, float x, float y) {
   c->anchorX = x, c->anchorY = y, c->anchored = true;
+  c->moving = false;  // (ours: the player's hand ends a timed move)
   c->targetZoom = ClampZoom(c, c->targetZoom * std::pow(2.0f, -kZoomAmount * notches));
 }
 
 // MoveTo(position, orientationHPR, zoom, seconds) / SnapTo(position, orientationHPR, zoom): the
-// camera looks at a place from a distance. The move takes no time here.
+// camera looks at a place from a distance, at once or after `seconds`. (The heading turns at
+// once.)
 int l_CamMoveTo(lua_State* L) {
   Camera* c = CheckCamera(L, 1);
-  ReadVector(L, 2, c->focus);
+  float focus[3] = {c->focus[0], c->focus[1], c->focus[2]};
+  ReadVector(L, 2, focus);
   float hpr[3];
   if (ReadVector(L, 3, hpr)) c->heading = hpr[0];  // (the pitch a script asks for is not kept: it follows the zoom)
-  if (lua_isnumber(L, 4)) SetZoomClamped(c, static_cast<float>(lua_tonumber(L, 4)));
+  StartMove(c, focus, lua_isnumber(L, 4) ? static_cast<float>(lua_tonumber(L, 4)) : c->targetZoom,
+            lua_isnumber(L, 5) ? static_cast<float>(lua_tonumber(L, 5)) : 0);
   return 0;
 }
 // MoveToRegion(region, seconds): the camera shows a rectangle of the map ({x0, y0, x1, y1}).
@@ -268,9 +303,9 @@ int l_CamMoveToRegion(lua_State* L) {
       r[i] = static_cast<float>(lua_tonumber(L, -1));
       lua_pop(L, 1);
     }
-    c->focus[0] = (r[0] + r[2]) * 0.5f;
-    c->focus[2] = (r[1] + r[3]) * 0.5f;
-    SetZoomClamped(c, std::max(std::fabs(r[2] - r[0]), std::fabs(r[3] - r[1])) * 1.2f);
+    float focus[3] = {(r[0] + r[2]) * 0.5f, c->focus[1], (r[1] + r[3]) * 0.5f};
+    StartMove(c, focus, std::max(std::fabs(r[2] - r[0]), std::fabs(r[3] - r[1])) * 1.2f,
+              lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0);
   }
   return 0;
 }
@@ -444,6 +479,9 @@ class WorldView : public Control {
         scene.ghosts.push_back(ghost);
       }
     }
+    // The range rings: of the selected units, the unit under the mouse, the building about to be
+    // placed, and of every unit in a filter the player has switched on.
+    RangeRingsForWorld(L, scene.hover, scene.ghosts.empty() ? nullptr : &scene.ghosts[0], &scene.rings);
     source->SetScene(scene);
     pixels_ = source->Draw(cam, w, h);
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
@@ -826,6 +864,14 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   if (!c->placed) return;
   WorldView* v = ViewOf(UserState::From(L)->ui().GetFrame(0), c->name);
   if (v) v->TakeAspect(c);
+  if (c->moving) {  // a timed move: soft at both ends
+    c->moveTime += seconds;
+    float t = c->moveSeconds > 0 ? std::min(1.0f, c->moveTime / c->moveSeconds) : 1.0f, s = t * t * (3 - 2 * t);
+    for (int i = 0; i < 3; ++i) c->focus[i] = c->moveFromFocus[i] + (c->moveFocus[i] - c->moveFromFocus[i]) * s;
+    float from = std::log(std::max(c->moveFromZoom, 1.0f)), to = std::log(std::max(c->moveZoom, 1.0f));
+    c->zoom = c->targetZoom = t >= 1 ? c->moveZoom : std::exp(from + (to - from) * s);
+    if (t >= 1) c->moving = false;
+  }
   c->targetZoom = ClampZoom(c, c->targetZoom);
   float before = c->zoom;
   // The ground under the anchor, as the camera sees it before this frame's step.
@@ -972,6 +1018,41 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
   eye[0] = focus[0] + sh * cp * distance, eye[1] = focus[1] + sp * distance, eye[2] = focus[2] + ch * cp * distance;
   right[0] = ch, right[1] = 0, right[2] = -sh;
   *zoom = c->zoom;
+  return true;
+}
+
+void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], float seconds) {
+  TargetBox(GetCameraObject(L, "WorldCamera"), lo, hi, seconds);
+}
+
+bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids) {
+  UserState* user = UserState::From(L);
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  if (!v || !v->EnsurePicture(L)) return false;
+  Rect r;
+  v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  user->config().world->UnitsIn(0, 0, r.x1 - r.x0, r.y1 - r.y0, ids);
+  return true;
+}
+
+bool PlaceInCameraView(lua_State* L, const float place[3]) {
+  const Camera* c = GetCameraObject(L, "WorldCamera");
+  // Without a picture: the ground the zoom spans (the zoom is the width of world across the
+  // view's longer side), turned with the camera; the lean is left out.
+  float turn = c->heading - kPi, sh = std::sin(turn), ch = std::cos(turn);
+  float dx = place[0] - c->focus[0], dz = place[2] - c->focus[2];
+  float right = ch * dx - sh * dz, forward = sh * dx + ch * dz;
+  float halfW = c->zoom * 0.5f, halfH = halfW;
+  if (c->aspect > 1) halfH /= c->aspect;
+  else halfW *= c->aspect;
+  return std::fabs(right) <= halfW && std::fabs(forward) <= halfH;
+}
+
+bool MouseWorldPlace(lua_State* L, float out[3]) {
+  UiManager& ui = UserState::From(L)->ui();
+  WorldView* v = MainView(ui.GetFrame(0));
+  if (!v) return false;
+  v->Unproject(L, ui.mouseX, ui.mouseY, out);
   return true;
 }
 

@@ -341,6 +341,13 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     float t1 = Len(Sub(pos, aim)) * k;
     Vec3 P1 = Add(aim, Mul(tv, t1));
     float t2 = Len(Sub(pos, P1)) * k;
+    // MOHO64_DEBUG_TRACK=<projectile id>: the lead's inputs each beat
+    static const long dbgTrack = getenv("MOHO64_DEBUG_TRACK") ? atol(getenv("MOHO64_DEBUG_TRACK")) : -1;
+    if (dbgTrack >= 0 && static_cast<long>(p->id) == dbgTrack)
+      Logf(LogLevel::Info,
+           "track %u %u pos %.9g %.9g %.9g target %u%s point %.9g %.9g %.9g vel %.9g %.9g %.9g t1 %.9g t2 %.9g", sim.tick(),
+           p->id, pos.x, pos.y, pos.z, te->id, te->shapeHeld ? " (moved this beat)" : "", aim.x, aim.y, aim.z, tv.x, tv.y,
+           tv.z, t1, t2);
     aim = Add(aim, Mul(tv, t2));
   }
   float w = WaterLevel(sim);
@@ -378,8 +385,7 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     if (!p->stayUnderwater) a.y = std::max(a.y, ww);
     d = Sub(a, pos);
   }
-  float maxAng = p->turnRate * 0.1f * kPi / 180;
-  q = RotateToward(q, d, maxAng);
+  q = TurnToward(q, d, p->turnRate * 0.00174532924f);  // 0x69cf67: TurnRate x [0xe4f768]
   if (p->stayUnderwater && p->underwater) {
     Vec3 f = Forward(q);
     if (f.y > 0) {
@@ -391,8 +397,16 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     }
   }
   if (p->velocityAlign) {
-    Vec3 f = Forward(q);
-    v = Mul(f, Dot(f, v));
+    // 0x69a2a0: the velocity's part along the new forward, divided by the forward's own squared length (the
+    // quaternion is not kept normalised)
+    const Vec3 f = Forward(q);
+    const float f2 = (f.x * f.x + f.y * f.y) + f.z * f.z;
+    if (f2 > 0.0f) {
+      const float k = ((v.y * f.y + v.z * f.z) + v.x * f.x) / f2;
+      v = {f.x * k, f.y * k, f.z * k};
+    } else {
+      v = {};
+    }
   }
 }
 
@@ -579,7 +593,7 @@ void MotionTick(Sim& sim, Projectile* p) {
   if (!p->trackTarget) {
     v = Add(v, Mul(p->ballisticAccel, 0.1f));
     v = Add(v, Mul(Forward(q), p->accel * 0.1f));
-    if (p->velocityAlign && maxAng > 0) q = RotateToward(q, v, maxAng >= kPi ? 10.0f : maxAng);
+    if (p->velocityAlign && maxAng > 0) q = TurnToward(q, v, p->turnRate * 0.00174532924f);  // 0x69c11e
   } else {
     UpdateTracking(sim, p, q, v);
     if (p->destroyQueued) return;

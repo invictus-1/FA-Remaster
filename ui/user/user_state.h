@@ -27,7 +27,10 @@ namespace moho::ui {
 
 class WorldSource;
 class BackdropSource;
+struct GamePace;
 struct WorldLine;
+struct WorldRing;
+struct WorldGhost;
 class UiManager;
 namespace sound {
 class SoundSystem;
@@ -54,6 +57,8 @@ class UserState {
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
+    // The running game's pace (the host's); nullptr: there is no game.
+    GamePace* pace = nullptr;
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;
@@ -86,6 +91,7 @@ class UserState {
     virtual ~Extra() = default;
   };
   std::unique_ptr<Extra> units;
+  std::unique_ptr<Extra> ranges;  // the range rings' filters and switches (range_rings.cpp)
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
   std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
   // The life bars over units (the console command UI_RenderUnitBars, user/keymap.cpp): the
@@ -156,6 +162,14 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
 uint32_t UnitUnderMouse(lua_State* L);
 std::string ArmyColorOf(lua_State* L, int army);
+// The world camera (worldview.cpp): show a box of the world, at once or in `seconds` (the
+// original's camera slot 13, FA exe 0x7a83e0); the entity ids of the units in the main world
+// view's picture (false without a picture; then PlaceInCameraView says roughly whether a place
+// is in view); the place of the world under the mouse (false without a world view).
+void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], float seconds);
+bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids);
+bool PlaceInCameraView(lua_State* L, const float place[3]);
+bool MouseWorldPlace(lua_State* L, float out[3]);
 // How the unit under the mouse is to be marked (the original's choice of bracket, FA exe
 // 0x7fd3f0): 0 not at all (no such unit, or it is selected and has its mark already), 1 the
 // player's own or an ally's, 2 an enemy's, 3 a neutral's.
@@ -167,6 +181,12 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// The console commands the game's key map binds its selection keys to (user_units.cpp):
+// UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
+// words> (FA exe 0x866a30) and UI_ExpandCurrentSelection (0x866970: the player's units in view
+// of the kinds that are selected join the selection; no walls, no building being upgraded).
+void SelectByCategoryCommand(lua_State* L, const std::string& arguments);
+void ExpandCurrentSelection(lua_State* L);
 // Select the player's units of the same kind (blueprint) as `unit` among those entity ids; with
 // `add` they join the selection. False when `unit` is not one of the player's.
 bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);
@@ -174,6 +194,26 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
 // each unit to where its orders take it, coloured by the kind of order).
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);
 std::string TakeOrders(lua_State* L);
+// For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
+// knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false
+// when there is no such unit.
+void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids);
+bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army);
+// Range rings (range_rings.cpp): SetOverlayFilter / SetOverlayFilters; the console variables
+// range_RenderSelected / range_RenderHighlighted / range_RenderBuild (the name in upper case;
+// false: not one of them); and the rings to draw now, given the unit under the mouse
+// (0xffffffff: none) and the building about to be placed (nullptr: none).
+void RegisterRangeBindings(lua_State* L);
+bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::string& value);
+void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRing>* out);
+// The player asks for the game to pause or to go on (user_units.cpp): written into the orders
+// like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
+// FA exe 0x8942b0 / 0x894330).
+void RequestSessionPause(lua_State* L, bool pause);
+// The game's speed in the speed keys' steps, and setting it (session_bindings.cpp): only where
+// the game's option lets the players change it (the client manager's byte +0x454).
+int GameSpeedOf(lua_State* L);
+void SetGameSpeedTo(lua_State* L, int rate);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
 

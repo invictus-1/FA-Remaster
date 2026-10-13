@@ -339,8 +339,49 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   blueprint, health, economy, what it works on, its army and colour; the fields as the original
   writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by
   its key as FAF's scripts ask.
-- 405 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 126 are logged stubs. (`--list-bindings` counts
+- Selecting by category and going to units, as read from the original: `UISelectionByCategory`
+  (FA exe 0x8662b0: the keys for "all engineers", "nearest idle engineer", "all of this kind on
+  screen": the player's selectable units of a category expression, optionally only those in
+  view, only idle ones, or only the one nearest to the mouse; a building being upgraded is left
+  out), `AddSelectUnits`, `UIZoomTo(units, seconds)` (0x867240: the camera shows the units' places
+  with 20 around them; one unit from a zoom of 40) and `UISelectAndZoomTo(unit, seconds)`. The
+  game's key map binds its selection keys to two console commands, built the same way:
+  `UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
+  words>` (0x866a30; Ctrl-B engineers, Ctrl-X everything, Ctrl-A / Ctrl-S / Ctrl-L air, naval and
+  land units without engineers, H the nearest factory, ...) and `UI_ExpandCurrentSelection`
+  (0x866970; Ctrl-Z: the units in view of the kinds that are selected). Not read: how `+idle
+  +goto` steps the camera from one idle unit to the next (0x865590); ours goes to the one found. So a
+  game now opens as the original does: the game's script sends the camera to the commander in
+  one second and selects it. The camera's moves can take time (`MoveTo`, `MoveToRegion` and
+  these): soft at both ends, the zoom by its logarithm; the path's exact shape is ours (the
+  original's curve, 0x7a8940, is not read), and the player's wheel or drag ends such a move.
+  Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
+  structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.
+- Range rings, first form (`user/range_rings.cpp`, with what was read from the original's range
+  renderer at its top): `SetOverlayFilter` and `SetOverlayFilters` keep the game script's
+  filters; the console variables `range_RenderSelected`, `range_RenderHighlighted` and
+  `range_RenderBuild` (the script switches all three on unless the profile says otherwise) give
+  rings to the selected units, to the player's unit under the mouse and to the building about
+  to be placed; a filter the player switches on in the game's overlay menu gives them to every
+  unit of the player's in it. What a ring measures goes by the filter's name as in the original:
+  the weapons of a range category (the greatest EffectiveRadius or MaxRadius, the least
+  MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
+  They are drawn as plain circles through the picture's source (`WorldScene::rings`). Not the
+  original's yet: overlapping rings joined into one outline with a glow, the line's thickness
+  by the zoom, radii changed while the game runs, and the rings of "Miscellaneous".
+- Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
+  go into the player's orders like every command, so the simulation pauses with a beat; the
+  game's script hears of it from the sync table and shows its own sign (the Pause key runs the
+  script's `TogglePause`). The speed is the host's (`GamePace`, as the original's client manager
+  keeps it): in the speed keys' steps, the game runs 10^(rate / 10) times as fast (0x88d0b0).
+  `SetGameSpeed`, `GetGameSpeed`, and the console commands `WLD_IncreaseSimRate`,
+  `WLD_DecreaseSimRate`, `WLD_ResetSimRate`, `WLD_GameSpeed <n>` with the original's bounds (-10
+  to 50) are built. As in the original the speed only changes where the game's option
+  `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
+  asked for, not the speed the simulation manages; at high speeds the host runs at most ten
+  beats a frame.
+- 414 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 117 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track
