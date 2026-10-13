@@ -202,6 +202,7 @@ class Unit : public Entity {
   Vec3 armAim;                     // CAiBuilderImpl +0xc: the build arm's aim target (zero: none)
   bool armReady = true;            // CAiBuilderImpl +9: the arm is on target (no arm: always)
   std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach
+  std::vector<uint8_t> blipCacheBlip;  // per entry: 1 = the entry is that unit's recon BLIP (a jammer's), not the unit
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)

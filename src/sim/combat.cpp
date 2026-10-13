@@ -338,7 +338,11 @@ bool HasTarget(Sim& sim, const AiTarget& t) {
   if (t.type != 1) return false;
   Entity* e = TargetEntity(sim, t);
   if (!e) return false;
-  if (e->kind == Entity::Kind::Unit) return !e->dead;
+  if (e->kind == Entity::Kind::Unit) {
+    // (a blip taken after its unit died: the blip itself is asked, 0x5e2a5a, and it is not dead while it exists)
+    if (t.viaBlip && t.pastDeath) return static_cast<const Unit*>(e)->blip != nullptr;
+    return !e->dead;
+  }
   return true;
 }
 
@@ -966,6 +970,7 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   u->blipCacheValid = true;
   u->blipCacheTick = sim.tick();
   u->blipCache.clear();
+  u->blipCacheBlip.clear();
   float R = MaxWeaponRange(u);
   // FAF patch 0x128f426: wider while the head command's type has bit 0x10 or 0x20 (types 16..63)
   if (!u->commands.empty() && (static_cast<int>(u->commands.front()->type) & 0x30) != 0)
@@ -1001,12 +1006,31 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
         if (std::find(ordered.begin(), ordered.end(), t) == ordered.end()) ordered.push_back(t);
     u->blipCache.swap(ordered);
   }
+  // 0x6acf27: behind a unit whose jammer is on come the blips the army holds of it that it does not know to be
+  // fakes (ReconGetJamingBlips 0x5c20c0: every blip of the unit in the army's database, the real one too). The
+  // list is only as fresh as the weapon that asks needs it (a 20-beat weapon reads what a 10-beat one built), and
+  // a blip does not die with its unit: so a weapon can take the blip of a jammer that died since the list was
+  // made. Here: the real blip. NOT YET: the fakes as targets.
+  {
+    std::vector<Unit*> withBlips;
+    for (Unit* t : u->blipCache) {
+      withBlips.push_back(t);
+      u->blipCacheBlip.push_back(0);
+      if (t->intel && t->intel->has[9] && t->intel->on[9] && t->blip && (t->recon[a] & kReconInUse) &&
+          !(t->recon[a] & 0x20)) {
+        withBlips.push_back(t);
+        u->blipCacheBlip.push_back(1);
+      }
+    }
+    u->blipCache.swap(withBlips);
+  }
   {
     // MOHO64_DEBUG_BLIPCACHE=<unit id>: every rebuild of that unit's list of enemies in reach
     static const long dbgId = getenv("MOHO64_DEBUG_BLIPCACHE") ? atol(getenv("MOHO64_DEBUG_BLIPCACHE")) : -1;
     if (dbgId >= 0 && static_cast<long>(u->id) == dbgId) {
       std::string ids;
-      for (const Unit* t : u->blipCache) ids += " " + std::to_string(t->id);
+      for (size_t i = 0; i < u->blipCache.size(); ++i)
+        ids += " " + std::to_string(u->blipCache[i]->id) + (u->blipCacheBlip[i] ? "b" : "");
       Logf(LogLevel::Info, "blipcache %u unit %u period %d reach %.3f:%s", sim.tick(), u->id, period, R, ids.c_str());
     }
   }
@@ -1059,57 +1083,76 @@ bool InMap(Sim& sim, Vec3 p) {
 }
 
 // CAiAttackerImpl::FindBestEnemy 0x5d7a10
-Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, float range, bool useAngle) {
+// isBlip (one flag per list entry, Unit::blipCacheBlip): the entry is the unit's recon blip, an entity of its own
+// in the original: the blip's own flags and place count, not the unit's, and what comes back is the blip
+// (*bestIsBlip). Without the flags every entry is a unit.
+Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, float range, bool useAngle,
+                    const std::vector<uint8_t>* isBlip = nullptr, bool* bestIsBlip = nullptr) {
+  if (bestIsBlip) *bestIsBlip = false;
   if (list.empty()) return nullptr;
   Unit* u = w->unit;
   int a = u->army ? u->army->index - 1 : -1;
   Unit* best = nullptr;
+  bool bestBlip = false;
   float bestScore = std::numeric_limits<float>::infinity();
   int bestStatus = 3, bestPrio = 9999;
   Vec3 P = u->position;
   Vec3 fwd = WeaponForward(w);
   Entity* cur = TargetEntity(sim, w->target);
+  const bool curBlip = cur && bestIsBlip && w->target.viaBlip;
   const int n = static_cast<int>(w->priorities.size());
-  for (Unit* e : list) {
-    if (!Alive(e)) continue;
-    float d2 = Dist2XZ(P, e->position);
+  for (size_t li = 0; li < list.size(); ++li) {
+    Unit* e = list[li];
+    const bool blip = isBlip && li < isBlip->size() && (*isBlip)[li] != 0;
+    if (blip) {
+      if (!bestIsBlip || !e || e->destroyQueued || !e->blip || e->blip->destroyQueued) continue;
+    } else if (!Alive(e)) {
+      continue;
+    }
+    const Vec3 ep = blip ? e->blip->position : e->position;
+    float d2 = Dist2XZ(P, ep);
     if (d2 > range * range) continue;
     if (!IsEnemy(u->army, e->army)) continue;
     const CombatBpData& ecb = CB(e);
     if (ecb.benign) continue;
-    if (e->parentId) {
-      if (e->layer == "Air" || e->beingBuilt) continue;
-    } else if (e->layer == "Air" && e->beingBuilt) {
-      continue;
+    if (!blip) {  // (a blip has no parent, is never being built, has no unit states and is on no blacklist)
+      if (e->parentId) {
+        if (e->layer == "Air" || e->beingBuilt) continue;
+      } else if (e->layer == "Air" && e->beingBuilt) {
+        continue;
+      }
+      if (Blacklisted(w, e) || TargetExempt(u, e) || e->unitStates.count("DoNotTarget")) continue;
     }
-    if (Blacklisted(w, e) || TargetExempt(u, e) || e->unitStates.count("DoNotTarget")) continue;
-    if (e->layer != "Air" && !InMap(sim, e->position)) continue;
+    if (e->layer != "Air" && !InMap(sim, ep)) continue;
     if (!Targetable(sim, w, e)) continue;
-    int s = SolutionStatus(w, e->position, &d2);
+    int s = SolutionStatus(w, ep, &d2);
     if (s == 1 || s == 2) {
       if (!(IsMobile(u) && (w->bp->autoInitiateAttackCommand || w->bp->slavedToBody))) continue;
     }
-    if (TerrainBlocked(sim, u, e->position, w->bp->ballisticArc)) continue;
+    if (TerrainBlocked(sim, u, ep, w->bp->ballisticArc)) continue;
     if (CB(u).needUnpack && s != 0) continue;
-    float score = useAngle ? Dot(Norm(Sub(P, e->position)), fwd) : d2;
+    float score = useAngle ? Dot(Norm(Sub(P, ep)), fwd) : d2;
     if (s != 0 && !w->bp->autoInitiateAttackCommand) score = useAngle ? score + 4 : score * 4;
     bool seen = a >= 0 && a < 16 && (e->recon[a] & 0x10);
     int prio = 9999;
+    const bool curIsE = cur == e && curBlip == blip;
     for (int i = 0; i < n; ++i) {
       if (i > bestPrio) break;
       if (s > bestStatus && best) break;
       if (!InSet(w->priorities[static_cast<size_t>(i)], e->blueprint)) continue;
       if (seen) prio = i;
-      bool take = prio < bestPrio || (!cur && score < bestScore) ||
-                  (cur && cur != best && (score < bestScore || cur == e));
+      const bool curIsBest = cur == best && curBlip == bestBlip;
+      bool take = prio < bestPrio || (!cur && score < bestScore) || (cur && !curIsBest && (score < bestScore || curIsE));
       if (take) {
         best = e;
+        bestBlip = blip;
         bestScore = score;
         bestStatus = s;
         bestPrio = prio;
       }
     }
   }
+  if (bestIsBlip) *bestIsBlip = bestBlip;
   return best;
 }
 
@@ -1152,6 +1195,9 @@ bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
   if (c.type != CommandType::Attack && c.type != CommandType::FormAttack) return false;
   if (!c.targetId) return false;  // (a ground target)
   const Entity* e = sim.FindEntity(c.targetId);
+  // (0x5d5980: the entity the order names; for a blip taken after its unit died that is the blip, which lives)
+  if (e && c.targetViaBlip && c.targetPastDeath && e->kind == Entity::Kind::Unit)
+    return e->destroyQueued || !static_cast<const Unit*>(e)->blip;
   return !e || e->dead || e->destroyQueued;
 }
 
@@ -1278,7 +1324,8 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   float range = WeaponReach(w);
   bool useAngle = b.turreted || b.slavedToBody;
   const std::vector<Unit*>& list = BlipsInRange(sim, u, period);
-  Unit* best = FindBestEnemy(sim, w, list, range, useAngle);
+  bool bestBlip = false;
+  Unit* best = FindBestEnemy(sim, w, list, range, useAngle, &u->blipCacheBlip, &bestBlip);
   if (best) {
     // an idle unit's AutoInitiateAttackCommand weapon also orders the unit to attack what it found (0x5d93d5)
     const bool autoAttack = CheckAutoInitiate(sim, w);
@@ -1287,12 +1334,19 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     {
       static const bool dbgAcq = getenv("MOHO64_DEBUG_ACQUIRE") != nullptr;
       if (dbgAcq)
-        Logf(LogLevel::Info, "acq %u unit %u %s -> %u (had %u)", sim.tick(), u->id, b.label.c_str(), best->id,
+        Logf(LogLevel::Info, "acq %u unit %u %s -> %u%s (had %u)", sim.tick(), u->id, b.label.c_str(), best->id,
+             bestBlip ? (best->dead ? " (its blip, the unit is dead)" : " (its blip)") : "",
              TargetEntity(sim, w->target) ? TargetEntity(sim, w->target)->id : 0u);
     }
     TargetPointDraw(sim, best);
-    SetTarget(sim, w, EntityTarget(best));  // (Unit::GetBlipsInRange 0x6acc60 lists the units themselves)
-    if (autoAttack) IssueAutoAttack(sim, u, best);
+    // (Unit::GetBlipsInRange 0x6acc60 lists the units themselves, and behind a jammer its blips)
+    AiTarget nt = EntityTarget(best);
+    if (bestBlip) {
+      nt.viaBlip = true;
+      nt.pastDeath = best->dead;
+    }
+    SetTarget(sim, w, nt);
+    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
   } else if (d.type == 1 && d.viaBlip && TargetEntity(sim, d) && TargetEntity(sim, d)->dead &&
@@ -1933,6 +1987,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
         Unit* tu = static_cast<Unit*>(e);
         a.mobile = IsMobile(tu);
         a.viaBlip = t.targetViaBlip;
+        a.pastDeath = t.targetViaBlip && t.targetPastDeath;
         // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
@@ -2344,6 +2399,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
+  t->targetPastDeath = c.targetPastDeath;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2362,6 +2418,7 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
+  t->targetPastDeath = c.targetPastDeath;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2472,6 +2529,7 @@ BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->goalId = c.targetId;
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
+  t->targetPastDeath = c.targetPastDeath;
   t->site = e->position;
   InitAttack(sim, u, *t, false);
   for (size_t i = 0; i < u->weapons.size(); ++i)

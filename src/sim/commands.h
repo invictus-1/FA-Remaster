@@ -43,6 +43,7 @@ struct UnitCommand {
   // the order named the army's recon BLIP of an enemy unit (a player's order: the interface only knows blips),
   // not the unit itself (an order the engine issues from what a weapon found: [entity+0x68] at 0x5d9415)
   bool targetViaBlip = false;
+  bool targetPastDeath = false;  // ... and that unit was dead already (AiTarget::pastDeath)
   uint32_t id = 0;
   CommandType type = CommandType::None;
   Vec3 pos;
@@ -109,7 +110,8 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
 // RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
 // The Attack order a weapon with AutoInitiateAttackCommand gives its own idle unit (CAcquireTargetTask 0x5d9415).
-std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target);
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip = false,
+                                             bool pastDeath = false);
 
 // Lua's view of a unit's navigator (Unit:GetNavigator()).
 class NavigatorObject : public ScriptObject {

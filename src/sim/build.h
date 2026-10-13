@@ -28,6 +28,7 @@ struct BuildTask : public ScriptObject {
   uint32_t goalId = 0;    // the command's target (repair / guard)
   int targetPoint = -1;   // an attack's CAiTarget target point (the command's pick among AI.TargetBones; -1 none)
   bool targetViaBlip = false;  // the command named the army's recon blip of the unit (UnitCommand::targetViaBlip)
+  bool targetPastDeath = false;  // (UnitCommand::targetPastDeath)
   uint32_t targetId = 0;  // the unit being worked on (focus)
   bool started = false;   // OnStartBuild ran for targetId
   bool completed = false; // the work finished (the task's done state: mobile 5, factory 4, upgrade 3)

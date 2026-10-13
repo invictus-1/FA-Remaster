@@ -880,13 +880,15 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
 // what is left in the queue goes, the command ctor draws the target point.
-std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target) {
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath) {
   if (!IsAlive(u) || !target) return nullptr;
   auto c = std::make_shared<UnitCommand>();
   c->id = sim.nextCommandId++;
   c->type = CommandType::Attack;
   sim.commandsById[c->id] = c;
   c->targetId = EntityRef(target);
+  c->targetViaBlip = viaBlip;  // (what the weapon found was a jammer's blip: the order names the blip's id)
+  c->targetPastDeath = pastDeath;
   c->pos = target->position;
   c->hasPos = true;
   c->targetPoint = TargetPointDraw(sim, target);

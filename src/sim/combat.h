@@ -83,6 +83,9 @@ struct AiTarget {
   // weapon found itself): scripts see the difference (GetCurrentTarget returns the blip)
   bool viaBlip = false;
   uint32_t blipId = 0;  // that blip (set when a weapon takes the target): it outlives the unit by a few beats
+  // the blip was taken when its unit was already dead (a jammer's blip out of a list of enemies built while the
+  // unit lived): a blip is not dead while it exists (HasTarget 0x5e2a5a), so the target lasts as long as the blip
+  bool pastDeath = false;
   // (a unit and the blip of that unit are two entities in the original: going from one to the other is a new target)
   bool operator==(const AiTarget& o) const {
     return type == o.type && entityId == o.entityId && (type != 1 || viaBlip == o.viaBlip) &&
