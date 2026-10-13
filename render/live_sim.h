@@ -40,6 +40,11 @@ class LiveSim {
     // by the game's own callback (what Ctrl-K sends). 0 = never.
     uint32_t selfDestructAt = 0;
     int selfDestructArmy = 1;  // 1-based
+    // For tests of a new game: at this beat the army's first unit (its commander) is ordered to
+    // build that enhancement on itself (the order the interface writes: a script task). 0 = never.
+    uint32_t enhanceAt = 0;
+    int enhanceArmy = 1;
+    std::string enhancement;
   };
   enum class State { Loading, Running, Ended, Failed };
 
@@ -87,6 +92,7 @@ class LiveSim {
   struct Engine;  // everything of src/sim, kept out of this header
   void Run();
   void SelfDestruct(int army);
+  void Enhance(int army, const std::string& enhancement);
   bool Load(std::string* error);
 
   Setup setup_;

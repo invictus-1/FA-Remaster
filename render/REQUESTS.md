@@ -22,7 +22,40 @@ bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal s
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
-game's names to today's techniques by a table of 18; `models.cpp` has the same table).
+game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 open (a Script
+order from the command stream loses its table: no enhancement can be ordered).
+
+## 18. A Script order from the command stream loses its table (2026-10-13, blocking for upgrades in a played game)
+
+**Who asks:** the renderer (found on the way; it concerns the interface as much). **What:** an
+order of type Script (28) that comes through the command stream should carry its Lua table into
+the command, as `IssueScript` does for the simulation's own scripts.
+
+**Seen:** the viewer orders a commander to build an enhancement the way the interface's script
+does: `CommandWriter::IssueCommand(units, data, clear)` with `data.type = CommandType::Script` and
+`data.lua` = the serialized table `{ TaskName = "EnhanceTask", Enhancement = "ElectronicsEnhancment" }`
+(`LiveSim::Enhance`, the viewer's `--enhance <beat>,<army>,<name>`). The simulation's log then says:
+```
+warning: Unable to find file /lua/sim/tasks/scripttask.lua
+info: Can't find task ScriptTask, using ScriptTask directly
+warning: .../lua/sim/scripttask.lua:87: ScriptTask.TaskTick called. Did you forget to add TaskName to your command lua param table?
+```
+and nothing is built (the commander stands unchanged 170 game-seconds later).
+
+**Where it seems to be** (read, not changed): `command_stream.cpp` reads the value (`c.lua =
+Lua()`), but `IssueFromStream` in `commands.cpp` never makes a table of `d.lua`; `scriptRef` is set
+in one place only, `l_IssueScript`. So `StartScriptTask` finds no `TaskName` and falls back to the
+bare `ScriptTask`.
+
+**Why it matters:** every enhancement a player buys is this order (and whatever else the interface
+sends as a script task). In Chris's game the upgrades of the rebuilt commander cannot be bought
+until it works; here it is the last thing not yet seen of that model (each upgrade's part coming
+back when bought).
+
+**Smallest form:** in `IssueFromStream`, for a Script order with a non-nil `d.lua`: push the value
+(`PushSerializedLua`) and keep it as the command's `scriptRef`.
+
+**Answer:** (none yet)
 
 ## 17. A mesh whose ShaderName names no technique of mesh.fx (2026-10-13, answered)
 
