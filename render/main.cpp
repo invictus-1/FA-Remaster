@@ -70,6 +70,8 @@
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
 // --find shield|wreck  with a game: once it is where --tick asks, the camera goes to the first shield's bubble or
 //           the first wreck there is (to look at them without knowing where they are)
+// --hide-bone <bone>  placed units are drawn with that bone and all that hangs on it hidden (as a script's
+//           HideBone does; a name or a number, as for --turn)
 // --shielded  placed units are drawn with a personal shield up
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
@@ -152,6 +154,7 @@ struct Options {
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
   bool shielded = false;                // --shielded
+  bool hideTurned = false;              // --hide-bone
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
@@ -227,6 +230,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
     else if (a == "--turn") o->turn = v;
+    else if (a == "--hide-bone") {
+      o->turn = v;
+      o->hideTurned = true;
+    }
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
@@ -965,7 +972,7 @@ int main(int argc, char** argv) {
           if (up != u.turned) continue;
           const Vec3 p = pivot + Rotate(yaw, bones[i].position * scale - pivot);
           const Quat q = Mul(yaw, bones[i].rotation);
-          u.bones.push_back({static_cast<uint32_t>(i), {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w}});
+          u.bones.push_back({static_cast<uint32_t>(i), {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w}, opt.hideTurned});
         }
         pose.now = pose.next = u.bones.data();
         pose.nowCount = pose.nextCount = u.bones.size();

@@ -18,7 +18,31 @@ running game needs no `--display` log any more). 12 done and in use
 three seconds at the start is the M28 AI's own script, in the original too; the renderer does not
 count a look in which every place is seen as exploring). 14 done and in use (`PropEvents`,
 `EntityViews`, a projectile's scale: wreckage, trees that burn, fall and are reclaimed, shields'
-bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields).
+bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 is
+open (hidden bones).
+
+## 15. Hidden bones: the parts of a mesh a script hides and shows (2026-10-12, not blocking)
+
+**Who asks:** the renderer. **What:** which bones of a unit are hidden now (`HideBone(bone,
+affectChildren)` / `ShowBone`), as you offered at the end of answer 14.
+
+**Why:** many models carry parts that are only there some of the time, and the scripts switch them
+with these two calls: a commander's upgrades (every enhancement's mesh is in the model and hidden
+until it is bought: today a new commander is drawn wearing all of them at once), a factory's arms
+and platform parts, missiles in a silo, a unit's alternative weapons, pieces that fly off in a
+death. Drawn with everything showing, such units are plainly wrong.
+
+**Smallest form:** per unit that has any hidden bone, the list of hidden bone indices (the model's
+bone order, as `UnitPoses` numbers them), with the children already resolved (if the script hid a
+bone with `affectChildren`, list the children too, so the renderer need not know the rule). Beside
+`UnitPoses`, per beat; or as a field of `UnitPose` if a unit with hidden bones may as well be
+listed there. Also for props and the script-made entities if the scripts hide bones on those
+(wreckage sometimes does); units matter most.
+
+**What I do with it:** a hidden bone's vertices are drawn at no size (each vertex follows one
+bone), in the picture and in the shadow.
+
+**Until then:** every part of every model shows.
 
 ## 14. Everything else that has a mesh: props that change, wreckage, shields, what scripts make (2026-10-12)
 
