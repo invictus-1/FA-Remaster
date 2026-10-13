@@ -4,6 +4,32 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 17: the commander's thin eye beams run off to the side (2026-10-13)
+
+It was the renderer's drawing, not the lights list: the two eye lamps of EEL0001 both point straight
+ahead and 22 degrees down, and the broad light on the ground showed that. Fixed in `render/shafts.cpp`.
+
+What was wrong: a lamp's shaft in the air is a flat strip turned to the camera, as thin as the lamp
+at its start and as wide as the beam's middle at its end, drawn as two triangles. Its brightness
+across (bright in the middle, nothing at the edges) was given to the corners as -1 and +1 and left
+to run evenly between them. Over a shape that is a point at one end that does not come out
+symmetrical: the bright middle lay along the strip's diagonal, one of its two edges, a thin line
+about 18 degrees off the beam (to the unit's right), with a faint sheet on one side of it. That is
+the pair of thin lines in his picture (one per eye). Now the pixel is told how far it is from the
+strip's middle and how wide the strip is there, both of which do run evenly, and divides.
+
+Seen in the viewer from straight above, in fog (where shafts are plain) and in clear air: both
+shafts run from the eyes straight ahead along the middle of the broad light
+(`_scratch\render\review\eyebeam\fixed_three.png` in the lab: before in fog, after in fog, after in
+clear air). Every unit's head-lamp shafts were drawn this way, so engineers' and tanks' are
+straightened by the same change; lightning bolts are strips of one width and were not affected.
+
+He had found the beams fine in between: from a low camera the strip is seen along its length and
+the skew hardly shows; from straight above it shows in full.
+
+Still as it was, and not asked: where a shaft runs into the ground it ends in a hard line (plain
+only in fog).
+
 ## ui, to the renderer 16: the range rings' thickness beside the original's (2026-10-13)
 
 Measured rather than judged by eye (the width a line has in a picture: the sum of how far its

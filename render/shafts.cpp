@@ -21,7 +21,11 @@ cbuffer Shafts : register(b2) {
 
 struct VOut {
   float4 position : SV_Position;
-  float2 at : TEXCOORD0;  // x: -1..1 across; y: 0 at the lamp .. 1 at the far end
+  // x: how far to the side of the shaft's middle, in world units; y: 0 at the lamp .. 1 at the far
+  // end; z: half the shaft's width there. (Not -1..1 across: a shaft is thin at the lamp and wide at
+  // its end, and over such a shape a corner's "across" does not run evenly: the bright middle came
+  // out along the shape's diagonal, a thin line pointing some 18 degrees off the beam.)
+  float3 at : TEXCOORD0;
   float4 color : TEXCOORD1;  // w: 1 = a bolt's piece (no fading along it)
 };
 
@@ -33,14 +37,15 @@ VOut VS(uint id : SV_VertexID) {
   float3 p = lerp(s.from.xyz, s.to.xyz, uv.y);
   float3 side = normalize(cross(s.to.xyz - s.from.xyz, cameraPosition - p));
   VOut o;
-  o.position = mul(viewProj, float4(p + side * (uv.x * lerp(s.from.w, s.to.w, uv.y)), 1));
-  o.at = uv;
+  float half = lerp(s.from.w, s.to.w, uv.y);
+  o.position = mul(viewProj, float4(p + side * (uv.x * half), 1));
+  o.at = float3(uv.x * half, uv.y, half);
   o.color = s.color;
   return o;
 }
 
 float4 PS(VOut i) : SV_Target {
-  float across = saturate(1 - abs(i.at.x));
+  float across = saturate(1 - abs(i.at.x) / max(i.at.z, 1e-5));
   float along = 1 - i.at.y;
   // (the far end is wider: the same light over more air, so it thins twice over)
   if (i.color.w > 0.5) return float4(i.color.rgb * (across * across), 1);
