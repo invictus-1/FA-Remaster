@@ -76,21 +76,52 @@ inline Quat Orient(Vec3 dir) {
   // rotation = yaw about +y, then pitch about local +x (negative pitch tips +z up)
   return QMul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, -pitch));
 }
-// Shortest-arc rotation turning q's forward toward dir by at most maxAngle (radians).
-inline Quat RotateToward(const Quat& q, Vec3 dir, float maxAngle) {
-  Vec3 f = Forward(q);
-  Vec3 d = Norm(dir);
-  if (Len2(d) <= 0) return q;
-  float c = std::fmax(-1.0f, std::fmin(1.0f, Dot(f, d)));
-  float ang = dmath::Acos(c);
-  if (ang <= 1e-6f) return q;
-  Vec3 axis = Cross(f, d);
-  if (Len2(axis) < 1e-12f) {  // opposite: any perpendicular axis
-    axis = std::fabs(f.y) < 0.9f ? Cross(f, {0, 1, 0}) : Cross(f, {1, 0, 0});
+// The exe's normalise in place 0x452af0: the squares summed x, y, z, the root taken of the float sum, the parts
+// multiplied by 1 / length; a length of 1e-6 or less gives the zero vector and returns 0.
+inline double NormalizeExe(Vec3& v) {
+  const float s = (v.x * v.x + v.y * v.y) + v.z * v.z;
+  const double n = std::sqrt(static_cast<double>(s));
+  if (n > static_cast<double>(9.99999997e-07f)) {
+    const float inv = 1.0f / static_cast<float>(n);
+    v.x *= inv;
+    v.y *= inv;
+    v.z *= inv;
+    return n;
   }
-  axis = Norm(axis);
-  if (maxAngle < 3.14159265f && ang > maxAngle) ang = maxAngle;
-  return QNorm(QMul(AxisAngle(axis, ang), q));
+  v = {};
+  return 0.0;
+}
+// func_QuatFromVecRot 0x69aa50 (a shell's turn, homing or VelocityAlign): turn q so that its forward points along d,
+// by at most maxAngle. The rotation is built from the half vector (0x44f880: h = normalise(f + d), w = f.h,
+// xyz = f x h), not from an angle: a small turn comes out exact where an arccos of a dot product near 1 is off by a
+// percent. 0x4eb740 clamps it (only when maxAngle / 2 is below pi / 2), and the product r * q is NOT normalised.
+inline Quat TurnToward(const Quat& q, Vec3 d, float maxAngle) {
+  Vec3 f{(q.w * q.y + q.z * q.x) * 2.0f, (q.z * q.y - q.w * q.x) * 2.0f, 1.0f - (q.y * q.y + q.x * q.x) * 2.0f};
+  NormalizeExe(f);
+  NormalizeExe(d);
+  Vec3 h{d.x + f.x, f.y + d.y, f.z + d.z};
+  Quat r;
+  if (NormalizeExe(h) > 0.0) {
+    r.x = h.z * f.y - f.z * h.y;
+    r.y = f.z * h.x - h.z * f.x;
+    r.z = h.y * f.x - f.y * h.x;
+    r.w = (h.z * f.z + f.y * h.y) + h.x * f.x;
+  } else {  // opposite: half a turn about the world's up
+    r = {0.0f, 1.0f, 0.0f, 0.0f};
+  }
+  const float half = std::fabs(maxAngle * 0.5f);
+  if (half < 1.57079637f) {
+    float s = dmath::Sin(half);
+    const float len2 = (r.z * r.z + r.x * r.x) + r.y * r.y;
+    if (len2 > s * s) {
+      if (0.0f > r.w) s = -0.0f - s;
+      Vec3 n{r.x, r.y, r.z};
+      NormalizeExe(n);
+      r = {n.x * s, n.y * s, n.z * s, dmath::Cos(half)};
+    }
+  }
+  return {((q.z * r.y + q.x * r.w) + q.w * r.x) - q.y * r.z, ((q.w * r.y + q.x * r.z) + q.y * r.w) - q.z * r.x,
+          ((q.w * r.z + q.z * r.w) + q.y * r.x) - q.x * r.y, ((q.w * r.w - q.x * r.x) - q.y * r.y) - q.z * r.z};
 }
 inline Quat Nlerp(const Quat& a, Quat b, float t) {
   float d = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;

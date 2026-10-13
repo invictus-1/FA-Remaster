@@ -133,7 +133,7 @@ Vec3 Normalized(const Vec3& v) {
   return {v.x * inv, inv * v.y, inv * v.z};
 }
 
-// 0x452af0: normalise in place (zero if the length is <= 1e-6); returns the length
+// 0x452af0: normalise in place; returns the length (zero vector and 0 if the length is <= 1e-6: 0x452b92)
 double NormalizeInPlace(Vec3& v) {
   float s = (v.x * v.x + v.y * v.y) + v.z * v.z;
   double n = std::sqrt(static_cast<double>(s));
@@ -142,10 +142,10 @@ double NormalizeInPlace(Vec3& v) {
     v.x *= inv;
     v.y *= inv;
     v.z *= inv;
-  } else {
-    v = {};
+    return n;
   }
-  return n;
+  v = {};
+  return 0.0;
 }
 
 // func_NormalizeQuatInPlace 0x4edaa0
