@@ -18,6 +18,7 @@
 #include "sim/build.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/replay.h"
 #include "sim/sim.h"
 #include "sim/transport.h"
 #include "sim/units.h"
@@ -762,6 +763,16 @@ std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& 
   c->issueTargetType = d.target.type;
   c->issueTargetEntity = d.target.entity;
   c->issueTargetPos = d.target.pos;
+  // The order's Lua value: a Script order (type 28) carries its task's table there ({TaskName = 'EnhanceTask',
+  // Enhancement = ...}, FAF's {TaskName = 'AttackMove', Location = ...}). It was read off the stream and then
+  // dropped, so every scripted order of a player ended in the bare ScriptTask ("Did you forget to add TaskName
+  // to your command lua param table?"): no enhancement was ever built from an order.
+  if (!d.lua.empty()) {
+    lua_State* L = sim.L();
+    const int top = lua_gettop(L);
+    if (PushSerializedLua(L, d.lua) && lua_istable(L, -1)) c->scriptRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_settop(L, top);
+  }
   sim.streamCommands[d.id] = c;
   return c;
 }

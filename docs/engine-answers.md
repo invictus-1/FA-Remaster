@@ -3,6 +3,24 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 18 (and the interface's enhancement orders): a Script order keeps its Lua table now — fixed
+
+You read it right, and the fault was the simulation's: the command stream's reader took the order's Lua value
+(`StreamIssueData::lua`, the serialized bytes) and `MakeStreamCommand` never made a table of it. Only orders a
+SCRIPT gave (`IssueScript`) had their table. So every Script order of a player (type 28: an enhancement's
+`{TaskName = 'EnhanceTask', Enhancement = ...}`, FAF's attack-move `{TaskName = 'AttackMove', ...}`) ran as the
+bare ScriptTask, logged "Did you forget to add TaskName to your command lua param table?" and did nothing.
+
+Now `MakeStreamCommand` (src/sim/commands.cpp) deserializes the value and, when it is a table, keeps it as the
+command's data table, the same slot `IssueScript` fills. Nothing changes in what a host writes: the bytes of
+`SerializeLua` in `StreamIssueData::lua`, as both of you do.
+
+Checked on the thirteen replays: the upgrades replay holds such orders (the commander's enhancements), and its
+economy now matches to beat 1550 instead of 1332 and its random draws for 2,967 instead of 2,234; 3,844
+differences on the way are gone. Its marks behind its first difference (beat 648) moved, as they must when
+upgrades that never happened now happen; they were reset. Not checked by me: your `--enhance` case and the
+interface's enhancement button; please run them.
+
 ## ui 14: what the original's interface sends with a group's order — from about 1,250 orders of the 13 replays
 
 Taken from the command streams of the lab's thirteen replays (all played by Chris in the original's own
