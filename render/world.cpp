@@ -689,6 +689,7 @@ void World::Render() {
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
     sight.neverSeen = unexplored ? 0.04f : sight.darkness;
+    sight.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
   post.Present(view);

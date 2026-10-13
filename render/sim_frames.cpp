@@ -224,9 +224,13 @@ void SimFrames::Beat(const moho::Sim& sim) {
         for (int x = 0; x < cells; ++x) {
           const float at[3] = {(static_cast<float>(x) + 0.5f) * mapWidth / static_cast<float>(cells), 0, (static_cast<float>(z) + 0.5f) * mapHeight / static_cast<float>(cells)};
           const size_t i = static_cast<size_t>(z) * static_cast<size_t>(cells) + static_cast<size_t>(x);
-          const bool now = (moho::ReconAt(sim, focus, at) & moho::kReconSeenNow) != 0;
+          // (asked as of something on the water's surface: sight is the same as on land there, and
+          // sonar is told too)
+          const uint32_t recon = moho::ReconAt(sim, focus, at, 1);
+          const bool now = (recon & moho::kReconSeenNow) != 0;
           if (now) sightEver_[i] = 1;
-          sightWork_[i] = now ? 255 : sightEver_[i] ? 128 : 0;
+          sightWork_[i] = static_cast<uint8_t>((now ? kSightNow : 0) | (sightEver_[i] ? kSightEver : 0) |
+                                               ((recon & (moho::kReconRadar | moho::kReconOmni)) ? kSightRadar : 0) | ((recon & moho::kReconSonar) ? kSightSonar : 0));
         }
       std::lock_guard<std::mutex> lock(mutex_);
       sight_ = sightWork_;

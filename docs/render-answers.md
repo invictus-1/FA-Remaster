@@ -47,8 +47,11 @@ picture and on the minimap (whose ground now also follows the hour and the weath
 anew when the light has changed). What it sees is asked of `ReconAt` over a grid of 256 x 256 places
 on the map every fifth beat (so the edge moves twice a second, in steps of four world units on a
 20 km map), and everything under a pixel darkens alike: ground, water, wrecks, and the units of the
-army's own that stand there cannot, since they see. Radar cover is not shown on the ground. It
-needs nothing from you beyond `SetFocusArmy`.
+army's own that stand there cannot, since they see. Radar cover shows on the ground since
+2026-10-12: an unseen place under the army's radar or omni (on water, its sonar too) keeps seven
+tenths of its light instead of half, so three levels can be told apart: seen, covered, neither.
+Whether the original lightens covered ground I have from memory only; say so if you read
+otherwise. It needs nothing from you beyond `SetFocusArmy`.
 
 Ground never seen (2026-10-12): the renderer keeps, from that grid, what the focus army has seen at
 some time (the engine does not keep it of places). `WorldPicture::SetUnexplored(true)` is for the

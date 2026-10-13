@@ -234,9 +234,10 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
       uint32_t* out = &m.mapPixels[static_cast<size_t>(y) * static_cast<size_t>(width)];
       for (int x = 0; x < width; ++x) {
         const int cx = static_cast<int>((static_cast<float>(x) + 0.5f - m.mapX0) * sx);
-        if (cx < 0 || cx >= m.seenCells || row[cx] == 255) continue;
+        if (cx < 0 || cx >= m.seenCells || (row[cx] & kSightNow)) continue;
         const uint32_t p = out[x];
-        if (row[cx] == 0 && w.unexplored) out[x] = (p & 0xff000000u) | ((p >> 4) & 0x000f0f0fu);  // never seen: next to none of it
+        if (!(row[cx] & kSightEver) && w.unexplored) out[x] = (p & 0xff000000u) | ((p >> 4) & 0x000f0f0fu);  // never seen: next to none of it
+        else if (row[cx] & (kSightRadar | kSightSonar)) out[x] = (p & 0xff000000u) | (((p >> 1) & 0x007f7f7fu) + ((p >> 2) & 0x003f3f3fu));  // under radar or sonar: three quarters
         else out[x] = (p & 0xff000000u) | ((p >> 1) & 0x007f7f7fu);  // half its light
       }
     }

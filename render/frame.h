@@ -12,6 +12,14 @@
 
 namespace render {
 
+// What the army the picture is for knows of a place of the map (the sight grid, SimFrames::TakeSight).
+enum SightBits : uint8_t {
+  kSightRadar = 1,    // radar or omni covers it now
+  kSightSonar = 2,    // sonar covers it now (which tells of what is on or in water)
+  kSightEver = 0x40,  // it has been seen at some time
+  kSightNow = 0x80,   // it is seen now
+};
+
 struct FrameUnit {
   uint32_t id = 0;         // the game's entity id; bits 20 to 27 are the army index
   uint32_t blueprint = 0;  // index into Frame::blueprints

@@ -336,7 +336,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   sees the place again. Ground: `SimFrames` keeps which places of the grid the army has seen at
   some time; with `World::unexplored` (`--unexplored`, `WorldPicture::SetUnexplored`, for the
   game's option FogOfWar "unexplored") ground never seen is all but black, otherwise it looks
-  like ground seen before. Not the original's: the memory is the renderer's own and begins when
+  like ground seen before. Radar cover shows on the ground: an unseen place that radar or omni
+  covers (on water, sonar too) keeps seven tenths of its light where other unseen ground keeps
+  half (`SightShade::covered`), in the picture and on the minimap (where sonar's cover also
+  shows on land: the minimap does not ask where water is). That the original lightens covered
+  ground at all is from memory, not read out of it. Not the original's: the memory is the renderer's own and begins when
   the army becomes the focus army; the buildings' part is made from the frames that are drawn,
   so running a game ahead without drawing misses what was seen meanwhile; a building is told by
   its id's third letter. Open: the engine reports the whole map as seen for three seconds at a

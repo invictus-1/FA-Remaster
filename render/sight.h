@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "camera.h"
+#include "frame.h"
 #include "gfx.h"
 #include "view.h"
 
@@ -18,14 +19,14 @@ class SightShade {
  public:
   explicit SightShade(gfx::Device* device) : device_(device) {}
   bool Init(std::string* error);
-  // What is seen: `cells` x `cells` values over the whole map, row by row from z = 0 (255 seen
-  // now, 128 seen at some time, 0 never). An empty grid: nothing is darkened.
+  // What is seen: `cells` x `cells` values over the whole map, row by row from z = 0, each the
+  // bits of SightBits (frame.h). An empty grid: nothing is darkened.
   void Set(const std::vector<uint8_t>& grid, int cells);
   bool On() const { return static_cast<bool>(texture_); }
   // Of a place of the map (x and z as shares of its width and height, 0..1): is it seen now, and
   // has it been seen at some time. With no grid, and outside the map: yes.
-  bool SeenAt(float u, float v) const { return At(u, v) == 255; }
-  bool ExploredAt(float u, float v) const { return At(u, v) >= 128; }
+  bool SeenAt(float u, float v) const { return (At(u, v) & kSightNow) != 0; }
+  bool ExploredAt(float u, float v) const { return (At(u, v) & kSightEver) != 0; }
   // Into a pass that has the scene's colour only (the depth is read): darkens what is not seen.
   void Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, float mapWidth, float mapHeight);
 
@@ -33,6 +34,10 @@ class SightShade {
   // How much a place never seen keeps: the same, when the game's map is known from the start
   // (the game's option FogOfWar "explored", the usual); next to nothing when it is not ("unexplored").
   float neverSeen = 0.5f;
+  // How much an unseen place keeps while radar or omni covers it (on water, sonar too): a little
+  // more, so that the cover shows on the ground. `waterLevel`: below it a place is water.
+  float covered = 0.7f;
+  float waterLevel = -1e9f;
 
  private:
   uint8_t At(float u, float v) const {
