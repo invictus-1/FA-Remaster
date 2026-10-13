@@ -40,6 +40,7 @@
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/transport.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
@@ -912,6 +913,19 @@ int TickAssistLegacy(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 // resource fraction) and yields that share of its value to the army's income and reclaim stat;
 // a unit loses that share of its maximum health. At nothing left the target's OnReclaimed runs.
 int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (!t.goalId) {
+    // CUnitReclaimTask::Execute 0x61f02e, a task made without an entity (the order named only a place: something
+    // the player's army no longer saw, or a click on bare ground): every beat it asks the army's recon data
+    // whether the place is in sight (recon vt+0x10 with the place and 8 = vision). In sight: there is nothing
+    // there to reclaim, the task ends as failed (OnStopReclaim first if it had started, which it cannot have
+    // here). Not in sight: the unit goes there. (Read as far as the test; the walk is the plain move of the
+    // states below with the place for a target.)
+    const int a = u->army ? u->army->index - 1 : -1;
+    if (a < 0 || (ReconAtPoint(sim, a, t.site, 0) & 8u)) return kTaskFailed;
+    if (!CanMove(u) || u->motion.failed || u->motion.arrived) return kTaskFailed;
+    if (!u->motion.hasGoal) MoveToward(sim, u, t.site);
+    return kTaskRunning;
+  }
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
   if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
@@ -2303,9 +2317,13 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::OverCharge:
       return StartOverchargeTask(sim, u, c);
     case CommandType::Reclaim:
-      if (!u->bpData || !u->bpData->hasBuilder || !c.targetId) return nullptr;
+      if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
+      // (an order that names a place and no entity: the task is made all the same, "created without an entity",
+      // task+0x4c, with the place at +0x50; see TickReclaim)
+      if (!c.targetId && !c.hasPos) return nullptr;
       t->order = "Reclaim";
       t->goalId = c.targetId;
+      if (!c.targetId) t->site = c.pos;
       break;
     case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus
       if (!c.targetId) return nullptr;

@@ -161,30 +161,51 @@ int SoundSystem::Play(const std::string& bankName, const std::string& cueName, b
 // The quietest a world sound is still played at (decibels by its curves alone).
 const float kHeardFrom = -60.0f;
 
+// SET BY EAR, NOT READ FROM THE ORIGINAL. The hums of working buildings (the game's sound
+// categories "ActiveLoops...": a power generator's crackle, a mass extractor's thump) come out
+// far louder here than Chris hears them in the original, by everything that could be read:
+// the cue's and the track's volume, the categories down the chain (the game's sound library
+// itself was read for this, xactengine2_10.dll: a cue's volume is multiplied by its category's
+// and every parent's, each the authored volume times what the game last set, as here), the
+// distance and angle curves, the sharing between the ears, the rule for starting. What still
+// differs is not found. Chris, 2026-10-13, with ours beside the original: at the zoom where a
+// commander is a thumbnail the hums "should be pretty much unheard"; only with the camera
+// right at the building "even slightly at all", and then "like 2-3 out of 100. A very very
+// subtle noise"; guns are right as they are. So, until the cause is found, for these
+// categories only: 16 dB less, and they run only while the camera's eye is within kHumWithin
+// of the place it looks at (they end beyond kHumEnds).
+const float kHumTrim = -16.0f;
+const float kHumWithin = 40.0f, kHumEnds = 50.0f;
+
 // How loud a sound of the world is, as read from the original (FA exe):
 // - The listener's place is the place it is given with its height 4 lower
 //   (AudioEngine::SetListenerTransform, 0x4d9890). "Distance" is from there to the sound (the
 //   sound library's own measure, handed on at 0x4d82ca).
-// - "Angle" (set for each running sound, 0x8aa57f..0x8aa5e7): with v from the listener to the
-//   sound, 90 degrees + the angle v rises above the level: 180 for a sound straight above the
-//   listener, 90 for one level with it. (The original takes the arc cosine of v's upward share
-//   by the short formula below, 0x50b710; the constant it then takes off is set while the game
-//   runs and is taken as a quarter turn here.) The game's curve by it is 0 dB at 180 and -20 dB
-//   at 90: a sound at the listener's place is at its loudest, one off to the side much softer.
-// - "CameraDistance" is how far the camera's eye is from the place it looks at (0x8ac226:
-//   the camera's LODMetric of its own target).
-// INFERRED, not read: that the place given is the place the camera LOOKS AT on the ground, not
-// its eye. The code that hands it over was not found; but only so do the pieces fit: the
-// listener sunk 4 below, a curve that is loudest for sounds "above" the listener, a variable of
-// its own for the eye's distance, and what Chris hears in the original (a power generator's
-// crackle only from very near, a mass extractor's thump hardly at all), where ours with the
-// listener at the eye played both loudly from every height.
+// - "Angle" (set for every running sound, 0x8aa57f..0x8aa5e7, and for every sound played once,
+//   0x8ac5d1..0x8ac65e): with v from the listener to the sound, a quarter turn less the angle
+//   by which v points DOWN, so 0 for a sound straight below the listener, 90 for one level with
+//   it, 180 for one straight above. The original takes the arc cosine of v's upward share by a
+//   short formula (0x50b710) that is only good for what lies above: for a sound straight below
+//   it gives 28 degrees and not 0. That is kept, formula and all: by the game's curve (0 dB at
+//   0 and at 180, -6 at 45, -20 at 90) a sound in the middle of the view loses about 4 dB and
+//   one off to the side more. (The constant the original takes off the arc cosine is a quarter
+//   turn: 0xfb7914, set at start as pi x 0.5, 0xbedc60.)
+// - "CameraDistance" is how far the camera's eye is from the place it looks at (0x8ac226: the
+//   camera's LODMetric of its own target).
+// - A unit's running sound STARTS only while that camera distance is at most 200 and the unit
+//   is among those the camera has in view (0x8ac9e4 .. 0x8acbbf, over
+//   CameraImpl::GetAllSoundEntitiesInFrustum); once it runs it goes on until its sound is
+//   filtered (the place no longer seen, 0x8abba0) or ended. See MayStartLoop.
+// INFERRED, not read: that the place given to the listener is the camera's EYE. The call that
+// hands it over was not found. (For some hours of 2026-10-13 this took the place the camera
+// looks at instead: wrong, the camera's height then made no difference, and Chris heard at
+// once that it does in the original.)
 float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float position[3], float* left, float* right) const {
   if (!listening_) {
     *left = *right = 0;
     return -96.0f;
   }
-  float d[3] = {position[0] - focus_[0], position[1] - (focus_[1] - 4.0f), position[2] - focus_[2]};
+  float d[3] = {position[0] - eye_[0], position[1] - (eye_[1] - 4.0f), position[2] - eye_[2]};
   float distance = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
   float angle = 180.0f;
   if (distance > 0) {
@@ -275,6 +296,7 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
     if (!wave) continue;
     auto between = [&](float a, float b) { return a + (b - a) * static_cast<float>(Random() % 1001) / 1000.0f; };
     float decibels = sound.volume + between(e.volumeMin, e.volumeMax);
+    if (position && IsHumCategory(category)) decibels += kHumTrim;  // (set by ear: see kHumTrim)
     float cents = static_cast<float>(sound.pitch) + between(static_cast<float>(e.pitchMin), static_cast<float>(e.pitchMax));
     int voice = mixer_.Add(wave, Linear(decibels), std::pow(2.0f, cents / 1200.0f), e.loops == 255 ? -1 : e.loops, category, e.timeMs);
     if (!voice) continue;
@@ -385,17 +407,49 @@ void SoundSystem::UpdateWorld() {
   for (auto& entry : loops_) {
     Loop& loop = entry.second;
     auto placed = placed_.find(loop.handle);
+    if (loop.hum < 0) loop.hum = IsHumCategory(CategoryOfCue(loop.bank, loop.cue)) ? 1 : 0;
+    const float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
+    const float eyeDistance = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
     if (placed == placed_.end()) {
-      loop.handle = PlayCue(loop.bank, loop.cue, false, loop.position);  // 0 while it cannot be heard
+      const bool may = MayStartLoop(loop.position) && !(loop.hum == 1 && eyeDistance > kHumWithin);
+      loop.handle = may ? PlayCue(loop.bank, loop.cue, false, loop.position) : 0;  // 0 while it cannot be heard
       continue;
     }
     float left = 1, right = 1;
-    if (Heard(placed->second.curves, loop.position, &left, &right) < kHeardFrom) {
+    if (Heard(placed->second.curves, loop.position, &left, &right) < kHeardFrom || (loop.hum == 1 && eyeDistance > kHumEnds)) {
       Stop(loop.handle, false);
       placed_.erase(placed);
       loop.handle = 0;
     }
   }
+}
+
+// The category of a cue's first sound (-1: none), and whether a category is one of the game's
+// "ActiveLoops...": the hums of working buildings (see kHumTrim).
+int SoundSystem::CategoryOfCue(const std::string& bankName, const std::string& cueName) {
+  Bank* bank = GetBank(bankName);
+  if (!bank) return -1;
+  auto it = bank->info.cues.find(Lower(cueName));
+  if (it == bank->info.cues.end() || it->second.sounds.empty()) return -1;
+  int sound = it->second.sounds[0];
+  if (sound < 0 || sound >= static_cast<int>(bank->info.sounds.size())) return -1;
+  int category = bank->info.sounds[static_cast<size_t>(sound)].category;
+  return category < static_cast<int>(categories_.size()) ? category : -1;
+}
+bool SoundSystem::IsHumCategory(int category) const {
+  return category >= 0 && category < static_cast<int>(categories_.size()) &&
+         categories_[static_cast<size_t>(category)].name.compare(0, 11, "ActiveLoops") == 0;
+}
+
+// A unit's running sound may start only while the camera is near and has the unit in view (see
+// at Heard). "In view" is taken here as within six tenths of the shown width of the place the
+// camera looks at: ours, in place of the original's list of what the camera's view holds.
+bool SoundSystem::MayStartLoop(const float position[3]) const {
+  if (!listening_) return false;
+  const float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
+  if (std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) > 200.0f) return false;
+  const float dx = position[0] - focus_[0], dz = position[2] - focus_[2];
+  return std::sqrt(dx * dx + dz * dz) <= std::max(1.0f, zoom_ * 0.6f);
 }
 
 void SoundSystem::Start(int handle) {

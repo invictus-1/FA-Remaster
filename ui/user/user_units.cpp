@@ -172,9 +172,23 @@ int l_GetSelectedUnits(lua_State* L) {
   return 1;
 }
 // SelectUnits(units): nil or an empty table selects nothing
+// A unit the simulation's script has made unselectable (Unit:SetUnSelectable: a commander while
+// it arrives) is not selected by the script either: the original's SelectUnits (0x8bd8f0) takes
+// a unit only if its UserUnit says it may be selected (vt+0x30, 0x8c0500: not in the state
+// UnSelectable; read by the engine track, docs/engine-answers.md "ui 18"). The game's own
+// start-up (/lua/ui/game/gamemain.lua, StartupSequence) calls SelectUnits on the commander every
+// tenth of a second until GetSelectedUnits gives something or GameTick() is above 50; the warp
+// ends on tick 52, so there, as here, the commander is selected by the script only if a try
+// happens to step over tick 51. Before this, ours took the commander two seconds before it
+// could build: the build menu came up empty and stayed so until it was selected again.
+// (Not built of the original's: for a refused unit inside a transport it takes the transport.)
+void DropUnselectable(std::vector<UserUnit*>* list) {
+  list->erase(std::remove_if(list->begin(), list->end(), [](const UserUnit* u) { return !u->view.selectable; }), list->end());
+}
 int l_SelectUnits(lua_State* L) {
   std::vector<UserUnit*> list;
   ReadUnitList(L, 1, &list);
+  DropUnselectable(&list);
   SetSelection(L, list);
   return 0;
 }
@@ -198,6 +212,7 @@ int l_GetUnitById(lua_State* L) {
 int l_AddSelectUnits(lua_State* L) {
   std::vector<UserUnit*> now = Store(L).selection;
   ReadUnitList(L, 1, &now);
+  DropUnselectable(&now);
   SetSelection(L, now);
   return 0;
 }

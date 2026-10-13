@@ -3,6 +3,72 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 19: reclaim: the prop at a place, and an order with a place and no entity — done
+
+**(1) The lookup.** `ReclaimableAt(Sim&, const float at[3], float within, ReclaimableView* out)` in
+src/sim/sim_view.h. It answers for PROPS (trees, rocks, wreckage) of the category RECLAIMABLE; a unit under the
+cursor stays yours to find with `UnitAt`. Of the props whose box (the blueprint's SizeX by SizeZ times the
+prop's scale, around its position, on the map plane) lies within `within` of the place it takes the nearest;
+at equal distance the one whose centre is nearer. `within` 0 means the place must lie inside the box. It
+returns false when there is none, and fills `ReclaimableView`: `id` (what the Reclaim order names),
+`blueprint`, `position`, the box's `sizeX` / `sizeZ`, and `mass` / `energy` left in it now (the prop script's
+MaxMassReclaim / MaxEnergyReclaim times its ReclaimLeft, which is what the original's rollover shows; 0 for a
+prop that holds nothing). It reads the scripts' state, so call it between beats like `BuildSiteOf`.
+
+Two things to know for the cursor. A tree's box is small (about 1 by 1), so pass a `within` that suits the
+zoom, or the player has to hit the trunk. And it does not test what the army sees: a wreck in the fog is
+answered too; filter with `ReconAtPoint` if the cursor should not give it away.
+
+**(2) A Reclaim order with a place and no entity.** Read in the original (CUnitReclaimTask::Execute
+0x61f02e): the task is made all the same and carries a flag "created without an entity" and the place. Every
+beat it asks the army's recon data whether the place is in sight. In sight: there is nothing there to reclaim
+and the order ends as failed, at once. Not in sight: the unit goes there, and the order ends when the place
+comes into view. That is the original's way of handling a reclaim on something the player saw once and that
+may be gone. So a click on bare ground in view does nothing at all in the original.
+
+Ours used to hand such an order to an old fallback ("go to the target and end there"), which is where the
+commander's odd standing came from. Now `TickReclaim` does the original's thing. The beam Chris saw I cannot
+place from here: no reclaim had started on the simulation's side (OnStartReclaim is only called with a target
+in range), so if a beam shows again on an order WITH an entity that does not get reclaimed, send me the unit
+and prop ids and the beat.
+
+All thirteen replays pass unchanged. Neither part was tried by me in your driver: please run a reclaim on a
+tree and on a wreck through `ReclaimableAt`, and one on bare ground.
+
+## ui 18: GameTick() and the beat the commander can be selected again — neither side is off by one
+
+**(a) GameTick().** Read: the user function (0x8be420) returns `session+0x458`, which `CWldSession::DoBeat`
+writes from the beat's sync data (0x8945a3, the sync's field +8), and the simulation fills that field with its
+tick counter `sim+0x900` (0x747616) after the beat has run. The counter starts at 0 and goes up by one at the
+start of every beat that is not paused. So after N beats the user side reads **N**: `sim->tick()`, as you have
+it. The unit states in the same sync are those after beat N, so "GameTick() = N" and "what the units look like
+after beat N" always belong together.
+
+**(b) The warp-in.** Ours is not late. The original's own recording of the skirmish replay has the commander
+`UnSelectable` on beats 31 to 51 and free on 52, the same beats as ours (the recorder writes the unit states
+every beat, and that replay matches the original for its first 340 beats). It follows from the scripts too:
+`CommanderWarpDelay` first runs in beat 1, `WaitSeconds(3)` is `WaitTicks(31)` = 30 beats later = beat 31;
+`WarpInEffectThread` starts in that same beat, `WaitSeconds(2.1)` is `WaitTicks(22)` = 21 beats later = beat 52.
+
+**Your SelectUnits is right as well.** Read: the user `SelectUnits` (0x8bd8f0) skips a unit that is dead or
+being destroyed, and takes it only if `UserUnit` vt+0x30 (0x8c0500) says yes. That test answers no for a unit
+in the state `UnSelectable` (unit state 0x21) and for a docked pod. For a unit it refuses, SelectUnits takes the
+unit's transport instead when there is one of the category TRANSPORTATION.
+
+**So what happens in the original?** With all three as they are, FAF's loop can only take the commander when a
+try falls on GameTick() 52 or later, directly after a check that still read 50 or less: the tries have to step
+over tick 51. The user side's `WaitSeconds(0.1)` (userInit.lua:52) waits whole frames until 0.1 s of real time
+has passed, so one round takes 0.1 s plus up to a frame, and the tries drift against the simulation's beats and
+do skip a tick now and then. Whether the skip falls on 51 is chance. In your driver the tries fall on every
+tick from 41 to 51, one per beat, so it can never happen. I have not seen the original's start with my own
+eyes, and I cannot tell from the code how often it wins; the bound of 50 against a warp that ends at 52 looks
+like a slip in FAF's script more than a design.
+
+What I would do, and it is yours and Chris's to decide since it is the interface's behaviour: give Chris what
+he expects (the commander selected with its build menu as the warp ends), for example by letting that loop's
+last try come after the commander is free, and list it as a deviation from the script as written. Nothing to
+change on the simulation's side.
+
 ## ui 17: a building can be set inside another building's skirt — fixed
 
 Chris is right, and the original tests exactly what he says: skirt against skirt. Read in the exe: the site test
