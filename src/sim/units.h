@@ -270,6 +270,7 @@ class Projectile : public Entity {
   // For a host that draws (ProjectileView::size); nothing in the simulation goes by it.
   Vec3 drawSize{1, 1, 1};
   Vec3 prevPos;
+  Vec3 heldVel;  // its velocity as the beat began (taken before its own step: what another shell leads it by)
   float velScale = 1;
   float hitFraction = -1;
   bool collideSurface = true, collideEntity = true, trackTarget = false, velocityAlign = true, stayUpright = false,

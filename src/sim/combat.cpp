@@ -369,6 +369,11 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     Entity* e = TargetEntity(sim, t);
     if (!e) return NaNVec();
     if (e->kind == Entity::Kind::Unit) return centre ? e->position : UnitTargetPoint(static_cast<Unit*>(e), t.aimBone);
+    // A shell as a target (an anti-torpedo's, a missile defence's): its bone -1 too, the centre its blueprint
+    // gives (half its SizeY above its origin: 0.5 with the default size), turned with the shell. Seen in the
+    // original's shell lines: an anti-torpedo steers at a point 0.5 from the torpedo's origin, along its up axis.
+    if (e->kind == Entity::Kind::Projectile && e->blueprint && !centre)
+      return Add(e->position, RotateM(e->orientation, e->bpCenter));
     return e->position;
   }
   return NaNVec();
@@ -383,6 +388,7 @@ Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
         return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
+      if (e->kind == Entity::Kind::Projectile && e->blueprint) return Add(e->shapePos, RotateM(e->shapeOri, e->bpCenter));
       return e->shapePos;
     }
   return TargetPos(sim, t, false);

@@ -337,7 +337,10 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   if (IsNaN(aim)) return;
   Entity* te = TargetEntity(sim, p->target);
   if (p->leadTarget && p->maxSpeed > 0 && te && has) {
-    Vec3 tv = EntityVelocity(te);
+    // (a shell that has taken its step already: its velocity of the beat's start goes with its place of the
+    // beat's start, both are what is committed)
+    Vec3 tv = te->kind == Entity::Kind::Projectile && te->shapeHeld ? static_cast<const Projectile*>(te)->heldVel
+                                                                     : EntityVelocity(te);
     float k = 1 / (p->maxSpeed * 0.1f);
     float t1 = Len(Sub(pos, aim)) * k;
     Vec3 P1 = Add(aim, Mul(tv, t1));
@@ -688,6 +691,7 @@ void ProjectilesTick(Sim& sim) {
     Projectile* p = sim.projectiles[i];
     if (p->destroyQueued || !p->HasLuaObject()) continue;
     sim.HoldShape(p);
+    p->heldVel = EntityVelocity(p);
     MotionTick(sim, p);
   }
 }
