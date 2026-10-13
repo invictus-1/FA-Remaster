@@ -382,6 +382,12 @@ weapons' 22. (MaxBuildDistance at +0x564 is read by the world view's own drawing
 a plain circle round each selected builder in the "buildanchored" mode.) Still not explained in
 the picture: the two thin rings (yellow at 15.4, dark red at 28.6 on that scale: each 1.28 times
 a thick one) and the wide green one at 62. Thank you.
+LATER THE SAME DAY, all explained, by Chris's next three pictures (one with the unit's stats
+open): the commander in his pictures is the mod's (BlackOps, EEL0001), not the stock one. Its
+torpedo launcher reaches 60 (the green ring: AntiNavy), its omni is 28 (the thin dark red one:
+Omni; intel rings are thin by the game's filter list) and its cluster missiles have a MinRadius
+of 15 (the thin yellow one: the INNER ring of IndirectFire). Ours draws the same five rings at
+the same sizes for that unit. Nothing more is asked.
 
 ## To the renderer track
 
@@ -816,6 +822,40 @@ since main 7a2f089.
 
 Not blocking.
 
+**Status:** done by the renderer track the same day (`docs/render-answers.md`, "ui, to the
+renderer 15"; on main since 7e26797): the adjacency links' beams are drawn and their nodes in
+their own colours; the life bar lies straight below the unit at the size its blueprint gives,
+the work bar under it in orange; nothing to change on my side but the default, which is turned.
+Chris's look is still owed.
+
+### 16. Range rings: the lines' thickness beside the original's (three pictures of his)
+Not blocking; yours to weigh (you wrote that how thickness goes with the zoom is your guess, and
+here are pictures to set it by). Chris, 2026-10-13, three pictures of the original with ONE
+commander's rings and no filter switched on, in the folder of his others
+(`_scratch\ui\chris_20261013\`): `original_rings_blackops_selected.webp`,
+`original_rings_blackops_mouse_on_not_selected.webp` (both from far up) and
+`original_rings_blackops_near_with_stats.webp` (near). Ours for the same unit at about the far
+zoom: `ui_rings_blackops_ours.png` (this build, 1600x900).
+
+The unit is the mod's commander (EEL0001). Its rings, the same in ours and the original:
+Miscellaneous 12 (ochre), IndirectFire inner 15 and outer 22 (yellow), DirectFire 22 (red),
+AntiAir 22, Omni 28 (dark red), AntiNavy 60 (green).
+
+What differs in the picture:
+- the green ring at 60 is as thick in the original as the red one at 22 (both are "Outer" lines
+  of a military filter: 0.04 / 4.0); in ours it is clearly thinner than the red and ochre ones;
+- the yellow inner ring at 15 is about half as thick as an outer one in the original ("Inner":
+  0.02 / 2.0); in ours it is as thick as the ochre ring beside it;
+- between his far and near pictures the thick lines grow only a little on screen (about 4 to 5
+  pixels of 2000 across in both): a measure for how thickness goes with the zoom.
+
+One thing I changed on my side, for you to know: the groups now reach you sorted, so that of
+rings lying on one another the filter standing first in the original's table of names
+(AllMilitary, DirectFire, IndirectFire, AntiAir, AntiNavy, Defense, Miscellaneous, AllIntel,
+Radar, Sonar, Omni, CounterIntel) is drawn LAST and so is the one seen: in his pictures the ring
+at 22 is red, and ours showed it yellow. That rests on your drawing the groups in the order
+given, a later one over an earlier; if that ever changes, tell me.
+
 **Status:** open.
 
 ## To the visuals track
@@ -866,6 +906,11 @@ in the folder of his others (`_scratch\ui\chris_20261013\`):
    build pad, the one he circled before.
 3. `unit_built_in_unfinished_factory.png` is not for you (the engine's).
 "Other than that everything else works and looks right." Not blocking.
+
+**Status:** answered by the visuals track the same day, by message: the lamps on the pads are
+taken out of six factories' lists; the flicker of a factory while it upgrades is hers (the
+factories are being baked again; she says when they are in); the commander's thin eye shafts and
+any strips that blink she names as the renderer's, and passed them on herself.
 
 ### 13. The minimap is too dark to read at a game's start (fog of war)
 Found by the interface chat, 2026-10-13, not by Chris (he has not opened the minimap yet; its

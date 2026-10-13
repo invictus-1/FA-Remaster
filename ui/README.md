@@ -405,9 +405,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
   They go to the picture's source in groups (`WorldScene::ranges`: a filter in one colour, with
   the script's glow byte and its thickness numbers), which the renderer's `SetRanges` draws as
-  the original does: one outline round what a group's rings cover together. Not the original's yet: how
-  thickness and glow go with the zoom (the renderer's guess; `func_RenderRings` is not read),
-  radii changed while the game runs, and the rings of "Miscellaneous".
+  the original does: one outline round what a group's rings cover together. The groups go in
+  the reverse of the original's table of filter names, so that of rings lying on one another
+  the direct fire one is seen, as in pictures of the original (inferred from those, not read).
+  "Miscellaneous" is the build range of engineers and commanders (the game's scripts make it
+  so). Checked against pictures of the original for one unit: the same rings at the same sizes.
+  Not the original's yet: how thickness and glow go with the zoom (the renderer's guess;
+  `func_RenderRings` is not read) and radii changed while the game runs.
 - The meshes the game's script places in the world (`user/world_meshes.cpp`): its `WorldMesh`
   (`InternalCreateWorldMesh` and the `CUIWorldMesh` methods: the factories' rally points, the
   marks under the cursor) and `AddCommandFeedbackBlip`, the mark where an order lands, which

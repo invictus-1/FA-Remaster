@@ -482,6 +482,12 @@ local function run()
     check("the commander has a direct fire weapon", reach > 0, true)
     check("selected: its direct fire ring, in the filter's select colour", ring(reach, filters.DirectFire.SelectColor), true)
     check("and its omni ring", ring(bp.Intel.OmniRadius, filters.Omni.SelectColor), true)
+    -- of rings that lie on one another the direct fire one is seen (so its group is drawn last)
+    local groupOf = {}
+    for _, r in moho64ui_RangeRings() do groupOf[r.color] = r.group end
+    local function group(f) return groupOf[string.lower(string.sub(f.SelectColor, 3))] or 0 end
+    check("the direct fire ring is drawn over the build range ring, and that over the omni ring",
+        group(filters.DirectFire) > group(filters.Miscellaneous) and group(filters.Miscellaneous) > group(filters.Omni) and group(filters.Omni) > 0, true)
     local at2 = cdr:GetPosition()
     local first = moho64ui_RangeRings()[1]
     check("the rings lie round the unit", math.abs(first.x - at2[1]) < 0.01 and math.abs(first.z - at2[3]) < 0.01, true)

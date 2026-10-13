@@ -42,7 +42,13 @@
 //   "AllMilitary" as every weapon with a range category (the original's weapon test for these
 //   two is not read to the end);
 // - switched-on filters show the player's own units only (whose units the original shows is
-//   not read).
+//   not read);
+// - of rings that lie on one another the filter that comes first in the original's table of
+//   names (0x7ed4b0: AllMilitary, DirectFire, IndirectFire, AntiAir, AntiNavy, Defense,
+//   Miscellaneous, AllIntel, Radar, Sonar, Omni, CounterIntel) is the one seen, so the groups go
+//   to the picture last name first. INFERRED from a picture of the original, not read: a
+//   commander whose direct fire, indirect fire and anti-air weapons all reach 22 shows that
+//   ring in the direct fire colour.
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -215,6 +221,16 @@ bool InFilter(lua_State* L, const RangeFilter& f, const std::string& blueprint) 
          CategoryHas(f.categories.data(), bp->entityIndex);
 }
 
+// Where a filter stands in the original's table of names (0x7ed4b0).
+int RankOf(const std::string& name) {
+  static const char* const kOrder[] = {"AllMilitary", "DirectFire", "IndirectFire", "AntiAir", "AntiNavy", "Defense",
+                                       "Miscellaneous", "AllIntel", "Radar", "Sonar", "Omni", "CounterIntel"};
+  int n = static_cast<int>(sizeof kOrder / sizeof *kOrder);
+  for (int i = 0; i < n; ++i)
+    if (name == kOrder[i]) return i;
+  return n;
+}
+
 // A ring into the group of its filter and colour (made when it is the first).
 void AddRing(std::vector<WorldRangeGroup>* out, std::map<std::pair<std::string, uint32_t>, size_t>* groups,
              const std::string& name, const RangeFilter& f, uint32_t color, const float at[3], float inner, float outer) {
@@ -337,19 +353,31 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
     for (uint32_t id : selected) named(id, false);
   }
   if (store.highlighted && hover != 0xffffffffu) named(hover, true);
+  // The picture draws the groups in the order given, a later one over an earlier: the filter
+  // that stands first in the original's table goes last (see the head of this file).
+  struct Found {
+    const std::string* name;
+    const RangeFilter* filter;
+    uint32_t color;
+    float at[3], inner, outer;
+  };
+  std::vector<Found> found;
   float inner = 0, outer = 0;
-  std::map<std::pair<std::string, uint32_t>, size_t> groups;
   for (const auto& [key, color] : colors) {
     auto f = store.filters.find(key.second);
     if (f != store.filters.end() && UserUnitFacts(L, key.first, &blueprint, at, &army) &&
         RadiiOf(L, store, blueprint, key.second, &inner, &outer))
-      AddRing(out, &groups, key.second, f->second, color, at, inner, outer);
+      found.push_back({&f->first, &f->second, color, {at[0], at[1], at[2]}, inner, outer});
   }
   if (store.build && build)
     for (const auto& [name, f] : store.filters)
       if (name != "AllMilitary" && name != "AllIntel" && InFilter(L, f, build->blueprint) &&
           RadiiOf(L, store, build->blueprint, name, &inner, &outer))
-        AddRing(out, &groups, name, f, f.normal, build->position, inner, outer);
+        found.push_back({&name, &f, f.normal, {build->position[0], build->position[1], build->position[2]}, inner, outer});
+  std::stable_sort(found.begin(), found.end(),
+                   [](const Found& a, const Found& b) { return RankOf(*a.name) > RankOf(*b.name); });
+  std::map<std::pair<std::string, uint32_t>, size_t> groups;
+  for (const Found& r : found) AddRing(out, &groups, *r.name, *r.filter, r.color, r.at, r.inner, r.outer);
 }
 
 void RegisterRangeBindings(lua_State* L) {
