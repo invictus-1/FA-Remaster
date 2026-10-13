@@ -55,6 +55,7 @@ struct FrameBone {
   uint32_t bone = 0;  // index in the skeleton of the unit's mesh; a unit's bones are listed in rising order
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
+  bool hidden = false;  // the script has hidden this bone: what follows it is not drawn
 };
 
 struct FrameProjectile {
