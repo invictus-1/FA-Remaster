@@ -393,6 +393,12 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
       lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
+    } else if (kind == "nukeuef" || kind == "nukeemp" || kind == "nukequantum") {  // a nuke's ball of fire
+      lod.blend = lod.glass = true;
+      lod.teamMask = false;
+      lod.nuke = kind == "nukeuef" ? 1 : 2;
+      if (kind == "nukeemp") lod.nukeShell = {1.0f, -0.008f, 180.0f};
+      if (kind == "nukequantum") lod.nukeShell = {0.5f, -0.006f, 150.0f};
     } else if (kind == "alphafade") {  // a see-through slab that fades with its age: the UEF's build slices, its teleport box
       lod.blend = lod.glass = lod.fades = true;
       lod.teamMask = false;
