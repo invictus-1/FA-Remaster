@@ -1236,6 +1236,12 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
       float wl = WaterLevel(sim);
       for (Projectile* p : sim.projectiles) {
         if (!Alive(p) || !IsEnemy(u->army, p->army)) continue;
+        // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles), and an entity
+        // without a collision primitive is in no cell of it. A projectile has none unless its blueprint or its
+        // script gives it one: FAF's torpedo and missile classes call SetCollisionShape('Sphere', ...) when they
+        // are made, a mod's class that does not (BlackOps' AssaultTorpedoSubProjectile) makes a shell that no
+        // counter-weapon ever finds. (Seen: 89 such torpedoes in a replay, none taken as a target.)
+        if (p->shape.type == ShapeType::None) continue;
         float d2 = Dist2XZ(u->position, p->position);
         if (d2 > reach * reach) continue;
         if (!((w->layerCaps & 8) || p->position.y > wl)) continue;
