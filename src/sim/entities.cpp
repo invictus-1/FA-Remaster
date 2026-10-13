@@ -542,7 +542,7 @@ int l_Destroy(lua_State* L) {
     Entity* de = ToObject<Entity>(L, 1);
     lua_Debug ar;
     std::string tb;
-    for (int lv = 1; lv < 6 && lua_getstack(L, lv, &ar); ++lv)
+    for (int lv = 1; lv < 12 && lua_getstack(L, lv, &ar); ++lv)
       if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
     Logf(LogLevel::Info, "destroydbg %u id %u%s", S(L)->tick(), de ? de->id : 0, tb.c_str());
   }

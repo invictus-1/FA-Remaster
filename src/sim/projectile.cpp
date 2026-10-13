@@ -714,9 +714,13 @@ void ProjectilesTick(Sim& sim) {
   // That holds for every shell made in the pass (CTaskStage 0x409ac0: a thread made while the stage runs is
   // linked at its new end), also for the debris a shot-down missile drops from OnKilled; what looked like such a
   // piece waiting a beat was where it starts: at its parent's place of the beat's START (l_CreateChildProjectile).
+  // A shell whose Destroy is QUEUED still takes its step: neither Entity::TaskTick 0x679c40 nor
+  // Projectile::MotionTick 0x69bdd0 looks at the flag, and the entity is only taken away when the beat's destroy
+  // queue runs. Seen: a missile that a script thread killed in the Lua stage (FAF's flare, 10 beats after it
+  // turned the missile) still made its zig-zag draws in that beat's entity stage.
   for (size_t i = 0; i < sim.projectiles.size(); ++i) {
     Projectile* p = sim.projectiles[i];
-    if (p->destroyQueued || !p->HasLuaObject()) continue;
+    if (!p->HasLuaObject()) continue;
     sim.HoldShape(p);
     p->heldVel = EntityVelocity(p);
     sim.steppingProjectile = p;
