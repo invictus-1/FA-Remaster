@@ -761,8 +761,10 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
   }
   // the collision record
   if (m.colType == 5) {
-    if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
-    else m.colType = 0;
+    // (0x5d2e62: no test of the target here, nor in case 4 below: a unit that has been told to stop and has no
+    // waypoint left still takes the hard brake when a collision record waits for it. Seen: one unit of thirteen
+    // stopped by one order braked at twice the rate from the beat after it, the one with a neighbour ahead.)
+    UpdatePath(sim, u, m.steerTarget, true, 4);
   } else if (m.colType == 1 && sim.tick() >= m.colTick && m.colLateTick != sim.tick()) {
     Resolve(sim, u);
     switch (m.colType) {
@@ -778,8 +780,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
         break;
       }
       case 4:
-        if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
-        else m.colType = 0;
+        UpdatePath(sim, u, m.steerTarget, true, 4);  // (0x5d2f12: whatever the target)
         break;
       default:
         break;
