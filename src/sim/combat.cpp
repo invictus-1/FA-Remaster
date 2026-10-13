@@ -1816,9 +1816,17 @@ Vec3 Aim(Sim& sim, AimController* c) {
     float high = -dmath::Atan((std::sqrt(disc) + d) / (2 * A));
     float low = -dmath::Atan((d - std::sqrt(disc)) / (2 * A));
     float p = w->bp->ballisticArc == 2 ? high : low;
+    // AI_CalculateFiringDirection 0x5d6440: the horizontal difference set to the length cos(p) by 0x5b1c90, i.e.
+    // each component times (cos(p) / length), one rounding; then y = -sin(p). (Normalising first and multiplying
+    // after is another last digit of the turret's yaw, and a gun with FiringTolerance 0 notices.)
     Vec3 hz{tPos.x - Mpos.x, 0, tPos.z - Mpos.z};
-    hz = Norm(hz);
-    return {hz.x * dmath::Cos(p), -dmath::Sin(p), hz.z * dmath::Cos(p)};
+    const float l2 = (hz.x * hz.x + hz.y * hz.y) + hz.z * hz.z;
+    if (l2 > 0.0f) {
+      const float k = dmath::Cos(p) / std::sqrt(l2);
+      hz.x *= k;
+      hz.z = k * hz.z;
+    }
+    return {hz.x, -dmath::Sin(p), hz.z};
   }
   return Norm(Sub(tPos, Mpos));
 }
