@@ -48,6 +48,10 @@ float4 PS(VOut i) : SV_Target {
   float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
   if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
   if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y * (falling.w > 0 ? falling.w : 1) : 1);
+  if (look > 0.5 && weather.z > 0) {  // thick air between it and the eye
+    float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
+    c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor(), lost);
+  }
   if (options.w > 0.5) c.a = 1;  // (the device's adding blend weighs by alpha)
   return c;
 }

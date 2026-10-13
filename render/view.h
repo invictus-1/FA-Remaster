@@ -137,7 +137,12 @@ float CloudShadow(float3 world) {
   return 1 - 0.75 * CloudFrom(CloudField(q));
 }
 // The colour of thick air, and a colour seen through `distance` of it.
-float3 AirColor() { return skyZenith.rgb * 0.45 + skyHorizon.rgb * 0.75; }
+// (the light that reaches the ground from the sky, greyed: thick air is lit like the ground under
+// it, and is not as bright or as coloured as the sky at the horizon, or a dawn's fog would be orange)
+float3 AirColor() {
+  float3 light = skyZenith.rgb * 0.85 + skyHorizon.rgb * 0.15;
+  return lerp(light, dot(light, float3(0.3, 0.6, 0.1)), 0.7) * 0.65;
+}
 float3 ThroughAir(float3 color, float distance) {
   if (weather.z <= 0) return color;
   return lerp(color, AirColor(), min(1 - exp(-distance * weather.z), weather.w));

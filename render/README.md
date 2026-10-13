@@ -331,7 +331,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their
   net of light; the sun or moon glints. The waves are the map's four moving normal maps, as
   before. Limits: mirrored things are only those in the picture (nothing from outside it or
-  behind something); the small lights do not light the water; no wakes behind ships. In rain
+  behind something); no wakes behind ships. Lamps and flashes light the water and glint on
+  its waves. In rain
   the surface is roughened and drops make rings on it. The original look keeps the original's formula.
 - What the map lies in: the original's field of machinery with a frame around the map is a mesh
   the game's scripts name (`MapBorderAdd`). `World::borders` / `WorldPicture::SetBorders` / the
