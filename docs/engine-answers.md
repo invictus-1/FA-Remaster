@@ -3,6 +3,63 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 14: what the original's interface sends with a group's order — from about 1,250 orders of the 13 replays
+
+Taken from the command streams of the lab's thirteen replays (all played by Chris in the original's own
+interface), with `engine-ref\replay_dump.py` and a count over all of them. Not read from the exe's interface
+code: where the data does not decide, I say so.
+
+**What the records show, without exception:**
+
+| Order | Units | formIndex | scale | how often |
+|---|---|---|---|---|
+| Move (right click on ground) | 2 or more | 0 | 1.0 | 126 of 126 |
+| Move | 1 | 0 | 1.0 | 60 of 60 |
+| Attack on a unit (right click on an enemy) | 1 | 0 | 1.0 | 20 of 20 |
+| Attack | 2 or more | 0 | 1.0 | 14 of 14 |
+| Patrol | 2 or more | 0 | 1.0 | 13 of 13 |
+| Guard, Reclaim, Repair, Capture, Build*, Upgrade, Stop, Dive, Ferry, transport orders, Script (FAF's attack-move) | any | -1 | none | all |
+| a factory's rally orders (IssueFactoryCommand: Move, Patrol) | 1 | -1 | none | 6 of 6 |
+
+- **The type stays what it is**: Move is type 2 (Move), not FormMove; Attack 10, Patrol 16. No replay holds a
+  FormMove, FormAttack, FormPatrol, AggressiveMove or FormAggressiveMove order at all, so what Ctrl does is
+  not in my data.
+- **formIndex is 0, the scale 1.0, also for ONE unit.** The simulation only builds a formation when the order
+  holds more than one unit (`GenerateFormation`), so a single unit's 0 changes nothing; send it all the same,
+  it is what the original sends.
+- **The orientation** is a turn about the up axis only, written as a quaternion in the order **(w, x, y, z)**
+  with x = z = 0: heading = 2 x atan2(y, w), and the heading is the direction FROM THE MEAN OF THE UNITS'
+  POSITIONS TO THE TARGET, atan2(dx, dz). Checked on the naval replay's order at beat 147: 17 ships, mean
+  position (185.38, 366.79), target (294.66, 271.94): direction (109.28, -94.85) = 130.96 degrees; the record
+  has (w 0.415, y 0.910) = 130.96 degrees. (The middle of the units' bounding box would give 132.45: it is
+  the mean.) For an Attack on a unit the target point is the unit's place.
+
+**Three orders that do not fit**, all with one unit and formIndex -1 where the table says 0: an Attack on the
+GROUND by one tank (land battle, beat 340), and two Patrol points given to one engineer (economy replay, beat
+4491). All other single-unit orders with -1 are factory rally orders. My reading, not proven: these three
+were given through the order BUTTON (attack-ground and patrol have no right click), and the button's path
+sends no formation for one unit, while a group's patrol does carry it. If you want it exact I can read the
+interface's issue function in the exe; say so.
+
+**Records** (replay, stream beat, units, type, target, formIndex, quaternion w x y z, scale):
+
+```
+Naval    147  17 units  Move   pos (294.66, 17.50, 271.94)  form 0  (0.415, 0, 0.910, 0)   1.0
+Naval    159  19 units  Move   pos (125.45, 17.50, 239.05)  form 0  (-0.098, 0, 0.995, 0)  1.0
+Naval    207  2 units   Move   pos (550.76, 18.78, 478.87)  form 0  (0.920, 0, 0.392, 0)   1.0
+LAND      60  0x7 0x9   Move   pos (280.18, 23.86, 696.28)  form 0  (-0.430, 0, 0.903, 0)  1.0
+LAND      84  0x2 0x4   Attack ent 0x30100005 (a blip)      form 0  (-0.391, 0, 0.920, 0)  1.0
+LAND     104  0x6       Move   pos (296.42, 20.44, 687.85)  form 0  (0.082, 0, 0.997, 0)   1.0
+LAND     113  0x6       Attack ent 0x30100006               form 0  (0.053, 0, 0.999, 0)   1.0
+LAND     232  0x1 0x2 0x3  Patrol pos (287.05, 23.83, 692.46)  form 0  (0.918, 0, -0.397, 0)  1.0
+LAND     340  0x5       Attack pos (287.13, 23.80, 692.64)  form -1
+Economy 4491  0x4       Patrol pos (660.50, 18.68, 329.50)  form -1
+Skirmish 178  factory 0x700001  Move (rally)  pos (106.92, 25.76, 917.21)  form -1
+```
+
+**What formIndex 0 becomes on our side**: the naval order at beat 159 (19 ships and subs) is the formation
+script 'AttackFormation' in the simulation. I have seen no other index in any replay.
+
 ## ui 13: a unit that is still being built carries out no order — fixed in the simulation
 
 The fault was the simulation's, not the interface's: your order is right to go out.
