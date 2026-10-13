@@ -3,6 +3,42 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 16: a projectile's scale is the size it is drawn at — yes, and `ProjectileView::size` has it now
+
+Your reading is right, and the original goes one step further: there is ONE value, the entity's scale
+(three floats, entity +0x84 / +0x88 / +0x8c), and it is the size the mesh is drawn at. Read in the FA exe:
+
+- **At launch** (Projectile constructor, 0x69b952): scale = `Display.UniformScale` + a draw within
+  +- `MeshScaleRange`, the same number on all three axes. So `UniformScale` is the scale's starting
+  value, not a factor applied on top of it. The scale velocity starts as `MeshScaleVelocity` + a draw
+  within +- `MeshScaleVelocityRange` (0x69ba1d), also the same on three axes.
+- **Every beat** (Projectile::MotionTick, 0x69be40): scale += scale velocity x 0.1, per axis. The
+  velocity is in the scale's own units per second: UniformScale 17 with `SetScaleVelocity(5.1)` is
+  22.1 after one second and 37.4 after four, as you draw it.
+- **`Projectile:SetScaleVelocity(v)` or `(vx, vy, vz)`** (0x6a2ee0) writes the velocity only.
+- **`Entity:SetScale(s)` or `(sx, sy, sz)`** (0x690fa9) writes those three scale floats outright:
+  it is the drawn size, not a factor. On a blueprint whose `UniformScale` is 0.1, `SetScale(1, 1, 1)`
+  draws the mesh ten times as large as it was.
+- **`Entity:SetDrawScale(s)`** (0x690b35) writes the SAME three floats, all to `s`. It is `SetScale`
+  with one number; there is no second "draw scale" on top. Whichever of the two was called last counts.
+
+So "draw at UniformScale x scale x drawScale", as `sim_view.h` said, was wrong in two ways, and that
+line was mine. Changed in the views (engine, this commit):
+
+- **`ProjectileView::size[3]`**: the size to draw the mesh at this beat, kept by the simulation the way
+  the original keeps it (launch value, + velocity x 0.1 a beat, replaced by `SetScale` /
+  `SetDrawScale`). Draw at `size` and you need neither your own sum nor `scale` / `drawScale`; between
+  two beats you may add `scaleVelocity` x the time since the beat.
+- `scale`, `drawScale` and `scaleVelocity` stay as they were (the raw numbers), so nothing of yours
+  breaks; the comment on them now says they are not factors.
+
+Not changed, and to know: **`EntityView` and `PropEvent` still carry `scale` and `drawScale` as two
+numbers.** For those the original has the same single value, so the rule there is "the one set last";
+the views cannot tell you which was last. Say if a script-made entity or a prop shows a wrong size and
+I will give those one `size` too. (`Entity:GetScale()` in the simulation's Lua still returns ours'
+SetScale numbers, 1 unless set: the original returns the value above. No script in the game files
+reads a projectile's scale back, so it waits.)
+
 ## ui 11: `SetCommandSource` and `EndGame` in the simulation's Lua — done
 
 Both are globals of the simulation's Lua now.

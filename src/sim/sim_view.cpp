@@ -266,6 +266,9 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.scaleVelocity[0] = p->scaleVel.x;
     v.scaleVelocity[1] = p->scaleVel.y;
     v.scaleVelocity[2] = p->scaleVel.z;
+    v.size[0] = p->drawSize.x;
+    v.size[1] = p->drawSize.y;
+    v.size[2] = p->drawSize.z;
     out->push_back(std::move(v));
   }
 }

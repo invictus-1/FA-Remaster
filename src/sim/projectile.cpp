@@ -258,6 +258,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     float sv = Uniform(*this, b.meshScaleVel, b.meshScaleVelRange);
     if (b.meshScaleRange != 0 && b.uniformScale != 0) p->scale[0] = p->scale[1] = p->scale[2] = sc / b.uniformScale;
     if (b.meshScaleVelRange != 0 || b.meshScaleVel != 0) p->scaleVel = {sv, sv, sv};
+    p->drawSize = {sc, sc, sc};
   }
   if (p->trackTarget && !HasTarget(*this, target)) {
     QueueDestroy(p);
@@ -575,6 +576,9 @@ void Impact(Sim& sim, Projectile* p) {
 
 // MotionTick 0x69bdd0
 void MotionTick(Sim& sim, Projectile* p) {
+  // 0x69be40: the drawn size grows by the scale velocity, in drawn-size units per second ([0xe4f714] = 0.1)
+  p->drawSize = {p->drawSize.x + p->scaleVel.x * 0.1f, p->drawSize.y + p->scaleVel.y * 0.1f,
+                 p->drawSize.z + p->scaleVel.z * 0.1f};
   if (p->hitFraction >= 0) {
     // no movement this tick, so the entity is not on the moved list and its previous coords stay those of
     // the hit tick's AdvanceCoords: OnImpact's GetVelocity is the last step to the hit point (projectile.md 3.1,

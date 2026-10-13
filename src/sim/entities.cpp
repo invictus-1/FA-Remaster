@@ -609,6 +609,9 @@ int l_SetScale(lua_State* L) {
   e->scale[0] = s;
   e->scale[1] = static_cast<float>(luaL_optnumber(L, 3, s));
   e->scale[2] = static_cast<float>(luaL_optnumber(L, 4, s));
+  // (0x690fa9: the three numbers go straight into the entity's scale, the size it is drawn at)
+  if (e->kind == Entity::Kind::Projectile)
+    static_cast<Projectile*>(e)->drawSize = {e->scale[0], e->scale[1], e->scale[2]};
   return 0;
 }
 // Entity:SetMesh(meshBlueprint, keepActor), Entity:SetDrawScale(scale), Entity:SetVizToFocusPlayer / Allies /
@@ -621,7 +624,11 @@ int l_SetMesh(lua_State* L) {
   return 0;
 }
 int l_SetDrawScale(lua_State* L) {
-  E(L)->drawScale = static_cast<float>(luaL_checknumber(L, 2));
+  Entity* e = E(L);
+  e->drawScale = static_cast<float>(luaL_checknumber(L, 2));
+  // (0x690b35: the same three fields as SetScale, all set to the one number)
+  if (e->kind == Entity::Kind::Projectile)
+    static_cast<Projectile*>(e)->drawSize = {e->drawScale, e->drawScale, e->drawScale};
   return 0;
 }
 template <int Which>

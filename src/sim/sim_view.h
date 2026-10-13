@@ -124,14 +124,21 @@ struct ProjectileView {
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
   // Entity:SetScale(x, y, z) as last set (1, 1, 1 unless a script set it, or the blueprint's MeshScaleRange drew
-  // another size at launch), and Entity:SetDrawScale. Both are on top of the blueprint's own
-  // Display.UniformScale: draw the mesh at UniformScale * scale * drawScale.
+  // another size at launch), and Entity:SetDrawScale: the raw numbers, kept for hosts that used them. They are
+  // NOT factors on Display.UniformScale (an earlier line here said so): use `size` below.
   float scale[3] = {1, 1, 1};
   float drawScale = 1;
   // Projectile:SetScaleVelocity, or the blueprint's MeshScaleVelocity as drawn at launch: how fast the scale
   // grows, per second. The simulation does not apply it (nothing in it goes by a shell's drawn size), so `scale`
   // stays as set: a host adds scaleVelocity * (seconds since it first saw the shell).
   float scaleVelocity[3] = {0, 0, 0};
+  // THE SIZE TO DRAW THE MESH AT this beat, per axis, as the original holds it (its entity scale): the blueprint's
+  // Display.UniformScale (+- MeshScaleRange) at launch, grown by the scale velocity every beat (velocity x 0.1,
+  // in these same units: a ball of UniformScale 17 with velocity 5.1 is 22.1 a second later), and replaced
+  // outright by SetScale(x, y, z) or SetDrawScale(s), which write this very value (UniformScale no longer counts
+  // then). A host draws at `size` and needs none of scale / drawScale / scaleVelocity above; between two beats it
+  // may add scaleVelocity x the time since the beat.
+  float size[3] = {1, 1, 1};
 };
 
 // A weapon's collision beam while it is on: from its muzzle to where it ends this beat.

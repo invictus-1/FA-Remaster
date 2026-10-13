@@ -265,6 +265,10 @@ class Projectile : public Entity {
   std::string layer = "None";
   // Motion (sim/projectile.cpp; the original's Projectile, ctor 0x69afe0)
   Vec3 angVel, scaleVel;
+  // The size its mesh is drawn at, per axis (the original's entity scale, +0x84): UniformScale +- MeshScaleRange
+  // at launch, + scaleVel x 0.1 every beat (MotionTick 0x69be40), replaced outright by SetScale / SetDrawScale.
+  // For a host that draws (ProjectileView::size); nothing in the simulation goes by it.
+  Vec3 drawSize{1, 1, 1};
   Vec3 prevPos;
   float velScale = 1;
   float hitFraction = -1;
