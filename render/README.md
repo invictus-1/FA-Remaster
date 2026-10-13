@@ -438,6 +438,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   camera to the first one in a game. Not there: a shield's flash where it is hit beyond the
   game's own patch; the bubbles are not sorted by distance among themselves; the original's
   personal shield is a second, larger copy of the mesh with a pattern running over it.
+- The remastered units' files for this engine in games (`remasters.h`, `--remasters <folder>`):
+  every `<folder>/<ID>/export/moho64` with a first level is mounted at `/preview/<id>`, where
+  `ModelCache` takes a unit's meshes (four levels, sizes on screen 250 / 100 / 30 pixels),
+  LabPBR textures and lights list from, in place of the model the game's archives have. A
+  host does the same with `MountRemasters` before it opens the world. A lamp whose bone the
+  script has hidden stays dark.
 - Parts of a model its script hides (the engine's `HiddenBones`, units only, as in the original):
   `SimFrames` puts a unit's hidden bones into its pose's list (`FrameBone::hidden`), and what
   follows such a bone is drawn at no size at its joint, in the picture and in the shadow. So a

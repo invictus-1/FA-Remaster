@@ -1,0 +1,31 @@
+#include "remasters.h"
+
+#include <cctype>
+
+#include "core/hostfs.h"
+#include "core/vfs.h"
+
+namespace render {
+
+int MountRemasters(moho::Vfs* vfs, const std::string& root) {
+  int mounted = 0;
+  for (const std::string& name : moho::hostfs::ListDirectory(root)) {
+    const std::string folder = root + "/" + name + "/export/moho64";
+    if (!moho::hostfs::IsDirectory(folder)) continue;
+    // (a unit's folder is named by its id, in any case; its first level tells that it is one)
+    bool first = false;
+    for (const std::string& file : moho::hostfs::ListDirectory(folder)) {
+      std::string low = file, want = name + "_lod0.scm";
+      for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      for (char& c : want) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (low == want) first = true;
+    }
+    if (!first) continue;
+    std::string id = name;
+    for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (vfs->Mount(folder, "/preview/" + id)) ++mounted;
+  }
+  return mounted;
+}
+
+}  // namespace render
