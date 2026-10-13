@@ -1,11 +1,13 @@
 #include "sim/skeleton.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
 #include "core/log.h"
 #include "core/vfs.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 
@@ -62,6 +64,41 @@ std::unique_ptr<Skeleton> Skeleton::FromScm(const std::string& d) {
       b.parent = -1;
       b.modelRot = b.localRot;
       b.modelPos = b.localPos;
+    }
+    {
+      // bone+0x24: quaternion of the rest-pose inverse's 3 x 3 part (0x4f0ae0 hands 0x4f0cb0 the TRANSPOSE: Wm3's
+      // Quaternion::FromRotationMatrix, in its order of operations) and its translation (the matrix's fourth row)
+      const size_t m = at - 64;
+      float M[3][3];
+      for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c) M[c][r] = Read<float>(d, m + static_cast<size_t>(r * 4 + c) * 4);
+      const Vec3 ip{Read<float>(d, m + 48), Read<float>(d, m + 52), Read<float>(d, m + 56)};
+      float q[4];  // w, x, y, z
+      const float trace = (M[0][0] + M[1][1]) + M[2][2];
+      if (trace > 0.0f) {
+        const float root = std::sqrt(trace + 1.0f);
+        q[0] = root * 0.5f;
+        const float k = 0.5f / root;
+        q[1] = (M[2][1] - M[1][2]) * k;
+        q[2] = (M[0][2] - M[2][0]) * k;
+        q[3] = (M[1][0] - M[0][1]) * k;
+      } else {
+        static const int next[3] = {1, 2, 0};
+        int a = 0;
+        if (M[1][1] > M[0][0]) a = 1;
+        if (M[2][2] > M[a][a]) a = 2;
+        const int b2 = next[a], c2 = next[b2];
+        const float root = std::sqrt(((M[a][a] - M[b2][b2]) - M[c2][c2]) + 1.0f);
+        q[a + 1] = root * 0.5f;
+        const float k = 0.5f / root;
+        q[0] = (M[c2][b2] - M[b2][c2]) * k;
+        q[b2 + 1] = (M[a][b2] + M[b2][a]) * k;
+        q[c2 + 1] = (M[a][c2] + M[c2][a]) * k;
+      }
+      // 0x46fbf0, the inverse: the conjugate, and the negated translation turned by it (0x452d40)
+      const Quat iq{-0.0f - q[1], -0.0f - q[2], -0.0f - q[3], q[0]};
+      b.entRot = iq;
+      b.entPos = vm::RotateM(iq, Vec3{-0.0f - ip.x, -0.0f - ip.y, -0.0f - ip.z});
     }
     sk->byName_.emplace(Lower(b.name), i);
   }
