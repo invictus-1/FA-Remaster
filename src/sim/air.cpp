@@ -1629,6 +1629,19 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
         }
       if (can) CombatTactics(sim, u, target, d, fwdH);
     }
+    {
+      static const long dbgTac = getenv("MOHO64_DEBUG_TACTICS") ? atol(getenv("MOHO64_DEBUG_TACTICS")) : -1;
+      if (dbgTac >= 0 && static_cast<long>(u->id) == dbgTac && target.type != 0) {
+        const Entity* te = target.type == 1 && target.entityId ? sim.FindEntity(target.entityId) : nullptr;
+        bool can = false;
+        for (UnitWeapon* w : u->weapons)
+          if (w->bp && WeaponCanAttackTarget(sim, w, target)) can = true;
+        Logf(LogLevel::Info, "tactics %u unit %u wants type %d entity %d%s%s%s: has %d, a weapon can attack it %d",
+             sim.tick(), u->id, target.type, te ? static_cast<int>(te->id) : -1, te && te->dead ? " (dead)" : "",
+             te && te->destroyQueued ? " (destroy queued)" : "", target.viaBlip ? " via its blip" : "", has ? 1 : 0,
+             can ? 1 : 0);
+      }
+    }
     if (!has) {
       a.combatCounter = 0;
       a.combatState = 0;
