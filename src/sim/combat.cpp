@@ -3907,7 +3907,13 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     double s, c;
     dmath::SinCos(static_cast<double>(ang), &s, &c);
     const float sn = static_cast<float>(s), cs = static_cast<float>(c);
-    *dir = Vec3{n.x * cs + n.z * sn, n.y, n.z * cs - n.x * sn};
+    // 0x6c24b5: what the motion is handed is a POINT, the unit's place + that unit vector, and TurnInfo 0x6990e0
+    // takes the place off again. Beside a coordinate of a few hundred a unit vector keeps only its first five
+    // digits, so the direction the hull turns to is up to 1e-5 rad off the exact one, and the 0.9999 test that
+    // starts the next turn falls a beat earlier or later with it.
+    const Vec3 r{n.x * cs + n.z * sn, n.y, n.z * cs - n.x * sn};
+    const Vec3 T{r.x + u->position.x, r.y + u->position.y, r.z + u->position.z};
+    *dir = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
     return true;
   }
   const float arc = w->bp->slavedToBodyArcRange;

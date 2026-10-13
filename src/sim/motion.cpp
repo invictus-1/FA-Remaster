@@ -1246,6 +1246,10 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
         !u->unitStates.count("Refueling") && !combat::HasTarget(sim, u->desiredTarget))
       fv = FormationVector(sim, u);
     if (fv.x == 0 && fv.y == 0 && fv.z == 0) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
+    if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
+    // T = pos + fv (0x6c2620), and TurnInfo takes the place off again: the vector as the float sum left it
+    const Vec3 T{u->position.x + fv.x, u->position.y + fv.y, u->position.z + fv.z};
+    fv = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
   }
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
@@ -1264,7 +1268,10 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   float wx = fv.x, wz = -fv.z;          // toward T = pos + fv
   float len = std::sqrt(wx * wx + wz * wz);
   if (len <= 0) return false;
-  if ((wx / len) * cx + (wz / len) * cz >= 0.9999f) return false;
+  // (0x6c2515: the direction is the vector times 1 / len, not divided by len; near the threshold the last bit
+  // of the product decides whether a slowly turning ship takes its next degree this beat or the next)
+  const float inv = 1.0f / len;
+  if (cz * (wz * inv) + cx * (wx * inv) >= 0.9999f) return false;
   float rate = (b.motionType == kMotionHover ? b.turnFacingRate : b.turnRate) * m.turnMult * 0.0017453292f;
   float th = std::min(rate, 3.14159274f);
   float lc = std::sqrt(cx * cx + cz * cz), lw = len;
