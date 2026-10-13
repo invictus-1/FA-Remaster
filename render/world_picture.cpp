@@ -180,7 +180,7 @@ void WorldPicture::SetShapes(const std::vector<Line>& lines, const std::vector<R
   World& w = *impl_->world;
   w.lines.clear();
   w.rings.clear();
-  for (const Line& l : lines) w.lines.push_back({{l.a[0], l.a[1], l.a[2]}, {l.b[0], l.b[1], l.b[2]}, l.color});
+  for (const Line& l : lines) w.lines.push_back({{l.a[0], l.a[1], l.a[2]}, {l.b[0], l.b[1], l.b[2]}, l.color, l.width});
   for (const Ring& r : rings) w.rings.push_back({{r.centre[0], r.centre[1], r.centre[2]}, r.radius, r.color});
 }
 

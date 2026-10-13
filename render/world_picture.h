@@ -91,10 +91,12 @@ class WorldPicture {
   };
   void SetBuildPreviews(const std::vector<BuildPreview>& previews);
   // Lines between places of the world and rings lying on the ground (the lines of a unit's orders,
-  // ranges). Colours are 0xAARRGGBB; lines are one pixel wide and hidden by what is in front of them.
+  // ranges). Colours are 0xAARRGGBB; lines are hidden by what is in front of them. A line's width
+  // is in pixels on the screen, the same from near and from far (1: a hairline, as before).
   struct Line {
     float a[3], b[3];
     uint32_t color;
+    float width = 1;
   };
   struct Ring {
     float centre[3];

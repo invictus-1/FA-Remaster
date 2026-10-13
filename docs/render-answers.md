@@ -4,6 +4,17 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 12: a width for a line — there (2026-10-13)
+
+`WorldPicture::Line` has a `float width = 1`, in pixels on the screen, the same from near and from
+far. 1 (or less than 1.25) is the hairline as before; anything wider is drawn as a flat ribbon
+turned to the eye, each end half a width longer so that two lines meeting at a corner close it.
+Nothing else changes: same colours (0xAARRGGBB), still lifted 0.15 above its end points and hidden
+by what stands in front of it. A long line is still straight between its two ends, so over uneven
+ground keep handing it over in pieces of one map unit as you do; the pieces join without gaps.
+Seen in the viewer (`--ranges`): a row of site outlines four pixels wide, from zoom 45 and 160.
+I would rather you keep the rectangles on your side: you know what is placed and queued.
+
 ## ui, to the renderer 10 and 11: Chris's notes on lights at night (2026-10-13)
 
 Each lamp was checked in the viewer against its unit's `<ID>_lights.bp`. Where the drawing follows

@@ -164,6 +164,7 @@ struct Options {
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
   std::string find;                     // --find
+  bool show = false;                    // --show
   int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -201,6 +202,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     const char* v = nullptr;
     if (a == "--novsync") o->vsync = false;
     else if (a == "--debug") o->debug = true;
+    else if (a == "--show") o->show = true;
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
@@ -358,7 +360,9 @@ int main(int argc, char** argv) {
   // an automatic run (--frames) must give the same picture whatever the person at the machine is
   // doing: its window stays in the background and what is typed or clicked is not acted on
   const bool automatic = opt.frames > 0;
-  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error, automatic);
+  // (and a run that only writes a picture shows no window at all: it would lie over whatever the
+  // person is doing, a game of their own included; --show brings it back)
+  auto window = Window::Create("FA Remastered", opt.width, opt.height, &error, automatic, automatic && !opt.screenshot.empty() && !opt.show);
   if (!window) {
     fprintf(stderr, "render: no window: %s\n", error.c_str());
     return 1;
@@ -489,6 +493,30 @@ int main(int argc, char** argv) {
       dot.fractionComplete = 0.8f;
       world.placed.push_back(dot);
     }
+    // ... and the guides round building sites: outlines four pixels wide in pieces of one map unit
+    // that follow the ground, a hairline one beside them, and an order's line through them
+    auto outline = [&](Vec3 middle, float half, uint32_t color, float width) {
+      const Vec3 corners[4] = {{-half, 0, -half}, {half, 0, -half}, {half, 0, half}, {-half, 0, half}};
+      for (int side = 0; side < 4; ++side) {
+        const Vec3 from = middle + corners[side], to = middle + corners[(side + 1) % 4];
+        const int pieces = std::max(static_cast<int>(half * 2), 1);
+        for (int k = 0; k < pieces; ++k) {
+          Vec3 a = from + (to - from) * (static_cast<float>(k) / static_cast<float>(pieces));
+          Vec3 b = from + (to - from) * (static_cast<float>(k + 1) / static_cast<float>(pieces));
+          if (world.HaveMap()) {
+            a.y = world.GroundHeight(a.x, a.z);
+            b.y = world.GroundHeight(b.x, b.z);
+          }
+          world.lines.push_back({a, b, color, width});
+        }
+      }
+    };
+    outline(at + Vec3{-20, 0, 16}, 2, 0xff40ff40u, 4);
+    outline(at + Vec3{-16, 0, 16}, 2, 0xff40ff40u, 4);
+    outline(at + Vec3{-12, 0, 16}, 2, 0xff4080ffu, 4);
+    outline(at + Vec3{-8, 0, 20}, 2, 0xff40ff40u, 1);
+    world.lines.push_back({at + Vec3{-26, world.HaveMap() ? world.GroundHeight(at.x - 26, at.z + 16) : 0, 16},
+                           at + Vec3{-12, world.HaveMap() ? world.GroundHeight(at.x - 12, at.z + 16) : 0, 16}, 0xffffff40u, 4});
   }
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};

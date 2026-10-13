@@ -139,6 +139,7 @@ class World {
   struct Line {
     Vec3 a, b;
     uint32_t color = 0xffffffffu;
+    float width = 1;  // pixels on the screen
   };
   struct Ring {
     Vec3 centre;

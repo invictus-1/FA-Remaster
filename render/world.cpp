@@ -506,7 +506,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
   auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
   const Vec3 lift{0, 0.15f, 0};
-  for (const Line& l : lines) draw.Line(l.a + lift, l.b + lift, swapped(l.color));
+  for (const Line& l : lines) {
+    if (l.width > 1.25f) draw.WideLine(l.a + lift, l.b + lift, swapped(l.color), l.width);
+    else draw.Line(l.a + lift, l.b + lift, swapped(l.color));
+  }
   for (const Ring& r : rings) {
     // along the ground, in as many pieces as its size asks for
     const int pieces = std::clamp(static_cast<int>(r.radius * 2), 24, 160);
