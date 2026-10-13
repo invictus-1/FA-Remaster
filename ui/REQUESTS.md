@@ -291,6 +291,47 @@ that cannot be built, which reads as a broken game to a player.
 the selection's, then the army's. Confirmed in a new game as the engine asked: a UEF commander's
 category holds ueb1101 and not ueb1201 (`ui/tests/game.lua`). Thank you.
 
+### 13. A factory that is still being built starts on the units ordered from it
+Chris, 2026-10-13, in a live game (his words): "units being built despite the factory not being
+done ... its been an issue". His picture: a UEF land factory still inside its build box, and a
+unit's wire frame being built on its pad.
+
+Reproduced without the picture (stock Seton's, seed 7, no mods): the commander begins a land
+factory (ueb0101) at game time 5.4; the factory is selected at 14 of 4000 health and one engineer
+is ordered from it (the script's `IssueBlueprintCommand("UNITCOMMAND_BuildFactory", "uel0105",
+1)`, which goes out as the command stream's order for that unit); at 5.6, with the factory at 41
+of 4000 and the commander still building it, the factory's focus is the engineer: it has started.
+The factory itself is finished at 35.4.
+
+In the original a building under construction can be selected and given its queue, and works
+through it only once it is finished. So the order is rightly taken; what is asked for is that a
+unit which is not finished does not begin on its queue (the factory's build orders here; I have
+not tried other orders to unfinished units). Not blocking, but a player sees it in every game.
+
+**Status:** open.
+
+### 14. What the original's interface sends with a group's order so that it moves in formation
+Chris, 2026-10-13: "unit commands when its a group in the og game they went into formations
+here its just a jumble of units".
+
+Read on your side (formation.cpp): `GenerateFormation` does nothing unless the command holds more
+than one unit AND `formIndex > -1`, and it takes `formQw..formQz` and `formScale` from the order.
+My orders leave `StreamIssueData` at its defaults (`formIndex = -1`, the unit quaternion, scale
+1), so a group gets no formation: that part is mine. What I do not know is what the original's
+interface puts there, and you have the replays:
+- for a plain right click with several units selected (Move, and Attack / Patrol / AggressiveMove
+  / Guard at a place): which `formIndex` (0? and by which rule, as the index means a place in
+  the formation table of the units' kind), which orientation (from the units' middle towards the
+  target? the camera's? fixed?), which scale;
+- whether the type stays Move or becomes FormMove, and what Ctrl changes (players know a
+  "formation move" with Ctrl held);
+- for one unit alone: is it -1?
+The smallest form of an answer: a few records of real replays' issue-command data for group
+orders beside what the units and the target were, or the rule if you have it read from the exe.
+I build it into `IssueOrder` (ui/user/user_units.cpp) as soon as I know. Not blocking.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -683,3 +724,21 @@ body as `UEL0001` under the stock skeleton without upgrade parts, today, and say
 is in and which stock upgrade bones are empty. The stock upgrades themselves are not modelled:
 new design work that waits for Chris's order. The lights lists (commander, engineer, T1 power
 generator) are being reworked today.
+
+### 2. From Chris, after the new lights lists: the commander's eye beams, the land factory's lights
+Chris, 2026-10-13, in a game with your new lists (`Open-Game-DayNight.bat`, main c7790f2 or
+later). He adds: "not sure if its just visuals not done yet too just double check for the light
+stuff", so if these are simply not reworked yet, say so and that is the answer. Three pictures
+in the folder of his others (`_scratch\ui\chris_20261013\`):
+1. `commander_eye_beams_off.png`: "Acu light is in right direction but the thin light from his
+   eyes are off they point in a different direction." The broad light lies ahead of the
+   commander and to its right on the ground; two thin beams leave its head straight down the
+   picture, to the left of that light (he circled them).
+2. `factory_lights_1_blinking_top_2_point_on_pad.png`, the UEF land factory (UEB0101) at night:
+   (1) "the top of the factory has lights turning off and on not sure if that is intended if so
+   probably put a light on the top so its not just random flickering lights and it has an actual
+   like I guess model so it looks legit" (he circled the row of lit strips across the middle of
+   the building); (2) "the random light in the middle of the factory": a white point on the
+   build pad, the one he circled before.
+3. `unit_built_in_unfinished_factory.png` is not for you (the engine's).
+"Other than that everything else works and looks right." Not blocking.
