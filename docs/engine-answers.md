@@ -3,6 +3,60 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 17: the first game's shader names — the exe MAPS them to the present ones (a table of 18)
+
+It neither draws nothing nor falls back to one technique: the exe carries a dictionary of the old names,
+and every mesh material's `ShaderName` goes through it before it is used.
+
+**Where.** `MeshMaterial::Create` (FA exe 0x7dc1b0) calls the lookup 0x7dbdb0 with the blueprint's
+`ShaderName` and stores what comes back as the material's shader name (0x7dc262). The dictionary is
+built once by `ShaderDictionary::ShaderDictionary` (0x7db3a0). All of it, old name -> name used:
+
+| Blueprint says | Technique used |
+|---|---|
+| `TMeshNoLighting` | `Flat` |
+| `TMeshNoNormals` | `VertexNormal` |
+| `TMeshAlpha` | `NormalMappedAlpha` |
+| `TMeshGlow` | `NormalMappedGlow` |
+| `TMeshTerrain` | `NormalMappedTerrain` |
+| `Simple` | `Unit` |
+| `Team` | `Unit` |
+| `TMeshAlphaGlowFade` | `UnitBuild` |
+| `TMeshMetalBuild` | `AeonBuild` |
+| `TMeshShield` | `Shield` |
+| `TMeshZFill` | `ShieldFill` |
+| `TMeshAdd` | `Effect` |
+| `TMeshExplosion` | `Explosion` |
+| `TMeshCloud` | `Cloud` |
+| `TMeshOuterCloud` | `OuterCloud` |
+| `TMeshEMPNuke` | `NukeEMP` |
+| `TMeshQuantumNuke` | `NukeQuantum` |
+| `TMeshTemporalBubble` | `TemporalBubble` |
+
+So the Aeon commander's death is `NukeQuantum` and `NormalMappedAlpha`, the Cybran's `OuterCloud`.
+Checked in the `effects/mesh.fx` the lab runs (FAF's, effects.nx2): `NukeQuantum` and `OuterCloud`
+are techniques there, `NukeQuantum` with `AlphaBlend_SrcAlpha_InvSrcAlpha` and no depth write; so a
+plain lit model is the wrong look for them. Of the 18 targets, three are in that file under no name
+I could match (`TemporalBubble`, `UnitBuild`, `Shield`: neither plain nor with a fidelity suffix).
+
+**The rule of the lookup (0x7dbdb0), in its order:**
+1. the name is in the table: the mapped name is used. The first time each old name is met the log gets
+   `Use of 'old' shader: <name>` (a set of names already reported, 0x10be638, keeps it to once);
+2. the name is not in the table and is EMPTY: `Unit`;
+3. anything else: the name as it is.
+
+**After that, the technique** (`CD3DEffect::SetTechnique` 0x42d290, with the name from above): the
+effect keeps a map of the techniques that carry a fidelity definition. A name in that map gives, for
+the fidelity now set (the global at 0xf58e88), the technique NAMED in its entry for that level; an
+entry with nothing for that level uses the technique of the name itself and logs `technique %s in
+effect %s has an invalid fidelity definition`. A name not in that map goes straight to the effect's
+own `GetTechnique(name)`. So the exe does not paste `_HighFidelity` and the like onto the name: which
+technique stands for which level is written in the effect file, in each technique's annotations
+(`string abstractTechnique = "NormalMappedAlpha"; int fidelity = FIDELITY_HIGH;` on
+`NormalMappedAlpha_HighFidelity`; 140 techniques of mesh.fx carry an `abstractTechnique`). The name a
+blueprint gives is the abstract one. What is drawn when `GetTechnique` finds nothing (a name that is neither in the table nor a
+technique) I have not read; none of the names you list gets that far.
+
 ## render 16: a projectile's scale is the size it is drawn at — yes, and `ProjectileView::size` has it now
 
 Your reading is right, and the original goes one step further: there is ONE value, the entity's scale
