@@ -343,8 +343,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   ground at all is from memory, not read out of it. Not the original's: the memory is the renderer's own and begins when
   the army becomes the focus army; the buildings' part is made from the frames that are drawn,
   so running a game ahead without drawing misses what was seen meanwhile; a building is told by
-  its id's third letter. Open: the engine reports the whole map as seen for three seconds at a
-  game's start (`REQUESTS.md`, 13), so "never seen" does not last.
+  its id's third letter. A look in which every place of the grid is seen is shown but not kept
+  as seen: the M28 AI gives its commanders sight of the whole map for a few beats at a game's
+  start, and an ally's sight is the army's own (`docs/engine-answers.md`, render 13).
 - Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
   trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
   the model, each on its own beat by where it stands, harder when it rains or snows; their

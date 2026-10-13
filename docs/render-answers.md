@@ -58,9 +58,10 @@ some time (the engine does not keep it of places). `WorldPicture::SetUnexplored(
 game's option `FogOfWar = "unexplored"`: ground never seen is then all but black, in the picture
 and on the minimap, until it is seen. Left alone (false, right for `"explored"`, the only fog FAF's
 lobby offers) it looks like ground seen before, as it did. You have the game's options; call it
-when you launch a game that has the option. One thing to know: in the lab's M28 game the engine
-reports the WHOLE map as seen by army 1 from tick 46 to tick 75, so with `SetUnexplored(true)`
-everything counts as explored after eight seconds. Asked of the engine (render 13).
+when you launch a game that has the option. One thing to know: the M28 AI gives its commanders
+sight of the whole map for a few beats at the start (`docs/engine-answers.md`, render 13), and an
+ally's sight is the army's own; the renderer shows that while it lasts but does not keep a look
+in which every place is seen as "seen at some time", so black ground stays black.
 
 Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
 minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's
