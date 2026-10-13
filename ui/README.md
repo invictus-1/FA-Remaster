@@ -318,16 +318,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   takes the old wave output with larger buffers, as the host does by itself where the session
   cannot be opened. The world's sounds: what the simulation's scripts play (the engine's
   `SoundEvents` of every beat: steps, engines, weapons, fires) is played at its place and heard
-  from the place the camera looks at, 4 below the ground there: each sound follows its own
-  curves from the game's files, loudness by the distance from that place (`Distance`), by how
-  far to the side of it the sound lies (`Angle`: full at the place itself, 20 dB less off to
-  the side) and by how far out the camera is (`CameraDistance`), and sits between the ears by
-  where it is on screen (that last part is ours). So a power generator's hum is heard when the
-  view is right on it and hardly from elsewhere, as in the original. Read from the original:
-  the 4, the angle and its formula, the camera distance; inferred: that the listener's place is
-  where the camera looks and not its eye (`sound/sound_system.cpp`, at `Heard`). The original
-  also has a sight check (its `snd_CheckLOS`: a sound at a place the army does not see is not
-  played) and a cut-off by the camera's distance that a blueprint names (`LodCutoff`; the
+  from the camera's eye (4 lower, as the original has it): each sound follows its own curves
+  from the game's files, loudness by the distance from there (`Distance`), by the angle at
+  which it lies below or beside the camera (`Angle`: about 4 dB less in the middle of the
+  view, more to the side) and by how far out the camera is (`CameraDistance`); the two ears
+  share it, half each in the middle, by where it is on screen (the sharing is ours in its
+  detail). A unit's running sound (a generator's hum, an engine) STARTS only while the camera
+  is within 200 of the place it looks at and has the unit in view, as in the original
+  (0x8ac9e4); so a base is silent from far up and hums only under a near camera. Read from the
+  original: the 4, the angle and its formula, the camera distance, the rule for starting;
+  inferred: that the listener's place is the camera's eye (`sound/sound_system.cpp`, at
+  `Heard`). The original also has a sight check (its `snd_CheckLOS`: a sound at a place the
+  army does not see is not played) and a cut-off by the camera's distance that a blueprint
+  names (`LodCutoff`; the
   game's values for these are 10000, so it cuts nothing). A running sound follows its unit and
   plays only while it can be heard. Whose sounds:
   the player's and the allies' always; anything else only when the player's army sees it now

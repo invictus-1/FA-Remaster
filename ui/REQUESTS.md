@@ -454,6 +454,33 @@ of the factory's skirt. My outline is the right rectangle for buildings whose of
 skirt; the general one (`GetSkirtRect`, in his answer: from the footprint's corner plus the
 skirt's offset) is not drawn yet and matters only for a mod's building with an off-centre skirt.
 
+### 18. The user side's GameTick(), and the beat in which the commander can be selected again
+A question, not blocking. From Chris (2026-10-13): at a game's start "the uef build menu on the
+bottom ... doesn't appear until I reclick on acu". What happens: the game's own start
+(/lua/ui/game/gamemain.lua, StartupSequence) waits, zooms, then calls SelectUnits(avatars) every
+tenth of a second `until not table.empty(selected) or GameTick() > 50`. In ours those calls fall
+at GameTick() 41 to 51, while the commander is in the state UnSelectable (the script's warp-in:
+PlayCommanderWarpInEffect after CommanderWarpDelay's 3 s, SetUnSelectable(false) 2.1 s later).
+As the interface was, SelectUnits took the unselectable commander at once, the build menu came
+up empty (the unit is busy and its queue blocked) and stayed empty until he selected it again.
+I have made SelectUnits pass over unselectable units (inferred from that loop: it only makes
+sense if the call does not take). Now nothing is selected at the start, because of ONE BEAT:
+my own SelectUnits first takes when our GameTick() says 52, and the script gives up at 51.
+
+What I see on my side, by `UnitView::selectable` after each beat and `sim->tick()` as GameTick():
+selectable through 30, unselectable from 31 to 51, selectable from 52; the commander's Gate_In
+sound comes in the beat after which tick() is 31.
+
+Asked, since you have the original's timing: (a) after N beats of the simulation, what does the
+USER side's GameTick() answer in the original: N, or N - 1 (the beat last synced counted from
+0)? (b) in which beat does the commander's WarpInEffectThread reach SetUnSelectable(false) in the
+original: is ours a beat late? If the original's interface reads 51 where ours reads 52, the
+script's last try takes there and the commander is selected as the warp ends, which is what
+Chris knows from the original. Whichever side is off by one, tell me and I set GameTick() or
+you the thread's waking.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

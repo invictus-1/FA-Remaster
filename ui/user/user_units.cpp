@@ -172,9 +172,19 @@ int l_GetSelectedUnits(lua_State* L) {
   return 1;
 }
 // SelectUnits(units): nil or an empty table selects nothing
+// A unit the simulation's script has made unselectable (Unit:SetUnSelectable: a commander while
+// it arrives) is not selected by the script either. INFERRED from the game's own start-up
+// (/lua/ui/game/gamemain.lua, StartupSequence): it calls SelectUnits on the commander every
+// tenth of a second until GetSelectedUnits gives something, which only makes sense if the call
+// does not take while the commander is unselectable. Ours took at once, two seconds before the
+// commander could build: the build menu came up empty and stayed so until it was selected again.
+void DropUnselectable(std::vector<UserUnit*>* list) {
+  list->erase(std::remove_if(list->begin(), list->end(), [](const UserUnit* u) { return !u->view.selectable; }), list->end());
+}
 int l_SelectUnits(lua_State* L) {
   std::vector<UserUnit*> list;
   ReadUnitList(L, 1, &list);
+  DropUnselectable(&list);
   SetSelection(L, list);
   return 0;
 }
@@ -198,6 +208,7 @@ int l_GetUnitById(lua_State* L) {
 int l_AddSelectUnits(lua_State* L) {
   std::vector<UserUnit*> now = Store(L).selection;
   ReadUnitList(L, 1, &now);
+  DropUnselectable(&now);
   SetSelection(L, now);
   return 0;
 }
