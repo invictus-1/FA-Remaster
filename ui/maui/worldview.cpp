@@ -571,6 +571,9 @@ class WorldView : public Control {
     if (cameraDrag_) {
       cameraDrag_ = false;
       UserState::From(L)->ui().holdPointer = false;
+      // A turn with Space that was under way starts anew from where the mouse is now (its last
+      // place is from before the drag: turning by the way since would be a jump).
+      spinning_ = false;
       return;
     }
     std::vector<uint32_t> ids;
