@@ -736,6 +736,34 @@ The bar's colour is its choice, not the original's. A paused unit with no work a
 shows no mark until the engine gives `paused` in its plain unit view (its request 19). Thank you.
 Waiting for Chris's look.
 
+### 15. From Chris: the adjacency graphic between buildings; and how the work bar should look
+Chris, 2026-10-13, after a game on main f5234bf (the build before your work bars; his words).
+
+a. "Building adjacency is another thing we gotta add. since in og game each faction had its own
+adjacy graphic that showed buildings were connected to each other." His picture
+(`1130_adjacency_red_cubes_between_buildings.png` in the folder of his others): three UEF T1
+power generators in a row below a land factory, and between them and the factory a row of small
+RED CUBES on the ground (six of them, one more at the factory's upper right), which he circled.
+So the simulation makes the adjacency's things (FAF's scripts create them when buildings that
+give each other a bonus stand side by side: beams and node meshes, each faction its own), and
+what is drawn for them is a plain cube in the army's colour. Asked for: the original's adjacency
+look in their place (for the UEF as he knows it: the linking lines between the two buildings).
+What they are on the simulation's side (entities with a mesh, beams, emitters) is for you and
+the engine to say; if they reach you as something you have no look for, tell me which.
+
+b. The work bar. He had not seen yours yet when he wrote this (his build was older), and asks
+for the original's: "If I recall in the og game when a building or acu was upgrading there was a
+black bar that filled I think with orange on the bottom of the unit/building we need that ...
+Buildings need the percent bar too as in the upgrade." So: a black bar that fills with ORANGE,
+BELOW the unit or building (yours is over its top, light blue), for buildings as for units. He
+offers to start the original and take pictures; I have asked him for one, and send it when it is
+there. Until then his words are the measure. Also from him: "Pause button still needs the pause
+icon on the unit its pausing": that is your pause mark, in his program since main 7a2f089.
+
+Not blocking.
+
+**Status:** open.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

@@ -1869,6 +1869,11 @@ void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, b
     if (it == store.units.end()) continue;
     UserUnit* u = it->second.get();
     if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    // (A unit still being built on something, a factory's unit on its pad, is not taken by a
+    // box or a click: it is selected once it is out, as Chris knows it from the original, 2026-10-13. A
+    // building under construction can be selected. INFERRED: told apart here as "being built and
+    // not a building"; the original's own test is not read.)
+    if (u->view.beingBuilt && !InCategory(L, u, "STRUCTURE")) continue;
     found.push_back(u);
   }
   if (byPriority && found.size() > 1) {
