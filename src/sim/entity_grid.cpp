@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "sim/collision.h"
 #include "sim/sim.h"
@@ -115,6 +116,9 @@ void GridUpdate(Sim& sim, Entity* e, bool widened) {
   if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop) return;
   EntityGrid& g = sim.entityGrid();
   if (!g.ready()) return;
+  e->gridSeen = true;
+  e->gridPos = e->position;
+  e->gridOri = e->orientation;
   WorldShape ws;
   if (!GetWorldShape(e, &ws)) {
     g.Place(e, 0, 0, 0, 0);
@@ -143,8 +147,17 @@ void GridUpdate(Sim& sim, Entity* e, bool widened) {
 void GridRemove(Sim& sim, Entity* e) { sim.entityGrid().Remove(e); }
 
 void GridAdvanceCoords(Sim& sim) {
-  for (Unit* u : sim.units())
-    if (!u->destroyQueued) GridUpdate(sim, u, true);
+  // UpdateCollision runs here only for entities whose transform changed (the beat's list of moved coords). A unit
+  // that has stood where it was made since - a parked aircraft, set down by a script - keeps the cells of its
+  // PLAIN box; the skirt-wide box comes with its first move. (Seen: one blast over four parked aircraft; the order
+  // it kills them in, and so the order of their explosions' random draws, is the order of their cells.)
+  for (Unit* u : sim.units()) {
+    if (u->destroyQueued) continue;
+    if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&
+        std::memcmp(&u->gridOri, &u->orientation, sizeof(Quat)) == 0)
+      continue;
+    GridUpdate(sim, u, true);
+  }
 }
 
 }  // namespace moho
