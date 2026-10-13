@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "core/log.h"
 #include "maui/world_source.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
@@ -35,6 +36,7 @@ struct Blip {
 struct MeshStore : UserState::Extra {
   std::vector<std::unique_ptr<MeshObject>> meshes;
   std::vector<Blip> blips;
+  std::string shown;  // which meshes were handed over last (for the log)
 };
 
 MeshStore& Store(lua_State* L) {
@@ -285,6 +287,20 @@ void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out) {
     WorldMeshView v = b.view;
     v.age = static_cast<float>(now - b.made);
     out->push_back(std::move(v));
+  }
+  // The log names what is handed over whenever that changes (which meshes, not where they are):
+  // so a mark seen in a game can be traced to the script that placed it.
+  std::string names;
+  for (const WorldMeshView& v : *out) names += v.shader + " " + v.mesh + " " + v.texture + ";";
+  if (names != store.shown) {
+    store.shown = names;
+    Logf(LogLevel::Debug, "moho64ui: world meshes shown: %d", static_cast<int>(out->size()));
+    int listed = 0;
+    for (const WorldMeshView& v : *out) {
+      if (++listed > 16) break;
+      Logf(LogLevel::Debug, "moho64ui:   %s %s (%s) at %.1f, %.1f, %.1f scale %.2f", v.shader.c_str(), v.mesh.c_str(),
+           v.texture.c_str(), v.position[0], v.position[1], v.position[2], v.uniformScale);
+    }
   }
 }
 

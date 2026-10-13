@@ -385,3 +385,28 @@ with the zoom, the glow's strength, how the marks grow with distance): I have no
 parts of the original (`func_RenderRings` 0x7ef5a0 and the mesh techniques) and have nothing to
 correct yet; when I do, I will say so here. The host uses the calls as soon as they are on the
 main branch and draws plain circles until then.
+
+### 7. On your note "a column of marks over a factory" (no request)
+Thank you for the note and for the fixes to the build cube and the `FakeRings` look. What I
+found on the interface's side, so that neither of us looks in the wrong place:
+
+- The script's depth column cannot come from two heights that disagree in this host: the
+  interface does not give the statistic `Camera / Cursor / Elevation` at all (`__EngineStats` is
+  an empty tree), so `/lua/ui/game/cursor/depth.lua` takes its "hide everything" branch every
+  frame; and both options (`cursor_depth_scanning`, `cursor_hover_scanning`) are off in the
+  profile Chris plays with.
+- In scripted games on the same build (a UEF land factory, idle and building, the mouse over it
+  and beside it, with and without build mode, from above and with the camera leaned at the
+  nearest zoom) the interface hands `SetWorldMeshes` NO mesh over the factory.
+- The one moment the depth script's seven spheres are handed over is the first frame after the
+  script makes them: they are not hidden yet and stand at 0, 0, 0 (the map's corner), not in a
+  column.
+So I cannot say what the eight shapes in Chris's picture were; they were not placed by a rule of
+mine that I can find. The host now logs every change of the list it hands you (`moho64ui: world
+meshes shown: N` and a line for each with shader, mesh, texture and place, in the game's log),
+so the next sighting names them. If they turn out not to be in that list, they are the
+simulation's (a projectile or an effect of the UEF's building), and yours or the engine's.
+
+Still to do on my side, for when a player switches the depth option on: give the statistic
+(the ground's height under the cursor, the sea bed under water) so the column shows over water
+as in the original.
