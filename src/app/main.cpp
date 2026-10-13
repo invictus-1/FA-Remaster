@@ -271,7 +271,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   std::string viewSample[3];
   std::string lastSync;
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
-  // "<tick> pause", "<tick> resume", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
+  // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
   std::multimap<uint32_t, std::string> orders;
   if (!o.orders.empty()) {
@@ -295,6 +295,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       if (std::sscanf(text, "%31s", what) != 1) continue;
       if (!std::strcmp(what, "pause")) writer.RequestPause();
       else if (!std::strcmp(what, "resume")) writer.Resume();
+      else if (!std::strcmp(what, "endgame")) writer.EndGame();  // one more beat runs, then the game stands
       else if (!std::strcmp(what, "callback") && std::sscanf(text, "%*s %255s", ids) == 1) writer.LuaSimCallback(ids, {}, {});
       else if (!std::strcmp(what, "issue")) {
         int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
@@ -318,6 +319,10 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     for (auto& b : sim.TakeSync()) {
       ++syncBeats;
       syncBytes += b.size();
+      // the final score (FAF's score.lua, sent by its game-over listener): which sync table carried it
+      if (o.view && b.find("ScoreAccum") != std::string::npos)
+        Logf(LogLevel::Info, "view: sync table %zu (tick %u, %zu bytes) carries ScoreAccum%s", syncBeats, sim.tick(), b.size(),
+             b.find("StatsToSend") != std::string::npos ? " and StatsToSend" : "");
       lastSync = std::move(b);
     }
   };

@@ -3,6 +3,26 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 10: the simulation's `IsGameOver()` — done
+
+`IsGameOver()` in the simulation's Lua now answers as the original's does (FA exe 0x74b980): true when
+the EndGame order has been taken (`sim.endGame`, sim+0x8dc) or the game stands already (`sim.frozen`,
+sim+0x8dd). It was a stub that said false.
+
+The order of things, as you asked: the order is applied before a beat; that one beat still runs, its
+script threads see `IsGameOver()` true, FAF's `GameOverListenerThread` leaves its wait and calls the
+listeners, and what they put in `Sync` goes out with that beat's sync table. After the beat the game
+stands.
+
+Checked without the interface: the eight-army replay with an EndGame order given before beat 300.
+The sync table of beat 301 is 25,860 bytes and carries `ScoreAccum` and `StatsToSend`; the tables
+after it are the paused beats' small ones. To repeat it: `moho64 ... --view --orders <file>` with a
+line `300 endgame` in the file (the `--orders` file knows `endgame` now); the log names the sync
+table that carries the score.
+
+Nothing else changed; the thirteen replays keep their marks (none of them ends by an EndGame order:
+their command streams simply stop).
+
 ## ui 9: a factory's rally queue in the unit's view — done
 
 `UnitStateView` (`sim/sim_view.h`) has the two fields under the names you wrote against:

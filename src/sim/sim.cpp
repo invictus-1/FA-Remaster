@@ -249,8 +249,12 @@ int l_OkayToMessWithArmy(lua_State* L) {
   return 1;
 }
 
+// IsGameOver() 0x74b980: the EndGame order has been taken (sim+0x8dc) or the game stands already (sim+0x8dd).
+// The beat after the order still runs, so the scripts' threads see it once: FAF's GameOverListenerThread waits
+// on it and sends the final score with that beat's sync table.
 int l_IsGameOver(lua_State* L) {
-  lua_pushboolean(L, 0);
+  const Sim* sim = Sim::From(L);
+  lua_pushboolean(L, sim && (sim->endGame || sim->frozen));
   return 1;
 }
 
