@@ -447,7 +447,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`
   makes that army's commander destroy itself in a new game (the game's own Ctrl-K callback), to
-  look at a death. Not there: a shield's flash where it is hit beyond the
+  look at a death. `--animate <file.sca>[,<fraction>]` poses the placed units by one of the game's
+  animations at that point of it (without a fraction it plays), remaster and original side by side:
+  `--place ueb0101 --animate /units/UEB0101/UEB0101_Aupgrade.sca,0.5`. `--shots <n>` writes every
+  n-th frame of an automatic run beside the last one (`<screenshot>_0001.png` ...), to look at
+  something that moves or flickers in one and the same game. A run that only writes pictures opens
+  no window (`--show` brings it back). Not there: a shield's flash where it is hit beyond the
   game's own patch; the bubbles are not sorted by distance among themselves; the original's
   personal shield is a second, larger copy of the mesh with a pattern running over it.
 - The remastered units' files for this engine in games (`remasters.h`, `--remasters <folder>`):
