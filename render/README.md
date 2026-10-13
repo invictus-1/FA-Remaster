@@ -287,8 +287,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   trees half as much as on the ground, so that they can be told apart) and is gone in three. Fog,
   and a little of it with rain and snow, is the air taking the colour of the sky's light with
   distance, never all of it, or the map seen from high up would be gone. All of this is in the
-  light every surface shares, so nothing about a model or a map needs to be made for it. Not yet:
-  puddles, snow that builds up as a layer, wind on the trees, sound, a bolt to see in the sky.
+  light every surface shares, so nothing about a model or a map needs to be made for it. Puddles:
+  where wet ground is nearly level, patches of still water that grow as it gets wetter and mirror
+  the sky (the ground only; a patch's place is noise by where it is, not where water would truly
+  gather). Not yet: snow that builds up as a layer, sound.
   Cost: none that can be measured (1.4 to 1.5 ms a frame at 1920 x 1080, clear, storm or snow
   alike).
   Weather that changes by itself (`--weather auto`, `World::weatherAuto`): `WeatherAt(seed,
@@ -298,7 +300,11 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   unless said), each spell has one kind of weather drawn by the seed (clear, fair, cloudy,
   overcast, rain, storm, fog, snow, by shares that depend on a climate: temperate, cold, dry),
   the first is always fair, and the last quarter of a spell goes over into the next. In a storm
-  lightning strikes now and then: for half a second the clouds light everything, flickering.
+  lightning strikes now and then: for half a second the clouds light everything, flickering,
+  and the bolt is seen: a zigzag with a branch or two from the clouds to the ground somewhere
+  round what the camera looks at (so that it is in the picture most times; it is drawn for
+  the eye and strikes nothing), with its light on the ground at its foot. Its place and shape
+  follow from the seed and which stroke it is, so it stands still while it flickers.
   Rain shows as small rings running outward on wet ground near the camera. The weather is only
   seen; it does nothing to the game. The seed is the game's own once a game has started (the
   engine's `SessionSeed`), the viewer's `--seed` or 1 without one. A map does not say its
@@ -325,8 +331,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 - Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
   trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
   the model, each on its own beat by where it stands, harder when it rains or snows; their
-  shadows move with them. One wind over the whole map, from one side; no gusts running across
-  the land yet.
+  shadows move with them. One wind over the whole map, from one side; it comes in gusts that
+  run across the land with it (noise that drifts downwind, so a wood bends in waves).
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
@@ -428,7 +434,7 @@ Known gaps, to be closed in the steps they belong to:
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
 - Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.
   The symbol's name is read from the `.bp` file, so a change a mod's script makes to it is not seen.
-- Props do not sway, and blended far-away cards are not sorted by distance.
+- Blended far-away cards are not sorted by distance.
 - Shadows: a cascade leaves out what casts wholly inside the square the cascade before it covers
   (that map has it, and every surface its shadow can reach reads that map). What straddles the
   edge is still drawn in both.

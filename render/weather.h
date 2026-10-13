@@ -31,7 +31,11 @@ enum class Climate { Temperate, Cold, Dry };  // rain and storms; snow instead o
 // always fair), and the last quarter of a spell goes over into the next.
 WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate = Climate::Temperate, float spell = 300);
 // A storm's lightning alone: how bright its flash is at that moment, for rain that hard.
-float LightningAt(uint32_t seed, double seconds, float rain);
+// `stroke`: which stroke it is (a number of its own for every stroke of a game), for whoever draws
+// its bolt: the same number as long as the flash lasts.
+float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke = nullptr);
+// A number 0..1 from a seed and two whole numbers (always the same for the same three).
+float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b);
 
 class Precipitation {
  public:

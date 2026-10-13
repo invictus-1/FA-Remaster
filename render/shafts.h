@@ -20,6 +20,8 @@ class Shafts {
   void Begin() { shafts_.clear(); }
   // From the lamp to where the beam ends; half its width at each end; its light (linear).
   void Add(Vec3 from, Vec3 to, float halfWidthFrom, float halfWidthTo, Vec3 color);
+  // A piece of a lightning bolt: as bright at one end as at the other.
+  void AddBolt(Vec3 from, Vec3 to, float halfWidth, Vec3 color);
   // Into the scene's pass, after everything solid and the water.
   void Draw(const View& view);
   int Count() const { return static_cast<int>(shafts_.size()); }

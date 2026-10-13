@@ -128,7 +128,9 @@ WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate, float spell
   return w;
 }
 
-float LightningAt(uint32_t seed, double seconds, float rain) {
+float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b) { return Draw01(seed, a, b); }
+
+float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke) {
   if (rain < 0.7f || seconds < 0) return 0;
   // time in stretches of seven seconds; a stretch may have one stroke, the likelier the harder it rains
   float flash = 0;
@@ -142,7 +144,11 @@ float LightningAt(uint32_t seed, double seconds, float rain) {
     if (since < 0 || since > 0.6f) continue;
     // a stroke flickers: bright at once, twice more, and gone
     const float flicker = 0.55f + 0.45f * std::cos(since * 46);
-    flash = std::max(flash, std::exp(-since * 7) * flicker * (0.6f + 0.4f * Draw01(seed, n, 59)));
+    const float bright = std::exp(-since * 7) * flicker * (0.6f + 0.4f * Draw01(seed, n, 59));
+    if (bright > flash) {
+      flash = bright;
+      if (stroke) *stroke = n;
+    }
   }
   return flash;
 }

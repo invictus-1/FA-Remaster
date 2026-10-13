@@ -324,15 +324,16 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   if (timeOfDay >= 0 && look == Look::Modern) {
     // the weather: what it is by itself, its clouds, and what it has done to surfaces by now
     float flash = 0;
+    uint32_t stroke = 0;
     if (weatherAuto) {
       const WeatherNow now = WeatherAt(weatherSeed, clock, climate, weatherSpell);
       cloudCover = now.clouds;
       rain = now.rain;
       snow = now.snow;
       fog = now.fog;
-      flash = now.flash;
+      flash = LightningAt(weatherSeed, clock, rain, &stroke);
     } else {
-      flash = LightningAt(weatherSeed, clock, rain);
+      flash = LightningAt(weatherSeed, clock, rain, &stroke);
     }
     const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
     weatherTime_ = time;
@@ -346,6 +347,46 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       skyLight.horizon += bolt * 0.6f;
     }
     lampsOn_ = std::clamp((0.30f - skyLight.daylight) / 0.18f, 0.0f, 1.0f);
+    if (flash > 0.02f) {
+      // the bolt itself: from the clouds to the ground somewhere round what the camera looks at (the
+      // place and its zigzag follow from which stroke it is, so it stands still while it flashes),
+      // and its light on the ground where it strikes
+      const float reach = std::max(camera.distance * 0.4f, 25.0f);  // (near enough to be in the picture most times)
+      Vec3 foot = camera.target + Vec3{(WeatherDraw(weatherSeed, stroke, 71) - 0.5f) * 2 * reach, 0, (WeatherDraw(weatherSeed, stroke, 73) - 0.5f) * 2 * reach};
+      foot.y = haveMap_ ? GroundHeight(foot.x, foot.z) : camera.target.y;
+      const Vec3 light = Vec3{0.8f, 0.86f, 1.0f} * (flash * 22 / skyLight.exposure);
+      const float top = foot.y + 150, wide = std::max(0.3f, camera.distance * 0.009f);
+      Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
+      const int pieces = 18;
+      for (int k = 1; k <= pieces; ++k) {
+        const float t = static_cast<float>(k) / pieces;
+        const uint32_t n = static_cast<uint32_t>(k);
+        Vec3 to = from + (foot - from) * (1.0f / static_cast<float>(pieces - k + 1));
+        if (k < pieces) {  // (a zigzag, smaller toward the ground)
+          const float far = 22 * (0.35f + 0.65f * (1 - t));
+          to.x += (WeatherDraw(weatherSeed, stroke, 100 + n) - 0.5f) * far;
+          to.z += (WeatherDraw(weatherSeed, stroke, 200 + n) - 0.5f) * far;
+        }
+        shafts.AddBolt(from, to, wide, light);
+        shafts.AddBolt(from, to, wide * 5, light * 0.08f);  // (its glow in the wet air)
+        if (k < pieces - 3 && WeatherDraw(weatherSeed, stroke, 300 + n) < 0.3f) {
+          // a branch: three thinner, dimmer pieces off to one side and downward, ending in the air
+          Vec3 at = to;
+          float turn = WeatherDraw(weatherSeed, stroke, 400 + n) * 6.2832f;
+          for (uint32_t b = 0; b < 3; ++b) {
+            const float step = (top - foot.y) / pieces * 0.7f;
+            turn += (WeatherDraw(weatherSeed, stroke, 800 + n * 4 + b) - 0.5f) * 2.2f;  // (it wanders too)
+            const Vec3 next = at + Vec3{std::cos(turn) * step * (0.9f + WeatherDraw(weatherSeed, stroke, 500 + n * 4 + b)),
+                                        -step * (0.5f + 0.8f * WeatherDraw(weatherSeed, stroke, 600 + n * 4 + b)),
+                                        std::sin(turn) * step * (0.9f + WeatherDraw(weatherSeed, stroke, 700 + n * 4 + b))};
+            shafts.AddBolt(at, next, wide * (0.6f - 0.13f * static_cast<float>(b)), light * (0.45f - 0.12f * static_cast<float>(b)));
+            at = next;
+          }
+        }
+        from = to;
+      }
+      lights.Add(foot + Vec3{0, 3, 0}, 45, Vec3{0.8f, 0.86f, 1.0f} * (flash * 6 / skyLight.exposure));
+    }
     c.falling[0] = rain;
     c.falling[1] = snow;
     c.falling[2] = flash;
