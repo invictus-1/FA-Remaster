@@ -16,7 +16,52 @@ is read once the game has started; models and strategic icons take their names f
 running game needs no `--display` log any more). 12 done and in use
 (`SessionSeed` seeds the weather once a game has started). 13 answered (the whole map seen for
 three seconds at the start is the M28 AI's own script, in the original too; the renderer does not
-count a look in which every place is seen as exploring).
+count a look in which every place is seen as exploring). 14 is open (everything else that has
+a mesh: props that come and go, wreckage, shields, what scripts make).
+
+## 14. Everything else that has a mesh: props that change, wreckage, shields, what scripts make (2026-10-12)
+
+**What is missing in the picture.** The views give units, projectiles and beams. Everything else
+the simulation holds that the original draws is absent or stale:
+- the map's props are drawn from the map file as they were at the start (46,612 on the remastered
+  Seton's Clutch): a tree that is reclaimed, burnt or knocked over stays as it was;
+- wreckage never appears (a dead unit's model just goes);
+- shields are not drawn at all (the bubble is an entity of its own with a mesh; a personal shield
+  is a mesh the script sets on the unit);
+- other entities scripts make with a mesh: the UEF's frame of light round a building under
+  construction, the Aeon's pool of metal, a death's falling pieces.
+
+**Asked for, in two parts; take whichever form suits the engine.**
+
+1. *Props, as events* (in the manner of `EffectEvents`, off unless switched on), because sending
+   tens of thousands of props every beat would be waste:
+   - a prop made after the start (`CreateProp`, `CreatePropHPR`, wreckage): its entity id, its
+     blueprint's path, position, orientation, scale;
+   - a prop gone (reclaimed, destroyed): its id;
+   - a prop changed: a new mesh (a burnt tree's `SetMesh`), a new position or orientation (a tree
+     knocked over, however the original moves it: say what you read there).
+   And for the map's own props, which the simulation makes at the start and the renderer reads
+   from the map file itself: how the two lists are matched. If the simulation makes them in the
+   map file's order, the index in that order is enough ("map prop 1234 is gone"); otherwise the
+   renderer would match by blueprint and place, or take the whole list from you once at the start
+   instead of from the file. Say which.
+
+2. *Entities with a mesh that are neither units, projectiles nor props*, per beat beside
+   `UnitViews` (there are few at a time): id, the mesh blueprint as it is set now, position,
+   orientation, the scale it is drawn at (`SetDrawScale`, `SetScale`), the army, the entity and
+   bone it is attached to if any, and whether it is hidden from the focus army (`SetVizTo...`).
+   That would cover shield bubbles and build frames at once. For a unit whose script sets another
+   mesh on it (a personal shield, a build mesh), the name of the mesh set now, as a field of
+   `UnitView`, would do.
+
+**Why now.** Wreckage and trees that change are what makes a battlefield look used; shields are
+the largest thing a player expects to see that is not there. None of it blocks other work.
+
+**Until then:** the map's props stay as the file has them; no wreckage, no shields.
+
+**A small thing seen on the way (no change asked):** `CreateDecal` events carry the decal's type
+("Albedo", "Alpha Normals") in `text` when the script gave no second texture, which is nearly
+always; `docs/engine-answers.md` says `text2`. The renderer now reads whichever is filled.
 
 ## 13. A question: the whole map is seen for three seconds at the start (2026-10-12)
 

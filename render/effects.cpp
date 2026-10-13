@@ -1,5 +1,6 @@
 #include "effects.h"
 
+#include <cmath>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -144,6 +145,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       printf("\n");
     }
   }
+  // (what is not drawn is counted, and with `verbose` named once)
+  auto missed = [&]() {
+    ++notShown;
+    if (!verbose) return;
+    const std::string what = "not drawn: " + f + " " + event.blueprint + " | " + event.text2;
+    if (!said_[what]++) printf("render: effects: %s\n", what.c_str());
+  };
   Effect e;
   e.entity = event.entity;
   e.entity2 = event.entity2;
@@ -188,13 +196,31 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   } else if (f == "CreateDecal" || f == "CreateSplat") {
     // numbers: heading, sizeX, sizeZ, lod, duration (seconds - a GUESS), fidelity; a decal's kind is text2
     const std::vector<float>& n = event.numbers;
-    std::string kind = event.text2;
+    // (the kind comes in text2 after a second texture's name, or in text when the script gave no
+    // second texture, which is the usual: seen so in games)
+    std::string kind = event.text2.empty() ? event.text : event.text2;
     for (char& c : kind) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return;
-    ++notShown;
+    // the ground's shape under it: a crater's dent, the joints of a building's tarmac ("Normals",
+    // "Alpha Normals": both drawn as the map's own normal decals are)
+    if (n.size() >= 5 && kind.find("normals") != std::string::npos && decals_->AddNormal(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return;
+    missed();
+    return;
+  } else if (f == "CreateSplatOnBone") {
+    // a mark left on the ground under a part of a unit (a footprint, a track's print): where that
+    // bone is now, moved by the offset in the unit's own frame, turned as the unit is.
+    // numbers: offset x, y, z, sizeX, sizeZ, lod, duration
+    const std::vector<float>& n = event.numbers;
+    Vec3 place;
+    Quat turn;
+    if (n.size() >= 7 && AttachPoint(frame, e.entity, e.bone, &place, &turn) && !Hidden(frame, e.entity)) {
+      const Vec3 forward = Rotate(turn, {0, 0, 1});
+      if (decals_->Add(event.blueprint, place + Rotate(turn, {n[0], n[1], n[2]}), n[3], n[4], std::atan2(forward.x, forward.z), n[5], at, n[6])) return;
+    }
+    missed();
     return;
   } else {
-    ++notShown;  // splats on bones, anything new
+    missed();  // anything new
     return;
   }
   if (e.attached) ++hanging_[e.entity];
