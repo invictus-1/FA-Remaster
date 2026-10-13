@@ -445,7 +445,14 @@ size centred on the unit (the offsets of the stock buildings centre it); if the 
 rectangle is another, tell me and I draw that.
 Not blocking, but Chris met it in his first minutes with the outlines.
 
-**Status:** open.
+**Status:** fixed by the engine track within the half hour (`docs/engine-answers.md`, "ui 17";
+main 8c5f0e7): the original tests the new building's skirt against the skirt of every standing
+unit that is not mobile, strictly, touching edges allowed (0x720770); ours had tested footprints
+only. Repeated in my build (main 62fa7b3), same game: the generator ordered at 685.0, 347.5 is
+refused (no order, nothing built); one ordered at 683.0, 347.5 is built at 682.5, 347.5, clear
+of the factory's skirt. My outline is the right rectangle for buildings whose offsets centre the
+skirt; the general one (`GetSkirtRect`, in his answer: from the footprint's corner plus the
+skirt's offset) is not drawn yet and matters only for a mod's building with an off-centre skirt.
 
 ## To the renderer track
 
