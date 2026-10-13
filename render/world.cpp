@@ -30,13 +30,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       falling(device),
       sight(device),
       shafts(device),
+      wakes(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -313,8 +314,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lampsOn_ = 0;
   lights.night = 1;
   shafts.Begin();
+  wakes.Begin();
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
+  if (moving_.size() > 60000) moving_.clear();  // (entity ids pile up over a long game)
   lampSquares_.clear();
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
@@ -454,6 +457,25 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.blend = frame.blend;
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
+      // a wake, when it goes on the water: by how far it has come since the frame before
+      if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
+        Moving& m = moving_[u.id];
+        const double dt = clock_ - m.clock;
+        if (dt > 1e-4 && dt < 1.0) m.speed += (Length(position - m.place) / static_cast<float>(dt) - m.speed) * 0.2f;
+        else if (dt >= 1.0 || dt < 0) m.speed = 0;
+        if (dt != 0) {
+          m.place = position;
+          m.clock = clock_;
+        }
+        const bool overWater = map.Height(Clamp(position.x, 0, static_cast<float>(map.width)), Clamp(position.z, 0, static_cast<float>(map.height))) < map.water.elevation - 0.15f;
+        if (m.speed > 0.4f && overWater) {
+          const Vec3 back = Rotate(orientation, {0, 0, -1});
+          const Vec3 level = Normalize(Vec3{back.x, 0, back.z});
+          const float halfX = (model->boundsMax.x - model->boundsMin.x) * 0.5f * model->scale, halfZ = (model->boundsMax.z - model->boundsMin.z) * 0.5f * model->scale;
+          const Vec3 stern{position.x + level.x * halfZ * 0.6f, map.water.elevation + 0.03f, position.z + level.z * halfZ * 0.6f};
+          wakes.Add(stern, level, std::min(m.speed * 1.8f, 14.0f) + halfZ, halfX * 0.7f, std::min(m.speed / 2.5f, 1.0f));
+        }
+      }
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour
@@ -547,6 +569,7 @@ void World::Render() {
     skyDraw.Draw(view, camera, skyLight);
   }
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
+  wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   shafts.Draw(view);
   if (hide.find("particles") == std::string::npos) particles.Draw(view);
