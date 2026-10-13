@@ -814,3 +814,11 @@ not be the new pad's middle), or whether the unit is drawn off the bone: if the 
 your file, tell me and I take it to the renderer and the engine. "too" in his words: he did not
 say which other factory; the land factory's looked right in my pictures. Not blocking.
 Also from the same game, no fault: "Lights on t1 pgen now work good."
+
+**Status:** answered by the visuals track within the half hour: hers. The bone is where the
+original has it; she had laid the rebuilt deck's tiles and landing marks round the deck's own
+middle, 1.5 mesh units off the bone. Fixed in her scripts (tiles and marks centred on the bone);
+the three air factories (UEB0102, UEB0202, ZEB9502) re-bake after the naval ones, about an hour
+and a quarter from 11:25; she messages when they are in. On "too": the land factory's bone is 3
+units behind its pad's middle in the original as well (the unit is built nearer the gate); left
+as it is unless Chris means that one.
