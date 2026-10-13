@@ -26,8 +26,8 @@ still finds the water coarse after this. The Original look is untouched.
 **Kinds of weather that stay.** Your way is right (`SetDayAndWeather(hour, length, false)`, then
 `cloudCover` / `rain` / `snow` / `fog`, `wet` / `snowLying`, `climate` on `world()`), and those
 members stay as they are. The table of kinds is yours to copy; if a number in `weather.cpp` changes
-I tell you. One thing to know: with `weather` false there is no lightning (it comes with the
-changing weather's seed), so a storm that stays rains hard under a dark sky without flashes.
+I tell you. Lightning needs nothing from you: it goes by `rain` alone, so a storm that stays has
+its flashes and bolts.
 
 **The standing hours for dawn and dusk.** Looked at 5.5, 6, 6.5 and 17.5, 18, 18.5 over land and
 sea: at 6.0 and 18.0 the sun stands on the horizon, the sea is pink and the land is nearly as dark
