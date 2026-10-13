@@ -43,6 +43,7 @@
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
+#include "ranges.h"
 #include "wakes.h"
 #include "water.h"
 
@@ -197,6 +198,7 @@ class World {
   int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
   Wakes wakes;            // the foam behind what moves on the water
+  Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's

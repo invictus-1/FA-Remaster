@@ -160,6 +160,25 @@ void WorldPicture::SetShapes(const std::vector<Line>& lines, const std::vector<R
   for (const Ring& r : rings) w.rings.push_back({{r.centre[0], r.centre[1], r.centre[2]}, r.radius, r.color});
 }
 
+void WorldPicture::SetRanges(const std::vector<RangeGroup>& groups, float zoomNear, float zoomFar) {
+  if (!impl_->world) return;
+  Ranges& ranges = impl_->world->ranges;
+  ranges.zoomNear = zoomNear;
+  ranges.zoomFar = zoomFar;
+  ranges.groups.clear();
+  for (const RangeGroup& g : groups) {
+    render::RangeGroup to;
+    to.color = g.color;
+    to.glow = g.glow;
+    to.outerNear = g.outerNear;
+    to.outerFar = g.outerFar;
+    to.innerNear = g.innerNear;
+    to.innerFar = g.innerFar;
+    for (const RangeRing& r : g.rings) to.rings.push_back({{r.centre[0], r.centre[1], r.centre[2]}, r.radius, r.innerRadius});
+    ranges.groups.push_back(std::move(to));
+  }
+}
+
 void WorldPicture::MapSize(float* width, float* height) const {
   *width = impl_->world ? static_cast<float>(impl_->world->map.width) : 0;
   *height = impl_->world ? static_cast<float>(impl_->world->map.height) : 0;
@@ -195,9 +214,11 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     std::vector<World::Ghost> ghosts;
     std::vector<World::Line> lines;
     std::vector<World::Ring> rings;
+    std::vector<render::RangeGroup> ranges;
     ghosts.swap(w.ghosts);
     lines.swap(w.lines);
     rings.swap(w.rings);
+    ranges.swap(w.ranges.groups);
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
@@ -212,6 +233,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     ghosts.swap(w.ghosts);
     lines.swap(w.lines);
     rings.swap(w.rings);
+    ranges.swap(w.ranges.groups);
     m.mapCamera = c;
     m.mapMatrix = w.view.constants.viewProj;
     m.mapWidth = width;

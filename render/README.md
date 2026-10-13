@@ -353,6 +353,17 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   run across the land with it (noise that drifts downwind, so a wood bends in waves).
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
+- Range rings as one outline (`ranges.h`, `World::ranges.groups`, `WorldPicture::SetRanges`;
+  `--ranges` in the viewer shows two test groups): all the rings of a group show as the outline
+  of the ground they cover together, an inner radius cuts a hole with its own outline, the
+  thickness is given in world units for the nearest and the farthest zoom and never falls under
+  a pixel and a half, and a group can glow (drawn brighter than the screen shows, so the
+  picture's glow spreads it). Per group every ring is drawn as a box into a picture of the
+  screen, found on the ground by the scene's depth: once whole, once smaller by the thickness;
+  whole and not smaller is the outline. Laid over the land before anything stands on it and
+  over the water's surface after the water. Not read out of the original: how its thickness
+  goes with the zoom between the two numbers (here: evenly with the camera's distance, between
+  10 and 1000 unless the host says otherwise), and how strong its glow is.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by

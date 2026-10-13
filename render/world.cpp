@@ -31,13 +31,14 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       sight(device),
       shafts(device),
       wakes(device),
+      ranges(device),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error) || !ranges.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -79,6 +80,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
           high = std::max(high, h);
         }
       groundMiddle_ = (low + high) * 0.5f;
+      ranges.low = low;
+      ranges.high = high;
     }
     if (map.water.present)
       particles.SetWater(map.water.elevation, [this](float x, float z) {
@@ -656,6 +659,17 @@ void World::Render() {
       post.ContinueScene();
       lights.Bind();
     }
+    // range rings on the land, before anything stands on it (their picture is made from the
+    // ground's depth; over the water they are laid after the water)
+    if (ranges.Any()) {
+      ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
+      ranges.night = lights.night;
+      ranges.Build(view, camera, post.Depth());
+      post.BeginColorOnly();
+      ranges.Lay(view, camera, post.Depth(), false);
+      post.ContinueScene();
+      lights.Bind();
+    }
     meshes.Draw(view, environment_);
     draw.Flush(view);
     // ambient occlusion: from the depth of everything solid, laid over it before the water
@@ -675,6 +689,12 @@ void World::Render() {
       lights.Bind();
     } else {
       water.Draw(view);
+    }
+    if (ranges.Any() && map.water.present) {
+      post.BeginColorOnly();
+      ranges.Lay(view, camera, post.Depth(), true);
+      post.ContinueScene();
+      lights.Bind();
     }
   } else {
     draw.Flush(view);

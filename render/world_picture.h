@@ -93,6 +93,27 @@ class WorldPicture {
     uint32_t color;
   };
   void SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings);
+  // Range rings as the original draws them: all the rings of a group show as ONE outline round
+  // the ground they cover together (a ring inside what the others cover does not show); an inner
+  // radius cuts a hole with an outline of its own. On the ground, under what stands on it, and on
+  // the water's surface. A group is one of the game's range filters in one of its colours.
+  struct RangeRing {
+    float centre[3];
+    float radius;
+    float innerRadius;  // 0: none
+  };
+  struct RangeGroup {
+    uint32_t color = 0xffffffffu;  // 0xAARRGGBB; the first byte is not used (give the glow below)
+    int glow = 0;                  // 0 (none) .. 255: brighter than the screen can show, so it glows
+    // The line's thickness in world units at the nearest and at the farthest zoom (the script's
+    // Outer and Inner pairs): of the outline round the group, and of the holes' outlines.
+    float outerNear = 0.04f, outerFar = 4.0f;
+    float innerNear = 0.04f, innerFar = 4.0f;
+    std::vector<RangeRing> rings;
+  };
+  // `zoomNear`, `zoomFar`: the camera's distances that count as the nearest and the farthest zoom
+  // (the thickness goes evenly between them and stays at its end values beyond).
+  void SetRanges(const std::vector<RangeGroup>& groups, float zoomNear = 10, float zoomFar = 1000);
   // What the map lies in (the game's MapBorderAdd): the mesh blueprints to draw around the map, as
   // the original places them; empty: nothing. In the main picture only.
   void SetBorders(const std::vector<std::string>& meshBlueprints);

@@ -60,6 +60,8 @@
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
 //           only as it knows them (seen, a blip on radar, or not at all)
+// --ranges  test range rings round where the camera starts: a red group that glows (three rings that join, one
+//           of them with a hole, and one apart) and a blue one
 // --unexplored  with --focus: ground that army has never seen is all but black (the game's option
 //           FogOfWar "unexplored")
 // Key B: life bars over units on and off.
@@ -144,6 +146,7 @@ struct Options {
   float clouds = 0.3f;                  // --clouds
   int focus = 0;                        // --focus
   bool unexplored = false;              // --unexplored
+  bool ranges = false;                  // --ranges
   float snowLying = -1;                 // --snow-lying
   std::string weather, climate;         // --weather, --climate
   std::vector<std::string> border;      // --border
@@ -185,6 +188,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
+    else if (a == "--ranges") o->ranges = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--look") {
@@ -408,6 +412,16 @@ int main(int argc, char** argv) {
   world.cloudCover = opt.clouds;
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
+  if (opt.ranges) {  // range rings to look at, round where the camera starts
+    const Vec3 at{opt.cam[0], 0, opt.cam[1]};
+    RangeGroup fire, radar;
+    fire.color = 0xffff3020u;
+    fire.glow = 160;
+    fire.rings = {{at + Vec3{-14, 0, 0}, 22, 0}, {at + Vec3{12, 0, 6}, 22, 8}, {at + Vec3{2, 0, -4}, 9, 0}, {at + Vec3{40, 0, -30}, 15, 0}};
+    radar.color = 0xff20e0ffu;
+    radar.rings = {{at + Vec3{0, 0, 10}, 60, 0}, {at + Vec3{70, 0, 20}, 45, 0}};
+    world.ranges.groups = {fire, radar};
+  }
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
   auto setWeather = [&](int which) {
