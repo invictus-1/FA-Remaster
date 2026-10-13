@@ -869,7 +869,17 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   d.target.entity = entity != 0xffffffffu ? entity : d.target.entity;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   d.blueprint = blueprint;
-  Writer(L).IssueCommand(ids, d, clear);
+  // An order given with a factory selected is the factory's rally order: what the units it builds
+  // are told to do (the command stream's IssueFactoryCommand, FA exe 0x6f14d0), kept in a queue
+  // of its own. INFERRED: which units count (here: buildings that are factories; a carrier moves
+  // itself) and that every order of the world's clicks but a building order goes that way; where
+  // the original's interface decides is not read.
+  std::vector<uint32_t> factories, others;
+  for (UserUnit* u : units)
+    (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
+        .push_back(u->view.id);
+  if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
+  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, d, clear);
   ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
   return true;
 }
@@ -1174,12 +1184,29 @@ const char* CommandName(int type) {
 }
 
 // unit:GetCommandQueue(): the unit's orders, first to last, each {ID, type, position}.
+// The rally queue of a factory where the engine's view has it (asked for: "ui 9" in
+// ui/REQUESTS.md, `hasFactoryQueue` and `factoryQueue`); nullptr for any other unit, and for
+// every unit until then. (The second form goes when the engine's answer is in.)
+template <class S>
+auto FactoryQueueOf(const S& s, int) -> decltype(s.hasFactoryQueue, &s.factoryQueue) {
+  return s.hasFactoryQueue ? &s.factoryQueue : nullptr;
+}
+template <class S>
+const std::vector<CommandView>* FactoryQueueOf(const S&, long) {
+  return nullptr;
+}
+
+// GetCommandQueue() (FA exe 0x8c5480): the unit's orders, each {ID, type, position}. A factory
+// gives its rally queue instead (the original asks the unit for its factory command queue first,
+// slot +0x20, and takes the unit's own, slot +0x18, only when there is none): the game's script
+// places the rally flag by its last entry.
 int l_GetCommandQueue(lua_State* L) {
   UnitStateView s;
   lua_newtable(L);
   if (!StateOf(L, CheckUnit(L, 1), &s)) return 1;
   int n = 0;
-  for (const CommandView& c : s.queue) {
+  const std::vector<CommandView>* rally = FactoryQueueOf(s, 0);
+  for (const CommandView& c : rally ? *rally : s.queue) {
     lua_newtable(L);
     lua_pushstring(L, "ID");
     lua_pushnumber(L, static_cast<lua_Number>(c.id));

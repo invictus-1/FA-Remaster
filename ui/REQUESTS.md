@@ -180,6 +180,34 @@ used for the mouse (the mark, the unit panel, what a right click orders on an en
 still shows every unit, and what can be seen must answer to the mouse; that follows when the
 picture shows only what the army sees (renderer 5 below).
 
+### 9. A factory's rally queue in the unit's view
+A player sets a factory's rally point by a right click with the factory selected. The interface
+now writes that order with `CommandWriter::IssueFactoryCommand` (for the buildings among the
+selected units that are factories; every other unit gets the ordinary `IssueCommand`), and it
+works: an engineer built afterwards walks to the place.
+
+What is missing is the flag at the rally point. The game's script places it
+(`/lua/ui/game/rallypoint.lua`) from `unit:GetCommandQueue()` of the selected factory: the LAST
+entry's `type` and `position`. In the original that call gives a factory's rally queue, not its
+own orders (FA exe 0x8c5480: it asks the unit for its factory command queue first, vtable slot
++0x20, and takes the ordinary queue, slot +0x18, only when that is null). `UnitStateView::queue`
+is the unit's own queue, which is empty for a factory.
+
+Asked for, in `UnitStateView`:
+```
+bool hasFactoryQueue = false;            // the unit has a rally queue (Unit::factoryCommands)
+std::vector<CommandView> factoryQueue;   // its entries, as `queue` has them
+```
+with the first rally the engine sets by itself in it (`SetUpInitialRally`), so that a new factory
+shows its flag in front of it as in the original. The interface's half is written against exactly
+these two names and switches over by itself when they are there.
+
+One question, if you have read it: where does the original's INTERFACE decide that an order is a
+factory order (message 13) and not an ordinary one? I send it for buildings in category FACTORY
+when the order is not a building order, which is a guess.
+
+**Status:** asked 2026-10-12.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
