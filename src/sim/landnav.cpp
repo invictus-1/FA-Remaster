@@ -306,11 +306,15 @@ void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
   n.fits = Fits(sim, u, n.cur) && UnitClearTo(sim, u, n, n.cur);
 }
 
-void ResetPathState(Sim& sim, LandNav& n) {
+void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   Tables(sim).Cancel(&n.pf);
   n.path.clear();
   n.state = 0;
   n.wait = 0;
+  // 0x5ada19: the unit's PathFinding and ProblemGettingToGoal states go with the path (a search cut short by a
+  // new goal does not leave PathFinding standing)
+  u->unitStates.erase("PathFinding");
+  u->unitStates.erase("ProblemGettingToGoal");
   // (0x5ad9c0 leaves the splice count +0x5c alone: only ConsumePathPrefix 0x5ad830 and the splice itself write
   // it, so a move dropped with spliced cells ahead hands the count to the next goal's first waypoints)
 }
@@ -323,12 +327,12 @@ void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
   if (!n.path.empty() && n.path[0] == n.cur) {
     Pop(n, 1);
     if (n.path.empty()) {
-      ResetPathState(sim, n);
+      ResetPathState(sim, u, n);
       return;
     }
   }
   if (n.path.empty()) {
-    ResetPathState(sim, n);
+    ResetPathState(sim, u, n);
     return;
   }
   // 0x5aecb1: Reach(path[0], path[0]) / UnitClear(path[0], path[0]): the point itself, not the way to it
@@ -795,14 +799,21 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   LandNav& n = *u->motion.nav;
   PathCell gc{x0, z0};
   const bool single = x1 == x0 + 1 && z1 == z0 + 1;
-  if (single && n.active && n.state == 2 && n.goal[0] == gc.x && n.goal[1] == gc.z && n.goal[2] == gc.x + 1 &&
-      n.goal[3] == gc.z + 1) {
+  // 0x5a3edc: while the navigator's status is 1 (a goal given, no target handed to the steering yet: also while
+  // its search runs and in the beat the path arrived) the same goal again changes nothing. A formation gives
+  // every member its goal each beat while it forms up, so a member whose slot did not move keeps its search.
+  const bool same = n.active && n.thinking;
+  if (same && n.goal[0] == x0 && n.goal[1] == z0 && n.goal[2] == x1 && n.goal[3] == z1) {
     n.speedThroughGoal = speedThrough;
     return;
   }
   // the free-spot spiral: the cell itself, then square rings stepping by the footprint size
   if (single && !Fits(sim, u, gc)) FreeSpotRings(sim, u, &gc);
-  ResetPathState(sim, n);
+  if (single && same && n.goal[0] == gc.x && n.goal[1] == gc.z) {  // (0x5a4056: the spot found is the one it has)
+    n.speedThroughGoal = speedThrough;
+    return;
+  }
+  ResetPathState(sim, u, n);
   n.active = true;
   n.goal[0] = gc.x;
   n.goal[1] = gc.z;
@@ -851,7 +862,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
 void LandNavStop(Sim& sim, Unit* u) {
   LandNav* n = Nav(u);
   if (!n || !n->active) return;
-  ResetPathState(sim, *n);
+  ResetPathState(sim, u, *n);
   n->active = false;
   n->hasTarget = false;
   u->unitStates.erase("PathFinding");
