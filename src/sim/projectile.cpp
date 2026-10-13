@@ -512,7 +512,8 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
       for (Entity* se : sim.scriptEntities)
         if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
       for (Entity* e : cands) {
-        if (e->destroyQueued) continue;
+        // (an entity whose Destroy is queued is still in the world until the beat's end and is met like any
+        // other: an anti-torpedo runs into the sphere of a torpedo that struck its ship earlier in this pass)
         WorldShape ws;
         Vec3 hit;
         float d;
