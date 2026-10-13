@@ -68,7 +68,7 @@ bool PlacedMeshes::Init(std::string* error) {
 
 bool PlacedMeshes::Flat(const std::string& shader) {
   const std::string kind = Lower(shader);
-  return kind == "commandfeedback" || kind == "commandfeedback2" || kind == "rallypoint" || kind == "fakerings";
+  return kind == "commandfeedback" || kind == "commandfeedback2" || kind == "commandfeedback3" || kind == "rallypoint" || kind == "fakerings";
 }
 
 void PlacedMeshes::Draw(const View& view, const std::vector<PlacedMesh>& meshes, float night) {
