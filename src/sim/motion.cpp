@@ -24,6 +24,7 @@
 #include "sim/units.h"
 
 namespace moho {
+Quat LookQuat(float dx, float dy, float dz);  // (below; UpdateLayer's blend needs it)
 namespace {
 
 constexpr float kDegToRadTenth = 0.001745329238474369f;  // TurnRate (deg/s) -> rad per tick
@@ -169,22 +170,50 @@ void UpdateLayer(Sim& sim, Unit* u) {
     thr = thr + b.layerChangeOffset;
   float h = map->TerrainHeight(u->position.x, u->position.z);
   const std::string& L = u->layer;
-  static bool warned = false;
-  auto set = [&](const char* to) {
-    if (b.layerTransitionDuration != 0 && (mt == kMotionHover || mt == kMotionAmphibiousFloating || mt == kMotionWater) &&
-        !warned) {
-      warned = true;
-      Logf(LogLevel::Debug, "moho64: LayerTransitionDuration blend not implemented (layer_change.md 4)");
+  auto set = [&](const char* to) { SetLayer(sim, u, to); };
+  // layer_change.md 4.1 (0x6c372b / 0x6c3804), only for the two rules between Water and Land and only with a
+  // LayerTransitionDuration: before the layer is set, the blend's counter starts at 1 and its two ends are taken.
+  // Out of the water: the transform ten beats of the motion's velocity ahead, set on the ground there
+  // (SnapToGround 0x6c1610). Into it: the transform as it is, set on the water (SnapToWater 0x6c1cb0).
+  auto blend = [&](bool toLand) {
+    if (b.layerTransitionDuration == 0.0f) return;
+    UnitMotion& m = u->motion;
+    const Vec3 p0 = u->position;
+    const Quat q0 = u->orientation;
+    m.layerBlend = 1.0f;
+    m.blendFromPos = p0;
+    m.blendFromOri = q0;
+    if (toLand) {
+      u->position = Vec3{m.vel.x * 10.0f + p0.x, m.vel.y * 10.0f + p0.y, m.vel.z * 10.0f + p0.z};
+      m.snapTerrain = true;
+      SnapUnit(sim, u);
+      m.snapTerrain = false;
+    } else {
+      // (outline in the spec: level, at the water's height + the depth, not nearer than 0.25 to the bottom)
+      u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+      const float water = map->hasWater ? map->waterElevation : -10000.0f;
+      u->position.y = std::max(water + m.depth, map->TerrainHeight(p0.x, p0.z) + 0.25f);
     }
-    SetLayer(sim, u, to);
+    m.blendToPos = u->position;
+    m.blendToOri = u->orientation;
+    u->position = p0;
+    u->orientation = q0;
   };
   if (h > thr) {
-    if (L == "Seabed" && (mt == kMotionAmphibious || mt == kMotionLand)) set("Land");
-    else if (L == "Water" && (mt == kMotionHover || mt == kMotionAmphibiousFloating || mt == kMotionWater)) set("Land");
+    if (L == "Seabed" && (mt == kMotionAmphibious || mt == kMotionLand)) {
+      set("Land");
+    } else if (L == "Water" && (mt == kMotionHover || mt == kMotionAmphibiousFloating || mt == kMotionWater)) {
+      blend(true);
+      set("Land");
+    }
   } else if (thr > h) {
     if (L == "Land") {
-      if (mt == kMotionAmphibious || mt == kMotionLand) set("Seabed");
-      else if (mt == kMotionHover || mt == kMotionAmphibiousFloating) set("Water");
+      if (mt == kMotionAmphibious || mt == kMotionLand) {
+        set("Seabed");
+      } else if (mt == kMotionHover || mt == kMotionAmphibiousFloating) {
+        blend(false);
+        set("Water");
+      }
     }
   }
 }
@@ -486,7 +515,11 @@ void SnapUnit(const Sim& csim, Unit* u) {
   }
   if (b.motionType == kMotionAir) return;
   bool hover = b.motionType == kMotionHover;
-  bool floating = b.motionType == kMotionAmphibiousFloating;
+  // (a floating type rides the surface; but where SnapToGround is asked for the ground of a layer blend's end, and
+  // while such a unit is in the Land layer, it stands on the bottom itself: the Cybran destroyer comes ashore at
+  // 17.17 under a sea of 17.5, wading)
+  bool floating = b.motionType == kMotionAmphibiousFloating && !u->motion.snapTerrain &&
+                  !(b.layerTransitionDuration != 0.0f && u->layer == "Land");
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-hx, 0, hz}, {-hx, 0, -hz}, {hx, 0, -hz}};
   Vec3 c[4];
@@ -1541,6 +1574,43 @@ void MotionTick(Sim& sim, Unit* u) {
       m.prevPosSet = true;
     }
     if ((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext) ProcessSurfaceCollision(sim, u);
+    if (m.layerBlend != 0.0f) {
+      // TransitionBetweenLayers 0x6c3070, called by CalcMoveCommon (0x6c1e59) in place of the move while the
+      // counter runs: the transform is the blend of the two taken when the layer changed, the motion's velocity
+      // is left as it was and no spline point is taken. An immobile unit blends too, but its last frame (the
+      // counter back at 0) is not applied (0x6ba00d..0x6ba065). The motion's last position (m+0x2c) stays where
+      // the blend began, so the first spline point after it gives one beat of a large velocity (seen: ten times).
+      const float n = b.layerTransitionDuration * 10.0f;
+      const float t = m.layerBlend / n;
+      const Vec3 np{(m.blendToPos.x - m.blendFromPos.x) * t + m.blendFromPos.x,
+                    (m.blendToPos.y - m.blendFromPos.y) * t + m.blendFromPos.y,
+                    (m.blendToPos.z - m.blendFromPos.z) * t + m.blendFromPos.z};
+      // 0x4eba80: a x (1 - t) + b x t, b negated when the two point apart, then brought back to unit length
+      Quat a = m.blendFromOri, q2 = m.blendToOri, nq = a;
+      if (!(a.w == q2.w && a.x == q2.x && a.y == q2.y && a.z == q2.z)) {
+        const float tc = std::fmax(0.0f, std::fmin(1.0f, t)), uc = 1.0f - tc;
+        if (0.0f > ((a.w * q2.w + a.x * q2.x) + a.y * q2.y) + a.z * q2.z) q2 = {0.0f - q2.x, 0.0f - q2.y, 0.0f - q2.z, 0.0f - q2.w};
+        nq = {a.x * uc + tc * q2.x, a.y * uc + tc * q2.y, a.z * uc + tc * q2.z, a.w * uc + tc * q2.w};
+        const float len = std::sqrt(((nq.w * nq.w + nq.x * nq.x) + nq.y * nq.y) + nq.z * nq.z);
+        if (len > 9.99999997e-07f) {
+          const float inv = 1.0f / len;
+          nq.w *= inv;
+          nq.x *= inv;
+          nq.y *= inv;
+          nq.z *= inv;
+        }
+      }
+      m.layerBlend += 1.0f;
+      m.surfaceNext = false;
+      if (m.layerBlend >= n) m.layerBlend = 0.0f;
+      if (!held || m.layerBlend != 0.0f) {
+        u->position = np;
+        u->orientation = nq;
+      }
+      m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
+      if (!u->beingBuilt) ProcessCommonMotionState(sim, u, false);
+      return;
+    }
     if (held) {
       m.pointNow = false;
       const Quat q0 = u->orientation;

@@ -738,6 +738,27 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     UpdatePath(sim, u, m.steerTarget, false, GetVal(m));
     CheckCollisions(sim, u);
   }
+  // 0x5d2d24..0x5d2e4b: a unit in the Immobile state, or a stunned one, loses its spline once (Stop, and the
+  // byte steering+0xa0 remembers it) and gets no point while that lasts. When it is let go, a unit that is
+  // Moving, Patrolling or Attacking gets a fresh batch toward the same target, from where it stands now.
+  const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
+  if (!m.heldLatch) {
+    if (held) {
+      m.heldLatch = true;
+      const bool unused = m.hasSpline && m.splineIdx < m.spline.size();
+      SteeringStop(m);
+      if (unused) CheckCollisions(sim, u);
+      return;
+    }
+  } else {
+    if (held) return;
+    if (Driving(u) && (u->unitStates.count("Moving") > 0 || u->unitStates.count("Patrolling") > 0 ||
+                       u->unitStates.count("Attacking") > 0)) {
+      UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+      CheckCollisions(sim, u);
+    }
+    m.heldLatch = false;
+  }
   // the collision record
   if (m.colType == 5) {
     if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
