@@ -909,6 +909,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
   }
   // what scripts made that has a mesh: shields' bubbles and the like, each its mesh blueprint's model
+  impactBornNext_.clear();
   for (const FrameEntity& f : frame.entities) {
     if (!f.seen || f.mesh >= frame.blueprints->size()) continue;
     const std::string& mesh = (*frame.blueprints)[f.mesh];
@@ -921,8 +922,18 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // (in its own colours where its look has no team colour of its own: the original gives every
     // mesh that is not a unit's opaque white; an adjacency's node was a cube in the army's colour)
     const bool teamed = !model->lods.empty() && model->lods[0].teamMask;
+    if (!model->lods.empty() && model->lods[0].impact) {
+      // a shield's flash where it is hit: drawn by its age (and, the Cybran's, a step sideways that
+      // differs from hit to hit, as the original takes it from the time it was made)
+      const auto known = impactBorn_.find(f.id);
+      const double born = known == impactBorn_.end() ? clock_ : known->second;
+      impactBornNext_[f.id] = born;
+      meshes.Add(model, at, Vec3{static_cast<float>(clock_ - born), static_cast<float>(std::fmod(born, 100.0)) * -0.01f, 0});
+      continue;
+    }
     meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army));
   }
+  impactBorn_.swap(impactBornNext_);
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {
     if (effects.OnEntity(b.id)) continue;

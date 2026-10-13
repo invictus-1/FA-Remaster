@@ -404,8 +404,13 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.teamMask = false;
     } else if (kind == "shieldfill") {
       lod.hidden = true;
-    } else if (kind.compare(0, 6, "shield") == 0 || kind.find("shieldimpact") != std::string::npos) {
-      // a shield's bubble (and the patch that flashes where it is hit), tinted by whose it is
+    } else if (kind.find("shieldimpact") != std::string::npos) {
+      // the patch that flashes on a shield where it is hit
+      lod.blend = lod.glass = true;
+      lod.teamMask = false;
+      lod.impact = kind.find("cybran") != std::string::npos ? 2 : 1;
+    } else if (kind.compare(0, 6, "shield") == 0) {
+      // a shield's bubble, tinted by whose it is
       lod.blend = lod.glass = lod.shield = true;
       lod.teamMask = false;
       if (kind.find("aeon") != std::string::npos) lod.shieldTint = {0.35f, 1.0f, 0.75f};

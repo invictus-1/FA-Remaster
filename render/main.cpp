@@ -1115,6 +1115,13 @@ int main(int argc, char** argv) {
         const Model* model = models.Blueprint(kTest[k]);
         if (model && model->ok) meshes.Add(model, Mat4::FromTRS(base + Vec3{static_cast<float>(k) * 3.5f, 0, 0}, Quat{}, model->scale * (k ? 1.2f : 1.0f)), {1, 1, 1});
       }
+      // ... and a shield's flash where it is hit, the plain one and the Cybran's, each at four ages
+      // of its two seconds (it is a patch of a bubble; here of one twelve across, turned to face upward)
+      for (int k = 0; k < 8; ++k) {
+        const Model* model = models.Blueprint(k < 4 ? "/effects/entities/shieldsection01/shieldsection01_mesh.bp" : "/effects/entities/shieldsection01/shieldsection01b_mesh.bp");
+        const Vec3 where = base + Vec3{static_cast<float>(k % 4) * 7.0f - 8, -1.0f, k < 4 ? -9.0f : -13.5f};
+        if (model && model->ok) meshes.Add(model, Mat4::FromTRS(where, Quat{-0.7071f, 0, 0, 0.7071f}, model->scale * 12), {0.15f + 0.55f * static_cast<float>(k % 4), -0.37f, 0});
+      }
     }
     for (PlacedUnit& u : placedUnits) {
       Pose pose;
@@ -1201,6 +1208,36 @@ int main(int argc, char** argv) {
             camera.distance = f.scale[0] * 2.4f;
             break;
           }
+      } else if (opt.find == "impact" && frame.blueprints) {
+        // a shield being hit: one with a flash on it now, or else the one with the most shots flying near it
+        bool flashing = false;
+        int most = -1;
+        for (const FrameEntity& f : frame.entities) {
+          if (f.mesh < frame.blueprints->size()) {
+            std::string name = (*frame.blueprints)[f.mesh];
+            for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (name.find("shieldsection") != std::string::npos) {
+              camera.target = {f.position[0], f.position[1], f.position[2]};
+              camera.distance = f.scale[0] * 2.2f;
+              flashing = true;
+              break;
+            }
+          }
+          if (!f.shield) continue;
+          int near = 0;
+          for (const FrameProjectile& q : frame.projectiles) {
+            const float dx = q.position[0] - f.position[0], dz = q.position[2] - f.position[2];
+            const float speed2 = q.velocity[0] * q.velocity[0] + q.velocity[1] * q.velocity[1] + q.velocity[2] * q.velocity[2];
+            if (dx * dx + dz * dz < f.scale[0] * f.scale[0] * 1.5f && speed2 > 25) ++near;
+          }
+          if (near > most) {
+            most = near;
+            camera.target = {f.position[0], f.position[1], f.position[2]};
+            camera.distance = f.scale[0] * 2.2f;
+          }
+        }
+        printf(flashing ? "render: --find impact: a flash on a shield at %.0f, %.0f\n" : "render: --find impact: no flash now; the shield with the most shots near it is at %.0f, %.0f\n",
+               camera.target.x, camera.target.z);
       } else if (opt.find == "dying") {  // a unit in its death: the one highest above the ground (a plane falling)
         float best = -1e9f;
         for (const FrameUnit& u : frame.units) {

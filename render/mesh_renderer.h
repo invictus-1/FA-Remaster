@@ -96,7 +96,7 @@ class MeshRenderer {
   void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
-  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_;
+  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
   // two of the game's lookup textures for the original look (where the game's files have them):
   // the Cybran's highlight by how the sun's mirror image and the sun itself stand to the surface,
   // and the Seraphim's ramp of how strongly a surface mirrors by the angle it is seen at
