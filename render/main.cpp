@@ -1189,6 +1189,18 @@ int main(int argc, char** argv) {
             camera.distance = f.scale[0] * 2.4f;
             break;
           }
+      } else if (opt.find == "dying") {  // a unit in its death: the one highest above the ground (a plane falling)
+        float best = -1e9f;
+        for (const FrameUnit& u : frame.units) {
+          if (!u.dead) continue;
+          const float above = u.position[1] - (world.HaveMap() ? world.GroundHeight(u.position[0], u.position[2]) : 0);
+          if (above > best) {
+            best = above;
+            camera.target = {u.position[0], u.position[1], u.position[2]};
+            camera.distance = 22;
+          }
+        }
+        if (best > -1e8f) printf("render: --find dying: one %.1f above the ground at %.0f, %.0f\n", best, camera.target.x, camera.target.z);
       } else if (opt.find == "wreck") {
         const std::vector<Vec3> wrecks = world.WreckPlaces(1);
         if (!wrecks.empty()) {
@@ -1265,6 +1277,7 @@ int main(int argc, char** argv) {
           if (q.sized && std::max(q.size[0], std::max(q.size[1], q.size[2])) > 6 && frame.blueprints && q.blueprint < frame.blueprints->size() && big++ < 6)
             printf("; shell %s of size %.1f, %.1f, %.1f at %.0f, %.0f", (*frame.blueprints)[q.blueprint].c_str(), q.size[0], q.size[1], q.size[2], q.position[0], q.position[2]);
         printf("; camera at %.0f, %.0f", camera.target.x, camera.target.z);
+        printf("; %d units in their death drawn", world.dyingDrawn);
         {  // (what the scripts have made that has a mesh, by mesh: to tell what a shape in the picture is)
           std::map<std::string, int> made;
           for (const FrameEntity& f : frame.entities)

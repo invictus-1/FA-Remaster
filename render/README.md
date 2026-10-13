@@ -456,6 +456,9 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`
   makes that army's commander destroy itself in a new game (the game's own Ctrl-K callback), and
+  (a unit in its death is drawn until the simulation takes it away: a plane falling, a ship going
+  down, a walker toppling, without symbol, bars, lamps or wake; `--find dying` sends the camera to
+  one),
   `--enhance <beat>,<army>,<enhancement>` orders it to build an enhancement (`REQUESTS.md` 18)
   and `--pause-at <beat>` pauses it (with `--focus <army>` the picture then shows its work bar and
   the game's pause mark over it: `World::workBars`, `WorldPicture::SetWorkBars`), to
