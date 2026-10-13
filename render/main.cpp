@@ -387,6 +387,7 @@ int main(int argc, char** argv) {
     setup.maps = opt.maps;
     live.SetFocusArmy(opt.focus);
     picture.SetFocusArmy(opt.focus);
+    if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
       fprintf(stderr, "render: simulation: %s\n", error.c_str());

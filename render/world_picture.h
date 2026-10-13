@@ -74,6 +74,14 @@ class WorldPicture {
   // Life bars over units (selected, under the mouse, or damaged and near): OFF at first; a player's
   // switch for them is the interface's.
   void SetLifeBars(bool on);
+  // A day that passes and weather that changes, both by the game's own clock (the `tick` given to
+  // Draw), so that every player of a game sees the same and a paused game's day stands still.
+  // `startHour`: the hour the game starts at, 0..24 (6 sunrise, 12 noon, 18 sunset); negative, as
+  // at first: the map's own fixed light, no weather. `dayLengthSeconds`: how long a whole day
+  // takes in game time; 0: the hour stands still. `weather`: it changes by itself in spells of a
+  // few minutes (clear, cloudy, rain, storm, fog, snow), drawn from the game's seed; false: fair.
+  // It is only seen; it does nothing to the game.
+  void SetDayAndWeather(float startHour, float dayLengthSeconds, bool weather);
   // Buildings shown as ghosts while their site is chosen: green where the site is free, red where not.
   struct BuildPreview {
     std::string blueprint;  // the unit's blueprint id ("ueb0101")

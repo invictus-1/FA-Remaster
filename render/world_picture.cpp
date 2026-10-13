@@ -20,6 +20,8 @@ struct WorldPicture::Impl {
   std::unique_ptr<World> world;
   SimFrames frames;
   Frame frame;
+  float dayStart = -1, dayLength = 0;  // SetDayAndWeather
+  bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
   std::vector<uint8_t> capture;
@@ -72,6 +74,16 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   }
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
+  // the hour and the weather, by the game's clock
+  if (m.dayStart >= 0) {
+    const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
+    m.world->timeOfDay = static_cast<float>(std::fmod(hours, 24.0));
+    m.world->weatherAuto = m.weather;
+  } else if (m.dayOff) {  // (switched off again, once: a host may also set the world's hour itself)
+    m.world->timeOfDay = -1;
+    m.world->weatherAuto = false;
+    m.dayOff = false;
+  }
   {  // how the blueprints look, once the game has said
     std::vector<BlueprintLook> looks;
     m.frames.TakeLooks(&looks);
@@ -140,6 +152,13 @@ void WorldPicture::SetFocusArmy(int army) { impl_->frames.SetFocusArmy(army); }
 
 void WorldPicture::SetUnexplored(bool on) {
   if (impl_->world) impl_->world->unexplored = on;
+}
+
+void WorldPicture::SetDayAndWeather(float startHour, float dayLengthSeconds, bool weather) {
+  impl_->dayStart = startHour;
+  impl_->dayLength = dayLengthSeconds;
+  impl_->weather = weather;
+  impl_->dayOff = startHour < 0;
 }
 
 void WorldPicture::SetLifeBars(bool on) {

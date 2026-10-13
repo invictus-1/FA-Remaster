@@ -79,7 +79,7 @@ float4 PS(VOut i) : SV_Target {
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
   if (i.options.z > 2.5) {  // a mark: as it is (the modern look's picture is linear light, mapped back at the end)
-    if (look > 0.5) c.rgb = ToLinear(c.rgb) * 1.6;
+    if (look > 0.5) c.rgb = ToLinear(c.rgb) * (1.6 * (falling.w > 0 ? falling.w : 1));  // (less to an eye opened for the night)
     return c;
   }
   if (i.options.z > 1.5) {

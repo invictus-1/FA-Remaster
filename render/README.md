@@ -363,6 +363,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the model, each on its own beat by where it stands, harder when it rains or snows; their
   shadows move with them. One wind over the whole map, from one side; it comes in gusts that
   run across the land with it (noise that drifts downwind, so a wood bends in waves).
+- A host's one call for the hour and the weather: `WorldPicture::SetDayAndWeather(startHour,
+  dayLengthSeconds, weather)` drives `World::timeOfDay` from the tick given to `Draw` and
+  switches the self-changing weather on (the viewer's `--picture` test uses it with
+  `--time-of-day`, `--day-length`, `--weather auto`).
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
 - Units under construction, by faction (`mesh_renderer.cpp`, `BuildSolid`; `--built <0..1>` in
