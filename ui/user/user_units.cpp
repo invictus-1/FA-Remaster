@@ -865,6 +865,28 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   d.target.entity = entity != 0xffffffffu ? entity : d.target.entity;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   d.blueprint = blueprint;
+  // The formation, as the original's interface sends it (the engine track's count over about
+  // 1,250 orders of real replays, docs/engine-answers.md "ui 14"): a Move to a place, an Attack on
+  // a unit and a Patrol carry formation 0 at scale 1 and a turn about the up axis whose heading
+  // is the direction from the MEAN of the units' places to the target, atan2(dx, dz); for one
+  // unit alone as well. Everything else carries none, and so does a factory's rally order (the
+  // factories' own data below). With it the simulation arranges a group; without, every unit
+  // heads for the same spot.
+  StreamIssueData rally = d;
+  const bool forms = type == CommandType::Move || type == CommandType::Patrol || (type == CommandType::Attack && entity != 0xffffffffu);
+  if (forms) {
+    float mean[2] = {0, 0}, to[2] = {x, z};
+    for (const UserUnit* u : units) mean[0] += u->view.position[0], mean[1] += u->view.position[2];
+    mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
+    if (entity != 0xffffffffu) {  // (an Attack on a unit: the target point is the unit's place)
+      auto it = Store(L).units.find(entity);
+      if (it != Store(L).units.end()) to[0] = it->second->view.position[0], to[1] = it->second->view.position[2];
+    }
+    const float heading = std::atan2(to[0] - mean[0], to[1] - mean[1]);
+    d.formIndex = 0;
+    d.scale = 1;
+    d.qw = std::cos(heading * 0.5f), d.qx = 0, d.qy = std::sin(heading * 0.5f), d.qz = 0;
+  }
   // An order given with a factory selected is the factory's rally order: what the units it builds
   // are told to do (the command stream's IssueFactoryCommand, FA exe 0x6f14d0), kept in a queue
   // of its own. INFERRED: which units count (here: buildings that are factories; a carrier moves
@@ -875,7 +897,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
         .push_back(u->view.id);
   if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
-  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, d, clear);
+  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
   ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
   return true;
 }

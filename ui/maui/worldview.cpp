@@ -399,6 +399,9 @@ int l_CamNothing(lua_State* L) {
 
 // --- the world view control ---
 
+class WorldView;
+WorldView* MainView(Control* c);  // further down: the first world view that is not a minimap
+
 class WorldView : public Control {
  public:
   const char* ClassName() const override { return "worldview"; }
@@ -559,13 +562,55 @@ class WorldView : public Control {
     Rect r;
     if (MinimapRect(L, &r)) {
       int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+      float corners[4][3];
+      const bool outline = MainViewCorners(L, corners);
       if (const uint32_t* pixels = UserState::From(L)->config().world->DrawMinimap(w, h))
         target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+      if (outline) DrawMainViewOutline(L, target, r, corners);
       return;
     }
     if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+  }
+
+  // On a minimap: the outline of the ground the main view shows, its four corners joined (a
+  // trapezoid when the camera leans), as the original draws it. The corners are the places under
+  // the main view's corners by the picture it last drew: asked BEFORE the minimap's own picture
+  // is made (its first drawing leaves the picture's camera as the minimap's). False until the
+  // main view has a picture, or when a corner looks at the sky.
+  bool MainViewCorners(lua_State* L, float world[4][3]) {
+    UserState* user = UserState::From(L);
+    WorldView* main = MainView(user->ui().GetFrame(0));
+    WorldSource* source = user->config().world;
+    if (!main || !source || !main->pixels_) return false;
+    Rect v;
+    main->GetRect(&v.x0, &v.y0, &v.x1, &v.y1);
+    const float corners[4][2] = {{0, 0}, {v.x1 - v.x0 - 1, 0}, {v.x1 - v.x0 - 1, v.y1 - v.y0 - 1}, {0, v.y1 - v.y0 - 1}};
+    for (int i = 0; i < 4; ++i)
+      if (!source->GroundAt(corners[i][0], corners[i][1], world[i])) return false;
+    return true;
+  }
+  void DrawMainViewOutline(lua_State* L, DrawTarget& target, const Rect& map, const float world[4][3]) {
+    WorldSource* source = UserState::From(L)->config().world;
+    float at[4][2];
+    for (int i = 0; i < 4; ++i) {
+      if (!source->MinimapProject(world[i], &at[i][0], &at[i][1])) return;
+      at[i][0] += map.x0, at[i][1] += map.y0;
+    }
+    target.SetClip(map);
+    for (int i = 0; i < 4; ++i) {
+      const float* a = at[i];
+      const float* b = at[(i + 1) % 4];
+      const int steps = std::max(1, static_cast<int>(std::ceil(std::max(std::fabs(b[0] - a[0]), std::fabs(b[1] - a[1])))));
+      if (steps > 8192) continue;
+      for (int k = 0; k <= steps; ++k) {
+        const float t = static_cast<float>(k) / static_cast<float>(steps);
+        const float x = std::floor(a[0] + (b[0] - a[0]) * t), y = std::floor(a[1] + (b[1] - a[1]) * t);
+        target.FillRect({x, y, x + 1, y + 1}, 0xffffffffu);
+      }
+    }
+    target.ClearClip();
   }
 
   // World to screen and back: the picture's own answers when there is one. Without a picture, a
@@ -621,12 +666,19 @@ class WorldView : public Control {
   // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
   // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
   // that the drag has no end at the screen's edge; here the pointer moves.
-  bool cameraDrag_ = false;
+  bool cameraDrag_ = false, miniDrag_ = false;
   float lastX_ = 0, lastY_ = 0;
   // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
   bool spinning_ = false;
   float spinX_ = 0, spinY_ = 0;
   void DragMove(lua_State* L, const UiEvent& e) override {
+    if (miniDrag_) {  // the left button held on a minimap: the main camera looks where the pointer is
+      float world[3];
+      Unproject(L, e.x, e.y, world);
+      Camera* main = GetCameraObject(L, "WorldCamera");
+      main->focus[0] = world[0], main->focus[2] = world[2];
+      return;
+    }
     if (!cameraDrag_) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -685,6 +737,10 @@ class WorldView : public Control {
     }
   }
   void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (miniDrag_) {
+      miniDrag_ = false;
+      return;
+    }
     if (buildDrag_) {
       buildDrag_ = false;
       Sim* sim = UserState::From(L)->config().sim;
@@ -809,9 +865,11 @@ class WorldView : public Control {
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;
     }
-    if (miniMap && mode.empty()) {  // a left click on the minimap: the main camera looks there
-      Camera* main = GetCameraObject(L, "WorldCamera");
+    if (miniMap && mode.empty()) {  // a left press on the minimap: the main camera looks there, and
+      Camera* main = GetCameraObject(L, "WorldCamera");  // follows the pointer while the button is held
       main->focus[0] = world[0], main->focus[2] = world[2];
+      miniDrag_ = true;
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;
     }
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);

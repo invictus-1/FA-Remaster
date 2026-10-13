@@ -308,7 +308,10 @@ through it only once it is finished. So the order is rightly taken; what is aske
 unit which is not finished does not begin on its queue (the factory's build orders here; I have
 not tried other orders to unfinished units). Not blocking, but a player sees it in every game.
 
-**Status:** open.
+**Status:** fixed by the engine track within the hour (`docs/engine-answers.md`, "ui 13": the
+original's dispatcher starts no order of a unit that is being built; ours lacked that test).
+Confirmed in the case above: the factory's focus stays empty until it is finished at 35.4, and the
+engineer is begun in that beat. Thank you.
 
 ### 14. What the original's interface sends with a group's order so that it moves in formation
 Chris, 2026-10-13: "unit commands when its a group in the og game they went into formations
@@ -330,7 +333,13 @@ The smallest form of an answer: a few records of real replays' issue-command dat
 orders beside what the units and the target were, or the rule if you have it read from the exe.
 I build it into `IssueOrder` (ui/user/user_units.cpp) as soon as I know. Not blocking.
 
-**Status:** open.
+**Status:** answered by the engine track from about 1,250 orders of real replays
+(`docs/engine-answers.md`, "ui 14") and built in (`IssueOrder`, ui/user/user_units.cpp): a Move
+to a place, an Attack on a unit and a Patrol carry formation 0, scale 1 and the turn towards the
+target from the mean of the units' places; everything else and a factory's rally orders carry
+none. Seen in a game: five tanks sent 30 units away by one right click end in a row 2.8 apart
+across their way (before: all within 3 units of the spot). Not built, as the data does not
+decide it: what Ctrl changes; an order given through an order button for one unit. Thank you.
 
 ## To the renderer track
 

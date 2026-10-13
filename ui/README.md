@@ -287,8 +287,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   elsewhere than pressed, a ROW of the building is ordered, one on every free site between the
   two places (shown as ghosts while the button is held; one building's room apart, the larger of
   footprint and skirt: the original's spacing is not read, INFERRED). Buildings the selected
-  units (selected or not) have been ordered to build and have not begun show as ghosts where they will stand. What a unit may not build yet (its own restrictions, the engine's `UnitRestrictedBlueprints`) is left out of its build menu. A minimap world view shows the renderer's minimap picture; a
-  left click on it moves the main camera there. `--no-world` runs a game without the picture
+  units (selected or not) have been ordered to build and have not begun show as ghosts where they will stand. What a unit may not build yet (its own restrictions, the engine's `UnitRestrictedBlueprints`) is left out of its build menu. A minimap world view shows the renderer's minimap picture with the
+  outline of the ground the main view shows; a left press on it moves the main camera there, and
+  the camera follows the pointer while the button is held. `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
 - Sound: the scripts' `PlaySound(Sound({Bank, Cue}))` plays the cue from the game's own sound
   files in `/sounds` (read by the files' own layout: every sound entry of every bank of the game
