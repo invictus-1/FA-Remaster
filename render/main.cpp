@@ -60,6 +60,8 @@
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
 //           only as it knows them (seen, a blip on radar, or not at all)
+// --unexplored  with --focus: ground that army has never seen is all but black (the game's option
+//           FogOfWar "unexplored")
 // Key B: life bars over units on and off.
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
@@ -140,6 +142,7 @@ struct Options {
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
   int focus = 0;                        // --focus
+  bool unexplored = false;              // --unexplored
   std::string weather, climate;         // --weather, --climate
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
@@ -179,6 +182,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
+    else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--look") {
@@ -400,6 +404,7 @@ int main(int argc, char** argv) {
   world.timeOfDay = opt.timeOfDay;
   world.cloudCover = opt.clouds;
   world.borders = opt.border;
+  world.unexplored = opt.unexplored;
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
   auto setWeather = [&](int which) {
@@ -943,7 +948,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
-      if (haveLive)
+      if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());      if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());

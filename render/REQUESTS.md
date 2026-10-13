@@ -14,7 +14,30 @@ beams and trails by the engine's account; not yet acted on: `SetEmitterCurvePara
 `ResizeEmitterCurve`, `SetBeamParam`, refracting particles), 11 done and in use (`BlueprintDisplays`
 is read once the game has started; models and strategic icons take their names from it, so a
 running game needs no `--display` log any more). 12 done and in use
-(`SessionSeed` seeds the weather once a game has started).
+(`SessionSeed` seeds the weather once a game has started). 13 is a question (the whole map seen
+for three seconds at the start).
+
+## 13. A question: the whole map is seen for three seconds at the start (2026-10-12)
+
+**What I see:** in a new game (one player and seven M28 AIx armies on Seton's Clutch, `FogOfWar =
+"explored"`, `RevealCivilians = "No"`, `CivilianAlliance = "enemy"`), the renderer asks
+`ReconAt(sim, 1, place)` for 256 x 256 places over the map every fifth beat. Places with
+`kReconSeenNow`: 514 of 65,536 at ticks 1 to 41 (the starting units' sight), ALL 65,536 at ticks 46,
+51, 56, 61, 66 and 71, then 543 at tick 76 and after. So for about three seconds army 1 sees the
+whole map. (Counted in one run; only army 1 was asked.)
+
+**Why I ask:** the renderer now keeps which ground the focus army has seen at some time (for the
+option `FogOfWar = "unexplored"`: ground never seen stays black). With this, all of it counts as
+seen after eight seconds. More to the point for you: if the vision grid is what `ReconOf` and the
+scripts' `GetBlip` / `IsSeenEver` go by, and if it is so for the other armies too, then every army
+has seen every other army's starting units by tick 46, which an AI may act on.
+
+**The question:** is that what the original does there (a script's map-wide vision marker, or the
+engine's own way of making the map "explored"), or is it something of ours, for example an army
+that is briefly an ally and whose vision counts as everywhere? I did not find a script that reads
+`FogOfWar` on the simulation's side, nor what makes the vision. No change is asked for if it is
+the original's; then tell me, and the renderer treats those ticks as the game's way of saying
+"explored".
 
 ## 12. A number every player of a game has the same: the session's seed (2026-10-12, small)
 

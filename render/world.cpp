@@ -444,8 +444,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
+  ++frameStamp_;
+  rememberedGone.clear();
+  bool noFocus = false;
   for (const FrameUnit& u : frame.units) {
-    if (u.dead) continue;
+    if (u.recon == 0xff) noFocus = true;
+    if (u.dead) {
+      if (u.Seen()) remembered_.erase(u.id);  // (the army saw it go)
+      continue;
+    }
     // of another army's unit only what the army the picture is for knows: the unit when it is seen,
     // its blip when it is on radar, sonar or omni alone, nothing otherwise
     const std::string& blueprint = (*frame.blueprints)[u.blueprint];
@@ -454,12 +461,32 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // id, "ueb0101", the game's own way of naming them - units of mods that name otherwise are
     // not remembered)
     const bool known = u.SeenBefore();
-    const bool remembered = known && blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+    const bool building = blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+    const bool remembered = known && building;
     const bool blip = u.Blip() && !remembered;
-    if (!u.Seen() && !blip && !remembered) continue;
-    const Vec3 position{u.position[0], u.position[1], u.position[2]};
-    const Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
+    Vec3 position{u.position[0], u.position[1], u.position[2]};
+    Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
     const Vec3 color = colorOf(u.Army());
+    float fractionComplete = u.fractionComplete;
+    // another army's building is kept as it is while it is seen (0x10: seen at some time, which
+    // the army's own and its allies' never say), and drawn as it was kept while it is not: what
+    // has become of it since, the army does not know
+    bool asRemembered = false;
+    if (building && u.recon != 0xff && (u.recon & 0x10)) {
+      if (u.Seen()) {
+        remembered_[u.id] = {u.blueprint, position, color, orientation, fractionComplete, frameStamp_};
+      } else {
+        auto kept = remembered_.find(u.id);
+        if (kept != remembered_.end()) {
+          kept->second.stamp = frameStamp_;
+          position = kept->second.position;
+          orientation = kept->second.orientation;
+          fractionComplete = kept->second.fractionComplete;
+          asRemembered = true;
+        }
+      }
+    }
+    if (!u.Seen() && !blip && !remembered) continue;
     if (!blueprint.empty()) {  // its strategic icon, when it is far enough away
       if (u.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
@@ -496,7 +523,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, u.fractionComplete, &pose);
+      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, fractionComplete, asRemembered ? nullptr : &pose);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
@@ -539,6 +566,32 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       draw.Box(centre, {0.4f, 0.4f, 0.4f}, 0xff000000u | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x));
     }
     pickables_.push_back({u.id, centre, radius});
+  }
+  // remembered buildings that are gone (destroyed where the army did not see it): each stays, as
+  // it was last seen, until the army sees the place again and finds it gone
+  if (noFocus) remembered_.clear();
+  for (auto it = remembered_.begin(); it != remembered_.end();) {
+    const Remembered& r = it->second;
+    if (r.stamp == frameStamp_) {
+      ++it;
+      continue;
+    }
+    const bool seenNow = !haveMap_ || !sight.On() || sight.SeenAt(r.position.x / static_cast<float>(map.width), r.position.z / static_cast<float>(map.height));
+    if (seenNow || r.blueprint >= frame.blueprints->size()) {
+      it = remembered_.erase(it);
+      continue;
+    }
+    const std::string& blueprint = (*frame.blueprints)[r.blueprint];
+    if (!blueprint.empty()) {
+      if (r.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
+      const StrategicIcons::Kind*& kind = iconKinds_[r.blueprint];
+      if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
+      icons.Add(kind, r.position, r.color, false, false, true);
+      rememberedGone.push_back({kind, r.position, r.color});
+      const Model* model = models.Unit(blueprint);
+      if (model && model->ok) meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete);
+    }
+    ++it;
   }
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
@@ -632,6 +685,7 @@ void World::Render() {
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
+    sight.neverSeen = unexplored ? 0.04f : sight.darkness;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
   post.Present(view);

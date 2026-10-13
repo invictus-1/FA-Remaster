@@ -12,7 +12,7 @@ cbuffer SightCamera : register(b1) {
   float4 cameraRight;  // w: tan(half the field of view)
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
-  float4 mapInfo;      // x, y: 1 / the map's size; z: what an unseen place keeps of its light
+  float4 mapInfo;      // x, y: 1 / the map's size; z: what an unseen place keeps of its light; w: a place never seen
 };
 Texture2D sight : register(t0);
 #ifdef MSAA
@@ -36,9 +36,11 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   float3 world = cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
   float2 uv = world.xz * mapInfo.xy;
   if (any(uv < 0) || any(uv > 1)) return 1;  // what the map lies in
-  float seen = smoothstep(0.2, 0.8, sight.SampleLevel(samplerLinearClamp, uv, 0).r);
-  // unseen: darker, and a little toward blue
-  return float4(lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, seen), 1);
+  float2 grid = sight.SampleLevel(samplerLinearClamp, uv, 0).rg;  // seen now; seen at some time
+  float seen = smoothstep(0.2, 0.8, grid.r);
+  float known = smoothstep(0.2, 0.8, grid.g);
+  // unseen: darker, and a little toward blue; never seen: as dark as the game's option says
+  return float4(lerp(float3(0.85, 0.95, 1.2) * lerp(mapInfo.w, mapInfo.z, known), 1, seen), 1);
 }
 )hlsl";
 
@@ -62,10 +64,16 @@ bool SightShade::Init(std::string* error) {
 void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
   if (texture_) device_->Destroy(texture_);
   texture_ = {};
+  grid_.clear();
+  cells_ = 0;
   if (cells <= 0 || grid.size() < static_cast<size_t>(cells) * static_cast<size_t>(cells)) return;
+  grid_ = grid;
+  cells_ = cells;
   pixels_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells) * 4);
   for (size_t i = 0; i < static_cast<size_t>(cells) * static_cast<size_t>(cells); ++i) {
-    pixels_[i * 4] = pixels_[i * 4 + 1] = pixels_[i * 4 + 2] = grid[i];
+    pixels_[i * 4] = grid[i] == 255 ? 255 : 0;      // seen now
+    pixels_[i * 4 + 1] = grid[i] >= 128 ? 255 : 0;  // seen at some time
+    pixels_[i * 4 + 2] = 0;
     pixels_[i * 4 + 3] = 255;
   }
   gfx::TextureDesc td;
@@ -83,7 +91,7 @@ void SightShade::Draw(const View& view, const Camera& camera, gfx::Texture scene
   const float constants[16] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                back.x, back.y, back.z, camera.zNear,
-                               1 / mapWidth, 1 / mapHeight, darkness, 0};
+                               1 / mapWidth, 1 / mapHeight, darkness, neverSeen};
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, constants, sizeof constants);

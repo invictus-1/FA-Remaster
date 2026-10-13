@@ -60,6 +60,11 @@ class WorldPicture {
   // any distance) while it is on radar, sonar or omni alone, nothing otherwise; their shots only
   // where the army sees. The minimap, UnitAt and UnitsIn go by the same.
   void SetFocusArmy(int army);
+  // The game's option FogOfWar: true for "unexplored" (ground the focus army has never seen is all
+  // but black, in the picture and on the minimap, until it is seen); false, as at first, for
+  // "explored" (it looks like ground seen before). What the army has seen is kept from when it
+  // became the focus army.
+  void SetUnexplored(bool on);
   void SetSelection(const std::vector<uint32_t>& ids);
   // The unit under the mouse: marked with the original's brackets of that kind (1 the player's own
   // or an ally's, 2 an enemy's, 3 anyone else's). Kind 0 or an id that is no unit's: no mark. A

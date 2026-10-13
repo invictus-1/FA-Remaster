@@ -324,10 +324,18 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   hidden, and the ground the army does not see is darkened (`sight.h`: a grid of what it sees,
   asked of the engine twice a second, and one pass over the picture). What is made at a place the
   army does not see (an explosion, a flash, a mark) is not made. The minimap is darkened the
-  same way, and its ground follows the hour and the weather. A building seen before
-  stays drawn where it stood, and a unit seen before keeps its own icon as a blip. Not yet:
-  ground seen before looks like ground never seen; a remembered building follows the real one's
-  state at once.
+  same way, and its ground follows the hour and the weather. What the army has seen before: a
+  unit keeps its own icon as a blip; another army's building stays drawn as it was last seen
+  (`World::remembered_`: kept while it is seen, drawn from what was kept while it is not), and
+  one destroyed out of the army's sight stays, with its icon and on the minimap, until the army
+  sees the place again. Ground: `SimFrames` keeps which places of the grid the army has seen at
+  some time; with `World::unexplored` (`--unexplored`, `WorldPicture::SetUnexplored`, for the
+  game's option FogOfWar "unexplored") ground never seen is all but black, otherwise it looks
+  like ground seen before. Not the original's: the memory is the renderer's own and begins when
+  the army becomes the focus army; the buildings' part is made from the frames that are drawn,
+  so running a game ahead without drawing misses what was seen meanwhile; a building is told by
+  its id's third letter. Open: the engine reports the whole map as seen for three seconds at a
+  game's start (`REQUESTS.md`, 13), so "never seen" does not last.
 - Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
   trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
   the model, each on its own beat by where it stands, harder when it rains or snows; their
