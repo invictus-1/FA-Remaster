@@ -226,7 +226,7 @@ float4 Shade(VOut i, bool front) {
       float4 moved = specularMap.Sample(samplerAniso, i.uv.xy + float2(frac(i.color.g), 0));
       c = sliding.rrr + still.g;
       alpha = saturate(sliding.b * moved.r * 4.5 * saturate(1 - (age - 6) * 0.15) * still.a);
-      return float4(look > 0.5 ? pow(max(c, 0), 2.2) * 1.5 * dark : c, alpha);
+      return float4(look > 0.5 ? pow(max(c, 0), 2.2) * 3.0 * dark : c, alpha);
     }
     // the others': a ring pattern (the albedo's green) sliding outward, slower as it goes, through
     // a still coarse pattern and the patch's own outline; pale blue, adding its light
@@ -236,7 +236,9 @@ float4 Shade(VOut i, bool front) {
     c = float3(0, 0, 0.5) + coarse.r;
     alpha = saturate(outline * ring.g * (coarse.r + coarse.g) * saturate(1 - (age - 2) * 0.2));
     // (the pipeline adds what is returned as it is)
-    return float4((look > 0.5 ? pow(max(c, 0), 2.2) * 1.5 * dark : c) * alpha, 1);
+    // (four times over in the modern look: it is a flash of light, and among bubbles lying over
+    // each other a weaker one was not to be found)
+    return float4((look > 0.5 ? pow(max(c, 0), 2.2) * 4.0 * dark : c) * alpha, 1);
   }
   if (kind.y > 6.5) {
     // not lit by the scene: what the textures say, as bright as the hour lets a thing be seen

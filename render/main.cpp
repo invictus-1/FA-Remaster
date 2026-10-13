@@ -1121,6 +1121,9 @@ int main(int argc, char** argv) {
         const Model* model = models.Blueprint(k < 4 ? "/effects/entities/shieldsection01/shieldsection01_mesh.bp" : "/effects/entities/shieldsection01/shieldsection01b_mesh.bp");
         const Vec3 where = base + Vec3{static_cast<float>(k % 4) * 7.0f - 8, -1.0f, k < 4 ? -9.0f : -13.5f};
         if (model && model->ok) meshes.Add(model, Mat4::FromTRS(where, Quat{-0.7071f, 0, 0, 0.7071f}, model->scale * 12), {0.15f + 0.55f * static_cast<float>(k % 4), -0.37f, 0});
+        // (two of each on a bubble of that size, as in a game; the others bare, to see the flash alone)
+        const Model* bubble = k % 4 == 1 || k % 4 == 2 ? models.Blueprint("/effects/entities/shield01/shield01_mesh.bp") : nullptr;
+        if (bubble && bubble->ok) meshes.Add(bubble, Mat4::FromTRS(where, Quat{}, bubble->scale * 12), {1, 1, 1});
       }
     }
     for (PlacedUnit& u : placedUnits) {
@@ -1200,7 +1203,10 @@ int main(int argc, char** argv) {
     effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
     if (playing) world.AddFrame(frame, armyColors);
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
-    if (!opt.find.empty() && haveLive && !(automatic && liveBusy) && frameCount == 1) {
+    // (a shield's flash lasts two seconds and may not be there at that moment: that search goes on,
+    // frame after frame, until one shows)
+    static bool impactFound = false;
+    if (!opt.find.empty() && haveLive && !(automatic && liveBusy) && (frameCount == 1 || (opt.find == "impact" && !impactFound && frameCount > 1))) {
       if (opt.find == "shield") {
         for (const FrameEntity& f : frame.entities)
           if (f.shield) {
@@ -1211,7 +1217,7 @@ int main(int argc, char** argv) {
       } else if (opt.find == "impact" && frame.blueprints) {
         // a shield being hit: one with a flash on it now, or else the one with the most shots flying near it
         bool flashing = false;
-        int most = -1;
+        int most = frameCount == 1 ? -1 : 1 << 30;  // (after the first frame only a flash moves the camera)
         for (const FrameEntity& f : frame.entities) {
           if (f.mesh < frame.blueprints->size()) {
             std::string name = (*frame.blueprints)[f.mesh];
@@ -1236,8 +1242,9 @@ int main(int argc, char** argv) {
             camera.distance = f.scale[0] * 2.2f;
           }
         }
-        printf(flashing ? "render: --find impact: a flash on a shield at %.0f, %.0f\n" : "render: --find impact: no flash now; the shield with the most shots near it is at %.0f, %.0f\n",
-               camera.target.x, camera.target.z);
+        impactFound = flashing;
+        if (flashing) printf("render: --find impact: a flash on a shield at %.0f, %.0f (frame %d)\n", camera.target.x, camera.target.z, frameCount);
+        else if (frameCount == 1) printf("render: --find impact: no flash yet; the shield with the most shots near it is at %.0f, %.0f\n", camera.target.x, camera.target.z);
       } else if (opt.find == "dying") {  // a unit in its death: the one highest above the ground (a plane falling)
         float best = -1e9f;
         for (const FrameUnit& u : frame.units) {
