@@ -24,10 +24,10 @@ and in use the same day (`HiddenBones`: a commander no longer wears the upgrades
 draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
 order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
-(`paused` in the plain unit view: every paused unit wears the pause mark). 20 open (where a beam's end is
-when it hangs on an entity without a mesh: the last piece of an adjacency's link).
+(`paused` in the plain unit view: every paused unit wears the pause mark). 20 done and in use (a beam's far end
+when it hangs on an entity without a mesh, and the blueprints' life bar sizes).
 
-## 20. Where a beam's ends are when they hang on an entity without a mesh (2026-10-13, not blocking)
+## 20. Where a beam's ends are when they hang on an entity without a mesh (2026-10-13, done)
 
 **Who asks:** the renderer. **What:** the place of a script entity that has no mesh, when a beam
 hangs on it: either such entities in `EntityViews` (with an empty mesh), or, smaller, the second
@@ -46,7 +46,11 @@ move.
 The renderer reads them from the unit's blueprint file today (the original places and sizes each
 unit's life bar by them); from the simulation they would follow what mods merge in.
 
-**Answer:** (none yet)
+**Answer:** done by the engine the same hour (0e5db33, `docs/engine-answers.md`): the effect event
+has `hasPosition2` / `position2`, and `BlueprintDisplay` the three life bar numbers. In use: a beam
+whose far end is never in a frame ends where the event said (`Effects`, `hasEnd`), and a unit's life
+bar takes its size from the simulation's blueprint. Seen: the UEF's adjacency links now run from
+each building's edge to the next, with no piece missing.
 
 ## 19. `paused` in the plain unit view (2026-10-13, done)
 
