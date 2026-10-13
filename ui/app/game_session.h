@@ -54,6 +54,12 @@ class GameSession {
   // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
   // renderer).
   bool wantPicture = true;
+  // A day that passes and weather that changes in the picture (the renderer's
+  // WorldPicture::SetDayAndWeather): the hour the game starts at (negative: the map's own fixed
+  // light, as the original has it), how long a whole day takes in game seconds, and whether the
+  // weather changes by itself. It is only seen. Set before a game is launched.
+  float dayStartHour = -1, dayLengthSeconds = 1200;
+  bool weather = true;
   // What plays the world's sounds (the host's sound system); nullptr: the simulation is not asked
   // for them. Set before a game is launched.
   sound::SoundSystem* sounds = nullptr;

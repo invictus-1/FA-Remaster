@@ -58,11 +58,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
+         [--day-weather | --day <hour>] [--day-length <seconds>] [--no-weather]
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
   frames). Without it the host runs headless on its own clock.
 - `--screenshot file.png` draws the head once at the end and saves the picture.
+- `--day-weather`: a game's picture has a day that passes (it starts at nine in the morning; a
+  whole day takes twenty minutes of game time) and weather that changes by itself (the renderer's
+  `SetDayAndWeather`; it is only seen). `--day <hour>` starts at another hour, `--day-length
+  <seconds>` sets the day's length in game seconds (0: the hour stands), `--no-weather` leaves the
+  weather fair. Without any of them a game has the map's own fixed light, as the original.
 - `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
   on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
@@ -406,7 +412,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   score, and the game's own score screen comes up (`/lua/ui/dialogs/score.lua`, reached by the
   menu's "End Game"); its Continue leaves the game. `SessionGetCommandSourceNames` /
   `SessionGetLocalCommandSource` name who gives orders (the script's pause sign uses them).
-  Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`, `ui/tests/score.lua`.
+  A game also ends by itself: when the player's commander is destroyed the simulation's victory
+  script reports the defeat, the interface's script announces it and offers the score, and the
+  game stands a few seconds later. Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`,
+  `ui/tests/score.lua`, `ui/tests/defeat.lua`.
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

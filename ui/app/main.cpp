@@ -61,6 +61,11 @@ bool windowed = false;            // --window: run live in a window until it is 
 bool noSound = false;             // --no-sound: a live window without the sound device
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
+// --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds>
+// / --no-weather: a day that passes and weather that changes in a game's picture. Without them
+// a game has the map's own fixed light.
+float dayStartHour = -1, dayLengthSeconds = 1200;
+bool weather = true;
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -194,6 +199,10 @@ int main(int argc, char** argv) {
     else if (a == "--fullscreen") fullScreen = windowed = true;
     else if (a == "--backdrop") wantBackdrop = 1;
     else if (a == "--no-backdrop") wantBackdrop = 0;
+    else if (a == "--day-weather") dayStartHour = 9;
+    else if (a == "--day") dayStartHour = static_cast<float>(std::atof(next().c_str()));
+    else if (a == "--day-length") dayLengthSeconds = static_cast<float>(std::atof(next().c_str()));
+    else if (a == "--no-weather") weather = false;
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -250,6 +259,7 @@ int main(int argc, char** argv) {
   session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.wantPicture = !noWorld;
+  session.dayStartHour = dayStartHour, session.dayLengthSeconds = dayLengthSeconds, session.weather = weather;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread

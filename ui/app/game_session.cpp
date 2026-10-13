@@ -253,6 +253,7 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);
+      if (dayStartHour >= 0) pic->picture.SetDayAndWeather(dayStartHour, dayLengthSeconds, weather);
       pic->picture.Beat(*sim_);
       picture_ = std::move(pic);
       Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));

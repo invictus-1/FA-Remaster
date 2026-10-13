@@ -254,7 +254,11 @@ command an army) and `EndGame()` (the game is over: what the EndGame order does)
 game ending by victory or defeat; the interface's side (the announcement, the Score button, the
 score screen) is the scripts' and is waiting for `Sync.GameResult`.
 
-**Status:** asked 2026-10-13.
+**Status:** done by the engine track within the hour (`docs/engine-answers.md`, "ui 11") and in
+use. What I see with it, as you asked: the commander destroys itself at game time 9.3; the
+interface's script announces "You have been defeated!" within half a second (so ToObserver and
+SyncGameResult run through); the game is over at 18.0 and stands, with the final score handed
+over (EndGameThread and EndGame()). `ui/tests/defeat.lua` keeps it so. Thank you.
 
 ## To the renderer track
 
