@@ -2990,6 +2990,31 @@ int l_SetDoNotTarget(lua_State* L) {
   else u->unitStates.erase("DoNotTarget");
   return 0;
 }
+// Unit:HideBone(bone, affectChildren) / Unit:ShowBone(bone, affectChildren) 0x6d14f0: the pose bone's "visible" flag
+// (bone+0x48), set for the bone alone or, with affectChildren, for it and everything below it (0x54be30). The
+// simulation does not go by it; a host that draws the unit does (HiddenBones in sim/sim_view.h).
+template <bool Hide>
+int l_ShowHideBone(lua_State* L) {
+  Unit* u = U(L);
+  const int bone = BoneIndex(L, u, 2);
+  if (!u->skeleton || bone < 0 || bone >= u->skeleton->Count()) return 0;
+  const bool children = lua_toboolean(L, 3) != 0;
+  const auto& bones = u->skeleton->bones();
+  if (u->hiddenBones.size() != bones.size()) u->hiddenBones.assign(bones.size(), 0);
+  u->hiddenBones[static_cast<size_t>(bone)] = Hide ? 1 : 0;
+  if (children) {  // (.scm lists a parent before its children)
+    std::vector<uint8_t> below(bones.size(), 0);
+    below[static_cast<size_t>(bone)] = 1;
+    for (size_t i = static_cast<size_t>(bone) + 1; i < bones.size(); ++i) {
+      const int par = bones[i].parent;
+      if (par >= 0 && static_cast<size_t>(par) < i && below[static_cast<size_t>(par)]) {
+        below[i] = 1;
+        u->hiddenBones[i] = Hide ? 1 : 0;
+      }
+    }
+  }
+  return 0;
+}
 int l_DetachAll(lua_State* L) {  // entity:DetachAll(bone)
   Entity* e = ToObject<Entity>(L, 1);
   if (!e) return 0;
@@ -3122,6 +3147,8 @@ void RegisterBuildBindings(lua_State* L) {
   SetMethod(L, "Unit", "SetBusy", l_SetBusy);
   SetMethod(L, "Unit", "SetUnSelectable", l_SetUnSelectable);
   SetMethod(L, "Unit", "SetDoNotTarget", l_SetDoNotTarget);
+  SetMethod(L, "Unit", "HideBone", l_ShowHideBone<true>);
+  SetMethod(L, "Unit", "ShowBone", l_ShowHideBone<false>);
   SetMethod(L, "Unit", "SetBlockCommandQueue", l_SetBlockCommandQueue);
   SetMethod(L, "Entity", "AttachBoneTo", l_AttachBoneTo);
   SetMethod(L, "Entity", "AttachTo", l_AttachTo);

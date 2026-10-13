@@ -230,6 +230,19 @@ void UnitPoses(const Sim& sim, std::vector<UnitPose>* out) {
   }
 }
 
+void HiddenBones(const Sim& sim, std::vector<UnitHiddenBones>* out) {
+  out->clear();
+  for (const Unit* u : sim.units()) {
+    if (u->destroyQueued || u->hiddenBones.empty()) continue;
+    UnitHiddenBones h;
+    for (size_t i = 0; i < u->hiddenBones.size(); ++i)
+      if (u->hiddenBones[i]) h.bones.push_back(static_cast<int>(i));
+    if (h.bones.empty()) continue;
+    h.id = u->id;
+    out->push_back(std::move(h));
+  }
+}
+
 void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
   out->clear();
   for (const Projectile* p : sim.projectiles) {

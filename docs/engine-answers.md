@@ -3,6 +3,33 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 15: hidden bones — done
+
+`sim/sim_view.h`:
+
+```cpp
+struct UnitHiddenBones {
+  uint32_t id;             // the unit's entity id
+  std::vector<int> bones;  // the hidden bones, rising, indices as in UnitPose (.scm order)
+};
+void HiddenBones(const Sim& sim, std::vector<UnitHiddenBones>* out);   // once per beat, beside UnitPoses
+```
+
+- Only units with at least one hidden bone are listed, each with its whole list as it is now (not
+  changes). A unit that shows everything again drops out of the list.
+- Children are resolved: `Unit:HideBone(bone, true)` hides the bone and everything below it, and all
+  of them are in the list; `ShowBone(bone, true)` shows them all again; with `false` only the one
+  bone changes. That is the original's rule (the pose bone's visible flag, set alone or through the
+  children: FA exe 0x6d14f0, 0x54be30).
+- `HideBone` and `ShowBone` are methods of units only in the original, so there is nothing for props
+  or script-made entities: wreckage does not hide bones by this call.
+- They were stubs until now and are kept for this list only; the simulation does not go by them (the
+  thirteen replays keep their marks).
+
+Seen in the eight-army test game at beat 600: 10 of 99 units have hidden bones, 345 in all; a
+commander (`eel0001`) hides 44 (bones 7 8 9 10 14 16 17 18 19 20 24 26 ...: its upgrades).
+`moho64 ... --view` prints that count and one unit's list at the end of a run.
+
 ## ui 10: the simulation's `IsGameOver()` — done
 
 `IsGameOver()` in the simulation's Lua now answers as the original's does (FA exe 0x74b980): true when

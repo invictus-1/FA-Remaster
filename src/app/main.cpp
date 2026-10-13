@@ -111,6 +111,20 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     }
     Logf(LogLevel::Info, "view: %zu units keep a rally queue, %zu of them with something in it", factories, withRally);
     if (!sample.empty()) Logf(LogLevel::Info, "view: %s", sample.c_str());
+    std::vector<UnitHiddenBones> hidden;
+    HiddenBones(sim, &hidden);
+    size_t hiddenBones = 0;
+    for (const UnitHiddenBones& h : hidden) hiddenBones += h.bones.size();
+    Logf(LogLevel::Info, "view: %zu of %zu units have hidden bones, %zu in all", hidden.size(), units.size(), hiddenBones);
+    if (!hidden.empty()) {
+      const UnitHiddenBones& h = hidden.front();
+      std::string list, bp;
+      for (size_t i = 0; i < h.bones.size() && i < 12; ++i) list += " " + std::to_string(h.bones[i]);
+      for (const UnitView& uv : units)
+        if (uv.id == h.id) bp = uv.blueprint;
+      Logf(LogLevel::Info, "view: unit %#x %s hides %zu bones:%s%s", h.id, bp.c_str(), h.bones.size(), list.c_str(),
+           h.bones.size() > 12 ? " ..." : "");
+    }
   }
   if (!lastSync.empty()) {
     ScriptState st(ScriptState::Kind::User, nullptr);

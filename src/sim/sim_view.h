@@ -107,6 +107,15 @@ struct UnitPose {
   std::vector<BonePose> bones;
 };
 
+// The bones of a unit's mesh that its script has hidden now (Unit:HideBone / ShowBone): a commander's upgrades
+// not bought yet, a factory's arm parts, a missile not in its silo. Bone indices as in UnitPose (the mesh's bone
+// list, .scm order), in rising order, the children of a bone hidden "with its children" listed too. Only units
+// with at least one hidden bone are listed.
+struct UnitHiddenBones {
+  uint32_t id = 0;  // the unit's entity id
+  std::vector<int> bones;
+};
+
 struct ProjectileView {
   uint32_t id = 0;
   std::string blueprint;  // the projectile blueprint's id (its path)
@@ -246,6 +255,8 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out);
 bool UnitPoseOf(const Sim& sim, uint32_t unitId, std::vector<BonePose>* out);
 void UnitPoses(const Sim& sim, std::vector<UnitPose>* out);
 // The projectiles in flight (creation order) and the beams that are on.
+// Hidden bones of every unit that has any (see UnitHiddenBones). Take it once per beat, beside UnitPoses.
+void HiddenBones(const Sim& sim, std::vector<UnitHiddenBones>* out);
 void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
 void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 // Script-made entities with a mesh (see EntityView). Take it once per beat, after Tick().

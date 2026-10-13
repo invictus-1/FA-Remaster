@@ -52,6 +52,8 @@ class Entity : public ScriptObject {
   std::string mesh;
   float drawScale = 1;
   uint8_t viz[4] = {0, 0, 0, 0};
+  // Unit:HideBone / ShowBone: per bone of the skeleton, 1 = hidden (empty: none ever hidden). Also only for a host.
+  std::vector<uint8_t> hiddenBones;
   const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)
   float meshScale = 1;                 // Display.UniformScale: model units -> world
   float health = 0, maxHealth = 0;
