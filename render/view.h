@@ -64,6 +64,10 @@ struct ViewConstants {
   // They were made for the day's exposure; to an eye opened for the night they would be many
   // times brighter, and a faint ring of dust a white arc.
   float falling[4];
+  // The mist that lies on low ground (with a computed sky): x how thick it is at its floor (the
+  // share of light lost per world unit; 0: none), y the floor's height, z 1 / the height over
+  // which it thins to 1/e, w the most of a thing it may hide.
+  float mist[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -94,6 +98,7 @@ cbuffer View : register(b0) {
   float4 skyClouds;       // the cloud layer: x cover 0..1; y, z its drift (world units); w its change
   float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
   float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash; w: the night's dimming of glowing effects (0: none)
+  float4 mist;            // the mist on low ground: x thickness per world unit at its floor; y the floor's height; z 1 / its depth; w the most it hides
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -146,6 +151,27 @@ float3 AirColor() {
 float3 ThroughAir(float3 color, float distance) {
   if (weather.z <= 0) return color;
   return lerp(color, AirColor(), min(1 - exp(-distance * weather.z), weather.w));
+}
+// The mist that lies on low ground: how much of what is at `world` it hides from the eye. It is
+// thickest at its floor and thins upward; what is lost on the way from the eye is that thickness
+// summed along the line of sight (so a valley seen from high above shows as a pool of it, and a
+// hilltop stands clear). It lies in banks that drift.
+float3 MistColor() { return AirColor() * 0.75; }
+float MistLost(float3 world) {
+  if (mist.x <= 0) return 0;
+  float a = max((cameraPosition.y - mist.y) * mist.z, -1), b = max((world.y - mist.y) * mist.z, -1);
+  float d = a - b;
+  float mean = abs(d) > 1e-3 ? (exp(-b) - exp(-a)) / d : exp(-a);
+  float2 q = world.xz + skyClouds.yz * 0.12;
+  float banks = smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
+                                      CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+  return min(1 - exp(-length(world - cameraPosition) * mist.x * mean * banks), mist.w);
+}
+// A colour at `world` as the eye sees it: through the thick air and through the mist.
+float3 ThroughAirTo(float3 color, float3 world) {
+  color = ThroughAir(color, length(world - cameraPosition));
+  float lost = MistLost(world);
+  return lost > 0 ? lerp(color, MistColor(), lost) : color;
 }
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {

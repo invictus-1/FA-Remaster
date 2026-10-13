@@ -248,6 +248,8 @@ void Effects::Update(double tick, const Frame& frame) {
   const auto t0 = std::chrono::steady_clock::now();
   projectileAt_.clear();
   beamAt_.clear();
+  shotGlow_.clear();
+  shotLights = 0;
   entityAt_.clear();
   for (uint32_t i = 0; i < frame.entities.size(); ++i) entityAt_[frame.entities[i].id] = i;
   for (uint32_t i = 0; i < frame.projectiles.size(); ++i) projectileAt_[frame.projectiles[i].id] = i;
@@ -292,10 +294,34 @@ void Effects::Update(double tick, const Frame& frame) {
         if (e.attached) {
           particles_->Move(e.handle, e.position, e.orientation);
           particles_->Hide(e.handle, hidden);
+          // (a glow on a shot in flight: it lights what it passes)
+          if (here && !hidden && shotLight > 0) {
+            auto shot = projectileAt_.find(e.entity);
+            std::string ramp;
+            float scale = 1;
+            if (shot != projectileAt_.end() && particles_->Glows(e.handle, &ramp, &scale)) {
+              ShotGlow& g = shotGlow_[shot->second];
+              const Vec3 c = lights_->RampGlow(ramp);
+              if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
+              g.scale = std::max(g.scale, scale);
+              ++g.count;
+            }
+          }
         }
         break;
       case Kind::Trail:
         if (!hidden) ribbons_->MoveTrail(e.handle, e.position);
+        if (here && !hidden && shotLight > 0) {  // (a glowing trail's head lights as a glow does)
+          auto shot = projectileAt_.find(e.entity);
+          std::string ramp;
+          Vec3 unused;
+          if (shot != projectileAt_.end() && ribbons_->Glows(e.blueprint, &ramp, &unused)) {
+            ShotGlow& g = shotGlow_[shot->second];
+            const Vec3 c = lights_->RampGlow(ramp);
+            if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
+            ++g.count;
+          }
+        }
         break;
       case Kind::Beam:
       case Kind::TextureBeam: {
@@ -320,10 +346,45 @@ void Effects::Update(double tick, const Frame& frame) {
         }
         if (e.kind == Kind::Beam) ribbons_->Beam(e.blueprint, e.position, end);
         else ribbons_->TextureBeam(e.blueprint, e.position, end, e.halfWidth);
+        // a weapon's beam lights the ground it runs over and, more, what it hits
+        if (e.kind == Kind::Beam && shotLight > 0 && beamAt_.count(e.entity)) {
+          std::string unusedRamp;
+          Vec3 color{1, 1, 1};
+          if (ribbons_->Glows(e.blueprint, &unusedRamp, &color)) {
+            const Vec3 light = color * (1.4f * shotLight * lights_->night);
+            const float length = Length(end - e.position);
+            const int steps = std::min(static_cast<int>(length / 5), 8);
+            for (int k = 1; k <= steps; ++k)
+              lights_->Add(e.position + (end - e.position) * (static_cast<float>(k) / static_cast<float>(steps + 1)), 4.5f, light * 0.3f);
+            lights_->Add(end + Vec3{0, 0.3f, 0}, 5.5f, light);
+            shotLights += steps + 1;
+          }
+        }
         break;
       }
     }
     ++it;
+  }
+  // the shots in flight that glow: one light each, in its glow's colour (at most 400 lights a frame).
+  // Only what flies: the slices of light the UEF builds with are "projectiles" too, dozens standing
+  // in one place, and would pile their lights on a building site until it is white. And of shots
+  // flying close together (a salvo) one light to a pace of ground, the others' being the same light.
+  shotCells_.clear();
+  for (const auto& g : shotGlow_) {
+    if (shotLights >= 400 || g.first >= frame.projectiles.size()) break;
+    const FrameProjectile& p = frame.projectiles[g.first];
+    if (p.velocity[0] * p.velocity[0] + p.velocity[1] * p.velocity[1] + p.velocity[2] * p.velocity[2] < 1) continue;
+    const uint64_t cell = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(p.position[0] / 3.0f)))) << 32) |
+                          static_cast<uint32_t>(static_cast<int32_t>(std::floor(p.position[2] / 3.0f)));
+    if (!shotCells_.insert(cell).second) continue;
+    const float most = std::max({g.second.color.x, g.second.color.y, g.second.color.z, 1e-3f});
+    if (most < 0.02f) continue;
+    // (as bright as its colour is strong, in the colour's own hue)
+    const Vec3 tint = g.second.color * (std::min(most * 3, 1.0f) / most);
+    // (it reaches six paces: a shot skimming the ground lays a clear patch under it, one flying
+    // four paces up a faint one, one high in its arc none)
+    lights_->Add(V(p.position), 6.0f * std::clamp(g.second.scale, 0.8f, 2.0f), tint * (1.1f * shotLight * lights_->night));
+    ++shotLights;
   }
   live = static_cast<int>(effects_.size());
   const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();

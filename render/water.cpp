@@ -84,7 +84,7 @@ float4 PS(VOut i) : SV_Target {
   rgb = rgb * (1 - c) + c;
   through *= 1 - c;
   // the modern look works in linear light: the same water for now, its colours converted
-  if (look > 0.5) rgb = ThroughAir(pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight), length(i.world - cameraPosition));
+  if (look > 0.5) rgb = ThroughAirTo(pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight), i.world);
   return float4(rgb, 1 - through);
 }
 )hlsl";
@@ -342,7 +342,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // the sun's (or the moon's) glint
   color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
   // at its very edge the water thins out to nothing over what is behind it
-  color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAir(color, distance), saturate(deep / 0.035));
+  color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAirTo(color, i.world), saturate(deep / 0.035));
   return float4(color, 1);
 }
 )hlsl";

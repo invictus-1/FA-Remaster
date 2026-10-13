@@ -83,6 +83,14 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       groundMiddle_ = (low + high) * 0.5f;
       ranges.low = low;
       ranges.high = high;
+      // where mist lies: on the water, or on the lowest twentieth of a dry map's ground; it thins
+      // over a fifth of the way up to the high ground (the height nine tenths of the map lie under)
+      std::vector<float> heights;
+      for (int z = 0; z <= map.height; z += 4)
+        for (int x = 0; x <= map.width; x += 4) heights.push_back(map.Height(static_cast<float>(x), static_cast<float>(z)));
+      std::sort(heights.begin(), heights.end());
+      mistFloor_ = map.water.present ? map.water.elevation : heights[heights.size() / 20];
+      mistDepth_ = std::clamp((heights[heights.size() * 9 / 10] - mistFloor_) * 0.2f, 1.5f, 12.0f);
     }
     if (map.water.present)
       particles.SetWater(map.water.elevation, [this](float x, float z) {
@@ -442,6 +450,27 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // whole map seen from high up would be gone)
     c.weather[2] = 0.0035f * fog + 0.0007f * rain + 0.0010f * snow;
     c.weather[3] = 0.55f + 0.3f * fog;
+    // the mist on low ground
+    mistNow = mist;
+    if (mistNow < 0) {
+      auto rise = [](float from, float to, float h) {
+        const float t = std::clamp((h - from) / (to - from), 0.0f, 1.0f);
+        return t * t * (3 - 2 * t);
+      };
+      // by the hour: a third of it lies from nine in the evening, all of it from half past five
+      // to seven, and the morning has burnt it off by half past nine
+      const float h = timeOfDay;
+      const float byHour = h < 12 ? (0.3f + 0.7f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
+      mistNow = byHour * (climate == Climate::Dry ? 0.25f : 1.0f) + 0.5f * fog + (rain > 0 ? 0.0f : 0.4f * wet);
+      mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (snow > 0 ? 0.0f : 1.0f);
+    }
+    if (haveMap_ && mistNow > 0) {
+      // (seen straight down through all of it at its floor, in the middle of a bank, full mist hides a third)
+      c.mist[0] = 0.23f * mistNow / mistDepth_;
+      c.mist[1] = mistFloor_;
+      c.mist[2] = 1 / mistDepth_;
+      c.mist[3] = 0.6f;
+    }
     SetSky(skyLight, &c);
     lightDirection = skyLight.direction;
   }

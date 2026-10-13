@@ -43,6 +43,9 @@ class Lights {
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far).
   void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds);
+  // The colour a thing glows in whose particles take theirs from that ramp texture: the ramp's
+  // strongest place (linear light), for the light a shot in flight throws.
+  Vec3 RampGlow(const std::string& ramp);
   // Sorts this frame's lights (those added, and the flashes alive now) into the grid, hands them to
   // the shaders and writes where the grid is into `view`. Call once a frame, before the scene's passes.
   void Build(View* view);

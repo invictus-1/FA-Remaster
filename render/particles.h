@@ -86,6 +86,9 @@ class Particles {
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
+  // Does that emitter glow (its particles add their light)? Then `rampPath` is its colour ramp's
+  // file and `scale` how large a script has made it.
+  bool Glows(uint32_t emitter, std::string* rampPath, float* scale) const;
   // While hidden an emitter throws nothing out, and makes nothing up afterwards (what it hangs on
   // is not seen by whom the picture is for).
   void Hide(uint32_t emitter, bool hidden);

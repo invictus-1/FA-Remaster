@@ -193,7 +193,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float splash = saturate(1 - ring * 6) * (1 - age) * (1 - age) * step(h, falling.x * 0.45) * saturate(1 - toEye / 140);
     color += (skyZenith.rgb + skyHorizon.rgb) * (splash * 0.1);
   }
-  return ThroughAir(color + small + emission, toEye);
+  return ThroughAirTo(color + small + emission, world);
 }
 )hlsl";
 

@@ -91,7 +91,11 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
   r.Skip(4 * 5 + 4 + 2);  // file version, a marker, 2, width and height as floats, two zeros
   r.Blob();               // the preview picture
   m.version = r.I();
-  if (m.version != 56 && m.version != 60) return fail("unsupported scmap version");
+  // (53: the first game's maps, which the campaign's and many old custom maps still are. It differs
+  // in five places, each marked below; checked against every such map of a large collection, each
+  // read to exactly its file's end.)
+  if (m.version != 53 && m.version != 56 && m.version != 60) return fail("unsupported scmap version");
+  const bool old = m.version < 56;
   m.width = r.I();
   m.height = r.I();
   m.heightScale = r.F();
@@ -101,11 +105,12 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
   m.heights.resize(points);
   std::memcpy(m.heights.data(), file.data() + r.p, points * 2);
   r.p += points * 2;
-  r.Skip(1);
+  if (!old) r.Skip(1);
   m.shader = r.S();
   m.background = r.S();
   m.skyCubemap = r.S();
-  int cubemaps = r.I();
+  if (old) m.environmentCubemaps.emplace_back("<default>", r.S());  // (53: one environment picture, unnamed)
+  int cubemaps = old ? 0 : r.I();
   for (int i = 0; i < cubemaps && r.ok; ++i) {
     std::string name = r.S();
     m.environmentCubemaps.emplace_back(std::move(name), r.S());
@@ -157,15 +162,36 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
     r.S();
     r.Skip(4 * (3 + 1 + 3 + 10));
   }
-  r.Skip(4 * 6);                     // minimap contour interval and colours
-  if (m.version > 56) r.Skip(4);
-  for (MapLayer& layer : m.albedo) {
-    layer.texture = r.S();
-    layer.scale = r.F();
-  }
-  for (MapLayer& layer : m.normal) {
-    layer.texture = r.S();
-    layer.scale = r.F();
+  if (old) {
+    // 53: no minimap colours; a tile set's name, then the layers one after another, each with its
+    // colour and normal pictures and their two scales: the lower layer, the strata, and last the
+    // upper layer (whose normal picture is not used)
+    r.S();
+    const int layers = r.I();
+    if (layers < 0 || layers > 32) return fail("bad layer count");
+    for (int i = 0; i < layers && r.ok; ++i) {
+      MapLayer albedo, normal;
+      albedo.texture = r.S();
+      normal.texture = r.S();
+      albedo.scale = r.F();
+      normal.scale = r.F();
+      if (i == layers - 1 && layers > 1) m.albedo[9] = albedo;
+      else if (i < 9) {
+        m.albedo[static_cast<size_t>(i)] = albedo;
+        m.normal[static_cast<size_t>(i)] = normal;
+      }
+    }
+  } else {
+    r.Skip(4 * 6);                     // minimap contour interval and colours
+    if (m.version > 56) r.Skip(4);
+    for (MapLayer& layer : m.albedo) {
+      layer.texture = r.S();
+      layer.scale = r.F();
+    }
+    for (MapLayer& layer : m.normal) {
+      layer.texture = r.S();
+      layer.scale = r.F();
+    }
   }
   r.Skip(8);
 
@@ -203,8 +229,9 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
     std::string dds = r.Blob();
     if (i == 0) m.normalMap = std::move(dds);
   }
+  if (old) r.Skip(4);  // (53: one number more, and one layer mask only)
   m.maskLow = r.Blob();
-  m.maskHigh = r.Blob();
+  if (!old) m.maskHigh = r.Blob();
   int waterMaps = r.I();
   for (int i = 0; i < waterMaps && r.ok; ++i) {
     std::string dds = r.Blob();

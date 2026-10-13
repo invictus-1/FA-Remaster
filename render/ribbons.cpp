@@ -34,10 +34,12 @@ struct VOut {
   float2 uv : TEXCOORD0;
   float2 rampUv : TEXCOORD1;
   float4 color : COLOR;
+  float3 world : TEXCOORD2;
 };
 VOut VS(VIn i) {
   VOut o;
   o.position = mul(viewProj, float4(i.position, 1));
+  o.world = i.position;
   o.uv = i.uv;
   o.rampUv = i.rampUv;
   o.color = i.color;
@@ -51,6 +53,10 @@ float4 PS(VOut i) : SV_Target {
   if (look > 0.5 && weather.z > 0) {  // thick air between it and the eye
     float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
     c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor(), lost);
+  }
+  if (look > 0.5 && mist.x > 0) {  // and the mist on low ground
+    float lost = MistLost(i.world);
+    c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor(), lost);
   }
   if (options.w > 0.5) c.a = 1;  // (the device's adding blend weighs by alpha)
   return c;
@@ -114,6 +120,15 @@ bool Ribbons::Init(std::string* error) {
 // Blendmode adds, without Length is 10 long; a trail's TrailLength is how long a place stays, in
 // ticks; v runs along the band; a beam's RepeatRate and a trail's TextureRepeatRate are repeats of
 // the texture per world unit; UShift and VShift slide a beam's texture, per tick.
+bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* color) {
+  const Kind* kind = Blueprint(blueprint);
+  if (!kind->ok || kind->blend != 2) return false;
+  rampPath->clear();
+  if (kind->trail) *rampPath = kind->rampPath;
+  else *color = Vec3{kind->startColor[0], kind->startColor[1], kind->startColor[2]} * std::min(kind->startColor[3] * 4, 1.0f);
+  return kind->trail ? !rampPath->empty() : true;
+}
+
 const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
   const std::string key = moho::Vfs::Normalize(path);
   auto known = kinds_.find(key);
@@ -130,6 +145,7 @@ const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
     kind->trail = true;
     kind->texture = textures_->Get(v["RepeatTexture"].StringOr(std::string()), textures_->White());
     kind->ramp = textures_->Get(v["RampTexture"].StringOr(std::string()), textures_->White());
+    kind->rampPath = v["RampTexture"].StringOr(std::string());
     kind->blend = BlendKind(static_cast<int>(Number(v["BlendMode"], 3)));
     kind->halfWidth = Number(v["Size"], 0.1f);
     kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);

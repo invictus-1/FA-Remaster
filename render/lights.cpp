@@ -31,6 +31,14 @@ void Lights::Add(Vec3 position, float radius, Vec3 color) {
   if (radius > 0) lights_.push_back(Light{position, radius, color, 1, {}, -2});
 }
 
+Vec3 Lights::RampGlow(const std::string& ramp) {
+  const std::vector<Vec3>& colors = *Ramp(ramp);
+  Vec3 best{0, 0, 0};
+  for (const Vec3& c : colors)
+    if (c.x + c.y + c.z > best.x + best.y + best.z) best = c;
+  return best;
+}
+
 void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow) {
   if (radius <= 0) return;
   Light light{position, radius, color, 1, {}, -2};

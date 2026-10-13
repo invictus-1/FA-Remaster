@@ -69,6 +69,8 @@
 //           FogOfWar "unexplored")
 // Key B: life bars over units on and off.
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
+// --mist <0..1>  with a time of day: how much mist lies on low ground and over water (unless given: by the
+//           hour and the weather, most at daybreak)
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
 // --find shield|wreck|<unit id>  with a game: once it is where --tick asks, the camera goes to the first shield's bubble,
@@ -156,6 +158,7 @@ struct Options {
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
+  float mist = -1;                      // --mist
   int focus = 0;                        // --focus
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
@@ -167,6 +170,7 @@ struct Options {
   std::string find;                     // --find
   bool show = false;                    // --show
   bool bars = false;                    // --bars
+  float shotLight = 1;                  // --shot-light
   int shots = 0;                        // --shots
   std::string animate;                  // --animate: an .sca file of the game's
   float animateAt = -1;                 // ... and where in it (0..1); below 0: it plays
@@ -274,10 +278,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
+    else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--find") o->find = v;
     else if (a == "--shots") o->shots = atoi(v);
+    else if (a == "--shot-light") o->shotLight = static_cast<float>(atof(v));  // how strong the light of shots in flight is (0: none; below 0: on and off by turns of 30 frames, to compare)
     else if (a == "--animate") {  // <file.sca>[,<fraction>]
       o->animate = v;
       const size_t comma = o->animate.rfind(',');
@@ -475,6 +481,7 @@ int main(int argc, char** argv) {
   world.exposure = opt.exposure;
   world.timeOfDay = opt.timeOfDay;
   world.cloudCover = opt.clouds;
+  world.mist = opt.mist;
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
   if (opt.soften >= 0) world.particles.soften = opt.soften;
@@ -1179,6 +1186,7 @@ int main(int argc, char** argv) {
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
     }
+    effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
     if (playing) world.AddFrame(frame, armyColors);
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
     if (!opt.find.empty() && haveLive && !(automatic && liveBusy) && frameCount == 1) {
@@ -1201,6 +1209,27 @@ int main(int argc, char** argv) {
           }
         }
         if (best > -1e8f) printf("render: --find dying: one %.1f above the ground at %.0f, %.0f\n", best, camera.target.x, camera.target.z);
+      } else if (opt.find == "fight") {  // where the most shots are in flight: the shot with the most others near it
+        size_t best = 0;
+        int most = -1;
+        for (size_t a = 0; a < frame.projectiles.size(); a += std::max<size_t>(frame.projectiles.size() / 200, 1)) {
+          int near = 0;
+          for (const FrameProjectile& b : frame.projectiles) {
+            const float dx = b.position[0] - frame.projectiles[a].position[0], dz = b.position[2] - frame.projectiles[a].position[2];
+            const float speed2 = b.velocity[0] * b.velocity[0] + b.velocity[1] * b.velocity[1] + b.velocity[2] * b.velocity[2];
+            if (dx * dx + dz * dz < 30 * 30 && speed2 > 25) ++near;  // (what flies: the UEF's build slices stand still)
+          }
+          if (near > most) {
+            most = near;
+            best = a;
+          }
+        }
+        if (most > 0) {
+          const FrameProjectile& p = frame.projectiles[best];
+          camera.target = {p.position[0], world.HaveMap() ? world.GroundHeight(p.position[0], p.position[2]) : p.position[1], p.position[2]};
+          camera.distance = 45;
+          printf("render: --find fight: %d shots within 30 of %.0f, %.0f\n", most, camera.target.x, camera.target.z);
+        }
       } else if (opt.find == "wreck") {
         const std::vector<Vec3> wrecks = world.WreckPlaces(1);
         if (!wrecks.empty()) {
@@ -1278,6 +1307,7 @@ int main(int argc, char** argv) {
             printf("; shell %s of size %.1f, %.1f, %.1f at %.0f, %.0f", (*frame.blueprints)[q.blueprint].c_str(), q.size[0], q.size[1], q.size[2], q.position[0], q.position[2]);
         printf("; camera at %.0f, %.0f", camera.target.x, camera.target.z);
         printf("; %d units in their death drawn", world.dyingDrawn);
+        printf("; %d lights from shots and beams", effects.shotLights);
         {  // (what the scripts have made that has a mesh, by mesh: to tell what a shape in the picture is)
           std::map<std::string, int> made;
           for (const FrameEntity& f : frame.entities)

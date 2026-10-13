@@ -45,6 +45,7 @@ struct VOut {
   float4 position : SV_Position;
   float2 uv : TEXCOORD0;
   float2 rampUv : TEXCOORD1;
+  float3 world : TEXCOORD2;
 };
 
 VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
@@ -86,6 +87,7 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
     else position += (turned.x * cameraRight.xyz + turned.y * cameraUp.xyz) * size;
   }
   o.position = mul(viewProj, float4(position, 1));
+  o.world = position;
   o.uv = (corner + 1) * 0.5;
   if (options.y > 0.5) {
     o.uv.x = (o.uv.x + floor(p3.w * t)) * sheet.x;
@@ -143,6 +145,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     if (weather.z > 0) {  // thick air between it and the eye: its own light is lost in it, its colour goes to the air's
       float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
       c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor() * (options.z > 2.5 ? c.a : 1), lost);
+    }
+    if (mist.x > 0) {  // and the mist on low ground
+      float lost = MistLost(i.world);
+      c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor() * (options.z > 2.5 ? c.a : 1), lost);
     }
   }
   if (options.z > 2.5) c *= meets;  // (premultiplied: the colour carries its alpha)
@@ -309,6 +315,16 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
 Particles::Emitter* Particles::Find(uint32_t id) {
   auto it = index_.find(id);
   return it == index_.end() ? nullptr : &emitters_[it->second];
+}
+
+bool Particles::Glows(uint32_t emitter, std::string* rampPath, float* scale) const {
+  auto it = index_.find(emitter);
+  if (it == index_.end()) return false;
+  const Emitter& e = emitters_[it->second];
+  if (!e.blueprint || (e.blueprint->blendMode != 2 && e.blueprint->blendMode != 3) || e.blueprint->rampPath.empty()) return false;
+  *rampPath = e.blueprint->rampPath;
+  *scale = e.scale;
+  return true;
 }
 
 void Particles::SetScale(uint32_t emitter, float scale) {
