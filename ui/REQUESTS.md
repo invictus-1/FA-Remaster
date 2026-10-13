@@ -239,7 +239,7 @@ the player's commander destroys itself (the game's own way: `SimCallback ToggleS
 with the unit selected), it dies, and then nothing: no defeat is announced, the game runs on.
 The simulation's log has the reason:
 ```
-...\lua\simictoryconditionbstractvictorycondition.lua:341: access to nonexistent global variable "SetCommandSource"
+.../lua/sim/victorycondition/abstractvictorycondition.lua:341: access to nonexistent global variable "SetCommandSource"
     ... in function `ToObserver'   (405) in function `DefeatForArmy'   unitcondition.lua(62) `EvaluateVictoryCondition'
 ```
 `DefeatForArmy` calls `ToObserver` (which calls `SetArmyOutOfGame`, `ArmyIsOutOfGame`, both
