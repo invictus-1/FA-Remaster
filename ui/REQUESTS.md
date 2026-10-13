@@ -420,6 +420,33 @@ main 601a410): the original's factory build task sets the factory's work progres
 ends, however it ends (0x5fa010), and ours had left the factory out of that. Repeated in my
 build: 0.499 before the Stop, 0.000 one second and four seconds after; the bar is gone.
 
+### 17. A building can be set INSIDE another building's skirt (and is built there)
+From Chris's game on main da2e9c5 (2026-10-13), now that the interface draws the skirts of the
+buildings that stand while one is being placed (his words): "Building sizing error it seems like
+the pgen can be within the land factory structure size when it shouldn't ... the square around
+the factory is where nothing can be build as in nothing can go inside the square." His picture:
+`pgen_can_be_placed_inside_factory_outline.webp` in the folder of his others
+(`_scratch\ui\chris_20261013\`): a T1 power generator's guide, green, with its site inside the
+blue outline of a UEF land factory that is being built. He also says this is why his generators
+"next to" a factory gave no adjacency before: without the outlines he had set them inside it.
+
+Reproduced in my build (session `session_ai_daynight.lua`, seed 7), all by the player's orders:
+- a land factory ueb0101 built at 688.5, 346.5: Footprint 5 x 5 (686 to 691 along x),
+  SkirtSizeX 8 with SkirtOffsetX -1.5 (684.5 to 692.5);
+- a generator ueb1101 (2 x 2) ordered at 685.0, 347.5: `BuildSiteOf` answers a free site and the
+  simulation builds it at 684.5, 347.5, taking 683.5 to 685.5: one map unit INSIDE the
+  factory's skirt, clear of its footprint.
+
+So both the preview's answer and the build itself test against footprints only. Asked: what the
+original tests a new building's ground against (Chris: the whole square, which is the skirt; he
+knows the original well, and its adjacency works from skirt to skirt), and ours the same, in
+`BuildSiteOf` and in the order itself. The interface draws the outline from the blueprint's skirt
+size centred on the unit (the offsets of the stock buildings centre it); if the original's
+rectangle is another, tell me and I draw that.
+Not blocking, but Chris met it in his first minutes with the outlines.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

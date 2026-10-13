@@ -203,11 +203,17 @@ float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float positi
     else if (it->second.variable == "CameraDistance") decibels += it->second.At(eyeDistance);
   }
   // Between the ears by where it is on screen: at the screen's edge about two thirds to one side. (Ours.)
+  // The two ears SHARE the sound: one in the middle has half in each, as a sound placed in the
+  // world has in the original (its sound library spreads one channel over the two speakers; the
+  // game's own curve for that spreading is flat, 0xf61398, so nothing else is taken off there).
+  // INFERRED that the share is half and half, not read: the library is not part of the game's
+  // program; Chris, 2026-10-13, hearing ours beside the original with a full share in each ear:
+  // "cut it in half and I think we got the og sound".
   float side = ((position[0] - focus_[0]) * right_[0] + (position[2] - focus_[2]) * right_[2]) / std::max(1.0f, zoom_ * 0.5f);
   side = std::max(-1.0f, std::min(1.0f, side));
   float gain = Linear(decibels);
-  *left = gain * (1.0f - std::max(0.0f, side) * 0.65f);
-  *right = gain * (1.0f + std::min(0.0f, side) * 0.65f);
+  *left = gain * 0.5f * (1.0f - side * 0.65f);
+  *right = gain * 0.5f * (1.0f + side * 0.65f);
   return decibels;
 }
 
