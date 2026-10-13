@@ -573,6 +573,18 @@ class WorldView : public Control {
     if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    // The box of a selection being drawn with the mouse: a thin frame from the press to the
+    // pointer. (First version of its look: one pixel, white; the original's is not measured.)
+    if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {
+      const float x0 = std::floor(std::min(pressX_, dragX_)), x1 = std::floor(std::max(pressX_, dragX_));
+      const float y0 = std::floor(std::min(pressY_, dragY_)), y1 = std::floor(std::max(pressY_, dragY_));
+      target.SetClip(r);
+      target.FillRect({x0, y0, x1 + 1, y0 + 1}, 0xffffffffu);
+      target.FillRect({x0, y1, x1 + 1, y1 + 1}, 0xffffffffu);
+      target.FillRect({x0, y0, x0 + 1, y1 + 1}, 0xffffffffu);
+      target.FillRect({x1, y0, x1 + 1, y1 + 1}, 0xffffffffu);
+      target.ClearClip();
+    }
     // The marks of the selected units' orders, each at its order's place (while the queue shows):
     // the game's own textures for them, at their own size, over the picture.
     if (waypoints_.empty()) return;
@@ -686,6 +698,9 @@ class WorldView : public Control {
   // that the drag has no end at the screen's edge; here the pointer moves.
   std::vector<WorldWaypoint> waypoints_;  // the marks of the orders shown with the picture last made
   bool cameraDrag_ = false, miniDrag_ = false;
+  // A selection by box under way: from the press to where the mouse is now (drawn as a frame).
+  bool selecting_ = false;
+  float dragX_ = 0, dragY_ = 0;
   float lastX_ = 0, lastY_ = 0;
   // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
   bool spinning_ = false;
@@ -698,6 +713,7 @@ class WorldView : public Control {
       main->focus[0] = world[0], main->focus[2] = world[2];
       return;
     }
+    if (selecting_) dragX_ = e.x, dragY_ = e.y;
     if (!cameraDrag_) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -785,18 +801,37 @@ class WorldView : public Control {
       return;
     }
     std::vector<uint32_t> ids;
+    selecting_ = false;
+    bool box = false;
     if (std::fabs(e.x - pressX_) < 4 && std::fabs(e.y - pressY_) < 4) {
       uint32_t id = UnitUnder(L, e.x, e.y);
       if (id != 0xffffffffu) ids.push_back(id);
     } else {
-      if (!EnsurePicture(L)) return;
-      WorldSource* source = UserState::From(L)->config().world;
-      Rect r;
-      GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-      source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
-                      std::max(pressY_, e.y) - r.y0, &ids);
+      box = true;
+      if (EnsurePicture(L)) {
+        WorldSource* source = UserState::From(L)->config().world;
+        Rect r;
+        GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+        source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
+                        std::max(pressY_, e.y) - r.y0, &ids);
+      } else {
+        // (Without a picture: the units whose place, by the plain view from above, lies in the box.)
+        std::vector<uint32_t> all;
+        UserUnitIds(L, false, &all);
+        for (uint32_t id : all) {
+          std::string blueprint;
+          float place[3], sx = 0, sy = 0;
+          int army = 0;
+          if (!UserUnitFacts(L, id, &blueprint, place, &army)) continue;
+          ProjectPoint(L, place, &sx, &sy);
+          if (sx >= std::min(pressX_, e.x) && sx <= std::max(pressX_, e.x) && sy >= std::min(pressY_, e.y) && sy <= std::max(pressY_, e.y)) ids.push_back(id);
+        }
+      }
     }
-    SelectUnitsById(L, ids, pressShift_);
+    // (A box takes the units of the best selection priority in it: fighting units before
+    // engineers and commanders, those before buildings. With Shift held it takes everything
+    // in it, as Chris recalls the original, 2026-10-13.)
+    SelectUnitsById(L, ids, pressShift_, box && !pressShift_);
   }
 
   // The unit under a point of the screen (its entity id; 0xffffffff: none). Without a picture:
@@ -917,6 +952,7 @@ class WorldView : public Control {
       }
     }
     pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;
+    selecting_ = true, dragX_ = e.x, dragY_ = e.y;
     UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
     return true;
   }
@@ -963,6 +999,32 @@ int l_ViewProject(lua_State* L) {
   ReadVector(L, 2, world);
   v->ProjectPoint(L, world, &sx, &sy);
   PushPoint(L, sx, sy);
+  return 1;
+}
+// UnProject(view, point) (a global, FA exe 0x872c60): the place of the world under a point of the
+// view, given as Project gives it.
+int l_UnProject(lua_State* L) {
+  WorldView* v = View(L);
+  float sx = 0, sy = 0;
+  if (lua_istable(L, 2)) {
+    for (int i = 1; i <= 2; ++i) {
+      lua_rawgeti(L, 2, i);
+      if (!lua_isnumber(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushstring(L, i == 1 ? "x" : "y");
+        lua_gettable(L, 2);
+      }
+      (i == 1 ? sx : sy) = static_cast<float>(lua_tonumber(L, -1));
+      lua_pop(L, 1);
+    }
+  }
+  float world[3] = {0, 0, 0};
+  v->Unproject(L, sx, sy, world, false);
+  lua_newtable(L);
+  for (int i = 0; i < 3; ++i) {
+    lua_pushnumber(L, world[i]);
+    lua_rawseti(L, -2, i + 1);
+  }
   return 1;
 }
 int l_ViewFalse(lua_State* L) {
@@ -1282,6 +1344,7 @@ void RegisterWorldViewBindings(lua_State* L) {
 
   const char* cam = "CameraImpl";
   SetGlobal(L, "GetCamera", l_GetCamera);
+  SetGlobal(L, "UnProject", l_UnProject);
   SetMethod(L, cam, "MoveTo", l_CamMoveTo);
   SetMethod(L, cam, "SnapTo", l_CamMoveTo);
   SetMethod(L, cam, "MoveToRegion", l_CamMoveToRegion);

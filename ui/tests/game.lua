@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 3400 --log out.log
+--            --frames 3800 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -217,6 +217,59 @@ local function run()
     local repair = (cdr:GetCommandQueue() or {})[1]
     check("the Repair button and a click on the unfinished factory: a Repair order", repair ~= nil and repair.type, "Repair")
     check("and the commander builds on at it", cdr:GetFocus() == focus, true)
+
+    -- the pause switch as the order button reads it
+    check("not paused, the button's state is off", GetIsPaused({cdr}), false)
+    SetPaused({cdr}, true)
+    WaitSeconds(0.5)
+    check("paused, it is on", GetIsPaused({cdr}), true)
+    SetPaused({cdr}, false)
+    WaitSeconds(0.5)
+    check("and off again", GetIsPaused({cdr}), false)
+
+    -- a selection by box takes the units of the best selection priority in it: over the
+    -- commander and the factory, the commander; with Shift everything in it
+    local function boxOver(a, b, with)
+        local x0, y0 = math.min(a.x, b.x) - 70, math.min(a.y, b.y) - 70
+        local x1, y1 = math.max(a.x, b.x) + 70, math.max(a.y, b.y) + 70
+        moho64ui_MouseMove(x0, y0)
+        moho64ui_MouseButton("Left", true, x0, y0, with)
+        moho64ui_MouseMove(x1, y1)
+        moho64ui_MouseButton("Left", false, x1, y1, with)
+        WaitSeconds(0.2)
+        local ids = {}
+        for _, u in GetSelectedUnits() or {} do table.insert(ids, u:GetUnitId()) end
+        table.sort(ids)
+        return table.concat(ids, " ")
+    end
+    local overCdr, overFactory = view:Project(cdr:GetPosition()), view:Project(focus:GetPosition())
+    SelectUnits({})
+    check("a box over the commander and a factory selects the commander", boxOver(overCdr, overFactory), cdr:GetUnitId())
+    SelectUnits({})
+    check("with Shift the box selects both", boxOver(overCdr, overFactory, "Shift"), table.concat({factory, cdr:GetUnitId()}, " "))
+
+    -- a factory's queue shows orders for the same thing that follow one another as one entry
+    -- (the factory is not finished: it takes its orders and waits with them)
+    SelectUnits({focus})
+    local engineer, tank = string.sub(cdr:GetUnitId(), 1, 2) .. "l0105", string.sub(cdr:GetUnitId(), 1, 2) .. "l0201"
+    for _, id in {engineer, engineer, tank, engineer, engineer} do IssueBlueprintCommand("UNITCOMMAND_BuildFactory", id, 1) end
+    WaitSeconds(0.4)
+    local function shownQueue()
+        local t = {}
+        for _, e in SetCurrentFactoryForQueueDisplay(focus) or {} do table.insert(t, e.count .. "x" .. e.id) end
+        return table.concat(t, " ")
+    end
+    check("two engineers, a tank, two engineers: three entries", shownQueue(), "2x" .. engineer .. " 1x" .. tank .. " 2x" .. engineer)
+    DecreaseBuildCountInQueue(3, 1)
+    WaitSeconds(0.4)
+    check("one less of the third", shownQueue(), "2x" .. engineer .. " 1x" .. tank .. " 1x" .. engineer)
+    IncreaseBuildCountInQueue(2, 2)
+    WaitSeconds(0.4)
+    check("two more of the second", shownQueue(), "2x" .. engineer .. " 3x" .. tank .. " 1x" .. engineer)
+    for i = 1, 3 do DecreaseBuildCountInQueue(1, 9) WaitSeconds(0.3) end
+    check("and the queue emptied again", shownQueue(), "")
+    ClearCurrentFactoryForQueueDisplay()
+    SelectUnits({cdr})
 
     -- a right click orders by what is under the cursor
     local here = cdr:GetPosition()
