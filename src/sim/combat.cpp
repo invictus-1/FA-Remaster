@@ -995,6 +995,15 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
         if (std::find(ordered.begin(), ordered.end(), t) == ordered.end()) ordered.push_back(t);
     u->blipCache.swap(ordered);
   }
+  {
+    // MOHO64_DEBUG_BLIPCACHE=<unit id>: every rebuild of that unit's list of enemies in reach
+    static const long dbgId = getenv("MOHO64_DEBUG_BLIPCACHE") ? atol(getenv("MOHO64_DEBUG_BLIPCACHE")) : -1;
+    if (dbgId >= 0 && static_cast<long>(u->id) == dbgId) {
+      std::string ids;
+      for (const Unit* t : u->blipCache) ids += " " + std::to_string(t->id);
+      Logf(LogLevel::Info, "blipcache %u unit %u period %d reach %.3f:%s", sim.tick(), u->id, period, R, ids.c_str());
+    }
+  }
   return u->blipCache;
 }
 
