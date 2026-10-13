@@ -501,6 +501,12 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
             o->position.z >= z0 && o->position.z <= z1)
           cands.push_back(o);
       for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
+      // Script-made entities that were given a collision shape are in the entity grid like everything else, and a
+      // shell asks them too: FAF's torpedo decoy (DepthCharge in defaultantiprojectile.lua, a sphere riding on the
+      // anti-torpedo shell) and its missile flare answer no to OnCollisionCheck and turn the shell onto their
+      // owner with SetNewTarget; the Loyalist's MissileRedirect works the same way.
+      for (Entity* se : sim.scriptEntities)
+        if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
       for (Entity* e : cands) {
         if (e->destroyQueued) continue;
         WorldShape ws;
@@ -529,6 +535,8 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
       for (Projectile* o : sim.projectiles)
         if (o != p) cands.push_back(o);
       for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
+      for (Entity* se : sim.scriptEntities)
+        if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
       for (Entity* e : cands) {
         if (e->destroyQueued || e == p || (p->launcher && e == p->launcher)) continue;
         WorldShape ws;
@@ -808,6 +816,16 @@ int l_weapon_CreateProjectile(lua_State* L) {
     Logf(LogLevel::Info, "wproj %u unit %u %s weapon %s randomness %g moving %d target type %d point %.9g %.9g %.9g",
          sim.tick(), u->id, u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str(), R,
          static_cast<int>(u->unitStates.count("Moving")), w->target.type, tpDbg.x, tpDbg.y, tpDbg.z);
+    Vec3 bp0;
+    Quat bq0;
+    BoneWorld(u, bone, &bp0, &bq0);
+    Logf(LogLevel::Info,
+         "wproj %u unit %u   bone %d at %.9g %.9g %.9g bone q %.9g %.9g %.9g %.9g, shell q %.9g %.9g %.9g %.9g, solution %.9g "
+         "%.9g %.9g instead of the bone %d, straight down %d, unit at %.9g %.9g %.9g q %.9g %.9g %.9g %.9g posed %d",
+         sim.tick(), u->id, bone, bp0.x, bp0.y, bp0.z, bq0.x, bq0.y, bq0.z, bq0.w, q.x, q.y, q.z, q.w, w->solution.x,
+         w->solution.y, w->solution.z, w->bp->useFiringSolutionInsteadOfAimBone ? 1 : 0, pb.straightDown ? 1 : 0,
+         u->position.x, u->position.y, u->position.z, u->orientation.x, u->orientation.y, u->orientation.z,
+         u->orientation.w, u->poseSet ? 1 : 0);
   }
   if (R > 0) {
     float g1 = Gauss(sim), g2 = Gauss(sim);

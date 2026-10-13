@@ -79,6 +79,9 @@ struct WeaponBp {
 };
 const WeaponBp& GetWeaponBp(lua_State* L, int bpRef);
 
+// AiTarget::aimBone of a target point whose bone the target's model does not have (-1: no target point at all)
+enum : int { kAimBoneMissing = -2 };
+
 // A weapon's (or projectile's) target (the original's CAiTarget).
 struct AiTarget {
   int type = 0;  // 0 none, 1 entity, 2 ground
@@ -141,6 +144,22 @@ class SlideManipulator : public ScriptObject {
 };
 // MoveManipulator 0x647300 of the unit's sliders whose precedence is in [lo, hi)
 void SlidersTick(Unit* u, int lo, int hi);
+
+// CSlaveManipulator (CreateSlaver(unit, destBone, srcBone) 0x646330, MoveManipulator 0x646140): the destination
+// bone is turned by the source bone's rotation relative to its parent AS IT WAS IN LAST BEAT'S POSE (the actor's
+// pose +8), so what it follows it follows one beat behind. FAF's weapons slave the racks of a turret
+// (RackSlavedToTurret) to its pitch bone: a destroyer's second barrel rises a beat after the first, and its
+// shells leave at that pitch.
+class SlaveManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int destBone = -1, srcBone = -1;  // +0x60's bone, +0x80
+  float maxRate = -1;               // +0x94 (SetMaxRate(degrees a second) x 0.00174532924); below 0: at once
+  Quat cur;                         // +0x84: the rotation given to the destination bone
+  Quat srcLocal;                    // the source's local rotation in the pose that is being replaced
+  bool enabled = true, alive = true;
+  int precedence = 0;
+};
 
 // CCollisionManipulator (CreateCollisionDetector 0x638020, ManipulatorUpdate 0x637c90): watches bones of a unit
 // and tells the unit's script when one goes under the surface and when it comes back up (EnableTerrainCheck:

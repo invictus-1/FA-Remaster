@@ -187,6 +187,7 @@ class Unit : public Entity {
   Quat poseBaseOri, prevPoseBaseOri;
   bool poseSet = false;
   std::vector<class SlideManipulator*> sliders;
+  std::vector<class SlaveManipulator*> slavers;  // CreateSlaver
   std::vector<class CollisionManipulator*> colliders;  // CreateCollisionDetector
   std::vector<ScriptObject*> animators;  // its CAnimationManipulators, in creation order (sim/anim.cpp)
   std::vector<class RotateManipulator*> rotators;

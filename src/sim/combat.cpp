@@ -357,6 +357,14 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
     BoneWorld(u, bone, &p, &q);
     return p;
   }
+  if (bone == kAimBoneMissing) {
+    // A target point whose bone the model does not have (ues0201 lists 'UES0202', the cruiser's root): the point
+    // is asked of Unit::GetBoneWorldTransform with bone -1, which is the pose's own place and half the unit's
+    // SizeY above it (0x6aa637), without the collision offset the centre below has.
+    const Vec3& bp = u->poseSet ? u->poseBasePos : u->position;
+    const Quat& bq = u->poseSet ? u->poseBaseOri : u->orientation;
+    return Add(bp, RotateM(bq, Vec3{0.0f, u->bpSizeY * 0.5f, 0.0f}));
+  }
   if (u->blueprint) return Add(u->position, RotateM(u->orientation, u->bpCenter));  // bone -1 (0x679d19)
   return u->position;
 }
@@ -384,7 +392,7 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
 // primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
 // has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
-  if (t.type == 1 && t.aimBone < 0)
+  if (t.type == 1 && t.aimBone == -1)
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
         return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
@@ -821,6 +829,8 @@ int TargetPointDraw(Sim& sim, Entity* e) {
   return static_cast<int>(sim.IntRange(static_cast<uint32_t>(cb.targetBones.size())));
 }
 
+int TargetBoneOf(const Entity* e, const std::string& name);
+
 // CAiTarget::UpdateTarget 0x5d55b0 for a target that keeps its pick (a shell's): the draw, and the bone it names
 // (-1: no target bones, or no unit).
 int TargetPointBone(Sim& sim, Entity* e) {
@@ -829,7 +839,14 @@ int TargetPointBone(Sim& sim, Entity* e) {
   if (e->kind == Entity::Kind::Blip) e = static_cast<ReconBlip*>(e)->source;
   if (!e || e->kind != Entity::Kind::Unit || !e->skeleton) return -1;
   const CombatBpData& cb = CB(static_cast<Unit*>(e));
-  return idx < static_cast<int>(cb.targetBones.size()) ? e->skeleton->Find(cb.targetBones[static_cast<size_t>(idx)]) : -1;
+  return idx < static_cast<int>(cb.targetBones.size()) ? TargetBoneOf(e, cb.targetBones[static_cast<size_t>(idx)]) : -1;
+}
+
+// The bone a target point's name stands for; a name the model does not have is still a target point
+// (kAimBoneMissing: UnitTargetPoint).
+int TargetBoneOf(const Entity* e, const std::string& name) {
+  const int b = e->skeleton ? e->skeleton->Find(name) : -1;
+  return b >= 0 ? b : kAimBoneMissing;
 }
 
 namespace {
@@ -844,7 +861,7 @@ int PickAimBone(Sim& sim, Entity* e) {
   const CombatBpData& cb = CB(tu);
   if (cb.targetBones.empty()) return -1;
   size_t i = sim.IntRange(static_cast<uint32_t>(cb.targetBones.size()));
-  return e->skeleton->Find(cb.targetBones[i]);
+  return TargetBoneOf(e, cb.targetBones[i]);
 }
 
 // Unit::PickTargetPointAboveWater 0x6aafb0 / ...BelowWater 0x6ab190 (weapons with AboveWaterTargetsOnly /
@@ -859,10 +876,10 @@ bool PickPointBeside(Sim& sim, Entity* e, int* bone, bool above, std::vector<int
   const float wl = WaterLevel(sim);
   if (cb.targetBones.empty() || !e->skeleton) return above ? tu->position.y > wl : wl > tu->position.y;
   for (const std::string& name : cb.targetBones) {
-    int b = e->skeleton->Find(name);
-    Vec3 p;
-    Quat q;
-    BoneWorld(e, b < 0 ? 0 : b, &p, &q);
+    // (Unit::GetTargetPoint 0x6ab340 for each index: a name the model lacks gives the point half the unit's
+    // height above its origin, which for a ship is above the water: it is in the list and can be drawn)
+    const int b = TargetBoneOf(e, name);
+    const Vec3 p = UnitTargetPoint(tu, b);
     if (above ? p.y > wl : wl > p.y) pts->push_back(b);
   }
   return !pts->empty();
@@ -1723,7 +1740,7 @@ Vec3 Aim(Sim& sim, AimController* c) {
   // target that already moved this beat is still seen where it stood
   Vec3 tPos;
   Unit* tu = te && te->kind == Entity::Kind::Unit ? static_cast<Unit*>(te) : nullptr;
-  if (tu && w->target.aimBone < 0 && tu->lastPosTick == sim.tick()) {
+  if (tu && w->target.aimBone == -1 && tu->lastPosTick == sim.tick()) {
     const Vec3 curPos = tu->position;
     const Quat curOri = tu->orientation;
     tu->position = tu->lastPosition;
@@ -1832,7 +1849,8 @@ void PoseAdvance(Unit* u) {
 
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
-  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() && !anims) {
+  if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
+      u->slavers.empty() && !anims) {
     if (!u->colliders.empty()) CollidersTick(sim, u);
     return;
   }
@@ -1850,9 +1868,39 @@ void UnitAimTick(Sim& sim, Unit* u) {
     u->poseBasePos = curPos;
     u->poseBaseOri = curOri;
   }
+  // slavers read their source bone from the pose that is about to be replaced (last beat's: 0x646164)
+  if (!u->slavers.empty()) {
+    auto& sv = u->slavers;
+    sv.erase(std::remove_if(sv.begin(), sv.end(), [](SlaveManipulator* m) { return !m->alive; }), sv.end());
+    const auto& bones = u->skeleton->bones();
+    const bool posed = u->poseQ.size() == bones.size();
+    for (SlaveManipulator* m : sv)
+      if (m->srcBone >= 0 && static_cast<size_t>(m->srcBone) < bones.size())
+        m->srcLocal = posed ? u->poseQ[static_cast<size_t>(m->srcBone)] : bones[static_cast<size_t>(m->srcBone)].localRot;
+  }
   PoseReset(u);
   if (anims) AnimatorsUpdate(sim, u);  // (precedence 0, usually the unit's first manipulators)
   RotatorsTick(u);
+  for (SlaveManipulator* m : u->slavers) {  // CSlaveManipulator::MoveManipulator 0x646140
+    if (!m->enabled || m->destBone < 0 || m->srcBone < 0) continue;
+    if (m->maxRate >= 0.0f) {
+      // (0x4eb830: toward the source's rotation by at most the rate; no script in the game files sets one, and
+      // this is a plain shortest-arc step, not read from the exe)
+      const Quat d = ComposeQ(Conj(m->cur), m->srcLocal);
+      const float w = std::fmin(1.0f, std::fabs(d.w));
+      const float ang = 2.0f * std::acos(w);
+      if (ang <= m->maxRate || ang < 1e-6f) {
+        m->cur = m->srcLocal;
+      } else {
+        const float k = m->maxRate / ang, s = std::sin(ang * 0.5f), sk = std::sin(ang * 0.5f * k);
+        const float sign = d.w < 0 ? -1.0f : 1.0f, f = s > 1e-9f ? sk / s * sign : 0.0f;
+        m->cur = QNorm(ComposeQ(m->cur, Quat{d.x * f, d.y * f, d.z * f, std::cos(ang * 0.5f * k)}));
+      }
+    } else {
+      m->cur = m->srcLocal;
+    }
+    PoseRotate(u, m->destBone, m->cur);  // (0x646289: the destination's local rotation x that)
+  }
   // manipulators run in the order of their precedence (0x63ace0): a slider below every aim controller's goes first
   int aimPrec = INT_MAX;
   for (const AimController* c : u->aimControllers)
@@ -2100,7 +2148,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
         if (t.targetPoint >= 0 && t.targetPoint < static_cast<int>(cb.targetBones.size()) && e->skeleton)
-          a.aimBone = e->skeleton->Find(cb.targetBones[static_cast<size_t>(t.targetPoint)]);
+          a.aimBone = TargetBoneOf(e, cb.targetBones[static_cast<size_t>(t.targetPoint)]);
       }
   } else {
     a.type = 2;
@@ -3609,6 +3657,49 @@ int l_slide_Destroy(lua_State* L) {
   if (o) o->UnbindLua();
   return 0;
 }
+// CreateSlaver(unit, dest_bone, src_bone) 0x646330
+int l_CreateSlaver(lua_State* L) {
+  Unit* u = ToObject<Unit>(L, 1);
+  auto m = std::make_unique<SlaveManipulator>();
+  m->unit = u;
+  if (u && u->skeleton) {
+    m->destBone = ResolveBoneArg(L, u, 2);
+    m->srcBone = ResolveBoneArg(L, u, 3);
+  }
+  SlaveManipulator* raw = m.get();
+  if (u && u->skeleton) u->slavers.push_back(raw);
+  else raw->unit = nullptr;
+  CreateObject(L, raw, "CSlaveManipulator");
+  S(L)->Own(std::move(m));
+  return 1;
+}
+SlaveManipulator* CheckSlaver(lua_State* L) { return CheckObject<SlaveManipulator>(L, 1); }
+int l_slaver_SetMaxRate(lua_State* L) {  // 0x646510: degrees a second
+  CheckSlaver(L)->maxRate = static_cast<float>(luaL_checknumber(L, 2)) * 0.00174532924f;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slaver_SetPrecedence(lua_State* L) {
+  CheckSlaver(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slaver_Enable(lua_State* L) {
+  CheckSlaver(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slaver_Disable(lua_State* L) {
+  CheckSlaver(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_slaver_Destroy(lua_State* L) {
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* m = dynamic_cast<SlaveManipulator*>(o)) m->alive = false;
+  if (o) o->UnbindLua();
+  return 0;
+}
 }  // namespace
 
 void RegisterCombatBindings(lua_State* L) {
@@ -3651,6 +3742,12 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CSlideManipulator", "Enable", l_slide_Enable);
   SetMethod(L, "CSlideManipulator", "Disable", l_slide_Disable);
   SetMethod(L, "CSlideManipulator", "Destroy", l_slide_Destroy);
+  SetGlobal(L, "CreateSlaver", l_CreateSlaver);
+  SetMethod(L, "CSlaveManipulator", "SetMaxRate", l_slaver_SetMaxRate);
+  SetMethod(L, "CSlaveManipulator", "SetPrecedence", l_slaver_SetPrecedence);
+  SetMethod(L, "CSlaveManipulator", "Enable", l_slaver_Enable);
+  SetMethod(L, "CSlaveManipulator", "Disable", l_slaver_Disable);
+  SetMethod(L, "CSlaveManipulator", "Destroy", l_slaver_Destroy);
   SetMethod(L, "CAimManipulator", "SetFiringArc", l_aim_SetFiringArc);
   SetMethod(L, "CAimManipulator", "SetResetPoseTime", l_aim_SetResetPoseTime);
   SetMethod(L, "CAimManipulator", "OnTarget", l_aim_OnTarget);

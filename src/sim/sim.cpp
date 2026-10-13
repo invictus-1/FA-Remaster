@@ -1514,6 +1514,15 @@ void Sim::Tick() {
       if (!p || p->destroyQueued) continue;
       HoldShape(e);
       BoneWorld(p, e->attachBone, &e->position, &e->orientation);
+      if (p->kind == Entity::Kind::Projectile) {
+        // On a shell (FAF's torpedo decoy and missile flare ride on one): the shell's transform as the beat began
+        // (what is committed; its step of this beat is not), and bone -1 is its centre, half its SizeY above its
+        // origin. Seen in the original's shell lines: two torpedoes turn onto their decoys in the beat they come
+        // within the decoy's radius of where its shell was two beats before, measured from that centre.
+        e->position = p->shapeHeld ? p->shapePos : p->position;
+        e->orientation = p->shapeHeld ? p->shapeOri : p->orientation;
+        if (e->attachBone == -1 && p->blueprint) e->position = vm::Add(e->position, vm::RotateM(e->orientation, p->bpCenter));
+      }
       // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform 0x6aa637):
       // a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its origin
       // before the ShieldVerticalOffset)

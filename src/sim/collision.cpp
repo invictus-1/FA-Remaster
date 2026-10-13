@@ -246,6 +246,7 @@ static void RevertShape(lua_State* L, Entity* e) {
         oz = lu::Num(L, t, "CollisionOffsetZ", 0);
   lua_settop(L, top);
   e->bpCenter = {ox, sy * 0.5f + oy, oz};
+  e->bpSizeY = sy;
   if (type == "Box") {
     e->shape.type = ShapeType::Box;
     e->shape.center = {ox, oy + sy * 0.5f, oz};

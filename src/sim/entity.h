@@ -69,6 +69,7 @@ class Entity : public ScriptObject {
   // (CollisionOffsetX, SizeY / 2 + CollisionOffsetY, CollisionOffsetZ) of the blueprint: the point "bone -1" of
   // Entity::GetBoneWorldTransform 0x679ce0 (what a weapon aims at on a unit without target bones)
   Vec3 bpCenter;
+  float bpSizeY = 1;  // the blueprint's SizeY (a unit's "bone -1" is half of it above its origin, 0x6aa637)
   // This beat's pose (CAniPose): every bone's local transform, reset to the skeleton's rest values each beat
   // (UpdateBones 0x54b5f0, positions x the mesh scale) and then changed by the unit's manipulators in turn.
   // Empty: the rest pose.
