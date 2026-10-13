@@ -889,6 +889,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       u->clearKeepsMove = keep;
       ForgetUnitCommands(u);
       u->clearKeepsMove = false;
+      // CUnitMoveTask's destructor takes the unit out of state Moving FIRST (0x6187bd: bit 2 of unit+0x4a0) and
+      // aborts the move after it (0x618884). The abort's CheckCollisions therefore sees this unit as standing:
+      // "a standing unit has priority over a mover". When one Stop reaches two neighbours, the first one torn
+      // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
+      // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
+      if (moveAsleep) SetMoving(u, false);
       if (!keep && hadCommands) MotionStop(u);
       if (moveAsleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
