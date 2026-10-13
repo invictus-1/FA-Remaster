@@ -39,6 +39,15 @@ EconomyThreatLevel +0x18, ArmorType +0x1c (a string, 0x1c bytes long), which lea
 the shield struct (ShieldSize +0, RegenAssistMult +4) at +0x38. I did not find the entry that names the shield
 struct's place in Defense, and I did not read 0x7ec980.
 
+**Corrected by the interface track the same day (their main 6926a52), so that nobody builds on what follows:**
+the picture's scale was not 1 : 1. FAF's `/lua/system/blueprints-units.lua` sets `AI.StagingPlatformScanRadius =
+Economy.MaxBuildDistance + the footprint's size + 1` for engineers and commanders, so the "Miscellaneous" ring IS
+the build range (12 on the commander as the game runs it, not the file's 0), and with that ring as the scale the
+thick red one is the direct fire weapons' 22. The extractor at 0x7ec980 halves +0x458 (ShieldSize is a
+diameter). And +0x564 is read by the world view at 0x853f56, a plain circle of MaxBuildDistance round each
+selected builder in the "buildanchored" mode. My two points below about the ring at 10 and "none of these" are
+therefore wrong; the offsets and block starts above stand.
+
 **For Chris's picture** (your reading, with the blueprint's numbers beside it; the scale is 1 : 1, the
 commander's OmniRadius is 24):
 
