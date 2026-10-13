@@ -37,7 +37,22 @@ constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader'
 //   strength stands for metal, highlight strength for smoothness, with each faction's own weights;
 //   Seraphim surfaces are metal throughout, coloured by a light alloy plus their detail picture.
 //   Props are plain rough surfaces.
-// A unit under construction is simply darker (the build effects are not written yet).
+// A unit under construction (its fraction complete rides in the colour's alpha) is drawn by whose
+// it is. The original has a look of its own for each faction's building, and these keep to what
+// each of them is about without copying it:
+//   UEF (and whatever has no faction's look): built from the ground up. Under the level of the
+//     work the finished surface, with a line of light at the level; above it only a blue lattice
+//     of light with a band running up it, and nothing between its lines.
+//   Cybran: put together plate by plate, in no order; a new plate glows red for a moment, and
+//     where a plate is missing there is a red lattice.
+//   Aeon: it rises out of the ground, a little smaller at first, as liquid metal that sets into
+//     its own surface over the last quarter (the original: sunk by its height until 80 %, here by
+//     four fifths of it so that its top shows from the start; three
+//     quarters of its size at first).
+//   Seraphim: it grows from a quarter of its size, dark and glowing, and takes its surface over
+//     the second half (the original: from a quarter of its size).
+// In all of them the team colour comes in over the last tenth, as in the original. What has no
+// team mask (a prop, a mod's unit drawn as one) is only darker while it is built.
 //
 // Bones: every vertex follows one bone. A model at rest is drawn as its file holds it; for a posed
 // one the vertex is first moved by its bone's matrix (three rows in the bone buffer).
@@ -58,7 +73,8 @@ cbuffer MeshKind : register(b3) {
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
                 // y: 1 = leaves (ModelLod::leaves); z: 1 = a remastered level without its material texture;
                 // w: 1 = the map's border (ModelLod::border)
-  float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units
+  float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units;
+                // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -83,6 +99,7 @@ struct VOut {
   float4 uv : TEXCOORD1;
   float4 color : COLOR;
   float3 tint : TEXCOORD2;
+  float3 shape : TEXCOORD3;  // the place on the model in heights of the model; y: 0 at its foot .. 1 at its top
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
@@ -99,6 +116,16 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     binormal = mul(turn, binormal);
   }
   VOut o;
+  o.shape = float3(p.x, p.y - kind3.z, p.z) * kind3.w;
+  [branch] if (n.color.a < 0.999 && kind.z < 0.5) {  // a unit under construction
+    int whose = int(kind2.x + 0.5);
+    if (whose == 1) {  // Aeon: out of the ground, a little smaller at first
+      p.xyz *= max(0.75, n.color.a);
+      p.y -= 0.8 * (1 - min(1, 1.25 * n.color.a)) / kind3.w;  // (its top shows from the start)
+    } else if (whose == 3) {  // Seraphim: it grows
+      p.xyz *= 0.25 + 0.75 * n.color.a;
+    }
+  }
   o.world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
   [branch] if (kind3.x > 0) {
     // the wind: the higher on the model, the farther it is carried; every tree on its own beat (by
@@ -123,9 +150,46 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   return o;
 }
 
-// shadow maps: depth only, with foliage's holes
+// A unit under construction: how much of the finished surface shows at a place of the model
+// (0..1; below 0: nothing is there yet), and the light of the work itself.
+float BuildSolid(int faction, float f, float3 shape, out float3 work) {
+  work = 0;
+  if (faction == 1) return saturate((f - 0.75) * 4);  // Aeon: liquid metal until it sets
+  if (faction == 3) {  // Seraphim: a glowing form that takes its surface
+    work = float3(0.45, 0.7, 1.0) * (1 - f);
+    return saturate((f - 0.5) * 2);
+  }
+  if (faction == 2) {  // Cybran: plate by plate
+    float since = f * 1.08 - CloudHash(floor(shape * 6) + 3.1);  // above 0: this plate is in
+    if (since > 0) {
+      work = float3(1.0, 0.12, 0.05) * (saturate(1 - since / 0.04) * 1.2);
+      return 1;
+    }
+    float3 g = abs(frac(shape * 7 + shape.yzx * 7) - 0.5);
+    float wire = 1 - smoothstep(0.0, 0.05, min(g.x, min(g.y, g.z)));
+    work = float3(1.0, 0.12, 0.05) * (wire * (1.5 + 0.5 * sin(time * 5 + shape.y * 30)));
+    return wire > 0.3 ? 0 : -1;
+  }
+  // the UEF, and whatever else: from the ground up
+  float level = f * 1.04 - 0.02;
+  if (shape.y <= level) {
+    work = float3(0.25, 0.6, 1.0) * (saturate(1 - (level - shape.y) / 0.035) * 3);
+    return 1;
+  }
+  float3 g = abs(frac(shape * 10) - 0.5);
+  float wire = 1 - smoothstep(0.0, 0.07, min(g.x, min(g.y, g.z)));
+  float band = saturate(1 - abs(frac(shape.y * 0.5 - time * 0.25) - 0.5) * 6);
+  work = float3(0.2, 0.55, 1.0) * (wire * (0.8 + 1.5 * band * band));
+  return wire > 0.3 ? 0 : -1;
+}
+
+// shadow maps: depth only, with foliage's holes (and nothing where a unit is not built yet)
 void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
+  if (i.color.a < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
+    float3 work;
+    clip(BuildSolid(int(kind2.x + 0.5), i.color.a, i.shape, work) - 0.5);
+  }
 }
 
 float4 Shade(VOut i, bool front) {
@@ -152,9 +216,24 @@ float4 Shade(VOut i, bool front) {
   float3 n = float3(nxy, sqrt(saturate(1 - dot(nxy, nxy))));
   float3 N = kind.y > 0.5 ? vertexNormal : normalize(n.x * normalize(i.binormal) + n.y * normalize(i.tangent) + n.z * vertexNormal);
   float shadow = SunShadow(i.world, vertexNormal);
-  float built = 0.3 + 0.7 * i.color.a;
   int faction = int(kind2.x + 0.5);
   float teamMask = kind.z > 0.5 ? 0 : (faction == 3 ? albedo.a : spec.a);
+  // under construction: by its faction (BuildSolid); what has no team mask is only darker
+  bool building = i.color.a < 0.999 && kind.z < 0.5 && kind2.w < 0.5;
+  float built = building ? 1 : 0.3 + 0.7 * i.color.a;
+  float solid = 1;
+  float3 work = 0;
+  if (building) {
+    solid = BuildSolid(faction, i.color.a, i.shape, work);
+    clip(solid);
+    work *= falling.w > 0 ? falling.w : 1;  // (less to an eye opened for the night)
+    // (a lattice's line: its own light and nothing else)
+    if (solid <= 0 && faction != 1 && faction != 3) return float4(look > 0.5 ? work * 2 : saturate(work), 1);
+    teamMask *= saturate((i.color.a - 0.9) * 10);
+    if (faction == 3) albedo.a = teamMask;
+    else spec.a = teamMask;
+    built = faction == 3 ? lerp(0.35, 1, solid) : 1;
+  }
   float3 toCamera = normalize(cameraPosition - i.world);
   // toward the silhouette (0 facing the camera, 1 edge on), and the Seraphim team colour's strength by it
   float edge = pow(1 - saturate(dot(toCamera, N)), 0.6);
@@ -216,6 +295,19 @@ float4 Shade(VOut i, bool front) {
       roughness = 0.55;
       emission = base * spec.b * 2.5;
     }
+    if (building) {
+      if (faction == 1) {  // Aeon: liquid metal that sets
+        base = lerp(float3(0.72, 0.75, 0.78), base, solid);
+        metallic = lerp(1, metallic, solid);
+        roughness = lerp(0.14, roughness, solid);
+        emission *= solid;
+      } else if (faction == 3) {  // Seraphim: dark, lit from within, more toward the silhouette
+        base *= lerp(0.25, 1, solid);
+        emission = emission * solid + work * (0.4 + 2.5 * edge * edge);
+        work = 0;
+      }
+      emission += work * 2;
+    }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
@@ -236,24 +328,24 @@ float4 Shade(VOut i, bool front) {
     float3 ambience = sunAmbience + (1 - sunAmbience) * shadowFill;
     float3 seraphim = albedo.rgb * ambience + environment * spec.r * lerp(0.35, 1, edge) +
                       float3(0.5, 0.6, 0.7) * pow(highlight, 9) * spec.g + i.color.rgb * rim * albedo.a;
-    return float4(seraphim * built, 1);
+    return float4(seraphim * built + work * (0.3 + edge), 1);
   }
   albedo.rgb = kind.z > 0.5 ? albedo.rgb * i.color.rgb : lerp(i.color.rgb, albedo.rgb, 1 - spec.a);
   if (kind.z < 0.5 && faction == 1) {  // Aeon
     float3 sun = sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
     float3 aeonLight = 0.6 * lightMultiplier * sun + (1 - sun) * shadowFill;
     float3 aeon = albedo.rgb * (2 * spec.b + aeonLight + spec.r * environment) + float3(0.8, 0.85, 1.1) * pow(highlight, 3) * spec.g;
-    return float4(aeon * built, 1);
+    return float4(lerp(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), aeon, solid), 1);
   }
   if (kind.z < 0.5 && faction == 2) {  // Cybran
     float3 sun = 2 * sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
     float3 cybranLight = lightMultiplier * sun + (1 - sun) * shadowFill;
     float3 sheen = (pow(highlight, 6) * spec.g + 0.05 * spec.r * environment) * (1 - spec.a);
-    return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built, 1);
+    return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built + work, 1);
   }
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
   float3 color = albedo.rgb * (2 * spec.b + light + 2 * environment * spec.r) + additive;
-  return float4(color * built, 1);
+  return float4(color * built + work, 1);
 }
 
 // a ghost: its shape in one colour, the light and dark of the model kept
@@ -473,9 +565,14 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    const float kind[12] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[12] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
-                            lod->sway, 1 / lod->swayHeight, 0, 0};
+                            lod->sway, 1 / lod->swayHeight, 0, 1};
+    {  // (the model's foot and height, for a unit under construction)
+      const Model* of = items_[at].entry->model;
+      kind[10] = of->boundsMin.y;
+      kind[11] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
+    }
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

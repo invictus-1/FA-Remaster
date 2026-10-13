@@ -43,6 +43,8 @@
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
+#include "placed.h"
+#include "ranges.h"
 #include "wakes.h"
 #include "water.h"
 
@@ -134,6 +136,9 @@ class World {
   };
   std::vector<Line> lines;
   std::vector<Ring> rings;
+  // Meshes the interface's script places in the world (placed.h): rally points, cursor marks,
+  // the mark where an order lands.
+  std::vector<PlacedMesh> placed;
 
   // --- settings, changeable between frames ---
   Look look = Look::Modern;
@@ -197,6 +202,8 @@ class World {
   int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
   Wakes wakes;            // the foam behind what moves on the water
+  Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
+  PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's

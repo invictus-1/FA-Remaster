@@ -14,8 +14,9 @@ beams and trails by the engine's account; not yet acted on: `SetEmitterCurvePara
 `ResizeEmitterCurve`, `SetBeamParam`, refracting particles), 11 done and in use (`BlueprintDisplays`
 is read once the game has started; models and strategic icons take their names from it, so a
 running game needs no `--display` log any more). 12 done and in use
-(`SessionSeed` seeds the weather once a game has started). 13 is a question (the whole map seen
-for three seconds at the start).
+(`SessionSeed` seeds the weather once a game has started). 13 answered (the whole map seen for
+three seconds at the start is the M28 AI's own script, in the original too; the renderer does not
+count a look in which every place is seen as exploring).
 
 ## 13. A question: the whole map is seen for three seconds at the start (2026-10-12)
 

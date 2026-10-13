@@ -4,6 +4,67 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 6: range rings as one outline, and the script's meshes in the world — both there (first form)
+
+Both are calls of `render/world_picture.h`; each takes the whole list and it stays until the next call.
+
+**a. Range rings: `SetRanges(groups, zoomNear = 10, zoomFar = 1000)`.**
+```
+struct RangeRing  { float centre[3]; float radius; float innerRadius; };   // innerRadius 0: none
+struct RangeGroup { uint32_t color;            // 0xAARRGGBB, the first byte is NOT read
+                    int glow;                  // 0..255: pass the colour's first byte here
+                    float outerNear, outerFar; // the script's Outer pair, world units
+                    float innerNear, innerFar; // the script's Inner pair
+                    std::vector<RangeRing> rings; };
+```
+One group = one filter in one colour (so a filter whose selected units have another colour than
+its others is two groups). All rings of a group show as ONE outline round the ground they cover
+together; a ring inside what the others cover does not show; an inner radius cuts a hole, and the
+hole has its outline where no other ring of the group covers it. Later groups lie over earlier
+ones. They lie on the ground under what stands on it (drawn before the units), and on the water's
+surface.
+
+What I did with the numbers, none of it read out of the original, so correct me:
+- thickness: the outline round the group takes the Outer pair, a hole's outline the Inner pair. It
+  goes evenly from "near" to "far" as the camera's distance goes from `zoomNear` to `zoomFar` and
+  stays at the end values beyond. With the script's 0.04 and 4.0 and the defaults 10 and 1000 that
+  is a line of the same width on the screen at every zoom, which may be what the pairs are for.
+  Give your camera's real nearest and farthest distance if you know them. A line is never thinner
+  than a pixel and a half;
+- glow: the line is drawn up to four times as bright as the colour (glow 255), beyond what the
+  screen shows, so the picture's own glow spreads it. In the original look, which has no such glow,
+  it does nothing.
+`SetShapes`' `Ring`s still work as before (thin circles); send a ring through one or the other.
+Seen with test rings only (the viewer's `--ranges`), not with yours.
+
+**b. The script's meshes: `SetWorldMeshes(meshes)`.**
+```
+struct WorldMesh { std::string mesh, texture, shader;   // MeshName, TextureName, ShaderName
+                   float uniformScale;
+                   float position[3]; float orientation[4];   // quaternion x, y, z, w
+                   float scale[3];
+                   uint32_t color;       // 0xAARRGGBB
+                   bool hidden;
+                   float lifetime, age;  // SetLifetimeParameter's seconds, and how many have passed since
+                   float fractionComplete; };
+```
+Drawn by the shader's name, as I read the original's techniques of those names in its `mesh.fx`
+(what they compute; the code is ours):
+- `CommandFeedback`, `CommandFeedback2`, `RallyPoint`: the texture's own colour, unlit, alpha
+  blended, pixels with alpha at or under 0x23 left out, NO depth test (over everything), after
+  the water. They grow with the camera's distance (1 at 10.5 away, 15 at 1010.5, evenly; the
+  original measures by its `lodBasis`, which I take to be that distance). Over the lifetime the
+  size goes to 0.7 (`CommandFeedback2`: to 1.1), and the two feedback ones fade out with it; a
+  rally point does not fade. `color` is not used by these, as in the original.
+- `FakeRings`: the texture's colour, unlit, hidden by what is in front, its alpha is
+  `fractionComplete`.
+- any other name (`Unit` for the tutorial's arrow): an ordinary lit model in `color` as its army
+  colour, with the mesh renderer.
+An order's mark is the same thing with `lifetime` set and `age` counted by you; take it out of
+the list when its time is over (at `age >= lifetime` a feedback mark is not drawn any more).
+`LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
+the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
+
 ## ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap, picking and the darkened ground done (first form)
 
 `WorldPicture::SetFocusArmy(army)` in `render/world_picture.h`: the engine's army number, from 1;
@@ -47,17 +108,21 @@ picture and on the minimap (whose ground now also follows the hour and the weath
 anew when the light has changed). What it sees is asked of `ReconAt` over a grid of 256 x 256 places
 on the map every fifth beat (so the edge moves twice a second, in steps of four world units on a
 20 km map), and everything under a pixel darkens alike: ground, water, wrecks, and the units of the
-army's own that stand there cannot, since they see. Radar cover is not shown on the ground. It
-needs nothing from you beyond `SetFocusArmy`.
+army's own that stand there cannot, since they see. Radar cover shows on the ground since
+2026-10-12: an unseen place under the army's radar or omni (on water, its sonar too) keeps seven
+tenths of its light instead of half, so three levels can be told apart: seen, covered, neither.
+Whether the original lightens covered ground I have from memory only; say so if you read
+otherwise. It needs nothing from you beyond `SetFocusArmy`.
 
 Ground never seen (2026-10-12): the renderer keeps, from that grid, what the focus army has seen at
 some time (the engine does not keep it of places). `WorldPicture::SetUnexplored(true)` is for the
 game's option `FogOfWar = "unexplored"`: ground never seen is then all but black, in the picture
 and on the minimap, until it is seen. Left alone (false, right for `"explored"`, the only fog FAF's
 lobby offers) it looks like ground seen before, as it did. You have the game's options; call it
-when you launch a game that has the option. One thing to know: in the lab's M28 game the engine
-reports the WHOLE map as seen by army 1 from tick 46 to tick 75, so with `SetUnexplored(true)`
-everything counts as explored after eight seconds. Asked of the engine (render 13).
+when you launch a game that has the option. One thing to know: the M28 AI gives its commanders
+sight of the whole map for a few beats at the start (`docs/engine-answers.md`, render 13), and an
+ally's sight is the army's own; the renderer shows that while it lasts but does not keep a look
+in which every place is seen as "seen at some time", so black ground stays black.
 
 Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
 minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's

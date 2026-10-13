@@ -116,6 +116,9 @@ class ModelCache {
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp"),
   // or of a mesh blueprint file itself ("/meshes/game/map-border_squ_uef_mesh.bp").
   const Model* Blueprint(const std::string& blueprintPath, bool original = false);
+  // A model from a mesh file and an albedo texture named outright, with a shader's name (what the
+  // game's interface script places in the world, placed.h). One level; `uniformScale` is its scale.
+  const Model* Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale = 1);
   // Reads the mesh and texture names of blueprints as the simulation has them after the game's
   // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models
   // listed there take their names from it instead of from the .bp file. Returns the levels read.

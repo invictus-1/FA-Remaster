@@ -60,12 +60,15 @@
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
 //           only as it knows them (seen, a blip on radar, or not at all)
+// --ranges  test range rings round where the camera starts: a red group that glows (three rings that join, one
+//           of them with a hole, and one apart) and a blue one
 // --unexplored  with --focus: ground that army has never seen is all but black (the game's option
 //           FogOfWar "unexplored")
 // Key B: life bars over units on and off.
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
+// --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
 //           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
@@ -144,7 +147,9 @@ struct Options {
   float clouds = 0.3f;                  // --clouds
   int focus = 0;                        // --focus
   bool unexplored = false;              // --unexplored
+  bool ranges = false;                  // --ranges
   float snowLying = -1;                 // --snow-lying
+  float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
@@ -185,6 +190,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
+    else if (a == "--ranges") o->ranges = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--look") {
@@ -239,6 +245,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
+    else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
     else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
@@ -408,6 +415,31 @@ int main(int argc, char** argv) {
   world.cloudCover = opt.clouds;
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
+  if (opt.ranges) {  // range rings to look at, round where the camera starts
+    const Vec3 at{opt.cam[0], 0, opt.cam[1]};
+    RangeGroup fire, radar;
+    fire.color = 0xffff3020u;
+    fire.glow = 160;
+    fire.rings = {{at + Vec3{-14, 0, 0}, 22, 0}, {at + Vec3{12, 0, 6}, 22, 8}, {at + Vec3{2, 0, -4}, 9, 0}, {at + Vec3{40, 0, -30}, 15, 0}};
+    radar.color = 0xff20e0ffu;
+    radar.rings = {{at + Vec3{0, 0, 10}, 60, 0}, {at + Vec3{70, 0, 20}, 45, 0}};
+    world.ranges.groups = {fire, radar};
+    // ... and the meshes the game's script places: a rally point's flag, and an order's mark half way through its life
+    PlacedMesh flag, mark;
+    flag.mesh = "/meshes/game/flag02d_lod0.scm";
+    flag.texture = "/meshes/game/flag02d_albedo.dds";
+    flag.shader = "RallyPoint";
+    flag.uniformScale = 0.5f;
+    flag.position = at + Vec3{6, world.HaveMap() ? world.GroundHeight(at.x + 6, at.z + 10) : 0, 10};
+    mark.mesh = "/meshes/game/crosshair02d_lod0.scm";
+    mark.texture = "/meshes/game/crosshair02d_albedo.dds";
+    mark.shader = "CommandFeedback";
+    mark.uniformScale = 0.5f;
+    mark.position = at + Vec3{-8, world.HaveMap() ? world.GroundHeight(at.x - 8, at.z + 14) : 0, 14};
+    mark.lifetime = 0.7f;
+    mark.age = 0.3f;
+    world.placed = {flag, mark};
+  }
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};
   auto setWeather = [&](int which) {
@@ -913,7 +945,7 @@ int main(int argc, char** argv) {
         pose.now = pose.next = u.bones.data();
         pose.nowCount = pose.nextCount = u.bones.size();
       }
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], 1, u.turned >= 0 ? &pose : nullptr);
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.built, u.turned >= 0 ? &pose : nullptr);
       world.AddLamps(u.model, u.position, Quat{}, u.turned >= 0 ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }

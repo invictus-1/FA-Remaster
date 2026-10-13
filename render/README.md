@@ -336,11 +336,16 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   sees the place again. Ground: `SimFrames` keeps which places of the grid the army has seen at
   some time; with `World::unexplored` (`--unexplored`, `WorldPicture::SetUnexplored`, for the
   game's option FogOfWar "unexplored") ground never seen is all but black, otherwise it looks
-  like ground seen before. Not the original's: the memory is the renderer's own and begins when
+  like ground seen before. Radar cover shows on the ground: an unseen place that radar or omni
+  covers (on water, sonar too) keeps seven tenths of its light where other unseen ground keeps
+  half (`SightShade::covered`), in the picture and on the minimap (where sonar's cover also
+  shows on land: the minimap does not ask where water is). That the original lightens covered
+  ground at all is from memory, not read out of it. Not the original's: the memory is the renderer's own and begins when
   the army becomes the focus army; the buildings' part is made from the frames that are drawn,
   so running a game ahead without drawing misses what was seen meanwhile; a building is told by
-  its id's third letter. Open: the engine reports the whole map as seen for three seconds at a
-  game's start (`REQUESTS.md`, 13), so "never seen" does not last.
+  its id's third letter. A look in which every place of the grid is seen is shown but not kept
+  as seen: the M28 AI gives its commanders sight of the whole map for a few beats at a game's
+  start, and an ally's sight is the army's own (`docs/engine-answers.md`, render 13).
 - Wind: trees and plants sway. The meshes whose shader says so (the original's `Undulating...`
   trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
   the model, each on its own beat by where it stands, harder when it rains or snows; their
@@ -348,6 +353,37 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   run across the land with it (noise that drifts downwind, so a wood bends in waves).
 - Life bars (`World::lifeBars`, off unless switched on; key B in the viewer): a small bar, green down to red, over selected and pointed-at
   units and over damaged ones that are near enough to be seen as models.
+- Units under construction, by faction (`mesh_renderer.cpp`, `BuildSolid`; `--built <0..1>` in
+  the viewer for placed units). UEF: built from the ground up, a line of light at the level of
+  the work, above it only a blue lattice of light. Cybran: put together plate by plate, a new
+  plate glowing red for a moment, a red lattice where a plate is missing. Aeon: rises out of the
+  ground, a little smaller at first, as liquid metal that sets over the last quarter. Seraphim:
+  grows from a quarter of its size, dark and glowing, and takes its surface over the second
+  half. The team colour comes in over the last tenth. What is not there yet casts no shadow.
+  These are not the original's pictures: its build looks (half see-through hulls with moving
+  textures laid over them) were read for what each faction's is about and for the numbers
+  kept (the Aeon's sinking and size, the Seraphim's size, the team colour's last tenth). Not
+  drawn: the builders' beams and the UEF's frame of light round a building, which come with
+  the game's effects; the Aeon's pool on the ground. A unit that a mod draws without a team
+  mask is only darker while it is built.
+- Range rings as one outline (`ranges.h`, `World::ranges.groups`, `WorldPicture::SetRanges`;
+  `--ranges` in the viewer shows two test groups): all the rings of a group show as the outline
+  of the ground they cover together, an inner radius cuts a hole with its own outline, the
+  thickness is given in world units for the nearest and the farthest zoom and never falls under
+  a pixel and a half, and a group can glow (drawn brighter than the screen shows, so the
+  picture's glow spreads it). Per group every ring is drawn as a box into a picture of the
+  screen, found on the ground by the scene's depth: once whole, once smaller by the thickness;
+  whole and not smaller is the outline. Laid over the land before anything stands on it and
+  over the water's surface after the water. Not read out of the original: how its thickness
+  goes with the zoom between the two numbers (here: evenly with the camera's distance, between
+  10 and 1000 unless the host says otherwise), and how strong its glow is.
+- The meshes the game's interface script places in the world (`placed.h`, `World::placed`,
+  `WorldPicture::SetWorldMeshes`): a rally point's flag, the marks under the cursor, the mark
+  where an order lands. Each names a mesh file, an albedo texture and one of the original's
+  shaders; `CommandFeedback`, `CommandFeedback2`, `RallyPoint` (unlit, over everything, larger
+  from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
+  (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
+  the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by
@@ -442,7 +478,7 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
 Known gaps, to be closed in the steps they belong to:
 
 - Units: played from a recording, every model stands in its rest pose (a recording has no bone
-  poses; the running simulation gives them). A unit under construction is only darker. With a recording, army colours are a fixed
+  poses; the running simulation gives them). With a recording, army colours are a fixed
   list (the running simulation gives the game's own).
 - A unit smaller than a pixel and a half is not drawn; its strategic icon stands for it.
 - Strategic icons: only the plain symbol. Not yet: the selected and pointed-at forms, life bars.

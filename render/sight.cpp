@@ -1,5 +1,6 @@
 #include "sight.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace render {
@@ -13,6 +14,7 @@ cbuffer SightCamera : register(b1) {
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: what an unseen place keeps of its light; w: a place never seen
+  float4 cover;        // x: what an unseen place under radar keeps; y: the water's level
 };
 Texture2D sight : register(t0);
 #ifdef MSAA
@@ -36,11 +38,15 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   float3 world = cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
   float2 uv = world.xz * mapInfo.xy;
   if (any(uv < 0) || any(uv > 1)) return 1;  // what the map lies in
-  float2 grid = sight.SampleLevel(samplerLinearClamp, uv, 0).rg;  // seen now; seen at some time
+  float4 grid = sight.SampleLevel(samplerLinearClamp, uv, 0);  // seen now; seen at some time; radar; sonar
   float seen = smoothstep(0.2, 0.8, grid.r);
   float known = smoothstep(0.2, 0.8, grid.g);
-  // unseen: darker, and a little toward blue; never seen: as dark as the game's option says
-  return float4(lerp(float3(0.85, 0.95, 1.2) * lerp(mapInfo.w, mapInfo.z, known), 1, seen), 1);
+  // (sonar tells of water only; with the modern water the depth here is the bed's, which lies under the level)
+  float radar = smoothstep(0.2, 0.8, max(grid.b, world.y < cover.y + 0.3 ? grid.a : 0));
+  // unseen: darker, and a little toward blue; never seen: as dark as the game's option says; under
+  // radar it keeps a little more, where the ground is known at all
+  float keeps = lerp(mapInfo.w, lerp(mapInfo.z, cover.x, radar), known);
+  return float4(lerp(float3(0.85, 0.95, 1.2) * keeps, 1, seen), 1);
 }
 )hlsl";
 
@@ -71,10 +77,10 @@ void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
   cells_ = cells;
   pixels_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells) * 4);
   for (size_t i = 0; i < static_cast<size_t>(cells) * static_cast<size_t>(cells); ++i) {
-    pixels_[i * 4] = grid[i] == 255 ? 255 : 0;      // seen now
-    pixels_[i * 4 + 1] = grid[i] >= 128 ? 255 : 0;  // seen at some time
-    pixels_[i * 4 + 2] = 0;
-    pixels_[i * 4 + 3] = 255;
+    pixels_[i * 4] = (grid[i] & kSightNow) ? 255 : 0;
+    pixels_[i * 4 + 1] = (grid[i] & kSightEver) ? 255 : 0;
+    pixels_[i * 4 + 2] = (grid[i] & kSightRadar) ? 255 : 0;
+    pixels_[i * 4 + 3] = (grid[i] & kSightSonar) ? 255 : 0;
   }
   gfx::TextureDesc td;
   td.width = td.height = cells;
@@ -88,10 +94,11 @@ void SightShade::Draw(const View& view, const Camera& camera, gfx::Texture scene
   if (!texture_ || mapWidth <= 0 || mapHeight <= 0 || view.height <= 0) return;
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
-  const float constants[16] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+  const float constants[20] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                back.x, back.y, back.z, camera.zNear,
-                               1 / mapWidth, 1 / mapHeight, darkness, neverSeen};
+                               1 / mapWidth, 1 / mapHeight, darkness, neverSeen,
+                               std::max(covered, darkness), waterLevel, 0, 0};
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, constants, sizeof constants);
