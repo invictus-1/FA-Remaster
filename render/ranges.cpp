@@ -16,7 +16,8 @@ cbuffer RangeCamera : register(b1) {
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 lineInfo;     // x: the outline's thickness; y: that of a hole's outline; z: the water's level; w: 1 = the pass over the water
-  float4 boxInfo;      // x: the middle of the heights the ground lies between; y: half of them
+  float4 boxInfo;      // x: the middle of the heights the ground lies between; y: half of them; z: 1 = there are
+                       // outlines of earlier groups to lay this one over
   float4 lineColor;    // as the scene holds colour
 };
 #ifdef MSAA
@@ -86,13 +87,24 @@ float4 VS(uint id : SV_VertexID) : SV_Position {
 }
 )hlsl";
 
-// A group's outline, from its rings' sums: where the whole rings are and the smaller ones are not.
+// A group's outline, from its rings' sums: where the whole rings are and the smaller ones are not;
+// laid over the outlines of the groups before it. Where two groups' lines lie on one another (a
+// commander's direct, indirect and anti-air rings at one radius) the later one takes the earlier
+// one's place, soft edge and all: blended over it, the earlier colours showed through the later
+// line's half-covered edge pixels as a pale second line beside it.
 const char kGatherShader[] = R"hlsl(
 Texture2D mask : register(t0);
+Texture2D before : register(t2);
 float4 PS(float4 position : SV_Position) : SV_Target {
   float4 m = mask.Load(int3(position.xy, 0));
   float edge = saturate(m.r) * (1 - saturate(m.g));
-  return float4(lineColor.rgb * edge, edge * lineColor.a);
+  float4 mine = float4(lineColor.rgb * edge, edge * lineColor.a);
+  if (boxInfo.z < 0.5) return mine;
+  float4 under = before.Load(int3(position.xy, 0));
+  // (what of the earlier lines this one does not cover stays; together they cover as much of the
+  // pixel as the one that covers more)
+  float left = max(under.a - mine.a, 0) / max(under.a, 1e-4);
+  return float4(mine.rgb + under.rgb * left, max(under.a, mine.a));
 }
 )hlsl";
 
@@ -132,10 +144,11 @@ bool Ranges::Init(std::string* error) {
   pd.attrs.clear();
   pd.stride = 0;
   pd.cull = gfx::Cull::None;
-  pd.blend = gfx::Blend::Premultiplied;
+  pd.blend = gfx::Blend::Opaque;  // (it lays itself over the picture so far, read from the other of two targets)
   pd.colorFormat = kSceneFormat;
   gather_ = device_->CreatePipeline(pd, error);
   if (!gather_) return false;
+  pd.blend = gfx::Blend::Premultiplied;
   pd.name = "range outlines on the scene";
   pd.vertexSource = pd.pixelSource = laySource;
   pd.samples = gSceneSamples;
@@ -186,6 +199,7 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
   if (view.width != width_ || view.height != height_) {
     if (maskTarget_) device_->Destroy(maskTarget_);
     if (lines_) device_->Destroy(lines_);
+    if (linesBefore_) device_->Destroy(linesBefore_);
     gfx::TargetDesc td;
     td.width = view.width;
     td.height = view.height;
@@ -193,6 +207,7 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
     maskTarget_ = device_->CreateTarget(td);
     td.format = kSceneFormat;
     lines_ = device_->CreateTarget(td);
+    linesBefore_ = device_->CreateTarget(td);
     width_ = view.width;
     height_ = view.height;
   }
@@ -242,15 +257,20 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
       device_->Draw(36, 0, static_cast<uint32_t>(n));
       drawnRings += static_cast<int>(n);
     }
+    // (into the other of the two pictures, over the one made so far)
+    std::swap(lines_, linesBefore_);
+    constants[18] = first ? 0.0f : 1.0f;
     gfx::PassDesc gather;
     gather.color = lines_;
-    gather.clearColor = first;
+    gather.clearColor = true;
     device_->BeginPass(gather);
     device_->SetPipeline(gather_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, constants, sizeof constants);
     device_->SetTexture(0, maskTarget_);
+    device_->SetTexture(2, linesBefore_);
     device_->Draw(3);
+    constants[18] = 0;
     first = false;
   }
   built_ = !first;
