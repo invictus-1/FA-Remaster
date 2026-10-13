@@ -133,6 +133,15 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
     if (s.selectionX > 0) kind->selectionX = s.selectionX;
     if (s.selectionZ > 0) kind->selectionZ = s.selectionZ;
+    // (the life bar's size is not among what the simulation says: from the unit's file)
+    kind->lifeBarSize = kind->selectionX * 2;
+    kind->lifeBarOffset = kind->selectionZ;
+    BpValue file;
+    if (auto text = vfs_->ReadFile(blueprintPath); text && ReadBlueprintFile(*text, &file)) {
+      kind->lifeBarSize = static_cast<float>(file["LifeBarSize"].NumberOr(kind->lifeBarSize));
+      kind->lifeBarHeight = static_cast<float>(file["LifeBarHeight"].NumberOr(kind->lifeBarHeight));
+      kind->lifeBarOffset = static_cast<float>(file["LifeBarOffset"].NumberOr(kind->lifeBarOffset));
+    }
     return kind;
   }
   auto text = vfs_->ReadFile(blueprintPath);
@@ -149,6 +158,9 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   }
   kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
   kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));
+  kind->lifeBarSize = static_cast<float>(bp["LifeBarSize"].NumberOr(kind->selectionX * 2));
+  kind->lifeBarHeight = static_cast<float>(bp["LifeBarHeight"].NumberOr(0.075));
+  kind->lifeBarOffset = static_cast<float>(bp["LifeBarOffset"].NumberOr(kind->selectionZ));
   return kind;
 }
 
@@ -192,7 +204,7 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bool work) {
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bool work, float drop, float thick) {
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
   if (w <= 1e-4f) return;
@@ -200,7 +212,7 @@ void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bo
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
-  bars_.push_back({x, y, widthPixels, std::clamp(fraction, 0.0f, 1.0f), work});
+  bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), work, thick});
 }
 
 void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
@@ -287,17 +299,11 @@ void StrategicIcons::Draw() {
     for (const Vertex& v : {a, b, c, a, c, d}) vertices_.push_back(v);
   };
   for (const Bar& bar : bars_) {
-    const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half;
-    if (bar.work) {  // (one colour, a pixel thinner, under the life bar's place)
-      const float y0 = std::floor(bar.y) + 3 * pixel_;
-      rect(x0 - pixel_, y0 - pixel_, x0 + 2 * half + pixel_, y0 + 3 * pixel_, 0xd0000000u);
-      if (bar.fraction > 0) rect(x0, y0, x0 + std::max(pixel_, 2 * half * bar.fraction), y0 + 2 * pixel_, 0xffffd060u);
-      continue;
-    }
-    const float y0 = std::floor(bar.y) - 2 * pixel_;
-    rect(x0 - pixel_, y0 - pixel_, x0 + 2 * half + pixel_, y0 + 3 * pixel_, 0xd0000000u);
-    const uint32_t color = bar.fraction > 0.5f ? 0xff30e040u : bar.fraction > 0.25f ? 0xff20d8f0u : 0xff3030f0u;  // 0xAABBGGRR
-    if (bar.fraction > 0) rect(x0, y0, x0 + std::max(pixel_, 2 * half * bar.fraction), y0 + 2 * pixel_, color);
+    const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half, y0 = std::floor(bar.y), high = std::max(bar.thick, 2.0f) * pixel_;
+    rect(x0, y0, x0 + 2 * half, y0 + high, 0xff000000u);
+    // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange
+    const uint32_t color = bar.work ? 0xff0098ffu : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
+    if (bar.fraction > 0) rect(x0, y0, x0 + std::max(2 * pixel_, 2 * half * bar.fraction), y0 + high, color);
   }
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view_.constants, sizeof view_.constants);

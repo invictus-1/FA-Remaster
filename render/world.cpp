@@ -684,15 +684,6 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       icons.Add(kind, position, color, isSelected, blip, known);
-      // its life bar: when it is selected or pointed at, or damaged and near enough to be a model
-      if (lifeBars && u.Seen() && u.maxHealth > 0) {
-        const float away = Length(position - view.eye);
-        if (isSelected || u.id == hover || (u.health < u.maxHealth * 0.999f && away < kind->fadeIn * 0.9f)) {
-          const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away;
-          const float wide = std::clamp(kind->selectionX * 2.2f / std::max(perPixel, 1e-5f), 18.0f, 72.0f);
-          icons.AddBar(position + Vec3{0, kind->selectionZ * 1.1f + 0.4f, 0}, u.health / u.maxHealth, wide);
-        }
-      }
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
@@ -703,21 +694,44 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
     }
     const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
-    // its work: a bar over the unit, and the game's pause mark over a paused one (of the army the
-    // picture is for, when it is for one; the others' work is not the player's to see). Over the
-    // model's top, so a tall unit does not wear it at its waist.
-    if (workBars && !blip && u.Seen() && (u.paused || (u.workProgress > 0 && u.workProgress < 1)) &&
-        (focusArmy < 0 || static_cast<int>((u.id >> 20) & 0xff) == focusArmy)) {
-      const StrategicIcons::Kind* kind = blueprint.empty() ? nullptr : icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
-      const float half = kind ? kind->selectionX : 0.5f;
-      const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : (kind ? kind->selectionZ * 1.1f : 0.5f) + 0.4f;
-      const Vec3 over = position + Vec3{0, top, 0};
-      const float away = Length(over - view.eye);
-      const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away;
-      if (u.workProgress > 0 && u.workProgress < 1) icons.AddBar(over, u.workProgress, std::clamp(half * 2.2f / std::max(perPixel, 1e-5f), 24.0f, 80.0f), true);
-      if (u.paused) {
+    // Its bars, as the original draws them (Chris's pictures of it, 2026-10-13): the life bar under
+    // the unit, about as wide as the unit, black with a filling that is green, yellow at middling
+    // health and red when low, on every unit near enough to be a model (and on a selected or
+    // pointed-at one at any distance); the work bar directly under it, black with an orange filling,
+    // on the unit that does the work (of the army the picture is for: the others' work is not the
+    // player's to see). And the game's pause mark over a paused unit, above its top.
+    // (not on a unit whose script has hidden all of it: what a building is upgraded to stands in
+    // the same place, unseen, until it is done, and the original shows no bar for it)
+    bool allHidden = false;
+    for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
+      if (frame.bones[i].bone == 0) {
+        allHidden = frame.bones[i].hidden;
+        break;
+      }
+    if (!blip && !blueprint.empty() && u.Seen() && !allHidden) {
+      const StrategicIcons::Kind* kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
+      const bool own = focusArmy < 0 || static_cast<int>((u.id >> 20) & 0xff) == focusArmy;
+      const float away = Length(position - view.eye);
+      const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
+      const bool life = lifeBars && u.maxHealth > 0 && (isSelected || u.id == hover || away < kind->fadeIn * 0.9f);
+      const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1;
+      if (life || work) {
+        // (the size, height and place the unit's blueprint gives its life bar, in world units: the bar
+        // lies that far from the unit's middle toward the eye, along the ground)
+        const float perPixel = std::max(2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away, 1e-5f);
+        Vec3 toEye{view.eye.x - position.x, 0, view.eye.z - position.z};
+        const float flat = Length(toEye);
+        toEye = flat > 1e-3f ? toEye * (1 / flat) : Vec3{0, 0, 1};
+        const Vec3 at = position + toEye * kind->lifeBarOffset;
+        const float wide = std::clamp(kind->lifeBarSize / perPixel, 10.0f, 900.0f);
+        const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
+        if (life) icons.AddBar(at, u.health / u.maxHealth, wide, false, 0, thick);
+        if (work) icons.AddBar(at, u.workProgress, wide, true, life ? thick : 0, thick);
+      }
+      if (workBars && own && u.paused) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
-        icons.AddMark(pauseMark_, over, 16);
+        const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : kind->selectionZ * 1.1f + 0.4f;
+        icons.AddMark(pauseMark_, position + Vec3{0, top, 0}, 16);
       }
     }
     float radius = 0.5f;
@@ -847,7 +861,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
-    meshes.Add(model, at, f.army == 0xff ? Vec3{1, 1, 1} : colorOf(f.army));
+    // (in its own colours where its look has no team colour of its own: the original gives every
+    // mesh that is not a unit's opaque white; an adjacency's node was a cube in the army's colour)
+    const bool teamed = !model->lods.empty() && model->lods[0].teamMask;
+    meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army));
   }
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {

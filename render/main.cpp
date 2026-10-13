@@ -165,6 +165,7 @@ struct Options {
   std::string weather, climate;         // --weather, --climate
   std::string find;                     // --find
   bool show = false;                    // --show
+  bool bars = false;                    // --bars
   int shots = 0;                        // --shots
   std::string animate;                  // --animate: an .sca file of the game's
   float animateAt = -1;                 // ... and where in it (0..1); below 0: it plays
@@ -209,6 +210,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     if (a == "--novsync") o->vsync = false;
     else if (a == "--debug") o->debug = true;
     else if (a == "--show") o->show = true;
+    else if (a == "--bars") o->bars = true;  // life bars on from the start (key B switches them)
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--noicons") o->icons = false;
@@ -565,6 +567,7 @@ int main(int argc, char** argv) {
   };
   world.weatherAuto = opt.weather == "auto";
   world.focusArmy = opt.focus > 0 ? opt.focus - 1 : -1;  // (whose work bars and pause marks show)
+  world.lifeBars = opt.bars;
   world.weatherSeed = opt.seed ? opt.seed : 1;
   world.weatherSpell = opt.weatherSpell;
   world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : Climate::Temperate;

@@ -57,6 +57,10 @@ class Effects {
     Quat orientation;
     float length = 0, halfWidth = 0.05f;  // texture beams
     const Model* model = nullptr;         // of the unit it hangs on, once looked up (for the bone's place at rest)
+    // a beam between two things: were its own thing and its far end ever found in a frame? (A
+    // script hangs beams on things the frame does not list: the hubs of an adjacency's link have
+    // no mesh. Its own end then stays where it was made; with a far end never found it is not drawn.)
+    bool everHere = false, everEnd = false;
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);
@@ -76,7 +80,7 @@ class Effects {
   std::unordered_map<uint32_t, Effect> effects_;
   std::unordered_map<std::string, int> said_;
   std::unordered_map<uint32_t, int> hanging_;  // entity -> how many effects hang on it
-  std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_;  // this frame: entity id -> index in the frame's lists
+  std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_, entityAt_;  // this frame: entity id -> index in the frame's lists
 };
 
 }  // namespace render

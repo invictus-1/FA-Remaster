@@ -26,6 +26,8 @@ bool Effects::Hidden(const Frame& frame, uint32_t entity) {
   if (unit != frame.units.end() && unit->id == entity) return !unit->Seen();
   for (const FrameProjectile& p : frame.projectiles)
     if (p.id == entity) return !p.seen;
+  for (const FrameEntity& f : frame.entities)
+    if (f.id == entity) return !f.seen;
   return false;
 }
 
@@ -71,6 +73,13 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
     const FrameProjectile& p = frame.projectiles[projectile->second];
     *position = V(p.position);
     *orientation = Q(p.orientation);
+    return true;
+  }
+  auto made = entityAt_.find(entity);
+  if (made != entityAt_.end()) {  // something a script made (the nodes of an adjacency's link)
+    const FrameEntity& f = frame.entities[made->second];
+    *position = V(f.position);
+    *orientation = Q(f.orientation);
     return true;
   }
   auto beam = beamAt_.find(entity);
@@ -237,6 +246,8 @@ void Effects::Update(double tick, const Frame& frame) {
   const auto t0 = std::chrono::steady_clock::now();
   projectileAt_.clear();
   beamAt_.clear();
+  entityAt_.clear();
+  for (uint32_t i = 0; i < frame.entities.size(); ++i) entityAt_[frame.entities[i].id] = i;
   for (uint32_t i = 0; i < frame.projectiles.size(); ++i) projectileAt_[frame.projectiles[i].id] = i;
   for (uint32_t i = 0; i < frame.beams.size(); ++i) beamAt_[frame.beams[i].id] = i;
 
@@ -260,6 +271,9 @@ void Effects::Update(double tick, const Frame& frame) {
       if (here) {
         e.position = p + Rotate(q, e.offset);
         e.orientation = q;
+        e.everHere = true;
+      } else if (e.kind == Kind::Beam && e.entity2 != kNone && !e.everHere) {
+        here = true;  // (hung on a thing the frame never listed: it stands where it was made)
       }
     }
     // what hangs on something the army the picture is for does not see is not shown
@@ -288,6 +302,9 @@ void Effects::Update(double tick, const Frame& frame) {
         Quat unused;
         // between two things; with the second one gone the original falls back to the form on one thing
         if (e.entity2 != kNone && AttachPoint(frame, e.entity2, e.bone2, &end, &unused)) {
+          e.everEnd = true;
+        } else if (e.entity2 != kNone && !e.everEnd) {
+          break;  // (its far end is a thing the frame never listed: where it ends is not known)
         } else {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});
