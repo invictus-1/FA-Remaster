@@ -387,7 +387,11 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // A shell as a target (an anti-torpedo's, a missile defence's): its bone -1 too, the centre its blueprint
     // gives (half its SizeY above its origin: 0.5 with the default size), turned with the shell. Seen in the
     // original's shell lines: an anti-torpedo steers at a point 0.5 from the torpedo's origin, along its up axis.
-    if (e->kind == Entity::Kind::Projectile && e->blueprint && !centre)
+    // For the range test too (centre): 0x5e2a90 asks a unit for its place (vt+0x14) and a recon blip for its own
+    // (vt+0x1c, entity+0xac), and everything else falls to GetBoneWorldTransform(-1) whatever the flag says. Seen:
+    // a missile 68 above a cruiser, its origin 1.96 from the ship (inside MinRadius 2) and its centre 2.31: the
+    // original's missile defence fires.
+    if (e->kind == Entity::Kind::Projectile && e->blueprint)
       return Add(e->position, RotateM(e->orientation, e->bpCenter));
     return e->position;
   }
