@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
@@ -37,6 +38,8 @@ class Effects {
   bool OnEntity(uint32_t entity) const { return hanging_.count(entity) != 0; }
 
   int live = 0;        // effects being kept
+  int shotLights = 0;  // lights given this frame to shots in flight and to weapons' beams
+  float shotLight = 1.0f;  // how strong those are (0: none)
   int started = 0;     // since the beginning
   int curvesSet = 0;   // SetEmitterCurveParam calls acted on
   int notShown = 0;    // events for kinds of effect that are not drawn yet (decals of kinds other than albedo and normals, anything new)
@@ -82,6 +85,15 @@ class Effects {
   std::unordered_map<uint32_t, Effect> effects_;
   std::unordered_map<std::string, int> said_;
   std::unordered_map<uint32_t, int> hanging_;  // entity -> how many effects hang on it
+  // this frame: what the glowing things on each shot come to (the shot's place in the frame's list ->
+  // the strongest colour among them, the largest scale, how many)
+  struct ShotGlow {
+    Vec3 color;
+    float scale = 1;
+    int count = 0;
+  };
+  std::unordered_map<uint32_t, ShotGlow> shotGlow_;
+  std::unordered_set<uint64_t> shotCells_;  // squares of ground that have a shot's light this frame
   std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_, entityAt_;  // this frame: entity id -> index in the frame's lists
 };
 

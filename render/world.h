@@ -170,6 +170,11 @@ class World {
   // three), and a host may set them.
   float rain = 0, snow = 0, fog = 0;
   float wet = 0, snowLying = 0;
+  // The mist that lies on low ground and over water, with a time of day: how much of it, 0..1.
+  // Negative: by itself, from the hour and the weather: most at daybreak, some through the night,
+  // more on wet ground after rain and in fog, little in a dry climate, none while it snows.
+  // `mistNow` is what it came to in the last frame.
+  float mist = -1, mistNow = 0;
   // Weather that changes by itself (weather.h, WeatherAt): with `weatherAuto`, the clouds, rain,
   // snow and fog above are what the seed and the frame's clock (the game's, when a game plays)
   // say. A host gives every player of a game the same seed.
@@ -296,6 +301,7 @@ class World {
   int pauseMark_ = -2;  // the game's pause picture among the symbols (-2: not asked for yet)
   int debugLampsTold_ = 0;
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
+  float mistFloor_ = 0, mistDepth_ = 3;  // where the mist lies: its floor's height, and over what height it thins to 1/e
   double clock_ = 0;
 };
 

@@ -41,6 +41,9 @@ class Ribbons {
   // A plain glowing band without a blueprint, for this frame: what stands in where the game's own
   // effect is not known yet. `color` is rgb in 0..1; `width` the whole width in world units.
   void PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width);
+  // Does that beam or trail blueprint add its light? Then a trail says its colour ramp's file and
+  // a beam its own colour (as the blueprint gives it, by its alpha).
+  bool Glows(const std::string& blueprint, std::string* rampPath, Vec3* color);
 
   // Starts a trail of that blueprint at a place; Move it every frame to where its emitter is.
   // Returns its handle; 0 when the blueprint cannot be read.
@@ -68,6 +71,7 @@ class Ribbons {
     float repeatRate = 0;          // beams: how often the texture repeats per world unit (0: once over the beam)
     float uShift = 0, vShift = 0;  // how fast the texture slides, per second
     float life = 1;                // trails: how long a place stays, seconds
+    std::string rampPath;          // trails: the colour ramp's file
   };
   struct Vertex {
     float position[3];

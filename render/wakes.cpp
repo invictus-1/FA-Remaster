@@ -51,7 +51,7 @@ float4 PS(VOut i) : SV_Target {
   // lit like the water's foam: by the sky and the falling light
   float3 sunLight = pow(max(sunColor, 0), 2.2) * (lightMultiplier * modern.x);
   float3 light = (skyZenith.w > 0.5 ? SkyAmbient(float3(0, 1, 0)) : sunLight * 0.3) + sunLight * (saturate(sunDirection.y) * 0.6 * CloudShadow(i.world));
-  return float4(ThroughAir(light * 0.85, length(i.world - cameraPosition)), foam);
+  return float4(ThroughAirTo(light * 0.85, i.world), foam);
 }
 )hlsl";
 
