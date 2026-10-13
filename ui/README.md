@@ -368,8 +368,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
   They go to the picture's source in groups (`WorldScene::ranges`: a filter in one colour, with
   the script's glow byte and its thickness numbers), which the renderer's `SetRanges` draws as
-  the original does: one outline round what a group's rings cover together. (Until that call
-  is on the main branch the host falls back to plain circles.) Not the original's yet: how
+  the original does: one outline round what a group's rings cover together. Not the original's yet: how
   thickness and glow go with the zoom (the renderer's guess; `func_RenderRings` is not read),
   radii changed while the game runs, and the rings of "Miscellaneous".
 - The meshes the game's script places in the world (`user/world_meshes.cpp`): its `WorldMesh`

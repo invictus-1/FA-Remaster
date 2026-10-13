@@ -28,61 +28,6 @@
 
 namespace moho::ui {
 
-#ifdef MOHO64UI_WORLD_PICTURE
-// The range rings and the script's meshes go to the renderer's calls for them where it has them
-// (SetRanges, SetWorldMeshes: its answer to "ui, to the renderer 6"); a renderer without them
-// gets the rings as plain circles and no meshes. (The second form of each goes when the calls
-// are on the main branch.)
-template <class P>
-auto SendRanges(P& picture, const WorldScene& scene, std::vector<typename P::Ring>*, int)
-    -> decltype(picture.SetRanges(std::vector<typename P::RangeGroup>(), 0.f, 0.f), void()) {
-  std::vector<typename P::RangeGroup> groups;
-  for (const WorldRangeGroup& g : scene.ranges) {
-    typename P::RangeGroup o;
-    o.color = g.color, o.glow = g.glow;
-    o.outerNear = g.outer[0], o.outerFar = g.outer[1];
-    o.innerNear = g.inner[0], o.innerFar = g.inner[1];
-    for (const WorldRangeRing& r : g.rings) {
-      typename P::RangeRing ring;
-      for (int i = 0; i < 3; ++i) ring.centre[i] = r.centre[i];
-      ring.radius = r.radius, ring.innerRadius = r.innerRadius;
-      o.rings.push_back(ring);
-    }
-    groups.push_back(std::move(o));
-  }
-  picture.SetRanges(groups, scene.zoomNear, scene.zoomFar);
-}
-template <class P>
-void SendRanges(P&, const WorldScene& scene, std::vector<typename P::Ring>* plain, long) {
-  for (const WorldRangeGroup& g : scene.ranges)
-    for (const WorldRangeRing& r : g.rings)
-      for (float radius : {r.radius, r.innerRadius}) {
-        if (!(radius > 0)) continue;
-        typename P::Ring o;
-        for (int i = 0; i < 3; ++i) o.centre[i] = r.centre[i];
-        o.radius = radius, o.color = g.color;
-        plain->push_back(o);
-      }
-}
-template <class P>
-auto SendMeshes(P& picture, const WorldScene& scene, int) -> decltype(picture.SetWorldMeshes(std::vector<typename P::WorldMesh>()), void()) {
-  std::vector<typename P::WorldMesh> meshes;
-  for (const WorldMeshView& m : scene.meshes) {
-    typename P::WorldMesh o;
-    o.mesh = m.mesh, o.texture = m.texture, o.shader = m.shader;
-    o.uniformScale = m.uniformScale;
-    for (int i = 0; i < 3; ++i) o.position[i] = m.position[i], o.scale[i] = m.scale[i];
-    for (int i = 0; i < 4; ++i) o.orientation[i] = m.orientation[i];
-    o.color = m.color, o.hidden = m.hidden;
-    o.lifetime = m.lifetime, o.age = m.age, o.fractionComplete = m.fractionComplete;
-    meshes.push_back(std::move(o));
-  }
-  picture.SetWorldMeshes(meshes);
-}
-template <class P>
-void SendMeshes(P&, const WorldScene&, long) {}
-#endif
-
 // The renderer's world picture behind the interface's WorldSource.
 struct GameSession::Picture : WorldSource {
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -131,10 +76,36 @@ struct GameSession::Picture : WorldSource {
       o.color = l.color;
       lines.push_back(o);
     }
-    std::vector<render::WorldPicture::Ring> rings;  // (only for a renderer without SetRanges)
-    SendRanges(picture, scene, &rings, 0);
-    picture.SetShapes(lines, rings);
-    SendMeshes(picture, scene, 0);
+    picture.SetShapes(lines, {});
+    // The range rings in groups: the renderer draws a group as one outline.
+    std::vector<render::WorldPicture::RangeGroup> ranges;
+    for (const WorldRangeGroup& g : scene.ranges) {
+      render::WorldPicture::RangeGroup o;
+      o.color = g.color, o.glow = g.glow;
+      o.outerNear = g.outer[0], o.outerFar = g.outer[1];
+      o.innerNear = g.inner[0], o.innerFar = g.inner[1];
+      for (const WorldRangeRing& r : g.rings) {
+        render::WorldPicture::RangeRing ring;
+        for (int i = 0; i < 3; ++i) ring.centre[i] = r.centre[i];
+        ring.radius = r.radius, ring.innerRadius = r.innerRadius;
+        o.rings.push_back(ring);
+      }
+      ranges.push_back(std::move(o));
+    }
+    picture.SetRanges(ranges, scene.zoomNear, scene.zoomFar);
+    // The meshes the game's script has placed in the world, and the marks where orders landed.
+    std::vector<render::WorldPicture::WorldMesh> meshes;
+    for (const WorldMeshView& m : scene.meshes) {
+      render::WorldPicture::WorldMesh o;
+      o.mesh = m.mesh, o.texture = m.texture, o.shader = m.shader;
+      o.uniformScale = m.uniformScale;
+      for (int i = 0; i < 3; ++i) o.position[i] = m.position[i], o.scale[i] = m.scale[i];
+      for (int i = 0; i < 4; ++i) o.orientation[i] = m.orientation[i];
+      o.color = m.color, o.hidden = m.hidden;
+      o.lifetime = m.lifetime, o.age = m.age, o.fractionComplete = m.fractionComplete;
+      meshes.push_back(std::move(o));
+    }
+    picture.SetWorldMeshes(meshes);
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
     picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
