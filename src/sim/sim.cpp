@@ -258,6 +258,35 @@ int l_IsGameOver(lua_State* L) {
   return 1;
 }
 
+// SetCommandSource(army, source, enabled): which command sources may command an army (Army::sources, army+0x130).
+// Not the original's: a function FAF's exe patch adds (its name is in the patch section, 0x1294028), so its
+// behaviour is taken from how FAF's scripts use it: both numbers count from 0 (victory.lua:
+// SetCommandSource(i - 1, index, false) takes a defeated player's source off every army), true adds the source,
+// false takes it away. Nothing else happens (no AbandonedByPlayer: that is the stream's CommandSourceTerminated).
+int l_SetCommandSource(lua_State* L) {
+  Sim* sim = S(L);
+  const int army = static_cast<int>(luaL_checknumber(L, 1));
+  const int src = static_cast<int>(luaL_checknumber(L, 2));
+  const bool on = lua_toboolean(L, 3) != 0;
+  const auto& armies = sim->armies();
+  if (army < 0 || static_cast<size_t>(army) >= armies.size()) return 0;
+  auto& v = armies[static_cast<size_t>(army)]->sources;
+  const auto it = std::find(v.begin(), v.end(), src);
+  if (on) {
+    if (it == v.end()) v.push_back(src);
+  } else if (it != v.end()) {
+    v.erase(it);
+  }
+  return 0;
+}
+
+// EndGame() 0x74b8b0: Sim::EndGame (the simulation's vtable +0x5c), what the EndGame order of the command stream
+// does: the next beat still runs, then the game stands.
+int l_EndGame(lua_State* L) {
+  S(L)->endGame = true;
+  return 0;
+}
+
 // Random() -> [0,1]; Random(max) -> 1..max; Random(min, max) -> min..max (integers; 0x759010, sim_random.md 3)
 int32_t RandomArg(lua_State* L, int i) {
   if (lua_type(L, i) != LUA_TNUMBER) luaL_typerror(L, i, "number");
@@ -541,6 +570,8 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "GetCurrentCommandSource", l_GetCurrentCommandSource);
   SetGlobal(L, "OkayToMessWithArmy", l_OkayToMessWithArmy);
   SetGlobal(L, "IsGameOver", l_IsGameOver);
+  SetGlobal(L, "SetCommandSource", l_SetCommandSource);
+  SetGlobal(L, "EndGame", l_EndGame);
   SetGlobal(L, "Random", l_Random);
   SetGlobal(L, "IsAlly", l_IsAlly);
   SetGlobal(L, "IsEnemy", l_IsEnemy);

@@ -3,6 +3,27 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 11: `SetCommandSource` and `EndGame` in the simulation's Lua — done
+
+Both are globals of the simulation's Lua now.
+
+- **`EndGame()`**: what the EndGame order of the command stream does (FA exe 0x74b8b0 calls the
+  simulation's own EndGame, vtable +0x5c): the next beat still runs, then the game stands, and
+  `IsGameOver()` is true from the call on. It was a stub that did nothing.
+- **`SetCommandSource(army, source, enabled)`**: which command sources may command an army (the list an
+  army has from the session's header; the same list `OkayToMessWithArmy` and the command stream's
+  source check go by). `true` adds the source, `false` takes it away. **Both numbers count from 0**,
+  as FAF's scripts pass them (`SetCommandSource(data.Army - 1, commandSource, false)`).
+  This one is not the original's function: FAF's exe patch adds it (the name is in the patch section
+  of the exe, 0x1294028), so I could not read it the usual way and took its behaviour from the
+  scripts' use. Nothing else happens in it: the brain's `AbandonedByPlayer` is not called (that
+  belongs to the stream's CommandSourceTerminated).
+
+Checked by script after 50 beats of the eight-army replay: `SetCommandSource(0, 0, false / true)` and
+an army number out of range run without error, `EndGame()` runs and `IsGameOver()` is true after
+it. The victory script's whole path (ToObserver, SyncGameResult, EndGameThread) I have not run:
+that is your driver's. The thirteen replays keep their marks.
+
 ## render, a question by message: `SetEmitterCurveParam(name, a, b)` — it REPLACES the curve by one key
 
 Read now (it was "not read" in the answers to render 9 and 10). FA exe 0x66def0
