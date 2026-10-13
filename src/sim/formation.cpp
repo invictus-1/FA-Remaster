@@ -15,6 +15,7 @@
 #include "sim/blueprints.h"
 #include "sim/collision.h"
 #include "sim/commands.h"
+#include "sim/entity_grid.h"
 #include "sim/landnav.h"
 #include "sim/motion.h"
 #include "sim/sim.h"
@@ -388,12 +389,43 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
   float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
   float x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
-  sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
+  const bool selfTransport = u->transport != nullptr;
+  // (candidates come by their centre: the margin has to cover half the longest hull, a battleship lying askew
+  // reaches 15 and more from its middle)
+  static const long dbgSpot = getenv("MOHO64_DEBUG_FORMSPOT") ? atol(getenv("MOHO64_DEBUG_FORMSPOT")) : -1;
+  sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* e) {
+    if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot && e != u) {  // every unit within 2 of the box
+      WorldShape ds;
+      if (GetWorldShape(e, &ds)) {
+        Vec3 mn, mx;
+        ShapeBounds(ds, &mn, &mx);
+        if (!(mx.x < x0 - 2 || mn.x > x1 + 2 || mx.z < z0 - 2 || mn.z > z1 + 2))
+          Logf(LogLevel::Info,
+               "formspot   box (%g,%g)-(%g,%g) near unit %u %s layer %s box x %.4f..%.4f z %.4f..%.4f dead %d built %d moving %d "
+               "attached %d transport %d cells x %d+%d z %d+%d",
+               x0, z0, x1, z1, e->id, e->blueprint ? e->blueprint->id.c_str() : "?", e->layer.c_str(), mn.x, mx.x, mn.z, mx.z,
+               static_cast<int>(Gone(e)), static_cast<int>(!e->beingBuilt),
+               static_cast<int>(e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
+                                e->position.z != e->lastPosition.z),
+               static_cast<int>(e->unitStates.count("Attached")), static_cast<int>(e->transport != nullptr), e->gridX0,
+               e->gridW, e->gridZ0, e->gridH);
+      }
+    }
     if (blocked || e == u || Gone(e) || e->beingBuilt || e->layer == "Air") return;
     if (u->layer == "Sub" && e->layer != "Sub") return;
-    bool moving = e->position.x != e->lastPosition.x || e->position.z != e->lastPosition.z;
-    if (moving) return;
-    if (e->form && e->form == u->form && !e->unitStates.count("Attacking") && !u->unitStates.count("Attacking")) return;
+    const bool sameForm =
+        e->form && e->form == u->form && !e->unitStates.count("Attacking") && !u->unitStates.count("Attacking");
+    if (e->transport && !BpInCategory(sim, e->blueprint, "PODSTAGINGPLATFORM")) {
+      // (0x720f70: a unit with a transport object, a carrier too, is in the way whether it moves or not)
+      if (sameForm) return;
+    } else {
+      // its velocity, all three parts (memcmp of 12 bytes with zero): a submarine diving on the spot moves
+      const bool moving = e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
+                          e->position.z != e->lastPosition.z;
+      if (selfTransport && (moving || u->unitStates.count("TransportLoading"))) return;
+      if (moving) return;
+      if (sameForm) return;
+    }
     if (e->unitStates.count("Attached")) return;
     // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity+0x240, the axis-aligned bounds of its
     // collision shape as it stands: a turned or tilted hull has a wider one) touches the box, touching counts
@@ -402,8 +434,9 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
       Vec3 mn, mx;
       ShapeBounds(ws, &mn, &mx);
       if (mx.x < x0 || mn.x > x1 || mx.z < z0 || mn.z > z1) return;
-      // (and before that the entity grid's cells: boxes that only touch on a multiple of 4 do not meet)
-      if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
+      // (and before that the entity grid's cells, the unit's as the grid has them: skirt-wide once it has moved,
+      // so a submerged sub half a unit wide that ends on a multiple of 4 is still found by the box beside it)
+      if (!GridFindsInBox(sim, e, x0, z0, x1, z1)) return;
     } else {
       const MotionBlueprint* b = e->motion.bp;
       float hx = b ? b->sizeX * 0.5f : 0.5f, hz = b ? b->sizeZ * 0.5f : 0.5f;
@@ -439,8 +472,15 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
   if (Gone(u) || F.type == 15 || F.scale < 1.0f || LayerIndex(u) == 1) return;
   int size = std::max(FpSizeX(u), FpSizeZ(u));
   int layer = LayerIndex(u);
+  // MOHO64_DEBUG_FORMSPOT=<unit id>: every spot asked for that unit and which test refused it
+  static const long dbgSpot = getenv("MOHO64_DEBUG_FORMSPOT") ? atol(getenv("MOHO64_DEBUG_FORMSPOT")) : -1;
   auto spot = [&](float x, float z) {
     int cx = CellOfX(u, x), cz = CellOfZ(u, z);
+    if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot)
+      Logf(LogLevel::Info, "formspot %u unit %u at %.3f %.3f cell (%d,%d): fits %d can move %d within %d free %d (%zu reserved)",
+           sim.tick(), u->id, x, z, cx, cz, LandCellFits(sim, u, cx, cz) ? 1 : 0, CanMoveAt(sim, u, cx, cz) ? 1 : 0,
+           IsWithinMap(sim, x, z, static_cast<float>(size)) ? 1 : 0, IsFree(F, x, z, size, layer) ? 1 : 0,
+           F.reservations.size());
     return LandCellFits(sim, u, cx, cz) && CanMoveAt(sim, u, cx, cz) && IsWithinMap(sim, x, z, static_cast<float>(size)) &&
            IsFree(F, x, z, size, layer);
   };

@@ -871,10 +871,18 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
       // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
       const bool hadCommands = !u->commands.empty();
+      // A unit's command thread runs its dispatcher every beat while the queue is empty (TaskTick 0x598e80 answers
+      // 1), so an idle unit keeps its place in the stage's run list. A dispatched Move task sleeps on the
+      // navigator's event, off the list; clearing the queue destroys its command, which wakes it, and a woken
+      // thread is linked in at the list's end. So when one order reaches idle units and units under way, the
+      // idle ones are dispatched first, whatever their ids. Seen: 28 ships ordered to one place, each reserving
+      // its spot at dispatch (formation AdjustPosition); the ones already moving came last and had to give way.
+      const bool moveAsleep = hadCommands && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
       u->clearKeepsMove = keep;
       ForgetUnitCommands(u);
       u->clearKeepsMove = false;
       if (!keep && hadCommands) MotionStop(u);
+      if (moveAsleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
       at = -1;
     }

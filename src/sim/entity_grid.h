@@ -39,5 +39,10 @@ void GridUpdate(Sim& sim, Entity* e, bool widened);
 void GridRemove(Sim& sim, Entity* e);
 // Step 13 of the beat (Entity::AdvanceCoords): every unit's widened span.
 void GridAdvanceCoords(Sim& sim);
+// Whether a grid query of the box [mn, mx] finds the entity: the cells it is registered in (its span as the grid
+// has it: skirt-wide for a unit that moved since it was made, and as of the last AdvanceCoords) against the
+// box's cells (func_AABoxToRect 0x4fcbe0). GatherUnmarkedUnitsInBox 0x721c00 and CollectEntitiesInBox 0x721dc0
+// see only these before any box is compared.
+bool GridFindsInBox(Sim& sim, const Entity* e, float x0, float z0, float x1, float z1);
 
 }  // namespace moho

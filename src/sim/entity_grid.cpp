@@ -146,6 +146,14 @@ void GridUpdate(Sim& sim, Entity* e, bool widened) {
 
 void GridRemove(Sim& sim, Entity* e) { sim.entityGrid().Remove(e); }
 
+bool GridFindsInBox(Sim& sim, const Entity* e, float x0, float z0, float x1, float z1) {
+  if (!sim.entityGrid().ready()) return true;  // (no map: nothing to go by)
+  if (!e->gridW || !e->gridH) return false;
+  auto lo = [](float v) { return std::clamp(static_cast<int>(std::floor(v)) >> 2, 0, 0xffff); };
+  auto hi = [](float v) { return (static_cast<int>(std::ceil(v)) + 3) >> 2; };
+  return e->gridX0 < hi(x1) && lo(x0) < e->gridX0 + e->gridW && e->gridZ0 < hi(z1) && lo(z0) < e->gridZ0 + e->gridH;
+}
+
 void GridAdvanceCoords(Sim& sim) {
   // UpdateCollision runs here only for entities whose transform changed (the beat's list of moved coords). A unit
   // that has stood where it was made since - a parked aircraft, set down by a script - keeps the cells of its
