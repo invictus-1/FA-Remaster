@@ -76,6 +76,25 @@ int l_DiskFindFiles(lua_State* L) {
 
 int l_DiskGetFileInfo(lua_State* L) {
   const char* name = luaL_checkstring(L, 1);
+  // The lab's comparison probe (a script in the lab's overlay folder, not part of the game) is switched on for
+  // the ORIGINAL by flag files there. This engine goes by its own environment instead (MOHO64_PROBE = watch or
+  // on), never by those files: a flag set for another run (an oracle run, a watch run) must not switch the probe
+  // on in a game somebody starts meanwhile.
+  if (std::strncmp(name, "/moho64_probe_", 14) == 0) {
+    const char* mode = getenv("MOHO64_PROBE");
+    const std::string what = name + 14;
+    const bool watch = mode && std::strcmp(mode, "watch") == 0;
+    const bool on = mode && (watch || std::strcmp(mode, "on") == 0);
+    if ((what == "on" && on) || (what == "watch" && watch)) {
+      lua_newtable(L);
+      lua_pushstring(L, "IsFolder");
+      lua_pushboolean(L, 0);
+      lua_rawset(L, -3);
+    } else {
+      lua_pushboolean(L, 0);
+    }
+    return 1;
+  }
   auto info = GetVfs(L)->GetFileInfo(name);
   if (!info) {
     lua_pushboolean(L, 0);
