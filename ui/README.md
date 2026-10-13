@@ -396,10 +396,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   end state with the main menu (the original makes a new state for every change between front
   end and game, FA exe 0x885de0) and the menu's background again; starting over launches the same
   game as before (`GameSession::Relaunch`: the kept session description, a new random seed unless
-  one was given) and its interface comes up as the first time. `SessionEndGame()` ends the game:
-  no beat runs after it and `SessionIsGameOver()` says so. Written from the scripts' use, not
-  read from the original's code; the score screen the scripts show at a game's end is not
-  checked yet. Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`.
+  one was given) and its interface comes up as the first time. `SessionEndGame()` ends the game
+  as the original does, with an order (the command stream's EndGame): one more beat runs, then
+  the simulation stands; `SessionIsGameOver()` says so. Written from the scripts' use, not read
+  from the original's code. The score screen the scripts show at a game's end does not come up
+  yet: it waits for the final score, which the simulation's scripts hand over once their
+  `IsGameOver()` is true, and the engine's is not built ("ui 10" in `REQUESTS.md`). `SessionGet
+  CommandSourceNames` / `SessionGetLocalCommandSource` name who gives orders (the script's
+  pause sign uses them). Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`.
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the
@@ -411,8 +415,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 432 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
-  the units', as a first version); the other 99 are logged stubs. (`--list-bindings` counts
+- 434 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+  the units', as a first version); the other 97 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

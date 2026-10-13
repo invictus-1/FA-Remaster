@@ -110,15 +110,37 @@ int l_SessionResume(lua_State* L) {
   RequestSessionPause(L, false);
   return 0;
 }
-// SessionEndGame(): the game is over: the simulation runs no further (the score screen and the
-// way out follow from the scripts). SessionIsGameOver() says so.
+// SessionGetCommandSourceNames() (FA exe 0x897af0): the names of the session's command sources
+// (the players who can give orders), by their number from 1. SessionGetLocalCommandSource()
+// (0x897c70): the number of the one this player speaks for, 0 when he can give no orders. The
+// game's script names who paused by them.
+int l_SessionGetCommandSourceNames(lua_State* L) {
+  lua_newtable(L);
+  int n = 0;
+  for (const auto& source : TheSim(L)->cmdSources) {
+    lua_pushstring(L, source.name.c_str());
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+int l_SessionGetLocalCommandSource(lua_State* L) {
+  int source = UserState::From(L)->config().commandSource;
+  bool ours = TheSim(L)->focusArmy >= 0 && source >= 0 && source < static_cast<int>(TheSim(L)->cmdSources.size());
+  lua_pushnumber(L, ours ? source + 1 : 0);
+  return 1;
+}
+// SessionEndGame(): the game is over. As in the original it is an order like any other (the
+// command stream's EndGame, FA exe 0x74b100): the simulation runs one more beat, in which its
+// scripts hand over the final score, and then stands. SessionIsGameOver() says so from the
+// moment it is asked for.
 int l_SessionEndGame(lua_State* L) {
   if (GamePace* pace = UserState::From(L)->config().pace) pace->ended = true;
+  RequestSessionEnd(L);
   return 0;
 }
 int l_SessionIsGameOver(lua_State* L) {
   const GamePace* pace = UserState::From(L)->config().pace;
-  lua_pushboolean(L, pace && pace->ended);
+  lua_pushboolean(L, (pace && pace->ended) || TheSim(L)->endGame);
   return 1;
 }
 int l_GetSimTicksPerSecond(lua_State* L) {
@@ -420,6 +442,8 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "SessionRequestPause", l_SessionRequestPause);
   SetGlobal(L, "SessionResume", l_SessionResume);
   SetGlobal(L, "SessionEndGame", l_SessionEndGame);
+  SetGlobal(L, "SessionGetCommandSourceNames", l_SessionGetCommandSourceNames);
+  SetGlobal(L, "SessionGetLocalCommandSource", l_SessionGetLocalCommandSource);
   SetGlobal(L, "SessionIsGameOver", l_SessionIsGameOver);
   SetGlobal(L, "SessionIsPaused", l_SessionIsPaused);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);

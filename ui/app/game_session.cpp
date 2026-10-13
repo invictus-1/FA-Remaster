@@ -284,7 +284,7 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
 }
 
 void GameSession::Advance(double seconds) {
-  if (!sim_ || pace.ended) return;
+  if (!sim_) return;
   due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {

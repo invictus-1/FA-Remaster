@@ -223,6 +223,7 @@ void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out);
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).
 void RequestSessionPause(lua_State* L, bool pause);
+void RequestSessionEnd(lua_State* L);  // the command stream's EndGame
 // The game's speed in the speed keys' steps, and setting it (session_bindings.cpp): only where
 // the game's option lets the players change it (the client manager's byte +0x454).
 int GameSpeedOf(lua_State* L);

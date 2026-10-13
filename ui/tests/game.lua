@@ -4,7 +4,7 @@
 -- the lobby) with the player in the first slot and one opponent; run it with fog of war on and
 -- with the configuration's FogOfWar set to "none" (the checks about the enemy differ):
 --   moho64ui --init <init.lua> --stage setup --session <config.lua> --seed 7 --game-lua ui/tests/game.lua
---            --frames 2500 --log out.log
+--            --frames 2600 --log out.log
 -- (and once with GameOptions.GameSpeed = "adjustable": the checks of the game's speed differ)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 -- (With --prefs the run saves that preferences file, as a game does: give it a copy.)
@@ -456,6 +456,11 @@ local function run()
     WaitSeconds(1.0)
     check("and which goes when its time is over", meshes("CommandFeedback2"), marks)
 
+    -- who gives orders: the session's command sources by name, and the player's own
+    local sources = SessionGetCommandSourceNames()
+    local mine = SessionGetLocalCommandSource()
+    check("the player speaks for a command source", mine >= 1 and mine <= table.getn(sources), true)
+    check("which has the player's name", sources[mine], GetArmiesTable().armiesTable[GetFocusArmy()].nickname)
     -- pause: asked for like an order, so it holds from a beat on; the game's time stands
     check("the game runs", SessionIsPaused(), false)
     local gamemain = import("/lua/ui/game/gamemain.lua")
@@ -515,12 +520,17 @@ local function run()
     check("switched off they stay off whatever a script says", moho64ui_LifeBars(), false)
     if barsAtFirst then ConExecute('UI_RenderUnitBars') end
 
-    -- the game's end: no beat runs after SessionEndGame (last, since nothing moves any more)
+    -- the game's end: SessionEndGame is an order; one more beat runs (its scripts hand over the
+    -- final score), then the simulation stands (last, since nothing moves any more)
     check("the game is not over", SessionIsGameOver(), false)
     SessionEndGame()
+    check("SessionEndGame: the game is over", SessionIsGameOver(), true)
+    WaitSeconds(0.6)
     local ended = GetGameTimeSeconds()
     WaitSeconds(0.5)
-    check("SessionEndGame: the game is over and its time stands", SessionIsGameOver() and GetGameTimeSeconds() == ended, true)
+    check("and its time stands", GetGameTimeSeconds(), ended)
+    -- (To add when the engine's IsGameOver answers, "ui 10" in REQUESTS.md: the final score has
+    -- come, import("/lua/ui/dialogs/hotstats.lua").scoreData.current and .history are there.)
     LOG("TEST done: " .. failed .. " failed")
 end
 

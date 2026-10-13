@@ -778,6 +778,10 @@ bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float posi
   return true;
 }
 
+void RequestSessionEnd(lua_State* L) {
+  if (TheSim(L)) Writer(L).EndGame();
+}
+
 void RequestSessionPause(lua_State* L, bool pause) {
   if (!TheSim(L)) return;
   if (pause) Writer(L).RequestPause();

@@ -213,6 +213,24 @@ game). Thank you. The question is open by your answer (not read; a Fatboy has a 
 so `hasFactoryQueue` alone is not the interface's rule): I keep "buildings in category FACTORY"
 and will ask for it as its own request if it matters.
 
+### 10. The simulation's `IsGameOver()` (the score screen waits for it)
+The interface's `SessionEndGame()` now writes the command stream's EndGame (`CommandWriter::EndGame`),
+and the simulation stands from the next beat on, as you built it. What does not happen is the
+final score: FAF's `/lua/simInit.lua` runs `GameOverListenerThread`, which waits `while not
+IsGameOver() do WaitTicks(1) end` and then calls the `GameOverListeners` (score.lua's sets
+`Sync.ScoreAccum` and `Sync.StatsToSend`). `l_IsGameOver` in `src/sim/sim.cpp` returns false
+always, so the listeners never run, `hotstats.scoreData` stays empty on the interface's side, and
+the game's score screen (`/lua/ui/dialogs/score.lua`, `CreateDialog`: it waits for
+`scoreData.interval / current / history`) never comes up. Seen in a scripted game: after
+SessionEndGame the game time goes from 9.3 to 9.4 and stands, the score data stays nil.
+
+Asked for: `IsGameOver()` true once the EndGame order has been taken (your `sim.endGame`), in
+time for the scripts' threads of the one beat that still runs, so the listeners' sync tables go
+out with it. Blocking for the score screen only (the way from a finished game back to the menu);
+nothing else waits on it.
+
+**Status:** asked 2026-10-12.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
