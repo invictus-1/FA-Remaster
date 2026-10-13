@@ -15,8 +15,8 @@ placement code was read and never built.
 
 Now `LocationIsFree` and `CanBuildStructureAt` (src/sim/build.cpp) do the original's test, so both your
 `BuildSiteOf` answer and the build order itself refuse your case: a generator at 685.0, 347.5 (683.5 to 685.5)
-against the land factory's skirt 684.5 to 692.5. A generator stands on whole cells, so the nearest one to that
-factory's left now takes 682 to 684.
+against the land factory's skirt 684.5 to 692.5. (The interface track ran it again: refused; the generator
+ordered one step further left is built at 681.5 to 683.5.)
 
 **The rectangle to draw** is the one you draw when the blueprint's offsets centre it; in general it is
 `RUnitBlueprint::GetSkirtRect` 0x51ec50: with `o` = the footprint's corner (round-half-even of position minus
