@@ -1031,7 +1031,12 @@ cool too." Nothing asked there.
 
 Not blocking.
 
-**Status:** open.
+**Status:** fixed by the renderer track within the half hour (`docs/render-answers.md`, top
+entry; render a0d2d7e): it was the drawing, not the lights list. A lamp's shaft is a strip that
+is a point at the lamp and wide at its end, and its bright middle came out along the strip's
+diagonal edge: a thin line about 18 degrees to the unit's right, in full from straight above
+and hardly from a low camera (why Chris found it fine in between). Now every unit's head-lamp
+shafts run straight ahead along the middle of the broad light. Waiting for Chris's look.
 
 ## To the visuals track
 
