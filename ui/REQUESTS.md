@@ -341,6 +341,34 @@ none. Seen in a game: five tanks sent 30 units away by one right click end in a 
 across their way (before: all within 3 units of the spot). Not built, as the data does not
 decide it: what Ctrl changes; an order given through an order button for one unit. Thank you.
 
+### 15. Which unit blueprint fields lie at +0x458, +0x460 and +0x468 (the range rings read them)
+A question, not blocking. Chris, 2026-10-13, wants the range rings to be exactly the original's
+("the rings are based on the stats of the unit ... if not ask so you can get the right stuff") and
+sent a picture of the original with a commander selected (`original_range_rings_commander.png`
+in the interface's scratch folder `chris_20261013`, ours beside it as
+`ui_range_rings_commander_ours.png`).
+
+What I have read on the interface's side (FA exe): the range renderer takes a ring's radius from
+an extractor per filter name. Two of them read floats of the UNIT BLUEPRINT that I cannot name:
+- "Defense" (0x7ec980): the float at +0x458 (beside the weapons at +0x4d8, 0x184 bytes each);
+- "Miscellaneous" (0x7ed430): the float at +0x468 where it is above 0, else the one at +0x460.
+Known from the field tables: the Intel block is at +0x330 (0x38 bytes: VisionRadius +0 ...
+SpoofRadius +0x30), the Economy block's fields run from BuildCostEnergy +0 to MaxBuildDistance
++0x7c (the table at 0x521f00 .. 0x522095), the AI block from GuardScanRadius +0 to AttackAngle
++0x70. Where the Economy block and the others BEGIN in the blueprint I have not read.
+
+Asked: the names of the fields at those three offsets (you have the blueprint's layout from the
+simulation's side), or where the blocks begin, so that I can work it out.
+
+What I did meanwhile, to be corrected by your answer: "Defense" also takes
+Economy.MaxBuildDistance. In his picture the thick ring in the Defense colour measures 10 where
+the thin omni ring measures 24, which are the UEF commander's MaxBuildDistance and OmniRadius.
+Not explained by me in the same picture: a thick red ring at 18.6 on that scale (its direct
+fire weapons say 22), a thin yellow one at 12.9 and a wide green one at 51.7. If you know what a
+live unit answers for its weapons' reach (unit vtable +0x44: class, min, max), that may be it.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
