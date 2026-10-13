@@ -370,13 +370,34 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     ModelLod lod;
     lod.cutoff = s.cutoff;
     lod.shaderName = s.shader;
-    const std::string kind = Lower(lod.shaderName);
+    // (the first game's names, which many blueprints still carry, mean today's techniques: the
+    // original program's own table, docs/engine-answers.md, render 17; no name at all is "Unit")
+    std::string kind = Lower(lod.shaderName);
+    const bool solidScenery = kind == "tmeshnonormals";  // rocks, logs, debris
+    {
+      static const char* const kOld[][2] = {
+          {"tmeshnolighting", "flat"}, {"tmeshnonormals", "vertexnormal"}, {"tmeshalpha", "normalmappedalpha"},
+          {"tmeshglow", "normalmappedglow"}, {"tmeshterrain", "normalmappedterrain"}, {"simple", "unit"},
+          {"team", "unit"}, {"tmeshalphaglowfade", "unitbuild"}, {"tmeshmetalbuild", "aeonbuild"},
+          {"tmeshshield", "shield"}, {"tmeshzfill", "shieldfill"}, {"tmeshadd", "effect"},
+          {"tmeshexplosion", "explosion"}, {"tmeshcloud", "cloud"}, {"tmeshoutercloud", "outercloud"},
+          {"tmeshempnuke", "nukeemp"}, {"tmeshquantumnuke", "nukequantum"}, {"tmeshtemporalbubble", "temporalbubble"}};
+      for (const auto& old : kOld)
+        if (kind == old[0]) {
+          kind = old[1];
+          break;
+        }
+      if (kind.empty()) kind = "unit";
+    }
     if (kind.compare(0, 4, "aeon") == 0) lod.faction = 1;
     else if (kind == "insect" || kind.compare(0, 6, "cybran") == 0) lod.faction = 2;
     else if (kind.compare(0, 8, "seraphim") == 0) lod.faction = 3;
     if (kind == "vertexnormal") {  // the far-away cards of trees: alpha test above 0x23, blended
       lod.alphaCut = 35.0f / 255;
-      lod.blend = lod.vertexNormals = true;
+      lod.vertexNormals = true;
+      // (what the first game called "TMeshNoNormals" is rocks, logs and debris: solid things; they
+      // keep their shadows and are not blended)
+      lod.blend = !solidScenery;
       lod.teamMask = false;
     } else if (kind.find("aeonbuildpuddle") != std::string::npos) {  // the Aeon's pool of liquid metal
       lod.chrome = true;
@@ -393,12 +414,15 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
       lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
-    } else if (kind == "nukeuef" || kind == "nukeemp" || kind == "nukequantum") {  // a nuke's ball of fire
+    } else if (kind == "nukeuef" || kind == "nukeemp" || kind == "nukequantum" || kind == "outercloud" || kind == "cloud") {
+      // a nuke's ball of fire, and the shells of cloud round one ("OuterCloud" is the EMP shell's
+      // very look; "Cloud" stands still, and is lit by the sun in the original: here it is not)
       lod.blend = lod.glass = true;
       lod.teamMask = false;
       lod.nuke = kind == "nukeuef" ? 1 : 2;
-      if (kind == "nukeemp") lod.nukeShell = {1.0f, -0.008f, 180.0f};
+      if (kind == "nukeemp" || kind == "outercloud") lod.nukeShell = {1.0f, -0.008f, 180.0f};
       if (kind == "nukequantum") lod.nukeShell = {0.5f, -0.006f, 150.0f};
+      if (kind == "cloud") lod.nukeShell = {1.0f, 0.0f, 180.0f};
     } else if (kind == "alphafade") {  // a see-through slab that fades with its age: the UEF's build slices, its teleport box
       lod.blend = lod.glass = lod.fades = true;
       lod.teamMask = false;
@@ -412,7 +436,11 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind.find("alpha") != std::string::npos) {  // NormalMappedAlpha and its relatives: alpha test above 0x80
       lod.alphaCut = 128.0f / 255;
       lod.teamMask = false;
-    } else if (kind.find("terrain") != std::string::npos || kind.find("tmesh") != std::string::npos || kind.find("clutter") != std::string::npos) {
+    } else if (kind == "flat") {  // unlit in the original, cut where the alpha is not above 0x7F (drawn lit here)
+      lod.alphaCut = 127.0f / 255;
+      lod.teamMask = false;
+    } else if (kind.find("terrain") != std::string::npos || kind.find("tmesh") != std::string::npos || kind.find("clutter") != std::string::npos ||
+               kind == "normalmappedglow" || kind == "effect" || kind == "explosion") {
       lod.teamMask = false;  // rocks and other scenery
     }
     auto mesh = s.mesh == skeletonMesh ? skeletonFile : vfs_->ReadFile(s.mesh);

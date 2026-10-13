@@ -439,7 +439,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   shaders "NukeUEF", "NukeEMP", "NukeQuantum") is drawn by its age: churning fire with holes that
   hides what burns inside it, eats itself away after 20 seconds and fades from 50 (the UEF's, and
   the death of a commander that carries one); the Cybran's and Aeon's a shell whose texture slides
-  along it (the Aeon's without the original's missing green: not there). A shell is drawn at the
+  along it (the Aeon's without the original's missing green: not there). The first game's shader
+  names, which some 700 levels in the game's blueprints still carry (`TMeshAlpha`,
+  `TMeshNoNormals`, `TMeshOuterCloud` ...), are mapped to today's techniques by the original
+  program's own table before a level is sorted into a look (`REQUESTS.md` 17). A shell is drawn at the
   size the simulation holds for it (`FrameProjectile::size`, the engine's `ProjectileView::size`:
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`

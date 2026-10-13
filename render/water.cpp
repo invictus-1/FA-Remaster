@@ -204,6 +204,26 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // that shows of it), calmer where the map says the water is (lakes), higher when it rains
   float3 swell = Swell(xz) * ((0.35 + 0.65 * water.r) * (1 + 1.2 * falling.x));
   N = normalize(N + float3(-swell.y, 0, -swell.z) * 2.5);
+  // near the eye: fine ripples, two sizes of them crossing, which the game's wave textures are too
+  // coarse to show (Chris, 2026-10-13: "if you go up close it looks very pixelated"). Each size is
+  // left out where it would be finer than about two pixels (grain: the water one pixel covers).
+  float grain = max(length(ddx(xz)), length(ddy(xz)));
+  float2 fine = saturate(1.5 - grain * float2(4.0, 9.0) * 2);
+  [branch] if (fine.x > 0) {
+    const float e = 0.06;
+    float t = time * 0.5;
+    float2 q = xz * 4.0 + float2(t, t * 0.7);
+    float h = CloudNoise(float3(q, t));
+    float2 tilt = float2(CloudNoise(float3(q + float2(e, 0), t)) - h, CloudNoise(float3(q + float2(0, e), t)) - h) * (fine.x * 0.13 / e);
+    if (fine.y > 0) {
+      // (turned against the first, so that no grid shows)
+      float2 r = float2(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) * 9.0 - float2(t * 1.3, t);
+      float g = CloudNoise(float3(r, t * 1.7));
+      float2 turned = float2(CloudNoise(float3(r + float2(e, 0), t * 1.7)) - g, CloudNoise(float3(r + float2(0, e), t * 1.7)) - g) * (fine.y * 0.09 / e);
+      tilt += float2(turned.x * 0.8 + turned.y * 0.6, -turned.x * 0.6 + turned.y * 0.8);
+    }
+    N = normalize(N + float3(-tilt.x, 0, -tilt.y) * (0.4 + 0.6 * water.r));
+  }
   // rain: every small square of water has a drop falling into it again and again; its ring runs
   // outward, tilting the surface, and the whole surface is roughened
   float rings = 0;
@@ -234,7 +254,6 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // how high the water stands here just now, against the sheet: where the bed is higher, the
   // water has run back from it (the waterline moves up and down the shore with the swell)
   // (and unevenly, by the foam's own lace: a waterline is never a ruled line)
-  float grain = max(length(ddx(xz)), length(ddy(xz)));
   float lace = Lace(xz + N.xz * 0.12, grain);
   float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
   float deep = i.world.y + level - bed.y;
