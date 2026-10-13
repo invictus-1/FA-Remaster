@@ -75,6 +75,7 @@ struct GameSession::Picture : WorldSource {
       render::WorldPicture::Line o;
       for (int i = 0; i < 3; ++i) o.a[i] = l.a[i], o.b[i] = l.b[i];
       o.color = l.color;
+      o.width = l.width;
       lines.push_back(o);
     }
     picture.SetShapes(lines, {});

@@ -1635,6 +1635,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
       WorldLine line;
       for (int i = 0; i < 3; ++i) line.a[i] = from[i], line.b[i] = c.position[i], from[i] = c.position[i];
       line.color = color;
+      line.width = 3;
       lines->push_back(line);
     }
   }

@@ -32,7 +32,8 @@ struct WorldGhost {
 };
 struct WorldLine {
   float a[3], b[3];
-  uint32_t color;  // 0xAARRGGBB
+  uint32_t color;   // 0xAARRGGBB
+  float width = 1;  // pixels on the screen, the same from near and far
 };
 // Range rings: the rings of one of the game's range filters in one colour. They show as one
 // outline round the ground they cover together; an inner radius cuts a hole.

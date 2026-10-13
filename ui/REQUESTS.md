@@ -618,6 +618,18 @@ Not blocking. From my side for your count of previews: the green ghosts of build
 not begun now show for all of the player's builders, selected or not (his wish, "like the og
 game"), up to 400.
 
+**Status of 10 and 11:** answered by the renderer track the same day (`docs/render-answers.md`,
+"ui, to the renderer 10 and 11", with a table of whose each note is). Done by it: the army
+colour's glow at 0.8 of what it was, lightning in a full storm about every 22 seconds (was 9).
+The visuals track's, asked by it and by me: the factory's "flashlight", the tank's phantom patch,
+the commander's and the power generator's lights (their lights lists), the flicker on the
+upgrading factory (the remastered model's parts on the upgrade animation's bones). OPEN: the
+engineer's cones to both sides. Its list has three beams ahead; on its asking I ran my game with
+`MOHO64_DEBUG_LAMPS=tread` (the engineer built by the factory, after it built a power generator,
+at night): all 400 lines say turned = rest and beam = the unit's facing, and the picture shows
+one cone ahead. Not reproduced; Chris's picture was of an older build with the engineer under a
+move order. Waiting for his look on the current build.
+
 ### 12. Lines of a chosen width (the guide round a building's site, the lines of orders)
 Chris, 2026-10-13, with three pictures of the original (FAF) that he took for this: while a
 building is placed, a green outline lies on the ground round each site (the room the building
@@ -637,6 +649,9 @@ width` in `Line`, 1 as today), and that such lines lie on the ground without bei
 the outlines yourself (a list of rectangles with a colour), say so and I hand them over
 instead. His pictures: `guide_original_1.png` (queued, Shift held), `_2` (a row being placed),
 `_3` (a row placed slantwise) in the folder of request 10's pictures.
+
+**Status of 12:** done by the renderer track within the hour (`Line::width`, pixels on screen;
+render da46620). In use once the engine has merged it.
 
 ## To the visuals track
 
@@ -661,3 +676,10 @@ his pictures; the renderer may already have passed it on): the rebuilt commander
 shine to its sides, he wants them "front facing and shine the ground"; the engineer (UEL0105)
 "needs lights up front side ones can stay but probably smaller"; the T1 power generator
 (UEB1101) lights the ground on one side only, he wants it all round.
+
+**Status:** answered by the visuals track the same day: yes. The rebuilt commander was made on
+the BlackOps mesh, whose body bones carry the stock commander's names, so she exports the same
+body as `UEL0001` under the stock skeleton without upgrade parts, today, and says when the folder
+is in and which stock upgrade bones are empty. The stock upgrades themselves are not modelled:
+new design work that waits for Chris's order. The lights lists (commander, engineer, T1 power
+generator) are being reworked today.

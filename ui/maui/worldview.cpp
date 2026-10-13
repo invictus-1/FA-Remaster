@@ -650,6 +650,7 @@ class WorldView : public Control {
         line.a[1] = sim.map() ? sim.map()->TerrainHeight(line.a[0], line.a[2]) : site.position[1];
         line.b[1] = sim.map() ? sim.map()->TerrainHeight(line.b[0], line.b[2]) : site.position[1];
         line.color = color;
+        line.width = 4;  // (bold, as the original draws its guide: about four pixels in Chris's pictures of it)
         lines->push_back(line);
       }
     };
