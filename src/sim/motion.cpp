@@ -724,8 +724,14 @@ struct StepParams {
 StepParams Params(const UnitMotion& m) {
   const MotionBlueprint& b = *m.bp;
   StepParams P;
-  P.maxF = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.1f;  // u+0x594
-  P.maxR = b.maxSpeedReverse * m.speedMult * 0.1f;
+  // CAiSteeringImpl's parameters 0x6990e0 (0x6991d5): the top speed handed in is the unit's u+0x594, which
+  // Unit::UpdateInfoCache already made of MaxSpeed x the speed multiplier (and the formation's cap); here it is
+  // cut to the blueprint's MaxSpeed and multiplied by the speed multiplier AGAIN. So a multiplier below 1 counts
+  // twice in what the unit drives (a submerged Seraphim destroyer, SubSpeedMultiplier 0.9 on MaxSpeed 5: 4.05,
+  // while its u+0x594 says 4.5), a multiplier above 1 once. The reverse speed likewise (0x699206).
+  const float u594 = m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult;
+  P.maxF = std::min(b.maxSpeed, u594) * m.speedMult * 0.1f;
+  P.maxR = std::min(b.maxSpeedReverse, u594) * m.speedMult * 0.1f;
   P.acc = b.maxAccel * m.accMult * 0.01f;
   P.brake = (b.maxBrake != 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
   P.steer = (b.maxSteerForce != 0.0f ? b.maxSteerForce : b.maxAccel) * m.accMult * 0.01f;

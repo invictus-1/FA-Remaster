@@ -1237,6 +1237,19 @@ template <int Which>
 int l_SetMult(lua_State* L) {
   Unit* u = U(L);
   float v = static_cast<float>(luaL_checknumber(L, 2));
+  {
+    // MOHO64_DEBUG_MULT=<unit id>: every speed / acceleration / turn multiplier a script gives that unit, and from where
+    static const long dbg = getenv("MOHO64_DEBUG_MULT") ? atol(getenv("MOHO64_DEBUG_MULT")) : -1;
+    if (dbg >= 0 && static_cast<long>(u->id) == dbg) {
+      lua_Debug ar;
+      std::string where;
+      for (int lvl = 1; lvl <= 3 && lua_getstack(L, lvl, &ar); ++lvl) {
+        lua_getinfo(L, "Sl", &ar);
+        where += std::string(lvl > 1 ? " < " : "") + ar.short_src + ":" + std::to_string(ar.currentline);
+      }
+      Logf(LogLevel::Info, "mult %u unit %u kind %d = %g from %s", S(L)->tick(), u->id, Which, v, where.c_str());
+    }
+  }
   if (Which == 0) u->motion.speedMult = v;
   else if (Which == 1) u->motion.accMult = v;
   else if (Which == 2) u->motion.turnMult = v;
