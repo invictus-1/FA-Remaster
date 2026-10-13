@@ -484,6 +484,10 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
           return;
         }
       }
+      // That was the whole check (0x69d803 leaves the function, hit or not): a shell flying at a shapeless shell
+      // meets nothing else, neither another entity nor a detonation height. So a torpedo a decoy has turned onto
+      // its anti-torpedo shell is not turned again by the next decoy whose sphere it crosses.
+      return;
     }
     Unit* launcherUnit = p->launcher && p->launcher->kind == Entity::Kind::Unit ? static_cast<Unit*>(p->launcher) : nullptr;
     if (len >= 0.01f) {
