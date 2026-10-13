@@ -19,9 +19,12 @@ shoreline. What changed (`render/water.cpp`):
 - on open water the flecks that stay are wisps: soft at their edges, about a quarter as white, only
   on the swell's crests, and gone beyond about 180 world units from the eye. Up close they were
   hard white blobs before, which is most likely what read as "very pixelated".
-Not done: a finer picture of the waves themselves up close. They are the game's own four wave
-textures, as the original uses them; a finer layer of ripples near the eye can be added if Chris
-still finds the water coarse after this. The Original look is untouched.
+Added later the same day, on Chris's go: a finer layer of ripples near the eye (two sizes of them
+crossing, a quarter and a ninth of a world unit, each left out where it would be finer than about
+two pixels, so nothing of it shows from far). The fine detail in a close picture of open water
+rose by about 40 per cent (1.40 -> 1.97, mean difference from the blurred picture); the count of
+white points from far up is unchanged (123). Its cost is not measured yet. The Original look is
+untouched.
 
 **Kinds of weather that stay.** Your way is right (`SetDayAndWeather(hour, length, false)`, then
 `cloudCover` / `rain` / `snow` / `fog`, `wet` / `snowLying`, `climate` on `world()`), and those

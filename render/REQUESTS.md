@@ -21,10 +21,10 @@ count a look in which every place is seen as exploring). 14 done and in use (`Pr
 bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 done
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
 16 answered and in use the same day (a shell has ONE scale and it is the drawn size; the renderer
-draws at the engine's `ProjectileView::size`). 17 open (what the original draws for a `ShaderName` that
-is no technique of `mesh.fx`).
+draws at the engine's `ProjectileView::size`). 17 answered and in use (the original maps the first
+game's names to today's techniques by a table of 18; `models.cpp` has the same table).
 
-## 17. A mesh whose ShaderName names no technique of mesh.fx (2026-10-13, not blocking)
+## 17. A mesh whose ShaderName names no technique of mesh.fx (2026-10-13, answered)
 
 **Who asks:** the renderer. **What:** what the original draws when a mesh blueprint's `ShaderName`
 is not a technique of the game's `effects/mesh.fx`: nothing, a fixed fallback technique (which?),
@@ -46,7 +46,14 @@ draw them, those two are wrong.
 if it is a fallback, its name. If the fidelity suffixes (`_HighFidelity` ...) are part of the lookup,
 that too.
 
-**Answer:** (none yet)
+**Answer:** in `docs/engine-answers.md` (render 17): the exe sends every `ShaderName` through a
+table of 18 old names before use (`TMeshAlpha` -> `NormalMappedAlpha`, `TMeshNoNormals` ->
+`VertexNormal`, `TMeshOuterCloud` -> `OuterCloud`, `TMeshQuantumNuke` -> `NukeQuantum` ...); no name
+at all is `Unit`; the fidelity is chosen by the techniques' annotations, not by a suffix. In use:
+`ModelCache` maps the names the same way before it sorts a level into a look. `OuterCloud` and
+`Cloud` are drawn as a nuke's sliding shell; `Flat`, `NormalMappedGlow`, `Effect` and `Explosion`
+are still plain lit models (their own looks are not written). Not known: what is drawn when the
+mapped name is no technique either (`TemporalBubble`, `UnitBuild`, `Shield`).
 
 ## 16. A projectile's scale velocity: in what unit? (2026-10-13, answered)
 
