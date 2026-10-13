@@ -51,7 +51,9 @@ class SoundSystem {
   // the screen along the ground, and its zoom (the width of world it shows). Told every frame; the
   // world's sounds then get louder, softer and move between the ears as the camera moves. How loud
   // a sound is at a distance is its own: the game's files give each sound curves by "Distance"
-  // (from the eye to the sound) and by "CameraDistance" (from the eye to where it looks).
+  // (from the listener's place to the sound), by "Angle" (how far to the side of it) and by
+  // "CameraDistance" (from the eye to where it looks). The listener's place is the place the
+  // camera looks at, 4 lower (sound_system.cpp, at Heard, says what of that is read).
   void SetListener(const float eye[3], const float focus[3], const float right[3], float zoom);
   // A sound played once at a place. 0 when it is not heard from here (too far), or there is no such cue.
   int PlayAt(const std::string& bank, const std::string& cue, const float position[3]);

@@ -161,13 +161,37 @@ int SoundSystem::Play(const std::string& bankName, const std::string& cueName, b
 // The quietest a world sound is still played at (decibels by its curves alone).
 const float kHeardFrom = -60.0f;
 
+// How loud a sound of the world is, as read from the original (FA exe):
+// - The listener's place is the place it is given with its height 4 lower
+//   (AudioEngine::SetListenerTransform, 0x4d9890). "Distance" is from there to the sound (the
+//   sound library's own measure, handed on at 0x4d82ca).
+// - "Angle" (set for each running sound, 0x8aa57f..0x8aa5e7): with v from the listener to the
+//   sound, 90 degrees + the angle v rises above the level: 180 for a sound straight above the
+//   listener, 90 for one level with it. (The original takes the arc cosine of v's upward share
+//   by the short formula below, 0x50b710; the constant it then takes off is set while the game
+//   runs and is taken as a quarter turn here.) The game's curve by it is 0 dB at 180 and -20 dB
+//   at 90: a sound at the listener's place is at its loudest, one off to the side much softer.
+// - "CameraDistance" is how far the camera's eye is from the place it looks at (0x8ac226:
+//   the camera's LODMetric of its own target).
+// INFERRED, not read: that the place given is the place the camera LOOKS AT on the ground, not
+// its eye. The code that hands it over was not found; but only so do the pieces fit: the
+// listener sunk 4 below, a curve that is loudest for sounds "above" the listener, a variable of
+// its own for the eye's distance, and what Chris hears in the original (a power generator's
+// crackle only from very near, a mass extractor's thump hardly at all), where ours with the
+// listener at the eye played both loudly from every height.
 float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float position[3], float* left, float* right) const {
   if (!listening_) {
     *left = *right = 0;
     return -96.0f;
   }
-  float d[3] = {position[0] - eye_[0], position[1] - eye_[1], position[2] - eye_[2]};
+  float d[3] = {position[0] - focus_[0], position[1] - (focus_[1] - 4.0f), position[2] - focus_[2]};
   float distance = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  float angle = 180.0f;
+  if (distance > 0) {
+    const float x = d[1] / distance;
+    const float arc = std::sqrt(std::max(0.0f, 1.0f - x)) * (1.5707288f + x * (-0.2121144f + x * (0.0742610f + x * -0.0187293f)));
+    angle = (3.14159265f - arc) * 57.29578f;
+  }
   float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
   float eyeDistance = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
   float decibels = 0;
@@ -175,6 +199,7 @@ float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float positi
     auto it = curves_.find(offset);
     if (it == curves_.end() || it->second.parameter != 0) continue;
     if (it->second.variable == "Distance") decibels += it->second.At(distance);
+    else if (it->second.variable == "Angle") decibels += it->second.At(angle);
     else if (it->second.variable == "CameraDistance") decibels += it->second.At(eyeDistance);
   }
   // Between the ears by where it is on screen: at the screen's edge about two thirds to one side. (Ours.)
