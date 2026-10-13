@@ -190,11 +190,11 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     };
     const std::string start = option("RemasterDayStart"), length = option("RemasterDayLength"), weather = option("RemasterWeather");
     if (start == "map") skyNow_.startHour = -1;
-    else if (start == "dawn") skyNow_.startHour = 6.0f;
+    else if (start == "dawn") skyNow_.startHour = 6.5f;   // (the renderer: at 6.0 the land is nearly as dark as at night)
     else if (start == "morning") skyNow_.startHour = 9.0f;
     else if (start == "noon") skyNow_.startHour = 12.0f;
     else if (start == "afternoon") skyNow_.startHour = 15.0f;
-    else if (start == "dusk") skyNow_.startHour = 18.0f;
+    else if (start == "dusk") skyNow_.startHour = 17.5f;  // (likewise 18.0)
     else if (start == "night") skyNow_.startHour = 0.0f;
     else if (start == "random") skyNow_.startHour = static_cast<float>(session.header.seed % 96u) * 0.25f;  // every player draws the same
     if (length == "still") skyNow_.dayLengthSeconds = 0;

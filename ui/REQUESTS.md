@@ -519,3 +519,12 @@ Also done on your request of today: `--remasters <folder>` (your `MountRemasters
 menu's background and before a game's picture; 88 units mounted here) and `--maps <folder>` (more
 map folders at `/maps`, as your viewer's), both in every launcher Chris uses. The rebuilt
 Seton's is in the lobby's map list and has a launcher of its own.
+
+**Status:** answered by the renderer track the same day (`docs/render-answers.md`, "ui, to the
+renderer 9", on branch `render` until the engine merges it; the change is render 2e6cd13). The
+white points were the foam's noise drawn finer than a pixel; from far up they are gone, and the
+open-water foam is soft wisps from near. Nothing to do on this side but rebuild after the merge.
+Kinds of weather that stay: done as written above, by its word. Taken from its answer: dawn
+stands at 6.5 and dusk at 17.5 (at 6.0 and 18.0 the land is nearly as dark as at night). The
+commander's death glare (my note with ui 11): two faults of the renderer's in the nuke's ball of
+fire, fixed (render 3350bfd, on main). Thank you. Waiting for Chris's look at the sea.
