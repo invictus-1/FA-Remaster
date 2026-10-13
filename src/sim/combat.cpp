@@ -2105,6 +2105,14 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     Vec3 p = TargetPos(sim, target, true);
     int R = static_cast<int>(w->bp->maxRadius);
     int x0 = static_cast<int>(std::nearbyint(p.x - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(p.z - R * 0.5f));
+    {
+      // MOHO64_DEBUG_ATTACKGOAL=<unit id>: the square an attacker is sent to (the weapon, the target's point)
+      static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+      if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal)
+        Logf(LogLevel::Info, "attackgoal %u unit %u weapon %s R %d target type %d entity %d point %.9g %.9g %.9g square %d %d",
+             sim.tick(), u->id, w->bp->label.c_str(), R, target.type, e ? static_cast<int>(e->id) : -1, p.x, p.y, p.z, x0,
+             z0);
+    }
     if (R < 1) AttackSetPosGoal(sim, u, p);
     else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
   } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
