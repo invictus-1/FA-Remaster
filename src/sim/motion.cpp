@@ -1310,7 +1310,7 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   float lc = std::sqrt(cx * cx + cz * cz), lw = len;
   if (lc * lw == 0) return false;
   float nx, nz;
-  float k = std::cos(th);
+  float k = dmath::Cos(th);  // (the exe's cosine, as in RotateToward: std::cos is a last bit off for some angles)
   if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
     nx = wx * lc / lw;
     nz = wz * lc / lw;
