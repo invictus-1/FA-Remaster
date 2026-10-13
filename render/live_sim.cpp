@@ -166,6 +166,38 @@ void LiveSim::SelfDestruct(int army) {
              first->blueprint.c_str(), first->id, e.sim->tick(), first->position[0], first->position[2]);
 }
 
+// The army's first unit is ordered to build an enhancement on itself: a Script order whose table is
+// { TaskName = "EnhanceTask", Enhancement = <name> }, as the interface's script gives it.
+void LiveSim::Enhance(int army, const std::string& enhancement) {
+  Engine& e = *engine_;
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(*e.sim, &units);
+  const moho::UnitView* first = nullptr;
+  for (const moho::UnitView& u : units)
+    if (u.army == army && (!first || u.id < first->id)) first = &u;
+  if (!first || army < 1 || army > static_cast<int>(e.session.header.armies.size())) return;
+  std::string table;  // (a Lua table in the engine's byte form: 4, key and value pairs, 5; a string is 1, its text, 0)
+  auto text = [&](const char* s) {
+    table.push_back(1);
+    table.append(s);
+    table.push_back(0);
+  };
+  table.push_back(4);
+  text("TaskName");
+  text("EnhanceTask");
+  text("Enhancement");
+  text(enhancement.c_str());
+  table.push_back(5);
+  moho::CommandWriter writer(e.session.header.armies[army - 1].source);
+  moho::StreamIssueData order;
+  order.type = static_cast<int>(moho::CommandType::Script);
+  order.lua = table;
+  writer.IssueCommand({first->id}, order, true);
+  moho::ApplyCommands(*e.sim, writer.Take());
+  moho::Logf(moho::LogLevel::Info, "render: army %d's %s (entity %u) is ordered to build %s at beat %u, at %.1f, %.1f", army,
+             first->blueprint.c_str(), first->id, enhancement.c_str(), e.sim->tick(), first->position[0], first->position[2]);
+}
+
 void LiveSim::Run() {
   const auto t0 = std::chrono::steady_clock::now();
   std::string error;
@@ -204,6 +236,8 @@ void LiveSim::Run() {
       break;  // a new game that has ended
     } else if (setup_.selfDestructAt && e.sim->tick() == setup_.selfDestructAt) {
       SelfDestruct(setup_.selfDestructArmy);
+    } else if (setup_.enhanceAt && e.sim->tick() == setup_.enhanceAt) {
+      Enhance(setup_.enhanceArmy, setup_.enhancement);
     }
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();

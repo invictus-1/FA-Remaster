@@ -449,7 +449,8 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   size the simulation holds for it (`FrameProjectile::size`, the engine's `ProjectileView::size`:
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`
-  makes that army's commander destroy itself in a new game (the game's own Ctrl-K callback), to
+  makes that army's commander destroy itself in a new game (the game's own Ctrl-K callback), and
+  `--enhance <beat>,<army>,<enhancement>` orders it to build an enhancement (`REQUESTS.md` 18), to
   look at a death. `--animate <file.sca>[,<fraction>]` poses the placed units by one of the game's
   animations at that point of it (without a fraction it plays), remaster and original side by side:
   `--place ueb0101 --animate /units/UEB0101/UEB0101_Aupgrade.sca,0.5`. `--shots <n>` writes every
