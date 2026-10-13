@@ -372,6 +372,39 @@ local function run()
     SelectUnits(nil)
     cam:Reset()
 
+    -- range rings: the game's script has named its filters and switched the three cases on; a
+    -- selected unit gets the rings of the filters it is in, measured from its blueprint
+    local filters = import("/lua/ui/game/rangeoverlayparams.lua").RangeOverlayParams
+    local bp = __blueprints[cdr:GetUnitId()]
+    local reach = 0
+    for _, w in bp.Weapon do
+        if w.RangeCategory == 'UWRC_DirectFire' and w.MaxRadius > reach then reach = w.MaxRadius end
+    end
+    local function ring(radius, color)
+        for _, r in moho64ui_RangeRings() do
+            if math.abs(r.radius - radius) < 0.01 and r.color == string.lower(string.sub(color, 3)) then return true end
+        end
+        return false
+    end
+    moho64ui_MouseMove(3, 3)
+    check("nothing selected, nothing under the mouse: no rings", table.getn(moho64ui_RangeRings()), 0)
+    SelectUnits({cdr})
+    check("the commander has a direct fire weapon", reach > 0, true)
+    check("selected: its direct fire ring, in the filter's select colour", ring(reach, filters.DirectFire.SelectColor), true)
+    check("and its omni ring", ring(bp.Intel.OmniRadius, filters.Omni.SelectColor), true)
+    local at2 = cdr:GetPosition()
+    local first = moho64ui_RangeRings()[1]
+    check("the rings lie round the unit", math.abs(first.x - at2[1]) < 0.01 and math.abs(first.z - at2[3]) < 0.01, true)
+    ConExecute("range_RenderSelected false")
+    check("range_RenderSelected false: none", table.getn(moho64ui_RangeRings()), 0)
+    SelectUnits(nil)
+    SetOverlayFilters({"DirectFire"})
+    check("a filter switched on: every unit of the player's in it, normal colour", ring(reach, filters.DirectFire.NormalColor), true)
+    check("and only that filter's", ring(bp.Intel.OmniRadius, filters.Omni.NormalColor), false)
+    SetOverlayFilters({})
+    check("switched off again: none", table.getn(moho64ui_RangeRings()), 0)
+    ConExecute("range_RenderSelected true")
+
     -- pause: asked for like an order, so it holds from a beat on; the game's time stands
     check("the game runs", SessionIsPaused(), false)
     local gamemain = import("/lua/ui/game/gamemain.lua")

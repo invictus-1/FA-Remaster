@@ -753,6 +753,31 @@ std::string TakeOrders(lua_State* L) {
   return store.writer ? store.writer->Take() : std::string();
 }
 
+void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  if (selectedOnly) {
+    for (UserUnit* u : store.selection)
+      if (!u->gone && !u->view.dead) ids->push_back(u->view.id);
+  } else {
+    for (auto& [id, u] : store.units)
+      if (!u->gone && !u->view.dead) ids->push_back(id);
+  }
+}
+
+bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  auto it = store.units.find(id);
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return false;
+  *blueprint = it->second->view.blueprint;
+  for (int i = 0; i < 3; ++i) position[i] = it->second->view.position[i];
+  *army = it->second->view.army;
+  return true;
+}
+
 void RequestSessionPause(lua_State* L, bool pause) {
   if (!TheSim(L)) return;
   if (pause) Writer(L).RequestPause();

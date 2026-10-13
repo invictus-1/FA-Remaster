@@ -357,6 +357,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original's curve, 0x7a8940, is not read), and the player's wheel or drag ends such a move.
   Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
   structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.
+- Range rings, first form (`user/range_rings.cpp`, with what was read from the original's range
+  renderer at its top): `SetOverlayFilter` and `SetOverlayFilters` keep the game script's
+  filters; the console variables `range_RenderSelected`, `range_RenderHighlighted` and
+  `range_RenderBuild` (the script switches all three on unless the profile says otherwise) give
+  rings to the selected units, to the player's unit under the mouse and to the building about
+  to be placed; a filter the player switches on in the game's overlay menu gives them to every
+  unit of the player's in it. What a ring measures goes by the filter's name as in the original:
+  the weapons of a range category (the greatest EffectiveRadius or MaxRadius, the least
+  MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
+  They are drawn as plain circles through the picture's source (`WorldScene::rings`). Not the
+  original's yet: overlapping rings joined into one outline with a glow, the line's thickness
+  by the zoom, radii changed while the game runs, and the rings of "Miscellaneous".
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the
@@ -368,8 +380,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 412 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
-  the units', as a first version); the other 119 are logged stubs. (`--list-bindings` counts
+- 414 of the 531 engine functions are built (about 90 of them, the world view's, the cameras' and
+  the units', as a first version); the other 117 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

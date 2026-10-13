@@ -29,6 +29,8 @@ class WorldSource;
 class BackdropSource;
 struct GamePace;
 struct WorldLine;
+struct WorldRing;
+struct WorldGhost;
 class UiManager;
 namespace sound {
 class SoundSystem;
@@ -89,6 +91,7 @@ class UserState {
     virtual ~Extra() = default;
   };
   std::unique_ptr<Extra> units;
+  std::unique_ptr<Extra> ranges;  // the range rings' filters and switches (range_rings.cpp)
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
   std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
   // The life bars over units (the console command UI_RenderUnitBars, user/keymap.cpp): the
@@ -191,6 +194,18 @@ bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& am
 // each unit to where its orders take it, coloured by the kind of order).
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines);
 std::string TakeOrders(lua_State* L);
+// For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
+// knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false
+// when there is no such unit.
+void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids);
+bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army);
+// Range rings (range_rings.cpp): SetOverlayFilter / SetOverlayFilters; the console variables
+// range_RenderSelected / range_RenderHighlighted / range_RenderBuild (the name in upper case;
+// false: not one of them); and the rings to draw now, given the unit under the mouse
+// (0xffffffff: none) and the building about to be placed (nullptr: none).
+void RegisterRangeBindings(lua_State* L);
+bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::string& value);
+void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRing>* out);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).

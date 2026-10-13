@@ -34,10 +34,17 @@ struct WorldLine {
   float a[3], b[3];
   uint32_t color;  // 0xAARRGGBB
 };
+// A circle lying on the ground (a range ring).
+struct WorldRing {
+  float centre[3];
+  float radius;
+  uint32_t color;  // 0xAARRGGBB
+};
 struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
   std::vector<WorldLine> lines;
+  std::vector<WorldRing> rings;
   // The unit under the mouse, to be marked as the original marks it (brackets around it by how
   // its army stands to the player's): 0xffffffff for none. Kinds: 1 the player's own or an
   // ally's, 2 an enemy's, 3 a neutral's. A selected unit is not named here: it has its mark.

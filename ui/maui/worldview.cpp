@@ -479,6 +479,9 @@ class WorldView : public Control {
         scene.ghosts.push_back(ghost);
       }
     }
+    // The range rings: of the selected units, the unit under the mouse, the building about to be
+    // placed, and of every unit in a filter the player has switched on.
+    RangeRingsForWorld(L, scene.hover, scene.ghosts.empty() ? nullptr : &scene.ghosts[0], &scene.rings);
     source->SetScene(scene);
     pixels_ = source->Draw(cam, w, h);
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;

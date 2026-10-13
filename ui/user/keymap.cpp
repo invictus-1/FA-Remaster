@@ -443,6 +443,7 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     SetGameSpeedTo(L, rate > 50 ? 50 : rate < -10 ? -10 : rate);
     return;
   }
+  if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
   if (Upper(name) == "UI_SELECTBYCATEGORY") {
     SelectByCategoryCommand(L, rest);
     return;

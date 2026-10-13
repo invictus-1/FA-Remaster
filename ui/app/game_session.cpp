@@ -76,7 +76,15 @@ struct GameSession::Picture : WorldSource {
       o.color = l.color;
       lines.push_back(o);
     }
-    picture.SetShapes(lines, {});
+    std::vector<render::WorldPicture::Ring> rings;
+    for (const WorldRing& r : scene.rings) {
+      render::WorldPicture::Ring o;
+      for (int i = 0; i < 3; ++i) o.centre[i] = r.centre[i];
+      o.radius = r.radius;
+      o.color = r.color;
+      rings.push_back(o);
+    }
+    picture.SetShapes(lines, rings);
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
     picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
