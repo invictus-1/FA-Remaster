@@ -92,6 +92,11 @@ class Particles {
   void Update(double now, const View* view = nullptr);
   // Draws every living particle into the current pass, which must be the scene's.
   void Draw(const View& view);
+  // The particles that bend what is behind them (the original's blend mode 5: the shimmer over heat,
+  // a shock wave's ring): after Draw, into the scene's pass, with the picture as it was just before
+  // (one sample a pixel). `Bending()`: are there any, after the last Draw.
+  bool Bending() const { return bending_; }
+  void DrawBending(const View& view, gfx::Texture behind);
 
   // The modern look: how much brighter than its texture a particle that adds its light is (it is
   // light, and the picture's last pass brings it back into what a screen shows).
@@ -146,6 +151,9 @@ class Particles {
   std::vector<Emitter> emitters_;
   std::unordered_map<uint32_t, size_t> index_;  // emitter id -> its place in emitters_
   std::vector<float> rows_;
+  std::vector<std::pair<size_t, size_t>> spans_;  // per set of order_, from the last Draw: first row, particle count
+  bool bending_ = false;
+  void DrawSets(const View& view, bool bending, gfx::Texture behind);
   uint32_t nextId_ = 1;
   uint32_t seed_ = 0x2545f491u;
   double now_ = 0;

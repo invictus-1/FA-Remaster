@@ -719,7 +719,15 @@ void World::Render() {
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   shafts.Draw(view);
-  if (hide.find("particles") == std::string::npos) particles.Draw(view);
+  if (hide.find("particles") == std::string::npos) {
+    particles.Draw(view);
+    // those that bend what is behind them (the shimmer over heat): with the picture as it is now
+    if (particles.Bending() && post.CopyBehind()) {
+      post.ContinueScene();
+      lights.Bind();
+      particles.DrawBending(view, post.Behind());
+    }
+  }
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
