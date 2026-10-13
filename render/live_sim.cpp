@@ -16,6 +16,7 @@
 #include "script/mount.h"
 #include "script/script_state.h"
 #include "sim/command_stream.h"
+#include "sim/command_writer.h"
 #include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
@@ -134,6 +135,37 @@ bool LiveSim::Load(std::string* error) {
   return true;
 }
 
+// The army's first unit destroys itself: SimCallbacks' ToggleSelfDestruct with {owner, noDelay = true} and the
+// unit, sent as the army's own command source would send it.
+void LiveSim::SelfDestruct(int army) {
+  Engine& e = *engine_;
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(*e.sim, &units);
+  const moho::UnitView* first = nullptr;
+  for (const moho::UnitView& u : units)
+    if (u.army == army && (!first || u.id < first->id)) first = &u;
+  if (!first || army < 1 || army > static_cast<int>(e.session.header.armies.size())) return;
+  const float owner = static_cast<float>(army);
+  std::string args;  // (a Lua table in the engine's byte form: 4, key and value pairs, 5)
+  args.push_back(4);
+  args.push_back(1);
+  args.append("owner");
+  args.push_back(0);
+  args.push_back(0);
+  args.append(reinterpret_cast<const char*>(&owner), 4);
+  args.push_back(1);
+  args.append("noDelay");
+  args.push_back(0);
+  args.push_back(3);
+  args.push_back(1);
+  args.push_back(5);
+  moho::CommandWriter writer(e.session.header.armies[army - 1].source);
+  writer.LuaSimCallback("ToggleSelfDestruct", args, {first->id});
+  moho::ApplyCommands(*e.sim, writer.Take());
+  moho::Logf(moho::LogLevel::Info, "render: army %d's %s (entity %u) destroys itself at beat %u, at %.1f, %.1f", army,
+             first->blueprint.c_str(), first->id, e.sim->tick(), first->position[0], first->position[2]);
+}
+
 void LiveSim::Run() {
   const auto t0 = std::chrono::steady_clock::now();
   std::string error;
@@ -170,6 +202,8 @@ void LiveSim::Run() {
       }
     } else if (e.sim->frozen) {
       break;  // a new game that has ended
+    } else if (setup_.selfDestructAt && e.sim->tick() == setup_.selfDestructAt) {
+      SelfDestruct(setup_.selfDestructArmy);
     }
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();

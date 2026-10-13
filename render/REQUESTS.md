@@ -20,6 +20,30 @@ count a look in which every place is seen as exploring). 14 done and in use (`Pr
 `EntityViews`, a projectile's scale: wreckage, trees that burn, fall and are reclaimed, shields'
 bubbles, the UEF's box of light at its size, and `UnitView::mesh` for personal shields). 15 done
 and in use the same day (`HiddenBones`: a commander no longer wears the upgrades it has not bought).
+16 open (the unit of a projectile's scale velocity; the renderer goes by its own reading meanwhile).
+
+## 16. A projectile's scale velocity: in what unit? (2026-10-13, not blocking)
+
+**Who asks:** the renderer. **What:** a check in the original of what `Projectile:SetScaleVelocity`
+(and the blueprint's `MeshScaleVelocity`) adds to: the size the mesh is DRAWN at (the blueprint's
+`Display.UniformScale` counted in), or a factor on top of `UniformScale`. And, if you see it on the
+way, whether `Entity:SetScale(x, y, z)` is likewise the drawn size or a factor.
+
+**Why:** `sim_view.h` says "draw the mesh at UniformScale * scale * drawScale" and that a host adds
+`scaleVelocity` x seconds to `scale`. Drawn so, a nuke's ball of fire grows 17 times too fast: the
+game's `UEFNukeEffect01` script reads its own `UniformScale` (17) and calls
+`SetScaleVelocity(0.30 * scale, ...)`, that is 5.1 a second. As a factor that is a ball of 364 units'
+radius after four seconds (it swallowed the camera in a commander's death, which is how it was
+found); as drawn size it is 17 growing to 37.4, which is the death weapon's outer ring (40). The
+script only makes sense in the second reading, so the renderer now draws
+`UniformScale * scale * drawScale + what the velocity has added` (`FrameProjectile::grown`), summed
+beat by beat, because the script changes the velocity twice while the ball lives.
+
+**Smallest form:** a yes or no to that reading. Nothing needs to change in the views if it is yes
+(a line in `sim_view.h` saying so would do); if the original holds the drawn size in `scale` itself,
+say what `SetScale` means for a blueprint whose `UniformScale` is not 1.
+
+**Answer:** (none yet)
 
 ## 15. Hidden bones: the parts of a mesh a script hides and shows (2026-10-12, not blocking)
 

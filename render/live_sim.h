@@ -36,6 +36,10 @@ class LiveSim {
     std::string modUids;    // a text file with one mod uid per line (empty: a session's own GameMods)
     uint32_t seed = 0;      // a new game's random seed; 0: taken from the clock
     std::vector<std::string> maps;  // more folders of map folders, mounted at /maps beside what the init file mounts
+    // For tests of a new game: at this beat the army's first unit (its commander) destroys itself at once,
+    // by the game's own callback (what Ctrl-K sends). 0 = never.
+    uint32_t selfDestructAt = 0;
+    int selfDestructArmy = 1;  // 1-based
   };
   enum class State { Loading, Running, Ended, Failed };
 
@@ -82,6 +86,7 @@ class LiveSim {
  private:
   struct Engine;  // everything of src/sim, kept out of this header
   void Run();
+  void SelfDestruct(int army);
   bool Load(std::string* error);
 
   Setup setup_;

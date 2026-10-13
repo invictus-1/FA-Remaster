@@ -318,14 +318,24 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(p.position, v.position, sizeof p.position);
     std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
-    // its size: what the script set, and what its scale velocity has added since it was first seen
-    // (the simulation does not apply that itself)
+    // its size: what the script set, and what its scale velocity has added beat by beat since it
+    // was first seen (the simulation does not apply that itself, and a script changes the velocity
+    // while the shell lives)
     auto since = shellSince_.find(v.id);
-    const uint32_t first = since != shellSince_.end() ? since->second : sim.tick();
-    shellSinceNext_[v.id] = first;
-    p.age = static_cast<float>(sim.tick() - first) * 0.1f;
-    const float grown = p.age;
-    for (int k = 0; k < 3; ++k) p.scale[k] = std::max(v.scale[k] + v.scaleVelocity[k] * grown, 0.0f) * v.drawScale;
+    ShellSince known;
+    if (since != shellSince_.end()) {
+      known = since->second;
+      for (int k = 0; k < 3; ++k) known.grown[k] += v.scaleVelocity[k] * 0.1f;
+    } else {
+      known.first = sim.tick();
+    }
+    shellSinceNext_[v.id] = known;
+    p.age = static_cast<float>(sim.tick() - known.first) * 0.1f;
+    for (int k = 0; k < 3; ++k) {
+      p.scale[k] = v.scale[k] * v.drawScale;
+      p.grown[k] = known.grown[k];
+      p.growth[k] = v.scaleVelocity[k];
+    }
     beat.projectiles.push_back(p);
   }
   shellSince_.swap(shellSinceNext_);  // (only those there this beat are kept)
@@ -435,7 +445,10 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   out->projectiles = a.projectiles;
   const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
   for (FrameProjectile& p : out->projectiles) {
-    for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
+    for (int k = 0; k < 3; ++k) {
+      p.position[k] += p.velocity[k] * ahead;
+      p.grown[k] += p.growth[k] * ahead;
+    }
     p.age += ahead;
   }
   out->beams = a.beams;

@@ -69,7 +69,8 @@ cbuffer Instances : register(b2) {
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light,
-                // 3: a shield's bubble, 4: a slab that fades; none of them is lit),
+                // 3: a shield's bubble, 4: a slab that fades, 5: a nuke's ball of fire, 6: a nuke's sliding
+                // shell; none of them is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -77,7 +78,8 @@ cbuffer MeshKind : register(b3) {
                 // w: 1 = the map's border (ModelLod::border)
   float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units;
                 // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
-  float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool); y, z, w: a shield's tint
+  float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool); y, z, w: a shield's tint (a nuke's shell:
+                // how often its texture repeats, how fast it slides, from what age it fades)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -200,6 +202,35 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   i.color.a = min(i.color.a, 1);
+  if (kind.y > 4.5) {
+    // a nuclear explosion's ball of fire; its age in seconds comes as the instance's colour
+    float age = i.color.r;
+    float3 fire;
+    float alpha;
+    if (kind.y > 5.5) {
+      // a shell: its texture sliding along it, thinned by its second texture, fading late
+      float4 shell = albedoMap.Sample(samplerAniso, i.uv.xy * kind4.y + float2(0, age * kind4.z));
+      fire = shell.rgb;
+      alpha = shell.a * normalsMap.Sample(samplerAniso, i.uv.xy).g * saturate(1 - (age - kind4.w) * 0.025);
+    } else {
+      // churning fire: the fire's picture mixed half and half with its second texture's noise at
+      // three sizes, which creeps along the ball; holes where the fine noise is thin; after 20
+      // seconds the noise eats away what the picture's alpha does not hold, and from 50 it fades
+      float creep = age * 0.018;
+      float4 picture = albedoMap.Sample(samplerAniso, i.uv.xy);
+      float4 fine = normalsMap.Sample(samplerAniso, i.uv.xy * 6 + float2(0, creep * 1.25));
+      float4 middle = normalsMap.Sample(samplerAniso, i.uv.xy * 4 + float2(0, creep * 1.25));
+      float4 wide = normalsMap.Sample(samplerAniso, i.uv.xy * 0.25 + float2(0, creep * 0.1));
+      float churn = ((middle.g + fine.b) * 0.5 + wide.b) * 0.5 + wide.r * 0.5;
+      fire = (lerp(float3(churn, churn, churn), picture.rgb, 0.5) + fine.b * 0.3) * middle.g + fine.b;
+      alpha = picture.a * saturate(1 - (age - 50) * 0.015);
+      if (age >= 20 && fine.a * middle.b * fine.g >= picture.a) alpha = 0;
+      alpha *= fine.g;
+      clip(alpha - 15.0 / 255);
+    }
+    fire = saturate(fire);
+    return float4(look > 0.5 ? pow(fire, 2.2) * 2 : fire, alpha);
+  }
   if (kind.y > 3.5) {
     // a slab of light that fades (the UEF's build slices): its texture's colour, see-through by
     // the texture's alpha and by how much of it is left (the instance says: its age's doing)
@@ -459,6 +490,9 @@ bool MeshRenderer::Init(std::string* error) {
   if (!glass_) return false;
   pd.cull = gfx::Cull::Back;
   pd.depthWrite = true;
+  pd.name = "models, a ball of fire";  // (seen from outside only, and it hides what burns inside it)
+  dome_ = device_->CreatePipeline(pd, error);
+  if (!dome_) return false;
   pd.name = "models, leaves";
   pd.blend = gfx::Blend::Opaque;
   pd.cull = gfx::Cull::None;
@@ -638,9 +672,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    const int wanted = shadowPass ? 0 : glass ? 3 : lod->blend ? 2 : lod->leaves ? 1 : 0;
+    const int wanted = shadowPass ? 0 : glass ? (lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
+      device_->SetPipeline(wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
@@ -649,10 +683,15 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[16] = {lod->alphaCut, lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[16] = {lod->alphaCut, lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
+    if (lod->nuke) {
+      kind[13] = lod->nukeShell.x;
+      kind[14] = lod->nukeShell.y;
+      kind[15] = lod->nukeShell.z;
+    }
     {  // (the model's foot and height, for a unit under construction)
       const Model* of = items_[at].entry->model;
       kind[10] = of->boundsMin.y;

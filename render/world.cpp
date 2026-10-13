@@ -785,12 +785,14 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // unit gets its army's colour (docs/engine-answers.md, render 7)
       Mat4 at = Mat4::FromTRS(position, orientation, model->scale);
       for (int row = 0; row < 3; ++row)  // (the size a script gave it: the UEF's box of light round what it builds)
-        for (int k = 0; k < 3; ++k) at.m[row][k] *= p.scale[k];
+        for (int k = 0; k < 3; ++k) at.m[row][k] *= std::max(p.scale[k] + p.grown[k] / std::max(model->scale, 1e-4f), 0.0f);
       // what fades with its age (the UEF's build slices: whole for two seconds, then gone at
       // 0.145 a second, the original's numbers) says how much of it is left
       float left = 1;
       if (!model->lods.empty() && model->lods[0].fades) left = Clamp(1 - (p.age - 2.0f) * 0.145f, 0, 1);
-      if (left > 0) meshes.Add(model, at, {1, 1, 1}, left);
+      // (a nuke's ball of fire is drawn by its age)
+      const bool fire = !model->lods.empty() && model->lods[0].nuke;
+      if (left > 0) meshes.Add(model, at, fire ? Vec3{p.age, 0, 0} : Vec3{1, 1, 1}, left);
     } else if (!effects.OnEntity(p.id)) {
       const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);

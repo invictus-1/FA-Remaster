@@ -164,6 +164,7 @@ struct Options {
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
   std::string find;                     // --find
+  int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
   float weatherSpell = 300;             // --weather-spell
@@ -265,6 +266,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--find") o->find = v;
+    else if (a == "--self-destruct") {  // <beat>[,<army>]: that army's commander destroys itself then (a new game)
+      if (sscanf(v, "%d,%d", &o->selfDestructAt, &o->selfDestructArmy) < 1) return false;
+    }
     else if (a == "--soften") o->soften = static_cast<float>(atof(v));
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
     else if (a == "--built") o->built = static_cast<float>(atof(v));
@@ -392,6 +396,8 @@ int main(int argc, char** argv) {
     setup.session = opt.session;
     setup.seed = opt.seed;
     setup.maps = opt.maps;
+    setup.selfDestructAt = static_cast<uint32_t>(std::max(opt.selfDestructAt, 0));
+    setup.selfDestructArmy = opt.selfDestructArmy;
     live.SetFocusArmy(opt.focus);
     picture.SetFocusArmy(opt.focus);
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)

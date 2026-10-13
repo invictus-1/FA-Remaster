@@ -85,6 +85,12 @@ struct ModelLod {
   bool chrome = false;         // "AeonBuildPuddle": the pool of liquid metal an Aeon building rises from
   bool wreck = false;          // wreckage (ModelCache::Wreck): burnt and dull, no team colour, no glow
   bool fades = false;          // "AlphaFade": a see-through slab that fades with its age (the UEF's build slices)
+  // A nuclear explosion's ball of fire, drawn by its age (the instance's colour says it, in seconds):
+  // 1 "NukeUEF": churning fire with holes that eats itself away after 20 seconds and hides what burns
+  // inside it; 2 "NukeEMP", "NukeQuantum": a shell whose texture slides along it and fades late
+  // (nukeShell: how often the texture repeats, how fast it slides, from what age it fades).
+  int nuke = 0;
+  Vec3 nukeShell{1, 0, 0};
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;

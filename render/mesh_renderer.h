@@ -91,7 +91,7 @@ class MeshRenderer {
   void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
-  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_;
+  gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_;
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;
