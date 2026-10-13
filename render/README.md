@@ -251,8 +251,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   throws nothing out, and makes up the last ticks when it is seen again. Of the scripts' changes to
   a running emitter, `ScaleEmitter`, `OffsetEmitter` and `SetEmitterParam` with `POSITION_X/Y/Z`,
   `LIFETIME`, `REPEATTIME`, `SCALE`, `LODCUTOFF` and `EMITIFVISIBLE` are acted on. Not yet:
-  `SetEmitterCurveParam`, `ResizeEmitterCurve`, and particles that refract (blend mode 5) are not
-  drawn.
+  `SetEmitterCurveParam`, `ResizeEmitterCurve`. Particles that bend what is behind them (blend
+  mode 5: the shimmer over heat, a shock wave's ring; 46 of the game's emitters) are drawn after
+  the others with a copy of the picture as it is then: each shows that picture taken a little
+  to the side by its texture's red and green (half a hundredth of the picture at most, the
+  original's measure), as much as its alpha and its ramp's say. Only with several samples a
+  pixel, which is the usual (the copy is the one the water uses).
 - A time of day (modern look): `sky.h`. With `--time-of-day <hours>` (or `World::timeOfDay`) the
   light is no longer the map's but that of an hour: where the sun and the moon stand, which of
   the two lights the ground (around sunrise and sunset neither: the sky alone lights), its colour
@@ -385,6 +389,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
   (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
   the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
+- Two of the original's effect shaders on models (`models.cpp`, by the shader's name):
+  `UEFBuildCube`, the UEF's box of light round what it builds (a projectile): a see-through
+  blue box, its texture's clouds drifting as what can be seen through, fine lines running
+  over it (`ModelLod::frame`); and `AlphaFade`, see-through by its texture's alpha. The box
+  is drawn at its file's size: the size the script gives it is not handed over yet
+  (`REQUESTS.md`, 14). The other effect shaders (shields, glass, glows) are drawn as plain models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by
@@ -502,18 +512,15 @@ Known gaps, to be closed in the steps they belong to:
   map file is its centre (as a centre 97% of the erosion decals lie on land, as a corner about
   85%); which way its heading turns; that the other two rotation numbers do nothing. The map
   editor's other decal kinds (glow, water masks) are not drawn.
-- No sky, no ground beyond the map's edge. Effects: only albedo decals; no
-  splats on bones; explosion light falls on the ground only; scripts' changes to emitter curves
-  are ignored; particles are not sorted by distance, do not refract
-  (blend mode 5 is left out), have no drag, and do not soften where they meet the ground.
+- Effects: scripts' changes to emitter curves are ignored; particles are not sorted by distance
+  and do not soften where they meet the ground.
 - Anti-aliasing is 4x multisampling of the scene (`--msaa 1|2|4|8`): it smooths the edges of
   geometry, not shimmer inside a surface (bright highlights, foliage cut-outs).
 - Ambient occlusion (modern look, `--ao 0..1`, key O) is computed from the picture's depth and
   multiplied onto the finished lighting, so it dims the sun's direct light too; it is not sorted
   out per light. Thin things (foliage, antennas) darken a little as a whole.
-- The modern look still lacks: bloom, a water of its
-  own (it shows the original's water with converted colours), and sky cubes that are properly
-  pre-blurred (their mip levels are plain averages).
+- The modern look still lacks sky cubes that are properly pre-blurred (their mip levels are
+  plain averages).
 - Maps whose look is neither TTerrain nor TTerrainXP (newer custom maps) are drawn as TTerrain.
 - Layer textures repeat every `scale` world units in both directions; on a map that is not square the
   original may stretch one direction (not checked).

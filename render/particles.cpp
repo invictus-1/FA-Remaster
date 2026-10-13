@@ -24,13 +24,15 @@ cbuffer ParticleSet : register(b1) {
   float4 cameraUp;      // w: how it lies - 0 faces the camera, 1 flat on the ground, 2 stretched along its
                         // flight, 3 stretched along its start direction without moving (aligned to a bone)
   float4 options;       // x: first row of the set's particles, y: 1 = the texture has frames or strips,
-                        // z: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied),
+                        // z: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied,
+                        // 4: it has none of its own and bends what is behind it),
                         // w: brightness of what glows in the modern look
   float4 sheet;         // x: 1 / frames, y: 1 / strips, z: 1 = particles are slowed as by air
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
 Texture2D rampTexture : register(t1);
+Texture2D behindTexture : register(t2);  // (bending particles only)
 
 struct VOut {
   float4 position : SV_Position;
@@ -87,6 +89,15 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
 }
 
 float4 PS(VOut i) : SV_Target {
+  if (options.z > 3.5) {
+    // it bends what is behind it: the picture as it was, taken a little to the side, by the
+    // texture's red and green (the original's measure: half a hundredth of the picture at most);
+    // how much of that shows, by the texture's alpha and the ramp's
+    float4 bend = particleTexture.Sample(samplerLinear, i.uv);
+    float shows = bend.a * rampTexture.Sample(samplerLinearClamp, i.rampUv).a;
+    float2 at = i.position.xy * viewport.zw + 0.005 * (2 * bend.rg - 1);
+    return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, shows);
+  }
   float4 c = particleTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
   if (options.z > 0.5 && options.z < 1.5) return float4(saturate(c.rgb), 1);  // darkening: what is there x (1 - this)
   if (look > 0.5) {
@@ -434,12 +445,14 @@ void Particles::Draw(const View& view) {
   const float now = static_cast<float>(now_);
   rows_.clear();
   liveParticles = 0;
-  std::vector<std::pair<size_t, size_t>> spans;  // per set of order_: first row, particle count
+  spans_.clear();
+  bending_ = false;
   for (Set* set : order_) {
     std::vector<Particle>& ps = set->particles;
     ps.erase(std::remove_if(ps.begin(), ps.end(), [now](const Particle& p) { return now - p.startTime >= p.lifetime; }), ps.end());
-    spans.push_back({rows_.size() / 4, ps.size()});
+    spans_.push_back({rows_.size() / 4, ps.size()});
     if (ps.empty()) continue;
+    if (set->blueprint->blendMode == 5) bending_ = true;
     const float* from = reinterpret_cast<const float*>(ps.data());
     rows_.insert(rows_.end(), from, from + ps.size() * (sizeof(Particle) / sizeof(float)));
     liveParticles += static_cast<int>(ps.size());
@@ -449,7 +462,19 @@ void Particles::Draw(const View& view) {
     return;
   }
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
+  DrawSets(view, false, {});
+  const float ms = updateMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  cpuMs = cpuMs == 0 ? ms : cpuMs * 0.95f + ms * 0.05f;
+}
 
+void Particles::DrawBending(const View& view, gfx::Texture behind) {
+  if (bending_ && behind) DrawSets(view, true, behind);
+}
+
+// The sets of the last Draw: those that bend what is behind them, or all the others.
+void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind) {
+  const float now = static_cast<float>(now_);
+  const std::vector<std::pair<size_t, size_t>>& spans = spans_;
   // the camera's sideways and upward directions, from the rows of the view-projection matrix
   const Mat4& m = view.constants.viewProj;
   const Vec3 right = Normalize(Vec3{m.m[0][0], m.m[0][1], m.m[0][2]}), up = Normalize(Vec3{m.m[1][0], m.m[1][1], m.m[1][2]});
@@ -457,11 +482,13 @@ void Particles::Draw(const View& view) {
   for (size_t i = 0; i < order_.size(); ++i) {
     if (!spans[i].second) continue;
     const EmitterBlueprint& bp = *order_[i]->blueprint;
-    if (bp.blendMode == 5) continue;  // refraction: not written yet
-    // 0 alpha, 1 darkening, 2 adding, 3 premultiplied ("modulate 2x inverse" is drawn as adding)
-    const int kind = bp.blendMode == 1 ? 1 : (bp.blendMode == 2 || bp.blendMode == 3) ? 2 : bp.blendMode == 4 ? 3 : 0;
+    if ((bp.blendMode == 5) != bending) continue;
+    // 0 alpha, 1 darkening, 2 adding, 3 premultiplied ("modulate 2x inverse" is drawn as adding);
+    // 4: bending what is behind it, laid over by its alpha
+    const int kind = bending ? 4 : bp.blendMode == 1 ? 1 : (bp.blendMode == 2 || bp.blendMode == 3) ? 2 : bp.blendMode == 4 ? 3 : 0;
     if (kind != bound) {
-      device_->SetPipeline(pipelines_[kind]);
+      device_->SetPipeline(pipelines_[kind == 4 ? 0 : kind]);
+      if (bending) device_->SetTexture(2, behind);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetShaderBuffer(buffer_);
       bound = kind;
@@ -477,8 +504,6 @@ void Particles::Draw(const View& view) {
     device_->SetTexture(1, bp.ramp);
     device_->Draw(6, 0, static_cast<uint32_t>(spans[i].second));
   }
-  const float ms = updateMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
-  cpuMs = cpuMs == 0 ? ms : cpuMs * 0.95f + ms * 0.05f;
 }
 
 }  // namespace render

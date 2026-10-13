@@ -439,6 +439,24 @@ int main(int argc, char** argv) {
     mark.lifetime = 0.7f;
     mark.age = 0.3f;
     world.placed = {flag, mark};
+    // ... the UEF's box of light round what it builds, and the dots the cursor's script stands in a column
+    PlacedMesh cube;
+    cube.mesh = "/meshes/generic/cube01_lod0.scm";
+    cube.texture = "/meshes/generic/cube03_albedo.dds";
+    cube.shader = "UEFBuildCube";
+    cube.position = at + Vec3{14, (world.HaveMap() ? world.GroundHeight(at.x + 14, at.z + 12) : 0) + 1, 12};
+    cube.scale = {3, 2, 3};
+    world.placed.push_back(cube);
+    for (int k = 0; k < 4; ++k) {
+      PlacedMesh dot;
+      dot.mesh = "/env/common/props/sphere_lod0.scm";
+      dot.texture = "/meshes/game/Assist_albedo.dds";
+      dot.shader = "FakeRings";
+      dot.uniformScale = 0.15f;
+      dot.position = at + Vec3{0, (world.HaveMap() ? world.GroundHeight(at.x, at.z + 14) : 0) + 0.5f + static_cast<float>(k), 14};
+      dot.fractionComplete = 0.8f;
+      world.placed.push_back(dot);
+    }
   }
   int weatherNow = 0;  // which of kWeathers
   static const char* const kWeathers[] = {"clear", "rain", "storm", "snow", "fog"};

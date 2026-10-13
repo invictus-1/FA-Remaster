@@ -65,6 +65,27 @@ the list when its time is over (at `age >= lifetime` a feedback mark is not draw
 `LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
 the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
 
+## seen by Chris in the interface's game (2026-10-12): a column of marks over a factory — the marks' look was ours, where they stand is yours
+
+Chris's picture: a column of eight purple shapes standing over a UEF factory, and a white cloudy
+cube on its floor.
+
+- The cube was the renderer's: the UEF's box of light round what it builds is a projectile whose
+  mesh has the shader `UEFBuildCube`, and it was drawn as a plain solid model. Now a see-through
+  blue box with fine lines running over it (`ModelLod::frame`); the shader `AlphaFade` (the box of
+  the UEF's teleport) is see-through by its texture's alpha.
+- The shapes are the spheres of `/lua/ui/game/cursor/depth.lua` (your `WorldMesh`es, shader
+  `FakeRings`). Their odd outline was the renderer's: it cut them by their texture's alpha, which
+  the original does not do for this shader (the whole shape gets the one alpha, the
+  fraction-complete number). Fixed: they are small dots now.
+- That they show over LAND is not the renderer's. The script shows the column only where
+  `GetMouseWorldPos()[2]` is more than a quarter unit above the cursor's `Elevation` (the engine
+  statistic `Camera / Cursor / Elevation`), and strings the dots from the one down to the other:
+  in the original that is the water's surface over the sea bed. Over the factory the two differ in
+  your host, so one of them is not what the original gives there (for example the mouse's place
+  taken on a unit's roof, or an elevation that is not the ground's under the cursor).
+  `WorldPicture::GroundAt` gives the ground or the water's surface, never a unit's top.
+
 ## ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap, picking and the darkened ground done (first form)
 
 `WorldPicture::SetFocusArmy(army)` in `render/world_picture.h`: the engine's army number, from 1;
