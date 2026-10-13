@@ -15,7 +15,7 @@ std::string Lower(std::string s) {
 const char kShader[] = R"hlsl(
 cbuffer Placed : register(b1) {
   float4 row0, row1, row2;  // the mesh's place: model to world
-  float4 params;            // x: how much of it shows; y: the colour's strength
+  float4 params;            // x: how much of it shows; y: the colour's strength; z: 1 = its texture's alpha does not count
 };
 Texture2D albedo : register(t0);
 
@@ -34,7 +34,9 @@ VOut VS(float3 position : POSITION, float2 uv : TEXCOORD0) {
 
 float4 PS(VOut i) : SV_Target {
   float4 c = albedo.Sample(samplerLinear, i.uv);
-  if (c.a <= 35.0 / 255) discard;  // (the original's alpha test)
+  // ("FakeRings": the original gives the whole shape the one alpha; the others cut by the texture's)
+  if (params.z > 0.5) c.a = 1;
+  else if (c.a <= 35.0 / 255) discard;
   // the modern look's picture is linear light, mapped back at the end (as a mark on the ground
   // is given, decals.cpp)
   if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * params.y;
@@ -97,7 +99,7 @@ void PlacedMeshes::Draw(const View& view, const std::vector<PlacedMesh>& meshes,
     const float constants[16] = {world.m[0][0] * s.x, world.m[0][1] * s.y, world.m[0][2] * s.z, world.m[0][3],
                                  world.m[1][0] * s.x, world.m[1][1] * s.y, world.m[1][2] * s.z, world.m[1][3],
                                  world.m[2][0] * s.x, world.m[2][1] * s.y, world.m[2][2] * s.z, world.m[2][3],
-                                 shows, 1.6f * night, 0, 0};
+                                 shows, 1.6f * night, rings ? 1.0f : 0.0f, 0};
     const gfx::Pipeline wanted = rings ? tested_ : over_;
     if (!drawn || wanted.id != bound.id) {
       device_->SetPipeline(wanted);

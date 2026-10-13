@@ -385,6 +385,12 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
   (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
   the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
+- Two of the original's effect shaders on models (`models.cpp`, by the shader's name):
+  `UEFBuildCube`, the UEF's box of light round what it builds (a projectile): a see-through
+  blue box, its texture's clouds drifting as what can be seen through, fine lines running
+  over it (`ModelLod::frame`); and `AlphaFade`, see-through by its texture's alpha. The box
+  is drawn at its file's size: the size the script gives it is not handed over yet
+  (`REQUESTS.md`, 14). The other effect shaders (shields, glass, glows) are drawn as plain models.
 - Water of the modern look (`water.cpp`, with several samples a pixel, which is the usual): the
   picture as it was before the water is copied, and the water is drawn from it: what is under the
   surface is seen through it, bent a little by the waves, and loses its red and then its green by

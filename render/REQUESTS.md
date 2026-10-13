@@ -54,6 +54,11 @@ the simulation holds that the original draws is absent or stale:
    mesh on it (a personal shield, a build mesh), the name of the mesh set now, as a field of
    `UnitView`, would do.
 
+3. *A projectile's scale.* The UEF's box of light round what it builds is a projectile
+   (`/effects/Entities/UEFBuildEffect/UEFBuildEffect03_proj.bp`) that the script sizes to the unit
+   with `SetScale(x, y, z)`. `ProjectileView` has no scale, so the box is drawn at its file's size
+   (one unit's edge) whatever is built in it. Three numbers on `ProjectileView` would do.
+
 **Why now.** Wreckage and trees that change are what makes a battlefield look used; shields are
 the largest thing a player expects to see that is not there. None of it blocks other work.
 

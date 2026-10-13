@@ -67,7 +67,7 @@ cbuffer Instances : register(b2) {
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
-  float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only,
+  float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light, not lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -193,6 +193,16 @@ void ShadowPS(VOut i) {
 }
 
 float4 Shade(VOut i, bool front) {
+  if (kind.y > 1.5) {
+    // a frame of light (the UEF's box round what it builds): see-through and blue, its texture's
+    // clouds drifting over it as what can be seen through, fine lines running along it
+    float2 drift = i.uv.xy + float2(0.012, 0.062) * time;
+    float cloud = albedoMap.Sample(samplerLinear, drift * 0.35).a;
+    float2 g = abs(frac(drift * 6) - 0.5);
+    float wire = 1 - smoothstep(0.0, 0.05, min(g.x, g.y));
+    float3 light = lerp(float3(0.12, 0.3, 0.9), float3(0.4, 0.75, 1.0), wire) * (falling.w > 0 ? falling.w : 1);
+    return float4(look > 0.5 ? light * (0.6 + 1.2 * wire) : light, saturate(0.45 * cloud + 0.35 * wire));
+  }
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
   float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
@@ -565,7 +575,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[12] = {lod->alphaCut, lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[12] = {lod->alphaCut, lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1};
     {  // (the model's foot and height, for a unit under construction)

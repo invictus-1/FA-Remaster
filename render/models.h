@@ -78,6 +78,8 @@ struct ModelLod {
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
+  bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
+                               // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
                                // otherwise the colour multiplies the albedo
   // Whose look the textures were painted for (the channels mean different things, mesh_renderer.cpp):

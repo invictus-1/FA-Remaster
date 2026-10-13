@@ -363,6 +363,12 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.alphaCut = 35.0f / 255;
       lod.blend = lod.vertexNormals = true;
       lod.teamMask = false;
+    } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
+      lod.blend = lod.frame = true;
+      lod.teamMask = false;
+    } else if (kind == "alphafade") {  // a see-through box that fades (the UEF's teleport): by its albedo's alpha
+      lod.blend = lod.vertexNormals = true;
+      lod.teamMask = false;
     } else if (kind == "mapimager") {  // the machinery around the map
       lod.border = true;
       lod.teamMask = false;
