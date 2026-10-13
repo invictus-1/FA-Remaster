@@ -228,6 +228,16 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   bool takenBeam[16];
   size_t takenCount = 0;
   for (const ModelLight& light : model->lights) {
+    // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet)
+    if (light.bone >= 0 && pose) {
+      bool hidden = false;
+      for (size_t i = 0; pose->now && i < pose->nowCount; ++i)
+        if (pose->now[i].bone == static_cast<uint32_t>(light.bone)) {
+          hidden = pose->now[i].hidden;
+          break;
+        }
+      if (hidden) continue;
+    }
     if (lit++ >= most) break;
     Vec3 bonePlace{0, 0, 0};
     Quat boneTurn;

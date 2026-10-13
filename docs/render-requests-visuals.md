@@ -42,3 +42,8 @@ twelve upgrades, each rigid on its own bone (`HAC`, `Gatling_Cannon`, `Torpedo_L
 `Zephyr_Amplifier`, `Engineering_Suite`, `Flamer`, the two `*_Lance_Turret`s, `Back_MissilePack_B01`,
 `Back_SalvoLauncher`, `Back_ShieldPack`, `Back_IntelPack`). Told in return: the experimentals' level
 caps for it; the cannon's charge meter has no shader parameter yet (it is drawn as its textures say).
+READY and SEEN 2026-10-13 (its section "16 - READY"): in the viewer beside the BlackOps model, and in
+the M28 game without its upgrades (hidden bones), through the new `--remasters` option, which loads
+every unit's `export/moho64` folder for a game. Its two questions answered: a light on a hidden bone
+stays dark (since today); the textures are taken from the export folder, so the old set in LabVisuals
+need not be replaced. Still to see: each upgrade bought in a game.

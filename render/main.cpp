@@ -48,6 +48,9 @@
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
 // --detail  the models' quality setting: 1 full, 0.5 for a slower card, a huge value forces the finest level
+// --remasters <folder>  the remastered units' files for this engine, one folder per unit as the visuals track
+//           lays them out (<folder>\<ID>\export\moho64): each is used in place of that unit's own model, in
+//           games too; may be given several times
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
@@ -99,6 +102,7 @@
 #include "ambient_occlusion.h"
 #include "camera.h"
 #include "core/hostfs.h"
+#include "remasters.h"
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/mount.h"
@@ -170,7 +174,7 @@ struct Options {
   std::string screenshot, fa, map, recording, createLog, display;
   std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
   unsigned seed = 0;
-  std::vector<std::string> data, mods, maps, previews, place, crowd;
+  std::vector<std::string> data, mods, maps, previews, remasters, place, crowd;
   std::string turn;    // --turn: the bone placed units turn
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
@@ -229,6 +233,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--mods") o->mods.push_back(v);
     else if (a == "--maps") o->maps.push_back(v);
     else if (a == "--preview") o->previews.push_back(v);
+    else if (a == "--remasters") o->remasters.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
     else if (a == "--turn") o->turn = v;
@@ -309,6 +314,8 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
   for (const std::string& folder : o.mods)
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
+  // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');

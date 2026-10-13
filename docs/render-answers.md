@@ -65,6 +65,27 @@ the list when its time is over (at `age >= lifetime` a feedback mark is not draw
 `LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
 the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
 
+## for the interface's host (2026-10-13): the remastered units' own files in a game — one call before Open
+
+Found while setting the rebuilt UEF commander up for Chris: nothing loads the visuals track's files
+made for this engine (four levels, meshes beyond 65,535 vertices, their LabPBR textures and lights
+lists) in a game. The viewer only took them for one unit at a time (`--preview`). So a game showed
+each unit's older stand-in from the game's own archives, and the rebuilt commander not at all.
+
+Now there is `render/remasters.h`:
+
+    int n = render::MountRemasters(&vfs, root);   // before WorldPicture::Open; needs the Vfs non-const
+
+`root` is the folder that holds one folder per unit, each with `export/moho64` in it (in the lab: the
+visuals track's `work` folder; give it to your program as an option, the repository must not name
+it). Every unit found there is then drawn from those files, in the menu's backdrop and in games.
+The viewer's option for it is `--remasters <folder>`. Seen in the M28 game: 87 units mounted, the
+rebuilt commander without its upgrades, the UEF land factory in its remastered form; a base view
+4.1 ms a frame at 1280 x 800, the whole map 9.7.
+
+Asked of you, not blocking: the option in the host and in Chris's launchers, so that he can test
+the new commander (his wish of yesterday).
+
 ## for the interface's host (2026-10-13): one call for a day that passes and weather that changes
 
 Not asked for; offered because Chris's game still shows the map's fixed light while the viewer's
