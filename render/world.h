@@ -104,6 +104,7 @@ class World {
   // reclaimed goes.
   void AddPropEvents(const std::vector<FramePropEvent>& events);
   int propsChanged = 0, propsGone = 0;  // since the map was opened
+  int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
   int MadeProps() const { return static_cast<int>(madeProps_.size()); }  // props made in the game that stand now
   // Where wreckage lies now (at most `most` places): for looking at it in the viewer.
   std::vector<Vec3> WreckPlaces(size_t most) const;
@@ -222,6 +223,7 @@ class World {
   struct PlacedProp {  // (model null: not there - its files could not be read, or it is gone)
     const Model* model;
     Mat4 world;
+    int cell = -1;  // which square of the map it is listed in (propCells_); -1: none
   };
   struct Pickable {  // a unit of the frame, for UnitAt and UnitsIn
     uint32_t id;
@@ -234,6 +236,20 @@ class World {
   gfx::Texture environment_, sky_, selectionRing_;
   std::vector<PlacedProp> props_;  // the map's, by their index in the map file's list
   std::unordered_map<uint32_t, PlacedProp> madeProps_;  // made during the game (wreckage), by entity id
+  // The scenery by squares of the map (kPropCell world units a side): which of the map's props and
+  // which made ones stand in each. Only the squares near what the camera sees are gone through
+  // each frame: a game breaks a map's tree groups up into tens of thousands of single trees.
+  struct PropCell {
+    std::vector<uint32_t> ofMap;  // indices into props_
+    std::vector<uint32_t> made;   // entity ids in madeProps_
+  };
+  static constexpr float kPropCell = 32;
+  std::vector<PropCell> propCells_;
+  int propCellsX_ = 0, propCellsZ_ = 0;
+  float propReach_ = 0;  // the largest prop's reach from its place, in world units
+  int PropCellAt(const Mat4& world) const;
+  void ListProp(PlacedProp* prop, uint32_t key, bool made);
+  void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
   const Model* PropModel(const std::string& blueprint, const std::string& mesh);
   void ApplyPropEvent(const FramePropEvent& event);
