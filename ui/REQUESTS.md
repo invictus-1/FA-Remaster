@@ -320,3 +320,32 @@ agree; tell me when it is in and I follow in the same step.
 mouse follows it (a unit the army knows nothing of is not under the mouse; a blip tells whose it
 is, not what it is). Thank you. Still yours as you listed them: the ground the army does not
 see, and what was seen once.
+
+### 6. Range rings as the original draws them, and meshes the interface places in the world
+Two things, neither blocks anything; take them when they fit your order of work.
+
+**a. Range rings.** The interface now gives the picture the range rings of the selected units, the
+unit under the mouse, the building about to be placed and the filters the player switches on
+(`ui/user/range_rings.cpp`; they arrive through `WorldPicture::SetShapes` as `Ring`s). They are
+drawn as thin circles. The original (its range renderer, FA exe `0x7ef5a0`, with the effect
+techniques `RangeMask`, `RangeFill`, `RangeBurn`) draws all rings of one filter as ONE outline
+around the area they cover together (rings inside the covered area do not show), with a line
+whose thickness goes by the zoom and with a glow. Asked for: a call that takes rings in groups,
+each group with its colour, its glow amount (0..255), the outer line's thickness near and far and
+the inner line's (the script's numbers, e.g. 0.04 near and 4.0 far: world units at the nearest
+and the farthest zoom, as far as I read them), drawn as the outline of the group's union; an
+inner radius per ring cuts its hole. I will send the groups; tell me the call's shape.
+
+**b. Meshes in the world.** The game's script places meshes of its own in the world:
+`WorldMesh` (`/lua/ui/controls/worldmesh.lua`; the engine side is `InternalCreateWorldMesh` and
+the `CUIWorldMesh` methods `SetMesh({MeshName, TextureName, ShaderName, UniformScale, LODCutoff})`,
+`SetStance(position, orientation)`, `SetScale`, `SetColor`, `SetHidden`, `SetLifetimeParameter`,
+`SetFractionCompleteParameter`, `Destroy`). They are the factory rally points
+(`/lua/ui/game/rallypoint.lua`), the marks under the cursor (`/lua/ui/game/cursor/hover.lua`,
+`depth.lua`) and other players' cursors in a cast. Asked for: a call that takes a list of such
+meshes for the frame (mesh, albedo texture, shader name, place, orientation as a quaternion,
+scale as three numbers, colour, hidden or not, the two shader numbers), drawn with the world.
+The mark where an order lands (`AddCommandFeedbackBlip(meshInfo, duration)`) is the same thing
+with a lifetime; I would send it through the same call.
+
+**Status:** asked 2026-10-12.
