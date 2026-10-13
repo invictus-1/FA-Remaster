@@ -84,11 +84,11 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Land battle (2,091 beats) | beat 1251 |
 | Engineers | beat 955 |
 | Upgrades | beat 648 |
-| Submarines | beat 484 |
+| Submarines | beat 495 |
 | Missiles | beat 408 |
 | Eight-army AI game | beat 344 |
 | Skirmish against an AI | beat 340 |
-| Naval battle (1,079 beats) | beat 174 |
+| Naval battle (1,079 beats) | beat 177 |
 | Experimental units, second set | beat 167 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
