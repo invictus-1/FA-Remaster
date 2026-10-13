@@ -3,6 +3,58 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 15: the unit blueprint's fields at +0x458, +0x460, +0x468
+
+| Offset | Field | Commander (uel0001) |
+|---|---|---|
+| +0x458 | `Defense.Shield.ShieldSize` | not in the file: 0 |
+| +0x45c | `Defense.Shield.RegenAssistMult` | |
+| +0x460 | `AI.GuardScanRadius` | 31.5 |
+| +0x464 | `AI.GuardReturnRadius` | |
+| +0x468 | `AI.StagingPlatformScanRadius` | not in the file: 0 |
+
+So the "Defense" extractor (0x7ec980) reads the shield's size, and "Miscellaneous" (0x7ed430) the air staging
+platform's scan radius where there is one, else the guard scan radius.
+
+**Where the blocks begin** (the whole unit blueprint, for the next question of this kind):
+
+| Block | Begins | Known from |
+|---|---|---|
+| Footprint / AltFootprint | +0x0d8 / +0x0e8 | the reflection table itself |
+| Physics | +0x278 | many reads in the simulation (MotionType +0x290, MaxSpeed +0x2a0) |
+| Intel | +0x330 | as you have it (RadarRadius +0x338, SonarRadius +0x33c, OmniRadius +0x340) |
+| Air | +0x368 | `Air.CanFly` is read at +0x368 all over the flight code |
+| Transport | +0x3f8 | `Transport.StorageSlots` is read at +0x414 (block +0x1c) |
+| Defense | +0x420 | see below |
+| AI | +0x460 | `AI.GuardFormationName` +0x470, `AI.NeedUnpack` +0x48c, `AI.AttackAngle` +0x4d0, each read in code |
+| Economy | +0x4e8 | `BuildCostEnergy` +0x4e8, `BuildCostMass` +0x4ec; `MaxBuildDistance` is its +0x7c = **+0x564** |
+
+**How sure.** The offsets INSIDE each block are the exe's own reflection entries (`push <offset>; push <name>`,
+the entries from 0x521435 Transport, 0x521664 AI, 0x521ab5 Defense, 0x52183f the shield struct, 0x521f44 Economy). AI's
+three are read straight off: GuardScanRadius +0x00, GuardReturnRadius +0x04, StagingPlatformScanRadius +0x08, and
+AI's start at +0x460 is confirmed by three reads in simulation code. **+0x458 is by arithmetic, not by a read:**
+Transport ends at +0x420 (its last field, RepairRate, is its +0x24), AI begins at +0x460, so Defense is the 0x40
+bytes between; its entries are MaxHealth +0x00, RegenRate +0x08, AirThreatLevel +0x0c, SubThreatLevel +0x14,
+EconomyThreatLevel +0x18, ArmorType +0x1c (a string, 0x1c bytes long), which leaves exactly the two floats of
+the shield struct (ShieldSize +0, RegenAssistMult +4) at +0x38. I did not find the entry that names the shield
+struct's place in Defense, and I did not read 0x7ec980.
+
+**For Chris's picture** (your reading, with the blueprint's numbers beside it; the scale is 1 : 1, the
+commander's OmniRadius is 24):
+
+- The ring at 10 is `Economy.MaxBuildDistance` (10 on uel0001), as you took it. But by the table above the
+  "Defense" extractor does not read it: on a plain commander +0x458 is 0, so that filter draws nothing for it.
+  Another extractor must read +0x564; look for that offset in the range renderer's code.
+- Its direct fire weapons say MaxRadius 22 (RightZephyr, OverCharge, AutoOverCharge), the missiles 256 (min 20),
+  GuardScanRadius 31.5, VisionRadius 26. None of these is 18.6, 12.9 or 51.7, so those three rings are not the
+  commander's own blueprint values at that scale. Whether a live unit's answer (unit vtable +0x44) differs from
+  the blueprint I have not read; a weapon's radius does change at run time (`Weapon:ChangeMaxRadius`, which
+  enhancements and FAF's veterancy use), and the simulation's weapons hold the changed value
+  (`UnitWeapon::ovMaxRadius` on our side). If you need that out of the simulation, ask for it as a view field.
+
+The tool, if you want to look up another field: `_scratch\engine\session\bpfields_all.py <lo> <hi>` lists every
+reflection entry in a code range (0x51a000 0x526000 covers the unit blueprint), `bpfield.py <FieldName>` one.
+
 ## render 19: `paused` in the plain unit view — done
 
 `UnitView::paused` (src/sim/sim_view.h), filled by `UnitViews` from the same flag `UnitStateView::paused` reads
