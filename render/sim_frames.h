@@ -35,8 +35,9 @@ class SimFrames {
   // The map's size, for the grid of what the focus army sees (TakeSight): `cells` x `cells` places
   // over the whole map, asked of the engine's ReconAt every fifth beat. Without it there is no grid.
   void SetSightGrid(float mapWidth, float mapHeight, int cells = 256);
-  // What the focus army sees now, when that has been worked out anew since the last call: 255 seen,
-  // 0 not, row by row from z = 0. An empty grid: there is no focus army any more. False: nothing new.
+  // What the focus army sees, when that has been worked out anew since the last call: 255 seen now,
+  // 128 not now but at some time since it became the focus army, 0 never; row by row from z = 0.
+  // An empty grid: there is no focus army any more. False: nothing new.
   bool TakeSight(std::vector<uint8_t>* grid, int* cells);
   // After every beat, on the simulation's thread. For the scripts' effects the simulation must have
   // had `collectEffects` set from before its first beat.
@@ -78,6 +79,8 @@ class SimFrames {
   float sightWidth_ = 0, sightHeight_ = 0;  // (set before the game runs)
   int sightCells_ = 0;
   std::vector<uint8_t> sight_, sightWork_;
+  std::vector<uint8_t> sightEver_;  // what the focus army has seen at some time (the simulation's thread only)
+  int sightEverOf_ = 0;
   bool sightNew_ = false, sightWasOn_ = false;
   uint32_t sightBeat_ = 0;
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken

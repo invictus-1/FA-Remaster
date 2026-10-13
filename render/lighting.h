@@ -128,7 +128,15 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       roughness = lerp(roughness, 0.07, puddle);
     }
     roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
-    float lying = weather.y * SURFACE_SNOW * smoothstep(0.35, 0.75, N.y + (CloudNoise(world * 0.9) - 0.5) * 0.35);
+    // snow builds up: it lies first where the surface is level, in patches; the patches close as
+    // more falls, steeper ground comes last and the steepest stays bare. Where it lies thick it
+    // hides the small shapes under it.
+    float fallen = weather.y * SURFACE_SNOW;
+    float patch = CloudNoise(world * 0.9) * 0.55 + CloudNoise(float3(world.xz * 0.21, 5.3)) * 0.45;
+    float takes = patch * 0.75 + saturate((N.y - 0.35) * 1.6) * 0.25;  // how readily it lies here
+    float bar = 1.02 - fallen * 1.15;
+    float lying = smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, N.y);
+    N = normalize(lerp(N, float3(0, 1, 0), 0.5 * lying * saturate(fallen * 2 - 0.8)));
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
     metallic *= 1 - lying;
     roughness = lerp(roughness, 0.7, lying);

@@ -211,11 +211,22 @@ void SimFrames::Beat(const moho::Sim& sim) {
       wasOn = sightWasOn_;
     }
     if (focus > 0 && cells > 0 && sightBeat_++ % 5 == 0) {
-      sightWork_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells));
+      const size_t count = static_cast<size_t>(cells) * static_cast<size_t>(cells);
+      sightWork_.resize(count);
+      // (what it has seen at some time is kept here: the engine does not keep it of places. So it
+      // begins when the army becomes the focus army, and a place crossed between two of these
+      // looks, half a second apart, can be missed)
+      if (sightEver_.size() != count || sightEverOf_ != focus) {
+        sightEver_.assign(count, 0);
+        sightEverOf_ = focus;
+      }
       for (int z = 0; z < cells; ++z)
         for (int x = 0; x < cells; ++x) {
           const float at[3] = {(static_cast<float>(x) + 0.5f) * mapWidth / static_cast<float>(cells), 0, (static_cast<float>(z) + 0.5f) * mapHeight / static_cast<float>(cells)};
-          sightWork_[static_cast<size_t>(z) * static_cast<size_t>(cells) + static_cast<size_t>(x)] = (moho::ReconAt(sim, focus, at) & moho::kReconSeenNow) ? 255 : 0;
+          const size_t i = static_cast<size_t>(z) * static_cast<size_t>(cells) + static_cast<size_t>(x);
+          const bool now = (moho::ReconAt(sim, focus, at) & moho::kReconSeenNow) != 0;
+          if (now) sightEver_[i] = 1;
+          sightWork_[i] = now ? 255 : sightEver_[i] ? 128 : 0;
         }
       std::lock_guard<std::mutex> lock(mutex_);
       sight_ = sightWork_;

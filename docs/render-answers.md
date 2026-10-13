@@ -30,10 +30,14 @@ Not yet, so the picture still gives away more than it should:
   made unseen is therefore missing when the army comes by later;
 - remembered sight, first form: a BUILDING the army has seen before (`kReconSeenEver`) stays drawn
   where it stood, in the darkened ground, with its icon, and can be pointed at; a unit seen before
-  keeps its own icon (not the plain one) while it is a blip. Two things are not the original's:
-  what is a building is told by the third letter of its id (`ueb0101`; a mod's unit named
-  otherwise is not remembered), and it is drawn from the unit as it is now, so it changes or
-  goes at once when the real one does, although the army has not seen that;
+  keeps its own icon (not the plain one) while it is a blip. Since 2026-10-12 the building is drawn
+  AS IT WAS LAST SEEN (how far built, where, which way; in its rest pose), not as it is now, and
+  when it is destroyed where the army does not see it, it stays, with its icon and on the
+  minimap, until the army sees the place again and finds it gone. Such a gone building cannot be
+  pointed at or selected (there is no unit behind it). Not the original's: what is a building is
+  told by the third letter of its id (`ueb0101`; a mod's unit named otherwise is not remembered);
+  and the memory is the renderer's, made from the frames it draws, so it begins when
+  `SetFocusArmy` is called and is lost when the focus army changes;
 - a blip stands where the unit is; whatever the original does to a blip's place (jamming) is not in it;
 - whether a never-seen radar contact shows its class at all in the original, I have not read; here
   it shows the class icon.
@@ -43,9 +47,17 @@ picture and on the minimap (whose ground now also follows the hour and the weath
 anew when the light has changed). What it sees is asked of `ReconAt` over a grid of 256 x 256 places
 on the map every fifth beat (so the edge moves twice a second, in steps of four world units on a
 20 km map), and everything under a pixel darkens alike: ground, water, wrecks, and the units of the
-army's own that stand there cannot, since they see. Radar cover is not shown on the ground, and
-there is no difference between ground never seen and ground seen before. It needs nothing from you
-beyond `SetFocusArmy`.
+army's own that stand there cannot, since they see. Radar cover is not shown on the ground. It
+needs nothing from you beyond `SetFocusArmy`.
+
+Ground never seen (2026-10-12): the renderer keeps, from that grid, what the focus army has seen at
+some time (the engine does not keep it of places). `WorldPicture::SetUnexplored(true)` is for the
+game's option `FogOfWar = "unexplored"`: ground never seen is then all but black, in the picture
+and on the minimap, until it is seen. Left alone (false, right for `"explored"`, the only fog FAF's
+lobby offers) it looks like ground seen before, as it did. You have the game's options; call it
+when you launch a game that has the option. One thing to know: in the lab's M28 game the engine
+reports the WHOLE map as seen by army 1 from tick 46 to tick 75, so with `SetUnexplored(true)`
+everything counts as explored after eight seconds. Asked of the engine (render 13).
 
 Seen in the viewer (`--focus <army>`) on the M28 skirmish with `FogOfWar = "explored"`: at six
 minutes 790 icons for no one, 363 for army 2 (its own team's units and what they see). The lab's

@@ -183,6 +183,18 @@ class World {
   Precipitation falling;  // rain and snow
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
   bool sightShown = true; // (off for a picture that is darkened by other means: the minimap's ground)
+  // The game's option FogOfWar "unexplored": ground the army has never seen is all but black until
+  // it is seen. Otherwise (the usual, "explored") it looks like ground seen before.
+  bool unexplored = false;
+  // Other armies' buildings the focus army remembers though they are gone (destroyed out of its
+  // sight): each stays drawn as it was last seen until the army sees the place again. Filled by
+  // AddFrame, for hosts that show them elsewhere too (the minimap).
+  struct RememberedGone {
+    const StrategicIcons::Kind* kind;
+    Vec3 position, color;
+  };
+  std::vector<RememberedGone> rememberedGone;
+  int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
   Wakes wakes;            // the foam behind what moves on the water
   SkyLight skyLight;  // of this frame, when a time of day is set
@@ -220,6 +232,16 @@ class World {
     double trailClock = 0;
   };
   std::unordered_map<uint32_t, Moving> moving_;
+  // another army's building as the focus army last saw it: by entity id
+  struct Remembered {
+    uint32_t blueprint;  // FrameUnit::blueprint
+    Vec3 position, color;
+    Quat orientation;
+    float fractionComplete;
+    uint32_t stamp;      // the AddFrame its unit was last in
+  };
+  std::unordered_map<uint32_t, Remembered> remembered_;
+  uint32_t frameStamp_ = 0;
   // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the
   // kinds of `hoverKind`; corners in the picture's order: top left, top right, bottom left, bottom right.
   gfx::Texture brackets_[4][4];

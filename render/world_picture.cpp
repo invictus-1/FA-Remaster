@@ -133,6 +133,10 @@ void WorldPicture::SetBuildPreviews(const std::vector<BuildPreview>& previews) {
 
 void WorldPicture::SetFocusArmy(int army) { impl_->frames.SetFocusArmy(army); }
 
+void WorldPicture::SetUnexplored(bool on) {
+  if (impl_->world) impl_->world->unexplored = on;
+}
+
 void WorldPicture::SetLifeBars(bool on) {
   if (impl_->world) impl_->world->lifeBars = on;
 }
@@ -230,11 +234,17 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
       uint32_t* out = &m.mapPixels[static_cast<size_t>(y) * static_cast<size_t>(width)];
       for (int x = 0; x < width; ++x) {
         const int cx = static_cast<int>((static_cast<float>(x) + 0.5f - m.mapX0) * sx);
-        if (cx < 0 || cx >= m.seenCells || row[cx]) continue;
+        if (cx < 0 || cx >= m.seenCells || row[cx] == 255) continue;
         const uint32_t p = out[x];
-        out[x] = (p & 0xff000000u) | ((p >> 1) & 0x007f7f7fu);  // half its light
+        if (row[cx] == 0 && w.unexplored) out[x] = (p & 0xff000000u) | ((p >> 4) & 0x000f0f0fu);  // never seen: next to none of it
+        else out[x] = (p & 0xff000000u) | ((p >> 1) & 0x007f7f7fu);  // half its light
       }
     }
+  }
+  // the buildings the army remembers though they are gone
+  for (const World::RememberedGone& r : w.rememberedGone) {
+    float x, y;
+    if (MinimapProject(r.position, &x, &y)) w.icons.Blit(r.kind, r.color, false, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, false, true);
   }
   // every unit's icon on it
   if (m.frame.blueprints) {
