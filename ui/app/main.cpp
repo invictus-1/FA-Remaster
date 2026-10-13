@@ -286,6 +286,8 @@ int main(int argc, char** argv) {
   auto startGameInterface = [&]() {
     if (game || !session.running()) return;
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
+    // (A new state is made for the size the head has NOW: the window may have been resized.)
+    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
     ui::UserState::Config gameCfg = cfg;
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
@@ -322,6 +324,7 @@ int main(int argc, char** argv) {
   auto leaveOrRestart = [&]() {
     int request = ui::TakeSessionRequest();
     if (!request || !session.running()) return;
+    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now)
     shown = front.get();
     game.reset();
     sounds.StopAll();

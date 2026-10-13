@@ -332,6 +332,12 @@ UiEvent EventAt(lua_State* L, int xIdx) {
   return e;
 }
 
+// moho64ui_Resize(width, height): the head takes a new size, as when the window is resized. The
+// host's own function for tests.
+int l_Resize(lua_State* L) {
+  UserState::From(L)->ui().Resize(static_cast<int>(luaL_checknumber(L, 1)), static_cast<int>(luaL_checknumber(L, 2)));
+  return 0;
+}
 int l_MouseMove(lua_State* L) {
   MouseMove(L, UserState::From(L)->ui(), EventAt(L, 1));
   return 0;
@@ -403,6 +409,7 @@ void SetGlobal(lua_State* L, const char* name, lua_CFunction f);  // user/bindin
 
 void RegisterInputBindings(lua_State* L) {
   SetGlobal(L, "PostDragger", l_PostDragger);
+  lua_register(L, "moho64ui_Resize", l_Resize);
   lua_register(L, "moho64ui_MouseMove", l_MouseMove);
   lua_register(L, "moho64ui_MouseButton", l_MouseButton);
   lua_register(L, "moho64ui_ControlAt", l_ControlAt);

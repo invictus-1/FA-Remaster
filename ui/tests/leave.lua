@@ -16,5 +16,8 @@ ForkThread(function()
     check("a game runs", SessionIsActive() and GetGameTimeSeconds() > 1, true)
     check("the game is not over", SessionIsGameOver(), false)
     LOG("TEST done: " .. failed .. " failed")
+    -- The window is resized during the game: the front end that comes back must have the new
+    -- size (with --dump-ui the host's last lines then say "head 0: 1600x900").
+    moho64ui_Resize(1600, 900)
     ExitGame()
 end)

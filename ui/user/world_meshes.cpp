@@ -81,8 +81,11 @@ uint32_t ColorOf(const std::string& s) {
 
 // The first model of a blueprint (a unit's, through its Display.MeshBlueprint, or a mesh
 // blueprint itself): its mesh, texture and shader. Names the blueprint leaves out are the game's
-// usual ones beside the mesh blueprint ("<name>_lod0.scm", "<name>_albedo.dds").
-void MeshOfBlueprint(lua_State* L, const std::string& id, WorldMeshView* view) {
+// usual ones beside the mesh blueprint ("<name>_lod0.scm", "<name>_albedo.dds"). `scale`: the
+// size the blueprint gives its model (a unit's Display.UniformScale, a mesh blueprint's own
+// UniformScale): a model's own measures are many times a unit's size in the world.
+void MeshOfBlueprint(lua_State* L, const std::string& id, WorldMeshView* view, float* scale) {
+  *scale = 1;
   int top = lua_gettop(L);
   std::string meshId = id;
   for (char& ch : meshId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -98,6 +101,10 @@ void MeshOfBlueprint(lua_State* L, const std::string& id, WorldMeshView* view) {
     lua_pushstring(L, "Display");
     lua_rawget(L, -2);
     if (lua_istable(L, -1)) {
+      lua_pushstring(L, "UniformScale");
+      lua_rawget(L, -2);
+      if (lua_isnumber(L, -1) && lua_tonumber(L, -1) > 0) *scale = static_cast<float>(lua_tonumber(L, -1));
+      lua_pop(L, 1);
       std::string mesh = TextField(L, lua_gettop(L), "MeshBlueprint");
       if (!mesh.empty()) {
         meshId = mesh;
@@ -141,12 +148,12 @@ void ReadDescription(lua_State* L, int t, WorldMeshView* view) {
     view->mesh = mesh;
     view->texture = TextField(L, t, "TextureName");
     view->shader = TextField(L, t, "ShaderName");
-  } else if (!blueprint.empty()) {
-    MeshOfBlueprint(L, blueprint, view);
   }
+  float own = 1;  // (a blueprint's model comes with the blueprint's size; the description's scale is on top)
+  if (mesh.empty() && !blueprint.empty()) MeshOfBlueprint(L, blueprint, view, &own);
   lua_pushstring(L, "UniformScale");
   lua_gettable(L, t);
-  view->uniformScale = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f;
+  view->uniformScale = own * (lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f);
   lua_pop(L, 1);
   std::string color = TextField(L, t, "Color");
   if (!color.empty()) view->color = ColorOf(color);
