@@ -244,8 +244,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   rule so far: capture, loading into transports and ferries, whether the weapons can reach the
   target, and wreckage and trees (the picture answers for units only). A left click follows the script's
   command mode, asked the way the original asks (`commandmode.GetCommandMode`): an order's
-  button or key (move, attack ground, patrol), or a build icon, on which the commander builds
-  the chosen building at the click. The console command `StartCommandMode`, which the order
+  button or key (move, attack, patrol, guard, repair, reclaim, capture: for the unit under the
+  cursor when there is one, else for the place, INFERRED; FAF's attack-move and abilities, which
+  are Script orders: the game's `VerifyScriptCommand` is asked and its answer sent as the order's
+  Lua value), or a build icon, on which the commander builds the chosen building at the click.
+  A Move to a place, an Attack on a unit and a Patrol carry the original's formation fields
+  (formation 0, scale 1, the turn from the units' mean towards the target: the engine track's
+  count over real replays), so a group arrives in formation. The console command `StartCommandMode`, which the order
   keys use, is built. So are the orders that need no click: `IssueCommand`, `IssueUnitCommand`
   (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
   run the finished land factory built two engineers), `SimCallback` and the unit switches

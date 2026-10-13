@@ -873,7 +873,15 @@ class WorldView : public Control {
       return true;
     }
     if (mode == "order" && name == "RULEUCC_Script") return IssueScriptAt(L, world[0], world[1], world[2], !e.shift);
-    if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) return IssueToSelection(L, name.substr(8), world[0], world[1], world[2], !e.shift);
+    if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) {
+      // An order chosen by its button or key: for the unit under the cursor when there is one
+      // (attack it, guard it, repair, reclaim, capture it), else for the place. (INFERRED: the
+      // original's rule for which of the two an order mode takes is not read.)
+      const std::string order = name.substr(8);
+      const uint32_t under = miniMap ? 0xffffffffu : UnitUnder(L, e.x, e.y);
+      if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
+    }
     if (!mode.empty() || miniMap) return false;
     if (e.type == EventType::ButtonDClick) {
       // A double click on one of the player's units selects all of its kind that are on screen
