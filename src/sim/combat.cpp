@@ -1879,10 +1879,70 @@ void UnitAimTick(Sim& sim, Unit* u) {
         m->srcLocal = posed ? u->poseQ[static_cast<size_t>(m->srcBone)] : bones[static_cast<size_t>(m->srcBone)].localRot;
   }
   PoseReset(u);
-  if (anims) AnimatorsUpdate(sim, u);  // (precedence 0, usually the unit's first manipulators)
-  RotatorsTick(u);
-  for (SlaveManipulator* m : u->slavers) {  // CSlaveManipulator::MoveManipulator 0x646140
-    if (!m->enabled || m->destBone < 0 || m->srcBone < 0) continue;
+  // The unit's manipulators, one list in the order of their precedence, the ones of equal precedence in the
+  // order they were put there (CAniActor::UpdateManipulators 0x63aa80 walks the list 0x63ace0 keeps; the
+  // constructor, SetPrecedence and an animator's PlayAnim each put a manipulator behind its equals). FAF's
+  // numbers: animators and rotators 0 unless set, a weapon's slavers 9, its aim controller 10, its recoil
+  // sliders 11, a builder arm 0 / 5 / 20. The UEF cruiser's Phalanx spins its barrel, which is also the gun's
+  // pitch bone, with a rotator of precedence 10 made at the first unpacking: behind the aim controller, which
+  // therefore reads the barrel's frame before the spin is on it.
+  struct Manip {
+    int prec;
+    uint32_t seq;
+    int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller
+    void* p;
+  };
+  std::vector<Manip> order;
+  if (anims) {
+    std::vector<AnimatorRef> al;
+    AnimatorsCollect(sim, u, &al);
+    for (const AnimatorRef& r : al) order.push_back({r.precedence, r.seq, 0, r.a});
+  }
+  {
+    auto& v = u->rotators;
+    v.erase(std::remove_if(v.begin(), v.end(), [](RotateManipulator* r) { return !r->alive; }), v.end());
+    for (RotateManipulator* r : v) order.push_back({r->precedence, r->seq, 1, r});
+  }
+  for (SlaveManipulator* m : u->slavers) order.push_back({m->precedence, m->seq, 2, m});
+  {
+    auto& v = u->sliders;
+    v.erase(std::remove_if(v.begin(), v.end(), [](SlideManipulator* m) { return !m->alive; }), v.end());
+    for (SlideManipulator* m : v) order.push_back({m->precedence, m->seq, 3, m});
+  }
+  for (BuilderArm* a : u->builderArms) order.push_back({a->precedence, a->seq, 4, a});
+  for (AimController* c : u->aimControllers) order.push_back({c->precedence, c->seq, 5, c});
+  std::sort(order.begin(), order.end(), [](const Manip& a, const Manip& b) {
+    return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq;
+  });
+  for (const Manip& e : order) {
+    if (e.kind == 0) {
+      AnimatorStep(sim, u, static_cast<ScriptObject*>(e.p));
+      continue;
+    }
+    if (e.kind == 1) {
+      RotateManipulator* r = static_cast<RotateManipulator*>(e.p);
+      if (r->alive) RotatorStep(u, r);
+      continue;
+    }
+    if (e.kind == 3) {
+      SlideManipulator* s = static_cast<SlideManipulator*>(e.p);
+      if (s->alive) SliderStep(u, s);
+      continue;
+    }
+    if (e.kind == 4) {  // the arm's angles from this beat's MoveManipulator
+      BuilderArm* a = static_cast<BuilderArm*>(e.p);
+      if (!a->alive || !a->enabled) continue;
+      PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
+      PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
+      continue;
+    }
+    if (e.kind == 5) {
+      AimController* c = static_cast<AimController*>(e.p);
+      if (c->alive) MoveManipulator(sim, c);
+      continue;
+    }
+    SlaveManipulator* m = static_cast<SlaveManipulator*>(e.p);  // CSlaveManipulator::MoveManipulator 0x646140
+    if (!m->alive || !m->enabled || m->destBone < 0 || m->srcBone < 0) continue;
     if (m->maxRate >= 0.0f) {
       // (0x4eb830: toward the source's rotation by at most the rate; no script in the game files sets one, and
       // this is a plain shortest-arc step, not read from the exe)
@@ -1901,21 +1961,6 @@ void UnitAimTick(Sim& sim, Unit* u) {
     }
     PoseRotate(u, m->destBone, m->cur);  // (0x646289: the destination's local rotation x that)
   }
-  // manipulators run in the order of their precedence (0x63ace0): a slider below every aim controller's goes first
-  int aimPrec = INT_MAX;
-  for (const AimController* c : u->aimControllers)
-    if (c->alive) aimPrec = std::min(aimPrec, c->precedence);
-  SlidersTick(u, INT_MIN, aimPrec);
-  for (BuilderArm* a : u->builderArms) {  // the arm's angles from this beat's MoveManipulator
-    if (!a->alive || !a->enabled) continue;
-    PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
-    PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
-  }
-  for (size_t i = 0; i < u->aimControllers.size(); ++i) {
-    AimController* c = u->aimControllers[i];
-    if (c->alive) MoveManipulator(sim, c);
-  }
-  SlidersTick(u, aimPrec, INT_MAX);  // (a weapon's recoil sliders have precedence 11, its aim controller 10)
   if (!u->colliders.empty()) CollidersTick(sim, u);
 }
 
@@ -1997,6 +2042,7 @@ int l_CreateAimController(lua_State* L) {
   c->yawBone = yaw;
   c->pitchBone = pitch;
   c->muzzleBone = w->aimBone;
+  c->seq = S(L)->NextManipSeq();
   if (yaw >= 0) {
     Quat q = u->skeleton->bones()[static_cast<size_t>(yaw)].modelRot;
     Vec3 f = Forward(q);
@@ -2081,7 +2127,10 @@ int l_aim_Destroy(lua_State* L) {
   return 0;
 }
 int l_aim_SetPrecedence(lua_State* L) {
-  if (auto* c = dynamic_cast<AimController*>(GetObject(L, 1))) c->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  if (auto* c = dynamic_cast<AimController*>(GetObject(L, 1))) {
+    c->precedence = static_cast<int>(luaL_checknumber(L, 2));
+    c->seq = S(L)->NextManipSeq();  // (0x63bc2b: taken out and put back behind its equals)
+  }
   lua_settop(L, 1);
   return 1;
 }
@@ -3054,109 +3103,101 @@ void RegisterProjectileBindings(lua_State* L);
 
 // ---- rotators (CRotateManipulator) ------------------------------------------------------------
 
-void RotatorsTick(Unit* u) {
-  auto& v = u->rotators;
-  v.erase(std::remove_if(v.begin(), v.end(), [](RotateManipulator* r) { return !r->alive; }), v.end());
-  for (RotateManipulator* r : v) {  // MoveManipulator 0x643860
-    if (!r->enabled || r->bone < 0 || !u->skeleton || r->bone >= u->skeleton->Count()) continue;
-    if (r->followBone >= 0) {  // the goal follows that bone's heading
-      Vec3 p;
-      Quat q;
-      BoneWorld(u, r->followBone, &p, &q);
-      r->goal = dmath::Atan2((q.w * q.y + q.z * q.x) * 2.0f, 1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
-    }
-    if (r->spinDown && r->accel != 0.0f) {  // slow to a fifth of the target speed, then settle at the angle's half
-      const float lim = r->targetSpeed * 0.2f;
-      if (r->speed > lim) {
-        const float d = -r->speed;
-        if (r->accel > std::fabs(d)) r->speed = lim;
-        else r->speed = std::copysign(r->accel, d) + r->speed;
-        r->cur = WrapPi(r->cur + r->speed);
-        r->signalled = false;
-      } else if (!(lim < std::fabs(r->cur))) {
-        r->speed = 0.0f;
-        r->cur = r->cur * 0.5f;
-        r->signalled = true;
-      } else {
-        r->cur = WrapPi(r->cur + lim);
-        r->signalled = false;
-      }
-    } else if (r->hasGoal) {  // a step of the speed toward the goal; there: it signals (the speed stays)
-      const float delta = WrapPi(r->goal - r->cur);
-      if (!(r->speed < std::fabs(delta))) {
-        r->cur = r->goal;
-        r->signalled = true;
-      } else {
-        r->cur = std::copysign(r->speed, delta) + r->cur;
-        r->signalled = false;
-      }
-    } else {  // spinning: the speed approaches the target speed by the acceleration; signalled when it is there
-      if (r->accel != 0.0f && r->speed != r->targetSpeed) {
-        const float d = r->targetSpeed - r->speed;
-        if (r->accel > std::fabs(d)) r->speed = r->targetSpeed;
-        else r->speed = std::copysign(r->accel, d) + r->speed;
-      }
-      r->signalled = r->targetSpeed == r->speed;
-      r->cur = WrapPi(r->cur + r->speed);
-    }
-    PoseRotate(u, r->bone, AxisAngle(r->axis, r->cur));
+// MoveManipulator 0x643860
+void RotatorStep(Unit* u, RotateManipulator* r) {
+  if (!r->enabled || r->bone < 0 || !u->skeleton || r->bone >= u->skeleton->Count()) return;
+  if (r->followBone >= 0) {  // the goal follows that bone's heading
+    Vec3 p;
+    Quat q;
+    BoneWorld(u, r->followBone, &p, &q);
+    r->goal = dmath::Atan2((q.w * q.y + q.z * q.x) * 2.0f, 1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
   }
+  if (r->spinDown && r->accel != 0.0f) {  // slow to a fifth of the target speed, then settle at the angle's half
+    const float lim = r->targetSpeed * 0.2f;
+    if (r->speed > lim) {
+      const float d = -r->speed;
+      if (r->accel > std::fabs(d)) r->speed = lim;
+      else r->speed = std::copysign(r->accel, d) + r->speed;
+      r->cur = WrapPi(r->cur + r->speed);
+      r->signalled = false;
+    } else if (!(lim < std::fabs(r->cur))) {
+      r->speed = 0.0f;
+      r->cur = r->cur * 0.5f;
+      r->signalled = true;
+    } else {
+      r->cur = WrapPi(r->cur + lim);
+      r->signalled = false;
+    }
+  } else if (r->hasGoal) {  // a step of the speed toward the goal; there: it signals (the speed stays)
+    const float delta = WrapPi(r->goal - r->cur);
+    if (!(r->speed < std::fabs(delta))) {
+      r->cur = r->goal;
+      r->signalled = true;
+    } else {
+      r->cur = std::copysign(r->speed, delta) + r->cur;
+      r->signalled = false;
+    }
+  } else {  // spinning: the speed approaches the target speed by the acceleration; signalled when it is there
+    if (r->accel != 0.0f && r->speed != r->targetSpeed) {
+      const float d = r->targetSpeed - r->speed;
+      if (r->accel > std::fabs(d)) r->speed = r->targetSpeed;
+      else r->speed = std::copysign(r->accel, d) + r->speed;
+    }
+    r->signalled = r->targetSpeed == r->speed;
+    r->cur = WrapPi(r->cur + r->speed);
+  }
+  PoseRotate(u, r->bone, AxisAngle(r->axis, r->cur));
 }
 
 // ---- sliders (CSlideManipulator) --------------------------------------------------------------
 
 // MoveManipulator 0x647300
-void SlidersTick(Unit* u, int lo, int hi) {
-  auto& v = u->sliders;
-  if (v.empty()) return;
-  v.erase(std::remove_if(v.begin(), v.end(), [](SlideManipulator* m) { return !m->alive; }), v.end());
+void SliderStep(Unit* u, SlideManipulator* m) {
   const auto& bones = u->skeleton->bones();
-  for (SlideManipulator* m : v) {
-    if (m->precedence < lo || m->precedence >= hi || !m->enabled) continue;
-    if (m->bone < 0 || static_cast<size_t>(m->bone) >= bones.size()) continue;
-    if (m->speed > 0.0f) {  // this tick's speed
-      bool brake = false;
-      if (m->decel > 0.0f) {  // 0x647250: braking from this speed would end past the goal
-        const Vec3 d = Sub(m->goal, m->cur);
-        const float dist = std::sqrt(d.x * d.x + d.z * d.z + d.y * d.y);
-        const float dec = m->decel * 10.0f, sp = m->vel * 10.0f;
-        const float stop = dec > 0.0f ? sp * sp / (dec * 2.0f) : 0.0f;
-        brake = stop > dist;
-      }
-      if (brake) {
-        float s = m->vel - m->decel * 0.1f;
-        if (!(m->speed > s)) s = m->speed;
-        if (0.0f > s) s = 0.0f;
-        m->vel = s;
-      } else if (m->accel > 0.0f) {
-        float s = m->accel * 0.1f + m->vel;
-        if (!(m->speed > s)) s = m->speed;
-        if (0.0f > s) s = 0.0f;
-        m->vel = s;
-      } else {
-        m->vel = m->speed;
-      }
+  if (!m->enabled) return;
+  if (m->bone < 0 || static_cast<size_t>(m->bone) >= bones.size()) return;
+  if (m->speed > 0.0f) {  // this tick's speed
+    bool brake = false;
+    if (m->decel > 0.0f) {  // 0x647250: braking from this speed would end past the goal
+      const Vec3 d = Sub(m->goal, m->cur);
+      const float dist = std::sqrt(d.x * d.x + d.z * d.z + d.y * d.y);
+      const float dec = m->decel * 10.0f, sp = m->vel * 10.0f;
+      const float stop = dec > 0.0f ? sp * sp / (dec * 2.0f) : 0.0f;
+      brake = stop > dist;
     }
-    Vec3 d = Sub(m->goal, m->cur);
-    bool stepped = false;
-    if (m->speed > 0.0f) {  // 0x5d1e70: a step of at most the speed
-      const float l2 = d.x * d.x + d.y * d.y + d.z * d.z;
-      if (m->vel * m->vel < l2) {
-        const float k = m->vel / std::sqrt(l2);
-        m->cur = Add(m->cur, Vec3{d.x * k, d.y * k, d.z * k});
-        m->signalled = false;
-        stepped = true;
-      }
+    if (brake) {
+      float s = m->vel - m->decel * 0.1f;
+      if (!(m->speed > s)) s = m->speed;
+      if (0.0f > s) s = 0.0f;
+      m->vel = s;
+    } else if (m->accel > 0.0f) {
+      float s = m->accel * 0.1f + m->vel;
+      if (!(m->speed > s)) s = m->speed;
+      if (0.0f > s) s = 0.0f;
+      m->vel = s;
+    } else {
+      m->vel = m->speed;
     }
-    if (!stepped) {
-      m->vel = 0.0f;
-      m->cur = m->goal;
-      m->signalled = true;
-    }
-    // onto the bone's local position, turned by the bone's local rotation as it is now
-    const size_t bi = static_cast<size_t>(m->bone);
-    if (bi < u->poseQ.size()) u->poseP[bi] = Add(u->poseP[bi], RotateM(u->poseQ[bi], m->cur));
   }
+  Vec3 d = Sub(m->goal, m->cur);
+  bool stepped = false;
+  if (m->speed > 0.0f) {  // 0x5d1e70: a step of at most the speed
+    const float l2 = d.x * d.x + d.y * d.y + d.z * d.z;
+    if (m->vel * m->vel < l2) {
+      const float k = m->vel / std::sqrt(l2);
+      m->cur = Add(m->cur, Vec3{d.x * k, d.y * k, d.z * k});
+      m->signalled = false;
+      stepped = true;
+    }
+  }
+  if (!stepped) {
+    m->vel = 0.0f;
+    m->cur = m->goal;
+    m->signalled = true;
+  }
+  // onto the bone's local position, turned by the bone's local rotation as it is now
+  const size_t bi = static_cast<size_t>(m->bone);
+  if (bi < u->poseQ.size()) u->poseP[bi] = Add(u->poseP[bi], RotateM(u->poseQ[bi], m->cur));
 }
 
 // ---- builder arms (CBuilderArmManipulator, builder_arm.md) -----------------------------------------
@@ -3340,6 +3381,7 @@ int l_CreateBuilderArmController(lua_State* L) {
     a->hCenter = dmath::Atan2(2 * (r.w * r.y + r.x * r.z), 1 - 2 * (r.x * r.x + r.y * r.y));
   }
   if (HasBuilderObject(u)) u->armReady = false;
+  a->seq = S(L)->NextManipSeq();
   BuilderArm* raw = a.get();
   u->builderArms.push_back(raw);
   CreateObject(L, raw, "CBuilderArmManipulator");
@@ -3385,6 +3427,7 @@ int l_arm_Disable(lua_State* L) {
 }
 int l_arm_SetPrecedence(lua_State* L) {
   CheckArm(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  CheckArm(L)->seq = S(L)->NextManipSeq();
   lua_settop(L, 1);
   return 1;
 }
@@ -3431,10 +3474,18 @@ int l_CreateRotator(lua_State* L) {
     r->targetSpeed = static_cast<float>(luaL_checknumber(L, 7)) * kRotSpeed;
     r->signalled = r->speed == r->targetSpeed;
   }
+  r->seq = S(L)->NextManipSeq();
   RotateManipulator* raw = r.get();
   if (u) u->rotators.push_back(raw);
   CreateObject(L, raw, "CRotateManipulator");
   S(L)->Own(std::move(r));
+  return 1;
+}
+int l_rot_SetPrecedence(lua_State* L) {  // cfunc_IAniManipulatorSetPrecedenceL 0x63bb40
+  RotateManipulator* r = CheckRot(L);
+  r->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  r->seq = S(L)->NextManipSeq();
+  lua_settop(L, 1);
   return 1;
 }
 int l_rot_SetGoal(lua_State* L) {  // 0x644470
@@ -3547,6 +3598,7 @@ int l_CreateSlider(lua_State* L) {
     SlideSetGoal(m.get(), static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4)),
                  static_cast<float>(luaL_checknumber(L, 5)));
   if (n >= 6) SlideSetSpeed(m.get(), static_cast<float>(luaL_checknumber(L, 6)));
+  m->seq = S(L)->NextManipSeq();
   SlideManipulator* raw = m.get();
   if (u && u->skeleton) u->sliders.push_back(raw);
   else raw->unit = nullptr;
@@ -3638,6 +3690,7 @@ int l_slide_SetGoal(lua_State* L) {
 }
 int l_slide_SetPrecedence(lua_State* L) {
   CheckSlide(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  CheckSlide(L)->seq = S(L)->NextManipSeq();
   lua_settop(L, 1);
   return 1;
 }
@@ -3666,6 +3719,7 @@ int l_CreateSlaver(lua_State* L) {
     m->destBone = ResolveBoneArg(L, u, 2);
     m->srcBone = ResolveBoneArg(L, u, 3);
   }
+  m->seq = S(L)->NextManipSeq();
   SlaveManipulator* raw = m.get();
   if (u && u->skeleton) u->slavers.push_back(raw);
   else raw->unit = nullptr;
@@ -3681,6 +3735,7 @@ int l_slaver_SetMaxRate(lua_State* L) {  // 0x646510: degrees a second
 }
 int l_slaver_SetPrecedence(lua_State* L) {
   CheckSlaver(L)->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  CheckSlaver(L)->seq = S(L)->NextManipSeq();
   lua_settop(L, 1);
   return 1;
 }
@@ -3713,6 +3768,7 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CBuilderArmManipulator", "Disable", l_arm_Disable);
   SetMethod(L, "CBuilderArmManipulator", "SetPrecedence", l_arm_SetPrecedence);
   SetMethod(L, "CBuilderArmManipulator", "Destroy", l_arm_Destroy);
+  SetMethod(L, "CRotateManipulator", "SetPrecedence", l_rot_SetPrecedence);
   SetMethod(L, "CRotateManipulator", "SetGoal", l_rot_SetGoal);
   SetMethod(L, "CRotateManipulator", "ClearGoal", l_rot_ClearGoal);
   SetMethod(L, "CRotateManipulator", "SetSpeed", l_rot_SetSpeed);

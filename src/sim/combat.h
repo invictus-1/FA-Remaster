@@ -125,6 +125,7 @@ class AimController : public ScriptObject {
   Vec3 lastMuzzlePos;
   Quat lastMuzzleRot;
   int precedence = 0;
+  uint32_t seq = 0;  // Sim::NextManipSeq
   int EventState() const override { return onTarget ? 1 : 0; }
 };
 
@@ -140,10 +141,9 @@ class SlideManipulator : public ScriptObject {
   bool world = false;                   // +0xa8 SetWorldUnits
   bool signalled = true, enabled = true, alive = true;
   int precedence = 0;
+  uint32_t seq = 0;
   int EventState() const override { return signalled ? 1 : 0; }
 };
-// MoveManipulator 0x647300 of the unit's sliders whose precedence is in [lo, hi)
-void SlidersTick(Unit* u, int lo, int hi);
 
 // CSlaveManipulator (CreateSlaver(unit, destBone, srcBone) 0x646330, MoveManipulator 0x646140): the destination
 // bone is turned by the source bone's rotation relative to its parent AS IT WAS IN LAST BEAT'S POSE (the actor's
@@ -159,6 +159,7 @@ class SlaveManipulator : public ScriptObject {
   Quat srcLocal;                    // the source's local rotation in the pose that is being replaced
   bool enabled = true, alive = true;
   int precedence = 0;
+  uint32_t seq = 0;
 };
 
 // CCollisionManipulator (CreateCollisionDetector 0x638020, ManipulatorUpdate 0x637c90): watches bones of a unit
@@ -179,8 +180,10 @@ class CollisionManipulator : public ScriptObject {
 void CollidersTick(Sim& sim, Unit* u);
 
 // CRotateManipulator (CreateRotator 0x643d80, MoveManipulator 0x643860): turns one bone about a local axis
-// toward a goal, at a speed, or spinning down; applied to the pose every tick before the aim controllers. An
-// event: scripts WaitFor it (signalled at the goal, or when the speed reached the target speed).
+// toward a goal, at a speed, or spinning down; applied to the pose every tick at its place among the unit's
+// manipulators (precedence 0 unless a script sets one: the UEF cruiser's spinning Phalanx barrel has 10, the
+// same as the gun's aim controller, and comes after it because it was made later). An event: scripts WaitFor
+// it (signalled at the goal, or when the speed reached the target speed).
 class RotateManipulator : public ScriptObject {
  public:
   Unit* unit = nullptr;
@@ -192,9 +195,10 @@ class RotateManipulator : public ScriptObject {
   int followBone = -1;               // +0xa4: the goal is that bone's heading
   bool hasGoal = false, spinDown = false;  // +0x80, +0x81
   bool signalled = true, enabled = true, alive = true;
+  int precedence = 0;
+  uint32_t seq = 0;
   int EventState() const override { return signalled ? 1 : 0; }
 };
-void RotatorsTick(Unit* u);
 
 // CBuilderArmManipulator (CreateBuilderArmController, builder_arm.md): turns the yaw/pitch bones toward
 // the builder's aim target and reports the builder "on target" (Unit::armReady).
@@ -207,6 +211,7 @@ class BuilderArm : public ScriptObject {
   float pCenter = 15.0f, pHalf = 30.0f, pSlew = 0.0610865243f;    // +0xa4..+0xac
   bool tracking = false, onTarget = false, enabled = true, alive = true;
   int precedence = 0;
+  uint32_t seq = 0;
   int EventState() const override { return onTarget ? 1 : 0; }
 };
 // MoveManipulator 0x636590 of each arm: runs in Unit::MotionTick after the unit's own motion (UpdateManipulators 0x63aa80).
@@ -272,8 +277,20 @@ void RegisterCombatBindings(lua_State* L);
 // rotation x q (CAniPoseBone::Rotate 0x54bc00)
 void PoseReset(Entity* e);
 void PoseRotate(Entity* e, int bone, const Quat& q);
+// One step of a rotator (MoveManipulator 0x643860) and of a slider (0x647300), from UnitAimTick's ordered pass.
+void RotatorStep(Unit* u, RotateManipulator* r);
+void SliderStep(Unit* u, SlideManipulator* m);
 // Animation manipulators (sim/anim.cpp). A unit's animators advance and pose its bones with its other
-// manipulators (AnimatorsUpdate, from UnitAimTick); AnimTick runs the ones of other entities (time only).
+// manipulators, each at its place in the unit's order (AnimatorsCollect drops the ones that are gone and lists
+// the rest, AnimatorStep runs one; AnimatorsUpdate runs them all, for a unit without a skeleton); AnimTick runs
+// the ones of other entities (time only).
+struct AnimatorRef {
+  ScriptObject* a;
+  int precedence;
+  uint32_t seq;
+};
+void AnimatorsCollect(Sim& sim, Unit* u, std::vector<AnimatorRef>* out);
+void AnimatorStep(Sim& sim, Unit* u, ScriptObject* a);
 void AnimatorsUpdate(Sim& sim, Unit* u);
 void AnimTick(Sim& sim);
 void ReleaseAnimators();

@@ -126,6 +126,8 @@ class Animator : public ScriptObject {
   // SetAnimationResource (PlayAnim), SetRate and the per-tick manipulator update, not from SetAnimationTime /
   // SetAnimationFraction (a script that jumps to the end still waits until the next update)
   bool triggered = true;
+  int precedence = 0;  // +0x58 (the constructor's, 0; SetPrecedence)
+  uint32_t seq = 0;    // Sim::NextManipSeq: its place among the unit's manipulators of equal precedence
   int Compute() const {
     if (!hasAnim || rate == 0) return 1;
     if (looping) return 0;
@@ -275,6 +277,7 @@ int l_CreateAnimator(lua_State* L) {
   auto a = std::make_unique<Animator>();
   a->entity = e;
   a->alignToMotion = lua_gettop(L) > 1 && lua_toboolean(L, 2);
+  a->seq = Sim::From(L)->NextManipSeq();
   if (e->kind == Entity::Kind::Unit) {
     a->unit = static_cast<Unit*>(e);
     a->unit->animators.push_back(a.get());
@@ -299,7 +302,16 @@ int l_PlayAnim(lua_State* L) {  // (anim [, looping]) -> SetAnimationResource 0x
   a->watch.clear();
   if (h.ok && a->entity && a->entity->skeleton)
     for (const std::string& n : h.names) a->watch.push_back(a->entity->skeleton->Find(n));
+  // (0x63fc6a: every bone of the animation goes through AddWatchBone 0x63b6d0, which takes the manipulator out
+  // of the actor's list and puts it back behind the others of its precedence)
+  if (h.ok && !h.names.empty()) a->seq = Sim::From(L)->NextManipSeq();
   a->UpdateTriggered();
+  return Self(L);
+}
+int l_SetPrecedence(lua_State* L) {  // cfunc_IAniManipulatorSetPrecedenceL 0x63bb40
+  Animator* a = A(L);
+  a->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  a->seq = Sim::From(L)->NextManipSeq();
   return Self(L);
 }
 int l_GetRate(lua_State* L) {
@@ -391,7 +403,7 @@ bool Gone(Animator* a) {
 
 }  // namespace
 
-void AnimatorsUpdate(Sim& sim, Unit* u) {
+void AnimatorsCollect(Sim& sim, Unit* u, std::vector<AnimatorRef>* out) {
   auto& v = u->animators;
   size_t w = 0;
   static const long dbgUnit = getenv("MOHO64_DEBUG_ANIM") ? atol(getenv("MOHO64_DEBUG_ANIM")) : -1;
@@ -406,21 +418,33 @@ void AnimatorsUpdate(Sim& sim, Unit* u) {
       continue;
     }
     v[w++] = a;
-    if (!a->hasAnim) {
-      a->UpdateTriggered();
-      continue;
-    }
-    if (u->beingBuilt) continue;
-    const float before = a->time;
-    Advance(a);
-    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
-      Logf(LogLevel::Info, "animdbg %u unit %u time %.6f -> %.6f of %.6f rate %.4f loop %d align %d frames %d bones %d signalled %d",
-           sim.tick(), u->id, before, a->time, a->duration, a->rate, static_cast<int>(a->looping),
-           static_cast<int>(a->alignToMotion), a->frames, a->anim ? a->anim->numBones : 0, static_cast<int>(a->triggered));
-    if (a->triggered && a->disableOnSignal) continue;
-    Pose(a);
+    if (out) out->push_back({a, a->precedence, a->seq});
   }
   v.resize(w);
+}
+
+void AnimatorStep(Sim& sim, Unit* u, ScriptObject* o) {
+  Animator* a = static_cast<Animator*>(o);
+  static const long dbgUnit = getenv("MOHO64_DEBUG_ANIM") ? atol(getenv("MOHO64_DEBUG_ANIM")) : -1;
+  if (!a->hasAnim) {
+    a->UpdateTriggered();
+    return;
+  }
+  if (u->beingBuilt) return;
+  const float before = a->time;
+  Advance(a);
+  if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
+    Logf(LogLevel::Info, "animdbg %u unit %u time %.6f -> %.6f of %.6f rate %.4f loop %d align %d frames %d bones %d signalled %d",
+         sim.tick(), u->id, before, a->time, a->duration, a->rate, static_cast<int>(a->looping),
+         static_cast<int>(a->alignToMotion), a->frames, a->anim ? a->anim->numBones : 0, static_cast<int>(a->triggered));
+  if (a->triggered && a->disableOnSignal) return;
+  Pose(a);
+}
+
+void AnimatorsUpdate(Sim& sim, Unit* u) {
+  std::vector<AnimatorRef> list;
+  AnimatorsCollect(sim, u, &list);
+  for (const AnimatorRef& r : list) AnimatorStep(sim, u, r.a);
 }
 
 void AnimTick(Sim& sim) {
@@ -460,6 +484,7 @@ void RegisterAnimBindings(lua_State* L) {
   SetMethod(L, "CAnimationManipulator", "SetOverwriteMode", l_SetOverwriteMode);
   SetMethod(L, "CAnimationManipulator", "SetDisableOnSignal", l_SetDisableOnSignal);
   SetMethod(L, "CAnimationManipulator", "SetDirectionalAnim", l_SetDirectionalAnim);
+  SetMethod(L, "CAnimationManipulator", "SetPrecedence", l_SetPrecedence);
   SetMethod(L, "CAnimationManipulator", "Destroy", l_Destroy);
 }
 

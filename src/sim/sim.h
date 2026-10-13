@@ -194,6 +194,10 @@ class Sim {
   // entities the scripts made that are neither unit, projectile nor prop (_c_CreateEntity, _c_CreateShield), in
   // creation order: for EntityViews (sim/sim_view.h)
   std::vector<Entity*> scriptEntities;
+  // A manipulator's place among those of equal precedence (0x63ace0 puts it behind them): stamped when it is
+  // made, when its precedence is set, and when an animator is given an animation (it re-adds its bones).
+  uint32_t manipSeq = 0;
+  uint32_t NextManipSeq() { return ++manipSeq; }
   // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;
