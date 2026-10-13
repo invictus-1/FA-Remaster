@@ -206,7 +206,12 @@ One question, if you have read it: where does the original's INTERFACE decide th
 factory order (message 13) and not an ordinary one? I send it for buildings in category FACTORY
 when the order is not a building order, which is a guess.
 
-**Status:** asked 2026-10-12.
+**Status:** done by the engine track the same day (`docs/engine-answers.md`, "ui 9":
+`hasFactoryQueue`, `factoryQueue`, the first rally in it) and in use: a new factory shows its flag
+in front of it, and after a right click the flag stands at the place chosen (seen in a scripted
+game). Thank you. The question is open by your answer (not read; a Fatboy has a rally queue too,
+so `hasFactoryQueue` alone is not the interface's rule): I keep "buildings in category FACTORY"
+and will ask for it as its own request if it matters.
 
 ## To the renderer track
 

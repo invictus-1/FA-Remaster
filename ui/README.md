@@ -382,8 +382,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   factory's rally queue (`CommandWriter::IssueFactoryCommand`), so what it builds walks there.
   (Inferred: that this holds for buildings in category FACTORY and for every order but a
   building order.) `GetCommandQueue` gives a factory's rally queue as the original's does (FA exe
-  0x8c5480) once the engine's view has it ("ui 9" in `REQUESTS.md`); until then the script's flag
-  at the rally point does not show.
+  0x8c5480; the engine's `UnitStateView::factoryQueue`), so the game's script places its flag at
+  the rally point: in front of a new factory, and where the player's right click put it.
 - The numbered groups: the keys' console commands `UI_MakeSelectionSet <name>` and
   `UI_ApplySelectionSet <name>` (FA exe 0x834a80, 0x834c10; Ctrl-1 and 1 in the default key map)
   pass the name on, as a string, to the game's selection script, which keeps the sets; the

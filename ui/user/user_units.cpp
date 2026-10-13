@@ -1184,18 +1184,6 @@ const char* CommandName(int type) {
 }
 
 // unit:GetCommandQueue(): the unit's orders, first to last, each {ID, type, position}.
-// The rally queue of a factory where the engine's view has it (asked for: "ui 9" in
-// ui/REQUESTS.md, `hasFactoryQueue` and `factoryQueue`); nullptr for any other unit, and for
-// every unit until then. (The second form goes when the engine's answer is in.)
-template <class S>
-auto FactoryQueueOf(const S& s, int) -> decltype(s.hasFactoryQueue, &s.factoryQueue) {
-  return s.hasFactoryQueue ? &s.factoryQueue : nullptr;
-}
-template <class S>
-const std::vector<CommandView>* FactoryQueueOf(const S&, long) {
-  return nullptr;
-}
-
 // GetCommandQueue() (FA exe 0x8c5480): the unit's orders, each {ID, type, position}. A factory
 // gives its rally queue instead (the original asks the unit for its factory command queue first,
 // slot +0x20, and takes the unit's own, slot +0x18, only when there is none): the game's script
@@ -1205,8 +1193,9 @@ int l_GetCommandQueue(lua_State* L) {
   lua_newtable(L);
   if (!StateOf(L, CheckUnit(L, 1), &s)) return 1;
   int n = 0;
-  const std::vector<CommandView>* rally = FactoryQueueOf(s, 0);
-  for (const CommandView& c : rally ? *rally : s.queue) {
+  // (hasFactoryQueue: the simulation keeps a rally queue for the unit; a new factory has the
+  // engine's first rally in it.)
+  for (const CommandView& c : s.hasFactoryQueue ? s.factoryQueue : s.queue) {
     lua_newtable(L);
     lua_pushstring(L, "ID");
     lua_pushnumber(L, static_cast<lua_Number>(c.id));
