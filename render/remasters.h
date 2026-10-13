@@ -12,7 +12,8 @@ class Vfs;
 
 namespace render {
 
-// Mounts every unit's folder found under `root` that has a first level. Returns how many.
+// Mounts every unit's folder found under `root` that has a first level and no file named HOLD
+// (the visuals track puts one into a folder that must not be used). Returns how many.
 int MountRemasters(moho::Vfs* vfs, const std::string& root);
 
 }  // namespace render
