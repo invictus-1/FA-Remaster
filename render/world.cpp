@@ -783,9 +783,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
       // unit gets its army's colour (docs/engine-answers.md, render 7)
-      Mat4 at = Mat4::FromTRS(position, orientation, model->scale);
-      for (int row = 0; row < 3; ++row)  // (the size a script gave it: the UEF's box of light round what it builds)
-        for (int k = 0; k < 3; ++k) at.m[row][k] *= std::max(p.scale[k] + p.grown[k] / std::max(model->scale, 1e-4f), 0.0f);
+      // (at the size the simulation holds for it: its blueprint's at launch, grown by its scale
+      // velocity, or what a script set: the UEF's box of light round what it builds, a nuke's ball)
+      Mat4 at = Mat4::FromTRS(position, orientation, p.sized ? 1.0f : model->scale);
+      for (int row = 0; row < 3 && p.sized; ++row)
+        for (int k = 0; k < 3; ++k) at.m[row][k] *= std::max(p.size[k], 0.0f);
       // what fades with its age (the UEF's build slices: whole for two seconds, then gone at
       // 0.145 a second, the original's numbers) says how much of it is left
       float left = 1;

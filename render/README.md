@@ -439,9 +439,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   shaders "NukeUEF", "NukeEMP", "NukeQuantum") is drawn by its age: churning fire with holes that
   hides what burns inside it, eats itself away after 20 seconds and fades from 50 (the UEF's, and
   the death of a commander that carries one); the Cybran's and Aeon's a shell whose texture slides
-  along it (the Aeon's without the original's missing green: not there). A projectile's scale
-  velocity is added in the units of the size it is drawn at, beat by beat (`FrameProjectile::grown`;
-  inferred from the game's scripts, `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`
+  along it (the Aeon's without the original's missing green: not there). A shell is drawn at the
+  size the simulation holds for it (`FrameProjectile::size`, the engine's `ProjectileView::size`:
+  its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
+  blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`
   makes that army's commander destroy itself in a new game (the game's own Ctrl-K callback), to
   look at a death. Not there: a shield's flash where it is hit beyond the
   game's own patch; the bubbles are not sorted by distance among themselves; the original's

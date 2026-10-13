@@ -66,14 +66,14 @@ struct FrameProjectile {
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
   bool seen = true;               // by the army the picture is for
-  // What a script made of its size, on top of its blueprint's own scale (the UEF's box of light is
-  // sized to what is built in it): the engine's scale x draw scale.
-  float scale[3] = {1, 1, 1};
-  // What its scale velocity has added to its size so far, and adds a second. These are in the
-  // units of the size it is DRAWN at (the blueprint's UniformScale counted in), not on top of it:
-  // the game's scripts set them so (a nuke's ball of fire: 0.3 x its UniformScale a second).
-  // Inferred from those scripts, not yet confirmed from the original (render/REQUESTS.md 16).
-  float grown[3] = {0, 0, 0};
+  // The size its mesh is drawn at, per axis, as the simulation holds it (the engine's
+  // ProjectileView::size, docs/engine-answers.md, render 16): the blueprint's UniformScale at
+  // launch, grown by its scale velocity every beat, or whatever a script's SetScale / SetDrawScale
+  // wrote in its place (the UEF's box of light is sized to what is built in it). The blueprint's
+  // UniformScale is NOT applied on top. sized = false: not told (a recording); then the
+  // blueprint's own scale is used. growth: what the scale velocity adds a second (between beats).
+  bool sized = false;
+  float size[3] = {1, 1, 1};
   float growth[3] = {0, 0, 0};
   float age = 0;  // seconds since it was first seen (what fades with time goes by it)
 };
