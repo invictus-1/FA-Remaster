@@ -442,7 +442,10 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   along it (the Aeon's without the original's missing green: not there). The first game's shader
   names, which some 700 levels in the game's blueprints still carry (`TMeshAlpha`,
   `TMeshNoNormals`, `TMeshOuterCloud` ...), are mapped to today's techniques by the original
-  program's own table before a level is sorted into a look (`REQUESTS.md` 17). A shell is drawn at the
+  program's own table before a level is sorted into a look (`REQUESTS.md` 17). Glass ("GlassAlpha":
+  the domes of the Aeon's torpedo launchers, windows) is lit like a unit and seen through by its
+  albedo's alpha and its glow, in the pass after the water; the viewer's `--ranges` stands a dome
+  with a cube behind it. A shell is drawn at the
   size the simulation holds for it (`FrameProjectile::size`, the engine's `ProjectileView::size`:
   its blueprint's UniformScale at launch, grown by its scale velocity, or what a script set; the
   blueprint's scale is not applied on top; `REQUESTS.md` 16). The viewer's `--self-destruct <beat>[,<army>]`

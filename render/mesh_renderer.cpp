@@ -68,7 +68,7 @@ cbuffer Instances : register(b2) {
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
-  float4 kind;  // x: alpha not above this is cut away, y: 1 = lit by the mesh's normals only (2: a frame of light,
+  float4 kind;  // x: alpha not above this is cut away (-1: glass, seen through by its alpha and glow), y: 1 = lit by the mesh's normals only (2: a frame of light,
                 // 3: a shield's bubble, 4: a slab that fades, 5: a nuke's ball of fire, 6: a nuke's sliding
                 // shell; none of them is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
@@ -451,6 +451,9 @@ float4 Shade(VOut i, bool front) {
 // a ghost: its shape in one colour, the light and dark of the model kept
 float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
   float4 c = Shade(i, front);
+  // glass: as much of it shows as its albedo's alpha and its glow say (never quite nothing, or a
+  // clear pane would not be there at all)
+  if (kind.x < -0.5) c.a = saturate(max(albedoMap.Sample(samplerAniso, i.uv.xy).a + specularMap.Sample(samplerAniso, i.uv.xy).b, 0.12));
   if (dot(i.tint, float3(1, 1, 1)) > 0) {
     float lightness = dot(c.rgb, float3(0.3, 0.6, 0.1));
     float3 tint = look > 0.5 ? ToLinear(i.tint) : i.tint;

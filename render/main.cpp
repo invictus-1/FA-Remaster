@@ -505,6 +505,19 @@ int main(int argc, char** argv) {
       dot.fractionComplete = 0.8f;
       world.placed.push_back(dot);
     }
+    // ... a pane of glass (the dome of the Aeon's torpedo launcher), with a cube behind it to see through to
+    PlacedMesh dome, behind;
+    dome.mesh = "/effects/entities/uab2205_dome/uab2205_dome_lod0.scm";
+    dome.texture = "/effects/entities/uab2205_dome/uab2205_dome_albedo.dds";
+    dome.shader = "GlassAlpha";
+    dome.uniformScale = 1.0f;
+    dome.position = at + Vec3{-2, (world.HaveMap() ? world.GroundHeight(at.x - 2, at.z + 6) : 0) + 0.3f, 6};
+    behind = cube;
+    behind.shader = "Unit";
+    behind.position = dome.position + Vec3{0, 0.2f, -1.5f};
+    behind.scale = {0.6f, 0.6f, 0.6f};
+    world.placed.push_back(dome);
+    world.placed.push_back(behind);
     // ... and the guides round building sites: outlines four pixels wide in pieces of one map unit
     // that follow the ground, a hairline one beside them, and an order's line through them
     auto outline = [&](Vec3 middle, float half, uint32_t color, float width) {

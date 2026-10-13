@@ -414,6 +414,11 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
       lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
+    } else if (kind == "glassalpha") {
+      // glass: a dome or a window, lit like the unit it sits on and seen through by its albedo's
+      // alpha and its glow (an alpha cut of -1 says so to the shader); drawn after the water
+      lod.blend = lod.glass = true;
+      lod.alphaCut = -1;
     } else if (kind == "nukeuef" || kind == "nukeemp" || kind == "nukequantum" || kind == "outercloud" || kind == "cloud") {
       // a nuke's ball of fire, and the shells of cloud round one ("OuterCloud" is the EMP shell's
       // very look; "Cloud" stands still, and is lit by the sun in the original: here it is not)
