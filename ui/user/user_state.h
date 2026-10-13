@@ -193,7 +193,8 @@ uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius);
 std::string RightClickOrder(lua_State* L, uint32_t under);
 // Select the player's own units among these entity ids (what a click or a box in the world
 // found); with `add` they join the selection instead of replacing it.
-void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// `byPriority`: only those of the best selection priority among them (a selection by box).
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority = false);
 // The console commands the game's key map binds its selection keys to (user_units.cpp):
 // UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
 // words> (FA exe 0x866a30) and UI_ExpandCurrentSelection (0x866970: the player's units in view

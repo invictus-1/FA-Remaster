@@ -518,6 +518,33 @@ int l_ListFalse(lua_State* L) {
   lua_pushboolean(L, 0);
   return 1;
 }
+// GetIsPaused(units), GetIsAutoMode(units), GetIsAutoSurfaceMode(units), GetScriptBit(units, bit):
+// what the order buttons show as switched on: true when any of the units has it (INFERRED: any,
+// not all; the original's functions are not read).
+template <bool UnitStateView::*Field>
+int l_ListSwitch(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  bool any = false;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    if (!u->gone && StateOf(L, u, &s) && s.*Field) any = true;
+  }
+  lua_pushboolean(L, any);
+  return 1;
+}
+int l_GetScriptBit(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  const int bit = static_cast<int>(luaL_optnumber(L, 2, 0));
+  bool any = false;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    if (!u->gone && bit >= 0 && bit < 32 && StateOf(L, u, &s) && (s.scriptBits & (1u << bit))) any = true;
+  }
+  lua_pushboolean(L, any);
+  return 1;
+}
 int l_ListEmpty(lua_State* L) {
   lua_newtable(L);
   return 1;
@@ -1537,6 +1564,17 @@ void PushRollover(lua_State* L, UserUnit* u, bool withFocus) {
   num("armyIndex", u->view.army - 1);
   str("teamColor", ArmyColorOf(L, u->view.army));
   if (!u->customName.empty()) str("customName", u->customName);
+  // A unit that works on itself (a commander's enhancement: work under way and nothing it works
+  // on): `focusUpgrade`, by which the game's unit panel shows the work's per cent. INFERRED: the
+  // original's table for it is not read (0x8421f0); the script only asks whether it is there.
+  if (withFocus && s.focus == 0xffffffffu && u->view.workProgress > 0) {
+    lua_pushstring(L, "focusUpgrade");
+    lua_newtable(L);
+    lua_pushstring(L, "workProgress");
+    lua_pushnumber(L, u->view.workProgress);
+    lua_rawset(L, -3);
+    lua_rawset(L, -3);
+  }
   if (withFocus && s.focus != 0xffffffffu) {
     UnitStore& store = Store(L);
     auto it = store.units.find(s.focus);
@@ -1630,23 +1668,44 @@ void BuildQueue(lua_State* L, const UserUnit* factory, std::vector<CommandView>*
         c.type == static_cast<int>(CommandType::Upgrade))
       if (!c.blueprint.empty()) out->push_back(c);
 }
+// The queue as the panel shows it: orders for the same thing that follow one another are ONE
+// entry with their counts added up (two engineers, a tank, two engineers: three entries of 2, 1
+// and 2), as players know it from the original. (INFERRED where the original adds them up: in
+// what it hands the script, as here, or by putting a second order into the first.)
+struct QueueStack {
+  std::string blueprint;
+  int count = 0;
+  std::vector<CommandView> orders;  // first to last
+};
+std::vector<QueueStack> StacksOf(const std::vector<CommandView>& queue) {
+  std::vector<QueueStack> stacks;
+  for (const CommandView& c : queue) {
+    if (stacks.empty() || stacks.back().blueprint != c.blueprint || c.type != stacks.back().orders.back().type) {
+      stacks.emplace_back();
+      stacks.back().blueprint = c.blueprint;
+    }
+    stacks.back().count += c.count;
+    stacks.back().orders.push_back(c);
+  }
+  return stacks;
+}
 void PushBuildQueue(lua_State* L, const std::vector<CommandView>& queue) {
   lua_newtable(L);
   int n = 0;
-  for (const CommandView& c : queue) {
+  for (const QueueStack& stack : StacksOf(queue)) {
     lua_newtable(L);
     lua_pushstring(L, "id");
-    lua_pushstring(L, c.blueprint.c_str());
+    lua_pushstring(L, stack.blueprint.c_str());
     lua_rawset(L, -3);
     lua_pushstring(L, "count");
-    lua_pushnumber(L, c.count);
+    lua_pushnumber(L, stack.count);
     lua_rawset(L, -3);
     lua_rawseti(L, -2, ++n);
   }
 }
 std::string QueueKey(const std::vector<CommandView>& queue) {
   std::string key;
-  for (const CommandView& c : queue) key += c.blueprint + "*" + std::to_string(c.count) + ",";
+  for (const QueueStack& stack : StacksOf(queue)) key += stack.blueprint + "*" + std::to_string(stack.count) + ",";
   return key;
 }
 int l_SetCurrentFactoryForQueueDisplay(lua_State* L) {
@@ -1670,9 +1729,20 @@ int ChangeBuildCount(lua_State* L, bool more) {
   std::vector<CommandView> queue;
   BuildQueue(L, it->second.get(), &queue);
   int index = static_cast<int>(luaL_checknumber(L, 1)), count = static_cast<int>(luaL_optnumber(L, 2, 1));
-  if (index < 1 || index > static_cast<int>(queue.size())) return 0;
-  if (more) Writer(L).IncreaseCommandCount(queue[static_cast<size_t>(index - 1)].id, count);
-  else Writer(L).DecreaseCommandCount(queue[static_cast<size_t>(index - 1)].id, count);
+  // (The index is the shown entry's: more goes onto its last order; less is taken from its last
+  // order backwards, as many orders as it takes.)
+  const std::vector<QueueStack> stacks = StacksOf(queue);
+  if (index < 1 || index > static_cast<int>(stacks.size())) return 0;
+  const QueueStack& stack = stacks[static_cast<size_t>(index - 1)];
+  if (more) {
+    Writer(L).IncreaseCommandCount(stack.orders.back().id, count);
+    return 0;
+  }
+  for (size_t i = stack.orders.size(); i-- > 0 && count > 0;) {
+    const int take = std::min(count, std::max(stack.orders[i].count, 1));
+    Writer(L).DecreaseCommandCount(stack.orders[i].id, take);
+    count -= take;
+  }
   return 0;
 }
 int l_IncreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, true); }
@@ -1764,19 +1834,54 @@ void ExpandCurrentSelection(lua_State* L) {
   SetSelection(L, now);
 }
 
-void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
+// A unit kind's rank in a selection by box (the blueprints' General.SelectionPriority: 1 the
+// fighting units, 3 engineers and commanders, 5 buildings; 1 where a blueprint says nothing).
+int SelectionPriorityOf(lua_State* L, const UserUnit* u) {
+  int priority = 1;
+  PushBlueprint(L, u->view.blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "General");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "SelectionPriority");
+      lua_gettable(L, -2);
+      if (lua_isnumber(L, -1)) priority = static_cast<int>(lua_tonumber(L, -1));
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  return priority;
+}
+
+// `byPriority`: of the units named, only those of the best selection priority among them are
+// taken (a box drawn over tanks, engineers and buildings selects the tanks; over engineers, the
+// commander and buildings: the engineers and the commander), as players know it from the
+// original. INFERRED: the original's code for it is not read; the numbers are the blueprints'.
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority) {
   Sim* sim = TheSim(L);
   if (!sim) return;
   UnitStore& store = Store(L);
-  std::vector<UserUnit*> now;
+  std::vector<UserUnit*> now, found;
   if (add) now = store.selection;
   for (uint32_t id : ids) {
     auto it = store.units.find(id);
     if (it == store.units.end()) continue;
     UserUnit* u = it->second.get();
     if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
-    if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
+    found.push_back(u);
   }
+  if (byPriority && found.size() > 1) {
+    int best = 1000;
+    std::vector<int> priority;
+    for (UserUnit* u : found) priority.push_back(SelectionPriorityOf(L, u)), best = std::min(best, priority.back());
+    std::vector<UserUnit*> kept;
+    for (size_t i = 0; i < found.size(); ++i)
+      if (priority[i] == best) kept.push_back(found[i]);
+    found.swap(kept);
+  }
+  for (UserUnit* u : found)
+    if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
   SetSelection(L, now);
 }
 
@@ -1962,7 +2067,10 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "SetFireState", l_SetFireState);
   SetGlobal(L, "ToggleFireState", l_ToggleFireState);
   SetGlobal(L, "ToggleScriptBit", l_ToggleScriptBit);
-  for (const char* name : {"GetScriptBit", "GetIsPaused", "GetIsAutoMode", "GetIsAutoSurfaceMode"}) SetGlobal(L, name, l_ListFalse);
+  SetGlobal(L, "GetScriptBit", l_GetScriptBit);
+  SetGlobal(L, "GetIsPaused", l_ListSwitch<&UnitStateView::paused>);
+  SetGlobal(L, "GetIsAutoMode", l_ListSwitch<&UnitStateView::autoMode>);
+  SetGlobal(L, "GetIsAutoSurfaceMode", l_ListSwitch<&UnitStateView::autoSurfaceMode>);
   for (const char* name : {"GetAttachedUnitsList", "GetAssistingUnitsList"}) SetGlobal(L, name, l_ListEmpty);
 
   const char* cls = "UserUnit";
