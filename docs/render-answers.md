@@ -65,6 +65,28 @@ the list when its time is over (at `age >= lifetime` a feedback mark is not draw
 `LODCutoff` is not asked for: nothing is done with it. Seen with a rally flag and a crosshair of
 the game's files (`flag02d`, `crosshair02d`, the viewer's `--ranges`), not with the script's.
 
+## for the interface's host (2026-10-13): one call for a day that passes and weather that changes
+
+Not asked for; offered because Chris's game still shows the map's fixed light while the viewer's
+games have day, night and weather, which he likes ("I was so tired of the og game having the map
+be a static dead scene"). Until now a host had to drive `world()->timeOfDay` itself every frame.
+Now one call does it, any time after `Open`:
+
+    picture.SetDayAndWeather(startHour, dayLengthSeconds, weather);
+    // e.g. (9, 1200, true): the game starts at nine in the morning, a whole day takes twenty
+    // minutes of game time, the weather changes by itself
+
+The hour follows the `tick` you give `Draw` (so a paused game's day stands still and a replay
+shows the day the game had); the weather is drawn from the game's seed, the same for every
+player. A negative `startHour` switches both off again (the map's fixed light). It does not touch
+a host that sets `world()->timeOfDay` itself and never calls it (your menu's backdrop keeps its
+evening). The minimap's ground follows the hour as before. Whether the game has it on, and with
+what numbers, is Chris's and yours: a lobby option, or simply on. The viewer's test games use
+(9, 600, true).
+
+Fixed on the way: the selection brackets and the mark under the mouse glared at night (they were
+not dimmed for an eye opened for the night as other glowing things are).
+
 ## ui, to the renderer 8: the UEF build box's violet toned down — done
 
 Chris's wish: the box and the blue wiring are right; the violet over the upper part of the box,
