@@ -55,6 +55,7 @@
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --noshadows  start without the sun's shadows
+// --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -149,6 +150,7 @@ const Vec3 kArmyColors[8] = {{0.26f, 0.43f, 0.93f}, {0.91f, 0.04f, 0.04f}, {0.38
 struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
+  bool lampShadows = true;              // --no-lamp-shadows
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
   int frames = 0;
@@ -218,6 +220,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--bars") o->bars = true;  // life bars on from the start (key B switches them)
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
+    else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -475,6 +478,7 @@ int main(int argc, char** argv) {
   }
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
+  world.lampShadows = opt.lampShadows;
   world.iconsOn = opt.icons;
   world.sun = opt.sun;
   world.sky = opt.sky;
@@ -1295,6 +1299,7 @@ int main(int argc, char** argv) {
       if (lights.count) printf("; %d lights", lights.count);
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
+      if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);
       if (haveLive && opt.debug) {  // (where to look for them)
         printf("; %d emitter curves set by scripts", effects.curvesSet);
         for (const Vec3& p : world.WreckPlaces(6)) printf("; wreck at %.0f, %.0f", p.x, p.z);

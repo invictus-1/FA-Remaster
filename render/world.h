@@ -158,6 +158,10 @@ class World {
   // --- settings, changeable between frames ---
   Look look = Look::Modern;
   bool shadowsOn = true, iconsOn = true;
+  // The lamps' shadows (lights.h): what stands in a headlight's beam shadows the ground and the
+  // units behind it. `lampShadowsDrawn`: how many lamps had a shadow map in the last frame.
+  bool lampShadows = true;
+  int lampShadowsDrawn = 0;
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;  // the modern look's strengths
   // The time of day, in hours (0..24; 6 sunrise, 12 noon, 18 sunset): the modern look's light is
   // then the computed sky's (sky.h). Negative: the map's own light, as the original has it.

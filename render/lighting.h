@@ -20,6 +20,7 @@ inline const char kLightingShaderBlock[] = R"hlsl(
 #ifndef SURFACE_PUDDLES
 #define SURFACE_PUDDLES 0.0
 #endif
+Texture2DArray<float> lampShadowMaps : register(t27);
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
@@ -64,6 +65,25 @@ float3 EnvironmentBrdf(float3 f0, float roughness, float nDotV) {
   return f0 * ab.x + ab.y;
 }
 
+// How much of a lamp's beam reaches a place: 1 where nothing stands between them, by the lamp's
+// own shadow map (lights.h). The lookup is moved a little along the surface's normal and toward
+// the lamp, which keeps a lit surface from shadowing itself.
+float LampShadow(float3 world, float3 N, uint map) {
+  uint at = uint(lightGridSize.w) + map * 4;
+  float4 p = float4(world + N * 0.1, 1);
+  float4 s = float4(dot(lightData[at], p), dot(lightData[at + 1], p), dot(lightData[at + 2], p), dot(lightData[at + 3], p));
+  if (s.w <= 0.02) return 1;
+  float2 uv = s.xy / s.w;
+  if (any(uv < 0.01) || any(uv > 0.99)) return 1;
+  float depth = s.z / max(s.w - (0.12 + 0.015 * s.w), 0.01);
+  float step = 1.0 / 512.0;
+  float lit = 0;
+  for (int y = 0; y <= 1; ++y)
+    for (int x = 0; x <= 1; ++x)
+      lit += lampShadowMaps.SampleCmpLevelZero(samplerShadow, float3(uv + (float2(x, y) - 0.5) * (1.5 * step), map), depth);
+  return lit * 0.25;
+}
+
 // The small lights (lights.h) on a surface: those of the square of ground the place is over.
 // `diffuseColor` and `f0`: what the surface gives back of light from all sides and mirrored;
 // `a2` and `k`: its roughness as the highlight's formulas take it; `nDotV`: how it faces the eye.
@@ -78,7 +98,7 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
       for (uint s = 0; s < n; ++s) {
         uint at = first + s;
         uint light = uint(lightData[at >> 2][at & 3]);
-        float4 where = lightData[uint(lightGridSize.z) + light * 3];
+        float4 where = lightData[uint(lightGridSize.z) + light * 4];
         float3 toLight = where.xyz - world;
         float far2 = dot(toLight, toLight) / (where.w * where.w);
         if (far2 >= 1) continue;
@@ -86,14 +106,18 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
         float nl = saturate(dot(N, l));
         // full at the light, nothing at its radius
         float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
-        float4 tint = lightData[uint(lightGridSize.z) + light * 3 + 1];
-        float4 beam = lightData[uint(lightGridSize.z) + light * 3 + 2];
+        float4 tint = lightData[uint(lightGridSize.z) + light * 4 + 1];
+        float4 beam = lightData[uint(lightGridSize.z) + light * 4 + 2];
         if (beam.w > -1.5) {
           // a beam: how far off its middle this place is (0 in the middle, 1 at its edge); it reaches
           // farther than a light to all sides, and a share of it stays around the lamp
           float off = sqrt(saturate((1 - dot(-l, beam.xyz)) / max(1 - beam.w, 1e-4)));
           float inside = 1 - smoothstep(0.7, 1.0, off);
-          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside + fade * tint.w * saturate(1 - far2 * 25);
+          // (what stands in the beam shadows it; the lamp's glow to all sides is not shadowed)
+          float map = lightData[uint(lightGridSize.z) + light * 4 + 3].x;
+          float reaches = inside;
+          [branch] if (map > -0.5 && inside > 0) reaches *= LampShadow(world, N, uint(map));
+          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * tint.w * saturate(1 - far2 * 25);
           // (a lamp low on a unit shines along the ground, which by the angle alone would hardly be lit:
           // within the beam the ground takes light as if the air scattered some of it down)
           nl = saturate(dot(N, l) + 0.6 * inside);

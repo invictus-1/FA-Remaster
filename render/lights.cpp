@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "core/vfs.h"
 #include "dds.h"
@@ -20,6 +21,66 @@ Lights::Lights(gfx::Device* device, const moho::Vfs* vfs) : device_(device), vfs
   bd.stride = 16;
   bd.dynamic = true;
   buffer_ = device_->CreateBuffer(bd);
+  gfx::TargetDesc td;
+  td.width = td.height = kLampShadowSize;
+  td.layers = kLampShadows;
+  td.format = gfx::Format::D32;
+  shadowMap_ = device_->CreateTarget(td);
+}
+
+gfx::PassDesc Lights::ShadowPass(int i) const {
+  gfx::PassDesc p;
+  p.depth = shadowMap_;
+  p.depthLayer = i;
+  return p;
+}
+
+int Lights::PlaceShadows(const Camera& camera, const View& view) {
+  shadowCount_ = 0;
+  // the beams near enough to what the camera looks at to be seen, nearest first
+  struct Near {
+    float away;
+    size_t light;
+  };
+  std::vector<Near> near;
+  for (size_t n = 0; n < lights_.size(); ++n) {
+    const Light& l = lights_[n];
+    if (l.cosEdge < -1.5f || l.radius < 1.5f || l.color.x + l.color.y + l.color.z < 0.02f) continue;
+    // (over the ground: a host's camera target need not lie at the ground's height)
+    const float away = std::hypot(l.position.x - camera.target.x, l.position.z - camera.target.z);
+    if (away - l.radius > camera.distance * 1.3f) continue;
+    near.push_back({away, n});
+  }
+  const size_t count = std::min(near.size(), static_cast<size_t>(kLampShadows));
+  std::partial_sort(near.begin(), near.begin() + static_cast<std::ptrdiff_t>(count), near.end(), [](const Near& a, const Near& b) { return a.away < b.away; });
+  for (size_t k = 0; k < count; ++k) {
+    Light& l = lights_[near[k].light];
+    l.shadow = static_cast<int>(k);
+    // the lamp's eye: it looks along its beam, as wide as the beam opens (and a little more, for
+    // the lookups at the map's edge)
+    const Vec3 back = l.direction * -1.0f;
+    const Vec3 reference = std::fabs(back.y) > 0.99f ? Vec3{1, 0, 0} : Vec3{0, 1, 0};
+    const Vec3 right = Normalize(Cross(reference, back));
+    const Vec3 up = Cross(back, right);
+    const float opening = std::min(2 * std::acos(std::clamp(l.cosEdge, -1.0f, 1.0f)) + 0.1f, 2.6f);
+    const Mat4 lampViewProj = Mat4::Perspective(opening, 1, 0.05f) * Mat4::View(l.position, right, up, back);
+    View& v = shadowViews_[k];
+    v = view;
+    v.SetMatrix(lampViewProj);
+    v.constants.shadowsOn = 0;
+    v.coveredHalf = 0;
+    v.reachFrom = l.position;
+    v.reach = l.radius;
+    v.carrier = l.carrier;
+    v.hasCarrier = l.hasCarrier;
+    v.constants.viewport[0] = v.constants.viewport[1] = static_cast<float>(kLampShadowSize);
+    v.constants.viewport[2] = v.constants.viewport[3] = 1.0f / static_cast<float>(kLampShadowSize);
+    // from the projection's -w..w (y up) to the map's 0..w (y down)
+    const Mat4 toMap = {{{0.5f, 0, 0, 0.5f}, {0, -0.5f, 0, 0.5f}, {0, 0, 1, 0}, {0, 0, 0, 1}}};
+    shadowMatrix_[k] = toMap * lampViewProj;
+  }
+  shadowCount_ = static_cast<int>(count);
+  return shadowCount_;
 }
 
 void Lights::Begin(double now) {
@@ -39,10 +100,14 @@ Vec3 Lights::RampGlow(const std::string& ramp) {
   return best;
 }
 
-void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow) {
+void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier) {
   if (radius <= 0) return;
   Light light{position, radius, color, 1, {}, -2};
   light.glow = glow;
+  if (carrier) {
+    light.carrier = *carrier;
+    light.hasCarrier = true;
+  }
   light.direction = Normalize(direction);
   light.cosEdge = std::cos(std::clamp(coneDegrees, 1.0f, 179.0f) * 0.5f * 3.14159265f / 180);
   lights_.push_back(light);
@@ -93,6 +158,8 @@ void Lights::Build(View* view) {
   ViewConstants& c = view->constants;
   for (float& v : c.lightGrid) v = 0;
   for (float& v : c.lightGridSize) v = 0;
+  if (shadowCount_ == 0)
+    for (Light& l : lights_) l.shadow = -1;
 
   rows_.clear();
   if (lights_.empty()) {
@@ -157,17 +224,18 @@ void Lights::Build(View* view) {
       std::nth_element(list, list + 48, list + cellCount_[at], [&](uint32_t a, uint32_t b) { return away(a) < away(b); });
     }
   // the buffer, in rows of four numbers: one row per square (where its list begins, how long it
-  // is), then the lists (four light numbers a row), then three rows per light
+  // is), then the lists (four light numbers a row), then four rows per light, then four rows per
+  // lamp's shadow map (its matrix)
   const size_t listRows = (total + 3) / 4;
-  const size_t firstList = cells, firstLight = cells + listRows;
-  rows_.assign((firstLight + lights_.size() * 3) * 4, 0.0f);
+  const size_t firstList = cells, firstLight = cells + listRows, firstMatrix = firstLight + lights_.size() * 4;
+  rows_.assign((firstMatrix + static_cast<size_t>(shadowCount_) * 4) * 4, 0.0f);
   for (size_t i = 0; i < cells; ++i) {
     rows_[i * 4] = static_cast<float>(firstList * 4 + cellFirst_[i]);  // counted in numbers, not rows
     rows_[i * 4 + 1] = static_cast<float>(cellCount_[i]);
   }
   for (uint32_t i = 0; i < total; ++i) rows_[firstList * 4 + i] = static_cast<float>(indices_[i]);
   for (size_t n = 0; n < lights_.size(); ++n) {
-    float* p = &rows_[(firstLight + n * 3) * 4];
+    float* p = &rows_[(firstLight + n * 4) * 4];
     p[0] = lights_[n].position.x;
     p[1] = lights_[n].position.y;
     p[2] = lights_[n].position.z;
@@ -180,7 +248,11 @@ void Lights::Build(View* view) {
     p[9] = lights_[n].direction.y;
     p[10] = lights_[n].direction.z;
     p[11] = lights_[n].cosEdge;
+    p[12] = static_cast<float>(lights_[n].shadow);
   }
+  for (int k = 0; k < shadowCount_; ++k)
+    std::memcpy(&rows_[(firstMatrix + static_cast<size_t>(k) * 4) * 4], shadowMatrix_[k].m, 16 * sizeof(float));
+  shadowCount_ = 0;  // (placed anew every frame, or not at all)
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
   c.lightGrid[0] = x0;
   c.lightGrid[1] = z0;
@@ -189,6 +261,7 @@ void Lights::Build(View* view) {
   c.lightGridSize[0] = static_cast<float>(cols);
   c.lightGridSize[1] = static_cast<float>(rows);
   c.lightGridSize[2] = static_cast<float>(firstLight);
+  c.lightGridSize[3] = static_cast<float>(firstMatrix);
 }
 
 void Lights::Bind() { device_->SetShaderBuffer(buffer_, 1); }

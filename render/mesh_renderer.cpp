@@ -677,6 +677,8 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     if (part != 0 && e.scenery != (part == 1)) continue;
     if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
     if (shadowPass && view.CoveredByNearer(e.centre, e.radius)) continue;  // the nearer shadow map has it
+    if (view.reach > 0 && Length(e.centre - view.reachFrom) - e.radius > view.reach) continue;  // beyond a lamp's light
+    if (view.hasCarrier && Length(e.centre - view.carrier) < 0.02f) continue;                   // what the lamp rides on
     const float pixels = 2 * e.sizeRadius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
     if (pixels < smallest) continue;
     const float wanted = wish * pixels * pixels;
