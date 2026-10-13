@@ -501,6 +501,9 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
       d.iconSortPriority = static_cast<int>(NumField(L, t, "StrategicIconSortPriority", 0.0f));
       d.selectionSizeX = NumField(L, t, "SelectionSizeX", 0.0f);
       d.selectionSizeZ = NumField(L, t, "SelectionSizeZ", 0.0f);
+      d.lifeBarSize = NumField(L, t, "LifeBarSize", 0.0f);
+      d.lifeBarHeight = NumField(L, t, "LifeBarHeight", 0.0f);
+      d.lifeBarOffset = NumField(L, t, "LifeBarOffset", 0.0f);
       lua_pushstring(L, "Mesh");
       lua_rawget(L, disp);
       if (lua_istable(L, -1)) d.iconFadeInZoom = NumField(L, lua_gettop(L), "IconFadeInZoom", 0.0f);
