@@ -405,6 +405,7 @@ WorldView* MainView(Control* c);  // further down: the first world view that is 
 class WorldView : public Control {
  public:
   const char* ClassName() const override { return "worldview"; }
+  bool DrawsBeneathAll() const override { return !miniMap; }
   void Describe(std::string& out) const override { out += "camera " + cameraName + (miniMap ? " minimap" : ""); }
 
   std::string cameraName;

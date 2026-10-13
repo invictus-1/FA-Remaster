@@ -342,9 +342,31 @@ void LoadKeyMappings(lua_State* L) {
   lua_settop(L, top);
 }
 
+// In a game the script hears when the command graph shows and hides, which is while Shift is
+// held: commandgraph.OnCommandGraphShow(show) ("Called by the engine when the command graph is
+// shown by pressing the shift key", so the script's own comment; where the original calls it is
+// not read). FAF's reclaim labels and the pings in the world views hang on it.
+void CommandGraphShown(lua_State* L, bool show) {
+  if (!UserState::From(L)->config().sim) return;
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandgraph.lua");
+  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "OnCommandGraphShow");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      lua_pushboolean(L, show ? 1 : 0);
+      if (lua_pcall(L, 1, 0, 0) != 0) Logf(LogLevel::Warning, "OnCommandGraphShow: %s", lua_tostring(L, -1));
+    }
+  }
+  lua_settop(L, top);
+}
+
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat) {
   KeyMap& map = Map(L);
+  const bool wasDown = map.down.count(vk) != 0;
   map.down.insert(vk);
+  if (vk == KeycodeMauiToMSW(306) && !wasDown) CommandGraphShown(L, true);  // (306: Shift)
   if (UserState::From(L)->ui().focus) return;
   uint32_t code = static_cast<uint32_t>(vk) | (shift ? kShift : 0) | (ctrl ? kCtrl : 0) | (alt ? kAlt : 0);
   if (repeat && !map.repeats.count(code)) return;
@@ -354,7 +376,9 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   ExecuteConsoleCommand(L, action);
 }
 
-void KeyMapKeyUp(lua_State* L, int vk) { Map(L).down.erase(vk); }
+void KeyMapKeyUp(lua_State* L, int vk) {
+  if (Map(L).down.erase(vk) && vk == KeycodeMauiToMSW(306)) CommandGraphShown(L, false);
+}
 
 // The life bars over units. In the original UI_RenderUnitBars is a console variable: the game's
 // script sets it true when a game's interface comes up and false for a cinematic, and the key

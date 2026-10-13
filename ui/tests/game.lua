@@ -514,6 +514,19 @@ local function run()
         check("and bare air far off the map is not", moho64ui_ReclaimableAt(-500, -500, 1), nil)
     end
 
+    -- Shift held: the script is told that the command graph shows (commandgraph.OnCommandGraphShow);
+    -- with Control held too, FAF's script shows its reclaim labels, and hides them again
+    do
+        moho64ui_Key(306, "Shift", "down")
+        moho64ui_Key(308, "Shift Ctrl", "down")
+        WaitSeconds(0.5)
+        check("Shift and Control held: the script shows its reclaim labels", view.ShowingReclaim, true)
+        moho64ui_Key(308, "Shift", "up")
+        moho64ui_Key(306, "", "up")
+        WaitSeconds(0.5)
+        check("both let go: it hides them", view.ShowingReclaim, false)
+    end
+
     -- the meshes the script places in the world, and the marks where orders land
     local WorldMesh = import("/lua/ui/controls/worldmesh.lua").WorldMesh
     local function meshes(shader)

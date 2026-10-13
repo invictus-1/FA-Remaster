@@ -123,6 +123,12 @@ void UiManager::Update(lua_State* L, float seconds) {
 // makes one list ordered by Depth; the controls that are not hidden draw in that order, lowest
 // first. Depth is only asked of controls that are not hidden. Inferred: controls of equal depth
 // keep their tree order. Render passes are not told apart yet: every pass draws.
+// The main world view's picture is the world itself, which the original draws before any
+// control; here it is a control's picture, so it goes first whatever its Depth. Without that,
+// what the script puts over the world at a Depth below the view's own is hidden under it: FAF's
+// reclaim labels sit at a thousandth of their mass (0.1 for a rock of 113), the view at 3.
+// (INFERRED that the original's world lies under all controls: seen by those labels showing
+// there; its order of drawing world and interface is not read.)
 void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   Frame* frame = GetFrame(head);
   if (!frame) return;
@@ -130,7 +136,7 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   Collect(frame, all);
   std::vector<std::pair<float, Control*>> order;
   for (Control* c : all)
-    if (!c->dead() && !c->IsHidden()) order.emplace_back(c->depth.Get(), c);
+    if (!c->dead() && !c->IsHidden()) order.emplace_back(c->DrawsBeneathAll() ? -1e30f : c->depth.Get(), c);
   std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
   for (auto& [depth, c] : order)
     if (!c->dead()) c->Draw(L, target);

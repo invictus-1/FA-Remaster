@@ -246,7 +246,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   thing at a place (`ReclaimableAt`), and a right click right on one, with a unit selected that
   can reclaim, or the Reclaim button's click near one, sends the order on it (which thing the
   original's cursor takes is not read; `GetRightMouseButtonOrder` answers Reclaim there too, so
-  the game's cursor shows it; the rollover text for scenery is not built). A left click follows the script's
+  the game's cursor shows it). While Shift is held in a game the script is told that the command
+  graph shows (`commandgraph.OnCommandGraphShow`, as the original's engine tells it): FAF's
+  reclaim labels (Shift and Ctrl held, or Alt-R) and the pings hang on that. The main world
+  view's picture is drawn under every control whatever its Depth, as the world is in the
+  original: those labels sit at a Depth far below the view's own. A left click follows the script's
   command mode, asked the way the original asks (`commandmode.GetCommandMode`): an order's
   button or key (move, attack, patrol, guard, repair, reclaim, capture: for the unit under the
   cursor when there is one, else for the place, INFERRED; FAF's attack-move and abilities, which
