@@ -216,8 +216,11 @@ float4 Shade(VOut i, bool front) {
     float rim = pow(1 - abs(dot(normalize(i.normal), normalize(cameraPosition - i.world))), 2.5);
     float pattern = saturate(albedoMap.Sample(samplerLinear, i.uv.xy * 3 + float2(0.01, 0.03) * time).r *
                              albedoMap.Sample(samplerLinear, i.uv.xy * 7 - float2(0.02, 0.013) * time).g * 2.5);
-    float3 tint = kind4.yzw * (falling.w > 0 ? falling.w : 1);
-    return float4(look > 0.5 ? tint * (0.8 + 2.0 * rim + 1.2 * pattern) : tint, saturate(0.05 + 0.45 * rim + 0.18 * pattern));
+    // (by night much less of its own light, and less of it in the way: an eye opened for the dark
+    // would otherwise see a white dome and nothing in it)
+    float dark = falling.w > 0 ? falling.w : 1;
+    float3 tint = kind4.yzw * (dark * lerp(0.35, 1, dark));
+    return float4(look > 0.5 ? tint * (0.8 + 2.0 * rim + 1.2 * pattern) : tint, saturate(0.05 + 0.45 * rim + 0.18 * pattern) * lerp(0.55, 1, dark));
   }
   if (kind.y > 1.5) {
     // a frame of light (the UEF's box round what it builds): see-through and blue, its texture's
