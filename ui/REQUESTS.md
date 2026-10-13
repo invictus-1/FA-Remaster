@@ -389,6 +389,34 @@ Omni; intel rings are thin by the game's filter list) and its cluster missiles h
 of 15 (the thin yellow one: the INNER ring of IndirectFire). Ours draws the same five rings at
 the same sizes for that unit. Nothing more is asked.
 
+### 16. A factory told to Stop keeps its work progress (the orange bar stays under it)
+From Chris's game on main 6767629 (2026-10-13; his words): "The orange bar stays instead of
+leaving if I stop a unit being built. For upgrading the bar moves normally. But when I press the
+stop button here it goes away without issue the orange." (So: Stop while UPGRADING clears it;
+Stop while a factory BUILDS A UNIT does not.) His picture: `stop_orange_bar_stays.webp` in the
+folder of his others (`_scratch\ui\chris_20261013\`).
+
+Reproduced in my build (session `session_ai_daynight.lua`, seed 7): a UEF T1 air factory
+(ueb0102) builds a scout (uea0101); at half way the player's Stop (`IssueCommand
+("UNITCOMMAND_Stop")` on the selected factory). What the simulation says of the factory:
+
+| | workProgress | focus | build queue |
+|---|---|---|---|
+| before Stop | 0.499 | uea0101 | 1 entry |
+| 1 s after | 0.499 | none | empty |
+| 4 s after | 0.499 | none | empty |
+
+The unit on the deck is gone, the queue is empty, the build sound loop ends: all right. Only
+`UnitView::workProgress` keeps the last value for good, so the renderer's work bar stays (it
+shows for a unit whose progress is above 0), and so would the interface's own percent.
+The game's scripts do not reset it here (FactoryUnit.OnStopBuild / OnFailedToBuild call no
+SetWorkProgress; lua/sim/Unit.lua sets 0 only for enhancements and silos), so in the original
+the engine itself must: asked for is the factory's work progress back at 0 when its build ends
+without the unit (Stop, and I would guess the same when the unit under construction is killed).
+Not blocking.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

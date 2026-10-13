@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -265,6 +266,30 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
     p.position[0] = position[0], p.position[1] = position[1], p.position[2] = position[2];
     p.curves = sound.curves;
     ++worldPlayed_;
+    // (With MOHO64UI_SOUND_LOG: once for each cue, the curves its sound names, to see by what a
+    // sound of the world grows quiet.)
+    static const bool log = std::getenv("MOHO64UI_SOUND_LOG") != nullptr;
+    std::string key = "curves " + Lower(bankName) + "/" + Lower(cueName);
+    if (log && !complained_[key]) {
+      complained_[key] = true;
+      std::string text;
+      for (uint32_t offset : sound.curves) {
+        auto c = curves_.find(offset);
+        if (c == curves_.end()) {
+          text += " [unknown curve]";
+          continue;
+        }
+        text += " [" + c->second.variable + " -> parameter " + std::to_string(c->second.parameter) + ":";
+        char point[48];
+        for (const auto& xy : c->second.points) {
+          std::snprintf(point, sizeof point, " %.0f=%.1f", xy.first, xy.second / 100.0f);
+          text += point;
+        }
+        text += "]";
+      }
+      Logf(LogLevel::Info, "moho64ui: sound: %s/%s: volume %.1f dB, category %d, curves:%s", bankName.c_str(), cueName.c_str(),
+           sound.volume, category, text.empty() ? " none" : text.c_str());
+    }
   }
   if (!prepareOnly) Start(handle);
   return handle;

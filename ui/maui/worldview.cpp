@@ -461,12 +461,13 @@ class WorldView : public Control {
     // picture before this one), green where it can stand.
     WorldScene scene;
     // (The selected units' orders show while Shift is held, as in the original: the lines from
-    // order to order, and a blue outline round the site of every building among them.)
+    // order to order, and a green outline round the site of every building among them: green as
+    // in Chris's pictures of the original, whose guide for a site is 0xff00ff00 (0x854e52).)
     std::vector<WorldGhost> ordered, queued;
     waypoints_.clear();
     SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued, &waypoints_);
     if (sim) {
-      for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff2a8cffu, &scene.lines);
+      for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff10d010u, &scene.lines);
     }
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
@@ -481,7 +482,23 @@ class WorldView : public Control {
     std::string mode, name;
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();
-    if (sim && pixels_ && (mode == "build" || mode == "buildanchored") && !name.empty() && HitTest(ui.mouseX, ui.mouseY)) {
+    const bool building = sim && (mode == "build" || mode == "buildanchored") && !name.empty();
+    // While a building is being placed every building that stands shows the outline of the
+    // ground it takes, so that the new one can be set against it: the original's
+    // DrawAllUnitSkirts (0x85ad80: a rectangle of the blueprint's skirt in 0xc00080ff round each
+    // unit; called from the world view's drawing at 0x853e9a in a build mode unless Shift is
+    // held). Which units: buildings, any army's the player sees. INFERRED: the original's test
+    // (0x8b4140 gives 8) is not read; in Chris's picture of it a factory has the outline and the
+    // commander beside it has none. Only those near what the camera looks at (ours, for the cost).
+    if (building && !KeyIsDown(L, kKeyShift)) {
+      std::vector<WorldGhost> standing;
+      StructuresForWorld(L, cam.target, std::max(100.0f, cam.distance * 2.0f), &standing);
+      for (const WorldGhost& g : standing) SiteOutline(L, *sim, g, 0xc00080ffu, &scene.lines);
+      // and round the buildings ordered and not begun, the guide's green (the original draws
+      // its green over the blue for a building that is still someone's order)
+      for (const WorldGhost& g : ordered) SiteOutline(L, *sim, g, 0xff10d010u, &scene.lines);
+    }
+    if (building && pixels_ && HitTest(ui.mouseX, ui.mouseY)) {
       float at[3];
       WorldGhost ghost;
       if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {

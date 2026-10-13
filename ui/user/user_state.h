@@ -225,6 +225,10 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);
+// The buildings the interface knows of (any army's, as far as the player sees them) within
+// `within` map units of a place, each with its blueprint and where it stands: for the outlines
+// the world view draws round them while a building is being placed. At most 600.
+void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out);
 std::string TakeOrders(lua_State* L);
 // For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
 // knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false

@@ -1927,6 +1927,22 @@ void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, f
   *alongX = size[0], *alongZ = size[1];
 }
 
+void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  for (auto& entry : store.units) {
+    const UserUnit* u = entry.second.get();
+    if (u->gone || u->view.dead || out->size() >= 600) continue;
+    const float dx = u->view.position[0] - near[0], dz = u->view.position[2] - near[2];
+    if (dx * dx + dz * dz > within * within || !InCategory(L, u, "STRUCTURE")) continue;
+    WorldGhost g;
+    g.blueprint = u->view.blueprint;
+    for (int i = 0; i < 3; ++i) g.position[i] = u->view.position[i];
+    out->push_back(g);
+  }
+}
+
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
                        bool queueShown, std::vector<WorldGhost>* queued, std::vector<WorldWaypoint>* waypoints) {
   Sim* sim = TheSim(L);
