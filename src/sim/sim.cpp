@@ -1441,14 +1441,6 @@ void Sim::Tick() {
         if (onProjectile && u->ownBone >= 0) AttachedTransform(u, bp, bq, &np, &nq);
         u->position = np;
         u->orientation = nq;
-        if (onProjectile && map_ && map_->hasWater) {
-          // The projectile's layer as its place says it now: above the water Air, else Water. (Ours keeps a
-          // projectile's layer from where it was made until it crosses the surface in flight; the sinker is made
-          // some beats before it is warped under the wreck. Seen: a ship's wreck taken 0.022 above the water goes
-          // to Air in the beat it is attached, an aircraft's wreck lying on the surface stays in Water.)
-          const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
-          if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
-        }
       }
       u->motion.vel = {};
     } else if (u->parentId) {
@@ -1547,6 +1539,22 @@ void Sim::Tick() {
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
+  // A unit that hangs on a shell (a wreck on FAF's sinker) takes the shell's layer (0x6ba1ad), and it does so
+  // after the shell's step of this beat: a unit attached to a parent that has not had its turn takes its own turn
+  // behind the parent's (Entity::TaskTick 0x679c40), and a layer is no committed value. The layer is read from
+  // where the shell is: above the water Air, else Water. (Ours keeps a projectile's own layer from where it was
+  // made until it crosses the surface in flight; the sinker is made beats before it is warped under the wreck.
+  // Seen: a ship's wreck taken 0.022 above the water goes to Air in the beat it is attached and back to Water in
+  // the beat the sinker goes under; an aircraft's wreck lying on the surface stays in Water.)
+  if (map_ && map_->hasWater)
+    for (size_t i = 0; i < units_.size(); ++i) {
+      Unit* u = units_[i];
+      if (u->destroyQueued || !u->parentId) continue;
+      const Entity* p = FindEntity(u->parentId);
+      if (!p || p->destroyQueued || p->kind != Entity::Kind::Projectile) continue;
+      const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
+      if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
+    }
   g_prof.Lap(6);
   ReconBeat(*this);  // army (tick % armies) updates its blips
   {
