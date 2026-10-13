@@ -270,6 +270,10 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
+    // (the world's own camera and view are the main picture's and must be again when this pass is
+    // over: GroundAt, UnitAt and UnitsIn answer by them between two frames)
+    const Camera mainCamera = w.camera;
+    const View mainView = w.view;
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
@@ -285,6 +289,8 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     placed.swap(w.placed);
     m.mapCamera = c;
     m.mapMatrix = w.view.constants.viewProj;
+    w.camera = mainCamera;
+    w.view = mainView;
     m.mapWidth = width;
     m.mapHeight = height;
     MinimapProject({0, c.target.y, 0}, &m.mapX0, &m.mapY0);
