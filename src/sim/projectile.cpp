@@ -31,6 +31,7 @@
 #include "sim/blueprints.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
+#include "sim/entity_grid.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -499,29 +500,32 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
     if (len >= 0.01f) {
       Vec3 a = Sub(p0, Mul(seg, 0.01f)), b2 = Add(p1, Mul(seg, 0.01f));
       std::vector<Entity*> cands;
-      // (candidates by their centre: the margin must cover the biggest shape's reach, a CZAR's box corner is 15)
-      float x0 = std::min(a.x, b2.x) - 32, x1 = std::max(a.x, b2.x) + 32, z0 = std::min(a.z, b2.z) - 32,
-            z1 = std::max(a.z, b2.z) + 32;
-      std::vector<Unit*> units;
-      sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
-      std::sort(units.begin(), units.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
-      for (Unit* u : units) cands.push_back(u);
-      for (Projectile* o : sim.projectiles)
-        if (o != p && o->shape.type != ShapeType::None && o->position.x >= x0 && o->position.x <= x1 &&
-            o->position.z >= z0 && o->position.z <= z1)
-          cands.push_back(o);
-      for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
-      // Script-made entities that were given a collision shape are in the entity grid like everything else, and a
-      // shell asks them too: FAF's torpedo decoy (DepthCharge in defaultantiprojectile.lua, a sphere riding on the
-      // anti-torpedo shell) and its missile flare answer no to OnCollisionCheck and turn the shell onto their
-      // owner with SetNewTarget; the Loyalist's MissileRedirect works the same way.
-      // NEWEST FIRST, as the collision grid hands a cell's entities out (its lists are walked from the back): when
-      // a torpedo crosses three decoy spheres in one step each of them turns it, and the last one asked keeps it.
-      // Seen: the original's torpedo ended on the OLDEST decoy's shell, which reached the sea floor in that same
-      // beat, so the torpedo lost that target, took its weapon's again and struck a submarine; ours ended on the
-      // newest and chased it.
-      for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
-        if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) cands.push_back(*it);
+      if (sim.entityGrid().ready()) {
+        // 0x69db05: ONE query of the entity grid for everything with a collision primitive, GetEntityCollisionsInLine
+        // 0x7229c0: the cells the (lengthened) segment passes, from its start to its end; in each cell first the
+        // shells, shields and script entities, then the units, each list with what was registered last in front.
+        // The candidates are asked in that order, and one is only asked while no nearer hit stands. So a script
+        // entity is asked before a unit of the same cell: FAF's missile flare (a sphere riding on the flare shell,
+        // which answers no to OnCollisionCheck and turns the missile with SetNewTarget) still turns, and counts, a
+        // missile that strikes a ship in the very step it enters the sphere. And of several decoys crossed in one
+        // step the last one asked keeps the shell.
+        sim.entityGrid().GatherLine(a.x, a.z, b2.x, b2.z, &cands);
+      } else {
+        // (no map, no grid: by kind)
+        float x0 = std::min(a.x, b2.x) - 32, x1 = std::max(a.x, b2.x) + 32, z0 = std::min(a.z, b2.z) - 32,
+              z1 = std::max(a.z, b2.z) + 32;
+        std::vector<Unit*> units;
+        sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
+        std::sort(units.begin(), units.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
+        for (Unit* u : units) cands.push_back(u);
+        for (Projectile* o : sim.projectiles)
+          if (o != p && o->shape.type != ShapeType::None && o->position.x >= x0 && o->position.x <= x1 &&
+              o->position.z >= z0 && o->position.z <= z1)
+            cands.push_back(o);
+        for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
+        for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
+          if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) cands.push_back(*it);
+      }
       for (Entity* e : cands) {
         // (an entity whose Destroy is queued is still in the world until the beat's end and is met like any
         // other: an anti-torpedo runs into the sphere of a torpedo that struck its ship earlier in this pass)

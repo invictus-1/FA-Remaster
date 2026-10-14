@@ -16,7 +16,8 @@ namespace {
 int ListOf(const Entity* e) {
   if (e->kind == Entity::Kind::Unit) return 0;
   if (e->kind == Entity::Kind::Prop) return 1;
-  return -1;  // projectiles, shields, beams, script entities: not kept (GetEntitiesInRect is not bound)
+  if (e->kind == Entity::Kind::Blip) return -1;  // (a recon blip has no primitive of its own here)
+  return 2;  // shells (0x400), shields, beams and script entities (0x800): the third list
 }
 }  // namespace
 
@@ -112,8 +113,56 @@ void EntityGrid::GatherBox(float x0, float z0, float x1, float z1, int mask, std
   for (Entity* e : *out) e->gridMark = false;
 }
 
+void EntityGrid::GatherLine(float fromX, float fromZ, float toX, float toZ, std::vector<Entity*>* out) {
+  out->clear();
+  if (!w_) return;
+  // 0x40d860: both axes mirrored so that the march runs upward, from the segment's start to its end
+  const float ax = toX * 0.25f, az = toZ * 0.25f, bx = fromX * 0.25f, bz = fromZ * 0.25f;
+  float sx, ex, sz, ez;
+  int mx = 0, mz = 0;
+  if (ax >= bx) {
+    sx = bx;
+    ex = ax;
+  } else {
+    sx = -0.0f - bx;
+    ex = -0.0f - ax;
+    mx = -1;
+  }
+  if (az >= bz) {
+    sz = bz;
+    ez = az;
+  } else {
+    sz = -0.0f - bz;
+    ez = -0.0f - az;
+    mz = -1;
+  }
+  if (!(sx == sx) || !(ex == ex) || !(sz == sz) || !(ez == ez)) return;
+  const float dx = ex - sx, dz = ez - sz;
+  int ix = static_cast<int>(std::floor(sx)), iz = static_cast<int>(std::floor(sz));
+  for (int guard = 0; guard < 200000; ++guard) {
+    if (static_cast<float>(ix) > ex || static_cast<float>(iz) > ez) break;
+    const int cx = ix ^ mx, cz = iz ^ mz;
+    if (cx >= 0 && cx < w_ && cz >= 0 && cz < h_) {
+      const size_t idx = static_cast<size_t>(cz) * w_ + cx;
+      for (int k : {2, 0}) {  // (0x4fd2c1: the third list first, then the units)
+        const auto& l = lists_[k][idx];
+        for (auto it = l.rbegin(); it != l.rend(); ++it)
+          if (!(*it)->gridMark) {
+            (*it)->gridMark = true;
+            out->push_back(*it);
+          }
+      }
+    }
+    // 0x4fd368: the cell border the line reaches first; on a tie the z step
+    const float tx = (static_cast<float>(ix + 1) - ex) * dz, tz = (static_cast<float>(iz + 1) - ez) * dx;
+    if (tz > tx) ++ix;
+    else ++iz;
+  }
+  for (Entity* e : *out) e->gridMark = false;
+}
+
 void GridUpdate(Sim& sim, Entity* e, bool widened) {
-  if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop) return;
+  if (e->kind == Entity::Kind::Blip) return;
   EntityGrid& g = sim.entityGrid();
   if (!g.ready()) return;
   e->gridSeen = true;
@@ -166,6 +215,20 @@ void GridAdvanceCoords(Sim& sim) {
       continue;
     GridUpdate(sim, u, true);
   }
+  // The third list: shells, shields, script entities. Their turns set their transforms in the order they were
+  // made (one entity stage), and that is the order UpdateCollision goes through them here; one whose cells change
+  // goes to the head of its cells, so of two that change in one beat the younger ends up in front.
+  std::vector<Entity*>& o = sim.gridScratch;
+  o.clear();
+  for (Projectile* p : sim.projectiles)
+    if (!p->destroyQueued && (p->shape.type != ShapeType::None || p->gridW)) o.push_back(p);
+  for (ShieldEntity* s : sim.shields)
+    if (!s->destroyQueued && (s->shape.type != ShapeType::None || s->gridW)) o.push_back(s);
+  for (Entity* s : sim.scriptEntities)
+    if (!s->destroyQueued && s->kind == Entity::Kind::Entity && (s->shape.type != ShapeType::None || s->gridW))
+      o.push_back(s);
+  std::sort(o.begin(), o.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
+  for (Entity* e : o) GridUpdate(sim, e, false);
 }
 
 }  // namespace moho

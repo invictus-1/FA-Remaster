@@ -444,19 +444,27 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     bestD = d;
     bestHit = hit;
   };
-  float x0 = std::min(P.x, E.x) - 10, x1 = std::max(P.x, E.x) + 10, z0 = std::min(P.z, E.z) - 10,
-        z1 = std::max(P.z, E.z) + 10;
-  std::vector<Unit*> units;
-  sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
-  std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* c) { return a->id < c->id; });
-  for (Unit* u : units) consider(u);
-  // Shells: a missile has a sphere of its own and a beam meets it like anything else (the Cybran zapper: its
+  // Shells too: a missile has a sphere of its own and a beam meets it like anything else (the Cybran zapper: its
   // beam is drawn up to five times the range long, and the missile it aims at is struck where the two cross).
-  for (Projectile* o : std::vector<Projectile*>(sim.projectiles))
-    if (o->shape.type != ShapeType::None) consider(o);
-  for (ShieldEntity* sh : std::vector<ShieldEntity*>(sim.shields)) consider(sh);
-  for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
-    if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) consider(*it);
+  if (sim.entityGrid().ready()) {
+    // (0x6d6e56: the grid's line query, the cells from the muzzle outward; the order the scripts are asked in)
+    std::vector<Entity*> cands;
+    sim.entityGrid().GatherLine(P.x, P.z, E.x, E.z, &cands);
+    for (Entity* e : cands)
+      if (e->kind != Entity::Kind::Beam) consider(e);
+  } else {
+    float x0 = std::min(P.x, E.x) - 10, x1 = std::max(P.x, E.x) + 10, z0 = std::min(P.z, E.z) - 10,
+          z1 = std::max(P.z, E.z) + 10;
+    std::vector<Unit*> units;
+    sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
+    std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* c) { return a->id < c->id; });
+    for (Unit* u : units) consider(u);
+    for (Projectile* o : std::vector<Projectile*>(sim.projectiles))
+      if (o->shape.type != ShapeType::None) consider(o);
+    for (ShieldEntity* sh : std::vector<ShieldEntity*>(sim.shields)) consider(sh);
+    for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
+      if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) consider(*it);
+  }
   float D = Lr;
   Vec3 impactPos = E;
   int type = 3;  // Air
