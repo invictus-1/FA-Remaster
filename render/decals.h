@@ -40,6 +40,14 @@ class Decals {
   // Is that texture one of the two marks a game lays on its resource deposits? (They belong to the
   // map: every army sees every deposit from the first moment, as the original shows them.)
   static bool IsDepositMark(const std::string& texture, bool* hydrocarbon = nullptr);
+  // Snow and the marks: the host says each frame how much snow lies (0..1) and how hard it snows
+  // (0..1). A mark laid on lying snow (a tread's print, a footprint, a scorch) shows ON the snow,
+  // and new snowfall covers it in about a minute and a half of heavy fall; a mark that was there
+  // before the snow lies under it like the ground.
+  float snowLying = 0, snowing = 0;
+  // The picture a script's mark is named by (a path, or a short name looked up in the game's two
+  // folders of them); none: not there.
+  gfx::Texture Picture(const std::string& texture) { return Resolve(texture); }
   Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
@@ -87,6 +95,7 @@ class Decals {
     float seconds;
     bool normal = false;
     bool mark = false;
+    float snowAtBirth = 0;  // snowFallen_ when it was laid (see `snowLying`)
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
@@ -94,6 +103,9 @@ class Decals {
     float alpha, age, light, glow;  // age: 0..1 of a light's time; light: 1 = adds its light, 2 = a normal decal
   };
   gfx::Texture Resolve(const std::string& texture);
+  float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
+  double snowClock_ = -1;   // when it was last moved on
+  bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;

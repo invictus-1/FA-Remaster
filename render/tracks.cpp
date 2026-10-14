@@ -26,7 +26,7 @@ VOut VS(VIn i) {
   return o;
 }
 float4 PS(VOut i) : SV_Target {
-  float rim = 1 - smoothstep(0.55, 1.0, length(i.disc.xy));
+  float rim = 1 - smoothstep(0.15, 1.0, length(i.disc.xy));
   return float4(i.disc.z, i.disc.z, i.disc.z, i.disc.w * rim);
 }
 )hlsl";
@@ -68,9 +68,10 @@ void Tracks::SetMap(float width, float height) {
 
 void Tracks::Add(uint32_t id, Vec3 position, float radius) {
   if (!on || radius <= 0 || width_ <= 0) return;
+  if (printers_.count(id)) return;  // (it lays its own prints)
   // (never narrower than a pixel and a half of the picture: a smaller disc falls between its
   // pixels and the track comes out as a row of beads)
-  radius = std::max(radius, 1.5f * width_ / static_cast<float>(kSize));
+  radius = std::max(radius * 1.3f, 2.2f * width_ / static_cast<float>(kSize));  // (and wider by what its soft rim takes)
   Last& last = last_[id];
   // the way since the frame before, in steps of half a radius (not a jump: a unit carried or newly made)
   if (last.frame + 1 == frame_) {
@@ -86,9 +87,19 @@ void Tracks::Add(uint32_t id, Vec3 position, float radius) {
   if (last_.size() > 40000) last_.clear();  // (ids pile up over a long game)
 }
 
+void Tracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ) {
+  if (!on || width_ <= 0 || sizeX <= 0 || sizeZ <= 0) return;
+  printers_[id] = frame_;
+  if (printers_.size() > 40000) printers_.clear();
+  // (a soft disc a little larger than the print, and no smaller than the picture can hold)
+  const float radius = std::max(std::max(sizeX, sizeZ) * 0.9f, 1.8f * width_ / static_cast<float>(kSize));
+  if (prints_.size() < 20000) prints_.push_back({centre.x, centre.z, radius});
+}
+
 void Tracks::Draw(float covering, bool clear) {
   if (!map_ || width_ <= 0 || height_ <= 0) return;
   if (clear || !on) {
+    prints_.clear();
     if (trodden_ || fresh_) {  // (cleared to nothing by beginning a pass that clears)
       gfx::PassDesc pass;
       pass.color = map_;
@@ -105,14 +116,17 @@ void Tracks::Draw(float covering, bool clear) {
   };
   // new snow first: all of the picture a little toward untrodden; then what treads now
   if (covering > 0 && trodden_) quad(-1, -1, 1, 1, false, 0, std::min(covering, 1.0f));
-  for (const Stamp& s : stamps_) {
+  auto stamp = [&](const Stamp& s, float alpha) {
     // the map's x, z to the picture's -1..1 (its top row is the map's z = 0)
     const float cx = s.x / width_ * 2 - 1, cy = 1 - s.z / height_ * 2;
     const float rx = s.radius / width_ * 2, ry = s.radius / height_ * 2;
-    quad(cx - rx, cy - ry, cx + rx, cy + ry, true, 1, 0.6f);
-  }
+    quad(cx - rx, cy - ry, cx + rx, cy + ry, true, 1, alpha);
+  };
+  for (const Stamp& s : stamps_) stamp(s, 0.6f);
+  for (const Stamp& s : prints_) stamp(s, 0.75f);
+  if (!stamps_.empty() || !prints_.empty()) trodden_ = true;
+  prints_.clear();
   if (vertices_.empty() && !fresh_) return;
-  if (!stamps_.empty()) trodden_ = true;
   gfx::PassDesc pass;
   pass.color = map_;
   pass.clearColor = fresh_;

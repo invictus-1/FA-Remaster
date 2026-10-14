@@ -45,6 +45,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     return false;
   }
   effects.verbose = options.verbose;
+  effects.SetTracks(&tracks);
   if (!options.displayTable.empty()) {
     const int levels = models.LoadDisplayTable(options.displayTable);
     if (levels) printf("render: %d model levels named by the simulation's blueprints (%s)\n", levels, options.displayTable.c_str());
@@ -412,6 +413,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
     // (the tracks in it: falling snow covers them again in about a minute and a half of heavy fall)
     tracksCovering_ = snow > 0 ? dt * snow / 90 : 0;
+    decals.snowLying = snowLying;
+    decals.snowing = snow;
     if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover);
