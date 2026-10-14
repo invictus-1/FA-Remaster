@@ -663,6 +663,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   m.hasGoal = false;
   m.hasWaypoint = false;
   m.steerWpSet = false;  // (Execute's tail 0x5a43ef calls the navigator's MakeIdle: SetWaypoints(0, 0))
+  m.steerValid = false;
   m.navDriven = false;
   m.path.clear();
   SteeringStop(m);
@@ -1205,6 +1206,7 @@ void SteeringClearWaypoints(Sim& sim, Unit* u) {
   m.pathIndex = 0;
   m.hasWaypoint = false;
   m.steerWpSet = false;
+  m.steerValid = false;
   m.newSegment = false;
   if (!m.hasSpline) return;
   m.colType = 0;

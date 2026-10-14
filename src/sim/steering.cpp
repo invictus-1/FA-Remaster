@@ -744,9 +744,14 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       }
     }
   } else if (m.hasSpline && m.splineIdx + 1 >= m.spline.size()) {  // the batch is used up (one point left)
-    if (!Driving(u) || AtPosition(u, m.steerTarget)) {  // arrived at this waypoint
+    // 0x5d2d88: "is there a target" is st+0x90 against the no-target vector. A unit whose waypoints were cleared
+    // (a brake spline) and that has been handed a new waypoint since has none here yet: the brake ends in a Stop,
+    // and DriveToNextWaypoint then takes the new waypoint up. (Seen: a ship stopped by a new goal and handed the
+    // cell it stands in; measured against its waypoint of before, it took a continuing spline and rolled on.)
+    const bool driving = Driving(u) && m.steerValid;
+    if (!driving || AtPosition(u, m.steerTarget)) {  // arrived at this waypoint
       SteeringStop(m);
-      if (Driving(u) && !m.newSegment) m.hasWaypoint = false;
+      if (driving && !m.newSegment) m.hasWaypoint = false;
       return;
     }
     UpdatePath(sim, u, m.steerTarget, false, GetVal(m));
@@ -819,6 +824,7 @@ void SteeringTick(Sim& sim, Unit* u) {
   m.newSegment = false;
   if (!Driving(u)) return;
   m.steerTarget = m.path[m.pathIndex];
+  m.steerValid = true;
   if (AtPosition(u, m.steerTarget)) return;
   UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
   CheckCollisions(sim, u);

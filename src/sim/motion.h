@@ -140,6 +140,10 @@ struct UnitMotion {
   SplinePoint genLast{};   // the generator after the last point (continuation start)
   bool genReverse = false;
   Vec3 steerTarget;        // st+0x90: the current waypoint target
+  // st+0x90 holds a waypoint (not the "no target" vector the ctor and SetWaypoints(0, 0) write there, 0x5d2abb):
+  // set when DriveToNextWaypoint takes a waypoint up (0x5d30a6). ProcessSplineMovement asks this, not whether
+  // the navigator has handed a new waypoint since.
+  bool steerValid = false;
   bool pointNow = false;   // a point was handed this tick (motion+4)
   uint32_t handOutTick = 0xffffffffu;  // a point was handed outside the steering stage (SetWaypoints(0,0))
   // The beat a collision record was written OUTSIDE the steering stage (a stop in the command or script stage):
