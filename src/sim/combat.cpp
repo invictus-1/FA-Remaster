@@ -1551,9 +1551,14 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
   if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {  // why it does or does not fire this tick
     const bool has = HasTarget(sim, w->target);
-    Logf(LogLevel::Info, "wdbg %u unit %u %s clock %d enabled %d target %d(%u) canAttack %d canFire %d onTarget %d status %d",
+    const Entity* te = has ? TargetEntity(sim, w->target) : nullptr;
+    const Vec3 tp = has ? TargetPos(sim, w->target, false) : Vec3{};
+    Logf(LogLevel::Info,
+         "wdbg %u unit %u %s clock %d enabled %d target %d(%u = entity %d%s at %.2f %.2f %.2f) canAttack %d canFire %d "
+         "onTarget %d status %d",
          sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
-         w->target.entityId, has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
+         w->target.entityId, te ? static_cast<int>(te->id) : -1, w->target.viaBlip ? ", its blip" : "", tp.x, tp.y, tp.z,
+         has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
          has ? TargetStatus(sim, w, w->target) : -1);
   }
@@ -1909,6 +1914,8 @@ void PoseAdvance(Unit* u) {
   u->poseSet = true;
 }
 
+void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims);
+
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
   if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
@@ -1920,16 +1927,7 @@ void UnitAimTick(Sim& sim, Unit* u) {
     if (anims) AnimatorsUpdate(sim, u);  // (their time still runs)
     return;
   }
-  if (!u->aimControllers.empty()) {  // (the pose is still last beat's)
-    const Vec3 curPos = u->poseBasePos;
-    const Quat curOri = u->poseBaseOri;
-    u->poseBasePos = u->prevPoseBasePos;
-    u->poseBaseOri = u->prevPoseBaseOri;
-    for (AimController* c : u->aimControllers)
-      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
-    u->poseBasePos = curPos;
-    u->poseBaseOri = curOri;
-  }
+  AimReadLastPose(sim, u);
   // slavers read their source bone from the pose that is about to be replaced (last beat's: 0x646164)
   if (!u->slavers.empty()) {
     auto& sv = u->slavers;
@@ -1941,6 +1939,43 @@ void UnitAimTick(Sim& sim, Unit* u) {
         m->srcLocal = posed ? u->poseQ[static_cast<size_t>(m->srcBone)] : bones[static_cast<size_t>(m->srcBone)].localRot;
   }
   PoseReset(u);
+  UnitAimTickManipulators(sim, u, anims);
+}
+
+// Where each aim controller's muzzle stood in last beat's pose (actor+8: last beat's transform and rotations),
+// which Aim 0x6317b0 measures the firing direction from. It is read once a beat, while the pose is still last
+// beat's: before the builder arms' step, which writes its own bones (a commander's arm and gun both turn the
+// torso; read after the arm's step, the torso was back at rest and the gun aimed from where the muzzle is with
+// the torso unturned: Chris, 2026-10-13, "the acu is not aiming properly and shooting the tanks").
+void AimReadLastPose(Sim& sim, Unit* u) {
+  if (u->aimPoseTick == sim.tick()) return;
+  u->aimPoseTick = sim.tick();
+  if (!u->skeleton) return;
+  if (!u->aimControllers.empty()) {  // (the pose is still last beat's)
+    const Vec3 curPos = u->poseBasePos;
+    const Quat curOri = u->poseBaseOri;
+    u->poseBasePos = u->prevPoseBasePos;
+    u->poseBaseOri = u->prevPoseBaseOri;
+    for (AimController* c : u->aimControllers)
+      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+    static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
+      for (AimController* c : u->aimControllers)
+        if (c->alive && c->muzzleBone >= 0 && c->yawBone >= 0 && static_cast<size_t>(c->yawBone) < u->poseQ.size())
+          Logf(LogLevel::Info,
+               "wdbg   last pose %s (%s): muzzle %.9g %.9g %.9g, yaw bone %d local q %.9g %.9g %.9g %.9g, base %.9g %.9g "
+               "%.9g q %.9g %.9g",
+               c->label.c_str(), c->weapon ? c->weapon->label.c_str() : "-", c->lastMuzzlePos.x, c->lastMuzzlePos.y,
+               c->lastMuzzlePos.z, c->yawBone, u->poseQ[static_cast<size_t>(c->yawBone)].x,
+               u->poseQ[static_cast<size_t>(c->yawBone)].y, u->poseQ[static_cast<size_t>(c->yawBone)].z,
+               u->poseQ[static_cast<size_t>(c->yawBone)].w, u->poseBasePos.x, u->poseBasePos.y, u->poseBasePos.z,
+               u->poseBaseOri.y, u->poseBaseOri.w);
+    u->poseBasePos = curPos;
+    u->poseBaseOri = curOri;
+  }
+}
+
+void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   // The unit's manipulators, one list in the order of their precedence, the ones of equal precedence in the
   // order they were put there (CAniActor::UpdateManipulators 0x63aa80 walks the list 0x63ace0 keeps; the
   // constructor, SetPrecedence and an animator's PlayAnim each put a manipulator behind its equals). FAF's

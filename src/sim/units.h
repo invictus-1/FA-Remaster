@@ -169,7 +169,8 @@ class Unit : public Entity {
   uint32_t ferryUnit = 0;          // GetFerryUnit (+0x4c8): the ferry assigned to pick it up
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)
   int parentBone = -1, ownBone = -1;
-  float shieldRatio = 0;  // as the shield's script last gave Unit:SetShieldRatio (for the views; no simulation use)
+  float shieldRatio = 0;
+  uint32_t aimPoseTick = 0xffffffffu;  // the beat AimReadLastPose last ran in  // as the shield's script last gave Unit:SetShieldRatio (for the views; no simulation use)
   // Combat (sim/combat.cpp)
   const struct CombatBpData* combat = nullptr;
   AiTarget desiredTarget;          // set by attack commands (the attacker's desired target)

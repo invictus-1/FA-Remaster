@@ -235,6 +235,8 @@ void KillCleanupTick(Sim& sim);
 // 0x63aa80, once per beat after the unit's motion, before its builder arms and UnitAimTick
 void PoseAdvance(Unit* u);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
+// The aim controllers' muzzles in last beat's pose, once a beat: before the builder arms' step, else UnitAimTick's.
+void AimReadLastPose(Sim& sim, Unit* u);
 void ProjectilesTick(Sim& sim);
 void BeamsTick(Sim& sim);
 void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat

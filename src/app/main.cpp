@@ -300,7 +300,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   std::string viewSample[3];
   std::string lastSync;
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
-  // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
+  // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>", "<tick> lua <one line of Lua run in
+  // the sim state: a test building its case, not an order>"; <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
   std::multimap<uint32_t, std::string> orders;
   if (!o.orders.empty()) {
@@ -326,6 +327,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       else if (!std::strcmp(what, "resume")) writer.Resume();
       else if (!std::strcmp(what, "endgame")) writer.EndGame();  // one more beat runs, then the game stands
       else if (!std::strcmp(what, "callback") && std::sscanf(text, "%*s %255s", ids) == 1) writer.LuaSimCallback(ids, {}, {});
+      else if (!std::strcmp(what, "lua")) sim.RunString(text + 3, "@orders");  // a test's own Lua, straight into the sim state
       else if (!std::strcmp(what, "issue")) {
         int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
         if (n < 2) continue;
