@@ -186,7 +186,8 @@ class World {
   float mist = -1, mistNow = 0;
   // A view for checking art (modern look): what every lit surface shows in place of its lit
   // colour. 0: the picture as it is; 1 colour alone, 2 which way surfaces face, 3 roughness,
-  // 4 metal, 5 the creases' shading, 6 the sun's shadow, 7 the small lights alone.
+  // 4 metal, 5 the creases' shading, 6 the sun's shadow, 7 the small lights alone, 8 the sun's
+  // shadow maps by colour, 9 the models' levels of detail by colour.
   int inspect = 0;
   // Weather that changes by itself (weather.h, WeatherAt): with `weatherAuto`, the clouds, rain,
   // snow and fog above are what the seed and the frame's clock (the game's, when a game plays)

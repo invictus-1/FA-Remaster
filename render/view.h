@@ -72,7 +72,8 @@ struct ViewConstants {
   // A view for checking art (modern look): x says what every lit surface shows in place of its
   // lit colour: 0 nothing special, 1 its colour alone, 2 which way it faces, 3 how rough it is,
   // 4 how much of a metal, 5 how much of the sky's light its creases let in, 6 the sun's shadow,
-  // 7 the small lights alone.
+  // 7 the small lights alone, 8 which of the sun's shadow maps each place uses, 9 which level of
+  // detail each model is drawn at.
   float inspect[4];
 };
 
