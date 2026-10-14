@@ -27,7 +27,47 @@ order from the command stream keeps its table now: a commander's enhancement is 
 (`paused` in the plain unit view: every paused unit wears the pause mark). 20 done and in use (a beam's far end
 when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 done and in use (a projectile's
 SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 done and in use (`hasShield` and
-`shieldRatio` in the plain unit view: the shield's bar under the life bar).
+`shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
+bracket). 24 is addressed to the interface track (two launchers to watch big units die).
+
+## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking)
+
+**Who asks:** Chris, through the renderer: "for the large ship sinking and walker we will have to ask
+UI chat to see if he could have a bat where two battleships are fighting so we can see the ships
+sinking and a bat for say a monkey lord vs a galactic colossus cause ctrl K works too right? so
+when the colossus wins I can ctrl k so you can get that."
+
+**What:** two launchers like `Open-Game-NewCommander.bat`, each starting a game with the units
+already standing: (1) two battleships of opposed armies within gun range of each other on water
+(a UEF Summit `ues0302` against any other faction's); (2) a Cybran Monkeylord `url0402` against
+an Aeon Galactic Colossus `ual0401` on land. And his question, yours to answer: does Ctrl+K
+(self-destruct of the selected unit) work in your game, so that he can kill the winner himself?
+
+**Why:** the renderer draws a unit through its death (a ship going down, a walker toppling) since
+ed404b0, but only a small unit sinking and a plane falling have been seen; these are the last two
+unseen things on the renderer's list. He looks in the game; if a record is kept
+(`replay_*.stream` and `.seed`), I can run the same fight in my viewer for pictures.
+
+**How you place the units is yours** (a session's script, a cheat's spawn, the engine's help): if
+it needs something of the engine, ask him directly.
+
+## 23. How the original sizes a selection bracket (2026-10-13, open, not blocking)
+
+**Who asks:** the renderer. **What:** the original's rule for the four corner pieces round a
+selected unit, and the numbers it needs in `BlueprintDisplay`: which of `SelectionSizeX`,
+`SelectionSizeZ`, `SelectionThickness`, `SelectionCenterOffset` (and the console's
+`ren_SelectBracketSize`, `ren_SelectBracketMinPixelSize`) set the pieces' size, the line's
+thickness and where the box is centred.
+
+**Why:** the last thing open on the selection's drawing. Today (`World::AddBrackets`): the box is
+`SelectionSizeX` by `SelectionSizeZ` about the unit's place, a piece is nine tenths of the box's
+shorter half side and never under 27 pixels, and its line is whatever the piece's picture has (about
+a ninth of it). `SelectionThickness` and `SelectionCenterOffset` are not used at all, so a unit
+whose blueprint moves or thickens its bracket is drawn as every other. Chris has not complained;
+it is a matter of being right.
+
+**Smallest form:** the rule in a few lines in `docs/engine-answers.md`, and `selectionThickness`,
+`selectionCenterOffset` beside `selectionX / selectionZ` in `BlueprintDisplay` if the rule uses them.
 
 ## 22. A shield's ratio in the plain unit view (2026-10-13, done and in use)
 
