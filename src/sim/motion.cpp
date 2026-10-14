@@ -1659,6 +1659,16 @@ void MotionTick(Sim& sim, Unit* u) {
       if (!u->beingBuilt) ProcessCommonMotionState(sim, u, false);
       return;
     }
+    // CalcMoveCommon 0x6c1e69..0x6c20de, which runs every beat the layer blend does not (with a spline point or
+    // without): the weapon slaved to the hull is asked for its target, and the "turning toward it" latch (m+0x91) is
+    // set past the full arc, cleared inside half of it or when there is no such weapon or target. Ours asked only
+    // on beats without a point, so a latch set while standing survived a whole move. (Seen: an Atlantis that had
+    // started a turn at beat 134, then moved off, stopped at 344 with its target inside the arc but outside half
+    // of it: the original stood, ours went on turning.) What the direction is used for stays where it was.
+    {
+      Vec3 slavedDir{};
+      SlavedFaceVector(sim, u, &slavedDir);
+    }
     if (held) {
       m.pointNow = false;
       const Quat q0 = u->orientation;
