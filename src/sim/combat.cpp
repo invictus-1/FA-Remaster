@@ -2430,8 +2430,38 @@ bool VectorInAttackRange(Unit* u, const Vec3& p) {
 }
 
 void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
+  {
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal)
+      Logf(LogLevel::Info, "attackgoal %u unit %u rect %d %d .. %d %d", sim.tick(), u->id, x0, z0, x1, z1);
+  }
   if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {
-    TaskMoveToward(sim, u, Vec3{(x0 + x1) * 0.5f, u->position.y, (z0 + z1) * 0.5f});
+    // CAiNavigatorAir::SetGoal 0x5a4c60 (air_nav.md 4.2): the goal cell is the rect's own cell when it is 1 x 1,
+    // else the BORDER cell nearest the unit's cell (ClosestGoalCell 0x5a4b00: x outer, z inner, 16-bit
+    // differences, the first of equals), and the point flown to is that cell's footprint centre (CellToWorld
+    // 0x50b0f0: cell + size / 2), not the rect's middle. The navigator's goal is no order to move: the unit's
+    // states stay as they are.
+    const NamedFootprint& fp = u->motion.bp->footprint;
+    const int ux = static_cast<int16_t>(std::nearbyint(u->position.x - fp.sizeX * 0.5f));
+    const int uz = static_cast<int16_t>(std::nearbyint(u->position.z - fp.sizeZ * 0.5f));
+    int bx = x0, bz = z0;
+    if (!(x0 == x1 - 1 && z0 == z1 - 1)) {
+      float bestD = std::numeric_limits<float>::infinity();
+      for (int x = x0; x < x1; ++x)
+        for (int z = z0; z < z1; ++z) {
+          if (!(x == x0 || x == x1 - 1 || z == z0 || z == z1 - 1)) continue;
+          const float dx = static_cast<float>(static_cast<int16_t>(ux - x));
+          const float dz = static_cast<float>(static_cast<int16_t>(uz - z));
+          const float D = dx * dx + dz * dz;
+          if (D < bestD) {
+            bestD = D;
+            bx = x;
+            bz = z;
+          }
+        }
+    }
+    u->motion.failed = false;
+    MotionSetGoal(sim, u, {Vec3{bx + fp.sizeX * 0.5f, u->position.y, bz + fp.sizeZ * 0.5f}}, false, sim.tick());
     return;
   }
   u->motion.failed = false;
@@ -2451,6 +2481,12 @@ void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
 void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
+  {
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal)
+      Logf(LogLevel::Info, "attackgoal %u unit %u dest unit %u at %.9g %.9g %.9g", sim.tick(), u->id, e->id, e->position.x,
+           e->position.y, e->position.z);
+  }
   if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {  // CAiNavigatorAir::SetDestUnit: the exact spot
     u->motion.failed = false;
     AirSetDestEntity(sim, u, e);
@@ -2506,12 +2542,45 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (IsZeroV(d.lastPos)) d.lastPos = u->position;
   UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
   Entity* e = target.type == 1 ? sim.FindEntity(target.entityId) : nullptr;
+  {
+    // MOHO64_DEBUG_ATTACKGOAL=<unit id>: what the attacker's goal is made from (the target, its points)
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal && e && e->kind == Entity::Kind::Unit) {
+      Unit* tu = static_cast<Unit*>(e);
+      const CombatBpData& cb = CB(tu);
+      const Vec3 pt = TargetPos(sim, target, false);
+      std::string bones;
+      for (size_t i = 0; i < cb.targetBones.size(); ++i) {
+        const int b = TargetBoneOf(e, cb.targetBones[i]);
+        Vec3 bp{};
+        Quat bq;
+        if (b >= 0) BoneWorld(e, b, &bp, &bq);
+        char buf[160];
+        std::snprintf(buf, sizeof buf, " [%zu %s bone %d at %.4f %.4f %.4f]", i, cb.targetBones[i].c_str(), b, bp.x, bp.y, bp.z);
+        bones += buf;
+      }
+      Logf(LogLevel::Info,
+           "attackgoal %u unit %u first %d weapon %s target %u %s point index %d aim bone %d: point %.6f %.6f %.6f, place "
+           "%.6f %.6f %.6f, track mobile %d has %d;%s",
+           sim.tick(), u->id, d.firstUpdate ? 1 : 0, w ? w->bp->label.c_str() : "-", e->id,
+           tu->blueprint ? tu->blueprint->id.c_str() : "?", t.targetPoint, target.aimBone, pt.x, pt.y, pt.z, e->position.x,
+           e->position.y, e->position.z, d.trackMobile ? 1 : 0, has ? 1 : 0, bones.c_str());
+    }
+  }
   if (w) {
     // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point. The point is asked
     // of GetTargetPosGun 0x5e2a90 with its flag CLEAR (0x5f32bc: xor bl, bl), which for a unit is its target POINT
     // (Unit::GetTargetPoint 0x6ab340: the target bone the order drew), not its place. A ship's target bone can
     // sit two units from its centre, and the square's corner is a whole cell: one cell off, another path.
     Vec3 p = TargetPos(sim, target, false);
+    {
+      static const long dbgGoal0 = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+      if (dbgGoal0 >= 0 && static_cast<long>(u->id) == dbgGoal0) {
+        const Vec3 c = TargetPos(sim, target, true);
+        Logf(LogLevel::Info, "attackgoal %u unit %u aim bone %d: point %.9g %.9g %.9g, place %.9g %.9g %.9g", sim.tick(),
+             u->id, target.aimBone, p.x, p.y, p.z, c.x, c.y, c.z);
+      }
+    }
     int R = static_cast<int>(w->bp->maxRadius);
     int x0 = static_cast<int>(std::nearbyint(p.x - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(p.z - R * 0.5f));
     {
