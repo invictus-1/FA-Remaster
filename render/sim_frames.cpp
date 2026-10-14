@@ -315,6 +315,19 @@ void SimFrames::Beat(const moho::Sim& sim) {
     }
     beat.units.push_back(u);
   }
+  // Whom a script has hidden a thing from (SetVizToFocusPlayer / Allies / Enemies / Neutrals, 2 = 'Never'):
+  // is a thing of `army` (from 1; 0: none) hidden from the army the picture is for? With no such army
+  // it is as its own army sees it.
+  std::vector<int> towards;  // how the picture's army stands to each army: 0 enemy, 1 neutral, 2 ally
+  if (focus > 0) {
+    const std::vector<moho::ArmyView> armies = moho::ArmyViews(sim);
+    if (static_cast<size_t>(focus) <= armies.size()) towards = armies[static_cast<size_t>(focus - 1)].alliance;
+  }
+  auto never = [&](int army, uint8_t own, uint8_t allies, uint8_t enemies, uint8_t neutrals) {
+    if (focus <= 0 || army <= 0 || army == focus) return own == 2;
+    const int stance = static_cast<size_t>(army - 1) < towards.size() ? towards[static_cast<size_t>(army - 1)] : 0;
+    return (stance == 2 ? allies : stance == 1 ? neutrals : enemies) == 2;
+  };
   beat.projectiles.reserve(e.projectiles.size());
   for (const moho::ProjectileView& v : e.projectiles) {
     FrameProjectile p;
@@ -322,6 +335,9 @@ void SimFrames::Beat(const moho::Sim& sim) {
     p.blueprint = v.blueprint.empty() ? 0 : nameOf(v.blueprint);
     p.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
     if (focus > 0) p.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0;  // (a projectile: its place's answer)
+    // (a shell its script hides: FAF's ShieldCollider, a box ten across hung on a crashing plane so that
+    // the plane can hit a shield, hidden from everybody; drawn, it was a black square at shields under fire)
+    if (never(v.army, v.vizFocus, v.vizAllies, v.vizEnemies, v.vizNeutrals)) p.seen = false;
     std::memcpy(p.position, v.position, sizeof p.position);
     std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
@@ -355,7 +371,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     f.shield = v.shield;
     // (for the army the picture is for: where it sees. The script's own say on who sees it,
     // SetVizTo..., is 'Intel' for whoever is not its owner's side, which comes to the same; 'Never' is kept)
-    if (focus > 0) f.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0 && v.vizFocus != 2;
+    if (focus > 0) f.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0 && !never(v.army, v.vizFocus, v.vizAllies, v.vizEnemies, v.vizNeutrals);
     beat.entities.push_back(f);
   }
   // how the scenery changed (the engine's list is emptied by taking it, which is why the simulation is not const here)

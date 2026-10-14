@@ -64,14 +64,20 @@ class StrategicIcons {
   // A life bar at a place in the world, as the original draws it: black, `widthPixels` wide and
   // `thick` high, `fraction` (0..1) of it filled, green down to red by how full; `drop` screen
   // pixels below the place (under the unit). Drawn with the symbols.
-  // `work`: the bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
-  // is), filled in orange.
-  void AddBar(Vec3 position, float fraction, float widthPixels, bool work = false, float drop = 0, float thick = 4);
+  // `kind` 1: the bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
+  // is), filled in orange; 2: the bar of its shield (how much of it is left), filled in pale blue.
+  void AddBar(Vec3 position, float fraction, float widthPixels, int kind = 0, float drop = 0, float thick = 4);
   // A mark over a place in the world, whatever the distance and whether the symbols are shown or
   // not: the game's pause picture over a paused unit. `icon` from MarkIcon; `lift`: screen pixels
   // above the place.
   int MarkIcon(const std::string& name) { return Icon(name); }
   void AddMark(int icon, Vec3 position, float lift);
+  // A picture from anywhere in the game's files, for AddUnder (`path` whole); -1 when it is not there.
+  int Picture(const std::string& path) { return Load(path, path); }
+  // A picture on a place in the world UNDER all the symbols, at its own size, `alpha` 0..1 of it
+  // there: the icon the original shows on a mass or hydrocarbon deposit from far up (a unit's
+  // symbol on the spot covers it). Shown whether the symbols are or not.
+  void AddUnder(int icon, Vec3 position, float alpha);
   // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
   // middle at (x, y): for pictures made without the graphics card (a minimap).
   void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false, bool known = false) const;
@@ -102,11 +108,12 @@ class StrategicIcons {
   };
   struct Bar {
     float x, y, width, fraction;
-    bool work;
+    int kind;  // 0 life, 1 work, 2 shield
     float thick;
   };
   std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");
+  int Load(const std::string& key, const std::string& path);  // into the symbols' texture; known by `key`
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;
@@ -130,7 +137,7 @@ class StrategicIcons {
 
   View view_;
   float pixel_ = 1;  // this frame's scale
-  std::vector<Listed> listed_, marks_;
+  std::vector<Listed> listed_, marks_, under_;
   std::vector<uint32_t> order_;
   std::vector<Vertex> vertices_;
 };

@@ -482,6 +482,17 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
 
   meshes.Begin();
   icons.Begin(view);
+  // the resource deposits' icons, from where their marks on the ground are no longer drawn
+  if (depositIcons && !decals.Deposits().empty()) {
+    if (massIcon_ == -2) {
+      massIcon_ = icons.Picture("/env/common/splats/mass_strategic.dds");
+      hydrocarbonIcon_ = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds");
+    }
+    for (const Decals::Deposit& d : decals.Deposits()) {
+      const float full = std::max(d.cutoff * depositIconFrom, 1.0f);
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_ : massIcon_, d.position, Clamp((Length(d.position - view.eye) - full * 0.8f) / (full * 0.2f), 0, 1));
+    }
+  }
   lights.Begin(clock);
   pickables_.clear();
   // the scenery's changes that are due by now, then the scenery
@@ -783,8 +794,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         const Vec3 at = position + toEye * kind->lifeBarOffset;
         const float wide = std::clamp(kind->lifeBarSize / perPixel, 10.0f, 900.0f);
         const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
-        if (life) icons.AddBar(at, u.health / u.maxHealth, wide, false, 0, thick);
-        if (work) icons.AddBar(at, u.workProgress, wide, true, life ? thick : 0, thick);
+        // (the life bar, under it the shield's where the unit has one up, under that its work)
+        const bool shield = life && u.shieldRatio > 0;
+        if (life) icons.AddBar(at, u.health / u.maxHealth, wide, 0, 0, thick);
+        if (shield) icons.AddBar(at, u.shieldRatio, wide, 2, thick, thick);
+        if (work) icons.AddBar(at, u.workProgress, wide, 1, (life ? thick : 0) + (shield ? thick : 0), thick);
       }
       if (workBars && own && u.paused) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");

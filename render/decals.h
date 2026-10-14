@@ -28,6 +28,15 @@ namespace render {
 
 class Decals {
  public:
+  // The resource deposits a game has marked on the ground (the script's splats mass_marker and
+  // hydrocarbon_marker): where, which, and from how far the mark is drawn (its cutoff). For the
+  // icons that take the marks' place from far up (world.cpp).
+  struct Deposit {
+    Vec3 position;
+    bool hydrocarbon = false;
+    float cutoff = 0;
+  };
+  const std::vector<Deposit>& Deposits() const { return deposits_; }
   Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
@@ -91,6 +100,7 @@ class Decals {
   gfx::Texture waterMap_, waterRamp_;
   float mapWidth_ = 0, mapHeight_ = 0;
   std::vector<Decal> decals_;
+  std::vector<Deposit> deposits_;
   std::vector<Decal> marks_;  // this frame's
   struct Visible {
     uint32_t texture, ramp;

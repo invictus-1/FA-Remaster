@@ -72,11 +72,12 @@ bool StrategicIcons::Init(std::string* error) {
 }
 
 // The symbol of that name, put into the shared texture when it is first asked for. -1: no such file.
-int StrategicIcons::Icon(const std::string& name, const char* suffix) {
+int StrategicIcons::Icon(const std::string& name, const char* suffix) { return Load(name, kIconFolder + name + suffix + ".dds"); }
+
+int StrategicIcons::Load(const std::string& name, const std::string& path) {
   auto known = iconByName_.find(name);
   if (known != iconByName_.end()) return known->second;
   int index = -1;
-  const std::string path = kIconFolder + name + suffix + ".dds";
   auto file = vfs_->ReadFile(path);
   DdsImage image;
   std::vector<uint8_t> pixels;
@@ -169,6 +170,7 @@ void StrategicIcons::Begin(const View& view) {
   view_ = view;
   listed_.clear();
   marks_.clear();
+  under_.clear();
   bars_.clear();
   pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
 }
@@ -200,7 +202,7 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bool work, float drop, float thick) {
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, int kind, float drop, float thick) {
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
   if (w <= 1e-4f) return;
@@ -208,7 +210,7 @@ void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bo
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
-  bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), work, thick});
+  bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), kind, thick});
 }
 
 void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
@@ -221,6 +223,18 @@ void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height) - lift;
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
   marks_.push_back({x, y, icon, 0xffffffffu, 0});
+}
+
+void StrategicIcons::AddUnder(int icon, Vec3 position, float alpha) {
+  if (icon < 0 || alpha <= 0.004f) return;
+  const Mat4& m = view_.constants.viewProj;
+  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
+  if (w <= 1e-4f) return;
+  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
+  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
+  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  if (x < -40 || y < -40 || x > static_cast<float>(view_.width) + 40 || y > static_cast<float>(view_.height) + 40) return;
+  under_.push_back({x, y, icon, (static_cast<uint32_t>(std::min(alpha, 1.0f) * 255.0f + 0.5f) << 24) | 0xffffffu, 0});
 }
 
 void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip, bool known) {
@@ -249,7 +263,7 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
 void StrategicIcons::Draw() {
   if (!showSymbols) listed_.clear();
   drawn = static_cast<int>(listed_.size());
-  if (listed_.empty() && bars_.empty() && marks_.empty()) return;
+  if (listed_.empty() && bars_.empty() && marks_.empty() && under_.empty()) return;
   if (atlasChanged_) {  // symbols were added: the texture is made anew (a game uses a few dozen, early on)
     if (atlas_) device_->Destroy(atlas_);
     gfx::TextureDesc td;
@@ -273,13 +287,14 @@ void StrategicIcons::Draw() {
   for (uint32_t i = 0; i < listed_.size(); ++i) order_[starts[255 - listed_[i].priority]++] = i;
 
   vertices_.clear();
-  vertices_.reserve((listed_.size() + marks_.size()) * 6);
+  vertices_.reserve((under_.size() + listed_.size() + marks_.size()) * 6);
   const float texel = 1.0f / static_cast<float>(kAtlasSize);
-  // (the marks come after the symbols, over them)
-  for (size_t n = 0; n < order_.size() + marks_.size(); ++n) {
-    const Listed& l = n < order_.size() ? listed_[order_[n]] : marks_[n - order_.size()];
+  // (what lies under the symbols first, then the symbols; the marks come after them, over them)
+  const size_t first = under_.size(), last = first + order_.size();
+  for (size_t n = 0; n < last + marks_.size(); ++n) {
+    const Listed& l = n < first ? under_[n] : n < last ? listed_[order_[n - first]] : marks_[n - last];
     const Rect& r = rects_[static_cast<size_t>(l.icon)];
-    const float big = n < order_.size() ? 1.0f : 2.0f;  // (a mark at twice its picture's size: it must be seen)
+    const float big = n < last ? 1.0f : 2.0f;  // (a mark at twice its picture's size: it must be seen)
     // on whole pixels, so every pixel of the symbol covers the same number of the screen's
     const float x0 = std::floor(l.x - static_cast<float>(r.width) * pixel_ * big * 0.5f + 0.5f), y0 = std::floor(l.y - static_cast<float>(r.height) * pixel_ * big * 0.5f + 0.5f);
     const float x1 = x0 + static_cast<float>(r.width) * pixel_ * big, y1 = y0 + static_cast<float>(r.height) * pixel_ * big;
@@ -297,8 +312,8 @@ void StrategicIcons::Draw() {
   for (const Bar& bar : bars_) {
     const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half, y0 = std::floor(bar.y), high = std::max(bar.thick, 2.0f) * pixel_;
     rect(x0, y0, x0 + 2 * half, y0 + high, 0xff000000u);
-    // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange
-    const uint32_t color = bar.work ? 0xff0098ffu : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
+    // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange, its shield in pale blue
+    const uint32_t color = bar.kind == 1 ? 0xff0098ffu : bar.kind == 2 ? 0xffffc040u : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
     if (bar.fraction > 0) rect(x0, y0, x0 + std::max(2 * pixel_, 2 * half * bar.fraction), y0 + high, color);
   }
   device_->SetPipeline(pipeline_);
