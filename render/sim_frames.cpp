@@ -350,6 +350,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     p.age = static_cast<float>(sim.tick() - first) * 0.1f;
     // its size: the simulation's own account of it
     p.sized = true;
+    p.stopped = v.stopped;
     for (int k = 0; k < 3; ++k) {
       p.size[k] = v.size[k];
       p.growth[k] = v.scaleVelocity[k];
@@ -464,7 +465,10 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
   for (FrameProjectile& p : out->projectiles) {
     for (int k = 0; k < 3; ++k) {
-      p.position[k] += p.velocity[k] * ahead;
+      // (not one that has hit: it stands where it hit until its script ends it next beat; moved on
+      // with the speed it came with, it was drawn through what it hit, a tank's shell up to two and
+      // a half units: Chris's "some go through the acu")
+      if (!p.stopped) p.position[k] += p.velocity[k] * ahead;
       p.size[k] += p.growth[k] * ahead;
     }
     p.age += ahead;

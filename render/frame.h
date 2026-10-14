@@ -82,6 +82,9 @@ struct FrameProjectile {
   // UniformScale is NOT applied on top. sized = false: not told (a recording); then the
   // blueprint's own scale is used. growth: what the scale velocity adds a second (between beats).
   bool sized = false;
+  // It hit something this beat: its place is where it hit, and it is not moved on between beats
+  // (the engine's ProjectileView::stopped; its script ends it at the start of the next beat).
+  bool stopped = false;
   float size[3] = {1, 1, 1};
   float growth[3] = {0, 0, 0};
   float age = 0;  // seconds since it was first seen (what fades with time goes by it)
