@@ -2,7 +2,7 @@
 -- and taken back, and placed it orders every building of it where it stood beside the first.
 -- With them the small functions around a game that have no test of their own.
 -- Run it like victory.lua (a launched game whose options have CheatsEnabled = "true": the
--- buildings are made by the game's own cheat callback), with --frames 1800.
+-- buildings are made by the game's own cheat callback), with --frames 5400.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -126,6 +126,17 @@ ForkThread(function()
         WaitSeconds(0.3)
         button = import("/lua/ui/game/construction.lua").controls.extraBtn1
         check("the button still shows it after the panel is laid out anew", button:IsChecked(), true)
+        -- and the factory does build its queue again: a second tank comes with one ordered
+        local tanks, waited = 0, 0
+        while tanks < 2 and waited < 60 do
+            WaitSeconds(1)
+            waited = waited + 1
+            UISelectionByCategory("uel0201", false, false, false, false)
+            tanks = table.getn(GetSelectedUnits() or {})
+        end
+        check("with one tank ordered a second one is built", tanks >= 2, true)
+        check("and the order is still in the queue", table.getn(factory:GetCommandQueue() or {}), 1)
+        SelectUnits({factory})
         factory:ProcessInfo("SetRepeatQueue", "false")
         WaitSeconds(0.5)
         check("and it goes off again", factory:IsRepeatQueue(), false)
