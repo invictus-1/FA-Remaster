@@ -242,6 +242,8 @@ bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float po
 // the world view draws round them while a building is being placed. At most 600.
 void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out);
 std::string TakeOrders(lua_State* L);
+// The chat messages the script has sent since the last frame come back to it (session_bindings.cpp).
+void DeliverChat(lua_State* L);
 // For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
 // knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false
 // when there is no such unit.

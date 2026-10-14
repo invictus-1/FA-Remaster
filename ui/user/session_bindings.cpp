@@ -347,7 +347,82 @@ int l_GetSessionClients(lua_State* L) {
   return 1;
 }
 
+// SessionSendChatMessage([clients,] message): a message to the session's clients, which the
+// game's script uses for chat lines, pings, pause notices, taunts and more; each receiver's
+// script hears it as gamemain.ReceiveChat(sender's name, message), and so does the sender's own
+// when it is among the receivers (so the script expects: a ping shows by its own echo, and
+// "Engine doesn't bounce private messages back to the sender" is the one case it works round).
+// `clients`: a client's number or a list of them, as GetSessionClients lists them; left out,
+// everyone. Here there is one client, the player's own (number 1): the message comes back to
+// it on the next frame. Written from the scripts' use; the original's code is not read.
+int l_SessionSendChatMessage(lua_State* L) {
+  if (!TheSim(L)) return 0;
+  const int msg = lua_gettop(L) >= 2 ? 2 : 1;
+  if (!lua_istable(L, msg) && !lua_isstring(L, msg)) return 0;
+  bool toSelf = msg == 1;
+  if (msg == 2) {
+    if (lua_isnumber(L, 1)) toSelf = lua_tonumber(L, 1) == 1;
+    else if (lua_istable(L, 1)) {
+      lua_pushnil(L);
+      while (lua_next(L, 1) != 0) {
+        if (lua_isnumber(L, -1) && lua_tonumber(L, -1) == 1) toSelf = true;
+        lua_pop(L, 1);
+      }
+    } else if (lua_isnil(L, 1)) toSelf = true;
+  }
+  if (!toSelf) return 0;
+  // (kept in the registry until the frame's turn: registry.moho64ui_chat = {message, ...})
+  lua_pushstring(L, "moho64ui_chat");
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushstring(L, "moho64ui_chat");
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+  }
+  lua_pushvalue(L, msg);
+  lua_rawseti(L, -2, luaL_getn(L, -2) + 1);
+  lua_pop(L, 1);
+  return 0;
+}
+
 }  // namespace
+
+// The chat messages sent since the last frame reach the game's script (see above).
+void DeliverChat(lua_State* L) {
+  Sim* sim = UserState::From(L)->config().sim;
+  const int top = lua_gettop(L);
+  lua_pushstring(L, "moho64ui_chat");
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (!lua_istable(L, -1) || luaL_getn(L, -1) == 0 || !sim) {
+    lua_settop(L, top);
+    return;
+  }
+  const int list = lua_gettop(L);
+  lua_pushstring(L, "moho64ui_chat");  // (a fresh list: a handler may send again)
+  lua_pushnil(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  std::string name;
+  for (const ArmyView& a : ArmyViews(*sim))
+    if (a.index == sim->focusArmy + 1) name = a.nickname;
+  const int n = luaL_getn(L, list);
+  for (int i = 1; i <= n; ++i) {
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/gamemain.lua");
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "ReceiveChat");
+      lua_gettable(L, -2);
+      if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, name.c_str());
+        lua_rawgeti(L, list, i);
+        if (lua_pcall(L, 2, 0, 0) != 0) Logf(LogLevel::Warning, "ReceiveChat: %s", lua_tostring(L, -1));
+      }
+    }
+    lua_settop(L, list);
+  }
+  lua_settop(L, top);
+}
 
 void UserState::CallProvider(const char* fn, int nargs) {
   lua_State* L = state_->L();
@@ -451,6 +526,7 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GetArmiesTable", l_GetArmiesTable);
   SetGlobal(L, "GetEconomyTotals", l_GetEconomyTotals);
   SetGlobal(L, "GetSessionClients", l_GetSessionClients);
+  SetGlobal(L, "SessionSendChatMessage", l_SessionSendChatMessage);
   SetGlobal(L, "IsAlly", l_IsAlly);
   SetGlobal(L, "IsNeutral", l_IsNeutral);
   SetGlobal(L, "IsEnemy", l_IsEnemy);

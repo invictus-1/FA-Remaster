@@ -473,6 +473,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   score, and the game's own score screen comes up (`/lua/ui/dialogs/score.lua`, reached by the
   menu's "End Game"); its Continue leaves the game. `SessionGetCommandSourceNames` /
   `SessionGetLocalCommandSource` name who gives orders (the script's pause sign uses them).
+  `SessionSendChatMessage` brings a message back to the sender's own script on the next frame
+  when it is among the receivers (`gamemain.ReceiveChat`): the game's chat lines, its pings and
+  its pause notices are all sent so and show by their own echo. One client, the player's own;
+  written from the scripts' use.
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is

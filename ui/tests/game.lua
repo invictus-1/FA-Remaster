@@ -527,6 +527,28 @@ local function run()
         check("both let go: it hides them", view.ShowingReclaim, false)
     end
 
+    -- chat messages (chat lines, pings, pause notices are all sent so) come back to the
+    -- sender's own script when it is among the receivers
+    do
+        local gm = import("/lua/ui/game/gamemain.lua")
+        local oldReceive, heard = gm.ReceiveChat, {}
+        gm.ReceiveChat = function(sender, data)
+            table.insert(heard, {sender = sender, data = data})
+            return oldReceive(sender, data)
+        end
+        SessionSendChatMessage({to = "all", Chat = true, text = "a line from the test"})
+        WaitSeconds(0.3)
+        check("a chat line to everyone comes back, with the player's name",
+            heard[1] ~= nil and heard[1].sender == me.nickname and heard[1].data.text == "a line from the test", true)
+        SessionSendChatMessage({2, 3}, {to = "allies", Chat = true, text = "for others"})
+        WaitSeconds(0.3)
+        check("one for other clients only does not", table.getn(heard), 1)
+        SessionSendChatMessage({1}, {to = "allies", Chat = true, text = "for my own client"})
+        WaitSeconds(0.3)
+        check("one for the player's own client does", heard[2] ~= nil and heard[2].data.text, "for my own client")
+        gm.ReceiveChat = oldReceive
+    end
+
     -- the meshes the script places in the world, and the marks where orders land
     local WorldMesh = import("/lua/ui/controls/worldmesh.lua").WorldMesh
     local function meshes(shader)
