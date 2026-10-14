@@ -696,20 +696,25 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   c.targetId = 0;
   c.targetPoint = -1;
   c.targetViaBlip = false;
+  c.targetFakeId = 0;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
       // The player's orders on an enemy name its recon blip (the UI only knows blips). Our tasks and weapons work
-      // on units, so a real blip stands for its unit; a jammer's fake blip is not a target yet.
+      // on units, so a real blip stands for its unit, and a jammer's fake blip for its unit with the fake named
+      // beside it (the target then stands where the fake stands and lasts as long as it).
+      Vec3 at = e->position;
       if (e->kind == Entity::Kind::Blip) {
         auto* b = static_cast<ReconBlip*>(e);
-        if (!b->fake && b->source && !b->source->destroyQueued) {
+        if (b->source && !b->source->destroyQueued) {
+          if (b->fake) c.targetFakeId = EntityRef(b);
           e = b->source;
           c.targetViaBlip = true;
+          if (!c.targetFakeId) at = e->position;
         }
       }
       c.targetId = EntityRef(e);
-      c.pos = e->position;
+      c.pos = at;
       c.hasPos = true;
     } else if (getenv("MOHO64_DEBUG_BLIP")) {
       Logf(LogLevel::Info, "command %u: target entity %#x does not exist", sim.tick(), t.entity);
@@ -921,7 +926,8 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
 // what is left in the queue goes, the command ctor draws the target point.
-std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath) {
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath,
+                                             uint32_t fakeId) {
   if (!IsAlive(u) || !target) return nullptr;
   auto c = std::make_shared<UnitCommand>();
   c->id = sim.nextCommandId++;
@@ -930,7 +936,9 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
   c->targetId = EntityRef(target);
   c->targetViaBlip = viaBlip;  // (what the weapon found was a jammer's blip: the order names the blip's id)
   c->targetPastDeath = pastDeath;
-  c->pos = target->position;
+  c->targetFakeId = viaBlip ? fakeId : 0;
+  const Entity* fake = c->targetFakeId ? sim.FindEntity(c->targetFakeId) : nullptr;
+  c->pos = fake ? fake->position : target->position;
   c->hasPos = true;
   c->targetPoint = TargetPointDraw(sim, target);
   c->issueTargetType = 1;

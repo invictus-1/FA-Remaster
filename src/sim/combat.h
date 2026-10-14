@@ -96,9 +96,12 @@ struct AiTarget {
   // the blip was taken when its unit was already dead (a jammer's blip out of a list of enemies built while the
   // unit lived): a blip is not dead while it exists (HasTarget 0x5e2a5a), so the target lasts as long as the blip
   bool pastDeath = false;
+  // the target is one of a jammer's FAKE blips (its ReconBlip entity; entityId stays the jamming unit, viaBlip is
+  // set): it stands where the fake stands and lasts as long as the fake does
+  uint32_t fakeId = 0;
   // (a unit and the blip of that unit are two entities in the original: going from one to the other is a new target)
   bool operator==(const AiTarget& o) const {
-    return type == o.type && entityId == o.entityId && (type != 1 || viaBlip == o.viaBlip) &&
+    return type == o.type && entityId == o.entityId && (type != 1 || (viaBlip == o.viaBlip && fakeId == o.fakeId)) &&
            (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
   }
 };

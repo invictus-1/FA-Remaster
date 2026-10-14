@@ -343,6 +343,10 @@ Entity* TargetEntity(Sim& sim, const AiTarget& t) {
 bool HasTarget(Sim& sim, const AiTarget& t) {
   if (t.type == 2) return true;
   if (t.type != 1) return false;
+  if (t.fakeId) {  // a jammer's fake blip: while the fake exists (a blip is not dead while it exists)
+    const Entity* f = sim.FindEntity(t.fakeId);
+    return f && !f->destroyQueued;
+  }
   Entity* e = TargetEntity(sim, t);
   if (!e) return false;
   if (e->kind == Entity::Kind::Unit) {
@@ -381,6 +385,10 @@ namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   if (t.type == 2) return t.pos;
   if (t.type == 1) {
+    if (t.fakeId) {  // a jammer's fake blip: the blip's own place (0x5e2a90: a recon blip is asked vt+0x1c, +0xac)
+      const Entity* f = sim.FindEntity(t.fakeId);
+      return f ? f->position : NaNVec();
+    }
     Entity* e = TargetEntity(sim, t);
     if (!e) return NaNVec();
     if (e->kind == Entity::Kind::Unit) return centre ? e->position : UnitTargetPoint(static_cast<Unit*>(e), t.aimBone);
@@ -403,7 +411,7 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
 // primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
 // has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
-  if (t.type == 1 && t.aimBone == -1)
+  if (t.type == 1 && t.aimBone == -1 && !t.fakeId)
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
         return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
@@ -1070,7 +1078,7 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
   if (e && e->kind == Entity::Kind::Unit && w->target.viaBlip) {
     const Unit* tu = static_cast<const Unit*>(e);
-    w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
+    w->target.blipId = w->target.fakeId ? w->target.fakeId : tu->blip ? EntityRef(tu->blip) : 0;
   }
   PickNewTargetAimSpot(sim, w);
   // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
@@ -1170,16 +1178,26 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // fakes (ReconGetJamingBlips 0x5c20c0: every blip of the unit in the army's database, the real one too). The
   // list is only as fresh as the weapon that asks needs it (a 20-beat weapon reads what a 10-beat one built), and
   // a blip does not die with its unit: so a weapon can take the blip of a jammer that died since the list was
-  // made. Here: the real blip. NOT YET: the fakes as targets.
+  // made. The query collects them in a set sorted by the blips' ADDRESSES (0x5c3a90); here the real blip, made
+  // first, and then the fakes in the order they were made, which is what a heap that only grows gives.
+  u->blipCacheFake.clear();
   {
     std::vector<Unit*> withBlips;
     for (Unit* t : u->blipCache) {
       withBlips.push_back(t);
       u->blipCacheBlip.push_back(0);
-      if (t->intel && t->intel->has[9] && t->intel->on[9] && t->blip && (t->recon[a] & kReconInUse) &&
-          !(t->recon[a] & 0x20)) {
+      u->blipCacheFake.push_back(0);
+      if (!(t->intel && t->intel->has[9] && t->intel->on[9])) continue;
+      if (t->blip && (t->recon[a] & kReconInUse) && !(t->recon[a] & 0x20)) {
         withBlips.push_back(t);
         u->blipCacheBlip.push_back(1);
+        u->blipCacheFake.push_back(0);
+      }
+      for (const ReconBlip* f : t->fakeBlips) {
+        if (f->destroyQueued || !(f->rflags[a] & kReconInUse) || (f->rflags[a] & 0x20)) continue;
+        withBlips.push_back(t);
+        u->blipCacheBlip.push_back(1);
+        u->blipCacheFake.push_back(EntityRef(f));
       }
     }
     u->blipCache.swap(withBlips);
@@ -1190,7 +1208,7 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
     if (dbgId >= 0 && static_cast<long>(u->id) == dbgId) {
       std::string ids;
       for (size_t i = 0; i < u->blipCache.size(); ++i)
-        ids += " " + std::to_string(u->blipCache[i]->id) + (u->blipCacheBlip[i] ? "b" : "");
+        ids += " " + std::to_string(u->blipCache[i]->id) + (u->blipCacheFake[i] ? "f" : u->blipCacheBlip[i] ? "b" : "");
       Logf(LogLevel::Info, "blipcache %u unit %u period %d reach %.3f:%s", sim.tick(), u->id, period, R, ids.c_str());
     }
   }
@@ -1246,14 +1264,20 @@ bool InMap(Sim& sim, Vec3 p) {
 // isBlip (one flag per list entry, Unit::blipCacheBlip): the entry is the unit's recon blip, an entity of its own
 // in the original: the blip's own flags and place count, not the unit's, and what comes back is the blip
 // (*bestIsBlip). Without the flags every entry is a unit.
+// fakeIds (Unit::blipCacheFake) / bestFake: the entry is one of the unit's FAKE blips; its place and its flags
+// are the fake's.
 Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, float range, bool useAngle,
-                    const std::vector<uint8_t>* isBlip = nullptr, bool* bestIsBlip = nullptr) {
+                    const std::vector<uint8_t>* isBlip = nullptr, bool* bestIsBlip = nullptr,
+                    const std::vector<uint32_t>* fakeIds = nullptr, uint32_t* bestFakeOut = nullptr) {
   if (bestIsBlip) *bestIsBlip = false;
+  if (bestFakeOut) *bestFakeOut = 0;
   if (list.empty()) return nullptr;
   Unit* u = w->unit;
   int a = u->army ? u->army->index - 1 : -1;
   Unit* best = nullptr;
   bool bestBlip = false;
+  uint32_t bestFake = 0;
+  const uint32_t curFake = w->target.type == 1 ? w->target.fakeId : 0;
   float bestScore = std::numeric_limits<float>::infinity();
   int bestStatus = 3, bestPrio = 9999;
   Vec3 P = u->position;
@@ -1264,12 +1288,19 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
   for (size_t li = 0; li < list.size(); ++li) {
     Unit* e = list[li];
     const bool blip = isBlip && li < isBlip->size() && (*isBlip)[li] != 0;
-    if (blip) {
+    const uint32_t fakeRef = blip && fakeIds && bestFakeOut && li < fakeIds->size() ? (*fakeIds)[li] : 0;
+    const ReconBlip* fake = nullptr;
+    if (blip && fakeIds && li < fakeIds->size() && (*fakeIds)[li] != 0) {
+      if (!fakeRef || !bestIsBlip || !e) continue;  // (a caller that cannot hold a fake as its target)
+      const Entity* fe = sim.FindEntity(fakeRef);
+      if (!fe || fe->destroyQueued) continue;
+      fake = static_cast<const ReconBlip*>(fe);
+    } else if (blip) {
       if (!bestIsBlip || !e || e->destroyQueued || !e->blip || e->blip->destroyQueued) continue;
     } else if (!Alive(e)) {
       continue;
     }
-    const Vec3 ep = blip ? e->blip->position : e->position;
+    const Vec3 ep = fake ? fake->position : blip ? e->blip->position : e->position;
     float d2 = Dist2XZ(P, ep);
     if (d2 > range * range) continue;
     if (!IsEnemy(u->army, e->army)) continue;
@@ -1293,19 +1324,20 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     if (CB(u).needUnpack && s != 0) continue;
     float score = useAngle ? Dot(Norm(Sub(P, ep)), fwd) : d2;
     if (s != 0 && !w->bp->autoInitiateAttackCommand) score = useAngle ? score + 4 : score * 4;
-    bool seen = a >= 0 && a < 16 && (e->recon[a] & 0x10);
+    bool seen = a >= 0 && a < 16 && ((fake ? fake->rflags[a] : e->recon[a]) & 0x10);
     int prio = 9999;
-    const bool curIsE = cur == e && curBlip == blip;
+    const bool curIsE = cur == e && curBlip == blip && curFake == fakeRef;
     for (int i = 0; i < n; ++i) {
       if (i > bestPrio) break;
       if (s > bestStatus && best) break;
       if (!InSet(w->priorities[static_cast<size_t>(i)], e->blueprint)) continue;
       if (seen) prio = i;
-      const bool curIsBest = cur == best && curBlip == bestBlip;
+      const bool curIsBest = cur == best && curBlip == bestBlip && curFake == bestFake;
       bool take = prio < bestPrio || (!cur && score < bestScore) || (cur && !curIsBest && (score < bestScore || curIsE));
       if (take) {
         best = e;
         bestBlip = blip;
+        bestFake = fakeRef;
         bestScore = score;
         bestStatus = s;
         bestPrio = prio;
@@ -1313,6 +1345,7 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     }
   }
   if (bestIsBlip) *bestIsBlip = bestBlip;
+  if (bestFakeOut) *bestFakeOut = bestFake;
   return best;
 }
 
@@ -1356,6 +1389,10 @@ bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
   if (!c.targetId) return false;  // (a ground target)
   const Entity* e = sim.FindEntity(c.targetId);
   // (0x5d5980: the entity the order names; for a blip taken after its unit died that is the blip, which lives)
+  if (c.targetFakeId) {  // a jammer's fake blip: the order stands while the fake does
+    const Entity* f = sim.FindEntity(c.targetFakeId);
+    return !f || f->destroyQueued;
+  }
   if (e && c.targetViaBlip && c.targetPastDeath && e->kind == Entity::Kind::Unit)
     return e->destroyQueued || !static_cast<const Unit*>(e)->blip;
   return !e || e->dead || e->destroyQueued;
@@ -1498,7 +1535,8 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   bool useAngle = b.turreted || b.slavedToBody;
   const std::vector<Unit*>& list = BlipsInRange(sim, u, period);
   bool bestBlip = false;
-  Unit* best = FindBestEnemy(sim, w, list, range, useAngle, &u->blipCacheBlip, &bestBlip);
+  uint32_t bestFake = 0;
+  Unit* best = FindBestEnemy(sim, w, list, range, useAngle, &u->blipCacheBlip, &bestBlip, &u->blipCacheFake, &bestFake);
   if (best) {
     // an idle unit's AutoInitiateAttackCommand weapon also orders the unit to attack what it found (0x5d93d5)
     const bool autoAttack = CheckAutoInitiate(sim, w);
@@ -1508,7 +1546,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
       static const bool dbgAcq = getenv("MOHO64_DEBUG_ACQUIRE") != nullptr;
       if (dbgAcq)
         Logf(LogLevel::Info, "acq %u unit %u %s -> %u%s (had %u)", sim.tick(), u->id, b.label.c_str(), best->id,
-             bestBlip ? (best->dead ? " (its blip, the unit is dead)" : " (its blip)") : "",
+             bestFake ? " (a fake blip of it)" : bestBlip ? (best->dead ? " (its blip, the unit is dead)" : " (its blip)") : "",
              TargetEntity(sim, w->target) ? TargetEntity(sim, w->target)->id : 0u);
     }
     TargetPointDraw(sim, best);
@@ -1517,9 +1555,10 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     if (bestBlip) {
       nt.viaBlip = true;
       nt.pastDeath = best->dead;
+      nt.fakeId = bestFake;
     }
     SetTarget(sim, w, nt);
-    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath);
+    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath, bestFake);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
   } else if (d.type == 1 && d.viaBlip && TargetEntity(sim, d) && TargetEntity(sim, d)->dead &&
@@ -2287,6 +2326,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
         a.mobile = IsMobile(tu);
         a.viaBlip = t.targetViaBlip;
         a.pastDeath = t.targetViaBlip && t.targetPastDeath;
+        a.fakeId = t.targetViaBlip ? t.targetFakeId : 0;
         // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
@@ -2467,8 +2507,11 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
   Entity* e = target.type == 1 ? sim.FindEntity(target.entityId) : nullptr;
   if (w) {
-    // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point
-    Vec3 p = TargetPos(sim, target, true);
+    // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point. The point is asked
+    // of GetTargetPosGun 0x5e2a90 with its flag CLEAR (0x5f32bc: xor bl, bl), which for a unit is its target POINT
+    // (Unit::GetTargetPoint 0x6ab340: the target bone the order drew), not its place. A ship's target bone can
+    // sit two units from its centre, and the square's corner is a whole cell: one cell off, another path.
+    Vec3 p = TargetPos(sim, target, false);
     int R = static_cast<int>(w->bp->maxRadius);
     int x0 = static_cast<int>(std::nearbyint(p.x - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(p.z - R * 0.5f));
     {
@@ -2484,7 +2527,7 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
     AttackSetDestUnit(sim, u, e);
   } else {
-    AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, true) : d.lastPos);
+    AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
   }
   d.firstUpdate = false;
 }
@@ -2699,6 +2742,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2718,6 +2762,7 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2829,6 +2874,7 @@ BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = e->position;
   InitAttack(sim, u, *t, false);
   for (size_t i = 0; i < u->weapons.size(); ++i)
@@ -3061,7 +3107,9 @@ int l_w_GetCurrentTarget(lua_State* L) {
   Entity* e = w->target.type == 1 ? S(L)->FindEntity(w->target.entityId) : nullptr;
   if (e && w->target.viaBlip && e->kind == Entity::Kind::Unit) {  // the blip its army holds of the unit
     Unit* tu = static_cast<Unit*>(e);
-    if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
+    Entity* fake = w->target.fakeId ? S(L)->FindEntity(w->target.fakeId) : nullptr;
+    if (fake && fake->HasLuaObject()) e = fake;  // (one of the jammer's fakes)
+    else if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
   }
   if (e && e->HasLuaObject()) PushObject(L, e);
   else lua_pushnil(L);

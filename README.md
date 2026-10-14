@@ -89,7 +89,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Missiles | beat 408 |
 | Eight-army AI game | beat 344 |
 | Skirmish against an AI | beat 340 |
-| Experimental units, second set | beat 167 |
+| Experimental units, second set | beat 215 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed
