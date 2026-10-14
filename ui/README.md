@@ -57,6 +57,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
+         [--replay-out <prefix>]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [--day-weather | --day <hour>] [--day-length <seconds>] [--weather <kind>] [--no-weather]
          [--maps <folder>] [--remasters <folder>] [--own <folder>]
@@ -100,6 +101,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `--seed N` fixes its random seed. `--game-lua file` runs a Lua file of yours in the launched
   game's own state once its interface is up. `ui/tests/game.lua` is run that way: it checks the
   in-game state (the session's facts, units, selection, the world view, a move order).
+- `--replay-out prefix` keeps a record of each game, with which the engine's own program can run
+  the same game again without the interface: `prefix.stream` holds, for every beat, the bytes of
+  the orders handed to the simulation before it (each batch as `CommandWriter` gave it) and then
+  `CommandWriter::AdvanceMessage(1)`; a paused beat leaves only the orders given in it.
+  `prefix.seed` is four lines of text (`seed`, `map`, `armies`, `focus army`). The launch table
+  is the `--session` file, or for a game launched from the lobby `prefix.session.lua` (unless
+  `--session-out` names another place). A second game of one run writes `prefix.2.stream`.
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)
   and counts the calls at exit. `--list-bindings` lists all of them as `built` or `stub`.
 - Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form), or memory only.
