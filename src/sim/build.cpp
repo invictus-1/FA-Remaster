@@ -869,7 +869,9 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       }
       if (u->paused) return wait(10);
       if (FactorySiteBlocked(sim, L, u)) return wait(50);  // 0x62da50 false: (SIM_TryToBuild,) return 50
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, u->orientation, false, u);
+      // (the params of 0x5f54d0: no orientation given, so the unit's own heading; the script attaches it to the
+      // factory's build bone in OnStartBuild)
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
       if (!nu || !Alive(nu)) return wait(10);
       nu->fireState = u->fireState;
       SetFocus(sim, L, u, nu, t);
@@ -910,7 +912,8 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (!t.bp) return kTaskFailed;
       if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit)
       u->unitStates.insert("Upgrading");
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, u->orientation, false, u);
+      // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation)
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
       if (!nu || !Alive(nu)) {
         u->unitStates.erase("Upgrading");
         return kTaskFailed;

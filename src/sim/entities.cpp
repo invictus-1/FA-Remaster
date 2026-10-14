@@ -23,6 +23,7 @@
 #include "sim/entity_grid.h"
 #include "sim/vecmath.h"
 #include "sim/intel.h"
+#include "sim/luautil.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
@@ -1323,9 +1324,24 @@ uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, 
 }  // namespace
 
 Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
-                      Unit* builder, bool keepY, uint8_t wantLayer) {
+                      Unit* builder, bool keepY, uint8_t wantLayer, bool ownHeading) {
   lua_checkstack(L, 40);
   int top = lua_gettop(L);
+  if (ownHeading) {
+    // Unit ctor 0x6a5924, construction params +0x24 == 0: the given orientation is not used. A mobile unit
+    // (MotionType not None, vf+0x10 0x51e460) whose blueprint says Display.SpawnRandomRotation (ubp+0x274) is
+    // turned about the vertical by FRand(-pi/6, pi/6) (0x6a5969, quaternion by 0x570750); every other unit stands
+    // unturned. The draw is made whether or not the unit is attached to its factory right after.
+    q = Quat{};
+    bps_.PushTable(L, bp);
+    const int di = lu::Sub(L, lua_gettop(L), "Display");
+    const bool spin = di && lu::Bool(L, di, "SpawnRandomRotation", false);
+    lua_settop(L, top);
+    if (spin && GetMotionBlueprint(L, bp, bps_).motionType != 0) {
+      const float half = static_cast<float>(FRand(-0.523598790f, 0.523598790f)) * 0.5f;
+      q = {0.0f, dmath::Sin(half), 0.0f, dmath::Cos(half)};
+    }
+  }
   auto owned = std::make_unique<Unit>();
   Unit* u = owned.get();
   u->kind = Entity::Kind::Unit;
