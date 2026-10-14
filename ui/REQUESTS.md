@@ -589,6 +589,25 @@ CHRIS'S LOOK, about 20:15: "For reclaiming own base/structures acu speed and mov
 correct. For engineer I think its correct the speed and the arm moves now." All of 20 is
 closed.
 
+### 21. From Chris: a factory's infinite build (the repeat queue)
+Chris, 2026-10-13, about 23:10 (his words, with a picture of the construction panel's
+"Infinite Build" button and a land factory's queue): "infinite build for factories doesn't
+work when I click it then click on a unit to infinite build it turns off".
+
+Half of it was mine and is fixed in my build: `UserUnit:ProcessInfo(key, value)` was a
+placeholder, so the button's `v:ProcessInfo('SetRepeatQueue', 'true')` (construction.lua
+1929) never reached the simulation and the panel read the switch back as off. It now goes out
+as an info pair for that unit (`CommandWriter::ProcessInfoPair`), and `IsRepeatQueue()` reads
+`UnitStateView::repeatQueue` back.
+
+The other half is yours, as your own note says (`src/sim/units.h` 144: "kept for a host's
+panels; not acted on yet"; engine-answers "a factory does not repeat its queue"): with the
+switch on, a factory in the original builds its queue again and again (a unit that is
+finished goes back to the end of the queue) until the switch is taken off. Wanted: that the
+simulation does so. Not blocking anything else; Chris plays with it, so it is worth doing
+before he tries factories at length. I can check it in my driver when it is in (a factory,
+the switch on, two kinds queued, and the queue after the first is finished).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

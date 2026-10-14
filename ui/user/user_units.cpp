@@ -1462,6 +1462,20 @@ void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& val
   OwnIds(L, list, &ids, &units);
   for (uint32_t id : ids) Writer(L).ProcessInfoPair(id, key, value);
 }
+// unit:ProcessInfo(key, value): the same for one unit, with the key and value the script names
+// (the construction panel's infinite-build button: 'SetRepeatQueue', 'true' | 'false'; FAF's
+// external factories: 'SetPaused'). It was a placeholder that did nothing until Chris,
+// 2026-10-13: "infinite build for factories doesn't work when I click it then click on a unit
+// to infinite build it turns off": the simulation never heard of the switch, so the panel read
+// it back as off when it was next laid out.
+int l_UnitProcessInfo(lua_State* L) {
+  UserUnit* u = CheckUnit(L, 1);
+  const std::string key = luaL_checkstring(L, 2), value = luaL_checkstring(L, 3);
+  Sim* sim = TheSim(L);
+  if (!sim || u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) return 0;
+  Writer(L).ProcessInfoPair(u->view.id, key, value);
+  return 0;
+}
 // SetPaused(units, paused), SetAutoMode(units, on), SetFireState(units, state),
 // ToggleFireState(units, currentState), ToggleScriptBit(units, bit, currentState)
 int l_SetPaused(lua_State* L) {
@@ -2388,7 +2402,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   for (const char* name : {"IsAutoMode", "IsAutoSurfaceMode", "IsOverchargePaused", "IsRepeatQueue", "IsStunned",
                            "HasUnloadCommandQueuedUp", "CanAttackTarget"})
     SetMethod(L, cls, name, l_UnitFalse);
-  SetMethod(L, cls, "ProcessInfo", l_UnitNothing);
+  SetMethod(L, cls, "ProcessInfo", l_UnitProcessInfo);
 
   // The unit's state from the simulation.
   SetMethod(L, cls, "GetCommandQueue", l_GetCommandQueue);

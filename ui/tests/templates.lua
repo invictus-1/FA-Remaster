@@ -2,7 +2,7 @@
 -- and taken back, and placed it orders every building of it where it stood beside the first.
 -- With them the small functions around a game that have no test of their own.
 -- Run it like victory.lua (a launched game whose options have CheatsEnabled = "true": the
--- buildings are made by the game's own cheat callback), with --frames 1500.
+-- buildings are made by the game's own cheat callback), with --frames 1800.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -100,5 +100,35 @@ ForkThread(function()
     ClearSessionExtraSelectList()
     FlushEvents()
     check("the extra selection list and FlushEvents are there", true, true)
+
+    -- A factory's infinite build: the construction panel's button tells the simulation with
+    -- unit:ProcessInfo('SetRepeatQueue', ...) and reads it back with IsRepeatQueue; it must
+    -- stay on when a unit is then put in the queue (the panel is laid out anew by that).
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {x - 30, c[2], z - 4}, bpId = "ueb0101", count = 1, yaw = 0}})
+    WaitSeconds(1.5)
+    UISelectionByCategory("FACTORY", false, false, false, false)
+    local factory = (GetSelectedUnits() or {})[1]
+    check("a factory stands and is selected", factory ~= nil and factory:GetBlueprint().BlueprintId, "ueb0101")
+    if factory then
+        local button = import("/lua/ui/game/construction.lua").controls.extraBtn1
+        check("its queue does not repeat at first", factory:IsRepeatQueue(), false)
+        check("and the panel's infinite-build button is off", button:IsChecked(), false)
+        button:SetCheck(true)  -- (as a click on it: the button's OnCheck tells the simulation)
+        WaitSeconds(0.5)
+        check("the button's switch reaches the simulation", factory:IsRepeatQueue(), true)
+        IssueBlueprintCommand("UNITCOMMAND_BuildFactory", "uel0201", 1)
+        WaitSeconds(0.8)
+        check("a unit is queued", table.getn(factory:GetCommandQueue() or {}) > 0, true)
+        check("and the switch is still on", factory:IsRepeatQueue(), true)
+        SelectUnits({cdr})
+        WaitSeconds(0.3)
+        SelectUnits({factory})  -- (the panel is laid out anew and reads the switch back)
+        WaitSeconds(0.3)
+        button = import("/lua/ui/game/construction.lua").controls.extraBtn1
+        check("the button still shows it after the panel is laid out anew", button:IsChecked(), true)
+        factory:ProcessInfo("SetRepeatQueue", "false")
+        WaitSeconds(0.5)
+        check("and it goes off again", factory:IsRepeatQueue(), false)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)
