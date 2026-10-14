@@ -276,11 +276,21 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     {
       const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
                               static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
-      // (by the lamps of the units before this one: a unit's own lamps do not cut each other)
+      // (by the units before this one: a unit's own lamps do not cut each other. Beams are counted by
+      // the UNITS that shine one into the square, not by the beams: the first unit there keeps all
+      // its beams, the next three one each, so that in a crowd every unit has its cone and none a
+      // whole column goes dark because one engineer's three beams filled the square)
       const auto found = lampSquares_.find(square);
       const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
-      const uint32_t beams = count & 0xffffu, others = count >> 16;
-      if (light.cone > 0 ? beams >= 3 : others >= 2) continue;
+      const uint32_t beamUnits = count & 0xffffu, others = count >> 16;
+      if (light.cone > 0) {
+        if (beamUnits >= 4) continue;
+        bool ownHere = false;
+        for (size_t i = 0; i < takenCount; ++i) ownHere = ownHere || (takenBeam[i] && taken[i] == square);
+        if (beamUnits >= 1 && ownHere) continue;
+      } else if (others >= 2) {
+        continue;
+      }
       if (takenCount < 16) {
         taken[takenCount] = square;
         takenBeam[takenCount++] = light.cone > 0;
@@ -330,7 +340,12 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       lights.Add(at, light.radius * model->scale, tint * on);
     }
   }
-  for (size_t i = 0; i < takenCount; ++i) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
+  for (size_t i = 0; i < takenCount; ++i) {
+    // (a beam's square is counted once for the unit, however many of its beams lie in it)
+    bool counted = false;
+    for (size_t k = 0; takenBeam[i] && k < i; ++k) counted = counted || (takenBeam[k] && taken[k] == taken[i]);
+    if (!counted) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
+  }
 }
 
 float World::GroundHeight(float x, float z) const {
