@@ -27,7 +27,7 @@
 
 namespace render::gfx {
 
-bool IsBlockCompressed(Format f) { return f >= Format::BC1 && f <= Format::BC5; }
+bool IsBlockCompressed(Format f) { return f >= Format::BC1 && f <= Format::BC7; }
 
 int BytesPerPixelOrBlock(Format f) {
   switch (f) {
@@ -36,7 +36,7 @@ int BytesPerPixelOrBlock(Format f) {
     case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::R32F: case Format::D32: return 4;
     case Format::RGBA16F: return 8;
     case Format::BC1: case Format::BC1_sRGB: case Format::BC4: return 8;
-    case Format::BC2: case Format::BC2_sRGB: case Format::BC3: case Format::BC3_sRGB: case Format::BC5: return 16;
+    case Format::BC2: case Format::BC2_sRGB: case Format::BC3: case Format::BC3_sRGB: case Format::BC5: case Format::BC7: return 16;
     default: return 0;
   }
 }
@@ -104,6 +104,7 @@ DXGI_FORMAT ToDxgi(Format f) {
     case Format::BC3_sRGB: return DXGI_FORMAT_BC3_UNORM_SRGB;
     case Format::BC4: return DXGI_FORMAT_BC4_UNORM;
     case Format::BC5: return DXGI_FORMAT_BC5_UNORM;
+    case Format::BC7: return DXGI_FORMAT_BC7_UNORM;
     default: return DXGI_FORMAT_UNKNOWN;
   }
 }

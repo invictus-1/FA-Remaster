@@ -63,6 +63,7 @@ enum class Format : uint8_t {
   BC3_sRGB,
   BC4,
   BC5,
+  BC7,  // (only in files with the newer header; the game's own files have none)
 };
 bool IsBlockCompressed(Format f);
 int BytesPerPixelOrBlock(Format f);  // per pixel, or per 4x4 block for the BC formats

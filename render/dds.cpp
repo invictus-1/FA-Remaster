@@ -128,7 +128,33 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
   out->cube = (caps2 & 0x200) != 0;
   out->layers = out->cube ? 6 : 1;
   int sourceBytes = 0;  // per pixel in the file, when it differs from the format's
-  if (pfFlags & 4) {    // four-character code
+  size_t header = 128;  // where the pixels begin
+  char code[5] = {};
+  if (pfFlags & 4) std::memcpy(code, &fourcc, 4);
+  if (!std::strcmp(code, "DX10")) {
+    // the newer header: twenty bytes more, the format as a number of the graphics interface's list
+    // (those with "sRGB" in their name are the number after the plain one)
+    if (file.size() < 148) return fail("file is cut short");
+    header = 148;
+    const uint32_t number = U32(file, 128), dimension = U32(file, 132), misc = U32(file, 136), count = U32(file, 140);
+    if (dimension != 3) return fail("only flat textures and cube maps are supported");
+    out->cube = (misc & 4) != 0;
+    out->layers = out->cube ? 6 : 1;
+    if (count > 1) return fail("texture arrays are not supported");
+    switch (number) {
+      case 28: case 29: out->format = gfx::Format::RGBA8; break;
+      case 87: case 91: out->format = gfx::Format::BGRA8; break;
+      case 61: out->format = gfx::Format::R8; break;
+      case 49: out->format = gfx::Format::RG8; break;
+      case 71: case 72: out->format = gfx::Format::BC1; break;
+      case 74: case 75: out->format = gfx::Format::BC2; break;
+      case 77: case 78: out->format = gfx::Format::BC3; break;
+      case 80: out->format = gfx::Format::BC4; break;
+      case 83: out->format = gfx::Format::BC5; break;
+      case 98: case 99: out->format = gfx::Format::BC7; break;
+      default: return fail("unsupported format in the newer header");
+    }
+  } else if (pfFlags & 4) {    // four-character code
     char cc[5] = {};
     std::memcpy(cc, &fourcc, 4);
     if (!std::strcmp(cc, "DXT1")) out->format = gfx::Format::BC1;
@@ -155,7 +181,7 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
   // some files say 0 mips, some claim more than they hold: keep the levels that are really there
   const int layers = out->layers;
   mips = std::max(1, mips);
-  const size_t available = file.size() - 128;
+  const size_t available = file.size() - header;
   auto chainBytes = [&](int levels, bool source) {
     size_t n = 0;
     for (int m = 0; m < levels; ++m) {
@@ -169,7 +195,7 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
   if (chainBytes(mips, true) * static_cast<size_t>(layers) > available) return fail("file is cut short");
   out->mips = mips;
 
-  const uint8_t* src = reinterpret_cast<const uint8_t*>(file.data()) + 128;
+  const uint8_t* src = reinterpret_cast<const uint8_t*>(file.data()) + header;
   if (!sourceBytes) {
     out->data = src;
     out->dataSize = chainBytes(mips, false) * static_cast<size_t>(layers);
