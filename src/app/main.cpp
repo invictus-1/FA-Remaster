@@ -404,7 +404,14 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       }
       std::vector<SoundEvent> snd;
       SoundEvents(sim, &snd);
+      static const bool soundLog = getenv("MOHO64_SOUND_LOG") != nullptr;
       for (const SoundEvent& ev : snd) {
+        // MOHO64_SOUND_LOG=1 (with --view): every world sound, in the interface host's own words (its
+        // MOHOUI64_SOUND_LOG), so that a played-back game can be laid beside the live game's log
+        if (soundLog && !ev.cue.empty())
+          Logf(LogLevel::Info, "sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s", sim.tick(),
+               ev.kind == SoundEvent::Play ? "play" : "loop", ev.entity, ev.army, ev.position[0], ev.position[1],
+               ev.position[2], ev.bank.c_str(), ev.cue.c_str());
         ++sndCount[ev.kind == SoundEvent::Play ? 0 : (ev.cue.empty() && ev.rumbleCue.empty() ? 2 : 1)];
         if (sndSample[ev.kind].empty() && !ev.cue.empty()) {
           char sb[320];
