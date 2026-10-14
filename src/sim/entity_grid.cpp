@@ -109,6 +109,17 @@ void EntityGrid::GatherBox(float x0, float z0, float x1, float z1, int mask, std
             out->push_back(*it);
           }
       }
+      // the third list, after the units and the props of the cell, each entry asked for its own kind (0x4fd177)
+      if (mask & 12) {
+        const auto& l = lists_[2][idx];
+        for (auto it = l.rbegin(); it != l.rend(); ++it) {
+          if (!(mask & ((*it)->kind == Entity::Kind::Projectile ? 4 : 8))) continue;
+          if (!(*it)->gridMark) {
+            (*it)->gridMark = true;
+            out->push_back(*it);
+          }
+        }
+      }
     }
   for (Entity* e : *out) e->gridMark = false;
 }

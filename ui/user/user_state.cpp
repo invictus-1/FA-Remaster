@@ -142,6 +142,7 @@ void UserState::Frame(double seconds) {
   ++frame_;
   ui_->Update(state_->L(), static_cast<float>(seconds));
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
+  DeliverChat(state_->L());
   threads_->RunTick(frame_);
 }
 

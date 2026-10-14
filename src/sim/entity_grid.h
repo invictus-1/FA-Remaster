@@ -24,6 +24,8 @@ class EntityGrid {
   // order (Rect2fToInt16 + GatherUnmarked).
   void Gather(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
   // COGrid::CollectEntitiesInBox's cell span (func_AABoxToRect 0x4fcbe0: floor / ceil, like an entity's own span).
+  // Here the mask also has 4: shells (0x400) and 8: the rest of the third list (0x800), which a cell gives after
+  // its units and props (0x4fd000).
   void GatherBox(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
   // The cells a segment passes, from its start to its end, and in each cell the third list (shells, shields,
   // script entities: what has a collision primitive and is no unit and no prop) and then the units; props are not

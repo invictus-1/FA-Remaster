@@ -6,6 +6,7 @@
 // world: the host only reports that the simulation runs.
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <set>
@@ -83,6 +84,16 @@ class GameSession {
   bool seedGiven = false;
   uint32_t seed = 0;
 
+  // A record of each game, to run it again elsewhere (--replay-out <prefix>): `<prefix>.stream`
+  // gets, for every beat, the bytes of the orders handed to the simulation before it (each batch
+  // as the command writer gave it) and then the stream's "advance one beat"; a paused beat
+  // leaves nothing but the orders given in it. `<prefix>.seed` gets the game's seed and map as a
+  // line of text. A second game of the same run (a restart) writes `<prefix>.2.stream` and so
+  // on. With the launch table (the host's --session file, or what the lobby's launch wrote:
+  // `<prefix>.session.lua` unless --session-out names another place) and the seed, the engine's
+  // own program can play the stream back. Empty: nothing is written.
+  std::string replayOut;
+
   bool running() const { return sim_ != nullptr; }
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
@@ -139,6 +150,9 @@ class GameSession {
   size_t armies_ = 0;
   uint32_t seed_ = 0;
   double due_ = 0;  // seconds of beats not run yet
+  std::FILE* stream_ = nullptr;  // the game's record (replayOut), open while a game runs
+  int recorded_ = 0;             // games recorded in this run
+  void Record(const std::string& bytes);
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;

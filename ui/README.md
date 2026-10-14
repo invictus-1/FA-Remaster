@@ -57,6 +57,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
+         [--replay-out <prefix>]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [--day-weather | --day <hour>] [--day-length <seconds>] [--weather <kind>] [--no-weather]
          [--maps <folder>] [--remasters <folder>] [--own <folder>]
@@ -100,6 +101,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `--seed N` fixes its random seed. `--game-lua file` runs a Lua file of yours in the launched
   game's own state once its interface is up. `ui/tests/game.lua` is run that way: it checks the
   in-game state (the session's facts, units, selection, the world view, a move order).
+- `--replay-out prefix` keeps a record of each game, with which the engine's own program can run
+  the same game again without the interface: `prefix.stream` holds, for every beat, the bytes of
+  the orders handed to the simulation before it (each batch as `CommandWriter` gave it) and then
+  `CommandWriter::AdvanceMessage(1)`; a paused beat leaves only the orders given in it.
+  `prefix.seed` is four lines of text (`seed`, `map`, `armies`, `focus army`). The launch table
+  is the `--session` file, or for a game launched from the lobby `prefix.session.lua` (unless
+  `--session-out` names another place). A second game of one run writes `prefix.2.stream`.
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)
   and counts the calls at exit. `--list-bindings` lists all of them as `built` or `stub`.
 - Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form), or memory only.
@@ -473,10 +481,37 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   score, and the game's own score screen comes up (`/lua/ui/dialogs/score.lua`, reached by the
   menu's "End Game"); its Continue leaves the game. `SessionGetCommandSourceNames` /
   `SessionGetLocalCommandSource` name who gives orders (the script's pause sign uses them).
+  `SessionSendChatMessage` brings a message back to the sender's own script on the next frame
+  when it is among the receivers (`gamemain.ReceiveChat`): the game's chat lines, its pings and
+  its pause notices are all sent so and show by their own echo. One client, the player's own;
+  written from the scripts' use.
+  BUILD TEMPLATES (`GenerateBuildTemplateFromSelection`, `GetActiveBuildTemplate`,
+  `SetActiveBuildTemplate`, `ClearBuildTemplates`; `ui/user/user_units.cpp`, the placing in
+  `ui/maui/worldview.cpp` TemplateSites): the selected buildings become a template, to scripts
+  `{width, height, {blueprint, order, x, z}, ...}` as the original gives it (0x8472f0), each
+  place taken beside the first building's; the game's script keeps the templates in the
+  profile and starts the build mode with one. While one is active the build mode shows every
+  building of it round the map cell under the mouse and a click orders them all, in the
+  template's order; a drag orders a row of whole templates, the template's width or depth
+  apart. Read from the original: the table's shape, the sort, the box of the skirts, the cell
+  plus each building's place (0x852eee). INFERRED and marked: which selected units count
+  (buildings that are finished), what the order number is (the entity id stands in), and that
+  the cell's point is its middle. `ui/tests/templates.lua` (21 checks; a game with cheats on,
+  as victory.lua).
+  Small ones with it: `AddToSessionExtraSelectList` and its two kin (units that show the
+  selection's mark without being selected), `HasLocalizedVO` (whether the game has the
+  folder `/sounds/voice/<language>`, 0x8ae300), `AddConsoleOutputReciever` /
+  `RemoveConsoleOutputReciever` (the receivers are kept; no built console command prints a
+  line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host).
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
-  game stands a few seconds later. Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`,
-  `ui/tests/score.lua`, `ui/tests/defeat.lua`.
+  game stands a few seconds later. And it is won the same way: when the opponent's commander is
+  destroyed the script announces "Victory!", offers the score, and the game stands. Tests:
+  `ui/tests/leave.lua`, `ui/tests/restart.lua`, `ui/tests/score.lua`, `ui/tests/defeat.lua`,
+  `ui/tests/victory.lua` (that one in a game launched with cheats on: it makes a dozen heavy
+  bots beside the opponent's commander with the game's own cheat callback, `SimCallback`
+  "CheatSpawnUnit", which works here as in the original and is a handy way to make any unit
+  in a test).
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the
@@ -488,8 +523,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 435 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
-  the units', as a first version); the other 97 are logged stubs. (`--list-bindings` counts
+- 447 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+  the units', as a first version); the other 84 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

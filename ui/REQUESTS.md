@@ -578,6 +578,35 @@ game seconds, and `UnitStateView::shieldRatio` reads 0 for the whole 25 seconds 
 `ui_shield_up_ratio_zero.png` in the folder of Chris's pictures). So the panel's bar is not my
 fault: the number is not there. (Without energy the bubble was down and 0 was right; that was
 my first try.)
+d FIXED the same hour (`docs/engine-answers.md`, "ui 20 d, corrected"; main d45c1e3): the
+engine kept SetShieldRatio's value under one key and the view asked for another, so it was
+always 0; the same wrong key sat on `capturable` and `reclaimable` (a script's
+SetCapturable(false) / SetReclaimable(false) never showed). Repeated in my build: the same
+generator reads 1 with its bubble up, and the unit panel shows its shield bar and "100%"
+(`ui_shield_panel_bar_shows_no_bar_under_unit.png`). The bar under the unit is the renderer's
+and does not show yet in that picture.
+CHRIS'S LOOK, about 20:15: "For reclaiming own base/structures acu speed and movement is
+correct. For engineer I think its correct the speed and the arm moves now." All of 20 is
+closed.
+
+### 21. From Chris: a factory's infinite build (the repeat queue)
+Chris, 2026-10-13, about 23:10 (his words, with a picture of the construction panel's
+"Infinite Build" button and a land factory's queue): "infinite build for factories doesn't
+work when I click it then click on a unit to infinite build it turns off".
+
+Half of it was mine and is fixed in my build: `UserUnit:ProcessInfo(key, value)` was a
+placeholder, so the button's `v:ProcessInfo('SetRepeatQueue', 'true')` (construction.lua
+1929) never reached the simulation and the panel read the switch back as off. It now goes out
+as an info pair for that unit (`CommandWriter::ProcessInfoPair`), and `IsRepeatQueue()` reads
+`UnitStateView::repeatQueue` back.
+
+The other half is yours, as your own note says (`src/sim/units.h` 144: "kept for a host's
+panels; not acted on yet"; engine-answers "a factory does not repeat its queue"): with the
+switch on, a factory in the original builds its queue again and again (a unit that is
+finished goes back to the end of the queue) until the switch is taken off. Wanted: that the
+simulation does so. Not blocking anything else; Chris plays with it, so it is worth doing
+before he tries factories at length. I can check it in my driver when it is in (a factory,
+the switch on, two kinds queued, and the queue after the first is finished).
 
 ## To the renderer track
 
@@ -1150,6 +1179,35 @@ the flash: FAF hangs an invisible box on every crashing plane and hides it by sc
 the simulation did not pass on; fixed with the engine (render 21). e: the visuals track's (see
 above). The pause mark: he moves it clear of the model or makes it larger if Chris did pause
 and missed it.
+
+### 19. From Chris: the deposit icons from far up are too big and show only his part of the map
+Chris, 2026-10-13, about 20:15, a game on main 6b6ac00, with a picture of the ORIGINAL at its
+farthest zoom (`original_mass_and_hydro_spots_fully_zoomed_out.webp` in the folder of his
+others, `_scratch\ui\chris_20261013\`; on disk, checked). His words: "This is how the mass
+and hydro should look on the map. THis is og. The current on implemented is too big and it
+only shows mine not the whole map."
+
+What the original's picture shows (Seton's Clutch whole, 2000 pixels across, the map 810 of
+them): every mass deposit of the WHOLE map is a small green mark about 5 pixels across (a
+ring, a dot at that size), every hydrocarbon deposit a small yellow bolt about 8 pixels long;
+all of them, on both sides of the map and on the islands, from the first seconds of the game
+(game time 00:00:07, nothing explored).
+
+So two things: (1) the icons much smaller from far up, at the original's size; (2) all the
+map's deposits, not only those the player's army has seen: in the original they are known
+from the start. I have no picture of ours to lay beside it; say if you want one.
+
+His word on the rest, nothing asked: "for the shield bar its correct".
+
+Not blocking.
+
+**Status:** done by the renderer track within the half hour (`docs/render-answers.md`, top
+entry; render f4df827): both points were right. The icons were drawn at their pictures' 32
+pixels and are 8 now (16 only from near, where the ground mark has just ended); and a mark
+made where the viewing army does not see was not made at all, so only deposits in sight at the
+first beat were known: every deposit is made now, seen or not (checked with fog of war on:
+all 108 mass and 8 hydrocarbon deposits of Seton's at 7 seconds). In Chris's build after the
+engine's merge. Waiting for his look.
 
 ## To the visuals track
 

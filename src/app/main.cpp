@@ -46,6 +46,7 @@ struct Options {
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
   bool hasSeed = false;
   std::string orders;   // --orders file: orders issued through the command writer at given ticks (testing)
+  std::string stream;   // --stream file: with --session, a played game's command stream to play back
   bool view = false;    // --view: collect what a host reads (sync tables, armies, units) and log a summary
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
@@ -300,7 +301,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   std::string viewSample[3];
   std::string lastSync;
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
-  // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>"; <tick> counts beats, paused ones included, and
+  // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>", "<tick> lua <one line of Lua run in
+  // the sim state: a test building its case, not an order>"; <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
   std::multimap<uint32_t, std::string> orders;
   if (!o.orders.empty()) {
@@ -326,6 +328,12 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       else if (!std::strcmp(what, "resume")) writer.Resume();
       else if (!std::strcmp(what, "endgame")) writer.EndGame();  // one more beat runs, then the game stands
       else if (!std::strcmp(what, "callback") && std::sscanf(text, "%*s %255s", ids) == 1) writer.LuaSimCallback(ids, {}, {});
+      else if (!std::strcmp(what, "lua")) sim.RunString(text + 3, "@orders");  // a test's own Lua, straight into the sim state
+      else if (!std::strcmp(what, "info")) {  // "<tick> info <unit id> <key> <value>": an info pair, as the interface sends it
+        char key[64] = "", value[64] = "";
+        unsigned long id = 0;
+        if (std::sscanf(text, "%*s %lu %63s %63s", &id, key, value) == 3) writer.ProcessInfoPair(static_cast<uint32_t>(id), key, value);
+      }
       else if (!std::strcmp(what, "issue")) {
         int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
         if (n < 2) continue;
@@ -595,6 +603,17 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64: session %s: %zu armies, %zu command sources, focus army %d, seed %u, cheats %s",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, h.cheats ? "on" : "off");
+  // --stream: the orders of a game that was played from this table (the interface host's --replay-out: every
+  // batch it applied, an Advance per beat), played back here. The session is still a played one, not a replay.
+  if (!o.stream.empty()) {
+    const auto bytes = hostfs::ReadFile(o.stream);
+    if (!bytes) {
+      Logf(LogLevel::Error, "cannot read %s", o.stream.c_str());
+      return 1;
+    }
+    Logf(LogLevel::Info, "moho64: playing the command stream %s (%zu bytes)", o.stream.c_str(), bytes->size());
+    return RunSession(o, vfs, hookDirs, uids, session, &*bytes);
+  }
   return RunSession(o, vfs, hookDirs, uids, session, nullptr);
 }
 
@@ -630,6 +649,7 @@ int main(int argc, char** argv) {
       o.hasSeed = true;
     } else if (a == "--view") o.view = true;
     else if (a == "--orders") o.orders = next();
+    else if (a == "--stream") o.stream = next();
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;

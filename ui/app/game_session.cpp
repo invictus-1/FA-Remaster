@@ -209,7 +209,14 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   return true;
 }
 
+void GameSession::Record(const std::string& bytes) {
+  if (!stream_ || bytes.empty()) return;
+  std::fwrite(bytes.data(), 1, bytes.size(), stream_);
+  std::fflush(stream_);  // (a game that ends badly keeps what it had)
+}
+
 void GameSession::End() {
+  if (stream_) std::fclose(stream_), stream_ = nullptr;
   if (sounds) sounds->StopWorld();
   onSync = nullptr;
   takeOrders = nullptr;
@@ -269,6 +276,18 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
+  if (stream_) std::fclose(stream_), stream_ = nullptr;
+  if (!replayOut.empty()) {  // the game's record: see the header
+    const std::string base = replayOut + (recorded_ ? "." + std::to_string(recorded_ + 1) : "");
+    ++recorded_;
+    stream_ = std::fopen((base + ".stream").c_str(), "wb");
+    if (!stream_) Logf(LogLevel::Warning, "moho64ui: cannot write %s.stream", base.c_str());
+    else Logf(LogLevel::Info, "moho64ui: this game is recorded in %s.stream (seed %u)", base.c_str(), h.seed);
+    if (std::FILE* f = std::fopen((base + ".seed").c_str(), "wb")) {
+      std::fprintf(f, "seed %u\nmap %s\narmies %zu\nfocus army %d\n", h.seed, h.map.c_str(), h.armies.size(), session.focusArmy + 1);
+      std::fclose(f);
+    }
+  }
   pace.rate = session.gameSpeed;
   pace.adjustable = session.adjustableSpeed;
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -345,10 +364,14 @@ void GameSession::Advance(double seconds) {
     due_ -= 0.1;
     if (takeOrders) {
       std::string orders = takeOrders();
+      Record(orders);
       if (!orders.empty() && !ApplyCommands(*sim_, orders)) Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
     }
     if (sim_->Paused()) sim_->PausedBeat();
-    else sim_->Tick();
+    else {
+      sim_->Tick();
+      Record(CommandWriter::AdvanceMessage(1));
+    }
     NoteBeat();
     for (std::string& sync : sim_->TakeSync()) {
       if (onSync) onSync(sync);
@@ -440,6 +463,7 @@ void GameSession::PlayBeatSounds() {
 void GameSession::RunFirstBeat() {
   if (!sim_ || sim_->tick() != 0) return;
   sim_->Tick();
+  Record(CommandWriter::AdvanceMessage(1));
   NoteBeat();
   for (std::string& sync : sim_->TakeSync()) {
     if (onSync) onSync(sync);

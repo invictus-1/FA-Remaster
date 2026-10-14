@@ -229,14 +229,36 @@ struct WorldWaypoint {
 };
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
                        bool queueShown = true, std::vector<WorldGhost>* queued = nullptr, std::vector<WorldWaypoint>* waypoints = nullptr);
+// A build template: buildings that are placed together, each where it stood beside the first
+// (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
+// blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).
+struct BuildTemplate {
+  struct Building {
+    std::string blueprint;
+    int order = 0;     // what the original sorts the buildings by
+    float x = 0, z = 0;  // where it stands beside the place the template is put
+  };
+  float width = 0, height = 0;  // the ground the whole takes: the spacing when a row of it is drawn
+  std::vector<Building> buildings;
+};
+// The template being placed (GenerateBuildTemplateFromSelection, SetActiveBuildTemplate), or
+// nullptr when there is none.
+const BuildTemplate* ActiveBuildTemplate(lua_State* L);
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);
+// Whether a building of that kind at that site would lie over a building the player's units
+// have been ordered to build and have not begun (the ground of the two meets; edges may
+// touch). `adding`: the new order comes after the selected units' orders (Shift); without it
+// their own queued buildings do not count, since the new order takes their place.
+bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding);
 // The buildings the interface knows of (any army's, as far as the player sees them) within
 // `within` map units of a place, each with its blueprint and where it stands: for the outlines
 // the world view draws round them while a building is being placed. At most 600.
 void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out);
 std::string TakeOrders(lua_State* L);
+// The chat messages the script has sent since the last frame come back to it (session_bindings.cpp).
+void DeliverChat(lua_State* L);
 // For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
 // knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false
 // when there is no such unit.

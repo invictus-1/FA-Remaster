@@ -67,6 +67,8 @@ class SoundSystem {
 
   // The language of the voices (AudioSetLanguage): their banks are in /sounds/voice/<language>.
   void SetLanguage(const std::string& name);
+  // Whether the game has voices in a language (the folder /sounds/voice/<language>).
+  bool HasLanguage(const std::string& name) const;
 
   // Open the sound device and play; without it the sounds are mixed only when Mix is asked
   // (tests). False when there is no device.

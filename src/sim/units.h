@@ -141,7 +141,8 @@ class Unit : public Entity {
   int siloAmmo[2] = {0, 0};  // tactical, nuke missiles in store
   struct SiloState* silo = nullptr;  // missile production (sim/build.cpp)
   bool autoMode = false;
-  // set by the info pairs SetRepeatQueue / SetAutoSurfaceMode (kept for a host's panels; not acted on yet)
+  // set by the info pairs SetRepeatQueue / SetAutoSurfaceMode. repeatQueue (unit+0x2a2) is acted on by the command
+  // dispatcher (a factory's finished order goes back to the end of its queue); autoSurfaceMode is not acted on yet
   bool repeatQueue = false, autoSurfaceMode = false;
   Vec3 rallyPoint;
   bool hasRallyPoint = false;
@@ -169,7 +170,8 @@ class Unit : public Entity {
   uint32_t ferryUnit = 0;          // GetFerryUnit (+0x4c8): the ferry assigned to pick it up
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)
   int parentBone = -1, ownBone = -1;
-  float shieldRatio = 0;  // as the shield's script last gave Unit:SetShieldRatio (for the views; no simulation use)
+  float shieldRatio = 0;
+  uint32_t aimPoseTick = 0xffffffffu;  // the beat AimReadLastPose last ran in  // as the shield's script last gave Unit:SetShieldRatio (for the views; no simulation use)
   // Combat (sim/combat.cpp)
   const struct CombatBpData* combat = nullptr;
   AiTarget desiredTarget;          // set by attack commands (the attacker's desired target)
@@ -205,6 +207,7 @@ class Unit : public Entity {
   bool armReady = true;            // CAiBuilderImpl +9: the arm is on target (no arm: always)
   std::vector<Unit*> blipCache;    // enemies its army has a blip on, within its weapons' reach
   std::vector<uint8_t> blipCacheBlip;  // per entry: 1 = the entry is that unit's recon BLIP (a jammer's), not the unit
+  std::vector<uint32_t> blipCacheFake; // per entry: the jammer's FAKE blip the entry is (its entity handle), else 0
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)

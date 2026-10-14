@@ -343,6 +343,10 @@ Entity* TargetEntity(Sim& sim, const AiTarget& t) {
 bool HasTarget(Sim& sim, const AiTarget& t) {
   if (t.type == 2) return true;
   if (t.type != 1) return false;
+  if (t.fakeId) {  // a jammer's fake blip: while the fake exists (a blip is not dead while it exists)
+    const Entity* f = sim.FindEntity(t.fakeId);
+    return f && !f->destroyQueued;
+  }
   Entity* e = TargetEntity(sim, t);
   if (!e) return false;
   if (e->kind == Entity::Kind::Unit) {
@@ -381,6 +385,10 @@ namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   if (t.type == 2) return t.pos;
   if (t.type == 1) {
+    if (t.fakeId) {  // a jammer's fake blip: the blip's own place (0x5e2a90: a recon blip is asked vt+0x1c, +0xac)
+      const Entity* f = sim.FindEntity(t.fakeId);
+      return f ? f->position : NaNVec();
+    }
     Entity* e = TargetEntity(sim, t);
     if (!e) return NaNVec();
     if (e->kind == Entity::Kind::Unit) return centre ? e->position : UnitTargetPoint(static_cast<Unit*>(e), t.aimBone);
@@ -403,7 +411,7 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
 // primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
 // has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
-  if (t.type == 1 && t.aimBone == -1)
+  if (t.type == 1 && t.aimBone == -1 && !t.fakeId)
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
         return Add(e->shapePos, RotateM(e->shapeOri, static_cast<Unit*>(e)->bpCenter));
@@ -1070,7 +1078,7 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
   if (e && e->kind == Entity::Kind::Unit && w->target.viaBlip) {
     const Unit* tu = static_cast<const Unit*>(e);
-    w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
+    w->target.blipId = w->target.fakeId ? w->target.fakeId : tu->blip ? EntityRef(tu->blip) : 0;
   }
   PickNewTargetAimSpot(sim, w);
   // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
@@ -1170,16 +1178,26 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // fakes (ReconGetJamingBlips 0x5c20c0: every blip of the unit in the army's database, the real one too). The
   // list is only as fresh as the weapon that asks needs it (a 20-beat weapon reads what a 10-beat one built), and
   // a blip does not die with its unit: so a weapon can take the blip of a jammer that died since the list was
-  // made. Here: the real blip. NOT YET: the fakes as targets.
+  // made. The query collects them in a set sorted by the blips' ADDRESSES (0x5c3a90); here the real blip, made
+  // first, and then the fakes in the order they were made, which is what a heap that only grows gives.
+  u->blipCacheFake.clear();
   {
     std::vector<Unit*> withBlips;
     for (Unit* t : u->blipCache) {
       withBlips.push_back(t);
       u->blipCacheBlip.push_back(0);
-      if (t->intel && t->intel->has[9] && t->intel->on[9] && t->blip && (t->recon[a] & kReconInUse) &&
-          !(t->recon[a] & 0x20)) {
+      u->blipCacheFake.push_back(0);
+      if (!(t->intel && t->intel->has[9] && t->intel->on[9])) continue;
+      if (t->blip && (t->recon[a] & kReconInUse) && !(t->recon[a] & 0x20)) {
         withBlips.push_back(t);
         u->blipCacheBlip.push_back(1);
+        u->blipCacheFake.push_back(0);
+      }
+      for (const ReconBlip* f : t->fakeBlips) {
+        if (f->destroyQueued || !(f->rflags[a] & kReconInUse) || (f->rflags[a] & 0x20)) continue;
+        withBlips.push_back(t);
+        u->blipCacheBlip.push_back(1);
+        u->blipCacheFake.push_back(EntityRef(f));
       }
     }
     u->blipCache.swap(withBlips);
@@ -1190,7 +1208,7 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
     if (dbgId >= 0 && static_cast<long>(u->id) == dbgId) {
       std::string ids;
       for (size_t i = 0; i < u->blipCache.size(); ++i)
-        ids += " " + std::to_string(u->blipCache[i]->id) + (u->blipCacheBlip[i] ? "b" : "");
+        ids += " " + std::to_string(u->blipCache[i]->id) + (u->blipCacheFake[i] ? "f" : u->blipCacheBlip[i] ? "b" : "");
       Logf(LogLevel::Info, "blipcache %u unit %u period %d reach %.3f:%s", sim.tick(), u->id, period, R, ids.c_str());
     }
   }
@@ -1246,14 +1264,20 @@ bool InMap(Sim& sim, Vec3 p) {
 // isBlip (one flag per list entry, Unit::blipCacheBlip): the entry is the unit's recon blip, an entity of its own
 // in the original: the blip's own flags and place count, not the unit's, and what comes back is the blip
 // (*bestIsBlip). Without the flags every entry is a unit.
+// fakeIds (Unit::blipCacheFake) / bestFake: the entry is one of the unit's FAKE blips; its place and its flags
+// are the fake's.
 Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, float range, bool useAngle,
-                    const std::vector<uint8_t>* isBlip = nullptr, bool* bestIsBlip = nullptr) {
+                    const std::vector<uint8_t>* isBlip = nullptr, bool* bestIsBlip = nullptr,
+                    const std::vector<uint32_t>* fakeIds = nullptr, uint32_t* bestFakeOut = nullptr) {
   if (bestIsBlip) *bestIsBlip = false;
+  if (bestFakeOut) *bestFakeOut = 0;
   if (list.empty()) return nullptr;
   Unit* u = w->unit;
   int a = u->army ? u->army->index - 1 : -1;
   Unit* best = nullptr;
   bool bestBlip = false;
+  uint32_t bestFake = 0;
+  const uint32_t curFake = w->target.type == 1 ? w->target.fakeId : 0;
   float bestScore = std::numeric_limits<float>::infinity();
   int bestStatus = 3, bestPrio = 9999;
   Vec3 P = u->position;
@@ -1264,12 +1288,19 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
   for (size_t li = 0; li < list.size(); ++li) {
     Unit* e = list[li];
     const bool blip = isBlip && li < isBlip->size() && (*isBlip)[li] != 0;
-    if (blip) {
+    const uint32_t fakeRef = blip && fakeIds && bestFakeOut && li < fakeIds->size() ? (*fakeIds)[li] : 0;
+    const ReconBlip* fake = nullptr;
+    if (blip && fakeIds && li < fakeIds->size() && (*fakeIds)[li] != 0) {
+      if (!fakeRef || !bestIsBlip || !e) continue;  // (a caller that cannot hold a fake as its target)
+      const Entity* fe = sim.FindEntity(fakeRef);
+      if (!fe || fe->destroyQueued) continue;
+      fake = static_cast<const ReconBlip*>(fe);
+    } else if (blip) {
       if (!bestIsBlip || !e || e->destroyQueued || !e->blip || e->blip->destroyQueued) continue;
     } else if (!Alive(e)) {
       continue;
     }
-    const Vec3 ep = blip ? e->blip->position : e->position;
+    const Vec3 ep = fake ? fake->position : blip ? e->blip->position : e->position;
     float d2 = Dist2XZ(P, ep);
     if (d2 > range * range) continue;
     if (!IsEnemy(u->army, e->army)) continue;
@@ -1293,19 +1324,20 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     if (CB(u).needUnpack && s != 0) continue;
     float score = useAngle ? Dot(Norm(Sub(P, ep)), fwd) : d2;
     if (s != 0 && !w->bp->autoInitiateAttackCommand) score = useAngle ? score + 4 : score * 4;
-    bool seen = a >= 0 && a < 16 && (e->recon[a] & 0x10);
+    bool seen = a >= 0 && a < 16 && ((fake ? fake->rflags[a] : e->recon[a]) & 0x10);
     int prio = 9999;
-    const bool curIsE = cur == e && curBlip == blip;
+    const bool curIsE = cur == e && curBlip == blip && curFake == fakeRef;
     for (int i = 0; i < n; ++i) {
       if (i > bestPrio) break;
       if (s > bestStatus && best) break;
       if (!InSet(w->priorities[static_cast<size_t>(i)], e->blueprint)) continue;
       if (seen) prio = i;
-      const bool curIsBest = cur == best && curBlip == bestBlip;
+      const bool curIsBest = cur == best && curBlip == bestBlip && curFake == bestFake;
       bool take = prio < bestPrio || (!cur && score < bestScore) || (cur && !curIsBest && (score < bestScore || curIsE));
       if (take) {
         best = e;
         bestBlip = blip;
+        bestFake = fakeRef;
         bestScore = score;
         bestStatus = s;
         bestPrio = prio;
@@ -1313,6 +1345,7 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     }
   }
   if (bestIsBlip) *bestIsBlip = bestBlip;
+  if (bestFakeOut) *bestFakeOut = bestFake;
   return best;
 }
 
@@ -1356,6 +1389,10 @@ bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
   if (!c.targetId) return false;  // (a ground target)
   const Entity* e = sim.FindEntity(c.targetId);
   // (0x5d5980: the entity the order names; for a blip taken after its unit died that is the blip, which lives)
+  if (c.targetFakeId) {  // a jammer's fake blip: the order stands while the fake does
+    const Entity* f = sim.FindEntity(c.targetFakeId);
+    return !f || f->destroyQueued;
+  }
   if (e && c.targetViaBlip && c.targetPastDeath && e->kind == Entity::Kind::Unit)
     return e->destroyQueued || !static_cast<const Unit*>(e)->blip;
   return !e || e->dead || e->destroyQueued;
@@ -1446,16 +1483,29 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     if (CheckSilo(w) && !u->stunned && !u->unitStates.count("Busy")) {
       float reach = WeaponReach(w), bestD = std::numeric_limits<float>::infinity();
       float wl = WaterLevel(sim);
-      for (Projectile* p : sim.projectiles) {
+      // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles: the cells of the
+      // square about the unit, row by row, in each cell the shell registered last first), and the nearest is taken
+      // with a plain "nearer than the best so far" (0x5d8288). So of shells at one place - a missile's children
+      // in the beat they split - the one the grid gives first is taken. (Seen: three children at one point, the
+      // original's missile deflector takes one, ours took another, and every gun after it a different one.)
+      std::vector<Projectile*> cands;
+      if (sim.entityGrid().ready()) {
+        std::vector<Entity*> cells;
+        sim.entityGrid().GatherBox(u->position.x - reach, u->position.z - reach, u->position.x + reach,
+                                   u->position.z + reach, 4, &cells);
+        for (Entity* e : cells) cands.push_back(static_cast<Projectile*>(e));
+      } else {
+        for (Projectile* p : sim.projectiles) cands.push_back(p);
+      }
+      for (Projectile* p : cands) {
         if (!Alive(p) || !IsEnemy(u->army, p->army)) continue;
-        // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles), and an entity
-        // without a collision primitive is in no cell of it. A projectile has none unless its blueprint or its
-        // script gives it one: FAF's torpedo and missile classes call SetCollisionShape('Sphere', ...) when they
-        // are made, a mod's class that does not (BlackOps' AssaultTorpedoSubProjectile) makes a shell that no
-        // counter-weapon ever finds. (Seen: 89 such torpedoes in a replay, none taken as a target.)
+        // An entity without a collision primitive is in no cell of the grid. A projectile has none unless its
+        // blueprint or its script gives it one: FAF's torpedo and missile classes call SetCollisionShape('Sphere',
+        // ...) when they are made, a mod's class that does not (BlackOps' AssaultTorpedoSubProjectile) makes a
+        // shell that no counter-weapon ever finds. (Seen: 89 such torpedoes in a replay, none taken as a target.)
         if (p->shape.type == ShapeType::None) continue;
         float d2 = Dist2XZ(u->position, p->position);
-        if (d2 > reach * reach) continue;
+        if (!(reach * reach > d2)) continue;  // 0x7224b5
         if (!((w->layerCaps & 8) || p->position.y > wl)) continue;
         if (!((w->layerCaps & 16) || p->position.y <= wl)) continue;
         if (!Targetable(sim, w, p)) continue;
@@ -1485,7 +1535,8 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   bool useAngle = b.turreted || b.slavedToBody;
   const std::vector<Unit*>& list = BlipsInRange(sim, u, period);
   bool bestBlip = false;
-  Unit* best = FindBestEnemy(sim, w, list, range, useAngle, &u->blipCacheBlip, &bestBlip);
+  uint32_t bestFake = 0;
+  Unit* best = FindBestEnemy(sim, w, list, range, useAngle, &u->blipCacheBlip, &bestBlip, &u->blipCacheFake, &bestFake);
   if (best) {
     // an idle unit's AutoInitiateAttackCommand weapon also orders the unit to attack what it found (0x5d93d5)
     const bool autoAttack = CheckAutoInitiate(sim, w);
@@ -1495,7 +1546,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
       static const bool dbgAcq = getenv("MOHO64_DEBUG_ACQUIRE") != nullptr;
       if (dbgAcq)
         Logf(LogLevel::Info, "acq %u unit %u %s -> %u%s (had %u)", sim.tick(), u->id, b.label.c_str(), best->id,
-             bestBlip ? (best->dead ? " (its blip, the unit is dead)" : " (its blip)") : "",
+             bestFake ? " (a fake blip of it)" : bestBlip ? (best->dead ? " (its blip, the unit is dead)" : " (its blip)") : "",
              TargetEntity(sim, w->target) ? TargetEntity(sim, w->target)->id : 0u);
     }
     TargetPointDraw(sim, best);
@@ -1504,9 +1555,10 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     if (bestBlip) {
       nt.viaBlip = true;
       nt.pastDeath = best->dead;
+      nt.fakeId = bestFake;
     }
     SetTarget(sim, w, nt);
-    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath);
+    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath, bestFake);
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
   } else if (d.type == 1 && d.viaBlip && TargetEntity(sim, d) && TargetEntity(sim, d)->dead &&
@@ -1538,9 +1590,14 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
   if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {  // why it does or does not fire this tick
     const bool has = HasTarget(sim, w->target);
-    Logf(LogLevel::Info, "wdbg %u unit %u %s clock %d enabled %d target %d(%u) canAttack %d canFire %d onTarget %d status %d",
+    const Entity* te = has ? TargetEntity(sim, w->target) : nullptr;
+    const Vec3 tp = has ? TargetPos(sim, w->target, false) : Vec3{};
+    Logf(LogLevel::Info,
+         "wdbg %u unit %u %s clock %d enabled %d target %d(%u = entity %d%s at %.2f %.2f %.2f) canAttack %d canFire %d "
+         "onTarget %d status %d",
          sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
-         w->target.entityId, has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
+         w->target.entityId, te ? static_cast<int>(te->id) : -1, w->target.viaBlip ? ", its blip" : "", tp.x, tp.y, tp.z,
+         has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
          has ? TargetStatus(sim, w, w->target) : -1);
   }
@@ -1896,6 +1953,8 @@ void PoseAdvance(Unit* u) {
   u->poseSet = true;
 }
 
+void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims);
+
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
   if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
@@ -1907,16 +1966,7 @@ void UnitAimTick(Sim& sim, Unit* u) {
     if (anims) AnimatorsUpdate(sim, u);  // (their time still runs)
     return;
   }
-  if (!u->aimControllers.empty()) {  // (the pose is still last beat's)
-    const Vec3 curPos = u->poseBasePos;
-    const Quat curOri = u->poseBaseOri;
-    u->poseBasePos = u->prevPoseBasePos;
-    u->poseBaseOri = u->prevPoseBaseOri;
-    for (AimController* c : u->aimControllers)
-      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
-    u->poseBasePos = curPos;
-    u->poseBaseOri = curOri;
-  }
+  AimReadLastPose(sim, u);
   // slavers read their source bone from the pose that is about to be replaced (last beat's: 0x646164)
   if (!u->slavers.empty()) {
     auto& sv = u->slavers;
@@ -1928,6 +1978,43 @@ void UnitAimTick(Sim& sim, Unit* u) {
         m->srcLocal = posed ? u->poseQ[static_cast<size_t>(m->srcBone)] : bones[static_cast<size_t>(m->srcBone)].localRot;
   }
   PoseReset(u);
+  UnitAimTickManipulators(sim, u, anims);
+}
+
+// Where each aim controller's muzzle stood in last beat's pose (actor+8: last beat's transform and rotations),
+// which Aim 0x6317b0 measures the firing direction from. It is read once a beat, while the pose is still last
+// beat's: before the builder arms' step, which writes its own bones (a commander's arm and gun both turn the
+// torso; read after the arm's step, the torso was back at rest and the gun aimed from where the muzzle is with
+// the torso unturned: Chris, 2026-10-13, "the acu is not aiming properly and shooting the tanks").
+void AimReadLastPose(Sim& sim, Unit* u) {
+  if (u->aimPoseTick == sim.tick()) return;
+  u->aimPoseTick = sim.tick();
+  if (!u->skeleton) return;
+  if (!u->aimControllers.empty()) {  // (the pose is still last beat's)
+    const Vec3 curPos = u->poseBasePos;
+    const Quat curOri = u->poseBaseOri;
+    u->poseBasePos = u->prevPoseBasePos;
+    u->poseBaseOri = u->prevPoseBaseOri;
+    for (AimController* c : u->aimControllers)
+      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+    static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
+      for (AimController* c : u->aimControllers)
+        if (c->alive && c->muzzleBone >= 0 && c->yawBone >= 0 && static_cast<size_t>(c->yawBone) < u->poseQ.size())
+          Logf(LogLevel::Info,
+               "wdbg   last pose %s (%s): muzzle %.9g %.9g %.9g, yaw bone %d local q %.9g %.9g %.9g %.9g, base %.9g %.9g "
+               "%.9g q %.9g %.9g",
+               c->label.c_str(), c->weapon ? c->weapon->label.c_str() : "-", c->lastMuzzlePos.x, c->lastMuzzlePos.y,
+               c->lastMuzzlePos.z, c->yawBone, u->poseQ[static_cast<size_t>(c->yawBone)].x,
+               u->poseQ[static_cast<size_t>(c->yawBone)].y, u->poseQ[static_cast<size_t>(c->yawBone)].z,
+               u->poseQ[static_cast<size_t>(c->yawBone)].w, u->poseBasePos.x, u->poseBasePos.y, u->poseBasePos.z,
+               u->poseBaseOri.y, u->poseBaseOri.w);
+    u->poseBasePos = curPos;
+    u->poseBaseOri = curOri;
+  }
+}
+
+void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   // The unit's manipulators, one list in the order of their precedence, the ones of equal precedence in the
   // order they were put there (CAniActor::UpdateManipulators 0x63aa80 walks the list 0x63ace0 keeps; the
   // constructor, SetPrecedence and an animator's PlayAnim each put a manipulator behind its equals). FAF's
@@ -2239,6 +2326,7 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
         a.mobile = IsMobile(tu);
         a.viaBlip = t.targetViaBlip;
         a.pastDeath = t.targetViaBlip && t.targetPastDeath;
+        a.fakeId = t.targetViaBlip ? t.targetFakeId : 0;
         // the task's CAiTarget is a copy of the command's (0x5f29fb): it keeps the command's target point, which
         // is where GetTargetPosGun aims (an aircraft that is not yet on its attack run flies at that bone)
         const CombatBpData& cb = CB(tu);
@@ -2342,8 +2430,38 @@ bool VectorInAttackRange(Unit* u, const Vec3& p) {
 }
 
 void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
+  {
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal)
+      Logf(LogLevel::Info, "attackgoal %u unit %u rect %d %d .. %d %d", sim.tick(), u->id, x0, z0, x1, z1);
+  }
   if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {
-    TaskMoveToward(sim, u, Vec3{(x0 + x1) * 0.5f, u->position.y, (z0 + z1) * 0.5f});
+    // CAiNavigatorAir::SetGoal 0x5a4c60 (air_nav.md 4.2): the goal cell is the rect's own cell when it is 1 x 1,
+    // else the BORDER cell nearest the unit's cell (ClosestGoalCell 0x5a4b00: x outer, z inner, 16-bit
+    // differences, the first of equals), and the point flown to is that cell's footprint centre (CellToWorld
+    // 0x50b0f0: cell + size / 2), not the rect's middle. The navigator's goal is no order to move: the unit's
+    // states stay as they are.
+    const NamedFootprint& fp = u->motion.bp->footprint;
+    const int ux = static_cast<int16_t>(std::nearbyint(u->position.x - fp.sizeX * 0.5f));
+    const int uz = static_cast<int16_t>(std::nearbyint(u->position.z - fp.sizeZ * 0.5f));
+    int bx = x0, bz = z0;
+    if (!(x0 == x1 - 1 && z0 == z1 - 1)) {
+      float bestD = std::numeric_limits<float>::infinity();
+      for (int x = x0; x < x1; ++x)
+        for (int z = z0; z < z1; ++z) {
+          if (!(x == x0 || x == x1 - 1 || z == z0 || z == z1 - 1)) continue;
+          const float dx = static_cast<float>(static_cast<int16_t>(ux - x));
+          const float dz = static_cast<float>(static_cast<int16_t>(uz - z));
+          const float D = dx * dx + dz * dz;
+          if (D < bestD) {
+            bestD = D;
+            bx = x;
+            bz = z;
+          }
+        }
+    }
+    u->motion.failed = false;
+    MotionSetGoal(sim, u, {Vec3{bx + fp.sizeX * 0.5f, u->position.y, bz + fp.sizeZ * 0.5f}}, false, sim.tick());
     return;
   }
   u->motion.failed = false;
@@ -2363,6 +2481,12 @@ void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
 void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
+  {
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal)
+      Logf(LogLevel::Info, "attackgoal %u unit %u dest unit %u at %.9g %.9g %.9g", sim.tick(), u->id, e->id, e->position.x,
+           e->position.y, e->position.z);
+  }
   if (u->motion.bp && u->motion.bp->motionType == kMotionAir) {  // CAiNavigatorAir::SetDestUnit: the exact spot
     u->motion.failed = false;
     AirSetDestEntity(sim, u, e);
@@ -2418,9 +2542,45 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (IsZeroV(d.lastPos)) d.lastPos = u->position;
   UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
   Entity* e = target.type == 1 ? sim.FindEntity(target.entityId) : nullptr;
+  {
+    // MOHO64_DEBUG_ATTACKGOAL=<unit id>: what the attacker's goal is made from (the target, its points)
+    static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+    if (dbgGoal >= 0 && static_cast<long>(u->id) == dbgGoal && e && e->kind == Entity::Kind::Unit) {
+      Unit* tu = static_cast<Unit*>(e);
+      const CombatBpData& cb = CB(tu);
+      const Vec3 pt = TargetPos(sim, target, false);
+      std::string bones;
+      for (size_t i = 0; i < cb.targetBones.size(); ++i) {
+        const int b = TargetBoneOf(e, cb.targetBones[i]);
+        Vec3 bp{};
+        Quat bq;
+        if (b >= 0) BoneWorld(e, b, &bp, &bq);
+        char buf[160];
+        std::snprintf(buf, sizeof buf, " [%zu %s bone %d at %.4f %.4f %.4f]", i, cb.targetBones[i].c_str(), b, bp.x, bp.y, bp.z);
+        bones += buf;
+      }
+      Logf(LogLevel::Info,
+           "attackgoal %u unit %u first %d weapon %s target %u %s point index %d aim bone %d: point %.6f %.6f %.6f, place "
+           "%.6f %.6f %.6f, track mobile %d has %d;%s",
+           sim.tick(), u->id, d.firstUpdate ? 1 : 0, w ? w->bp->label.c_str() : "-", e->id,
+           tu->blueprint ? tu->blueprint->id.c_str() : "?", t.targetPoint, target.aimBone, pt.x, pt.y, pt.z, e->position.x,
+           e->position.y, e->position.z, d.trackMobile ? 1 : 0, has ? 1 : 0, bones.c_str());
+    }
+  }
   if (w) {
-    // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point
-    Vec3 p = TargetPos(sim, target, true);
+    // SetWeaponGoal 0x5f2ce0: a square of side trunc(MaxRadius) around the target's aim point. The point is asked
+    // of GetTargetPosGun 0x5e2a90 with its flag CLEAR (0x5f32bc: xor bl, bl), which for a unit is its target POINT
+    // (Unit::GetTargetPoint 0x6ab340: the target bone the order drew), not its place. A ship's target bone can
+    // sit two units from its centre, and the square's corner is a whole cell: one cell off, another path.
+    Vec3 p = TargetPos(sim, target, false);
+    {
+      static const long dbgGoal0 = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
+      if (dbgGoal0 >= 0 && static_cast<long>(u->id) == dbgGoal0) {
+        const Vec3 c = TargetPos(sim, target, true);
+        Logf(LogLevel::Info, "attackgoal %u unit %u aim bone %d: point %.9g %.9g %.9g, place %.9g %.9g %.9g", sim.tick(),
+             u->id, target.aimBone, p.x, p.y, p.z, c.x, c.y, c.z);
+      }
+    }
     int R = static_cast<int>(w->bp->maxRadius);
     int x0 = static_cast<int>(std::nearbyint(p.x - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(p.z - R * 0.5f));
     {
@@ -2436,7 +2596,7 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
     AttackSetDestUnit(sim, u, e);
   } else {
-    AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, true) : d.lastPos);
+    AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
   }
   d.firstUpdate = false;
 }
@@ -2651,6 +2811,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2670,6 +2831,7 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
@@ -2781,6 +2943,7 @@ BuildTask* StartOverchargeTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetPoint = c.targetPoint;
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
+  t->targetFakeId = c.targetFakeId;
   t->site = e->position;
   InitAttack(sim, u, *t, false);
   for (size_t i = 0; i < u->weapons.size(); ++i)
@@ -3013,7 +3176,9 @@ int l_w_GetCurrentTarget(lua_State* L) {
   Entity* e = w->target.type == 1 ? S(L)->FindEntity(w->target.entityId) : nullptr;
   if (e && w->target.viaBlip && e->kind == Entity::Kind::Unit) {  // the blip its army holds of the unit
     Unit* tu = static_cast<Unit*>(e);
-    if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
+    Entity* fake = w->target.fakeId ? S(L)->FindEntity(w->target.fakeId) : nullptr;
+    if (fake && fake->HasLuaObject()) e = fake;  // (one of the jammer's fakes)
+    else if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
   }
   if (e && e->HasLuaObject()) PushObject(L, e);
   else lua_pushnil(L);
@@ -3933,20 +4098,17 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     m.slavedTurning = false;
     return false;
   }
-  Vec3 tp = TargetPos(sim, w->target, false);
-  if (IsNaN(tp)) return false;
   // this runs inside the motion pass: a target that already moved this beat still stands, for the original,
   // where the beat began (its transform is committed in step 13). Seen: a launcher's body starts turning after a
   // target that began to move one beat later than "its new place" would make it.
-  // The aim point rides on the target's hull, so it is taken through the transform the beat began with (position
-  // and orientation): out of the hull's frame of now, back in with the held one.
+  // The aim point rides on the target's hull, so it is made from the transform the beat began with (position
+  // and orientation), in one step as the original makes it: taking the point of now out of the hull's frame and
+  // back in with the held one lands a float step beside it, and the hull's turn a millionth off with that.
   // (Only for a target WITHOUT a target point: a target bone comes out of the target's pose, Unit::GetTargetPoint
   // 0x6ab340 -> 0x6aa5c0, and the pose is this beat's once the target has had its turn. Seen: a destroyer's hull
   // following the turret of a turning battleship one beat late.)
-  if (const Entity* te = TargetEntity(sim, w->target); te && te->shapeHeld && w->target.aimBone == -1) {
-    const Vec3 local = Rotate(Conj(te->orientation), Sub(tp, te->position));
-    tp = Add(te->shapePos, Rotate(te->shapeOri, local));
-  }
+  Vec3 tp = TargetPosBeatStart(sim, w->target);
+  if (IsNaN(tp)) return false;
   if (const float aa = CB(u).attackAngle; aa > 0) {
     // AI.AttackAngle (ubp+0x4d0; 0x6c2350): the unit shows the target its side. The direction to the target is
     // turned about the up axis by the angle, away from the side the target is on, so the target ends up
@@ -3955,16 +4117,26 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     const Quat& q = u->orientation;
     const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
     const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
-    double s, c;
-    dmath::SinCos(static_cast<double>(ang), &s, &c);
-    const float sn = static_cast<float>(s), cs = static_cast<float>(c);
+    // 0x6c2483: the turn is a quaternion about the up axis (0x570750: the half angle's cosine, the axis times its
+    // sine) and the direction is turned by it through its matrix (0x452d40). A plain sine and cosine of the whole
+    // angle land a float step beside that, which the rounding below turns into a millionth of a radian.
+    const float hs = dmath::Sin(ang * 0.5f), hc = dmath::Cos(ang * 0.5f);
     // 0x6c24b5: what the motion is handed is a POINT, the unit's place + that unit vector, and TurnInfo 0x6990e0
     // takes the place off again. Beside a coordinate of a few hundred a unit vector keeps only its first five
     // digits, so the direction the hull turns to is up to 1e-5 rad off the exact one, and the 0.9999 test that
     // starts the next turn falls a beat earlier or later with it.
-    const Vec3 r{n.x * cs + n.z * sn, n.y, n.z * cs - n.x * sn};
+    const Vec3 r = RotateM(Quat{0.0f * hs, 1.0f * hs, 0.0f * hs, hc}, n);
     const Vec3 T{r.x + u->position.x, r.y + u->position.y, r.z + u->position.z};
     *dir = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
+    static const long dbgAa = getenv("MOHO64_DEBUG_SLAVED") ? atol(getenv("MOHO64_DEBUG_SLAVED")) : -1;
+    if (dbgAa >= 0 && static_cast<long>(u->id) == dbgAa) {
+      const Entity* te = TargetEntity(sim, w->target);
+      Logf(LogLevel::Info,
+           "attack angle %u unit %u target %u bone %d held %d: point %.9g %.9g %.9g | n %.9g %.9g %.9g | side %.9g ang "
+           "%.9g | r %.9g %.9g %.9g | dir %.9g %.9g %.9g | q %.9g %.9g",
+           sim.tick(), u->id, te ? te->id : 0, w->target.aimBone, te && te->shapeHeld ? 1 : 0, tp.x, tp.y, tp.z, n.x,
+           n.y, n.z, n.z * fx - fz * n.x, ang, r.x, r.y, r.z, dir->x, dir->y, dir->z, q.y, q.w);
+    }
     return true;
   }
   const float arc = w->bp->slavedToBodyArcRange;

@@ -57,6 +57,10 @@ std::string SoundSystem::Find(const std::string& file) const {
 }
 
 void SoundSystem::SetLanguage(const std::string& name) { language_ = Lower(name); }
+bool SoundSystem::HasLanguage(const std::string& name) const {
+  const std::string folder = "/sounds/voice/" + Lower(name);
+  return vfs_->IsFolder(folder) || !vfs_->FindFiles(folder, "*").empty();
+}
 
 uint32_t SoundSystem::Random() {
   seed_ ^= seed_ << 13, seed_ ^= seed_ >> 17, seed_ ^= seed_ << 5;

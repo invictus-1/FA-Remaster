@@ -54,7 +54,19 @@ struct UnitStore : UserState::Extra {
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
   std::vector<WorldGhost> ordered;
+  std::vector<uint32_t> orderedBy;  // (beside `ordered`: the unit whose order each is)
   uint32_t orderedTick = 0xffffffffu;
+  // Building orders the interface has sent that the simulation's queues may not show yet (the
+  // beats since are few): their sites, with the beat they were sent in.
+  struct SentSite {
+    WorldGhost site;
+    uint32_t tick;
+  };
+  std::vector<SentSite> sent;
+  // The build template being placed (see BuildTemplate), and the units a script has added to
+  // the selection's marks without selecting them (AddToSessionExtraSelectList).
+  BuildTemplate buildTemplate;
+  std::vector<uint32_t> extraSelect;
 };
 
 UnitStore& Store(lua_State* L) {
@@ -963,6 +975,14 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   for (UserUnit* u : units)
     (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
         .push_back(u->view.id);
+  if (type == CommandType::BuildMobile && !blueprint.empty()) {  // (remembered until the queues show it: SiteMeetsOrdered)
+    UnitStore::SentSite e;
+    e.site.blueprint = blueprint;
+    e.site.position[0] = x, e.site.position[1] = y, e.site.position[2] = z;
+    e.tick = static_cast<uint32_t>(sim->tick());
+    if (clear) Store(L).sent.clear();
+    Store(L).sent.push_back(e);
+  }
   if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
   if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
   ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
@@ -1441,6 +1461,20 @@ void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& val
   std::vector<UserUnit*> units;
   OwnIds(L, list, &ids, &units);
   for (uint32_t id : ids) Writer(L).ProcessInfoPair(id, key, value);
+}
+// unit:ProcessInfo(key, value): the same for one unit, with the key and value the script names
+// (the construction panel's infinite-build button: 'SetRepeatQueue', 'true' | 'false'; FAF's
+// external factories: 'SetPaused'). It was a placeholder that did nothing until Chris,
+// 2026-10-13: "infinite build for factories doesn't work when I click it then click on a unit
+// to infinite build it turns off": the simulation never heard of the switch, so the panel read
+// it back as off when it was next laid out.
+int l_UnitProcessInfo(lua_State* L) {
+  UserUnit* u = CheckUnit(L, 1);
+  const std::string key = luaL_checkstring(L, 2), value = luaL_checkstring(L, 3);
+  Sim* sim = TheSim(L);
+  if (!sim || u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) return 0;
+  Writer(L).ProcessInfoPair(u->view.id, key, value);
+  return 0;
 }
 // SetPaused(units, paused), SetAutoMode(units, on), SetFireState(units, state),
 // ToggleFireState(units, currentState), ToggleScriptBit(units, bit, currentState)
@@ -2001,6 +2035,129 @@ void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, f
   *alongX = size[0], *alongZ = size[1];
 }
 
+const BuildTemplate* ActiveBuildTemplate(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return nullptr;
+  const BuildTemplate& t = static_cast<UnitStore&>(*user->units).buildTemplate;
+  return t.buildings.empty() ? nullptr : &t;
+}
+
+namespace {
+// GenerateBuildTemplateFromSelection(): the selected buildings become the active template (FA
+// exe CWldSession::GenerateBuildTemplates 0x896aa0). As read there: the selected units that
+// count are gathered (two tests on each, taken here as "not mobile" and "not being built":
+// INFERRED which the two virtual calls at +0x30 and +0x28 are; with none that counts nothing
+// changes); each gives its place, a number and its blueprint; they are sorted by the number,
+// the size of the whole is the box round every building's skirt, and every place is then taken
+// relative to the first building's. The number (unit + 0x19c) is not identified; FAF's notes
+// call it the build order: the entity id stands in for it (INFERRED).
+int l_GenerateBuildTemplateFromSelection(lua_State* L) {
+  UnitStore& store = Store(L);
+  std::vector<const UserUnit*> from;
+  for (const UserUnit* u : store.selection)
+    if (!u->gone && !u->view.dead && !u->view.beingBuilt && InCategory(L, u, "STRUCTURE")) from.push_back(u);
+  if (from.empty()) return 0;
+  std::sort(from.begin(), from.end(), [](const UserUnit* a, const UserUnit* b) { return a->view.id < b->view.id; });
+  BuildTemplate t;
+  float lo[2] = {10000, 10000}, hi[2] = {-10000, -10000};
+  for (const UserUnit* u : from) {
+    BuildTemplate::Building b;
+    b.blueprint = u->view.blueprint;
+    b.order = static_cast<int>(u->view.id & 0xfffffu);
+    b.x = u->view.position[0] - from[0]->view.position[0];
+    b.z = u->view.position[2] - from[0]->view.position[2];
+    t.buildings.push_back(b);
+    float w = 1, h = 1;
+    BuildSpacingOf(L, b.blueprint, &w, &h);
+    lo[0] = std::min(lo[0], u->view.position[0] - w * 0.5f), hi[0] = std::max(hi[0], u->view.position[0] + w * 0.5f);
+    lo[1] = std::min(lo[1], u->view.position[2] - h * 0.5f), hi[1] = std::max(hi[1], u->view.position[2] + h * 0.5f);
+  }
+  t.width = hi[0] - lo[0], t.height = hi[1] - lo[1];
+  store.buildTemplate = std::move(t);
+  return 0;
+}
+// GetActiveBuildTemplate() -> {width, height, {blueprint, order, x, z}, ...}, an empty table
+// when there is none (0x8472f0).
+int l_GetActiveBuildTemplate(lua_State* L) {
+  const BuildTemplate& t = Store(L).buildTemplate;
+  lua_newtable(L);
+  if (t.buildings.empty()) return 1;
+  lua_pushnumber(L, t.width);
+  lua_rawseti(L, -2, 1);
+  lua_pushnumber(L, t.height);
+  lua_rawseti(L, -2, 2);
+  int at = 3;
+  for (const BuildTemplate::Building& b : t.buildings) {
+    lua_newtable(L);
+    lua_pushstring(L, b.blueprint.c_str());
+    lua_rawseti(L, -2, 1);
+    lua_pushnumber(L, b.order);
+    lua_rawseti(L, -2, 2);
+    lua_pushnumber(L, b.x);
+    lua_rawseti(L, -2, 3);
+    lua_pushnumber(L, b.z);
+    lua_rawseti(L, -2, 4);
+    lua_rawseti(L, -2, at++);
+  }
+  return 1;
+}
+// SetActiveBuildTemplate(template): the same table back (0x8475e0); the script starts the
+// build mode itself, with the first building's name.
+int l_SetActiveBuildTemplate(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  BuildTemplate t;
+  lua_rawgeti(L, 1, 1);
+  t.width = static_cast<float>(lua_tonumber(L, -1));
+  lua_rawgeti(L, 1, 2);
+  t.height = static_cast<float>(lua_tonumber(L, -1));
+  lua_pop(L, 2);
+  for (int at = 3;; ++at) {
+    lua_rawgeti(L, 1, at);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      break;
+    }
+    BuildTemplate::Building b;
+    lua_rawgeti(L, -1, 1);
+    if (lua_isstring(L, -1)) b.blueprint = lua_tostring(L, -1);
+    lua_rawgeti(L, -2, 2);
+    b.order = static_cast<int>(lua_tonumber(L, -1));
+    lua_rawgeti(L, -3, 3);
+    b.x = static_cast<float>(lua_tonumber(L, -1));
+    lua_rawgeti(L, -4, 4);
+    b.z = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 5);
+    if (!b.blueprint.empty()) t.buildings.push_back(b);
+  }
+  Store(L).buildTemplate = std::move(t);
+  return 0;
+}
+int l_ClearBuildTemplates(lua_State* L) {
+  Store(L).buildTemplate = BuildTemplate();
+  return 0;
+}
+// AddToSessionExtraSelectList(unit), RemoveFromSessionExtraSelectList(unit),
+// ClearSessionExtraSelectList(): units that show as selected without being in the selection
+// (the construction panel's buttons for the units attached to the selected one; the session's
+// list at 0x896780 / 0x896830 / 0x896870). Here they get the selection's mark in the world.
+int l_AddToSessionExtraSelectList(lua_State* L) {
+  UnitStore& store = Store(L);
+  if (const UserUnit* u = ToUnit(L, 1))
+    if (std::find(store.extraSelect.begin(), store.extraSelect.end(), u->view.id) == store.extraSelect.end()) store.extraSelect.push_back(u->view.id);
+  return 0;
+}
+int l_RemoveFromSessionExtraSelectList(lua_State* L) {
+  UnitStore& store = Store(L);
+  if (const UserUnit* u = ToUnit(L, 1))
+    store.extraSelect.erase(std::remove(store.extraSelect.begin(), store.extraSelect.end(), u->view.id), store.extraSelect.end());
+  return 0;
+}
+int l_ClearSessionExtraSelectList(lua_State* L) {
+  Store(L).extraSelect.clear();
+  return 0;
+}
+}  // namespace
+
 void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out) {
   UserState* user = UserState::From(L);
   if (!user->units) return;
@@ -2017,6 +2174,40 @@ void StructuresForWorld(lua_State* L, const float near[3], float within, std::ve
   }
 }
 
+// A building's site against the buildings ordered and not begun. The simulation refuses a site
+// that meets a standing building's ground (skirt against skirt); what is only ordered it does
+// not know as ground taken, so two buildings could be ordered into one another (Chris,
+// 2026-10-13: two queued power generators half over each other). The original's preview is
+// red there. INFERRED where the original tests it (its interface, by the build orders it
+// shows); the rectangles are those of the guide (BuildSpacingOf), edges may touch.
+bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding) {
+  Sim* sim = TheSim(L);
+  UserState* user = UserState::From(L);
+  if (!sim || !user->units) return false;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  float w = 1, h = 1;
+  BuildSpacingOf(L, blueprint, &w, &h);
+  auto meets = [&](const WorldGhost& g) {
+    float gw = 1, gh = 1;
+    BuildSpacingOf(L, g.blueprint, &gw, &gh);
+    return std::fabs(g.position[0] - position[0]) < (w + gw) * 0.5f - 0.01f && std::fabs(g.position[2] - position[2]) < (h + gh) * 0.5f - 0.01f;
+  };
+  for (size_t i = 0; i < store.ordered.size(); ++i) {
+    if (!adding && i < store.orderedBy.size()) {  // (a selected unit's own queue goes with the new order)
+      bool own = false;
+      for (const UserUnit* u : store.selection) own = own || u->view.id == store.orderedBy[i];
+      if (own) continue;
+    }
+    if (meets(store.ordered[i])) return true;
+  }
+  const uint32_t now = static_cast<uint32_t>(sim->tick());
+  store.sent.erase(std::remove_if(store.sent.begin(), store.sent.end(), [&](const UnitStore::SentSite& e) { return now - e.tick > 5; }),
+                   store.sent.end());
+  for (const UnitStore::SentSite& e : store.sent)
+    if (meets(e.site)) return true;
+  return false;
+}
+
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
                        bool queueShown, std::vector<WorldGhost>* queued, std::vector<WorldWaypoint>* waypoints) {
   Sim* sim = TheSim(L);
@@ -2024,6 +2215,10 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   if (!sim || !user->units) return;
   UnitStore& store = static_cast<UnitStore&>(*user->units);
   int shown = 0;
+  for (uint32_t id : store.extraSelect) {  // (shown as selected, not selected)
+    auto it = store.units.find(id);
+    if (it != store.units.end() && !it->second->gone && !it->second->view.dead) ids->push_back(id);
+  }
   for (UserUnit* u : store.selection) {
     if (u->gone || u->view.dead) continue;
     ids->push_back(u->view.id);
@@ -2073,6 +2268,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   if (store.orderedTick != sim->tick()) {
     store.orderedTick = sim->tick();
     store.ordered.clear();
+    store.orderedBy.clear();
     for (auto& entry : store.units) {
       const UserUnit* u = entry.second.get();
       if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0) continue;
@@ -2091,6 +2287,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
         g.blueprint = c.blueprint;
         for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
         store.ordered.push_back(g);
+        store.orderedBy.push_back(u->view.id);
       }
     }
   }
@@ -2159,6 +2356,13 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetUnitCommandFromCommandCap", l_GetUnitCommandFromCommandCap);
   SetGlobal(L, "SimCallback", l_SimCallback);
   SetGlobal(L, "SetPaused", l_SetPaused);
+  SetGlobal(L, "GenerateBuildTemplateFromSelection", l_GenerateBuildTemplateFromSelection);
+  SetGlobal(L, "GetActiveBuildTemplate", l_GetActiveBuildTemplate);
+  SetGlobal(L, "SetActiveBuildTemplate", l_SetActiveBuildTemplate);
+  SetGlobal(L, "ClearBuildTemplates", l_ClearBuildTemplates);
+  SetGlobal(L, "AddToSessionExtraSelectList", l_AddToSessionExtraSelectList);
+  SetGlobal(L, "RemoveFromSessionExtraSelectList", l_RemoveFromSessionExtraSelectList);
+  SetGlobal(L, "ClearSessionExtraSelectList", l_ClearSessionExtraSelectList);
   SetGlobal(L, "SetAutoMode", l_SetAutoMode);
   SetGlobal(L, "SetFireState", l_SetFireState);
   SetGlobal(L, "ToggleFireState", l_ToggleFireState);
@@ -2198,7 +2402,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   for (const char* name : {"IsAutoMode", "IsAutoSurfaceMode", "IsOverchargePaused", "IsRepeatQueue", "IsStunned",
                            "HasUnloadCommandQueuedUp", "CanAttackTarget"})
     SetMethod(L, cls, name, l_UnitFalse);
-  SetMethod(L, cls, "ProcessInfo", l_UnitNothing);
+  SetMethod(L, cls, "ProcessInfo", l_UnitProcessInfo);
 
   // The unit's state from the simulation.
   SetMethod(L, cls, "GetCommandQueue", l_GetCommandQueue);

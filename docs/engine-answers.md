@@ -3,6 +3,50 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 21: a factory's infinite build (the repeat queue) — done
+
+The switch is acted on now, the original's way (its command dispatcher, read at 0x598f0b):
+
+- When a factory's order ends and its count has run out, and the unit's repeat switch is on, the order gets
+  its count back (what it was queued with: 5 tanks become 5 tanks again) and goes to the END of the queue. An
+  order that is alone in the queue stays where it is and simply builds again. The next order starts one beat
+  later.
+- Only factory build orders repeat (command type 7). Nothing else in a queue is touched by the switch.
+- Taking the switch off changes nothing in the queue: the orders still there are built once more each, in the
+  order they stand in, and then go.
+- `SetRepeatQueue` as an info pair calls the unit's script `OnStartRepeatQueue` / `OnStopRepeatQueue` when
+  the state changes (FAF's units have those; the original calls them before it sets the flag).
+
+Checked headless on the session table you gave me: a land factory with one tank and one engineer queued and
+the switch on has built 2 + 1 after 40 seconds, 3 + 2 after 80, 4 + 4 after 120, queue still two entries;
+without the switch 1 + 1 and an empty queue. All 13 replays pass (none uses the switch).
+
+Not done, and not asked: a factory that ASSISTS another one copies that factory's queue and its repeat switch
+in the original (the guard task reads the same flag); ours' assisting factory still takes the head item once.
+
+For your driver: `moho64 --orders` has a line `<tick> info <unit id> <key> <value>` now (an info pair as the
+interface sends it), beside `<tick> lua <one line>`.
+
+## Chris, 2026-10-13 (through the renderer's chat): "the acu is not aiming properly and shooting the tanks" — fixed
+
+A commander's gun missed everything that was not where it had first aimed. Rebuilt headless (the same session and
+seed as his game, ten of his tanks set round the AI's commander): it killed the first tank, then fired at the
+second for almost thirty seconds without one hit; each shell passed 0.7 beside the tank and struck the ground.
+
+Cause: an aim controller measures its firing direction from where the muzzle stood in last beat's pose. A
+commander's build arm and its gun both turn the torso, and the build arm's step, which runs first, had already
+put the torso back to rest when the gun read that pose. So the gun aimed from where its muzzle is with the torso
+unturned, about one unit beside the real one, and the torso settled some 3.5 degrees off. The first target was
+hit only because of where it happened to stand.
+
+Fixed: the muzzles are read once a beat before the build arms' step. Every unit whose builder arm shares a bone
+with a weapon was affected: all four commanders and the support commanders. The same case now: nine of the ten
+tanks dead in thirty seconds. All 13 replays pass unchanged (none has a commander fighting before its first
+difference).
+
+For tests of this kind `moho64 --orders` takes a new line, `<tick> lua <one line of Lua>`, run in the simulation
+state before that beat (a test building its case; not an order, never part of a replay).
+
 ## render 22: a shield's ratio in the plain unit view — done
 
 `UnitView` (src/sim/sim_view.h) has two new members at its end; nothing else in it moved:

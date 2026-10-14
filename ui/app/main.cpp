@@ -80,6 +80,7 @@ bool noWorld = false;             // --no-world: a launched game gets no picture
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
+std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
 // The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
@@ -218,6 +219,7 @@ int main(int argc, char** argv) {
     else if (a == "--remasters") remastersFolder = next();
     else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
+    else if (a == "--replay-out") replayOut = next();
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
@@ -281,6 +283,9 @@ int main(int argc, char** argv) {
   }
   cfg.gameArgs = o.gameArgs;
   cfg.prefsFile = o.prefsFile;
+  // A recorded game needs its launch table kept too: a game launched from the lobby writes it
+  // beside the record unless a place of its own was named.
+  if (sessionFile.empty() && !replayOut.empty()) sessionFile = replayOut + ".session.lua";
   cfg.sessionFile = sessionFile;
 
   // The game's sounds, for the front end's state and a game's alike. Only a live window plays
@@ -296,6 +301,7 @@ int main(int argc, char** argv) {
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.wantPicture = !noWorld;
   session.sky = sky;
+  session.replayOut = replayOut;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread

@@ -96,9 +96,12 @@ struct AiTarget {
   // the blip was taken when its unit was already dead (a jammer's blip out of a list of enemies built while the
   // unit lived): a blip is not dead while it exists (HasTarget 0x5e2a5a), so the target lasts as long as the blip
   bool pastDeath = false;
+  // the target is one of a jammer's FAKE blips (its ReconBlip entity; entityId stays the jamming unit, viaBlip is
+  // set): it stands where the fake stands and lasts as long as the fake does
+  uint32_t fakeId = 0;
   // (a unit and the blip of that unit are two entities in the original: going from one to the other is a new target)
   bool operator==(const AiTarget& o) const {
-    return type == o.type && entityId == o.entityId && (type != 1 || viaBlip == o.viaBlip) &&
+    return type == o.type && entityId == o.entityId && (type != 1 || (viaBlip == o.viaBlip && fakeId == o.fakeId)) &&
            (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
   }
 };
@@ -235,6 +238,8 @@ void KillCleanupTick(Sim& sim);
 // 0x63aa80, once per beat after the unit's motion, before its builder arms and UnitAimTick
 void PoseAdvance(Unit* u);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
+// The aim controllers' muzzles in last beat's pose, once a beat: before the builder arms' step, else UnitAimTick's.
+void AimReadLastPose(Sim& sim, Unit* u);
 void ProjectilesTick(Sim& sim);
 void BeamsTick(Sim& sim);
 void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat

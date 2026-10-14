@@ -43,6 +43,8 @@ bool KeyIsDown(lua_State* L, int mauiCode);
 // UI_ExpandCurrentSelection, UI_MakeSelectionSet / UI_ApplySelectionSet <name>, the game speed's
 // WLD_ commands, the range rings' three variables. Any other command is logged once as not built.
 void ExecuteConsoleCommand(lua_State* L, const std::string& text);
+// A line of the console's output: every function a script gave AddConsoleOutputReciever hears it.
+void ConsolePrint(lua_State* L, const std::string& text);
 // Whether the life bars over units are to be drawn now (UI_RenderUnitBars).
 bool LifeBarsShown(lua_State* L);
 

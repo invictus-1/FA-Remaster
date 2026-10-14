@@ -280,6 +280,45 @@ int l_ConExecute(lua_State* L) {
   return 0;
 }
 
+// AddConsoleOutputReciever(function(text)) -> handle, RemoveConsoleOutputReciever(handle) (FA
+// exe 0x41eb80, 0x41ed80; the spelling is the game's): the functions that hear each line the
+// console prints (the console window's list, the echo on the game's screen). They are kept in
+// the registry by number; the handle is that number (the original's is an object: scripts
+// only hand it back).
+const char* const kConsoleReceivers = "moho64ui_console_receivers";
+int l_AddConsoleOutputReciever(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TFUNCTION);
+  lua_getfield(L, LUA_REGISTRYINDEX, kConsoleReceivers);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushstring(L, kConsoleReceivers);
+    lua_pushvalue(L, -2);
+    lua_settable(L, LUA_REGISTRYINDEX);
+  }
+  lua_rawgeti(L, -1, 0);  // (the last handle given)
+  const int handle = static_cast<int>(lua_tonumber(L, -1)) + 1;
+  lua_pop(L, 1);
+  lua_pushnumber(L, handle);
+  lua_rawseti(L, -2, 0);
+  lua_pushvalue(L, 1);
+  lua_rawseti(L, -2, handle);
+  lua_pushnumber(L, handle);
+  return 1;
+}
+int l_RemoveConsoleOutputReciever(lua_State* L) {
+  lua_getfield(L, LUA_REGISTRYINDEX, kConsoleReceivers);
+  if (lua_istable(L, -1) && lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 1) {
+    lua_pushnil(L);
+    lua_rawseti(L, -2, static_cast<int>(lua_tonumber(L, 1)));
+  }
+  return 0;
+}
+// FlushEvents(): the game's scripts call it after a long load. INFERRED: the original throws
+// away the mouse and key events that piled up in its window meanwhile; this host hands each
+// frame's events to the interface as they come and keeps none back, so nothing is to do.
+int l_FlushEvents(lua_State*) { return 0; }
+
 // moho64ui_KeyMapAction(key): the console command bound to a key ("Ctrl-A"), or nil. The host's
 // own function for tests.
 int l_KeyMapAction(lua_State* L) {
@@ -456,6 +495,30 @@ void CallScript(lua_State* L, const char* module, const char* function, const st
 }
 }  // namespace
 
+void ConsolePrint(lua_State* L, const std::string& text) {
+  static bool printing = false;  // (a receiver that prints is not heard again inside itself)
+  if (printing) return;
+  printing = true;
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getfield(L, LUA_REGISTRYINDEX, "moho64ui_console_receivers");
+  if (lua_istable(L, -1)) {
+    lua_rawgeti(L, -1, 0);
+    const int last = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    for (int handle = 1; handle <= last; ++handle) {
+      lua_rawgeti(L, top + 2, handle);
+      if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, text.c_str());
+        if (lua_pcall(L, 1, 0, top + 1) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+      }
+      lua_settop(L, top + 2);
+    }
+  }
+  lua_settop(L, top);
+  printing = false;
+}
+
 void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   size_t a = text.find_first_not_of(" \t");
   if (a == std::string::npos) return;
@@ -536,6 +599,8 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   KeyMap& map = Map(L);
   if (map.unbuilt.insert(Upper(name)).second)
     Logf(LogLevel::Debug, "moho64ui: console command not built: %s", name.c_str());
+  // (Nothing is printed to the console for it: the game's scripts and keys run commands all
+  // the time, and a line for each would show on the game's screen through the console echo.)
 }
 
 bool KeyIsDown(lua_State* L, int mauiCode) {
@@ -553,6 +618,9 @@ void RegisterKeyMapBindings(lua_State* L) {
   SetGlobal(L, "KeycodeMauiToMSW", l_KeycodeMauiToMSW);
   SetGlobal(L, "ConExecute", l_ConExecute);
   SetGlobal(L, "ConExecuteSave", l_ConExecute);
+  SetGlobal(L, "AddConsoleOutputReciever", l_AddConsoleOutputReciever);
+  SetGlobal(L, "RemoveConsoleOutputReciever", l_RemoveConsoleOutputReciever);
+  SetGlobal(L, "FlushEvents", l_FlushEvents);
   lua_register(L, "moho64ui_KeyMapAction", l_KeyMapAction);
   lua_register(L, "moho64ui_LifeBars", l_LifeBars);
 }

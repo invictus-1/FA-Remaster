@@ -519,6 +519,21 @@ void CommandStep(Sim& sim, Unit* u) {
           u->commands.front()->type == CommandType::BuildFactory && u->commands.front()->count > 1) {
         --u->commands.front()->count;
         u->headState = kNotStarted;
+      } else if (r == kTaskDone && u->repeatQueue && !u->commands.empty() &&
+                 u->commands.front()->type == CommandType::BuildFactory) {
+        // The repeat queue (IAiCommandDispatchImpl::TaskTick 0x598f0b): a factory order (type 7) whose count has
+        // run out, on a unit whose repeat switch is on (unit+0x2a2), gets its count back (cmd+0xe4 = cmd+0xe0) and
+        // goes to the END of the queue (0x6edfc0; alone in the queue it stays where it is). The dispatcher answers
+        // 1: the next order starts a beat later.
+        std::shared_ptr<UnitCommand> keep = u->commands.front();
+        keep->count = keep->maxCount;
+        if (u->commands.size() > 1) {
+          PopHead(u);
+          u->commands.push_back(keep);
+          keep->units.insert(u);
+        }
+        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        break;
       } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
                  !u->commands.empty()) {
         // a patrol point goes to the back of the queue (the loop); attack-moves are removed
@@ -696,20 +711,25 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   c.targetId = 0;
   c.targetPoint = -1;
   c.targetViaBlip = false;
+  c.targetFakeId = 0;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
       // The player's orders on an enemy name its recon blip (the UI only knows blips). Our tasks and weapons work
-      // on units, so a real blip stands for its unit; a jammer's fake blip is not a target yet.
+      // on units, so a real blip stands for its unit, and a jammer's fake blip for its unit with the fake named
+      // beside it (the target then stands where the fake stands and lasts as long as it).
+      Vec3 at = e->position;
       if (e->kind == Entity::Kind::Blip) {
         auto* b = static_cast<ReconBlip*>(e);
-        if (!b->fake && b->source && !b->source->destroyQueued) {
+        if (b->source && !b->source->destroyQueued) {
+          if (b->fake) c.targetFakeId = EntityRef(b);
           e = b->source;
           c.targetViaBlip = true;
+          if (!c.targetFakeId) at = e->position;
         }
       }
       c.targetId = EntityRef(e);
-      c.pos = e->position;
+      c.pos = at;
       c.hasPos = true;
     } else if (getenv("MOHO64_DEBUG_BLIP")) {
       Logf(LogLevel::Info, "command %u: target entity %#x does not exist", sim.tick(), t.entity);
@@ -921,7 +941,8 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
 // what is left in the queue goes, the command ctor draws the target point.
-std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath) {
+std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath,
+                                             uint32_t fakeId) {
   if (!IsAlive(u) || !target) return nullptr;
   auto c = std::make_shared<UnitCommand>();
   c->id = sim.nextCommandId++;
@@ -930,7 +951,9 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
   c->targetId = EntityRef(target);
   c->targetViaBlip = viaBlip;  // (what the weapon found was a jammer's blip: the order names the blip's id)
   c->targetPastDeath = pastDeath;
-  c->pos = target->position;
+  c->targetFakeId = viaBlip ? fakeId : 0;
+  const Entity* fake = c->targetFakeId ? sim.FindEntity(c->targetFakeId) : nullptr;
+  c->pos = fake ? fake->position : target->position;
   c->hasPos = true;
   c->targetPoint = TargetPointDraw(sim, target);
   c->issueTargetType = 1;
