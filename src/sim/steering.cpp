@@ -598,8 +598,14 @@ void CheckCollisions(Sim& sim, Unit* u) {
   m.colPos = {};
   m.colTick = 0xffffffffu;
   std::vector<Unit*> first, second;
-  float q = R + 8.0f;
-  sim.ForUnitsInRect(u->position.x - q, u->position.z - q, u->position.x + q, u->position.z + q, [&](Unit* e) {
+  // The candidates come from the entity grid (ForAllEntitiesIterator 0x721fb0, the units' list) in the grid's
+  // order: rows, then columns, in a cell the last registered first. The order decides which meeting is put on
+  // record: a meeting that is no nearer than the one on record is passed over, so of two units the one asked
+  // first can keep the record. Seen: a frigate given a new waypoint is predicted to meet one ship three beats
+  // on and another ship NOW; asked in the grid's order the "now" one is on record first, comes due in the same
+  // beat and the frigate brakes hard instead of taking the new course.
+  std::vector<Entity*> gridUnits;
+  auto visit = [&](Unit* e) {
     if (e == u) return;
     WorldShape s;
     if (!GetWorldShape(e, &s) || !SphereOverlap(s, u->position, R)) return;
@@ -609,7 +615,15 @@ void CheckCollisions(Sim& sim, Unit* u) {
     if (sp && e->motion.splineMode == 2) return;  // side-stepping: not seen
     if (e->army == u->army && !UnitPriority(e, u)) first.push_back(e);  // u has the right of way
     else if (sp || e->motion.bp->canFly) second.push_back(e);
-  });
+  };
+  if (sim.entityGrid().ready()) {
+    sim.entityGrid().GatherBox(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &gridUnits);
+    for (Entity* e : gridUnits)
+      if (e->kind == Entity::Kind::Unit) visit(static_cast<Unit*>(e));
+  } else {
+    float q = R + 8.0f;
+    sim.ForUnitsInRect(u->position.x - q, u->position.z - q, u->position.x + q, u->position.z + q, visit);
+  }
   for (Unit* e : second) Predict(sim, e, u);  // u yields
   for (Unit* e : first) Predict(sim, u, e);   // e yields
 }
