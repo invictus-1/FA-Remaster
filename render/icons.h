@@ -72,6 +72,12 @@ class StrategicIcons {
   // above the place.
   int MarkIcon(const std::string& name) { return Icon(name); }
   void AddMark(int icon, Vec3 position, float lift);
+  // A picture from anywhere in the game's files, for AddUnder (`path` whole); -1 when it is not there.
+  int Picture(const std::string& path) { return Load(path, path); }
+  // A picture on a place in the world UNDER all the symbols, at its own size, `alpha` 0..1 of it
+  // there: the icon the original shows on a mass or hydrocarbon deposit from far up (a unit's
+  // symbol on the spot covers it). Shown whether the symbols are or not.
+  void AddUnder(int icon, Vec3 position, float alpha);
   // The same symbol drawn into plain pixels (0xAARRGGBB rows from the top, `width` x `height`), its
   // middle at (x, y): for pictures made without the graphics card (a minimap).
   void Blit(const Kind* kind, Vec3 color, bool selected, int x, int y, uint32_t* pixels, int width, int height, bool blip = false, bool known = false) const;
@@ -107,6 +113,7 @@ class StrategicIcons {
   };
   std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");
+  int Load(const std::string& key, const std::string& path);  // into the symbols' texture; known by `key`
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;
@@ -130,7 +137,7 @@ class StrategicIcons {
 
   View view_;
   float pixel_ = 1;  // this frame's scale
-  std::vector<Listed> listed_, marks_;
+  std::vector<Listed> listed_, marks_, under_;
   std::vector<uint32_t> order_;
   std::vector<Vertex> vertices_;
 };

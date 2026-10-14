@@ -482,6 +482,17 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
 
   meshes.Begin();
   icons.Begin(view);
+  // the resource deposits' icons, from where their marks on the ground are no longer drawn
+  if (depositIcons && !decals.Deposits().empty()) {
+    if (massIcon_ == -2) {
+      massIcon_ = icons.Picture("/env/common/splats/mass_strategic.dds");
+      hydrocarbonIcon_ = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds");
+    }
+    for (const Decals::Deposit& d : decals.Deposits()) {
+      const float full = std::max(d.cutoff * depositIconFrom, 1.0f);
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_ : massIcon_, d.position, Clamp((Length(d.position - view.eye) - full * 0.8f) / (full * 0.2f), 0, 1));
+    }
+  }
   lights.Begin(clock);
   pickables_.clear();
   // the scenery's changes that are due by now, then the scenery
