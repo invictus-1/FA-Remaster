@@ -585,6 +585,9 @@ SetCapturable(false) / SetReclaimable(false) never showed). Repeated in my build
 generator reads 1 with its bubble up, and the unit panel shows its shield bar and "100%"
 (`ui_shield_panel_bar_shows_no_bar_under_unit.png`). The bar under the unit is the renderer's
 and does not show yet in that picture.
+CHRIS'S LOOK, about 20:15: "For reclaiming own base/structures acu speed and movement is
+correct. For engineer I think its correct the speed and the arm moves now." All of 20 is
+closed.
 
 ## To the renderer track
 
@@ -1157,6 +1160,29 @@ the flash: FAF hangs an invisible box on every crashing plane and hides it by sc
 the simulation did not pass on; fixed with the engine (render 21). e: the visuals track's (see
 above). The pause mark: he moves it clear of the model or makes it larger if Chris did pause
 and missed it.
+
+### 19. From Chris: the deposit icons from far up are too big and show only his part of the map
+Chris, 2026-10-13, about 20:15, a game on main 6b6ac00, with a picture of the ORIGINAL at its
+farthest zoom (`original_mass_and_hydro_spots_fully_zoomed_out.webp` in the folder of his
+others, `_scratch\ui\chris_20261013\`; on disk, checked). His words: "This is how the mass
+and hydro should look on the map. THis is og. The current on implemented is too big and it
+only shows mine not the whole map."
+
+What the original's picture shows (Seton's Clutch whole, 2000 pixels across, the map 810 of
+them): every mass deposit of the WHOLE map is a small green mark about 5 pixels across (a
+ring, a dot at that size), every hydrocarbon deposit a small yellow bolt about 8 pixels long;
+all of them, on both sides of the map and on the islands, from the first seconds of the game
+(game time 00:00:07, nothing explored).
+
+So two things: (1) the icons much smaller from far up, at the original's size; (2) all the
+map's deposits, not only those the player's army has seen: in the original they are known
+from the start. I have no picture of ours to lay beside it; say if you want one.
+
+His word on the rest, nothing asked: "for the shield bar its correct".
+
+Not blocking.
+
+**Status:** open.
 
 ## To the visuals track
 
