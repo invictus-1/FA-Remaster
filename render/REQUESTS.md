@@ -26,10 +26,10 @@ game's names to today's techniques by a table of 18; `models.cpp` has the same t
 order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
 (`paused` in the plain unit view: every paused unit wears the pause mark). 20 done and in use (a beam's far end
 when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 done and in use (a projectile's
-SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 open (a shield's ratio in
-the plain unit view, for the shield's bar).
+SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 done and in use (`hasShield` and
+`shieldRatio` in the plain unit view: the shield's bar under the life bar).
 
-## 22. A shield's ratio in the plain unit view (2026-10-13, open)
+## 22. A shield's ratio in the plain unit view (2026-10-13, done and in use)
 
 **Who asks:** the renderer, for Chris through the interface (its request 18 c): "we are missing
 shield health bar under health and under the unit."
