@@ -54,6 +54,9 @@
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
+// --inspect <what>  a view for checking art (modern look): every lit surface shows one of its own numbers in
+//           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow or lights (the small
+//           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
@@ -151,6 +154,7 @@ struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
   bool lampShadows = true;              // --no-lamp-shadows
+  std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
   int frames = 0;
@@ -281,6 +285,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
+    else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
@@ -479,6 +484,10 @@ int main(int argc, char** argv) {
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
+  static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights"};
+  for (int i = 1; i < 8; ++i)
+    if (opt.inspect == kInspect[i]) world.inspect = i;
+  if (!opt.inspect.empty() && !world.inspect) fprintf(stderr, "render: --inspect %s: expected albedo, normals, roughness, metal, occlusion, shadow or lights\n", opt.inspect.c_str());
   world.iconsOn = opt.icons;
   world.sun = opt.sun;
   world.sky = opt.sky;
@@ -878,6 +887,10 @@ int main(int argc, char** argv) {
             printf("render: weather: %s\n", kWeathers[weatherNow]);
           }
           if (e.key == 'C') world.cloudCover = world.cloudCover >= 0.95f ? 0 : std::min(world.cloudCover + 0.25f, 1.0f);
+          if (e.key == 'N') {  // the views for checking art, one after another, then the picture again
+            world.inspect = (world.inspect + 1) % 8;
+            printf("render: inspect: %s\n", world.inspect ? kInspect[world.inspect] : "off");
+          }
           if (e.key == 'I') iconsOn = !iconsOn;
           if (e.key == 'O') ao.strength = ao.strength > 0 ? 0 : (opt.ao > 0 ? opt.ao : 1);
           break;
