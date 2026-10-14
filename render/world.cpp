@@ -484,13 +484,19 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   icons.Begin(view);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn
   if (depositIcons && !decals.Deposits().empty()) {
-    if (massIcon_ == -2) {
-      massIcon_ = icons.Picture("/env/common/splats/mass_strategic.dds");
-      hydrocarbonIcon_ = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds");
+    // (small, as the original has them from all the way up: 8 pixels, measured in Chris's picture
+    // of it; 16 while two and a half units of ground at the deposit still take that many)
+    if (massIcon_[0] == -2) {
+      for (int k = 0; k < 2; ++k) {
+        massIcon_[k] = icons.Picture("/env/common/splats/mass_strategic.dds", k ? 16 : 8);
+        hydrocarbonIcon_[k] = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds", k ? 16 : 8);
+      }
     }
+    const float perUnit = static_cast<float>(std::max(view.height, 1)) / (2 * std::tan(camera.fovY * 0.5f));  // pixels a world unit takes at distance 1
     for (const Decals::Deposit& d : decals.Deposits()) {
-      const float full = std::max(d.cutoff * depositIconFrom, 1.0f);
-      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_ : massIcon_, d.position, Clamp((Length(d.position - view.eye) - full * 0.8f) / (full * 0.2f), 0, 1));
+      const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
+      const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((away - full * 0.8f) / (full * 0.2f), 0, 1));
     }
   }
   lights.Begin(clock);

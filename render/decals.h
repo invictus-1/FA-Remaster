@@ -37,6 +37,9 @@ class Decals {
     float cutoff = 0;
   };
   const std::vector<Deposit>& Deposits() const { return deposits_; }
+  // Is that texture one of the two marks a game lays on its resource deposits? (They belong to the
+  // map: every army sees every deposit from the first moment, as the original shows them.)
+  static bool IsDepositMark(const std::string& texture, bool* hydrocarbon = nullptr);
   Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 

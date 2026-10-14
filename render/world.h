@@ -294,7 +294,7 @@ class World {
   // when each flash on a shield (a script's entity with such a mesh) was first seen, by the
   // frames' clock: its look goes by its age
   std::unordered_map<uint32_t, double> impactBorn_, impactBornNext_;
-  int massIcon_ = -2, hydrocarbonIcon_ = -2;  // the deposits' icons (-2: not asked for yet)
+  int massIcon_[2] = {-2, -2}, hydrocarbonIcon_[2] = {-2, -2};  // the deposits' icons, small and larger (-2: not asked for yet)
   // another army's building as the focus army last saw it: by entity id
   struct Remembered {
     uint32_t blueprint;  // FrameUnit::blueprint
