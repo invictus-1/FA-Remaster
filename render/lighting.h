@@ -104,10 +104,10 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   float3 d = normalize(world - cameraPosition);
   float3 back;
   if (skyZenith.w > 0.5) {  // (as sky.cpp shows the far distance under a computed sky)
-    back = HorizonHaze(d) * pow(max(skyGlow.w, 0.006), 0.43);
+    back = BeyondGrey(HorizonHaze(d)) * pow(max(skyGlow.w, 0.006), 0.43);
   } else {
     float3 picture = environmentSky.SampleLevel(samplerLinear, d, 0).rgb;
-    back = look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture;
+    back = BeyondGrey(look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture);
   }
   float t = saturate(outside * beyond.z);
   // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the

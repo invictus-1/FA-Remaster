@@ -615,7 +615,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
   }
   meshes.addingScenery = false;
-  if (haveMap_ && terrain.beyondReach <= 0)  // (the original's frame: not with a world that goes on)
+  // (the original's frame round the map, also with a world that goes on beyond it: Chris, 2026-10-14,
+  // "keep the out of bounds thing but just have the mechanical thing")
+  if (haveMap_)
     for (const std::string& border : borders) {
       const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
       const Model* model = models.Blueprint(whole ? border : border + ".bp");
