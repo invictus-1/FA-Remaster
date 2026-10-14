@@ -1011,7 +1011,7 @@ void World::Render() {
       post.ContinueScene();
       ao.Apply(view);
     }
-    skyDraw.Draw(view, camera, skyLight);  // where nothing solid is
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
       post.BeginColorOnly();
@@ -1032,7 +1032,7 @@ void World::Render() {
     }
   } else {
     draw.Flush(view);
-    skyDraw.Draw(view, camera, skyLight);
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
   meshes.Draw(view, environment_, false, true);

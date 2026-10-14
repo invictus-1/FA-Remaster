@@ -139,8 +139,16 @@ float3 Stars(float3 d, float cells, float share, float brightest) {
   return tint * (bright * shape * shape * twinkle);
 }
 
+TextureCube mapSky : register(t29);
+
 float4 PS(VOut i) : SV_Target {
   float3 d = normalize(i.ray);
+  [branch] if (skyZenith.w < 0.5) {
+    // the map's own light: the map's sky picture stands behind everything (in the modern look as
+    // bright as the map's full light makes a white thing)
+    float3 picture = mapSky.SampleLevel(samplerLinear, d, 0).rgb;
+    return float4(look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture, 1);
+  }
   float3 sun = skyBody.xyz, moon = moonPlace.xyz;
   // the air's light: the sun's until it is well below the horizon, the moon's while it is up
   float3 c = 0;
@@ -455,8 +463,8 @@ bool Sky::Init(std::string* error) {
   return static_cast<bool>(pipeline_);
 }
 
-void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky) {
-  if (view.constants.skyZenith[3] < 0.5f || view.height <= 0) return;
+void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky) {
+  if ((view.constants.skyZenith[3] < 0.5f && !mapSky) || view.height <= 0) return;
   // the picture's middle and what half a picture adds to a direction, all at the same depth
   const float w = static_cast<float>(view.width), h = static_cast<float>(view.height);
   const Vec3 forward = camera.PixelRay(w * 0.5f, h * 0.5f, w, h).direction;
@@ -492,6 +500,7 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky) {
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &pc, sizeof pc);
+  if (mapSky) device_->SetTexture(kEnvironmentSlot, mapSky);
   device_->Draw(3);
 }
 
