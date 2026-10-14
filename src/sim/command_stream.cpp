@@ -366,7 +366,14 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       } else if (!strcasecmp(k, "SetAutoMode") || !strcasecmp(k, "SetAutoSurfaceMode") ||
                  !strcasecmp(k, "SetRepeatQueue") || !strcasecmp(k, "SetPaused")) {
         if (value != "true" && value != "false") break;
-        if (!strcasecmp(k, "SetRepeatQueue")) u->repeatQueue = value == "true";
+        if (!strcasecmp(k, "SetRepeatQueue")) {
+          // Unit::SetRepeatQueue 0x6a7450: the script hears of a change (OnStartRepeatQueue / OnStopRepeatQueue),
+          // then the flag (unit+0x2a2) is set; the command dispatcher reads it when a factory's order ends
+          const bool on = value == "true";
+          if (on != u->repeatQueue && u->HasLuaObject())
+            sim.CallMethod(L, u, on ? "OnStartRepeatQueue" : "OnStopRepeatQueue", 0);
+          u->repeatQueue = on;
+        }
         if (!strcasecmp(k, "SetAutoSurfaceMode")) u->autoSurfaceMode = value == "true";
         lua_pushboolean(L, value == "true");
         CallUnitBinding(sim, u, key.c_str(), 1);

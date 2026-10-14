@@ -329,6 +329,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       else if (!std::strcmp(what, "endgame")) writer.EndGame();  // one more beat runs, then the game stands
       else if (!std::strcmp(what, "callback") && std::sscanf(text, "%*s %255s", ids) == 1) writer.LuaSimCallback(ids, {}, {});
       else if (!std::strcmp(what, "lua")) sim.RunString(text + 3, "@orders");  // a test's own Lua, straight into the sim state
+      else if (!std::strcmp(what, "info")) {  // "<tick> info <unit id> <key> <value>": an info pair, as the interface sends it
+        char key[64] = "", value[64] = "";
+        unsigned long id = 0;
+        if (std::sscanf(text, "%*s %lu %63s %63s", &id, key, value) == 3) writer.ProcessInfoPair(static_cast<uint32_t>(id), key, value);
+      }
       else if (!std::strcmp(what, "issue")) {
         int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
         if (n < 2) continue;

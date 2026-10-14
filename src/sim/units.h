@@ -141,7 +141,8 @@ class Unit : public Entity {
   int siloAmmo[2] = {0, 0};  // tactical, nuke missiles in store
   struct SiloState* silo = nullptr;  // missile production (sim/build.cpp)
   bool autoMode = false;
-  // set by the info pairs SetRepeatQueue / SetAutoSurfaceMode (kept for a host's panels; not acted on yet)
+  // set by the info pairs SetRepeatQueue / SetAutoSurfaceMode. repeatQueue (unit+0x2a2) is acted on by the command
+  // dispatcher (a factory's finished order goes back to the end of its queue); autoSurfaceMode is not acted on yet
   bool repeatQueue = false, autoSurfaceMode = false;
   Vec3 rallyPoint;
   bool hasRallyPoint = false;

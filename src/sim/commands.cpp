@@ -519,6 +519,21 @@ void CommandStep(Sim& sim, Unit* u) {
           u->commands.front()->type == CommandType::BuildFactory && u->commands.front()->count > 1) {
         --u->commands.front()->count;
         u->headState = kNotStarted;
+      } else if (r == kTaskDone && u->repeatQueue && !u->commands.empty() &&
+                 u->commands.front()->type == CommandType::BuildFactory) {
+        // The repeat queue (IAiCommandDispatchImpl::TaskTick 0x598f0b): a factory order (type 7) whose count has
+        // run out, on a unit whose repeat switch is on (unit+0x2a2), gets its count back (cmd+0xe4 = cmd+0xe0) and
+        // goes to the END of the queue (0x6edfc0; alone in the queue it stays where it is). The dispatcher answers
+        // 1: the next order starts a beat later.
+        std::shared_ptr<UnitCommand> keep = u->commands.front();
+        keep->count = keep->maxCount;
+        if (u->commands.size() > 1) {
+          PopHead(u);
+          u->commands.push_back(keep);
+          keep->units.insert(u);
+        }
+        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        break;
       } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
                  !u->commands.empty()) {
         // a patrol point goes to the back of the queue (the loop); attack-moves are removed
