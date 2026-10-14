@@ -798,7 +798,12 @@ StepParams Params(const UnitMotion& m) {
   // cut to the blueprint's MaxSpeed and multiplied by the speed multiplier AGAIN. So a multiplier below 1 counts
   // twice in what the unit drives (a submerged Seraphim destroyer, SubSpeedMultiplier 0.9 on MaxSpeed 5: 4.05,
   // while its u+0x594 says 4.5), a multiplier above 1 once. The reverse speed likewise (0x699206).
-  const float u594 = m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult;
+  // u+0x594 is what UpdateInfoCache LAST wrote, in the unit's own turn of a beat: a batch made in the steering
+  // stage of the beat after a multiplier changed still finds the old value there. (Seen: a unit entering the
+  // water, speed multiplier 0.9 from its layer change: the batch made the next beat tops at MaxSpeed x 0.9, the
+  // one after it at MaxSpeed x 0.9 x 0.9.) Before the unit's first turn the live value stands in.
+  const float u594 =
+      m.maxSpeedU594 > 0 ? m.maxSpeedU594 : (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult);
   P.maxF = std::min(b.maxSpeed, u594) * m.speedMult * 0.1f;
   P.maxR = std::min(b.maxSpeedReverse, u594) * m.speedMult * 0.1f;
   P.acc = b.maxAccel * m.accMult * 0.01f;
