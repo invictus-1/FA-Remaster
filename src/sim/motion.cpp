@@ -483,7 +483,9 @@ void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz) {
 // CUnitMotion::SnapToGround (FA exe 0x6c1610) / SnapToWater: height and tilt from the terrain
 // under the four corners of the unit's size box.
 // FindIntersectingRaisedPlatform 0x6c2f00: the nearest immobile unit with RaisedPlatforms whose box
-// meets the unit's (the original takes it from the unit's surface-collision list).
+// meets the unit's (the original takes it from the unit's surface-collision list, m+0x178, and keeps the result in
+// m+0x114 until the next search: tried 2026-10-14 with our collision pass's hits, it broke the Transports replay
+// and put Skirmish two beats back; the box test stays until that list is read properly).
 const Unit* FindRaisedPlatform(Sim& sim, const Unit* u) {
   const MotionBlueprint& b = *u->motion.bp;
   float r = std::max(b.sizeX, b.sizeZ) * 0.5f;
@@ -555,9 +557,11 @@ void SnapUnit(const Sim& csim, Unit* u) {
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-hx, 0, hz}, {-hx, 0, -hz}, {hx, 0, -hz}};
   Vec3 c[4];
-  // SnapToGround 0x6c1610 takes the platform for every non-hover type (AmphibiousFloating too: T1 engineers
-  // rolling off a factory deck)
-  const Unit* plat = hover ? nullptr : FindRaisedPlatform(sim, u);
+  // SnapToGround 0x6c1610 takes the platform (motion+0x114, found by CalcMoveHover / Land / Water through
+  // FindIntersectingRaisedPlatform 0x6c2f00) for every type: a hover unit's corners are the surface (0x62b160:
+  // the higher of ground and water) plus the platform's height. (Seen: Aeon and Seraphim engineers, which hover,
+  // stand on their factory's deck when they are let go: 0.5 and 0.65 higher than the ground.)
+  const Unit* plat = FindRaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {r.x + u->position.x, 0, r.z + u->position.z};
@@ -586,6 +590,9 @@ void SnapUnit(const Sim& csim, Unit* u) {
   // MOHO64_DEBUG_SNAP=<unit id>: the exact floats (as bits) going into and coming out of the tilt
   static const long dbgSnap = getenv("MOHO64_DEBUG_SNAP") ? atol(getenv("MOHO64_DEBUG_SNAP")) : -1;
   const bool dbg = dbgSnap >= 0 && static_cast<long>(u->id) == dbgSnap;
+  if (dbg)
+    Logf(LogLevel::Info, "snapy %u unit %u type %d floating %d platform %d corners %.4f %.4f %.4f %.4f -> y %.4f", sim.tick(),
+         u->id, b.motionType, floating ? 1 : 0, plat ? static_cast<int>(plat->id) : -1, c[0].y, c[1].y, c[2].y, c[3].y, y);
   auto bits = [](float f) {
     uint32_t v;
     std::memcpy(&v, &f, 4);
@@ -1490,10 +1497,15 @@ void HoverSnap(Sim& sim, Unit* u) {
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-0.0f - hx, 0, hz}, {-0.0f - hx, 0, -0.0f - hz}, {hx, 0, -0.0f - hz}};
   Vec3 c[4];
+  // the corners are the surface (0x62b160: the higher of ground and water) plus the raised platform the unit
+  // stands on, when there is one (motion+0x114, CalcMoveHover 0x6c2c05 -> FindIntersectingRaisedPlatform): an Aeon
+  // or Seraphim engineer let go by its factory stands on the deck, 0.5 to 0.65 above the ground
+  const Unit* plat = FindRaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {u->position.x + r.x, 0, u->position.z + r.z};
     c[i].y = map->SurfaceHeight(c[i].x, c[i].z);
+    if (plat) c[i].y += PlatformHeight(plat, c[i].x, c[i].z);
   }
   float y = (c[3].y + c[2].y + c[1].y + c[0].y) * 0.25f;
   Vec3 n{0, 1, 0};
