@@ -1,9 +1,12 @@
 #include "terrain.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <string>
+#include <vector>
 
 #include "lighting.h"
 
@@ -31,7 +34,7 @@ cbuffer TerrainConstants : register(b1) {
   float4 mapSize;        // width, height, 1 / width, 1 / height
   float4 params;         // x: world height of the largest height value, y: 1 for the XP look, z: 1 for the glowing look
   float4 specularColor;
-  float4 albedoTile[10]; // x: repeats per world unit
+  float4 albedoTile[10]; // x: repeats per world unit; y: 1 = the layer has its third map (materialMaps)
   float4 normalTile[9];
   float4 morph[12];      // per level: x: distance where sliding starts, y: 1 / (length of the slide)
 };
@@ -47,6 +50,7 @@ Texture2D waterMap : register(t4);
 Texture2D waterRamp : register(t5);
 Texture2D albedoMaps[10] : register(t6);
 Texture2D normalMaps[9] : register(t16);
+Texture2DArray materialMaps : register(t25);  // per layer: r creases' shading, g roughness, b height
 
 float HeightAt(int2 c) {
   c = clamp(c, int2(0, 0), int2(mapSize.xy));
@@ -90,6 +94,33 @@ float4 PS(VOut i) : SV_Target {
 
   #define ALBEDO(n) albedoMaps[n].Sample(samplerAniso, xz * albedoTile[n].x)
   #define NORMAL(n) (normalMaps[n].Sample(samplerAniso, xz * normalTile[n].x) * 2 - 1)
+  // A remastered map's layers (modern look): where a layer has its third map, it does not fade
+  // evenly into what lies under it: its high places come through first (how much of it shows is
+  // its mask pushed by its height), and it brings its own roughness and crease shading.
+  // `matter`: x creases' shading, y roughness, z how much of the pixel is such a layer's at all.
+  float3 matter = 0;
+  float2 stepX = ddx(xz), stepY = ddy(xz);  // (taken here: inside a branch the sampler cannot work them out)
+  [branch] if (look > 0.5 && albedoTile[0].y > 0.5) {
+    float3 m = materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[0].x, 0), stepX * albedoTile[0].x, stepY * albedoTile[0].x).rgb;
+    matter = float3(m.r, m.g, 1);
+  }
+  #define RICH(n, mask, raw) \
+    [branch] if (look > 0.5 && albedoTile[n].y > 0.5 && raw > 0.002) { \
+      float3 m = materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb; \
+      mask = saturate((m.b + mask * 1.35 - 1) / 0.35); \
+      raw = saturate((m.b + raw * 1.35 - 1) / 0.35); \
+      matter = lerp(matter, float3(m.r, m.g, 1), mask); \
+    } else { \
+      matter = lerp(matter, 0, mask); \
+    }
+  RICH(1, low.x, rawLow.x)
+  RICH(2, low.y, rawLow.y)
+  RICH(3, low.z, rawLow.z)
+  RICH(4, low.w, rawLow.w)
+  RICH(5, high.x, rawHigh.x)
+  RICH(6, high.y, rawHigh.y)
+  RICH(7, high.z, rawHigh.z)
+  RICH(8, high.w, rawHigh.w)
   float4 albedo = ALBEDO(0);
   albedo = lerp(albedo, ALBEDO(1), low.x);
   float4 second = ALBEDO(2);
@@ -148,8 +179,11 @@ float4 PS(VOut i) : SV_Target {
   if (look > 0.5) {
     // the modern look: the ground is a rough, non-metal surface
     float roughness = 1 - 0.5 * gloss * saturate(specularColor.x * 2);
+    // (a remastered map's layers say their own; the upper, map-wide layer has none)
+    roughness = lerp(roughness, matter.y, matter.z);
+    float creases = lerp(1, matter.x, matter.z);
     // (ground that glows gives its own light, by day and by night)
-    float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, 1, ToLinear(glowing) * 2.5, N, i.world, shadow);
+    float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
     // full sunlight), so that shallows keep the map's water colours
 #ifdef MODERN_WATER
@@ -197,6 +231,12 @@ bool SphereTouchesBox(Vec3 center, float radius, Vec3 lo, Vec3 hi) {
 }
 
 }  // namespace
+
+int Terrain::MaterialLayers() const {
+  int n = 0;
+  for (bool has : material_) n += has ? 1 : 0;
+  return n;
+}
 
 bool Terrain::Load(const MapData* map, std::string* error) {
   map_ = map;
@@ -273,6 +313,19 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   waterRamp_ = map->water.present ? textures_->Get(map->water.ramp, textures_->Black()) : textures_->Black();
   for (int i = 0; i < 10; ++i) albedo_[i] = textures_->Get(map->albedo[i].texture, textures_->Black());
   for (int i = 0; i < 9; ++i) normal_[i] = textures_->Get(map->normal[i].texture, textures_->FlatNormal());
+  {  // a remastered map's third maps: beside each layer's `<name>_albedo.dds` a `<name>_arh.dds`
+    std::vector<std::string> paths(9);
+    for (size_t i = 0; i < 9; ++i) {
+      std::string lower = map->albedo[i].texture;
+      for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const size_t at = lower.rfind("_albedo.dds");
+      if (at != std::string::npos) paths[i] = map->albedo[i].texture.substr(0, at) + "_arh.dds";
+    }
+    std::vector<bool> present;
+    materials_ = textures_->Layers(paths, &present);
+    for (size_t i = 0; i < 9; ++i) material_[i] = materials_ && present[i];
+    if (MaterialLayers()) printf("render: %d of the map's ground layers have a third map (creases, roughness, height)\n", MaterialLayers());
+  }
   shaderKind_ = map->shader == "TTerrainXP" ? 1 : map->shader == "TTerrainGlow" ? 2 : 0;
   if (map->shader != "TTerrain" && map->shader != "TTerrainXP" && map->shader != "TTerrainGlow")
     fprintf(stderr, "render: the map asks for the terrain look \"%s\", which is not written yet; using TTerrain\n", map->shader.c_str());
@@ -390,6 +443,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   c.specularColor[2] = m.lighting.specular.z;
   c.specularColor[3] = m.lighting.specular.w;
   for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = m.albedo[i].scale > 0 ? 1.0f / m.albedo[i].scale : 0;
+  for (int i = 0; i < 9; ++i) c.albedoTile[i][1] = richGround && material_[i] ? 1.0f : 0.0f;
   for (int i = 0; i < 9; ++i) c.normalTile[i][0] = m.normal[i].scale > 0 ? 1.0f / m.normal[i].scale : 0;
   for (int k = 0; k <= top && k < 12; ++k) {
     if (k == top) {
@@ -414,6 +468,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     device_->SetTexture(5, waterRamp_);
     for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
     for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
+    if (materials_) device_->SetTexture(25, materials_);
   }
   device_->SetVertexBuffer(gridVertices_);
   device_->SetIndexBuffer(gridIndices_);

@@ -1,6 +1,8 @@
 #include "textures.h"
 
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 #include "core/vfs.h"
 #include "dds.h"
@@ -51,6 +53,41 @@ gfx::Texture TextureCache::FromDds(std::string_view file, const char* what) {
   gfx::Texture t = device_->CreateTexture(image.Desc());
   if (!t) fprintf(stderr, "render: texture %s: the device refused it\n", what);
   return t;
+}
+
+gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::vector<bool>* present) {
+  present->assign(paths.size(), false);
+  DdsImage first;
+  std::vector<uint8_t> all;
+  size_t each = 0;
+  for (size_t i = 0; i < paths.size(); ++i) {
+    if (paths[i].empty()) continue;
+    auto file = vfs_->ReadFile(paths[i]);
+    DdsImage image;
+    std::string error;
+    if (!file || !ParseDds(*file, &image, &error) || image.cube) continue;
+    if (!each) {
+      first = image;
+      each = image.dataSize;
+      all.assign(each * paths.size(), 0);
+    } else if (image.width != first.width || image.height != first.height || image.format != first.format || image.mips != first.mips ||
+               image.dataSize != each) {
+      fprintf(stderr, "render: %s: not of the size and kind of the others of its set; left out\n", paths[i].c_str());
+      continue;
+    }
+    std::memcpy(all.data() + each * i, image.data, each);
+    (*present)[i] = true;
+  }
+  if (!each) return {};
+  gfx::TextureDesc td;
+  td.width = first.width;
+  td.height = first.height;
+  td.mips = first.mips;
+  td.layers = static_cast<int>(paths.size());
+  td.format = first.format;
+  td.data = all.data();
+  td.dataSize = all.size();
+  return device_->CreateTexture(td);
 }
 
 gfx::Texture TextureCache::SkyCube(const std::string& path) {
