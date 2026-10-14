@@ -1115,6 +1115,9 @@ circled); in front a wide body with pale strips of light, two side wings with bl
 strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles with a yellow
 edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
 cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
+(Later: Chris gave the file; it lies in that folder as
+`factory_middle_piece_black_spot_flickers_on_zoom.png`. His answer: "it only flickers while
+zooming in and out".)
 
 (e is answered: the visuals track's, two faces in one plane on the land factories' middle
 tower; she bakes them again. Nothing of yours.)
@@ -1250,6 +1253,9 @@ circled); in front a wide body with pale strips of light, two side wings with bl
 strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles with a yellow
 edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
 cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
+(Later: Chris gave the file; it lies in that folder as
+`factory_middle_piece_black_spot_flickers_on_zoom.png`. His answer: "it only flickers while
+zooming in and out".)
 
 **Status:** found by the visuals track from the description, within the half hour: hers, not the
 renderer's. On the land factories the middle tower (bone Lifter_Middle) carries a dark armour
