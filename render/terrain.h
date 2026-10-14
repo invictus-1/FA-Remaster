@@ -20,6 +20,12 @@ namespace render {
 class Terrain {
  public:
   Terrain(gfx::Device* device, TextureCache* textures) : device_(device), textures_(textures) {}
+  // The richer ground of a remastered map (modern look): each layer's own roughness and crease
+  // shading, and layers that meet by their height (pebbles stand out of sand, grass creeps into
+  // the joints of rock) instead of fading evenly into each other. false: as a stock map is drawn.
+  // Without the layers' third maps it changes nothing.
+  bool richGround = true;
+  int MaterialLayers() const;  // how many of the map's layers have a third map
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.
   bool Load(const MapData* map, std::string* error);
@@ -58,6 +64,11 @@ class Terrain {
   uint32_t gridIndexCount_ = 0;
   gfx::Texture heightTexture_, normalMap_, maskLow_, maskHigh_, waterMap_, waterRamp_;
   gfx::Texture albedo_[10], normal_[9];
+  // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
+  // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
+  // nine as the layers of one texture; `material_[i]`: layer i has one.
+  gfx::Texture materials_;
+  bool material_[9] = {};
   int shaderKind_ = 0;  // 0: TTerrain (4 strata), 1: TTerrainXP (8 strata), 2: TTerrainGlow (TTerrain, the second stratum glowing)
   std::vector<Level> levels_;
   std::vector<float> ranges_;  // per level: the distance up to which it is used
