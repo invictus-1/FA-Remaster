@@ -1436,12 +1436,16 @@ void Sim::Tick() {
         }
         Vec3 np = bp;
         Quat nq = bq;
-        // On something that is no unit (FAF's sinker projectile under a wreck): the unit hangs by its OWN bone
-        // (AttachBoneTo's first argument), so a wreck taken at bone 0 stays where it was, and it takes the
+        // The unit hangs by its OWN bone (Entity::CalculateAttachedTransform 0x67a020: the parent bone's transform
+        // times the inverse of the child's own bone's, Unit::GetBoneLocalTransform 0x6aa440): AttachBoneTo's first
+        // argument, 0 for AttachTo; a bone of its skeleton is taken from its pose, -1 is half its SizeY above its
+        // origin, anything else (FAF's factories attach their product with -2) is the unit's origin itself.
+        // So a wreck taken at bone 0 by FAF's sinker stays where it was, and an aircraft a carrier builds sits
+        // with its root bone on the carrier's attach bone. On something that is no unit it also takes the
         // parent's layer (CUnitMotion::MotionTick 0x6ba1ad: SetLayer(parent's), every beat; a parent UNIT's only
         // when the child is not what that unit works on, 0x6ba1a2, which is left to the transport code here).
         const bool onProjectile = p->kind == Entity::Kind::Projectile;
-        if (onProjectile && u->ownBone >= 0) {
+        if (u->ownBone >= -1) {
           Vec3 cp;
           Quat cq;
           AttachedTransform(u, bp, bq, &np, &nq, &cp, &cq);

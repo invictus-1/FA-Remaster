@@ -56,9 +56,16 @@ EconomyTotals EconomyTotalsOf(const Sim& sim, int army) {
 void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
   out->clear();
   out->reserve(sim.units().size());
+  // (who carries a shield: the shield entity is attached to its owner)
+  std::vector<uint32_t> shielded;
+  for (const ShieldEntity* s : sim.shields)
+    if (!s->destroyQueued && s->attachParent) shielded.push_back(s->attachParent);
+  std::sort(shielded.begin(), shielded.end());
   for (const Unit* u : sim.units()) {
     if (u->destroyQueued) continue;
     UnitView v;
+    v.hasShield = std::binary_search(shielded.begin(), shielded.end(), EntityRef(u));
+    v.shieldRatio = u->shieldRatio;
     v.id = u->id;
     if (u->blueprint) v.blueprint = u->blueprint->id;
     v.army = u->army ? u->army->index : 0;
@@ -340,11 +347,9 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
   lua_State* L = sim.L();
   v.commandCaps = LiveCommandCaps(L, u);
   v.toggleCaps = UnitToggleCaps(sim, u);
-  if (u->HasLuaObject()) {  // the ratio the shield's script keeps on the unit (Unit:SetShieldRatio)
-    PushObjectValue(L, u, "SetShieldRatio");
-    if (lua_isnumber(L, -1)) v.shieldRatio = static_cast<float>(lua_tonumber(L, -1));
-    lua_pop(L, 1);
-  }
+  // the ratio the shield's script gives the unit (Unit:SetShieldRatio; kept on the unit by that call). This read
+  // the scripts' stored value under the wrong key until 2026-10-13 and so was always 0.
+  v.shieldRatio = u->shieldRatio;
   v.fuelRatio = u->fuelRatio;
   v.tacticalSiloCount = u->siloAmmo[0];
   v.nukeSiloCount = u->siloAmmo[1];
@@ -360,10 +365,12 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
     PushObjectValue(L, u, "stat:KILLS");
     if (lua_isnumber(L, -1)) v.kills = static_cast<int>(lua_tonumber(L, -1));
     lua_pop(L, 1);
-    PushObjectValue(L, u, "SetCapturable");
+    // (the keys are the setters' names without their "Set": entities.cpp's kAttrs. These two were read with it,
+    // as the shield's ratio was, and so never saw what a script had set.)
+    PushObjectValue(L, u, "Capturable");
     if (!lua_isnil(L, -1)) v.capturable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
-    PushObjectValue(L, u, "SetReclaimable");
+    PushObjectValue(L, u, "Reclaimable");
     if (!lua_isnil(L, -1)) v.reclaimable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
   }

@@ -3087,8 +3087,8 @@ int l_AttachBoneTo(lua_State* L) {
     BoneWorld(parent, u->parentBone, &bp, &bq);
     Vec3 np = bp;
     Quat nq = bq;
-    // (on a projectile the unit hangs by its own bone: see the attached branch of Sim::Tick's unit loop)
-    if (parent->kind == Entity::Kind::Projectile && u->ownBone >= 0) AttachedTransform(u, bp, bq, &np, &nq);
+    // (the unit hangs by its own bone: see the attached branch of Sim::Tick's unit loop)
+    if (u->ownBone >= -1) AttachedTransform(u, bp, bq, &np, &nq);
     u->position = np;
     u->orientation = nq;
   }
@@ -3101,7 +3101,11 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
   if (!u || !parent) return 0;
   u->parentId = EntityRef(parent);
-  u->ownBone = -1;
+  // Entity:AttachTo 0x68be10 is AttachBoneTo with the entity's own bone 0 (0x68bf14: push 0), not -1: the unit is
+  // placed so that ITS bone 0 lies on the parent's bone. Seen: an aircraft a carrier builds while it sails
+  // (AircraftCarrier's BuildingState: unitBuilding:AttachTo(self, bone)) sits 0.47 below and 0.06 ahead of the
+  // carrier's attach bone, which is where its model's root bone is.
+  u->ownBone = 0;
   u->parentBone = BoneIndex(L, parent, 3);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);

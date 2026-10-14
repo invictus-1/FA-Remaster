@@ -54,6 +54,13 @@ struct UnitView {
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
   // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own
   std::string mesh;
+  // A shield: hasShield while a shield entity hangs on the unit (a generator's bubble, a personal shield; the
+  // script makes it when the unit is finished or the upgrade is, and destroys it with the unit or the upgrade),
+  // and shieldRatio as the shield's script last gave Unit:SetShieldRatio, the same number as
+  // UnitStateView::shieldRatio: 1 full, the health's share under fire and while it recharges, the charge's
+  // progress while it comes up, 0 when it is down or switched off. So hasShield with 0 is a shield that is down.
+  bool hasShield = false;
+  float shieldRatio = 0;
 };
 
 // An entity a script made that is neither unit, projectile nor prop (a shield bubble, a build frame, the pieces

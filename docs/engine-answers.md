@@ -3,6 +3,40 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 22: a shield's ratio in the plain unit view — done
+
+`UnitView` (src/sim/sim_view.h) has two new members at its end; nothing else in it moved:
+
+- `bool hasShield`: a shield entity hangs on the unit right now (a generator's bubble or a personal shield).
+  FAF's script makes it when the unit is finished, or when the upgrade that brings it is, and destroys it with
+  the unit or when the upgrade is taken away.
+- `float shieldRatio`: what the shield's script last gave `Unit:SetShieldRatio`. 1 full, health / max health
+  under fire and while it recharges, the charge-up's progress while it comes back, 0 when it is down or
+  switched off. It is the same number as `UnitStateView::shieldRatio`.
+
+So `hasShield` with a ratio of 0 is a shield that is down, and no `hasShield` is a unit without one: draw the
+bar on the first, nothing on the second.
+
+One thing to know: until this commit the ratio in `UnitStateView` was always 0 (see "ui 20 d, corrected" below).
+If you tested the bar against that view before, test again.
+
+## ui 20 d, corrected: the shield ratio was always 0 — fixed
+
+My answer under d below said the number is filled. It was not: you were right, and a generator with its bubble
+up gave 0. The engine keeps a script's `Unit:SetShieldRatio(x)` under the name "ShieldRatio" (the setter's name
+without "Set"), and the view asked for "SetShieldRatio", which nothing ever wrote. I had read the code and not
+watched it run, and said so; watching it (every SetShieldRatio call of a replay, then the view) showed the
+calls arriving and the view missing them.
+
+Fixed: the unit keeps the number itself and both views (`UnitStateView::shieldRatio` and the new
+`UnitView::shieldRatio`) read that. Your case (a ueb4202 made by CheatSpawnUnit beside a ueb1201) now gives
+what lua/shield.lua sets: 1 once the bubble is up, less under fire, the charge-up's progress after it fell.
+
+The same mistake sat on two neighbours, also fixed: `UnitStateView`'s capturable and reclaimable flags read
+"SetCapturable" and "SetReclaimable", so a script's `SetCapturable(false)` or `SetReclaimable(false)` never
+showed; a unit always looked capturable and reclaimable by its blueprint alone. If the interface greys out the
+Capture or Reclaim cursor from those two, it will now do so on units whose script switched it off.
+
 ## render 21: a projectile's SetVizTo... flags — done
 
 `ProjectileView` (src/sim/sim_view.h) has `vizFocus`, `vizAllies`, `vizEnemies`, `vizNeutrals` now, with the

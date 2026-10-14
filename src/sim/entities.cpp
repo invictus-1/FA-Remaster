@@ -767,7 +767,17 @@ int l_IsBeingBuilt(lua_State* L) {
 // Engine values that scripts set and read back: Set<X>(v) / Get<X>() pairs, kept per object.
 int l_AttrSet(lua_State* L) {
   ScriptObject* o = CheckAnyObject(L, 1);
-  SetObjectValue(L, o, lua_tostring(L, lua_upvalueindex(1)), 2);
+  const char* key = lua_tostring(L, lua_upvalueindex(1));
+  SetObjectValue(L, o, key, 2);
+  // (the shield's ratio is also kept where the plain unit view can read it without asking the script state)
+  if (key && !strcmp(key, "ShieldRatio"))  // (the keys are the setters' names without "Set")
+    if (Unit* u = ToObject<Unit>(L, 1)) {
+      u->shieldRatio = static_cast<float>(lua_tonumber(L, 2));
+      static const bool dbg = getenv("MOHO64_DEBUG_SHIELD") != nullptr;  // every call, with the unit and the value
+      if (dbg)
+        Logf(LogLevel::Info, "shield %u unit %u %s ratio %.4f", S(L)->tick(), u->id,
+             u->blueprint ? u->blueprint->id.c_str() : "?", u->shieldRatio);
+    }
   return 0;
 }
 int l_AttrGet(lua_State* L) {
