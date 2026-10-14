@@ -475,8 +475,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `SessionGetLocalCommandSource` name who gives orders (the script's pause sign uses them).
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
-  game stands a few seconds later. Tests: `ui/tests/leave.lua`, `ui/tests/restart.lua`,
-  `ui/tests/score.lua`, `ui/tests/defeat.lua`.
+  game stands a few seconds later. And it is won the same way: when the opponent's commander is
+  destroyed the script announces "Victory!", offers the score, and the game stands. Tests:
+  `ui/tests/leave.lua`, `ui/tests/restart.lua`, `ui/tests/score.lua`, `ui/tests/defeat.lua`,
+  `ui/tests/victory.lua` (that one in a game launched with cheats on: it makes a dozen heavy
+  bots beside the opponent's commander with the game's own cheat callback, `SimCallback`
+  "CheatSpawnUnit", which works here as in the original and is a handy way to make any unit
+  in a test).
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

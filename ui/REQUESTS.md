@@ -1182,7 +1182,13 @@ His word on the rest, nothing asked: "for the shield bar its correct".
 
 Not blocking.
 
-**Status:** open.
+**Status:** done by the renderer track within the half hour (`docs/render-answers.md`, top
+entry; render f4df827): both points were right. The icons were drawn at their pictures' 32
+pixels and are 8 now (16 only from near, where the ground mark has just ended); and a mark
+made where the viewing army does not see was not made at all, so only deposits in sight at the
+first beat were known: every deposit is made now, seen or not (checked with fog of war on:
+all 108 mass and 8 hydrocarbon deposits of Seton's at 7 seconds). In Chris's build after the
+engine's merge. Waiting for his look.
 
 ## To the visuals track
 
