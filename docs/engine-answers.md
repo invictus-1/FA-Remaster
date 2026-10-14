@@ -3,6 +3,24 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## Chris, 2026-10-13 (through the renderer's chat): a tank's shell goes through the commander — found; the fix is the renderer's, with one new field from the engine
+
+The simulation stops the shell where it should. Checked on his own game (the one of 20:52, played back from
+its recorded stream: all 853 sound lines equal the live game's): 64 tank shells came at the commander, every
+one of them ended in a hit on a unit, and the hit point is the commander's near face (a shell from the north
+west: last step from (357.09, 19.93, 673.03), hit at 6% of it, 0.35 inside the box's corner).
+
+What he saw is drawn between two beats. `render/sim_frames.cpp` moves every shell on along its velocity for the
+part of the beat that has passed ("projectiles fly on along their velocity"). A shell that hit in this beat
+stands at the hit point with the velocity it arrived with, and is only destroyed when its OnImpact runs at the
+start of the next beat: for that tenth of a second it is drawn flying on, up to 2.5 units for a tank's shell,
+which is through the commander and about its own height beyond.
+
+**New: `ProjectileView::stopped`** (src/sim/sim_view.h, at the struct's end): true for a shell that hit
+something this beat. `position` is the hit point; `velocity` is left as it is (scripts read it at the impact).
+A host that advances shells between beats must leave a stopped one where it is. Renderer: that is one line in
+your frame code; the trail then ends at the hit point too.
+
 ## ui 21: a factory's infinite build (the repeat queue) — done
 
 The switch is acted on now, the original's way (its command dispatcher, read at 0x598f0b):

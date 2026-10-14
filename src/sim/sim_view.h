@@ -151,6 +151,12 @@ struct ProjectileView {
   // called, 1 'Always', 2 'Never', 3 'Intel'. FAF's ShieldCollider shell (the box it hangs on a crashing
   // aircraft so that a shield stops it) sets all four to 'Never': it is not meant to be seen by anybody.
   uint8_t vizFocus = 0, vizAllies = 0, vizEnemies = 0, vizNeutrals = 0;
+  // The shell HIT something in this beat: `position` is the hit point, and it stays there until its script's
+  // OnImpact runs at the start of the next beat and (usually) destroys it. `velocity` is still the speed it
+  // arrived with (scripts read it), so a host that moves shells on along their velocity between two beats must
+  // NOT do so for a stopped one: it would draw the shell flying through what it hit, up to a tenth of a second
+  // of flight beyond (Chris, 2026-10-13: "some go through the acu").
+  bool stopped = false;
 };
 
 // A weapon's collision beam while it is on: from its muzzle to where it ends this beat.

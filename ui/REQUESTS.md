@@ -608,6 +608,13 @@ simulation does so. Not blocking anything else; Chris plays with it, so it is wo
 before he tries factories at length. I can check it in my driver when it is in (a factory,
 the switch on, two kinds queued, and the queue after the first is finished).
 
+DONE the same hour (`docs/engine-answers.md`, top entry; main 84a0d14): a factory order whose
+count has run out gets its count back and goes to the end of the queue while the switch is on.
+Repeated in my build: a land factory, the panel's button on, ONE tank ordered: a second tank
+is built and the order is still in the queue (`ui/tests/templates.lua`, two checks). Not done
+and not asked: an assisting factory taking over the switch of the factory it assists. Waiting
+for Chris's look.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
