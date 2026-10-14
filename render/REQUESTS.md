@@ -25,10 +25,30 @@ draws at the engine's `ProjectileView::size`). 17 answered and in use (the origi
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
 order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
 (`paused` in the plain unit view: every paused unit wears the pause mark). 20 done and in use (a beam's far end
-when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 open (a projectile's
-SetVizTo... flags: the helper box FAF hides on crashing planes is drawn).
+when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 done and in use (a projectile's
+SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 open (a shield's ratio in
+the plain unit view, for the shield's bar).
 
-## 21. A projectile's SetVizTo... flags (2026-10-13, open; Chris sees its effect in his game)
+## 22. A shield's ratio in the plain unit view (2026-10-13, open)
+
+**Who asks:** the renderer, for Chris through the interface (its request 18 c): "we are missing
+shield health bar under health and under the unit."
+
+**What:** in `UnitView`, beside `paused` and `workProgress`: `shieldRatio` (the number
+`UnitStateView::shieldRatio` holds, as the shield's script last set it), and, if it is to be had
+cheaply, whether the unit has a shield at all (so that a shield that is down shows an empty bar
+and a unit without one shows none; with the ratio alone 0 means both).
+
+**Why not `UnitStateOf`:** the bar stands under every shielded unit in the picture, every frame's
+beat; asking the script's state unit by unit for all of them is what `paused` was moved into the
+plain view to avoid (request 19).
+
+**What the renderer does with it:** a third bar under the life bar, as wide and as thick, filled
+in the shield's blue by the ratio, wherever the life bar shows.
+
+**Blocking:** no.
+
+## 21. A projectile's SetVizTo... flags (2026-10-13, done and in use)
 
 **Who asks:** the renderer. **What:** on `ProjectileView`, the four flags `EntityView` already has:
 `vizFocus`, `vizAllies`, `vizEnemies`, `vizNeutrals` (0 never called, 1 'Always', 2 'Never',
@@ -50,6 +70,11 @@ With no army to look as (the viewer without `--focus`), 'Never' for the focus pl
 
 **Blocking:** no, but it is in Chris's game now. Until it is there the box stays; I add no stopgap
 by name unless you say it will take long.
+
+**Answered the same evening** (`docs/engine-answers.md`, render 21): the four flags are on
+`ProjectileView`; the ShieldCollider shell arrives as 2, 2, 2, 2. In use: `sim_frames.cpp` hides a
+shell (and, more exactly than before, a script's entity) from the army the picture is for by the
+flag for how that army stands to its owner.
 
 ## 20. Where a beam's ends are when they hang on an entity without a mesh (2026-10-13, done)
 

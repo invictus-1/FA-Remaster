@@ -4,6 +4,58 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 18: resource spots from far up, hydrocarbon spots, a shield's bar, a black square, a flicker (2026-10-13)
+
+**a and b, mass and hydrocarbon spots from far up: done.** The marks on the ground are the game
+script's own (`CreateResources` in `/lua/sim/ScenarioUtilities.lua` lays the splat `mass_marker`,
+2 across, drawn to a distance of 100, and `hydrocarbon_marker`, 6 across, to 200), so from higher
+up there was nothing. Chris remembers rightly: the original then shows ICONS. Its own program says
+so ("When to draw icons instead of resource deposit textures" is the help text of its setting
+`UI_ResourceLODCutoff`) and names the two pictures, `/env/common/splats/mass_strategic.dds` and
+`hydrocarbon_strategic.dds`, which are in the game's files. The renderer now lays that icon on
+every deposit from where its mark ends (it comes in over the last fifth of the mark's distance as
+the mark goes out), under the units' symbols, so an extractor's symbol on the spot covers it.
+`World::depositIcons` switches them off; `World::depositIconFrom` moves the distance (1 = where the
+mark ends). Seen in a fresh game on Seton's at four distances: the mark near, the green mass icon
+and the yellow hydrocarbon one from far, all 108 + 8 of them from the whole map's height.
+Not known and so not copied: the original's own switching distance and whether its icons pulse
+(its shader has a second pass that makes them glow in a wave); ours stand still.
+On b: close up the hydrocarbon spot HAS its mark in my viewer (a yellow ring six across with the
+deposit's rock in it, drawn to 200); if his game shows none from close, tell me, that would be a
+different fault (the splat's event not reaching the renderer in your host).
+
+**c, a shield's bar under the life bar: drawing ready, waits for one number.** A third bar under
+the life bar, as wide and as thick, pale blue, filled by `FrameUnit::shieldRatio`, wherever the life
+bar shows and the ratio is above 0 (the work bar moves down under it). The ratio is in the
+engine's `UnitStateView` only, which is asked unit by unit; I have asked for it in the plain unit
+view as `paused` is (render/REQUESTS.md 22). Until then the bar does not show.
+
+**d, the black square at a shield under fire: found and fixed.** It was not the flash. FAF hangs a
+helper shell on every crashing plane so that the plane can hit a shield
+(`/projectiles/ShieldCollider/ShieldCollider_proj.bp`): a box ten units across with no textures,
+which its script hides from everybody with `SetVizToFocusPlayer('Never')` and the same for allies,
+enemies and neutrals ("Set to 'Always' to see a nice box", its own comment). The simulation's
+projectile view did not carry those flags, so the renderer drew the box, black, for as long as the
+plane fell: at a shielded base under air attack, and coming and going with the zoom as a model
+does. The engine added the flags the same evening (render 21); a shell so hidden is not drawn now,
+nor its effects. Checked in a game: the viewer went to such a shell (17 above the ground on a
+falling plane, flagged hidden) and the picture shows the plane and no box. Entities the scripts
+hide are now also judged by how the viewing army stands to their owner, not by the owner's flag
+alone.
+
+**e, the dark spot on the factory's small tower that flickers with the zoom: not judged, no
+picture.** By the description (a recess on a small piece, changing while the zoom changes and not
+while the camera stands) it is most likely a step between two of the model's levels of detail:
+the recess is there in one level and closed, or shaded differently, in the next, and the zoom
+crosses the distance where they change. That would be the model's (the visuals track has it as her
+entry 4). Two faces lying in one plane would flicker while the camera moves sideways too. When the
+picture or the unit's id is there I can say which: the viewer's `--inspect` views and a fixed
+distance on either side of the step show it at once.
+
+**The pause mark you mention:** it is the game's own `pause_rest` picture at twice its size over the
+unit's top; on a factory's tower tip it may indeed read as part of the model. If Chris did pause
+and did not see it, say so and I move it clear of the model or make it larger.
+
 ## ui, to the renderer 17: the commander's thin eye beams run off to the side (2026-10-13)
 
 It was the renderer's drawing, not the lights list: the two eye lamps of EEL0001 both point straight

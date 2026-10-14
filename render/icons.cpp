@@ -202,7 +202,7 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bool work, float drop, float thick) {
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, int kind, float drop, float thick) {
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
   if (w <= 1e-4f) return;
@@ -210,7 +210,7 @@ void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, bo
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
   const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
-  bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), work, thick});
+  bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), kind, thick});
 }
 
 void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
@@ -312,8 +312,8 @@ void StrategicIcons::Draw() {
   for (const Bar& bar : bars_) {
     const float half = std::floor(bar.width * 0.5f), x0 = std::floor(bar.x) - half, y0 = std::floor(bar.y), high = std::max(bar.thick, 2.0f) * pixel_;
     rect(x0, y0, x0 + 2 * half, y0 + high, 0xff000000u);
-    // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange
-    const uint32_t color = bar.work ? 0xff0098ffu : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
+    // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange, its shield in pale blue
+    const uint32_t color = bar.kind == 1 ? 0xff0098ffu : bar.kind == 2 ? 0xffffc040u : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
     if (bar.fraction > 0) rect(x0, y0, x0 + std::max(2 * pixel_, 2 * half * bar.fraction), y0 + high, color);
   }
   device_->SetPipeline(pipeline_);
