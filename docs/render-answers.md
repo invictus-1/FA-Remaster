@@ -22,6 +22,10 @@ Done (render, this commit). Three switches on `World` (world.h), set once before
   default; it is not one of the two choices any more, so set the three explicitly from the option.
 - In the viewer: `--map-ends` for MACHINERY; `--no-frame --no-beyond-haze` for NO MACHINERY.
 
+**Correction (Chris to ui, same day):** MACHINERY is the frame AND the land beyond, with no white haze
+either: `worldBeyond` true, `frame` true, `beyondHaze` false (viewer: `--no-beyond-haze`). Seen: the frame
+stands whole over the land beyond, which stays clear to the far end. No change to the code was needed.
+
 ## ui, to the renderer 19: the deposit icons too big, and only one's own (2026-10-13)
 
 Both right, both mine, both changed (render 7afd232).
