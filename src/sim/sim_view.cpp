@@ -518,6 +518,10 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
       d.lifeBarSize = NumField(L, t, "LifeBarSize", 0.0f);
       d.lifeBarHeight = NumField(L, t, "LifeBarHeight", 0.0f);
       d.lifeBarOffset = NumField(L, t, "LifeBarOffset", 0.0f);
+      d.selectionThickness = NumField(L, t, "SelectionThickness", 0.0f);
+      d.selectionCenterOffset[0] = NumField(L, t, "SelectionCenterOffsetX", 0.0f);
+      d.selectionCenterOffset[1] = NumField(L, t, "SelectionCenterOffsetY", 0.0f);
+      d.selectionCenterOffset[2] = NumField(L, t, "SelectionCenterOffsetZ", 0.0f);
       lua_pushstring(L, "Mesh");
       lua_rawget(L, disp);
       if (lua_istable(L, -1)) d.iconFadeInZoom = NumField(L, lua_gettop(L), "IconFadeInZoom", 0.0f);

@@ -329,6 +329,11 @@ struct BlueprintDisplay {
   float iconFadeInZoom = 0;      // Display.Mesh.IconFadeInZoom
   float selectionSizeX = 0, selectionSizeZ = 0;
   float lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;  // LifeBarSize, LifeBarHeight, LifeBarOffset
+  // SelectionThickness (the bracket's share of the selection square when it is not 0; else the engine's 0.2)
+  // and SelectionCenterOffsetX / Y / Z (the square's centre, in the unit's own frame): docs/engine-answers.md
+  // "render 23" has the original's rule.
+  float selectionThickness = 0;
+  float selectionCenterOffset[3] = {0, 0, 0};
 };
 // Every unit, projectile and prop blueprint whose Display.MeshBlueprint names a mesh blueprint with LODs, in
 // blueprint order.

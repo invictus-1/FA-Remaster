@@ -3,6 +3,45 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 23: how the original sizes a selection bracket — the rule read; the four pieces' exact corners not yet
+
+Read in the original's own drawing routine (0x7fc820) and its parameter loader (0x7fc4b0, the Lua table
+`RenderSelectParams`). What is certain:
+
+**The parameters** (the table's keys, with the values the exe starts with):
+`ren_SelectionSizeFudge` 1.85, `ren_SelectionHeightFudge` 0.12, `ren_UnitSelectionScale` 0.75,
+`ren_SelectBracketMinPixelSize` 3, `ren_SelectBracketSize` 0.2.
+
+**The square.**
+- Side along x: `SelectionSizeX x ren_UnitSelectionScale` (0.75) when the blueprint's SelectionSizeX is above 0;
+  else the mesh's own bounds along x times `ren_SelectionSizeFudge` (1.85). The same along z with
+  SelectionSizeZ. These are half sides (the box is made with them as extents about its centre).
+- The pieces are laid out on **M = the larger of the two**: the bracket is a square, also for a long unit.
+- Centre: the unit's drawn place, plus SelectionCenterOffsetX / Y / Z turned by the unit's orientation (only
+  when one of the three is not 0), plus `ren_SelectionHeightFudge` (0.12) upward. The box lies flat in the
+  unit's own frame (its y extent is 0), so it tilts with the unit.
+- SelectionSizeY and SelectionYOffset are not read by this routine.
+
+**The pieces' share f.** `f = SelectionThickness` when its absolute value is at least 0.00001, else
+`ren_SelectBracketSize` (0.2). Then the smallest size: with w the camera's depth term for the unit's place
+(the dot of the place with the view's fourth row, + its fourth element), if `M x f / w` is under
+`ren_SelectBracketMinPixelSize` (3), f is raised to `3 x w / M`. So far from the unit the pieces stop
+shrinking; I have not worked out the unit of that 3 (the row may carry the screen's size: "pixels" by its name).
+
+**The drawing.** Four quads, one per corner, each showing a quarter of one texture (texture coordinates 0 to
+0.5 on each axis: the art is a 2 x 2 sheet of the four corners). The quads' corners are built from the lengths
+`f x M` and `(1 - f) x M` along the box's two axes.
+
+**Not read to the end:** exactly which of those lengths is measured from which box corner for each of the four
+quads (the routine re-uses its scratch space between the quads and I did not follow every store). The two
+readings are "a piece of side f x M sitting in each corner" and "a piece of side (1 - 2f) x M inset by f x M";
+your nine tenths of the shorter half side is neither, and it uses the SHORTER side where the original uses the
+longer. If you want it exact, tell me and I finish the read; otherwise the first reading (side f x M in each
+corner, never under the 3) is the plain one to try against a picture of the original.
+
+**New in `BlueprintDisplay`** (at its end, nothing moved): `selectionThickness` and
+`selectionCenterOffset[3]`.
+
 ## Chris, 2026-10-13 (through the renderer's chat): a tank's shell goes through the commander — found; the fix is the renderer's, with one new field from the engine
 
 The simulation stops the shell where it should. Checked on his own game (the one of 20:52, played back from
