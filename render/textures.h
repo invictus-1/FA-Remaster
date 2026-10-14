@@ -25,6 +25,11 @@ class TextureCache {
   // (the game's sky cubes have one level only). The modern lighting reads surroundings from it:
   // sharp levels for mirror-like surfaces, the blurriest for light from all sides.
   gfx::Texture SkyCube(const std::string& path);
+  // Several .dds files as the layers of ONE texture (a shader reads it as an array): for sets too
+  // large for a register each. The files must agree in size, format and number of mip levels (the
+  // first one found sets them); a path that is empty, missing or disagrees leaves its layer black
+  // and `present[i]` false. Nothing found: no texture.
+  gfx::Texture Layers(const std::vector<std::string>& paths, std::vector<bool>* present);
 
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)
