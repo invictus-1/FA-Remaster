@@ -1446,16 +1446,29 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
     if (CheckSilo(w) && !u->stunned && !u->unitStates.count("Busy")) {
       float reach = WeaponReach(w), bestD = std::numeric_limits<float>::infinity();
       float wl = WaterLevel(sim);
-      for (Projectile* p : sim.projectiles) {
+      // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles: the cells of the
+      // square about the unit, row by row, in each cell the shell registered last first), and the nearest is taken
+      // with a plain "nearer than the best so far" (0x5d8288). So of shells at one place - a missile's children
+      // in the beat they split - the one the grid gives first is taken. (Seen: three children at one point, the
+      // original's missile deflector takes one, ours took another, and every gun after it a different one.)
+      std::vector<Projectile*> cands;
+      if (sim.entityGrid().ready()) {
+        std::vector<Entity*> cells;
+        sim.entityGrid().GatherBox(u->position.x - reach, u->position.z - reach, u->position.x + reach,
+                                   u->position.z + reach, 4, &cells);
+        for (Entity* e : cells) cands.push_back(static_cast<Projectile*>(e));
+      } else {
+        for (Projectile* p : sim.projectiles) cands.push_back(p);
+      }
+      for (Projectile* p : cands) {
         if (!Alive(p) || !IsEnemy(u->army, p->army)) continue;
-        // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles), and an entity
-        // without a collision primitive is in no cell of it. A projectile has none unless its blueprint or its
-        // script gives it one: FAF's torpedo and missile classes call SetCollisionShape('Sphere', ...) when they
-        // are made, a mod's class that does not (BlackOps' AssaultTorpedoSubProjectile) makes a shell that no
-        // counter-weapon ever finds. (Seen: 89 such torpedoes in a replay, none taken as a target.)
+        // An entity without a collision primitive is in no cell of the grid. A projectile has none unless its
+        // blueprint or its script gives it one: FAF's torpedo and missile classes call SetCollisionShape('Sphere',
+        // ...) when they are made, a mod's class that does not (BlackOps' AssaultTorpedoSubProjectile) makes a
+        // shell that no counter-weapon ever finds. (Seen: 89 such torpedoes in a replay, none taken as a target.)
         if (p->shape.type == ShapeType::None) continue;
         float d2 = Dist2XZ(u->position, p->position);
-        if (d2 > reach * reach) continue;
+        if (!(reach * reach > d2)) continue;  // 0x7224b5
         if (!((w->layerCaps & 8) || p->position.y > wl)) continue;
         if (!((w->layerCaps & 16) || p->position.y <= wl)) continue;
         if (!Targetable(sim, w, p)) continue;
@@ -3933,20 +3946,17 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     m.slavedTurning = false;
     return false;
   }
-  Vec3 tp = TargetPos(sim, w->target, false);
-  if (IsNaN(tp)) return false;
   // this runs inside the motion pass: a target that already moved this beat still stands, for the original,
   // where the beat began (its transform is committed in step 13). Seen: a launcher's body starts turning after a
   // target that began to move one beat later than "its new place" would make it.
-  // The aim point rides on the target's hull, so it is taken through the transform the beat began with (position
-  // and orientation): out of the hull's frame of now, back in with the held one.
+  // The aim point rides on the target's hull, so it is made from the transform the beat began with (position
+  // and orientation), in one step as the original makes it: taking the point of now out of the hull's frame and
+  // back in with the held one lands a float step beside it, and the hull's turn a millionth off with that.
   // (Only for a target WITHOUT a target point: a target bone comes out of the target's pose, Unit::GetTargetPoint
   // 0x6ab340 -> 0x6aa5c0, and the pose is this beat's once the target has had its turn. Seen: a destroyer's hull
   // following the turret of a turning battleship one beat late.)
-  if (const Entity* te = TargetEntity(sim, w->target); te && te->shapeHeld && w->target.aimBone == -1) {
-    const Vec3 local = Rotate(Conj(te->orientation), Sub(tp, te->position));
-    tp = Add(te->shapePos, Rotate(te->shapeOri, local));
-  }
+  Vec3 tp = TargetPosBeatStart(sim, w->target);
+  if (IsNaN(tp)) return false;
   if (const float aa = CB(u).attackAngle; aa > 0) {
     // AI.AttackAngle (ubp+0x4d0; 0x6c2350): the unit shows the target its side. The direction to the target is
     // turned about the up axis by the angle, away from the side the target is on, so the target ends up
@@ -3955,16 +3965,26 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     const Quat& q = u->orientation;
     const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
     const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
-    double s, c;
-    dmath::SinCos(static_cast<double>(ang), &s, &c);
-    const float sn = static_cast<float>(s), cs = static_cast<float>(c);
+    // 0x6c2483: the turn is a quaternion about the up axis (0x570750: the half angle's cosine, the axis times its
+    // sine) and the direction is turned by it through its matrix (0x452d40). A plain sine and cosine of the whole
+    // angle land a float step beside that, which the rounding below turns into a millionth of a radian.
+    const float hs = dmath::Sin(ang * 0.5f), hc = dmath::Cos(ang * 0.5f);
     // 0x6c24b5: what the motion is handed is a POINT, the unit's place + that unit vector, and TurnInfo 0x6990e0
     // takes the place off again. Beside a coordinate of a few hundred a unit vector keeps only its first five
     // digits, so the direction the hull turns to is up to 1e-5 rad off the exact one, and the 0.9999 test that
     // starts the next turn falls a beat earlier or later with it.
-    const Vec3 r{n.x * cs + n.z * sn, n.y, n.z * cs - n.x * sn};
+    const Vec3 r = RotateM(Quat{0.0f * hs, 1.0f * hs, 0.0f * hs, hc}, n);
     const Vec3 T{r.x + u->position.x, r.y + u->position.y, r.z + u->position.z};
     *dir = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
+    static const long dbgAa = getenv("MOHO64_DEBUG_SLAVED") ? atol(getenv("MOHO64_DEBUG_SLAVED")) : -1;
+    if (dbgAa >= 0 && static_cast<long>(u->id) == dbgAa) {
+      const Entity* te = TargetEntity(sim, w->target);
+      Logf(LogLevel::Info,
+           "attack angle %u unit %u target %u bone %d held %d: point %.9g %.9g %.9g | n %.9g %.9g %.9g | side %.9g ang "
+           "%.9g | r %.9g %.9g %.9g | dir %.9g %.9g %.9g | q %.9g %.9g",
+           sim.tick(), u->id, te ? te->id : 0, w->target.aimBone, te && te->shapeHeld ? 1 : 0, tp.x, tp.y, tp.z, n.x,
+           n.y, n.z, n.z * fx - fz * n.x, ang, r.x, r.y, r.z, dir->x, dir->y, dir->z, q.y, q.w);
+    }
     return true;
   }
   const float arc = w->bp->slavedToBodyArcRange;

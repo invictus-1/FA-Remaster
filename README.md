@@ -85,7 +85,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Land battle (2,091 beats) | beat 1251 |
 | Submarines | beat 977 |
 | Upgrades | beat 648 |
-| Naval battle (1,079 beats) | beat 451 |
+| Naval battle (1,079 beats) | beat 487 |
 | Missiles | beat 408 |
 | Eight-army AI game | beat 344 |
 | Skirmish against an AI | beat 340 |
