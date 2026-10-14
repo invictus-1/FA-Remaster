@@ -795,7 +795,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         const float wide = std::clamp(kind->lifeBarSize / perPixel, 10.0f, 900.0f);
         const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
         // (the life bar, under it the shield's where the unit has one up, under that its work)
-        const bool shield = life && u.shieldRatio > 0;
+        const bool shield = life && (u.hasShield || u.shieldRatio > 0);  // (down: an empty bar)
         if (life) icons.AddBar(at, u.health / u.maxHealth, wide, 0, 0, thick);
         if (shield) icons.AddBar(at, u.shieldRatio, wide, 2, thick, thick);
         if (work) icons.AddBar(at, u.workProgress, wide, 1, (life ? thick : 0) + (shield ? thick : 0), thick);

@@ -177,8 +177,10 @@ class Sim {
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).
   // keepY: the construction params' +0x25 (Lua CreateUnit with an explicit layer keeps the given height).
   // wantLayer: the params' +0x28, a layer bit or 0 = Entity::GetStartingLayer chooses.
+  // ownHeading: the params' +0x24 is 0 (the factory's and the upgrade's build task, 0x5f54d0): q is not used, the
+  // unit stands unturned, or turned by a random angle when its blueprint says Display.SpawnRandomRotation.
   Unit* CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
-                   Unit* builder = nullptr, bool keepY = false, uint8_t wantLayer = 0);
+                   Unit* builder = nullptr, bool keepY = false, uint8_t wantLayer = 0, bool ownHeading = false);
   // Unit::Warp 0x6aa310 (the script's Warp() on a unit): the layer and the height are chosen for the new place
   // as at creation (the given y is not used), the motion is reset there and a move in progress is aborted.
   void WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q);
