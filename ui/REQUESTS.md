@@ -1106,6 +1106,16 @@ red and black disc on the tip of the factory's tower; Chris looked for "the paus
 paused factory and did not find one. It may simply be too small or too much like the model
 there. I am asking him what he pressed before making anything of it.
 
+CORRECTION (mine, the same evening): the picture file named here does NOT exist. It reached me
+in the chat while I was working and was never written to disk, and my copy failed silently; I
+named a file I had not checked. Until Chris gives the file: what the picture shows is a rebuilt
+UEF factory from close above, tilted view: at its back two tall red towers left and right, and
+between them, lower, a small red tower with a dark square recess in its top (the piece he
+circled); in front a wide body with pale strips of light, two side wings with blue glowing
+strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles with a yellow
+edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
+cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
+
 Not blocking.
 
 **Status:** open.
@@ -1227,5 +1237,15 @@ renderer's (he has the same picture, my entry "To the renderer 18", e).
 For you to enjoy, from the same game: "Shield textures look good though I can't wait till
 visual upgrades it later"; "The mass extractor upgrades are all good and factory upgrades are
 good too no issues."
+
+CORRECTION (mine, the same evening): the picture file named here does NOT exist. It reached me
+in the chat while I was working and was never written to disk, and my copy failed silently; I
+named a file I had not checked. Until Chris gives the file: what the picture shows is a rebuilt
+UEF factory from close above, tilted view: at its back two tall red towers left and right, and
+between them, lower, a small red tower with a dark square recess in its top (the piece he
+circled); in front a wide body with pale strips of light, two side wings with blue glowing
+strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles with a yellow
+edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
+cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
 
 **Status:** open.
