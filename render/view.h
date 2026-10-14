@@ -69,6 +69,11 @@ struct ViewConstants {
   // share of light lost per world unit; 0: none), y the floor's height, z 1 / the height over
   // which it thins to 1/e, w the most of a thing it may hide.
   float mist[4];
+  // A view for checking art (modern look): x says what every lit surface shows in place of its
+  // lit colour: 0 nothing special, 1 its colour alone, 2 which way it faces, 3 how rough it is,
+  // 4 how much of a metal, 5 how much of the sky's light its creases let in, 6 the sun's shadow,
+  // 7 the small lights alone.
+  float inspect[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -100,6 +105,7 @@ cbuffer View : register(b0) {
   float4 weather;         // x wet 0..1; y snow lying 0..1; z the air's thickness per world unit; w the most it hides
   float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash; w: the night's dimming of glowing effects (0: none)
   float4 mist;            // the mist on low ground: x thickness per world unit at its floor; y the floor's height; z 1 / its depth; w the most it hides
+  float4 inspect;         // x: what lit surfaces show instead of their lit colour (0: nothing special; view.h)
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);

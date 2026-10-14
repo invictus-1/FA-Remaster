@@ -352,6 +352,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[1] = v.y;
     to[2] = v.z;
   };
+  c.inspect[0] = static_cast<float>(inspect);
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
   set(c.sunAmbience, haveMap_ ? map.lighting.sunAmbience : Vec3{0.2f, 0.2f, 0.2f});
@@ -1011,7 +1012,7 @@ void World::Render() {
       post.ContinueScene();
       ao.Apply(view);
     }
-    skyDraw.Draw(view, camera, skyLight);  // where nothing solid is
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
       post.BeginColorOnly();
@@ -1032,7 +1033,7 @@ void World::Render() {
     }
   } else {
     draw.Flush(view);
-    skyDraw.Draw(view, camera, skyLight);
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
   meshes.Draw(view, environment_, false, true);

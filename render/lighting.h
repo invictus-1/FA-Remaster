@@ -165,6 +165,17 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     metallic *= 1 - lying;
     roughness = lerp(roughness, 0.7, lying);
   }
+  [branch] if (inspect.x > 0.5) {
+    // a view for checking art: one of the surface's own numbers as a picture, as the screen would
+    // show a colour of that value (so 0.5 reads as middle grey)
+    float3 value = inspect.x < 1.5 ? pow(max(albedo, 0), 1 / 2.2)
+                 : inspect.x < 2.5 ? N * 0.5 + 0.5
+                 : inspect.x < 3.5 ? roughness
+                 : inspect.x < 4.5 ? metallic
+                 : inspect.x < 5.5 ? occlusion
+                 : shadow;
+    if (inspect.x < 6.5) return pow(max(value, 0), 2.2) * (modern.x * lightMultiplier);
+  }
   float3 V = normalize(cameraPosition - world);
   float3 L = sunDirection;
   float3 H = normalize(V + L);
@@ -184,6 +195,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
   float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
+  if (inspect.x > 6.5) return small;
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
   // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
   // dark paint of middling roughness shows more sheen than colour)
