@@ -176,7 +176,11 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
 #ifdef SURFACE_TRACKS
     // where units have stood and driven the snow is trodden away, down to a dark wet ground
     [branch] if (tracksArea.z > 0.5 && lying > 0) {
-      float trodden = tracksMap.SampleLevel(samplerLinearClamp, world.xz * tracksArea.xy, 0).r;
+      // (four readings half a pixel of the picture apart: one alone shows the picture's pixels as steps
+      // along every track that runs aslant)
+      float2 at = world.xz * tracksArea.xy, half = 0.5 / 2048.0;
+      float trodden = (tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at + float2(-half.x, half.y), 0).r +
+                       tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, -half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at - float2(half.x, half.y), 0).r) * 0.25;
       albedo *= 1 - 0.15 * trodden * lying;
       lying *= 1 - 0.78 * trodden;  // (trodden snow, not bare earth: some of it stays)
     }
