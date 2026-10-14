@@ -269,6 +269,8 @@ void ClearEngagement(Sim& sim, Unit* u);
 
 // UnitWeapon::CanAttackTarget 0x6d5720.
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t);
+// An entity's set of shooters loses the units that are gone (once a beat, in the entity's own turn).
+void PurgeShooters(Sim& sim, Entity* e);
 // Unit::Kill (0x6a8090).
 void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::string& type, float ratio);
 

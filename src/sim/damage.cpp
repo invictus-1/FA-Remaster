@@ -16,7 +16,7 @@
 //   unit's script destroys it later. Weapons and the rest go at the next beat (KillCleanup).
 // - Collision beams (CollisionBeamEntity, MotionTick 0x6735c0): while enabled, every interval+1
 //   ticks a ray from the weapon unit's muzzle bone, MaximumBeamLength or the weapon's range long,
-//   hits the nearest unit or shield that accepts OnCollisionCheckWeapon(weapon), or the terrain
+//   hits the nearest unit, shell or shield that accepts OnCollisionCheckWeapon(weapon), or the terrain
 //   or water; the beam's OnImpact(type, entity) runs on every check (also 'Air' for a miss).
 #include <algorithm>
 #include <cmath>
@@ -422,12 +422,14 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   float h = Lr * std::sqrt(dir.x * dir.x + dir.z * dir.z);
   float s = h > 0.001f ? std::min(Lr / h, 5.0f) : 1.0f;
   Vec3 E = Add(P, Mul(dir, s * Lr));
-  // entities: units and shields
+  // Every entity with a collision shape that the segment crosses (0x7229c0 asks the collision grid, whatever
+  // the entity is), then the choice among them (0x6d6a00): the script's OnCollisionCheckWeapon first (0x6dd5d0,
+  // asked of the firing unit too), then allied aircraft, then the nearest, and last the firing unit is left out.
   Entity* best = nullptr;
   float bestD = std::numeric_limits<float>::infinity();
   Vec3 bestHit;
   auto consider = [&](Entity* e) {
-    if (e == owner || e->destroyQueued) return;
+    if (e->destroyQueued) return;
     WorldShape ws;
     Vec3 hit;
     float d;
@@ -437,18 +439,32 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     if (w->bp->ignoresAlly && e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->layer == "Air" &&
         !IsEnemy(owner->army, e->army))
       return;
-    if (!(d < bestD)) return;
+    if (!(d < bestD) || e == owner) return;
     best = e;
     bestD = d;
     bestHit = hit;
   };
-  float x0 = std::min(P.x, E.x) - 10, x1 = std::max(P.x, E.x) + 10, z0 = std::min(P.z, E.z) - 10,
-        z1 = std::max(P.z, E.z) + 10;
-  std::vector<Unit*> units;
-  sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
-  std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* c) { return a->id < c->id; });
-  for (Unit* u : units) consider(u);
-  for (ShieldEntity* sh : std::vector<ShieldEntity*>(sim.shields)) consider(sh);
+  // Shells too: a missile has a sphere of its own and a beam meets it like anything else (the Cybran zapper: its
+  // beam is drawn up to five times the range long, and the missile it aims at is struck where the two cross).
+  if (sim.entityGrid().ready()) {
+    // (0x6d6e56: the grid's line query, the cells from the muzzle outward; the order the scripts are asked in)
+    std::vector<Entity*> cands;
+    sim.entityGrid().GatherLine(P.x, P.z, E.x, E.z, &cands);
+    for (Entity* e : cands)
+      if (e->kind != Entity::Kind::Beam) consider(e);
+  } else {
+    float x0 = std::min(P.x, E.x) - 10, x1 = std::max(P.x, E.x) + 10, z0 = std::min(P.z, E.z) - 10,
+          z1 = std::max(P.z, E.z) + 10;
+    std::vector<Unit*> units;
+    sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
+    std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* c) { return a->id < c->id; });
+    for (Unit* u : units) consider(u);
+    for (Projectile* o : std::vector<Projectile*>(sim.projectiles))
+      if (o->shape.type != ShapeType::None) consider(o);
+    for (ShieldEntity* sh : std::vector<ShieldEntity*>(sim.shields)) consider(sh);
+    for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
+      if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) consider(*it);
+  }
   float D = Lr;
   Vec3 impactPos = E;
   int type = 3;  // Air

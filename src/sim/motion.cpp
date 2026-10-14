@@ -367,6 +367,38 @@ Quat LookQuat(float dx, float dy, float dz) {
   return Quat{q[0], q[1], q[2], w};
 }
 
+// 0x699940: the quaternion of a hull that has turned on the spot, from its new forward (d0, d1) = (x, -z) as the
+// limited turn 0x6992c0 left it, NOT normalised again: the matrix with the rows (-d1, 0, -d0), (0, 1, 0),
+// (d0, 0, -d1) through MatrixToQuat 0x4eb3f0. (The spline point's facing goes through 0x50b480 = LookQuat, which
+// normalises three times on the way: the same heading with another last digit, and a ship that has turned on the
+// spot carries that digit in every turret angle afterwards.)
+Quat TurnQuat(float d0, float d1) {
+  const float X[3] = {-0.0f - d1, 0.0f, -0.0f - d0}, Y[3] = {0.0f, 1.0f, 0.0f}, Z[3] = {d0, 0.0f, -0.0f - d1};
+  const float* A[3] = {X, Y, Z};
+  float q[3], w;
+  float tr = (A[0][0] + A[1][1]) + A[2][2];
+  if (tr > 0.0f) {
+    float r = std::sqrt(tr + 1.0f);
+    w = r * 0.5f;
+    float inv = 0.5f / r;
+    q[0] = (A[1][2] - A[2][1]) * inv;
+    q[1] = (A[2][0] - A[0][2]) * inv;
+    q[2] = (A[0][1] - A[1][0]) * inv;
+  } else {
+    static const int next[3] = {1, 2, 0};
+    int i = (A[1][1] > A[0][0]) ? 1 : 0;
+    if (A[2][2] > A[i][i]) i = 2;
+    int j = next[i], k = next[j];
+    float r = std::sqrt((A[i][i] - (A[k][k] + A[j][j])) + 1.0f);
+    float inv = 0.5f / r;
+    q[i] = r * 0.5f;
+    w = (A[j][k] - A[k][j]) * inv;
+    q[j] = (A[j][i] + A[i][j]) * inv;
+    q[k] = (A[i][k] + A[k][i]) * inv;
+  }
+  return Quat{q[0], q[1], q[2], w};
+}
+
 Quat YawQuat(float fx, float fz) {
   float h = dmath::Atan2(fx, fz);
   Quat q;
@@ -849,13 +881,17 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
       nfx = nfz = 0.0f;
     }
   }
+  // (the limited turn 0x6992c0 is handed TurnInfo's difference vector as it is, target - place, not a unit
+  // vector: when the turn ends inside the step the facing becomes that vector times |facing| / |vector|, and
+  // with a unit vector in its place the last digit of a ship's heading on a straight run differed)
+  const float rtx = dist > 0 ? dx : tx, rtz = dist > 0 ? dz : tz;
   if (!g.reverse) {
-    RotateToward(nfx, nfz, tx, tz, turn);
+    RotateToward(nfx, nfz, rtx, rtz, turn);
     g.fx = nfx;
     g.fz = nfz;
   } else {
     float bx = -nfx, bz = -nfz;
-    RotateToward(bx, bz, tx, tz, turn);
+    RotateToward(bx, bz, rtx, rtz, turn);
     g.fx = -bx;
     g.fz = -bz;
   }
@@ -1019,9 +1055,12 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   } else {
     g.p = u->position;
     g.vel = {V.x, 0, V.z};
+    // (TurnInfo's forward, normalised by 0x6999f0: times 1 / length. A division gives another last digit on some
+    // headings, and the first point of a fresh batch then turns a ship one float step beside the original's.)
     float l = std::sqrt(D.x * D.x + D.z * D.z);
-    g.fx = l > 1e-6f ? D.x / l : 0;
-    g.fz = l > 1e-6f ? D.z / l : 1;
+    const float li = l > 9.99999997e-07f ? 1.0f / l : 0.0f;
+    g.fx = l > 9.99999997e-07f ? D.x * li : 0;
+    g.fz = l > 9.99999997e-07f ? D.z * li : 1;
     g.bx = g.fx;
     g.bz = g.fz;
     ChooseStart(b, P, g, dot, frac, V.x * D.x + V.y * D.y + V.z * D.z < 0.0f);
@@ -1266,6 +1305,38 @@ namespace combat {
 bool HasTarget(Sim& sim, const AiTarget& t);
 }  // namespace combat
 
+// RotateToward 0x6992c0: the vector c turned toward w by at most th, in the original's order of operations (the
+// last digit of the result is the hull's quaternion's). False: one of the two has no length, c stays.
+static bool RotateTowardExe(float th, float cx, float cz, float wx, float wz, float* nx, float* nz) {
+  const float lc = std::sqrt(cz * cz + cx * cx), lw = std::sqrt(wz * wz + wx * wx);
+  const float k0 = dmath::Cos(th);  // fcos
+  const float ll = lw * lc;
+  if (ll == 0) return false;
+  if (wz * cz + wx * cx >= k0 * ll) {  // within one step: the wanted direction at c's length (0x6993a7)
+    const float ratio = lc / lw;
+    *nx = wx * ratio;
+    *nz = wz * ratio;
+    return true;
+  }
+  const float t2 = th * th;
+  float sn = ((t2 * 0.00761f - 0.16605f) * t2 + 1.0f) * th;
+  if (wz * cx - cz * wx < 0) sn = -0.0f - sn;
+  float k = k0;
+  if (std::fabs((sn * sn + k * k) - 1.0f) > 0.001f) {  // 0x6999f0: times 1 / length
+    const float r = std::sqrt(k * k + sn * sn);
+    if (r > 9.99999997e-07f) {
+      const float ri = 1.0f / r;
+      k *= ri;
+      sn *= ri;
+    } else {
+      k = sn = 0;
+    }
+  }
+  *nx = k * cx - sn * cz;
+  *nz = k * cz + sn * cx;
+  return true;
+}
+
 // CalcMoveCommon's no-spline branch (formations.md 12): an idle unit of a form formation turns on the
 // spot to the formation's forward vector (Unit::GetFormationVector), TurnInfo 0x6990e0 / RotateToward
 // 0x6992c0, in the negated-z frame. Returns true when it turned.
@@ -1291,9 +1362,10 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   // "face where you face" (a slaved weapon with its target inside the arc) is no turn at all.
   const Quat& q = u->orientation;
   float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
-  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
-    cx /= cl;
-    cz /= cl;
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 9.99999997e-07f) {  // 0x6999f0: times 1 / length
+    const float ci = 1.0f / cl;
+    cx *= ci;
+    cz *= ci;
   } else {
     cx = m.bx;
     cz = -m.bz;
@@ -1307,26 +1379,11 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   if (cz * (wz * inv) + cx * (wx * inv) >= 0.9999f) return false;
   float rate = (b.motionType == kMotionHover ? b.turnFacingRate : b.turnRate) * m.turnMult * 0.0017453292f;
   float th = std::min(rate, 3.14159274f);
-  float lc = std::sqrt(cx * cx + cz * cz), lw = len;
-  if (lc * lw == 0) return false;
   float nx, nz;
-  float k = dmath::Cos(th);  // (the exe's cosine, as in RotateToward: std::cos is a last bit off for some angles)
-  if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
-    nx = wx * lc / lw;
-    nz = wz * lc / lw;
-  } else {
-    float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
-    if (wz * cx - cz * wx < 0) sn = -sn;
-    if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
-      float r = std::sqrt(sn * sn + k * k);
-      sn /= r;
-      k /= r;
-    }
-    nx = k * cx - sn * cz;
-    nz = k * cz + sn * cx;
-  }
+  if (!RotateTowardExe(th, cx, cz, wx, wz, &nx, &nz)) return false;
   float l = std::sqrt(nx * nx + nz * nz);
   if (l <= 0) return false;
+  m.turnQ = TurnQuat(nx, nz);  // (0x699940: from the turned vector as it is)
   m.fx = m.bx = nx / l;
   m.fz = m.bz = -nz / l;
   return true;
@@ -1344,9 +1401,10 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
   if (!SlavedFaceVector(sim, u, &fv)) fv = Vec3{dirX, 0, dirZ};
   const Quat& q = u->orientation;
   float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
-  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 0) {
-    cx /= cl;
-    cz /= cl;
+  if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 9.99999997e-07f) {  // 0x6999f0: times 1 / length
+    const float ci = 1.0f / cl;
+    cx *= ci;
+    cz *= ci;
   } else {
     cx = m.bx;
     cz = -m.bz;
@@ -1354,24 +1412,7 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
   float nx = cx, nz = cz;
   const float wx = fv.x, wz = -fv.z;
   const float th = std::min(b.turnFacingRate * m.turnMult * 0.0017453292f, 3.14159274f);
-  const float lc = std::sqrt(cx * cx + cz * cz), lw = std::sqrt(wx * wx + wz * wz);
-  if (lc * lw != 0) {
-    float k = std::cos(th);
-    if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
-      nx = wx * lc / lw;
-      nz = wz * lc / lw;
-    } else {
-      float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
-      if (wz * cx - cz * wx < 0) sn = -sn;
-      if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
-        float r = std::sqrt(sn * sn + k * k);
-        sn /= r;
-        k /= r;
-      }
-      nx = k * cx - sn * cz;
-      nz = k * cz + sn * cx;
-    }
-  }
+  RotateTowardExe(th, cx, cz, wx, wz, &nx, &nz);
   const float l = std::sqrt(nx * nx + nz * nz);
   if (l > 0) {
     m.bx = nx / l;
@@ -1657,6 +1698,13 @@ void MotionTick(Sim& sim, Unit* u) {
       } else {
         if (brakePoint) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
         else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
+        {
+          // MOHO64_DEBUG_FACING=<unit id>: the point's direction and the quaternion made of it, all digits
+          static const long dbgFace = getenv("MOHO64_DEBUG_FACING") ? atol(getenv("MOHO64_DEBUG_FACING")) : -1;
+          if (dbgFace >= 0 && static_cast<long>(u->id) == dbgFace)
+            fprintf(stderr, "facing: tick %u dir %.9g %.9g (brake %d) -> q %.9g %.9g %.9g %.9g\n", sim.tick(), q.bx, q.bz,
+                    brakePoint ? 1 : 0, u->orientation.x, u->orientation.y, u->orientation.z, u->orientation.w);
+        }
         m.bx = q.bx;
         m.bz = q.bz;
       }
@@ -1676,7 +1724,7 @@ void MotionTick(Sim& sim, Unit* u) {
       moved = Coast(u, turned);
       if (turned) {
         m.needSnap = true;
-        u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+        u->orientation = m.turnQ;
       }
     }
     if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {

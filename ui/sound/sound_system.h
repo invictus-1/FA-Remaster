@@ -107,6 +107,7 @@ class SoundSystem {
   float Heard(const std::vector<uint32_t>& curves, const float position[3], float* left, float* right) const;
   void UpdateWorld();
   bool MayStartLoop(const float position[3]) const;
+  float ByCamera(const std::vector<uint32_t>& curves) const;
   int CategoryOfCue(const std::string& bank, const std::string& cue);
   bool IsHumCategory(int category) const;
   int CategoryByName(const std::string& name) const;
@@ -123,6 +124,7 @@ class SoundSystem {
   std::map<int, std::vector<int>> handles_;  // a playing cue's voices
   std::map<uint32_t, Curve> curves_;         // the global settings' curves, by offset
   std::map<int, Placed> placed_;             // the world's playing sounds, by handle
+  std::map<int, std::vector<uint32_t>> byCamera_;  // sounds not placed that follow the camera's distance: their curves
   std::map<uint32_t, Loop> loops_;           // the entities' running sounds
   float eye_[3] = {0, 0, 0}, focus_[3] = {0, 0, 0}, right_[3] = {1, 0, 0}, zoom_ = 100;
   bool listening_ = false;  // SetListener was called: before that nothing of the world is heard

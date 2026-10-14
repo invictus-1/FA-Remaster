@@ -84,6 +84,7 @@ struct UnitMotion {
   // A change between Water and Land of a unit with Physics.LayerTransitionDuration (the Cybran destroyer that
   // walks ashore): m+0x11c the blend's beat counter (0: none), m+0x120 the transform it began with, m+0x13c the
   // one it ends on. While it runs the unit is moved along the blend and takes no spline point (motion.cpp).
+  Quat turnQ;              // the hull's quaternion after this beat's turn on the spot (ArrivalTurn)
   bool heldLatch = false;  // steering+0xa0: the spline was dropped because the unit is immobile or stunned
   float layerBlend = 0;
   Vec3 blendFromPos, blendToPos;
@@ -202,6 +203,8 @@ void SetNewTargetLayer(Sim& sim, Unit* u, int layer);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// The look rotation 0x50b480: forward along the direction, the world's up (motion.cpp).
+Quat LookQuat(float dx, float dy, float dz);
 // Unit::GetVelocity 0x6a9c90 (entity vtbl+0x3c): a unit with a land motion not on the Air layer reports m+0x38,
 // otherwise the last tick's displacement
 const Vec3& UnitVelocity(const Unit* u);

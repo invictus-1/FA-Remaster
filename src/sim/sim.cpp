@@ -1329,6 +1329,7 @@ void Sim::Tick() {
   LandNavBackground(*this);  // AdvanceBeat step 3: path tables' background build
   // the armies' stage: economy, navigators and path queues, weapons (acquire, fire)
   EconomyBeginBeat(*this);
+  threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
   g_prof.Lap(0);
   LandNavTickAll(*this);
   g_prof.Lap(9);
@@ -1339,6 +1340,7 @@ void Sim::Tick() {
   SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
   g_prof.Lap(3);
   WeaponsTick(*this);
+  threads_->WakeSignalled();
   g_prof.Lap(8);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
   g_prof.Lap(2);
@@ -1395,6 +1397,7 @@ void Sim::Tick() {
     u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;
     u->lastPosTick = tick_;
+    PurgeShooters(*this, u);
     HoldShape(u);
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
@@ -1493,6 +1496,7 @@ void Sim::Tick() {
     if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
   }
   beamsBefore(0xffffffffu);  // the beams younger than every unit
+  threads_->WakeSignalled();
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   if (anyAttached) {
     AttachedUnitsTick(*this);
@@ -1545,6 +1549,7 @@ void Sim::Tick() {
   MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
   g_prof.Lap(4);
   AnimTick(*this);
+  threads_->WakeSignalled();
   gridDirty_ = true;
   g_prof.Lap(5);
   g_prof.Lap(7);

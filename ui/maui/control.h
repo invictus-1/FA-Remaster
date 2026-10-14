@@ -40,6 +40,9 @@ class Control : public ScriptObject {
   virtual const char* ClassName() const { return "control"; }
   // One line of this control's own state for Dump (texture, text, ...).
   virtual void Describe(std::string& out) const { (void)out; }
+  // A control whose picture lies under every other control of its head whatever its Depth: the
+  // main world view (see UiManager::Render).
+  virtual bool DrawsBeneathAll() const { return false; }
   // Draw this control alone (its children draw themselves). A plain control draws nothing.
   virtual void Draw(lua_State* L, DrawTarget& target) {
     (void)L;

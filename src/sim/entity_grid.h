@@ -25,11 +25,18 @@ class EntityGrid {
   void Gather(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
   // COGrid::CollectEntitiesInBox's cell span (func_AABoxToRect 0x4fcbe0: floor / ceil, like an entity's own span).
   void GatherBox(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
+  // The cells a segment passes, from its start to its end, and in each cell the third list (shells, shields,
+  // script entities: what has a collision primitive and is no unit and no prop) and then the units; props are not
+  // asked. Each entity once, where it is first met. (COGrid's line query 0x4fd200, behind
+  // GetEntityCollisionsInLine 0x7229c0: a shell's and a beam's candidates, in the order they are asked.)
+  void GatherLine(float fromX, float fromZ, float toX, float toZ, std::vector<Entity*>* out);
   bool ready() const { return w_ > 0; }
 
  private:
   int w_ = 0, h_ = 0;
-  std::vector<std::vector<Entity*>> lists_[2];  // per cell; the back is the head
+  // per cell; the back is the head. 0: units (0x100), 1: props (0x200), 2: shells (0x400) and shields, beams,
+  // script entities (0x800)
+  std::vector<std::vector<Entity*>> lists_[3];
 };
 
 // Entity::UpdateCollision / UpdateRect: the entity's cell span from its collision primitive (none: no
@@ -37,7 +44,8 @@ class EntityGrid {
 // (Unit::UpdateCollision); else the plain primitive (shape changes from Lua, creation).
 void GridUpdate(Sim& sim, Entity* e, bool widened);
 void GridRemove(Sim& sim, Entity* e);
-// Step 13 of the beat (Entity::AdvanceCoords): every unit's widened span.
+// Step 13 of the beat (Entity::AdvanceCoords): every unit's widened span, and the span of everything in the third
+// list, in the order they were made (the order their turns set their transforms in).
 void GridAdvanceCoords(Sim& sim);
 // Whether a grid query of the box [mn, mx] finds the entity: the cells it is registered in (its span as the grid
 // has it: skirt-wide for a unit that moved since it was made, and as of the last AdvanceCoords) against the

@@ -327,8 +327,10 @@ int l_VDist3(lua_State* L) {
 int l_VDot(lua_State* L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   luaL_checktype(L, 2, LUA_TTABLE);
-  lua_pushnumber(L, VecComp(L, 1, 1) * VecComp(L, 2, 1) + VecComp(L, 1, 2) * VecComp(L, 2, 2) +
-                        VecComp(L, 1, 3) * VecComp(L, 2, 3));
+  // (0x4d1776: summed z, y, then x; each product and sum rounded to float)
+  const float zz = VecComp(L, 1, 3) * VecComp(L, 2, 3), yy = VecComp(L, 1, 2) * VecComp(L, 2, 2),
+              xx = VecComp(L, 1, 1) * VecComp(L, 2, 1);
+  lua_pushnumber(L, (zz + yy) + xx);
   return 1;
 }
 int l_VAdd(lua_State* L) {
@@ -615,3 +617,28 @@ void RegisterCoreBindings(ScriptState& state) {
 }
 
 }  // namespace moho
+
+// For the Lua math library (third_party/lua/lmathlib.c): the functions whose results the original's are not the
+// correctly rounded ones. Its library (0x919a80...) is compiled to x87 instructions and runs with the precision
+// control at 24 bits, where +, -, * and the square root round to float and only the transcendental instructions stay
+// wide:
+// - asin, acos (0x919b10, 0x919b40 -> _CIasin 0xa8de20, _CIacos 0xa8dcd0): the x87 branch, see dmath.h.
+// - exp (0x919d50): x * log2(e) rounded to float, split at the nearest integer, f2xm1, then 1 + that rounded to
+//   float again, fscale.
+// sin, cos, tan, atan, atan2, log and log10 are one wide instruction each, stored as a float: the correctly
+// rounded value. pow goes to the library's double version (0xa8e0e0 -> 0xaa93c0 with exceptions masked), sqrt is
+// fsqrt, mod is fprem, deg and rad multiply by a float constant.
+extern "C" {
+float moho_lua_acos(float x) { return moho::dmath::Acos(x); }
+float moho_lua_asin(float x) { return moho::dmath::Asin(x); }
+float moho_lua_exp(float x) {
+  if (!(x == x)) return x;
+  const float t = static_cast<float>(static_cast<double>(x) * 1.4426950408889634074);
+  if (t > 200.0f) return HUGE_VALF;
+  if (t < -200.0f) return 0.0f;
+  const float n = std::nearbyint(t);
+  const float f = t - n;
+  const float g = static_cast<float>(1.0 + (std::exp2(static_cast<double>(f)) - 1.0));
+  return std::ldexp(g, static_cast<int>(n));
+}
+}

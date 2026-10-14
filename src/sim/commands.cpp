@@ -337,9 +337,17 @@ void StartHead(Sim& sim, Unit* u) {
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
-      // Stop: everything queued up to here is dropped; the unit coasts to a stop.
+      // DispatchTask's case for Stop (0x608f98 -> 0x60a490) does not touch the motion: it clears the attacker's
+      // desired target (0x5d56f0), calls unit+0x558's vt+0x2c and sets unit+0xa2. What stops the unit is the
+      // queue being cleared when the order ARRIVES: the running move task is torn down and its navigator makes
+      // the brake spline and hands out its first point there and then. By the next beat the steering hands out
+      // the second, so a unit told to stop skips the first brake point (seen: thirteen hovercraft, each one
+      // brake step ahead of ours from the beat after the order). A second stop here would make the brake spline
+      // afresh from where the unit stands. (A Stop a SCRIPT queued has not cleared anything when it gets here:
+      // not read what the original does with one behind other orders; it stops the motion as before.)
+      const bool fromStream = c.fromStream;
       PopHead(u);
-      MotionStop(u);
+      if (!fromStream) MotionStop(u);
       SetMoving(u, false);
       continue;
     }
@@ -881,6 +889,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       u->clearKeepsMove = keep;
       ForgetUnitCommands(u);
       u->clearKeepsMove = false;
+      // CUnitMoveTask's destructor takes the unit out of state Moving FIRST (0x6187bd: bit 2 of unit+0x4a0) and
+      // aborts the move after it (0x618884). The abort's CheckCollisions therefore sees this unit as standing:
+      // "a standing unit has priority over a mover". When one Stop reaches two neighbours, the first one torn
+      // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
+      // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
+      if (moveAsleep) SetMoving(u, false);
       if (!keep && hadCommands) MotionStop(u);
       if (moveAsleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);

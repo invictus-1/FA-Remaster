@@ -3,6 +3,65 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 21: a projectile's SetVizTo... flags — done
+
+`ProjectileView` (src/sim/sim_view.h) has `vizFocus`, `vizAllies`, `vizEnemies`, `vizNeutrals` now, with the
+same meaning as on `EntityView`: 0 never called, 1 'Always', 2 'Never', 3 'Intel', as the script last called
+SetVizToFocusPlayer / Allies / Enemies / Neutrals on the shell. They sit at the end of the struct; nothing else
+in it moved. FAF's ShieldCollider shell sets all four to 'Never' in its OnCreate, so it arrives as 2, 2, 2, 2.
+
+Another way a shell is hidden from everybody in the original: I know of none that the simulation holds. A shell
+has no recon blip of its own; whether it is drawn is the viz flags and, on the user side, whether its mesh has a
+level of detail for the distance. A blueprint without a mesh (Display.Mesh empty) draws nothing either, but that
+you see yourself.
+
+## ui 20: reclaim of a building (the walk, the speed, the arm) and a shield's ratio — a to c done, d answered
+
+The Reclaim order's task was a shorter form of the original's. It is now CUnitReclaimTask state by state
+(read at 0x61f000; `TickPropReclaim` in src/sim/build.cpp carries both a prop and a unit), and the three things
+Chris saw come from that.
+
+**a. The walk.** The original's rule, now ours: the builder must be within MaxBuildDistance of the target,
+measured as the distance between the two centres LESS the larger side of the builder's footprint LESS the larger
+side of the target's footprint (whole cells, not half of them). Farther than that, or nearer than 1, it walks
+first (to a free cell beside the target's footprint), then reclaims. So a commander (MaxBuildDistance 10,
+footprint 1) reclaims a building two cells wide from up to 13 away without a step, and one eight cells wide
+from up to 19. That is the original's reach, and it is generous: "it reclaims from where it stands" is right
+inside it. Before today ours took HALF the target's size, a shorter reach than the original's, so if anything
+it walked more. If he stood farther than the rule allows and it still did not walk, give me the two positions
+and the building's id and I look at that order.
+
+**b. The speed. This was wrong, and badly.** The original asks the BUILDER: `builder:GetReclaimCosts(target)`.
+Ours asked the target. For a prop FAF's function answers the same either way; for a unit it does not: asked the
+wrong way round it took the reclaimer's build cost and the TARGET's build rate. A T1 engineer on a land factory
+came out at 0.1 x 260 / 20 = 1.3 seconds. Asked the right way it is 0.1 x (the target's BuildCostEnergy or
+BuildCostMass, whichever is larger) x the builder's ReclaimTimeMultiplier / the builder's BuildRate: a building
+that costs 750 energy takes a T1 engineer (rate 5) 15 seconds and the commander (rate 10) 7.5.
+What happens in that time, as the original does it: every beat the target loses MaxHealth / (seconds x 10)
+health (plus what it regenerates in a beat) and carries the state BeingReclaimed; nothing is paid out and the
+builder's own shortage of resources does not slow it. When the health is used up the engine calls the target's
+OnReclaimed, then its `CreateWreckageProp(0)`, destroys the unit, and the same task goes on reclaiming the WRECK
+as a prop. That second part is where the mass comes from, and it has the prop's own pace (ui 19's numbers).
+An unfinished unit is taken the prop's way from the start and pays back what was put into it.
+
+**c. The arm.** The original's task aims the builder's arm at the target before it starts (SetAimTarget, which
+runs the script's OnPrepareArmToBuild: that is what opens it), waits until the arm is on target unless the two
+stand within 1 of each other, and lets it go when the task ends. The order's task did none of that; it does all
+three now, like the build task. Nothing new is needed on your side or the renderer's: the arm is bones in the
+unit's pose like a turret's.
+
+**d. A shield's ratio.** `UnitStateView::shieldRatio` is the number FAF's shield script hands to
+`Unit:SetShieldRatio`, read back from the unit each time the view is asked for. lua/shield.lua sets it to 1 when
+the shield is made, to health / max health when it takes damage and while it recharges, to the charge-up's
+progress while it comes up after being down, and to 0 when it goes down or is switched off. The owner is the
+unit that carries the shield (a generator, or the unit with a personal shield), so both kinds are covered. I
+have read this, not watched it in a running game: if a generator whose bubble is up gives you 0, tell me the
+unit's id and I trace that one. One trap: before the shield's first OnCreate has run (a generator still being
+built, a shield upgrade not yet finished) the script has never called it and the view says 0.
+
+The Engineers replay, which reclaims, now matches the original 418 beats longer (first difference at beat 1373,
+was 955).
+
 ## ui 19: reclaim: the prop at a place, and an order with a place and no entity — done
 
 **(1) The lookup.** `ReclaimableAt(Sim&, const float at[3], float within, ReclaimableView* out)` in

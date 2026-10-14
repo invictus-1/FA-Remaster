@@ -31,6 +31,7 @@
 #include "sim/blueprints.h"
 #include "sim/collision.h"
 #include "sim/combat.h"
+#include "sim/entity_grid.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -499,24 +500,32 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
     if (len >= 0.01f) {
       Vec3 a = Sub(p0, Mul(seg, 0.01f)), b2 = Add(p1, Mul(seg, 0.01f));
       std::vector<Entity*> cands;
-      // (candidates by their centre: the margin must cover the biggest shape's reach, a CZAR's box corner is 15)
-      float x0 = std::min(a.x, b2.x) - 32, x1 = std::max(a.x, b2.x) + 32, z0 = std::min(a.z, b2.z) - 32,
-            z1 = std::max(a.z, b2.z) + 32;
-      std::vector<Unit*> units;
-      sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
-      std::sort(units.begin(), units.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
-      for (Unit* u : units) cands.push_back(u);
-      for (Projectile* o : sim.projectiles)
-        if (o != p && o->shape.type != ShapeType::None && o->position.x >= x0 && o->position.x <= x1 &&
-            o->position.z >= z0 && o->position.z <= z1)
-          cands.push_back(o);
-      for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
-      // Script-made entities that were given a collision shape are in the entity grid like everything else, and a
-      // shell asks them too: FAF's torpedo decoy (DepthCharge in defaultantiprojectile.lua, a sphere riding on the
-      // anti-torpedo shell) and its missile flare answer no to OnCollisionCheck and turn the shell onto their
-      // owner with SetNewTarget; the Loyalist's MissileRedirect works the same way.
-      for (Entity* se : sim.scriptEntities)
-        if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
+      if (sim.entityGrid().ready()) {
+        // 0x69db05: ONE query of the entity grid for everything with a collision primitive, GetEntityCollisionsInLine
+        // 0x7229c0: the cells the (lengthened) segment passes, from its start to its end; in each cell first the
+        // shells, shields and script entities, then the units, each list with what was registered last in front.
+        // The candidates are asked in that order, and one is only asked while no nearer hit stands. So a script
+        // entity is asked before a unit of the same cell: FAF's missile flare (a sphere riding on the flare shell,
+        // which answers no to OnCollisionCheck and turns the missile with SetNewTarget) still turns, and counts, a
+        // missile that strikes a ship in the very step it enters the sphere. And of several decoys crossed in one
+        // step the last one asked keeps the shell.
+        sim.entityGrid().GatherLine(a.x, a.z, b2.x, b2.z, &cands);
+      } else {
+        // (no map, no grid: by kind)
+        float x0 = std::min(a.x, b2.x) - 32, x1 = std::max(a.x, b2.x) + 32, z0 = std::min(a.z, b2.z) - 32,
+              z1 = std::max(a.z, b2.z) + 32;
+        std::vector<Unit*> units;
+        sim.ForUnitsInRect(x0, z0, x1, z1, [&](Unit* u) { units.push_back(u); });
+        std::sort(units.begin(), units.end(), [](const Unit* x, const Unit* y) { return x->id < y->id; });
+        for (Unit* u : units) cands.push_back(u);
+        for (Projectile* o : sim.projectiles)
+          if (o != p && o->shape.type != ShapeType::None && o->position.x >= x0 && o->position.x <= x1 &&
+              o->position.z >= z0 && o->position.z <= z1)
+            cands.push_back(o);
+        for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
+        for (auto it = sim.scriptEntities.rbegin(); it != sim.scriptEntities.rend(); ++it)
+          if ((*it)->kind == Entity::Kind::Entity && (*it)->shape.type != ShapeType::None) cands.push_back(*it);
+      }
       for (Entity* e : cands) {
         // (an entity whose Destroy is queued is still in the world until the beat's end and is met like any
         // other: an anti-torpedo runs into the sphere of a torpedo that struck its ship earlier in this pass)
@@ -637,14 +646,25 @@ void MotionTick(Sim& sim, Projectile* p) {
     float l = Len(v);
     if (l > p->maxSpeed) v = Mul(v, p->maxSpeed / l);
   }
-  if (p->stayUpright) q = Orient(Forward(q));
+  if (p->stayUpright) {  // 0x69c1b7: the look rotation 0x50b480 of the forward
+    const Vec3 f = Forward(q);
+    q = LookQuat(f.x, f.y, f.z);
+  }
   Vec3 p0 = p->position;
   Vec3 p1 = Add(p0, Mul(Add(v, v0), 0.05f));
   float av = Len(p->angVel);
   if (av != 0) {
     if (p->velocityAlign || p->trackTarget) p->angVel = {0, 0, av};
     else if (p->stayUpright) p->angVel = {0, av, 0};
-    q = QNorm(QMul(q, FromRotVec(Mul(p->angVel, 0.1f))));
+    // 0x69c376: q x r, r = the quaternion of the rotation vector (0x697360: the vector normalised by 0x452af0, half
+    // its length, fsin / fcos), summed in the order below. The product is NOT normalised.
+    Vec3 n = Mul(p->angVel, 0.1f);
+    const float h = static_cast<float>(NormalizeExe(n)) * 0.5f;
+    const float s = dmath::Sin(h), c = dmath::Cos(h);
+    const Quat r{n.x * s, n.y * s, s * n.z, c};
+    const Quat b = q;
+    q = {((r.x * b.w + r.z * b.y) + b.x * r.w) - r.y * b.z, ((r.y * b.w + r.x * b.z) + b.y * r.w) - r.z * b.x,
+         ((r.z * b.w + r.y * b.x) + b.z * r.w) - r.x * b.y, ((r.w * b.w - r.x * b.x) - r.y * b.y) - r.z * b.z};
   }
   float w = WaterLevel(sim);
   if (p->stayUnderwater && p->underwater) p1.y = std::min(p1.y, w - 0.01f);
@@ -709,9 +729,14 @@ void ProjectilesTick(Sim& sim) {
   // That holds for every shell made in the pass (CTaskStage 0x409ac0: a thread made while the stage runs is
   // linked at its new end), also for the debris a shot-down missile drops from OnKilled; what looked like such a
   // piece waiting a beat was where it starts: at its parent's place of the beat's START (l_CreateChildProjectile).
+  // A shell whose Destroy is QUEUED still takes its step: neither Entity::TaskTick 0x679c40 nor
+  // Projectile::MotionTick 0x69bdd0 looks at the flag, and the entity is only taken away when the beat's destroy
+  // queue runs. Seen: a missile that a script thread killed in the Lua stage (FAF's flare, 10 beats after it
+  // turned the missile) still made its zig-zag draws in that beat's entity stage.
   for (size_t i = 0; i < sim.projectiles.size(); ++i) {
     Projectile* p = sim.projectiles[i];
-    if (p->destroyQueued || !p->HasLuaObject()) continue;
+    if (!p->HasLuaObject()) continue;
+    PurgeShooters(sim, p);
     sim.HoldShape(p);
     p->heldVel = EntityVelocity(p);
     sim.steppingProjectile = p;
@@ -823,8 +848,13 @@ int l_weapon_CreateProjectile(lua_State* L) {
   Quat q;
   BoneWorld(u, bone, &pos, &q);
   const ProjBp& pb = GetProjBp(sim, L, *w->projBp);
-  if (pb.straightDown) q = Orient({0, -1, 0});
-  else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) q = Orient(Norm(w->solution));
+  // (0x6d65d0..0x6d662f: the look rotation 0x50b480 of straight down, or of the normalised solution 0x44f7e0)
+  if (pb.straightDown) {
+    q = LookQuat(0.0f, -1.0f, 0.0f);
+  } else if (w->bp->useFiringSolutionInsteadOfAimBone && !IsNaN(w->solution)) {
+    const Vec3 s = Norm(w->solution);
+    q = LookQuat(s.x, s.y, s.z);
+  }
   float R = w->firingRandomness;
   static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;
   if (dbgProj) {
@@ -842,12 +872,37 @@ int l_weapon_CreateProjectile(lua_State* L) {
          w->solution.y, w->solution.z, w->bp->useFiringSolutionInsteadOfAimBone ? 1 : 0, pb.straightDown ? 1 : 0,
          u->position.x, u->position.y, u->position.z, u->orientation.x, u->orientation.y, u->orientation.z,
          u->orientation.w, u->poseSet ? 1 : 0);
+    // the bone's chain, root first: each bone's local rotation as posed this beat and at rest
+    if (u->skeleton && bone >= 0 && bone < u->skeleton->Count()) {
+      const auto& bones = u->skeleton->bones();
+      int chain[64];
+      int n = 0;
+      for (int i = bone; i >= 0 && n < 64; i = bones[static_cast<size_t>(i)].parent) chain[n++] = i;
+      const bool posed = u->poseQ.size() == bones.size();
+      Logf(LogLevel::Info, "wproj %u unit %u   pose base q %.9g %.9g %.9g %.9g", sim.tick(), u->id,
+           (u->poseSet ? u->poseBaseOri : u->orientation).x, (u->poseSet ? u->poseBaseOri : u->orientation).y,
+           (u->poseSet ? u->poseBaseOri : u->orientation).z, (u->poseSet ? u->poseBaseOri : u->orientation).w);
+      for (int k = n - 1; k >= 0; --k) {
+        const size_t bi = static_cast<size_t>(chain[k]);
+        const Quat pq = posed ? u->poseQ[bi] : bones[bi].localRot;
+        Logf(LogLevel::Info, "wproj %u unit %u   chain bone %d posed q %.9g %.9g %.9g %.9g rest q %.9g %.9g %.9g %.9g",
+             sim.tick(), u->id, chain[k], pq.x, pq.y, pq.z, pq.w, bones[bi].localRot.x, bones[bi].localRot.y,
+             bones[bi].localRot.z, bones[bi].localRot.w);
+      }
+    }
   }
   if (R > 0) {
-    float g1 = Gauss(sim), g2 = Gauss(sim);
-    float pitch = g1 * R * kPi / 180, yaw = g2 * R * kPi / 180;
-    Quat dq = QMul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, pitch));
-    q = QNorm(QMul(q, dq));
+    // 0x6d667e..0x6d67d2: two Gauss draws times the randomness times [0xdff090] (degrees to radians, in that
+    // order), the rotation r = yaw about +y times pitch about +x (0x50b300 with its third angle 0: fcos / fsin of the
+    // half angles, then single products), and q x r summed in the order below. The product is NOT normalised.
+    const float g1 = Gauss(sim), g2 = Gauss(sim);
+    const float pitch = (g1 * R) * kDeg2Rad, yaw = (g2 * R) * kDeg2Rad;
+    const float cA = dmath::Cos(pitch * 0.5f), sA = dmath::Sin(pitch * 0.5f);
+    const float cB = dmath::Cos(yaw * 0.5f), sB = dmath::Sin(yaw * 0.5f);
+    const Quat r{sA * cB, sB * cA, -(sB * sA), cB * cA};
+    const Quat b = q;
+    q = {((r.z * b.y + b.x * r.w) + r.x * b.w) - r.y * b.z, ((r.x * b.z + b.y * r.w) + r.y * b.w) - r.z * b.x,
+         ((r.y * b.x + b.z * r.w) + r.z * b.w) - r.x * b.y, ((r.w * b.w - r.x * b.x) - r.y * b.y) - r.z * b.z};
   }
   float damage = w->ovDamage >= 0 ? w->ovDamage : w->bp->damage;
   float radius = w->ovDamageRadius >= 0 ? w->ovDamageRadius : w->bp->damageRadius;
@@ -1026,6 +1081,15 @@ int l_SetNewTarget(lua_State* L) {
   // (a draw when it is a unit with target bones). FAF's Projectile.RetargetThread comes here a beat after a
   // homing shell lost its target, with what its weapon aims at now: one draw per torpedo of a salvo.
   p->target.aimBone = TargetPointBone(*S(L), e);
+  if (getenv("MOHO64_DEBUG_PROJ")) {  // who gives a shell a new target, and from which script line
+    luaL_where(L, 1);
+    const std::string at1 = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    luaL_where(L, 2);
+    const std::string at2 = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 2);
+    Logf(LogLevel::Info, "pdbg %u %u SetNewTarget %u (%s) from %s< %s", S(L)->tick(), p->id, e ? e->id : 0,
+         e && e->blueprint ? e->blueprint->id.c_str() : "?", at1.c_str(), at2.c_str());
+  }
   return 0;
 }
 int l_SetNewTargetGround(lua_State* L) {

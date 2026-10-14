@@ -405,6 +405,7 @@ WorldView* MainView(Control* c);  // further down: the first world view that is 
 class WorldView : public Control {
  public:
   const char* ClassName() const override { return "worldview"; }
+  bool DrawsBeneathAll() const override { return !miniMap; }
   void Describe(std::string& out) const override { out += "camera " + cameraName + (miniMap ? " minimap" : ""); }
 
   std::string cameraName;
@@ -490,7 +491,13 @@ class WorldView : public Control {
     // held). Which units: buildings, any army's the player sees. INFERRED: the original's test
     // (0x8b4140 gives 8) is not read; in Chris's picture of it a factory has the outline and the
     // commander beside it has none. Only those near what the camera looks at (ours, for the cost).
-    if (building && !KeyIsDown(L, kKeyShift)) {
+    // With Shift held too: read at 0x853e73 the original skips its call while key 0x132 (Shift)
+    // is down, and so did this at first; but Chris, 2026-10-13, queuing buildings with Shift
+    // held: "Pressing shift hides the building outlines when I'm trying to queue more buildings
+    // it shouldn't do this", and the original does show them to him then. His word on what the
+    // original shows goes before my reading of one jump (what the routine called next, 0x854b70,
+    // draws for standing buildings while Shift is down is not read).
+    if (building) {
       std::vector<WorldGhost> standing;
       StructuresForWorld(L, cam.target, std::max(100.0f, cam.distance * 2.0f), &standing);
       for (const WorldGhost& g : standing) SiteOutline(L, *sim, g, 0xc00080ffu, &scene.lines);
@@ -866,6 +873,15 @@ class WorldView : public Control {
     return UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0);
   }
 
+  // So many pixels of the view, in map units at the place the camera looks at.
+  float MapUnitsOf(lua_State* L, int pixels) {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    Camera* c = GetCameraObject(L, cameraName);
+    const float width = std::max(1.0f, static_cast<float>(r.x1 - r.x0));
+    return c ? c->zoom * static_cast<float>(pixels) / width : 0;
+  }
+
   // Events: the script first, as for every control. Then the world view's own part, of which this
   // much is built: a press of the right button gives the selected units the order that fits what
   // is under the cursor (RightClickOrder: attack an enemy, reclaim, repair, guard, else move
@@ -920,6 +936,11 @@ class WorldView : public Control {
       // (With Alt held, a right click that would be a move is FAF's attack-move.)
       if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
       if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
+      // can reclaim: reclaim it. (As players know it from the original; its code for what is
+      // under the cursor beside units is not read. The cursor must be ON it, within a few
+      // pixels: a click beside a tree stays a move.)
+      if (under == 0xffffffffu && !miniMap && IssueReclaimAtPlace(L, world, MapUnitsOf(L, 4), !e.shift)) return true;
       return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
     }
     if (!e.left) return false;
@@ -953,6 +974,11 @@ class WorldView : public Control {
       const std::string order = name.substr(8);
       const uint32_t under = miniMap ? 0xffffffffu : UnitUnder(L, e.x, e.y);
       if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
+      // with more room than a right click gets (the player has said what is meant). With nothing
+      // there the order still goes out with the place, as the original sends it (the simulation
+      // ends it at once when the place is in sight).
+      if (order == "Reclaim" && !miniMap && IssueReclaimAtPlace(L, world, std::max(1.0f, MapUnitsOf(L, 14)), !e.shift)) return true;
       return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
     }
     if (!mode.empty() || miniMap) return false;
@@ -1060,7 +1086,17 @@ int l_ViewRightMouseButtonOrder(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   std::string mode, name, order;
   v->CommandMode(L, &mode, &name);  // none while the script is in a command mode, as the original
-  if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) order = RightClickOrder(L, v->UnitUnder(L, ui.mouseX, ui.mouseY));
+  if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) {
+    const uint32_t under = v->UnitUnder(L, ui.mouseX, ui.mouseY);
+    order = RightClickOrder(L, under);
+    // (over a tree, a rock or a wreck that the selection can reclaim, the click reclaims it:
+    // the same test as the click's own, so the cursor says what the click will do)
+    float world[3];
+    if (under == 0xffffffffu && !order.empty() && !v->miniMap) {
+      v->Unproject(L, ui.mouseX, ui.mouseY, world);
+      if (CanReclaimAtPlace(L, world, v->MapUnitsOf(L, 4))) order = "RULEUCC_Reclaim";
+    }
+  }
   if (order.empty()) lua_pushnil(L);
   else lua_pushstring(L, order.c_str());
   return 1;

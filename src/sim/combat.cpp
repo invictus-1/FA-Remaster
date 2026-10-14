@@ -387,7 +387,11 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // A shell as a target (an anti-torpedo's, a missile defence's): its bone -1 too, the centre its blueprint
     // gives (half its SizeY above its origin: 0.5 with the default size), turned with the shell. Seen in the
     // original's shell lines: an anti-torpedo steers at a point 0.5 from the torpedo's origin, along its up axis.
-    if (e->kind == Entity::Kind::Projectile && e->blueprint && !centre)
+    // For the range test too (centre): 0x5e2a90 asks a unit for its place (vt+0x14) and a recon blip for its own
+    // (vt+0x1c, entity+0xac), and everything else falls to GetBoneWorldTransform(-1) whatever the flag says. Seen:
+    // a missile 68 above a cruiser, its origin 1.96 from the ship (inside MinRadius 2) and its centre 2.31: the
+    // original's missile defence fires.
+    if (e->kind == Entity::Kind::Projectile && e->blueprint)
       return Add(e->position, RotateM(e->orientation, e->bpCenter));
     return e->position;
   }
@@ -1055,8 +1059,12 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   bool had = w->target.type != 0, has = nt.type != 0;
   if (had && !has) WeaponCall(sim, w, "OnLostTarget");
   if (has) DecayBlacklist(sim, w);
-  if (Entity* old = TargetEntity(sim, w->target))
-    if (old->shooters > 0) --old->shooters;
+  // 0x6d5f89: the weapon's UNIT leaves the old target's shooters (whether or not another weapon of the unit still
+  // holds that target), unless the old target is dead or going
+  if (Entity* old = TargetEntity(sim, w->target); old && !old->dead && !old->destroyQueued && w->unit) {
+    const uint32_t ref = EntityRef(w->unit);
+    old->shooters.erase(std::remove(old->shooters.begin(), old->shooters.end(), ref), old->shooters.end());
+  }
   w->target = nt;
   Entity* e = TargetEntity(sim, w->target);
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
@@ -1065,7 +1073,11 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
     w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
   }
   PickNewTargetAimSpot(sim, w);
-  if (e && !e->dead) ++e->shooters;
+  // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
+  if (e && !e->dead && !e->destroyQueued && w->unit) {
+    const uint32_t ref = EntityRef(w->unit);
+    if (std::find(e->shooters.begin(), e->shooters.end(), ref) == e->shooters.end()) e->shooters.push_back(ref);
+  }
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   WakeFireThread(w);
   w->missCount = 0;
@@ -1456,7 +1468,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
           cap = static_cast<int>(lu::Num(L, lua_gettop(L), "DesiredShooterCap", 3));
           lua_settop(L, top);
         }
-        if (p->shooters >= cap && TargetEntity(sim, w->target) != p) continue;
+        if (static_cast<int>(p->shooters.size()) >= cap) continue;  // (0x5d8241: no word for its own target)
         if (d2 < bestD) {
           bestD = d2;
           bestP = p;
@@ -1624,6 +1636,10 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
     Quat bq;
     BoneWorld(c->unit, bone, &bp, &bq);
     v = RotateM(Conj(bq), goal);
+    static const long dbgUnit2 = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
+    if (dbgUnit2 >= 0 && static_cast<long>(c->unit->id) == dbgUnit2)
+      Logf(LogLevel::Info, "wdbg   frame %s %s goal %.9g %.9g %.9g bone q %.9g %.9g %.9g %.9g -> v %.9g %.9g %.9g",
+           c->label.c_str(), heading ? "yaw" : "pitch", goal.x, goal.y, goal.z, bq.x, bq.y, bq.z, bq.w, v.x, v.y, v.z);
   }
   float target;
   if (heading) {
@@ -1656,7 +1672,7 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
   float step = std::fabs(delta) > slew ? std::copysign(slew, delta) : delta;
   static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
   if (dbgUnit >= 0 && static_cast<long>(c->unit->id) == dbgUnit)
-    Logf(LogLevel::Info, "wdbg   aim %s %s cur %.6f target %.6f delta %.6f slew %.6f tol %.6f goal %.5f %.5f %.5f",
+    Logf(LogLevel::Info, "wdbg   aim %s %s cur %.9g target %.9g delta %.9g slew %.6f tol %.6f goal %.5f %.5f %.5f",
          c->label.c_str(), heading ? "yaw" : "pitch", cur, target, delta, slew, tol, goal.x, goal.y, goal.z);
   cur = WrapPi(cur + step);
   int bits = 0;
@@ -1721,8 +1737,10 @@ Vec3 LeadConstantSpeed(float c, Vec3 M, Vec3 T, Vec3 V) {
   float d = Len(D);
   if (d * d < 1e-4f) return T;
   Vec3 dHat = Mul(D, 1 / d), vHat = Mul(V, 1 / s);
-  float x = 1.5707964f - Dot(vHat, dHat);
-  float k = ((x * x * 0.00761f - 0.16605f) * x * x + 1) * x;
+  // (0x63145f..0x6314e4: the dot product summed z, x, then y; the polynomial in x squared)
+  const float x = 1.5707964f - ((vHat.z * dHat.z + vHat.x * dHat.x) + vHat.y * dHat.y);
+  const float x2 = x * x;
+  float k = ((x2 * 0.00761f - 0.16605f) * x2 + 1.0f) * x;
   float b = k * d * s;
   float a = s * s - c * c;
   if (a * a < 1e-4f) return T;
@@ -1812,9 +1830,17 @@ Vec3 Aim(Sim& sim, AimController* c) {
     float high = -dmath::Atan((std::sqrt(disc) + d) / (2 * A));
     float low = -dmath::Atan((d - std::sqrt(disc)) / (2 * A));
     float p = w->bp->ballisticArc == 2 ? high : low;
+    // AI_CalculateFiringDirection 0x5d6440: the horizontal difference set to the length cos(p) by 0x5b1c90, i.e.
+    // each component times (cos(p) / length), one rounding; then y = -sin(p). (Normalising first and multiplying
+    // after is another last digit of the turret's yaw, and a gun with FiringTolerance 0 notices.)
     Vec3 hz{tPos.x - Mpos.x, 0, tPos.z - Mpos.z};
-    hz = Norm(hz);
-    return {hz.x * dmath::Cos(p), -dmath::Sin(p), hz.z * dmath::Cos(p)};
+    const float l2 = (hz.x * hz.x + hz.y * hz.y) + hz.z * hz.z;
+    if (l2 > 0.0f) {
+      const float k = dmath::Cos(p) / std::sqrt(l2);
+      hz.x *= k;
+      hz.z = k * hz.z;
+    }
+    return {hz.x, -dmath::Sin(p), hz.z};
   }
   return Norm(Sub(tPos, Mpos));
 }
@@ -2170,9 +2196,6 @@ void DestroyWeapons(Sim& sim, Unit* u) {
   for (UnitWeapon* w : u->weapons)
     if (w->HasLuaObject()) sim.CallMethod(sim.L(), w, "OnDestroy", 0);
   for (UnitWeapon* w : u->weapons) {
-    if (w->bp)
-      if (Entity* e = TargetEntity(sim, w->target))
-        if (e->shooters > 0) --e->shooters;
     w->target = AiTarget{};
     w->UnbindLua();
   }
@@ -2910,7 +2933,7 @@ int l_ReachedMaxShooters(lua_State* L) {
     cap = static_cast<int>(lu::Num(L, lua_gettop(L), "DesiredShooterCap", 3));
     lua_settop(L, top);
   }
-  lua_pushboolean(L, e->shooters >= cap);
+  lua_pushboolean(L, static_cast<int>(e->shooters.size()) >= cap);
   return 1;
 }
 
@@ -3880,6 +3903,18 @@ void RegisterCombatBindings(lua_State* L) {
 
 // For the flight model (sim/air.cpp).
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t) { return CanAttackTarget(sim, w, t); }
+
+// Entity::ProcessEntitiesShootingAtMe 0x67a190, at the start of the entity's own turn (Entity::TaskTick 0x679cc1):
+// the shooters that are gone, dead or queued for destruction leave the set.
+void PurgeShooters(Sim& sim, Entity* e) {
+  if (e->shooters.empty()) return;
+  e->shooters.erase(std::remove_if(e->shooters.begin(), e->shooters.end(),
+                                   [&](uint32_t ref) {
+                                     const Entity* s = sim.FindEntity(ref);
+                                     return !s || s->dead || s->destroyQueued;
+                                   }),
+                    e->shooters.end());
+}
 
 // CUnitMotion::CalcMoveCommon 0x6c1e9b (a unit without a spline point this tick): the first weapon that has a
 // target and is SlavedToBody (CAiAttackerImpl::HasSlavedTarget 0x5d72b0) makes the unit turn its body. With an arc

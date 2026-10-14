@@ -598,8 +598,14 @@ void CheckCollisions(Sim& sim, Unit* u) {
   m.colPos = {};
   m.colTick = 0xffffffffu;
   std::vector<Unit*> first, second;
-  float q = R + 8.0f;
-  sim.ForUnitsInRect(u->position.x - q, u->position.z - q, u->position.x + q, u->position.z + q, [&](Unit* e) {
+  // The candidates come from the entity grid (ForAllEntitiesIterator 0x721fb0, the units' list) in the grid's
+  // order: rows, then columns, in a cell the last registered first. The order decides which meeting is put on
+  // record: a meeting that is no nearer than the one on record is passed over, so of two units the one asked
+  // first can keep the record. Seen: a frigate given a new waypoint is predicted to meet one ship three beats
+  // on and another ship NOW; asked in the grid's order the "now" one is on record first, comes due in the same
+  // beat and the frigate brakes hard instead of taking the new course.
+  std::vector<Entity*> gridUnits;
+  auto visit = [&](Unit* e) {
     if (e == u) return;
     WorldShape s;
     if (!GetWorldShape(e, &s) || !SphereOverlap(s, u->position, R)) return;
@@ -609,7 +615,15 @@ void CheckCollisions(Sim& sim, Unit* u) {
     if (sp && e->motion.splineMode == 2) return;  // side-stepping: not seen
     if (e->army == u->army && !UnitPriority(e, u)) first.push_back(e);  // u has the right of way
     else if (sp || e->motion.bp->canFly) second.push_back(e);
-  });
+  };
+  if (sim.entityGrid().ready()) {
+    sim.entityGrid().GatherBox(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &gridUnits);
+    for (Entity* e : gridUnits)
+      if (e->kind == Entity::Kind::Unit) visit(static_cast<Unit*>(e));
+  } else {
+    float q = R + 8.0f;
+    sim.ForUnitsInRect(u->position.x - q, u->position.z - q, u->position.x + q, u->position.z + q, visit);
+  }
   for (Unit* e : second) Predict(sim, e, u);  // u yields
   for (Unit* e : first) Predict(sim, u, e);   // e yields
 }
@@ -761,8 +775,10 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
   }
   // the collision record
   if (m.colType == 5) {
-    if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
-    else m.colType = 0;
+    // (0x5d2e62: no test of the target here, nor in case 4 below: a unit that has been told to stop and has no
+    // waypoint left still takes the hard brake when a collision record waits for it. Seen: one unit of thirteen
+    // stopped by one order braked at twice the rate from the beat after it, the one with a neighbour ahead.)
+    UpdatePath(sim, u, m.steerTarget, true, 4);
   } else if (m.colType == 1 && sim.tick() >= m.colTick && m.colLateTick != sim.tick()) {
     Resolve(sim, u);
     switch (m.colType) {
@@ -778,8 +794,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
         break;
       }
       case 4:
-        if (Driving(u)) UpdatePath(sim, u, m.steerTarget, true, 4);
-        else m.colType = 0;
+        UpdatePath(sim, u, m.steerTarget, true, 4);  // (0x5d2f12: whatever the target)
         break;
       default:
         break;
