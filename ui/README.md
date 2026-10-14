@@ -485,6 +485,24 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   when it is among the receivers (`gamemain.ReceiveChat`): the game's chat lines, its pings and
   its pause notices are all sent so and show by their own echo. One client, the player's own;
   written from the scripts' use.
+  BUILD TEMPLATES (`GenerateBuildTemplateFromSelection`, `GetActiveBuildTemplate`,
+  `SetActiveBuildTemplate`, `ClearBuildTemplates`; `ui/user/user_units.cpp`, the placing in
+  `ui/maui/worldview.cpp` TemplateSites): the selected buildings become a template, to scripts
+  `{width, height, {blueprint, order, x, z}, ...}` as the original gives it (0x8472f0), each
+  place taken beside the first building's; the game's script keeps the templates in the
+  profile and starts the build mode with one. While one is active the build mode shows every
+  building of it round the map cell under the mouse and a click orders them all, in the
+  template's order; a drag orders a row of whole templates, the template's width or depth
+  apart. Read from the original: the table's shape, the sort, the box of the skirts, the cell
+  plus each building's place (0x852eee). INFERRED and marked: which selected units count
+  (buildings that are finished), what the order number is (the entity id stands in), and that
+  the cell's point is its middle. `ui/tests/templates.lua` (21 checks; a game with cheats on,
+  as victory.lua).
+  Small ones with it: `AddToSessionExtraSelectList` and its two kin (units that show the
+  selection's mark without being selected), `HasLocalizedVO` (whether the game has the
+  folder `/sounds/voice/<language>`, 0x8ae300), `AddConsoleOutputReciever` /
+  `RemoveConsoleOutputReciever` (the receivers are kept; no built console command prints a
+  line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host).
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is
@@ -505,8 +523,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
-- 435 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
-  the units', as a first version); the other 97 are logged stubs. (`--list-bindings` counts
+- 447 of the 531 engine functions are built (about 100 of them, the world view's, the cameras' and
+  the units', as a first version); the other 84 are logged stubs. (`--list-bindings` counts
   them; run it with `--session` so that the in-game ones are registered.)
 
 ## Asking the engine track

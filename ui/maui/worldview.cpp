@@ -511,6 +511,8 @@ class WorldView : public Control {
       if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
           BuildRow(L, *sim, name, buildFrom_, at, &scene.ghosts, buildShift_);
+        } else if (ActiveBuildTemplate(L)) {  // a template: all its buildings round the mouse
+          BuildRow(L, *sim, name, at, at, &scene.ghosts, KeyIsDown(L, kKeyShift));
         } else if (BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
           if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, KeyIsDown(L, kKeyShift))) ghost.free = false;
           ghost.blueprint = name;
@@ -780,11 +782,52 @@ class WorldView : public Control {
   bool buildDrag_ = false, buildShift_ = false;
   std::string buildName_;
   float buildFrom_[3] = {0, 0, 0};
+  // The sites of a build template put at a place. As the original draws them (FA exe 0x852eee
+  // .. 0x853024): the place is the map cell under the mouse, and each building stands at that
+  // cell plus its own place in the template; nothing is snapped per building (the template's
+  // places are already on the grid: the game's script shifts them by half a cell where the
+  // first building's footprint is even). INFERRED: that the cell's point is its middle (the
+  // routine at 0x50b0f0 that makes the point is not read; with the middle, a template made
+  // from buildings that stand comes back on their own grid). Each site is still put through
+  // the simulation's test, which says whether the building can stand there.
+  void TemplateSites(lua_State* L, Sim& sim, const BuildTemplate& t, const float at[3], std::vector<WorldGhost>* out, bool adding) {
+    const float baseX = std::floor(at[0]) + 0.5f, baseZ = std::floor(at[2]) + 0.5f;
+    for (const BuildTemplate::Building& b : t.buildings) {
+      const float want[3] = {baseX + b.x, at[1], baseZ + b.z};
+      WorldGhost ghost;
+      if (!BuildSiteOf(sim, b.blueprint, want, ghost.position, &ghost.free)) continue;
+      bool twice = false;  // (two wholes of a row may meet: the later building gives way)
+      for (const WorldGhost& g : *out) {
+        float w = 1, h = 1, gw = 1, gh = 1;
+        BuildSpacingOf(L, b.blueprint, &w, &h);
+        BuildSpacingOf(L, g.blueprint, &gw, &gh);
+        twice = twice || (std::fabs(g.position[0] - ghost.position[0]) < (w + gw) * 0.5f - 0.01f &&
+                          std::fabs(g.position[2] - ghost.position[2]) < (h + gh) * 0.5f - 0.01f);
+      }
+      if (twice) continue;
+      if (ghost.free && SiteMeetsOrdered(L, b.blueprint, ghost.position, adding)) ghost.free = false;
+      ghost.blueprint = b.blueprint;
+      out->push_back(ghost);
+    }
+  }
   void BuildRow(lua_State* L, Sim& sim, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row,
                 bool adding) {
+    const float dx = to[0] - from[0], dz = to[2] - from[2];
+    if (const BuildTemplate* t = ActiveBuildTemplate(L)) {
+      // A template: the whole of it at the place, and in a row one whole beside the next, as
+      // far apart as the template is wide (a row that mostly runs along x) or deep (FA exe
+      // 0x852e63: the larger of the two distances picks the template's width or height).
+      const float steps = std::fabs(dx) > std::fabs(dz) ? std::fabs(dx) / std::max(1.0f, t->width) : std::fabs(dz) / std::max(1.0f, t->height);
+      const int count = std::min(static_cast<int>(steps + 0.5f), 30);
+      for (int k = 0; k <= count; ++k) {
+        const float s = steps > 0 ? static_cast<float>(k) / steps : 0.0f;
+        const float at[3] = {from[0] + dx * s, from[1], from[2] + dz * s};
+        TemplateSites(L, sim, *t, at, row, adding);
+      }
+      return;
+    }
     float alongX = 1, alongZ = 1;
     BuildSpacingOf(L, name, &alongX, &alongZ);
-    const float dx = to[0] - from[0], dz = to[2] - from[2];
     const float steps = std::max(std::fabs(dx) / alongX, std::fabs(dz) / alongZ);
     const int count = std::min(static_cast<int>(steps + 0.5f), 99);
     for (int k = 0; k <= count; ++k) {
@@ -815,7 +858,7 @@ class WorldView : public Control {
       bool clear = !buildShift_;
       for (const WorldGhost& g : row) {
         if (!g.free) continue;
-        IssueToSelection(L, "BuildMobile", g.position[0], g.position[1], g.position[2], clear, buildName_);
+        IssueToSelection(L, "BuildMobile", g.position[0], g.position[1], g.position[2], clear, g.blueprint);
         clear = false;  // the rest of the row comes after the first
       }
       return;
@@ -958,7 +1001,12 @@ class WorldView : public Control {
       // (The order goes out when the button is let go: until then the mouse may draw a row.)
       Sim* sim = UserState::From(L)->config().sim;
       bool free = true;
-      if (!sim || !BuildSiteOf(*sim, name, world, buildFrom_, &free)) return true;
+      if (!sim) return true;
+      if (ActiveBuildTemplate(L)) {  // (a template goes by the cell under the mouse: TemplateSites)
+        for (int i = 0; i < 3; ++i) buildFrom_[i] = world[i];
+      } else if (!BuildSiteOf(*sim, name, world, buildFrom_, &free)) {
+        return true;
+      }
       buildDrag_ = true, buildName_ = name, buildShift_ = e.shift;
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;

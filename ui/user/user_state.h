@@ -229,6 +229,21 @@ struct WorldWaypoint {
 };
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
                        bool queueShown = true, std::vector<WorldGhost>* queued = nullptr, std::vector<WorldWaypoint>* waypoints = nullptr);
+// A build template: buildings that are placed together, each where it stood beside the first
+// (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
+// blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).
+struct BuildTemplate {
+  struct Building {
+    std::string blueprint;
+    int order = 0;     // what the original sorts the buildings by
+    float x = 0, z = 0;  // where it stands beside the place the template is put
+  };
+  float width = 0, height = 0;  // the ground the whole takes: the spacing when a row of it is drawn
+  std::vector<Building> buildings;
+};
+// The template being placed (GenerateBuildTemplateFromSelection, SetActiveBuildTemplate), or
+// nullptr when there is none.
+const BuildTemplate* ActiveBuildTemplate(lua_State* L);
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);

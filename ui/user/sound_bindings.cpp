@@ -124,6 +124,14 @@ int l_AudioSetLanguage(lua_State* L) {
   if (sound::SoundSystem* s = System(L)) s->SetLanguage(luaL_checkstring(L, 1));
   return 0;
 }
+// HasLocalizedVO(language): whether the game has spoken voices in that language, which is
+// whether it has the folder /sounds/voice/<language> (FA exe 0x8ae300, the folder's name at
+// 0x8adf87). The game's localisation script falls back to "us" without it.
+int l_HasLocalizedVO(lua_State* L) {
+  sound::SoundSystem* s = System(L);
+  lua_pushboolean(L, s && s->HasLanguage(luaL_checkstring(L, 1)));
+  return 1;
+}
 // DisableWorldSounds(), EnableWorldSounds(): the world's own sounds (units, weapons) are not
 // played yet, so there is nothing to switch.
 int l_Nothing(lua_State*) { return 0; }
@@ -206,6 +214,7 @@ void RegisterSoundBindings(lua_State* L) {
   SetGlobal(L, "PauseSound", l_PauseSound);
   SetGlobal(L, "PauseVoice", l_PauseSound);
   SetGlobal(L, "AudioSetLanguage", l_AudioSetLanguage);
+  SetGlobal(L, "HasLocalizedVO", l_HasLocalizedVO);
   SetGlobal(L, "DisableWorldSounds", l_Nothing);
   SetGlobal(L, "EnableWorldSounds", l_Nothing);
   lua_register(L, "moho64ui_SoundInfo", l_SoundInfo);
