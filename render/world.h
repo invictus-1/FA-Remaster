@@ -166,6 +166,11 @@ class World {
   // longer drawn (the original's "resource icons", its pictures). `depositIconFrom`: at how many
   // times a mark's own cutoff distance its icon is fully there (it comes in from 0.8 of that).
   bool depositIcons = true;
+  // The world beyond the map's edge (modern look): land and sea go on past the edge, a shade
+  // dimmer, and are lost in the distance, so the map lies in a world and not on a tray. Nothing
+  // is out there for the game: no unit goes there. `borders` (the original's frame of machinery)
+  // are not drawn then. false: the map ends at its edge, with its frame, as the original.
+  bool worldBeyond = true;
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;  // the modern look's strengths
