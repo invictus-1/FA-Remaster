@@ -397,6 +397,7 @@ void PropCollisions(Sim& sim, Unit* u, const Obb& box) {
 
 void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  m.contacts.clear();  // (0x6b904f: emptied before any of the early returns)
   if (u->layer == "Air" || u->layer == "Sub") return;
   if (u->dead || u->beingBuilt || u->parentId || St(u, "Attached")) return;
   if (!m.bp || m.bp->canFly) return;
@@ -425,10 +426,11 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   std::vector<Entity*> cand;
   sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
   auto visit = [&](Unit* e) {
-    if (e == u || e->dead || e->destroyQueued) return;
+    if (e == u) return;
     WorldShape s;
     if (!GetWorldShape(e, &s)) return;
     float depth = 0;
+    bool meets = false;
     if (s.type == ShapeType::Box) {
       Obb o;
       o.c = s.c;
@@ -442,11 +444,17 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       Vec3 n;
       static const long dbgSat = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
       g_satDebug = dbgSat >= 0 && static_cast<long>(u->id) == dbgSat;
-      if (!BoxBoxSat(o, box, &n, &depth)) depth = 0;
+      meets = BoxBoxSat(o, box, &n, &depth);
+      if (!meets) depth = 0;
       g_satDebug = false;
     } else if (s.type == ShapeType::Sphere) {
       depth = ObbSphereDepth(box, s.c, s.r);
+      meets = depth >= 0;
     }
+    // every entity whose primitive meets the box goes into the motion's contact list (0x6b9260: the whole result of
+    // CollectEntitiesInBox, touching and edge-to-edge included), the raised-platform search's candidates
+    if (meets) m.contacts.push_back(EntityRef(e));
+    if (e->dead || e->destroyQueued) return;
     static const long dbgCol = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
     if (dbgCol >= 0 && (static_cast<long>(u->id) == dbgCol || static_cast<long>(e->id) == dbgCol))
       Logf(LogLevel::Info,
