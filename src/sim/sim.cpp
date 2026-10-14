@@ -1397,6 +1397,7 @@ void Sim::Tick() {
     u->prevLastOrientation = u->lastPosTick ? u->lastOrientation : u->orientation;
     u->lastOrientation = u->orientation;
     u->lastPosTick = tick_;
+    PurgeShooters(*this, u);
     HoldShape(u);
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved

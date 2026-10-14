@@ -86,7 +86,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Engineers | beat 955 |
 | Upgrades | beat 648 |
 | Missiles | beat 408 |
-| Naval battle (1,079 beats) | beat 374 |
+| Naval battle (1,079 beats) | beat 392 |
 | Eight-army AI game | beat 344 |
 | Skirmish against an AI | beat 340 |
 | Experimental units, second set | beat 167 |

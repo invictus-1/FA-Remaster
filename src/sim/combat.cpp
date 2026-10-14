@@ -1059,8 +1059,12 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   bool had = w->target.type != 0, has = nt.type != 0;
   if (had && !has) WeaponCall(sim, w, "OnLostTarget");
   if (has) DecayBlacklist(sim, w);
-  if (Entity* old = TargetEntity(sim, w->target))
-    if (old->shooters > 0) --old->shooters;
+  // 0x6d5f89: the weapon's UNIT leaves the old target's shooters (whether or not another weapon of the unit still
+  // holds that target), unless the old target is dead or going
+  if (Entity* old = TargetEntity(sim, w->target); old && !old->dead && !old->destroyQueued && w->unit) {
+    const uint32_t ref = EntityRef(w->unit);
+    old->shooters.erase(std::remove(old->shooters.begin(), old->shooters.end(), ref), old->shooters.end());
+  }
   w->target = nt;
   Entity* e = TargetEntity(sim, w->target);
   if (e && e->kind == Entity::Kind::Unit) w->target.mobile = IsMobile(static_cast<Unit*>(e));
@@ -1069,7 +1073,11 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
     w->target.blipId = tu->blip ? EntityRef(tu->blip) : 0;
   }
   PickNewTargetAimSpot(sim, w);
-  if (e && !e->dead) ++e->shooters;
+  // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
+  if (e && !e->dead && !e->destroyQueued && w->unit) {
+    const uint32_t ref = EntityRef(w->unit);
+    if (std::find(e->shooters.begin(), e->shooters.end(), ref) == e->shooters.end()) e->shooters.push_back(ref);
+  }
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   WakeFireThread(w);
   w->missCount = 0;
@@ -1460,7 +1468,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
           cap = static_cast<int>(lu::Num(L, lua_gettop(L), "DesiredShooterCap", 3));
           lua_settop(L, top);
         }
-        if (p->shooters >= cap && TargetEntity(sim, w->target) != p) continue;
+        if (static_cast<int>(p->shooters.size()) >= cap) continue;  // (0x5d8241: no word for its own target)
         if (d2 < bestD) {
           bestD = d2;
           bestP = p;
@@ -2188,9 +2196,6 @@ void DestroyWeapons(Sim& sim, Unit* u) {
   for (UnitWeapon* w : u->weapons)
     if (w->HasLuaObject()) sim.CallMethod(sim.L(), w, "OnDestroy", 0);
   for (UnitWeapon* w : u->weapons) {
-    if (w->bp)
-      if (Entity* e = TargetEntity(sim, w->target))
-        if (e->shooters > 0) --e->shooters;
     w->target = AiTarget{};
     w->UnbindLua();
   }
@@ -2928,7 +2933,7 @@ int l_ReachedMaxShooters(lua_State* L) {
     cap = static_cast<int>(lu::Num(L, lua_gettop(L), "DesiredShooterCap", 3));
     lua_settop(L, top);
   }
-  lua_pushboolean(L, e->shooters >= cap);
+  lua_pushboolean(L, static_cast<int>(e->shooters.size()) >= cap);
   return 1;
 }
 
@@ -3898,6 +3903,18 @@ void RegisterCombatBindings(lua_State* L) {
 
 // For the flight model (sim/air.cpp).
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t) { return CanAttackTarget(sim, w, t); }
+
+// Entity::ProcessEntitiesShootingAtMe 0x67a190, at the start of the entity's own turn (Entity::TaskTick 0x679cc1):
+// the shooters that are gone, dead or queued for destruction leave the set.
+void PurgeShooters(Sim& sim, Entity* e) {
+  if (e->shooters.empty()) return;
+  e->shooters.erase(std::remove_if(e->shooters.begin(), e->shooters.end(),
+                                   [&](uint32_t ref) {
+                                     const Entity* s = sim.FindEntity(ref);
+                                     return !s || s->dead || s->destroyQueued;
+                                   }),
+                    e->shooters.end());
+}
 
 // CUnitMotion::CalcMoveCommon 0x6c1e9b (a unit without a spline point this tick): the first weapon that has a
 // target and is SlavedToBody (CAiAttackerImpl::HasSlavedTarget 0x5d72b0) makes the unit turn its body. With an arc

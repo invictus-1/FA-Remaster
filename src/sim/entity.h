@@ -79,7 +79,11 @@ class Entity : public ScriptObject {
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
   int attachBone = -1;
   uint32_t lastMoveTick = 0;  // the tick its position last changed (aim lead, FAF patch)
-  int shooters = 0;           // weapons targeting it (DesiredShooterCap)
+  // The units that took it as a weapon's target (Entity::AddShooter 0x67a130 from UnitWeapon::SetTarget: a set,
+  // each unit once, whatever the number of its weapons), by entity handle. A unit leaves it when ONE of its
+  // weapons lets go of the entity (0x6d5f89), and the entity's own turn each beat drops the ones that are gone,
+  // dead or queued for destruction (0x67a190). Its size is what DesiredShooterCap is compared with.
+  std::vector<uint32_t> shooters;
   std::shared_ptr<EntityIntel> intel;  // intel circles (sim/intel.cpp; InitIntel / unit blueprints)
   // the entity grid (sim/entity_grid.h): its cell span (w or h 0: in no cell), the dedup mark
   uint16_t gridX0 = 0, gridZ0 = 0, gridW = 0, gridH = 0;

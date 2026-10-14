@@ -732,6 +732,7 @@ void ProjectilesTick(Sim& sim) {
   for (size_t i = 0; i < sim.projectiles.size(); ++i) {
     Projectile* p = sim.projectiles[i];
     if (!p->HasLuaObject()) continue;
+    PurgeShooters(sim, p);
     sim.HoldShape(p);
     p->heldVel = EntityVelocity(p);
     sim.steppingProjectile = p;
