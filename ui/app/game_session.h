@@ -92,7 +92,12 @@ class GameSession {
   // on. With the launch table (the host's --session file, or what the lobby's launch wrote:
   // `<prefix>.session.lua` unless --session-out names another place) and the seed, the engine's
   // own program can play the stream back. Empty: nothing is written.
+  // `replayTable` (the launch table's file) and `replayMaps` (the map folders beside the
+  // game's own, --maps) are named in the seed file too, as lines `session <path>` and
+  // `maps <folder>`, so that whoever plays the record back need not guess them.
   std::string replayOut;
+  std::string replayTable;
+  std::vector<std::string> replayMaps;
 
   bool running() const { return sim_ != nullptr; }
   Sim* sim() const { return sim_.get(); }

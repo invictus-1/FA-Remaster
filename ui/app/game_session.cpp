@@ -285,6 +285,8 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
     else Logf(LogLevel::Info, "moho64ui: this game is recorded in %s.stream (seed %u)", base.c_str(), h.seed);
     if (std::FILE* f = std::fopen((base + ".seed").c_str(), "wb")) {
       std::fprintf(f, "seed %u\nmap %s\narmies %zu\nfocus army %d\n", h.seed, h.map.c_str(), h.armies.size(), session.focusArmy + 1);
+      if (!replayTable.empty()) std::fprintf(f, "session %s\n", replayTable.c_str());
+      for (const std::string& folder : replayMaps) std::fprintf(f, "maps %s\n", folder.c_str());
       std::fclose(f);
     }
   }
