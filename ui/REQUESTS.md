@@ -1116,6 +1116,9 @@ strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles wi
 edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
 cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
 
+(e is answered: the visuals track's, two faces in one plane on the land factories' middle
+tower; she bakes them again. Nothing of yours.)
+
 Not blocking.
 
 **Status:** open.
@@ -1248,4 +1251,11 @@ strips on the ground beside them, and at the bottom a pad of 3 x 3 dark tiles wi
 edge; T1 power generators round it with their adjacency lines. Which factory and tier it is I
 cannot tell from the picture; he had been upgrading factories through the tiers. Asked of him.
 
-**Status:** open.
+**Status:** found by the visuals track from the description, within the half hour: hers, not the
+renderer's. On the land factories the middle tower (bone Lifter_Middle) carries a dark armour
+plate whose upper face lay in the tower's own top face, 0.01 mesh units apart in the exported
+mesh (measured in UEB0201 and UEB0301): two faces of different colour that fight as the
+camera's distance changes. Fixed in her script (the plate stands 0.22 proud); the five land
+factories (UEB0101, UEB0201, ZEB9501, UEB0301, ZEB9601) are baked again later today, with HOLD
+files while they bake. She also writes a check that finds such face pairs in every rebuilt
+unit. Waiting for the re-bake and Chris's look.
