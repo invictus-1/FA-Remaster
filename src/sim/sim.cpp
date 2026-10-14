@@ -1489,7 +1489,10 @@ void Sim::Tick() {
     // CAniActor::UpdateManipulators 0x63aa80, after CUnitMotion::MotionTick (0x6a908c before 0x6a90d5): the pose
     // is built on the pending transform this motion just wrote; the aim bone is read from last beat's pose
     PoseAdvance(u);
-    if (!u->builderArms.empty()) BuilderArmsTick(*this, u, u->lastPosition, prevOri);
+    if (!u->builderArms.empty()) {
+      AimReadLastPose(*this, u);  // (the arms' step writes the bones a gun may share with them)
+      BuilderArmsTick(*this, u, u->lastPosition, prevOri);
+    }
     UnitAimTick(*this, u);
     // the unit's own beat: economy events, regeneration or decay, consumption and production (health regen /
     // decay and HandleResourceManagement 0x6aaac0, after the manipulators)

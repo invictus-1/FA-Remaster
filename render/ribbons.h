@@ -59,6 +59,11 @@ class Ribbons {
   void Draw(const View& view);
 
   float glow = 2.5f;  // as Particles::glow: the modern look's brightness of what adds its light
+  // Tracers (modern look): a shell's trail that the game's files give as a plain white line (a trail
+  // that adds its light and whose colour ramp is one of the "ramp_white" ones: tank shells, gauss
+  // rounds) is drawn hot instead: white at the shell, through yellow and orange to a dull red where
+  // it ends, wider at the shell and never thinner than a pixel. false: as the files say.
+  bool tracers = true;
   int drawnBands = 0; // beams and trails in the last Draw
 
  private:
@@ -72,6 +77,7 @@ class Ribbons {
     float uShift = 0, vShift = 0;  // how fast the texture slides, per second
     float life = 1;                // trails: how long a place stays, seconds
     std::string rampPath;          // trails: the colour ramp's file
+    bool hot = false;              // trails: a plain white one that adds its light (see `tracers`)
   };
   struct Vertex {
     float position[3];

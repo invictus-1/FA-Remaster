@@ -148,7 +148,10 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   // what is made at a place and stays there (an explosion, a flash of light, a mark on the ground)
   // is not made where the army the picture is for does not see; what hangs on a unit or a shot is
   // made all the same and hidden while that is not seen (Update)
-  if (!event.seen && (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
+  // (but a resource deposit's mark is part of the map: every army sees every deposit from the first
+  // moment, explored or not, as the original shows them)
+  const bool deposit = f == "CreateSplat" && Decals::IsDepositMark(event.blueprint);
+  if (!event.seen && !deposit && (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
                       f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone"))
     return;
   if (verbose && (f == "CreateLightParticle" || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
@@ -314,10 +317,10 @@ void Effects::Update(double tick, const Frame& frame) {
         if (here && !hidden && shotLight > 0) {  // (a glowing trail's head lights as a glow does)
           auto shot = projectileAt_.find(e.entity);
           std::string ramp;
-          Vec3 unused;
-          if (shot != projectileAt_.end() && ribbons_->Glows(e.blueprint, &ramp, &unused)) {
+          Vec3 own;
+          if (shot != projectileAt_.end() && ribbons_->Glows(e.blueprint, &ramp, &own)) {
             ShotGlow& g = shotGlow_[shot->second];
-            const Vec3 c = lights_->RampGlow(ramp);
+            const Vec3 c = ramp.empty() ? own : lights_->RampGlow(ramp);  // (a tracer says its colour itself)
             if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
             ++g.count;
           }

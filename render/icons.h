@@ -73,7 +73,10 @@ class StrategicIcons {
   int MarkIcon(const std::string& name) { return Icon(name); }
   void AddMark(int icon, Vec3 position, float lift);
   // A picture from anywhere in the game's files, for AddUnder (`path` whole); -1 when it is not there.
-  int Picture(const std::string& path) { return Load(path, path); }
+  // `size`: made that many pixels across first (averaged down; 0: as it is), since symbols are
+  // drawn pixel for pixel.
+  int Picture(const std::string& path, int size = 0) { return Load(path + " at " + std::to_string(size), path, size); }
+  float Pixel() const { return pixel_; }  // this frame's scale: screen pixels a symbol's pixel takes
   // A picture on a place in the world UNDER all the symbols, at its own size, `alpha` 0..1 of it
   // there: the icon the original shows on a mass or hydrocarbon deposit from far up (a unit's
   // symbol on the spot covers it). Shown whether the symbols are or not.
@@ -113,7 +116,7 @@ class StrategicIcons {
   };
   std::vector<Bar> bars_;
   int Icon(const std::string& name, const char* suffix = "_rest");
-  int Load(const std::string& key, const std::string& path);  // into the symbols' texture; known by `key`
+  int Load(const std::string& key, const std::string& path, int size = 0);  // into the symbols' texture; known by `key`
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;

@@ -3,6 +3,26 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## Chris, 2026-10-13 (through the renderer's chat): "the acu is not aiming properly and shooting the tanks" — fixed
+
+A commander's gun missed everything that was not where it had first aimed. Rebuilt headless (the same session and
+seed as his game, ten of his tanks set round the AI's commander): it killed the first tank, then fired at the
+second for almost thirty seconds without one hit; each shell passed 0.7 beside the tank and struck the ground.
+
+Cause: an aim controller measures its firing direction from where the muzzle stood in last beat's pose. A
+commander's build arm and its gun both turn the torso, and the build arm's step, which runs first, had already
+put the torso back to rest when the gun read that pose. So the gun aimed from where its muzzle is with the torso
+unturned, about one unit beside the real one, and the torso settled some 3.5 degrees off. The first target was
+hit only because of where it happened to stand.
+
+Fixed: the muzzles are read once a beat before the build arms' step. Every unit whose builder arm shares a bone
+with a weapon was affected: all four commanders and the support commanders. The same case now: nine of the ten
+tanks dead in thirty seconds. All 13 replays pass unchanged (none has a commander fighting before its first
+difference).
+
+For tests of this kind `moho64 --orders` takes a new line, `<tick> lua <one line of Lua>`, run in the simulation
+state before that beat (a test building its case; not an order, never part of a replay).
+
 ## render 22: a shield's ratio in the plain unit view — done
 
 `UnitView` (src/sim/sim_view.h) has two new members at its end; nothing else in it moved:
