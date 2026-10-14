@@ -578,6 +578,13 @@ game seconds, and `UnitStateView::shieldRatio` reads 0 for the whole 25 seconds 
 `ui_shield_up_ratio_zero.png` in the folder of Chris's pictures). So the panel's bar is not my
 fault: the number is not there. (Without energy the bubble was down and 0 was right; that was
 my first try.)
+d FIXED the same hour (`docs/engine-answers.md`, "ui 20 d, corrected"; main d45c1e3): the
+engine kept SetShieldRatio's value under one key and the view asked for another, so it was
+always 0; the same wrong key sat on `capturable` and `reclaimable` (a script's
+SetCapturable(false) / SetReclaimable(false) never showed). Repeated in my build: the same
+generator reads 1 with its bubble up, and the unit panel shows its shield bar and "100%"
+(`ui_shield_panel_bar_shows_no_bar_under_unit.png`). The bar under the unit is the renderer's
+and does not show yet in that picture.
 
 ## To the renderer track
 
