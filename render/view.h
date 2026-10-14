@@ -206,6 +206,11 @@ float3 HorizonHaze(float3 d) {
   if (weather.z > 0) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600));
   return c;
 }
+// What the world beyond the map's edge goes over into far out: the far distance's colour greyed
+// and dimmed (Chris, 2026-10-14: "instead of bright white clouds maybe like its just greyed out").
+float3 BeyondGrey(float3 c) {
+  return dot(c, float3(0.3, 0.6, 0.1)) * float3(0.50, 0.52, 0.55);
+}
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {
   return lerp(skyHorizon.rgb * 0.3, skyZenith.rgb * 0.8 + skyHorizon.rgb * 0.2, saturate(n.y * 0.5 + 0.5));

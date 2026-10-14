@@ -42,6 +42,10 @@ class StrategicIcons {
     // LifeBarOffset): how wide, how high, and how far from the unit's middle toward the eye it
     // lies. Where the blueprint says none: by the selection's size.
     float lifeBarSize = 1, lifeBarHeight = 0.075f, lifeBarOffset = 0.5f;
+    // A weapon of it shows its firing cycle (the blueprint's RenderFireClock: artillery, battleships,
+    // missile launchers): its "work" is that cycle, which the original shows only on the unit under
+    // the mouse or selected, not always as a build's.
+    bool fireClock = false;
   };
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.

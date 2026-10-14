@@ -146,6 +146,13 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   auto known = kinds_.find(blueprintPath);
   if (known != kinds_.end()) return known->second.get();
   Kind* kind = kinds_.emplace(blueprintPath, std::make_unique<Kind>()).first->second.get();
+  // (read from the file in either case: the simulation does not say it)
+  auto text = vfs_->ReadFile(blueprintPath);
+  BpValue bp;
+  const bool readable = text && ReadBlueprintFile(*text, &bp);
+  if (readable)
+    for (const BpValue& weapon : bp["Weapon"].items)
+      if (weapon["RenderFireClock"].kind == BpValue::Bool && weapon["RenderFireClock"].boolean) kind->fireClock = true;
   auto said = said_.find(blueprintPath);
   if (said != said_.end()) {  // the simulation's word for it, in place of the file's
     const Said& s = said->second;
@@ -166,9 +173,7 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     kind->lifeBarOffset = s.lifeBarOffset > 0 ? s.lifeBarOffset : kind->selectionZ;
     return kind;
   }
-  auto text = vfs_->ReadFile(blueprintPath);
-  BpValue bp;
-  if (!text || !ReadBlueprintFile(*text, &bp)) return kind;  // the models report a blueprint that cannot be read
+  if (!readable) return kind;  // the models report a blueprint that cannot be read
   kind->fadeIn = static_cast<float>(bp["Display"]["Mesh"]["IconFadeInZoom"].NumberOr(130));
   kind->priority = std::clamp(static_cast<int>(bp["StrategicIconSortPriority"].NumberOr(128)), 0, 255);
   std::string name = bp["StrategicIconName"].StringOr(std::string());

@@ -340,6 +340,12 @@ void Effects::Update(double tick, const Frame& frame) {
           end = e.end;  // (its far end is a thing the frame never lists: it stands where the simulation said)
         } else if (e.entity2 != kNone && !e.everEnd) {
           break;  // (... and where that is was not said)
+        } else if (beamAt_.count(e.entity)) {
+          // on a weapon's beam: from where it is to where the simulation's beam ends this beat (the
+          // beam entity's own turn is not the way it shoots: a Galactic Colossus's laser was drawn
+          // straight south, away from what it hit)
+          const FrameBeam& b = frame.beams[beamAt_[e.entity]];
+          end = Vec3{b.end[0], b.end[1], b.end[2]};
         } else {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});
