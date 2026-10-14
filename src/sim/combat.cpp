@@ -1729,8 +1729,10 @@ Vec3 LeadConstantSpeed(float c, Vec3 M, Vec3 T, Vec3 V) {
   float d = Len(D);
   if (d * d < 1e-4f) return T;
   Vec3 dHat = Mul(D, 1 / d), vHat = Mul(V, 1 / s);
-  float x = 1.5707964f - Dot(vHat, dHat);
-  float k = ((x * x * 0.00761f - 0.16605f) * x * x + 1) * x;
+  // (0x63145f..0x6314e4: the dot product summed z, x, then y; the polynomial in x squared)
+  const float x = 1.5707964f - ((vHat.z * dHat.z + vHat.x * dHat.x) + vHat.y * dHat.y);
+  const float x2 = x * x;
+  float k = ((x2 * 0.00761f - 0.16605f) * x2 + 1.0f) * x;
   float b = k * d * s;
   float a = s * s - c * c;
   if (a * a < 1e-4f) return T;

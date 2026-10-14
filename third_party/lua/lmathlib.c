@@ -55,13 +55,18 @@ static int math_tan (lua_State *L) {
   return 1;
 }
 
+/* moho64: as the game's own library rounds them (src/script/core_bindings.cpp says how) */
+extern float moho_lua_acos(float x);
+extern float moho_lua_asin(float x);
+extern float moho_lua_exp(float x);
+
 static int math_asin (lua_State *L) {
-  lua_pushnumber(L, FROMRAD(asin(luaL_checknumber(L, 1))));
+  lua_pushnumber(L, moho_lua_asin(luaL_checknumber(L, 1)));
   return 1;
 }
 
 static int math_acos (lua_State *L) {
-  lua_pushnumber(L, FROMRAD(acos(luaL_checknumber(L, 1))));
+  lua_pushnumber(L, moho_lua_acos(luaL_checknumber(L, 1)));
   return 1;
 }
 
@@ -111,17 +116,18 @@ static int math_log10 (lua_State *L) {
 }
 
 static int math_exp (lua_State *L) {
-  lua_pushnumber(L, exp(luaL_checknumber(L, 1)));
+  lua_pushnumber(L, moho_lua_exp(luaL_checknumber(L, 1)));
   return 1;
 }
 
+/* moho64: the game multiplies by a float constant (0xd46340, 0xd46344) */
 static int math_deg (lua_State *L) {
-  lua_pushnumber(L, luaL_checknumber(L, 1)/RADIANS_PER_DEGREE);
+  lua_pushnumber(L, luaL_checknumber(L, 1) * 57.2957802f);
   return 1;
 }
 
 static int math_rad (lua_State *L) {
-  lua_pushnumber(L, luaL_checknumber(L, 1)*RADIANS_PER_DEGREE);
+  lua_pushnumber(L, luaL_checknumber(L, 1) * 0.0174532924f);
   return 1;
 }
 

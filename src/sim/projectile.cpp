@@ -867,6 +867,24 @@ int l_weapon_CreateProjectile(lua_State* L) {
          w->solution.y, w->solution.z, w->bp->useFiringSolutionInsteadOfAimBone ? 1 : 0, pb.straightDown ? 1 : 0,
          u->position.x, u->position.y, u->position.z, u->orientation.x, u->orientation.y, u->orientation.z,
          u->orientation.w, u->poseSet ? 1 : 0);
+    // the bone's chain, root first: each bone's local rotation as posed this beat and at rest
+    if (u->skeleton && bone >= 0 && bone < u->skeleton->Count()) {
+      const auto& bones = u->skeleton->bones();
+      int chain[64];
+      int n = 0;
+      for (int i = bone; i >= 0 && n < 64; i = bones[static_cast<size_t>(i)].parent) chain[n++] = i;
+      const bool posed = u->poseQ.size() == bones.size();
+      Logf(LogLevel::Info, "wproj %u unit %u   pose base q %.9g %.9g %.9g %.9g", sim.tick(), u->id,
+           (u->poseSet ? u->poseBaseOri : u->orientation).x, (u->poseSet ? u->poseBaseOri : u->orientation).y,
+           (u->poseSet ? u->poseBaseOri : u->orientation).z, (u->poseSet ? u->poseBaseOri : u->orientation).w);
+      for (int k = n - 1; k >= 0; --k) {
+        const size_t bi = static_cast<size_t>(chain[k]);
+        const Quat pq = posed ? u->poseQ[bi] : bones[bi].localRot;
+        Logf(LogLevel::Info, "wproj %u unit %u   chain bone %d posed q %.9g %.9g %.9g %.9g rest q %.9g %.9g %.9g %.9g",
+             sim.tick(), u->id, chain[k], pq.x, pq.y, pq.z, pq.w, bones[bi].localRot.x, bones[bi].localRot.y,
+             bones[bi].localRot.z, bones[bi].localRot.w);
+      }
+    }
   }
   if (R > 0) {
     // 0x6d667e..0x6d67d2: two Gauss draws times the randomness times [0xdff090] (degrees to radians, in that

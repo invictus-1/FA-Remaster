@@ -1305,6 +1305,38 @@ namespace combat {
 bool HasTarget(Sim& sim, const AiTarget& t);
 }  // namespace combat
 
+// RotateToward 0x6992c0: the vector c turned toward w by at most th, in the original's order of operations (the
+// last digit of the result is the hull's quaternion's). False: one of the two has no length, c stays.
+static bool RotateTowardExe(float th, float cx, float cz, float wx, float wz, float* nx, float* nz) {
+  const float lc = std::sqrt(cz * cz + cx * cx), lw = std::sqrt(wz * wz + wx * wx);
+  const float k0 = dmath::Cos(th);  // fcos
+  const float ll = lw * lc;
+  if (ll == 0) return false;
+  if (wz * cz + wx * cx >= k0 * ll) {  // within one step: the wanted direction at c's length (0x6993a7)
+    const float ratio = lc / lw;
+    *nx = wx * ratio;
+    *nz = wz * ratio;
+    return true;
+  }
+  const float t2 = th * th;
+  float sn = ((t2 * 0.00761f - 0.16605f) * t2 + 1.0f) * th;
+  if (wz * cx - cz * wx < 0) sn = -0.0f - sn;
+  float k = k0;
+  if (std::fabs((sn * sn + k * k) - 1.0f) > 0.001f) {  // 0x6999f0: times 1 / length
+    const float r = std::sqrt(k * k + sn * sn);
+    if (r > 9.99999997e-07f) {
+      const float ri = 1.0f / r;
+      k *= ri;
+      sn *= ri;
+    } else {
+      k = sn = 0;
+    }
+  }
+  *nx = k * cx - sn * cz;
+  *nz = k * cz + sn * cx;
+  return true;
+}
+
 // CalcMoveCommon's no-spline branch (formations.md 12): an idle unit of a form formation turns on the
 // spot to the formation's forward vector (Unit::GetFormationVector), TurnInfo 0x6990e0 / RotateToward
 // 0x6992c0, in the negated-z frame. Returns true when it turned.
@@ -1347,24 +1379,8 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   if (cz * (wz * inv) + cx * (wx * inv) >= 0.9999f) return false;
   float rate = (b.motionType == kMotionHover ? b.turnFacingRate : b.turnRate) * m.turnMult * 0.0017453292f;
   float th = std::min(rate, 3.14159274f);
-  float lc = std::sqrt(cx * cx + cz * cz), lw = len;
-  if (lc * lw == 0) return false;
   float nx, nz;
-  float k = dmath::Cos(th);  // (the exe's cosine, as in RotateToward: std::cos is a last bit off for some angles)
-  if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
-    nx = wx * lc / lw;
-    nz = wz * lc / lw;
-  } else {
-    float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
-    if (wz * cx - cz * wx < 0) sn = -sn;
-    if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
-      float r = std::sqrt(sn * sn + k * k);
-      sn /= r;
-      k /= r;
-    }
-    nx = k * cx - sn * cz;
-    nz = k * cz + sn * cx;
-  }
+  if (!RotateTowardExe(th, cx, cz, wx, wz, &nx, &nz)) return false;
   float l = std::sqrt(nx * nx + nz * nz);
   if (l <= 0) return false;
   m.turnQ = TurnQuat(nx, nz);  // (0x699940: from the turned vector as it is)
@@ -1396,24 +1412,7 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
   float nx = cx, nz = cz;
   const float wx = fv.x, wz = -fv.z;
   const float th = std::min(b.turnFacingRate * m.turnMult * 0.0017453292f, 3.14159274f);
-  const float lc = std::sqrt(cx * cx + cz * cz), lw = std::sqrt(wx * wx + wz * wz);
-  if (lc * lw != 0) {
-    float k = std::cos(th);
-    if (k * lc * lw <= cx * wx + cz * wz) {  // within one step: snap exactly
-      nx = wx * lc / lw;
-      nz = wz * lc / lw;
-    } else {
-      float sn = ((th * th * 0.00761f - 0.16605f) * th * th + 1) * th;
-      if (wz * cx - cz * wx < 0) sn = -sn;
-      if (std::fabs(sn * sn + k * k - 1) > 0.001f) {
-        float r = std::sqrt(sn * sn + k * k);
-        sn /= r;
-        k /= r;
-      }
-      nx = k * cx - sn * cz;
-      nz = k * cz + sn * cx;
-    }
-  }
+  RotateTowardExe(th, cx, cz, wx, wz, &nx, &nz);
   const float l = std::sqrt(nx * nx + nz * nz);
   if (l > 0) {
     m.bx = nx / l;
