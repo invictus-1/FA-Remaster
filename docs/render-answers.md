@@ -26,6 +26,11 @@ Done (render, this commit). Three switches on `World` (world.h), set once before
 either: `worldBeyond` true, `frame` true, `beyondHaze` false (viewer: `--no-beyond-haze`). Seen: the frame
 stands whole over the land beyond, which stays clear to the far end. No change to the code was needed.
 
+**Final (Chris to the renderer, 2026-10-14, after seeing the pictures):** keep it simple, the first table
+stands. Option one: the original's full frame (`worldBeyond` false, `frame` true). Option two, ours: no frame,
+the land beyond darkened (`worldBeyond` true, `frame` false, `beyondHaze` false). The correction above is withdrawn.
+His words: "I have a feeling some people will want the og frame."
+
 ## ui, to the renderer 19: the deposit icons too big, and only one's own (2026-10-13)
 
 Both right, both mine, both changed (render 7afd232).
