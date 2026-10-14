@@ -571,6 +571,49 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         }
       }
   }
+  // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
+  // mirrored copies of the map the ground out there is made of, turned as its mirror image is
+  // turned (the model itself is not mirrored: that would turn it inside out), as far out as the
+  // ground goes. They follow the map's own: a wood felled on the map is felled out there.
+  propsBeyond = 0;
+  if (terrain.beyondReach > 0 && !propCells_.empty()) {
+    const float w = static_cast<float>(map.width), h = static_cast<float>(map.height), reach = terrain.beyondReach;
+    const float margin = propReach_ + 30;
+    for (int tz = -1; tz <= 1; ++tz)
+      for (int tx = -1; tx <= 1; ++tx) {
+        if (!tx && !tz) continue;
+        const float sx = tx ? -1.0f : 1.0f, sz = tz ? -1.0f : 1.0f;
+        // (a place x of the map lies at ox + sx * x in this copy)
+        const float ox = tx ? static_cast<float>(tx) * w + w : 0, oz = tz ? static_cast<float>(tz) * h + h : 0;
+        for (int cz = 0; cz < propCellsZ_; ++cz)
+          for (int cx = 0; cx < propCellsX_; ++cx) {
+            const PropCell& cell = propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)];
+            if (cell.ofMap.empty()) continue;
+            const float xa = ox + sx * static_cast<float>(cx) * kPropCell, xb = ox + sx * static_cast<float>(cx + 1) * kPropCell;
+            const float za = oz + sz * static_cast<float>(cz) * kPropCell, zb = oz + sz * static_cast<float>(cz + 1) * kPropCell;
+            const Vec3 lo{std::min(xa, xb) - margin, ranges.low - 20, std::min(za, zb) - margin};
+            const Vec3 hi{std::max(xa, xb) + margin, ranges.high + 60, std::max(za, zb) + margin};
+            // (only a band along the edge, a quarter of the way the ground goes out: farther out the
+            // haze has taken most of it, and trees cost; only near the camera, where a tree is more
+            // than a dot; and only what the camera sees)
+            const float dx = std::max({-hi.x, lo.x - w, 0.0f}), dz = std::max({-hi.z, lo.z - h, 0.0f});
+            const float band = reach * 0.25f + margin;
+            if (dx * dx + dz * dz > band * band || !view.BoxVisible(lo, hi)) continue;
+            const Vec3 nearest{std::clamp(view.eye.x, lo.x, hi.x), std::clamp(view.eye.y, lo.y, hi.y), std::clamp(view.eye.z, lo.z, hi.z)};
+            if (Length(nearest - view.eye) > 450) continue;
+            for (uint32_t i : cell.ofMap) {
+              Mat4 m = props_[i].world;
+              const float s[3] = {sx, 1, sz};
+              for (int r = 0; r < 3; ++r)
+                for (int k = 0; k < 3; ++k) m.m[r][k] *= s[r] * s[k];
+              m.m[0][3] = ox + sx * m.m[0][3];
+              m.m[2][3] = oz + sz * m.m[2][3];
+              meshes.Add(props_[i].model, m, {1, 1, 1});
+              ++propsBeyond;
+            }
+          }
+      }
+  }
   meshes.addingScenery = false;
   if (haveMap_ && terrain.beyondReach <= 0)  // (the original's frame: not with a world that goes on)
     for (const std::string& border : borders) {

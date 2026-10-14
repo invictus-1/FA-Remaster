@@ -528,6 +528,7 @@ float4 Shade(VOut i, bool front) {
 // a ghost: its shape in one colour, the light and dark of the model kept
 float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
   float4 c = Shade(i, front);
+  c.rgb = BeyondScenery(c.rgb, i.world);  // (the trees and rocks of the world beyond the map's edge)
   // glass: as much of it shows as its albedo's alpha and its glow say (never quite nothing, or a
   // clear pane would not be there at all)
   if (kind.x < -0.5) c.a = saturate(max(albedoMap.Sample(samplerAniso, i.uv.xy).a + specularMap.Sample(samplerAniso, i.uv.xy).b, 0.12));
