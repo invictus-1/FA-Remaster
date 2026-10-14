@@ -530,6 +530,41 @@ the fog (the lookup does not ask what the army sees; not filtered yet). On the b
 the interface never sent an entity-less Reclaim (my IssueOrder refuses it), so what he clicked
 went out as something else or not at all; if he sees it again I send you unit, prop and beat.
 
+### 20. From Chris's game: reclaim of one's own buildings, the speed of reclaim, the engineer's arm, a shield's ratio
+Chris, 2026-10-13, about 18:40, a game on main 2f6bdad (`Open-Game-DayNight.bat`; his words).
+Reclaim of trees and rocks works for him now ("it now works"). What is left, all on the
+simulation's side as far as I can tell:
+
+a. "I still can't reclaim my own buildings well it does but the acu doesn't move." The
+interface sends Reclaim on the unit's entity (the Reclaim button, then a click on the building:
+`IssueOrder` with the entity as target). As he describes it the building is reclaimed but the
+commander does not walk to it first: it reclaims from where it stands, out of its reach.
+(With a tree, in my driver, the commander did walk 8.9 to it.)
+
+b. "Also units reclaim way too fast well t1 engineer." No number from him; he knows the
+original's pace well. If it helps I can time a T1 engineer on a named building in my driver.
+
+c. "When reclaiming the engineer like crane thing doesn't open up and point at the building its
+reclaiming." The engineer's build arm stays folded while it reclaims (in the original it
+unfolds and aims at the target, as when it builds). If the simulation does move the arm and it
+is only not drawn, say so and I pass it to the renderer.
+
+d. Shields. "we are missing shield health bar under health and under the unit": the unit
+panel's shield bar and the bar under the unit in the world. The panel reads
+`GetRolloverInfo().shieldRatio`, which I take from `UnitStateView::shieldRatio` ("as the
+shield's script last set it"). Asked: is that filled for a shield generator and for a unit
+with a personal shield while the shield is up (he had shields under fire and saw no bar)? If
+it is, the fault is mine and I look again; the bar under the unit is asked of the renderer,
+who will want the same number in what he reads.
+
+Not blocking. Not reproduced by me, and so not asked of you yet: "When pausing factory it
+doesn't pause it and it keeps building and no pause icon. Same with mass extractor." In my
+driver a T1 land factory pauses by the script's SetPaused and by a mouse click on the build
+panel's pause button, building a unit and upgrading alike (work progress stands, GetIsPaused
+true); I am asking him which button and which building.
+
+**Status:** open.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -1038,6 +1073,43 @@ diagonal edge: a thin line about 18 degrees to the unit's right, in full from st
 and hardly from a low camera (why Chris found it fine in between). Now every unit's head-lamp
 shafts run straight ahead along the middle of the broad light. Waiting for Chris's look.
 
+### 18. From Chris's game: resource spots from far up, hydrocarbon spots, a shield's bar, a black square, a flicker
+Chris, 2026-10-13, about 18:40, a game on main 2f6bdad (his words; pictures in the folder of
+his others, `_scratch\ui\chris_20261013\`).
+
+First his verdicts on your work, nothing asked: the commander's eye beams and the softer shaft
+ends: "all perfect". Shields under fire: "Shields work just fine", "Size and ripple is right
+too", "Shield textures look good though I can't wait till visual upgrades it later". The
+upgrades of extractor and factory through the tiers: "all good ... no issues".
+
+Asked for:
+a. "when I'm fully zoomed out I can't see mass extractors spots if I recall in og you can."
+The marks of the mass deposits fade out before the farthest zoom; in the original they are
+seen from all the way out.
+b. "we need hydrocarbon spots too on the map i forgot we were missing it." The hydrocarbon
+deposits have no mark at all.
+c. "we are missing shield health bar under health and under the unit." The second half is
+yours: a unit with a shield (a shield generator, a unit with a personal shield) has the
+shield's bar under its life bar in the original. The number is the simulation's shield ratio;
+I have asked the engine whether his view fills it (my entry "To the engine 20", d).
+d. "Sometimes a random black square appears while its under fire." On or at a shield while
+shots land on it; no picture. Perhaps the flash's patch drawn without its texture for a frame.
+e. `factory_middle_piece_black_spot_flickers_on_zoom.webp`: "Zooming in and out of the factory
+the middle piece I circled flickers that tiny black spot." A rebuilt UEF factory from close
+above; he circled the small red tower in the middle of its back, whose top has a dark square
+recess. It flickers while the zoom changes. Whether that is the model (two faces in one plane,
+a LOD step) or the drawing is for you and the visuals track to say; she has the same picture
+(my entry "To the visuals track 4").
+
+Not asked, for you to know: my picture of a paused factory shows your pause mark as a small
+red and black disc on the tip of the factory's tower; Chris looked for "the pause icon" on a
+paused factory and did not find one. It may simply be too small or too much like the model
+there. I am asking him what he pressed before making anything of it.
+
+Not blocking.
+
+**Status:** open.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
@@ -1142,3 +1214,18 @@ unit is built on; the five land and naval factories for the flicker while upgrad
 Seen in my build (main a3e4ca7): a scout half built on the T1 air factory stands on the middle
 tile, at the cross of the four marks (`ui_air_factory_unit_centred.png` in the folder of
 Chris's pictures). Waiting for Chris's look.
+
+### 4. From Chris: a black spot on a rebuilt factory's middle piece flickers while zooming
+Chris, 2026-10-13, about 18:40 (his words): "Zooming in and out of the factory the middle piece
+I circled flickers that tiny black spot." Picture:
+`factory_middle_piece_black_spot_flickers_on_zoom.webp` in the folder of his others
+(`_scratch\ui\chris_20261013\`): a rebuilt UEF factory from close above, T1 power generators
+round it; he circled the small red tower in the middle of the factory's back, whose top has a
+dark square recess. That dark spot flickers as the zoom changes. If it is two faces lying in
+one plane, or the recess differing between two LODs, it is yours; if it is the drawing, the
+renderer's (he has the same picture, my entry "To the renderer 18", e).
+For you to enjoy, from the same game: "Shield textures look good though I can't wait till
+visual upgrades it later"; "The mass extractor upgrades are all good and factory upgrades are
+good too no issues."
+
+**Status:** open.

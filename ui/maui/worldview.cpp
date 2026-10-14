@@ -491,7 +491,13 @@ class WorldView : public Control {
     // held). Which units: buildings, any army's the player sees. INFERRED: the original's test
     // (0x8b4140 gives 8) is not read; in Chris's picture of it a factory has the outline and the
     // commander beside it has none. Only those near what the camera looks at (ours, for the cost).
-    if (building && !KeyIsDown(L, kKeyShift)) {
+    // With Shift held too: read at 0x853e73 the original skips its call while key 0x132 (Shift)
+    // is down, and so did this at first; but Chris, 2026-10-13, queuing buildings with Shift
+    // held: "Pressing shift hides the building outlines when I'm trying to queue more buildings
+    // it shouldn't do this", and the original does show them to him then. His word on what the
+    // original shows goes before my reading of one jump (what the routine called next, 0x854b70,
+    // draws for standing buildings while Shift is down is not read).
+    if (building) {
       std::vector<WorldGhost> standing;
       StructuresForWorld(L, cam.target, std::max(100.0f, cam.distance * 2.0f), &standing);
       for (const WorldGhost& g : standing) SiteOutline(L, *sim, g, 0xc00080ffu, &scene.lines);
