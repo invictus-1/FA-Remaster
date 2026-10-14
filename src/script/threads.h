@@ -27,6 +27,9 @@ class ThreadScheduler {
   void SuspendCurrent() { if (current_) current_->suspended = true; }
   // WaitFor: the running thread waits until the event (registry ref) is signalled.
   void WaitCurrentOn(int ref);
+  // The threads whose event has been signalled since the last call go to the END of the run order, where the
+  // original's wake links them (0x409420). Called between the beat's stages and when a pass begins.
+  void WakeSignalled();
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
   size_t Count() const { return threads_.size(); }

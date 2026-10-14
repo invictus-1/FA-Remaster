@@ -233,14 +233,43 @@ void ThreadScheduler::Step(Thread& t) {
   t.wakeTick = tick_ + static_cast<uint32_t>(wait);
 }
 
+// WaitFor in the original (0x4ca910) puts a CWaitForTask on the thread; its Execute 0x4ca660 takes the thread off
+// the stage's run list while the event is not signalled (0x406e20 / 0x4093e0: the stage's second list), and the
+// event's wake 0x409420 links it in again at the END of the run list. So a thread that really waited runs after
+// every thread that was in the list when its event fired, from then on. Seen: a sinking ship's animation thread
+// (WaitFor(sinkAnim), then StopSink = true) was made before the unit's DeathThread, whose SeabedWatcher looks at
+// StopSink every beat; in the original the watcher runs first in the beat after the animation's end and sees the
+// flag one beat later, so the wreck is destroyed a beat later than a fixed order makes it.
+void ThreadScheduler::WakeSignalled() {
+  if (threads_.empty()) return;
+  const auto last = std::prev(threads_.end());
+  for (auto it = threads_.begin();;) {
+    const bool atLast = it == last;
+    const auto next = std::next(it);
+    Thread& t = *it;
+    if (!t.dead && t.waitRef != LUA_NOREF && &t != current_ && !StillWaiting(t) && !atLast)
+      threads_.splice(threads_.end(), threads_, it);
+    if (atLast) break;
+    it = next;
+  }
+}
+
 void ThreadScheduler::RunTick(uint32_t tick) {
   tick_ = tick;
+  WakeSignalled();
   // Threads forked during this pass are appended and run in the same pass.
   for (auto it = threads_.begin(); it != threads_.end();) {
     Thread& t = *it;
     if (!t.dead && !t.suspended && t.wakeTick <= tick) {
+      const bool waited = t.waitRef != LUA_NOREF;
       if (StillWaiting(t)) {
         t.wakeTick = tick + 1;
+      } else if (waited && std::next(it) != threads_.end()) {
+        // (its event was signalled while this pass runs, by a thread before it: it goes to the pass's end)
+        const auto next = std::next(it);
+        threads_.splice(threads_.end(), threads_, it);
+        it = next;
+        continue;
       } else {
         Step(t);
         for (int n = 0; t.again && !t.dead && !t.suspended && n < 100000; ++n) {
