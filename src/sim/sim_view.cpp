@@ -283,6 +283,7 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.vizAllies = p->viz[1];
     v.vizEnemies = p->viz[2];
     v.vizNeutrals = p->viz[3];
+    v.stopped = p->hitFraction >= 0;  // (the impact waits for the next beat's Impact 0x69dec0)
     out->push_back(std::move(v));
   }
 }

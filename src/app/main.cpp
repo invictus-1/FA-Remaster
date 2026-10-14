@@ -47,6 +47,7 @@ struct Options {
   bool hasSeed = false;
   std::string orders;   // --orders file: orders issued through the command writer at given ticks (testing)
   std::string stream;   // --stream file: with --session, a played game's command stream to play back
+  std::vector<std::string> moreMaps;  // --maps folder: mounted at /maps beside the game's own
   bool view = false;    // --view: collect what a host reads (sync tables, armies, units) and log a summary
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
@@ -657,6 +658,7 @@ int main(int argc, char** argv) {
     } else if (a == "--view") o.view = true;
     else if (a == "--orders") o.orders = next();
     else if (a == "--stream") o.stream = next();
+    else if (a == "--maps") o.moreMaps.push_back(next());
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
@@ -674,6 +676,10 @@ int main(int argc, char** argv) {
   Vfs vfs;
   std::vector<std::string> hookDirs;
   if (!MountFromInitFile(o.init, o.folders, vfs, hookDirs)) return 1;
+  // --maps <folder> (may be given more than once): more map folders beside the game's own at /maps, as the
+  // interface host has it (a game played there on such a map can then be played back here)
+  for (const std::string& folder : o.moreMaps)
+    if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64: --maps %s: no such folder", folder.c_str());
   Logf(LogLevel::Info, "moho64: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   std::vector<std::string> uids;
   if (!o.modsFile.empty()) {
