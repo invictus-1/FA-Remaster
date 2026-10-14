@@ -1,5 +1,8 @@
 // Reads .dds texture files as the game's data uses them: DXT1 / DXT3 / DXT5, 32-bit BGRA, 24-bit BGR
-// and 8-bit alpha or luminance; 2D textures and cube maps, with or without mip levels.
+// and 8-bit alpha or luminance; 2D textures and cube maps, with or without mip levels. And files
+// with the newer header ("DX10"), which new art may come in: the same formats named by number, and
+// BC7, which keeps colour and normals much better than DXT5 at the same size. A file that says its
+// colours are sRGB is taken as plain numbers, like every other texture here: the shaders do that step.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -29,7 +32,8 @@ struct DdsImage {
 bool ParseDds(std::string_view file, DdsImage* out, std::string* error);
 
 // The first (largest) image of one layer as plain RGBA, 4 bytes per pixel. Handles the compressed
-// formats DXT1 / DXT3 / DXT5 and the 32-bit ones. False for anything else.
+// formats DXT1 / DXT3 / DXT5 and the 32-bit ones. False for anything else (BC4, BC5 and BC7 are for
+// the graphics card only).
 bool DecodeRgba(const DdsImage& image, int layer, std::vector<uint8_t>* out);
 
 }  // namespace render
