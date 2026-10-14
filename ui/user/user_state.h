@@ -232,6 +232,11 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // How far apart buildings of a kind stand in a row (along x and along z, map units): the larger
 // of the blueprint's footprint and its skirt, at least 1.
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ);
+// Whether a building of that kind at that site would lie over a building the player's units
+// have been ordered to build and have not begun (the ground of the two meets; edges may
+// touch). `adding`: the new order comes after the selected units' orders (Shift); without it
+// their own queued buildings do not count, since the new order takes their place.
+bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding);
 // The buildings the interface knows of (any army's, as far as the player sees them) within
 // `within` map units of a place, each with its blueprint and where it stands: for the outlines
 // the world view draws round them while a building is being placed. At most 600.

@@ -510,8 +510,9 @@ class WorldView : public Control {
       WorldGhost ghost;
       if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
-          BuildRow(L, *sim, name, buildFrom_, at, &scene.ghosts);
+          BuildRow(L, *sim, name, buildFrom_, at, &scene.ghosts, buildShift_);
         } else if (BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
+          if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, KeyIsDown(L, kKeyShift))) ghost.free = false;
           ghost.blueprint = name;
           scene.ghosts.push_back(ghost);
         }
@@ -779,7 +780,8 @@ class WorldView : public Control {
   bool buildDrag_ = false, buildShift_ = false;
   std::string buildName_;
   float buildFrom_[3] = {0, 0, 0};
-  void BuildRow(lua_State* L, Sim& sim, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row) {
+  void BuildRow(lua_State* L, Sim& sim, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row,
+                bool adding) {
     float alongX = 1, alongZ = 1;
     BuildSpacingOf(L, name, &alongX, &alongZ);
     const float dx = to[0] - from[0], dz = to[2] - from[2];
@@ -791,6 +793,8 @@ class WorldView : public Control {
       WorldGhost ghost;
       if (!BuildSiteOf(sim, name, at, ghost.position, &ghost.free)) return;
       if (!row->empty() && row->back().position[0] == ghost.position[0] && row->back().position[2] == ghost.position[2]) continue;
+      // (not over a building that is ordered and not begun either: see SiteMeetsOrdered)
+      if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, adding)) ghost.free = false;
       ghost.blueprint = name;
       row->push_back(ghost);
     }
@@ -807,7 +811,7 @@ class WorldView : public Control {
       float to[3];
       Unproject(L, e.x, e.y, to);
       std::vector<WorldGhost> row;
-      BuildRow(L, *sim, buildName_, buildFrom_, to, &row);
+      BuildRow(L, *sim, buildName_, buildFrom_, to, &row, buildShift_);
       bool clear = !buildShift_;
       for (const WorldGhost& g : row) {
         if (!g.free) continue;

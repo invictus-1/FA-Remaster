@@ -54,7 +54,15 @@ struct UnitStore : UserState::Extra {
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
   std::vector<WorldGhost> ordered;
+  std::vector<uint32_t> orderedBy;  // (beside `ordered`: the unit whose order each is)
   uint32_t orderedTick = 0xffffffffu;
+  // Building orders the interface has sent that the simulation's queues may not show yet (the
+  // beats since are few): their sites, with the beat they were sent in.
+  struct SentSite {
+    WorldGhost site;
+    uint32_t tick;
+  };
+  std::vector<SentSite> sent;
 };
 
 UnitStore& Store(lua_State* L) {
@@ -963,6 +971,14 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   for (UserUnit* u : units)
     (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
         .push_back(u->view.id);
+  if (type == CommandType::BuildMobile && !blueprint.empty()) {  // (remembered until the queues show it: SiteMeetsOrdered)
+    UnitStore::SentSite e;
+    e.site.blueprint = blueprint;
+    e.site.position[0] = x, e.site.position[1] = y, e.site.position[2] = z;
+    e.tick = static_cast<uint32_t>(sim->tick());
+    if (clear) Store(L).sent.clear();
+    Store(L).sent.push_back(e);
+  }
   if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
   if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
   ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
@@ -2017,6 +2033,40 @@ void StructuresForWorld(lua_State* L, const float near[3], float within, std::ve
   }
 }
 
+// A building's site against the buildings ordered and not begun. The simulation refuses a site
+// that meets a standing building's ground (skirt against skirt); what is only ordered it does
+// not know as ground taken, so two buildings could be ordered into one another (Chris,
+// 2026-10-13: two queued power generators half over each other). The original's preview is
+// red there. INFERRED where the original tests it (its interface, by the build orders it
+// shows); the rectangles are those of the guide (BuildSpacingOf), edges may touch.
+bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding) {
+  Sim* sim = TheSim(L);
+  UserState* user = UserState::From(L);
+  if (!sim || !user->units) return false;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  float w = 1, h = 1;
+  BuildSpacingOf(L, blueprint, &w, &h);
+  auto meets = [&](const WorldGhost& g) {
+    float gw = 1, gh = 1;
+    BuildSpacingOf(L, g.blueprint, &gw, &gh);
+    return std::fabs(g.position[0] - position[0]) < (w + gw) * 0.5f - 0.01f && std::fabs(g.position[2] - position[2]) < (h + gh) * 0.5f - 0.01f;
+  };
+  for (size_t i = 0; i < store.ordered.size(); ++i) {
+    if (!adding && i < store.orderedBy.size()) {  // (a selected unit's own queue goes with the new order)
+      bool own = false;
+      for (const UserUnit* u : store.selection) own = own || u->view.id == store.orderedBy[i];
+      if (own) continue;
+    }
+    if (meets(store.ordered[i])) return true;
+  }
+  const uint32_t now = static_cast<uint32_t>(sim->tick());
+  store.sent.erase(std::remove_if(store.sent.begin(), store.sent.end(), [&](const UnitStore::SentSite& e) { return now - e.tick > 5; }),
+                   store.sent.end());
+  for (const UnitStore::SentSite& e : store.sent)
+    if (meets(e.site)) return true;
+  return false;
+}
+
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
                        bool queueShown, std::vector<WorldGhost>* queued, std::vector<WorldWaypoint>* waypoints) {
   Sim* sim = TheSim(L);
@@ -2073,6 +2123,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   if (store.orderedTick != sim->tick()) {
     store.orderedTick = sim->tick();
     store.ordered.clear();
+    store.orderedBy.clear();
     for (auto& entry : store.units) {
       const UserUnit* u = entry.second.get();
       if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0) continue;
@@ -2091,6 +2142,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
         g.blueprint = c.blueprint;
         for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
         store.ordered.push_back(g);
+        store.orderedBy.push_back(u->view.id);
       }
     }
   }
