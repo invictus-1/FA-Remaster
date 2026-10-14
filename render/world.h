@@ -171,6 +171,7 @@ class World {
   // is out there for the game: no unit goes there. `borders` (the original's frame of machinery)
   // are not drawn then. false: the map ends at its edge, with its frame, as the original.
   bool worldBeyond = true;
+  int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;
   float sun = 1.4f, sky = 1.1f, exposure = 0.55f, reflection = 0.7f;  // the modern look's strengths

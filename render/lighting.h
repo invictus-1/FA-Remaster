@@ -100,10 +100,7 @@ float LampShadow(float3 world, float3 N, uint map) {
 // The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
 // playable ground ends here) and lost in the distance farther out: it goes over into what the
 // sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
-float3 BeyondMap(float3 color, float3 world) {
-  float outside = OutsideMap(world);
-  float pixel = fwidth(outside);  // (how much of the way out one pixel is, for the line along the edge)
-  if (outside <= 0) return color;
+float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   float3 d = normalize(world - cameraPosition);
   float3 back;
   if (skyZenith.w > 0.5) {  // (as sky.cpp shows the far distance under a computed sky)
@@ -118,8 +115,21 @@ float3 BeyondMap(float3 color, float3 world) {
   // plain from all the way up
   float near = saturate(outside / 6);
   color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, beyond.w, near);
-  color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
+  if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
   return lerp(color, back, t * t * (3 - 2 * t));
+}
+float3 BeyondMap(float3 color, float3 world) {
+  float outside = OutsideMap(world);
+  float pixel = fwidth(outside);  // (how much of the way out one pixel is, for the line along the edge)
+  if (outside <= 0) return color;
+  return BeyondFar(color, world, outside, max(pixel, 1e-5));
+}
+// The same for what stands on that ground (trees, rocks): dimmed and lost in the distance with
+// it, without the line along the edge.
+float3 BeyondScenery(float3 color, float3 world) {
+  float outside = OutsideMap(world);
+  if (outside <= 0) return color;
+  return BeyondFar(color, world, outside, 0);
 }
 
 // The small lights (lights.h) on a surface: those of the square of ground the place is over.
