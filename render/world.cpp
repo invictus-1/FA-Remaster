@@ -371,6 +371,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // the world beyond the map's edge: six tenths of the map's shorter side out, then lost in the distance
+  terrain.beyondReach = 0;
+  if (haveMap_ && worldBeyond && look == Look::Modern) {
+    terrain.beyondReach = 0.6f * static_cast<float>(std::min(map.width, map.height));
+    c.beyond[0] = static_cast<float>(map.width);
+    c.beyond[1] = static_cast<float>(map.height);
+    c.beyond[2] = 1 / terrain.beyondReach;
+    c.beyond[3] = 0.78f;
+  }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
   set(c.sunAmbience, haveMap_ ? map.lighting.sunAmbience : Vec3{0.2f, 0.2f, 0.2f});
@@ -563,7 +572,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
   }
   meshes.addingScenery = false;
-  if (haveMap_)
+  if (haveMap_ && terrain.beyondReach <= 0)  // (the original's frame: not with a world that goes on)
     for (const std::string& border : borders) {
       const bool whole = border.size() > 3 && border.compare(border.size() - 3, 3, ".bp") == 0;
       const Model* model = models.Blueprint(whole ? border : border + ".bp");

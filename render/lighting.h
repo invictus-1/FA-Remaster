@@ -97,6 +97,31 @@ float LampShadow(float3 world, float3 N, uint map) {
   return lit * 0.25;
 }
 
+// The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
+// playable ground ends here) and lost in the distance farther out: it goes over into what the
+// sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
+float3 BeyondMap(float3 color, float3 world) {
+  float outside = OutsideMap(world);
+  float pixel = fwidth(outside);  // (how much of the way out one pixel is, for the line along the edge)
+  if (outside <= 0) return color;
+  float3 d = normalize(world - cameraPosition);
+  float3 back;
+  if (skyZenith.w > 0.5) {  // (as sky.cpp shows the far distance under a computed sky)
+    back = HorizonHaze(d) * pow(max(skyGlow.w, 0.006), 0.43);
+  } else {
+    float3 picture = environmentSky.SampleLevel(samplerLinear, d, 0).rgb;
+    back = look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture;
+  }
+  float t = saturate(outside * beyond.z);
+  // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the
+  // edge that keeps its width in the picture at any zoom: where the playable ground ends must be
+  // plain from all the way up
+  float near = saturate(outside / 6);
+  color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, beyond.w, near);
+  color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
+  return lerp(color, back, t * t * (3 - 2 * t));
+}
+
 // The small lights (lights.h) on a surface: those of the square of ground the place is over.
 // `diffuseColor` and `f0`: what the surface gives back of light from all sides and mirrored;
 // `a2` and `k`: its roughness as the highlight's formulas take it; `nDotV`: how it faces the eye.
@@ -178,7 +203,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     [branch] if (tracksArea.z > 0.5 && lying > 0) {
       // (four readings half a pixel of the picture apart: one alone shows the picture's pixels as steps
       // along every track that runs aslant)
-      float2 at = world.xz * tracksArea.xy, half = 0.5 / 2048.0;
+      float2 at = saturate(world.xz * tracksArea.xy), half = 0.5 / 2048.0;
       float trodden = (tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at + float2(-half.x, half.y), 0).r +
                        tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, -half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at - float2(half.x, half.y), 0).r) * 0.25;
       albedo *= 1 - 0.15 * trodden * lying;

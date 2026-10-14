@@ -61,6 +61,8 @@
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
+// --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
+//           and sea go on beyond the edge in the modern look
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -158,6 +160,7 @@ struct Options {
   bool lampShadows = true;              // --no-lamp-shadows
   bool tracers = true;                  // --no-tracers
   bool richGround = true;               // --plain-ground
+  bool worldBeyond = true;              // --map-ends
   std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
@@ -231,6 +234,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--plain-ground") o->richGround = false;
+    else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -492,6 +496,7 @@ int main(int argc, char** argv) {
   world.lampShadows = opt.lampShadows;
   world.ribbons.tracers = opt.tracers;
   world.terrain.richGround = opt.richGround;
+  world.worldBeyond = opt.worldBeyond;
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail"};
   for (int i = 1; i < 10; ++i)
     if (opt.inspect == kInspect[i]) world.inspect = i;

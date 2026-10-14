@@ -237,6 +237,9 @@ float4 PS(VOut i) : SV_Target {
   }
   // thick air: the sky low down is its colour
   if (weather.z > 0) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600) * saturate(1 - d.y * 2.5));
+  // with a world that goes on beyond the map's edge: below the horizon lies the haze that world
+  // is lost in (lighting.h, BeyondMap), not the dark of a ground far away
+  if (beyond.z > 0 && d.y < 0.01) c = lerp(c, HorizonHaze(d), saturate((0.01 - d.y) * 60));
   return float4(c * rayForward.w, 1);
 }
 )hlsl";

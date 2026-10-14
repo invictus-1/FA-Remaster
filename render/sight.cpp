@@ -37,7 +37,13 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   float2 ndc = float2(position.x * viewport.z * 2 - 1, 1 - position.y * viewport.w * 2);
   float3 world = cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
   float2 uv = world.xz * mapInfo.xy;
-  if (any(uv < 0) || any(uv > 1)) return 1;  // what the map lies in
+  if (any(uv < 0) || any(uv > 1)) {
+    // what the map lies in: left as it is; the world that goes on beyond the edge: dimmed as
+    // ground the army knows and does not see, less and less the farther out
+    float outside = OutsideMap(world);
+    if (outside <= 0) return 1;
+    return float4(lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, saturate(outside * beyond.z * 1.5)), 1);
+  }
   float4 grid = sight.SampleLevel(samplerLinearClamp, uv, 0);  // seen now; seen at some time; radar; sonar
   float seen = smoothstep(0.2, 0.8, grid.r);
   float known = smoothstep(0.2, 0.8, grid.g);

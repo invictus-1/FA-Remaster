@@ -28,6 +28,10 @@ class Terrain {
   // The picture of where lying snow is trodden away (tracks.h), set by the host each frame; none:
   // the snow lies untrodden.
   gfx::Texture tracksMap;
+  // The world beyond the map's edge: how far out (world units) the ground goes on, as the map
+  // laid out again mirrored on every side, which joins without a seam. 0: the map ends at its
+  // edge. The host sets it with the view's `beyond` (World does).
+  float beyondReach = 0;
   int MaterialLayers() const;  // how many of the map's layers have a third map
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.
@@ -58,6 +62,8 @@ class Terrain {
   bool Select(const View& view, int level, int ix, int iz);
   void AddNode(const View& view, int level, int ix, int iz);
   void AddPatch(const View& view, int level, float x, float z, float size, float lo, float hi);
+  void InWorld(float x0, float z0, float x1, float z1, float lo, float hi, Vec3* a, Vec3* b) const;
+  int tileX_ = 0, tileZ_ = 0;  // which copy of the map is being gone through (Draw)
 
   gfx::Device* device_;
   TextureCache* textures_;

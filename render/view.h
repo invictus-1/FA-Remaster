@@ -78,6 +78,10 @@ struct ViewConstants {
   // The tracks in lying snow (tracks.h): x, y what a place's x and z are multiplied by to read the
   // picture of what is trodden; z: 1 = there is one.
   float tracksArea[4];
+  // The world beyond the map's edge (terrain.h): x, y the map's width and height; z: 1 / how far
+  // out the land and sea go on before they are lost in the distance (0: the map ends at its
+  // edge); w: how much of its light the ground keeps just outside (the playable ground ends there).
+  float beyond[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -111,6 +115,7 @@ cbuffer View : register(b0) {
   float4 mist;            // the mist on low ground: x thickness per world unit at its floor; y the floor's height; z 1 / its depth; w the most it hides
   float4 inspect;         // x: what lit surfaces show instead of their lit colour (0: nothing special; view.h)
   float4 tracksArea;      // the tracks in lying snow: x, y: 1 / the map's width and height; z: 1 = there are tracks
+  float4 beyond;          // the world beyond the map's edge: x, y the map's size; z: 1 / how far out it goes (0: not at all); w: the light kept just outside
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -153,6 +158,14 @@ float CloudShadow(float3 world) {
   float2 q = world.xz + sunDirection.xz * ((150 - world.y) / max(sunDirection.y, 0.2));
   return 1 - 0.75 * CloudFrom(CloudField(q));
 }
+// The map's pictures (masks, normals, the water's depth) read beyond the map's edge: the map laid
+// out again mirrored, so that land and sea go on without a seam. Inside the map: as it is.
+float2 MirrorUv(float2 uv) { return 1 - abs(1 - frac(uv * 0.5) * 2); }
+// How far outside the map a place is, in world units (0: on the map).
+float OutsideMap(float3 world) {
+  if (beyond.z <= 0) return 0;
+  return length(max(max(-world.xz, world.xz - beyond.xy), 0));
+}
 // The colour of thick air, and a colour seen through `distance` of it.
 // (the light that reaches the ground from the sky, greyed: thick air is lit like the ground under
 // it, and is not as bright or as coloured as the sky at the horizon, or a dawn's fog would be orange)
@@ -184,6 +197,14 @@ float3 ThroughAirTo(float3 color, float3 world) {
   color = ThroughAir(color, length(world - cameraPosition));
   float lost = MistLost(world);
   return lost > 0 ? lerp(color, MistColor(), lost) : color;
+}
+// What the far distance looks like in a direction under a computed sky: the haze at the horizon
+// that way. The world beyond the map's edge is lost in it, and the sky's pass shows it below the
+// horizon then, so the two meet without a rim.
+float3 HorizonHaze(float3 d) {
+  float3 c = ComputedSky(normalize(float3(d.x, 0.03, d.z)));
+  if (weather.z > 0) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600));
+  return c;
 }
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {

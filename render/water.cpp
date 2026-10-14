@@ -42,14 +42,16 @@ struct VOut {
 
 VOut VS(float2 corner : POSITION) {
   VOut o;
-  o.world = float3(corner.x * mapSize.x, surfaceColor.w, corner.y * mapSize.y);
+  // (with a world beyond the map's edge the sheet reaches as far out as the ground does)
+  float reach = beyond.z > 0 ? 1 / beyond.z : 0;
+  o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w, lerp(-reach, mapSize.y + reach, corner.y));
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
 }
 
 float4 PS(VOut i) : SV_Target {
   float2 xz = i.world.xz;
-  float4 water = waterMap.Sample(samplerLinearClamp, xz * mapSize.zw);  // r: waviness, g: depth, a: no crests
+  float4 water = waterMap.Sample(samplerLinearClamp, MirrorUv(xz * mapSize.zw));  // r: waviness, g: depth, a: no crests
   float depth = water.g;
   float3 toPixel = normalize(i.world - cameraPosition);
 
@@ -85,7 +87,7 @@ float4 PS(VOut i) : SV_Target {
   through *= 1 - c;
   // the modern look works in linear light: the same water for now, its colours converted
   if (look > 0.5) rgb = ThroughAirTo(pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight), i.world);
-  return float4(rgb, 1 - through);
+  return float4(BeyondMap(rgb, i.world), 1 - through);
 }
 )hlsl";
 
@@ -132,7 +134,8 @@ VOut VS(float2 corner : POSITION) {
   VOut o;
   // (the sheet lies as high as the swell's crests reach; where the water stands lower just now is
   // worked out per pixel)
-  o.world = float3(corner.x * mapSize.x, surfaceColor.w + kRise, corner.y * mapSize.y);
+  float reach = beyond.z > 0 ? 1 / beyond.z : 0;
+  o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise, lerp(-reach, mapSize.y + reach, corner.y));
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
 }
@@ -190,7 +193,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   if (coverage == 0) discard;
 
   float2 xz = i.world.xz;
-  float4 water = waterMap.Sample(samplerLinearClamp, xz * mapSize.zw);  // r: waviness, a: no crests
+  float4 water = waterMap.Sample(samplerLinearClamp, MirrorUv(xz * mapSize.zw));  // r: waviness, a: no crests
   float3 toPixel = normalize(i.world - cameraPosition);
   float distance = length(i.world - cameraPosition);
   float4 sum = waves[0].Sample(samplerLinear, (xz + movement[0].xy * time) * normalRepeat.x)
@@ -343,7 +346,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
   // at its very edge the water thins out to nothing over what is behind it
   color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAirTo(color, i.world), saturate(deep / 0.035));
-  return float4(color, 1);
+  return float4(BeyondMap(color, i.world), 1);
 }
 )hlsl";
 
@@ -365,7 +368,7 @@ bool Water::Load(const MapData* map, std::string* error) {
   map_ = map;
   if (!map->water.present) return true;
   if (!pipeline_) {
-    std::string source = std::string(kViewShaderBlock) + kShader;
+    std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "water";
     pd.vertexSource = pd.pixelSource = source;

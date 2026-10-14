@@ -32,7 +32,8 @@ constexpr int kMaxPatches = 1024;           // per draw call (the size of the sh
 const char kShader[] = R"hlsl(
 cbuffer TerrainConstants : register(b1) {
   float4 mapSize;        // width, height, 1 / width, 1 / height
-  float4 params;         // x: world height of the largest height value, y: 1 for the XP look, z: 1 for the glowing look
+  float4 params;         // x: world height of the largest height value, y: 1 for the XP look, z: 1 for the glowing look,
+                         // w: 1 = the ground goes on beyond the map's edge (the map mirrored)
   float4 specularColor;
   float4 albedoTile[10]; // x: repeats per world unit; y: 1 = the layer has its third map (materialMaps)
   float4 normalTile[9];
@@ -57,6 +58,7 @@ float HeightAt(int2 c) {
   return heightMap.Load(int3(c, 0)) * params.x;
 }
 float HeightBilinear(float2 p) {
+  p = MirrorUv(p * mapSize.zw) * mapSize.xy;  // (beyond the map: the map mirrored; on it: as it is)
   float2 f = floor(p);
   float2 t = p - f;
   int2 c = int2(f);
@@ -71,22 +73,26 @@ struct VOut {
 
 VOut VS(float2 grid : POSITION, uint instance : SV_InstanceID) {
   float4 patch = patches[instance];
-  float2 p0 = min(patch.xy + grid * patch.z, mapSize.xy);
+  float2 p0 = patch.xy + grid * patch.z;
+  if (params.w < 0.5) p0 = min(p0, mapSize.xy);
   float h0 = HeightBilinear(p0);
   // slide the odd vertices onto their even neighbours as this level's range runs out
   float4 m = morph[int(patch.w)];
   float k = saturate((distance(float3(p0.x, h0, p0.y), cameraPosition) - m.x) * m.y);
   float2 odd = frac(grid * 0.5) * 2.0;
-  float2 p = min(patch.xy + (grid - odd * k) * patch.z, mapSize.xy);
+  float2 p = patch.xy + (grid - odd * k) * patch.z;
+  if (params.w < 0.5) p = min(p, mapSize.xy);
   VOut o;
   o.world = float3(p.x, HeightBilinear(p), p.y);
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
 }
 
-float4 PS(VOut i) : SV_Target {
+float4 Ground(VOut i) {
   float2 xz = i.world.xz;
-  float2 uv = xz * mapSize.zw;
+  float2 uv = MirrorUv(xz * mapSize.zw);
+  // (in a mirrored copy of the map the stored slopes point the other way)
+  float2 mirrored = 1 - 2 * abs(fmod(floor(xz * mapSize.zw), 2));
   float xp = params.y;
   float4 rawLow = maskLow.Sample(samplerLinearClamp, uv);
   float4 rawHigh = maskHigh.Sample(samplerLinearClamp, uv) * xp;
@@ -161,7 +167,7 @@ float4 PS(VOut i) : SV_Target {
   // the ground's normal: x in the texture's alpha, z in its green
   float4 stored = normalMap.Sample(samplerLinearClamp, uv);
   float3 base;
-  base.xz = stored.ag * 2 - 1;
+  base.xz = (stored.ag * 2 - 1) * mirrored;
   base.y = sqrt(saturate(1 - dot(base.xz, base.xz)));
   // the rotation that takes "up" to the ground's normal, applied to the layers' normal
   float3 h = normalize(base + float3(0, 1, 0));
@@ -210,6 +216,11 @@ float4 PS(VOut i) : SV_Target {
   // (the glowing look: the original marks the pixel to be spread as glow; here it is added)
   float3 color = lerp(colorPlain, colorXp, xp) + glowing * 0.6;
   return float4(lerp(color, ramp.rgb, ramp.a), 1);
+}
+
+float4 PS(VOut i) : SV_Target {
+  float4 c = Ground(i);
+  return float4(BeyondMap(c.rgb, i.world), c.a);
 }
 )hlsl";
 
@@ -371,11 +382,30 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   return true;
 }
 
+// Where a box of the map (x0..x1, z0..z1) lies in the world for the copy of the map being gone
+// through (tileX_, tileZ_: 0, 0 the map itself; an odd one is mirrored).
+void Terrain::InWorld(float x0, float z0, float x1, float z1, float lo, float hi, Vec3* a, Vec3* b) const {
+  const float w = static_cast<float>(map_->width), h = static_cast<float>(map_->height);
+  const float ox = static_cast<float>(tileX_) * w, oz = static_cast<float>(tileZ_) * h;
+  const bool mx = (tileX_ & 1) != 0, mz = (tileZ_ & 1) != 0;
+  *a = {ox + (mx ? w - x1 : x0), lo, oz + (mz ? h - z1 : z0)};
+  *b = {ox + (mx ? w - x0 : x1), hi, oz + (mz ? h - z0 : z1)};
+}
+
 void Terrain::AddPatch(const View& view, int level, float x, float z, float size, float lo, float hi) {
   const float w = static_cast<float>(map_->width), h = static_cast<float>(map_->height);
   if (x >= w || z >= h) return;
-  if (!view.BoxVisible({x, lo, z}, {std::min(x + size, w), hi, std::min(z + size, h)})) return;
-  patches_.push_back({x, z, size / kPatchQuads, static_cast<float>(level)});
+  Vec3 a, b;
+  InWorld(x, z, std::min(x + size, w), std::min(z + size, h), lo, hi, &a, &b);
+  if (!view.BoxVisible(a, b)) return;
+  if (tileX_ || tileZ_) {
+    // (a copy of the map: only as far out as the ground is drawn at all)
+    const float dx = std::max({-b.x, a.x - w, 0.0f}), dz = std::max({-b.z, a.z - h, 0.0f});
+    if (dx * dx + dz * dz > beyondReach * beyondReach) return;
+    // (the patch whole, not cut at the copy's edge: what laps over is the same ground again)
+    InWorld(x, z, x + size, z + size, lo, hi, &a, &b);
+  }
+  patches_.push_back({a.x, a.z, size / kPatchQuads, static_cast<float>(level)});
 }
 
 void Terrain::AddNode(const View& view, int level, int ix, int iz) {
@@ -392,9 +422,9 @@ bool Terrain::Select(const View& view, int level, int ix, int iz) {
   const Level& L = levels_[static_cast<size_t>(level)];
   const size_t at = static_cast<size_t>(iz) * static_cast<size_t>(L.nx) + static_cast<size_t>(ix);
   const float x = static_cast<float>(ix * L.nodeCells), z = static_cast<float>(iz * L.nodeCells);
-  const Vec3 lo{x, L.lo[at], z};
-  const Vec3 hi{std::min(x + static_cast<float>(L.nodeCells), static_cast<float>(map_->width)), L.hi[at],
-                std::min(z + static_cast<float>(L.nodeCells), static_cast<float>(map_->height))};
+  Vec3 lo, hi;
+  InWorld(x, z, std::min(x + static_cast<float>(L.nodeCells), static_cast<float>(map_->width)),
+          std::min(z + static_cast<float>(L.nodeCells), static_cast<float>(map_->height)), L.lo[at], L.hi[at], &lo, &hi);
   if (!SphereTouchesBox(view.eye, ranges_[static_cast<size_t>(level)], lo, hi)) return false;
   if (!view.BoxVisible(lo, hi)) return true;
   if (level == 0 || !SphereTouchesBox(view.eye, ranges_[static_cast<size_t>(level) - 1], lo, hi)) {
@@ -425,8 +455,14 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   for (int k = 0; k <= top; ++k) ranges_[static_cast<size_t>(k)] = k == top ? std::numeric_limits<float>::max() : base * static_cast<float>(1 << k);
   patches_.clear();
   const Level& T = levels_[static_cast<size_t>(top)];
-  for (int iz = 0; iz < T.nz; ++iz)
-    for (int ix = 0; ix < T.nx; ++ix) Select(view, top, ix, iz);
+  // the map, and (not into shadow maps) the eight copies of it round it that the ground beyond
+  // its edge is made of
+  const int round = beyondReach > 0 && !shadowPass ? 1 : 0;
+  for (tileZ_ = -round; tileZ_ <= round; ++tileZ_)
+    for (tileX_ = -round; tileX_ <= round; ++tileX_)
+      for (int iz = 0; iz < T.nz; ++iz)
+        for (int ix = 0; ix < T.nx; ++ix) Select(view, top, ix, iz);
+  tileX_ = tileZ_ = 0;
   if (patches_.empty()) return;
 
   const MapData& m = *map_;
@@ -438,6 +474,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   c.params[0] = 65535.0f * m.heightScale;
   c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
   c.params[2] = shaderKind_ == 2 ? 1.0f : 0.0f;
+  c.params[3] = beyondReach > 0 ? 1.0f : 0.0f;
   c.specularColor[0] = m.lighting.specular.x;
   c.specularColor[1] = m.lighting.specular.y;
   c.specularColor[2] = m.lighting.specular.z;
