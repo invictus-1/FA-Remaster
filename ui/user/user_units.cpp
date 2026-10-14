@@ -1445,6 +1445,15 @@ void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& val
 // SetPaused(units, paused), SetAutoMode(units, on), SetFireState(units, state),
 // ToggleFireState(units, currentState), ToggleScriptBit(units, bit, currentState)
 int l_SetPaused(lua_State* L) {
+  // (Each call is written to the log: a pause is rare, and "I pressed pause and it went on
+  // building" can then be read back: who was paused, when, and whether a second call undid it.)
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  std::string names;
+  for (const UserUnit* u : list) names += (names.empty() ? "" : " ") + u->view.blueprint;
+  Sim* sim = TheSim(L);
+  Logf(LogLevel::Info, "moho64ui: SetPaused(%s) at tick %u for %d unit(s): %s", lua_toboolean(L, 2) ? "true" : "false",
+       sim ? static_cast<unsigned>(sim->tick()) : 0u, static_cast<int>(list.size()), names.c_str());
   InfoPair(L, 1, "SetPaused", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
