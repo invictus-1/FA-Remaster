@@ -1258,6 +1258,20 @@ int main(int argc, char** argv) {
         impactFound = flashing;
         if (flashing) printf("render: --find impact: a flash on a shield at %.0f, %.0f (frame %d)\n", camera.target.x, camera.target.z, frameCount);
         else if (frameCount == 1) printf("render: --find impact: no flash yet; the shield with the most shots near it is at %.0f, %.0f\n", camera.target.x, camera.target.z);
+      } else if (opt.find == "collider" && frame.blueprints) {
+        // the helper shell FAF hangs on a crashing plane so that it can hit a shield (a box ten across
+        // that its script hides from everybody): where one is now, to see that it is not drawn
+        for (const FrameProjectile& q : frame.projectiles) {
+          if (q.blueprint >= frame.blueprints->size()) continue;
+          std::string name = (*frame.blueprints)[q.blueprint];
+          for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (name.find("shieldcollider") == std::string::npos) continue;
+          camera.target = {q.position[0], q.position[1], q.position[2]};
+          camera.distance = 40;
+          printf("render: --find collider: one at %.0f, %.0f, %.1f above the ground, %s\n", q.position[0], q.position[2],
+                 q.position[1] - (world.HaveMap() ? world.GroundHeight(q.position[0], q.position[2]) : 0), q.seen ? "to be seen" : "hidden");
+          break;
+        }
       } else if (opt.find == "dying") {  // a unit in its death: the one highest above the ground (a plane falling)
         float best = -1e9f;
         for (const FrameUnit& u : frame.units) {

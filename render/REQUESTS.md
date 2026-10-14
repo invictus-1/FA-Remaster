@@ -25,7 +25,31 @@ draws at the engine's `ProjectileView::size`). 17 answered and in use (the origi
 game's names to today's techniques by a table of 18; `models.cpp` has the same table). 18 answered and seen (a Script
 order from the command stream keeps its table now: a commander's enhancement is built). 19 done and in use
 (`paused` in the plain unit view: every paused unit wears the pause mark). 20 done and in use (a beam's far end
-when it hangs on an entity without a mesh, and the blueprints' life bar sizes).
+when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 open (a projectile's
+SetVizTo... flags: the helper box FAF hides on crashing planes is drawn).
+
+## 21. A projectile's SetVizTo... flags (2026-10-13, open; Chris sees its effect in his game)
+
+**Who asks:** the renderer. **What:** on `ProjectileView`, the four flags `EntityView` already has:
+`vizFocus`, `vizAllies`, `vizEnemies`, `vizNeutrals` (0 never called, 1 'Always', 2 'Never',
+3 'Intel'), from the projectile's `Entity::viz`.
+
+**Why:** Chris, from his game: "Shields are good but a random square pops up, a black one, when
+someone is shooting it. Not always, but if I zoom in and out it can randomly flicker in." What I
+take it to be (found by reading, not yet caught in a picture): FAF hangs a helper shell on every
+crashing plane so that the plane can hit a shield, `/projectiles/ShieldCollider/ShieldCollider_proj.bp`:
+a box of `UniformScale = 10` with a mesh and no textures, whose script begins
+`self:SetVizToFocusPlayer('Never') -- Set to 'Always' to see a nice box` and the same for allies,
+neutrals and enemies. The renderer does not know that and draws the box, black, ten units across,
+for as long as the plane falls. (The viewer's `--debug` had listed these among "shells drawn large"
+before; I did not follow it up then.)
+
+**What the renderer does with it:** a projectile whose flag for the viewing army's side is 'Never'
+is not drawn, nor its effects (`FrameProjectile::seen`), as `EntityView::vizFocus` is used today.
+With no army to look as (the viewer without `--focus`), 'Never' for the focus player hides it.
+
+**Blocking:** no, but it is in Chris's game now. Until it is there the box stays; I add no stopgap
+by name unless you say it will take long.
 
 ## 20. Where a beam's ends are when they hang on an entity without a mesh (2026-10-13, done)
 
