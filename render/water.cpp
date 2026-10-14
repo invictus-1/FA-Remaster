@@ -141,16 +141,20 @@ VOut VS(float2 corner : POSITION) {
 }
 
 // The swell: four trains of waves crossing the water, longer ones faster. x: the height; y, z: how
-// it slopes along x and z.
-float3 Swell(float2 xz) {
+// it slopes along x and z. grain: how much water one pixel covers (world units): a train whose
+// waves are shorter than about three pixels is left out (far off and seen at a low angle they
+// would no longer be waves but rings of false pattern round the eye).
+float3 Swell(float2 xz, float grain) {
   static const float4 trains[4] = {  // the way it runs (x, z), its length, its height
     float4(0.86, 0.50, 23.0, 0.060), float4(0.60, 0.80, 13.0, 0.040), float4(0.97, -0.24, 7.5, 0.022), float4(0.31, 0.95, 4.3, 0.012)};
   float3 sum = 0;
   for (int k = 0; k < 4; ++k) {
+    float shows = saturate(trains[k].z / max(grain, 1e-4) * 0.5 - 1);  // (all of it from waves four pixels long)
+    if (shows <= 0) continue;
     float turns = 6.2832 / trains[k].z;
     float phase = dot(trains[k].xy, xz) * turns - time * 0.55 * sqrt(trains[k].z) * turns;
-    sum.x += trains[k].w * sin(phase);
-    sum.yz += trains[k].xy * (trains[k].w * turns * cos(phase));
+    sum.x += shows * trains[k].w * sin(phase);
+    sum.yz += trains[k].xy * (shows * trains[k].w * turns * cos(phase));
   }
   return sum;
 }
@@ -205,12 +209,15 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   N = normalize(lerp(float3(0, 1, 0), N, water.r));
   // the swell: it tilts the surface (more than its true slope: seen from above, the tilt is all
   // that shows of it), calmer where the map says the water is (lakes), higher when it rains
-  float3 swell = Swell(xz) * ((0.35 + 0.65 * water.r) * (1 + 1.2 * falling.x));
-  N = normalize(N + float3(-swell.y, 0, -swell.z) * 2.5);
+  float grain = max(length(ddx(xz)), length(ddy(xz)));  // (the water one pixel covers)
+  float3 swell = Swell(xz, grain) * ((0.35 + 0.65 * water.r) * (1 + 1.2 * falling.x));
+  // (the tilt is overdone for the view from above, where it is all that shows of the swell; toward
+  // the horizon, where the water is seen at a low angle, the waves show by themselves, and overdone
+  // they stood as ruled stripes across the far sea)
+  N = normalize(N + float3(-swell.y, 0, -swell.z) * lerp(1.0, 2.5, saturate(-toPixel.y * 2.5)));
   // near the eye: fine ripples, two sizes of them crossing, which the game's wave textures are too
   // coarse to show (Chris, 2026-10-13: "if you go up close it looks very pixelated"). Each size is
-  // left out where it would be finer than about two pixels (grain: the water one pixel covers).
-  float grain = max(length(ddx(xz)), length(ddy(xz)));
+  // left out where it would be finer than about two pixels.
   float2 fine = saturate(1.5 - grain * float2(4.0, 9.0) * 2);
   [branch] if (fine.x > 0) {
     const float e = 0.06;

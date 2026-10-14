@@ -3,6 +3,55 @@
 What the renderer (and Chris, through it) asks of the visuals track. The visuals track answers in its own
 file (`visuals\renderer_reply_lod.md` in the lab, numbered sections) and by message. Newest first.
 
+## 5. For later: each kind of unit its own track in snow and on the ground (2026-10-13, Chris)
+
+**Who says:** Chris, after his first game in snow: "For a first iteration the snow is solid. What we
+need later is proper tread for bikes, tanks etc. Pretty much each unit gets its own proper
+tread/track like hover units will probably push stuff like now or not effect it at all while say
+bikes and tanks are different from a fat boy and or a megalith. Either ways that is later since I
+think visual needs to make them right?"
+
+**What exists (the renderer's, done):** where snow lies, a unit treads it away along the prints the
+game's own scripts lay under it (a walker's footfalls, a tank's tread mark every fifth of a unit),
+and those prints show on the snow until new snow covers them. A unit without prints of its own (a
+hover unit, a building) treads a plain soft disc of its size.
+
+**What would be yours:** the prints themselves, per kind of unit: the pictures the blueprints name as
+`TreadMarks` (today the original's few small grey ones: `tank_treads_albedo` 256 pixels,
+`CommanderPrint_albedo` 64), with their sizes and spacing: a light bike's narrow pair, a tank's two
+bands with their cleats, the wide deep bands of a Fatboy, a Megalith's or a commander's footprints.
+New files beside the game's, never over them. A normal map with a print (a pressed-in tread) I can
+draw as the game's normal decals are, if you make one.
+
+**What I need from Chris or you before that is worth doing:** which units; and for hover units his
+choice ("push stuff like now or not affect it at all"): today they tread a disc; say which and I
+set it.
+
+**When:** later (his word). **Status:** noted 2026-10-13; nothing asked yet.
+
+## 4. The Striker's shell: a tad bigger, with some effects (2026-10-13, Chris, not blocking)
+
+**Who asks:** Chris, from a night game with the new tracers ("those tracers are fucking beautiful
+... very very very good work"): "I think this is a visual job the projectile for strikers should be
+a tad bigger cause right now it just looks like a line shooting at the acu. But with a tad bigger
+projectile maybe some effects it will look insane."
+
+**What it is today (the game's own files):** UEL0201's gun fires `/projectiles/TDFGauss01`: a mesh
+with `UniformScale = 0.2` (a speck at game zoom), no flight emitters of its own, and two trails
+(`gauss_cannon_polytrail_01` half a pixel wide and 0.45 s long, `_02` 0.25 wide and 0.04 s long).
+What one sees is the trail, which the renderer now draws as a hot tracer with a bead at the shell.
+
+**The split, as I see it:**
+- **Yours:** the shell itself: a model that reads at game zoom (a few times the size, a shape with
+  a glowing core), and what it carries in flight (a short flame or glow emitter, a muzzle flash and
+  an impact that suit it): new files beside the game's, named in a projectile blueprint of ours
+  for the remastered unit.
+- **Mine:** how they are drawn: the tracer's width, bead and colours, the light the shell throws
+  (it lights the ground at night already), glow. If a bigger bead or a longer, fatter trail is all
+  that is wanted, that is one number on my side: say so and Chris can judge it the same day.
+
+**Status:** asked 2026-10-13.
+
 ## 3. For later, not now: the commander's death explosion remastered (2026-10-13, Chris's plan)
 
 **Who says:** Chris, after looking at the UEF commander's death in his game: "zero issues works for
