@@ -20,7 +20,7 @@ const char kShader[] = R"hlsl(
 struct Instance {
   float4 centre;   // xyz; w: half the box's height
   float4 shape;    // x, y: half the footprint along its own x and z; z, w: cos and sin of its heading
-  float4 options;  // x: how much of it is there (fading), y: a light's age (0..1 of its time),
+  float4 options;  // x: how much of it is there (fading), y: a light's age (0..1 of its time; a plain mark: how much of the lying snow covers it),
                    // z: 1 = a light (texture x ramp, added), w: the modern look's brightness of a light
 };
 cbuffer DecalCamera : register(b1) {
@@ -112,6 +112,7 @@ float4 PS(VOut i) : SV_Target {
   float4 tint = 0;
   if (mapInfo.z > 0.5) tint = waterRamp.Sample(samplerLinearClamp, float2(waterMap.Sample(samplerLinearClamp, world.xz * mapInfo.xy).g, 0.5));
   if (look > 0.5) {
+    markSnow = i.options.y;  // (a mark laid on the snow shows on it until new snow covers it)
     float3 lit = ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow);
 #ifdef MSAA
     return float4(lit, c.a);  // (the modern water colours what is under it itself)
@@ -127,7 +128,9 @@ float4 PS(VOut i) : SV_Target {
 }  // namespace
 
 bool Decals::Init(std::string* error) {
-  std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kLightingShaderBlock + kShader;
+  // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
+  std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" + kViewShaderBlock +
+                       kLightingShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.name = "decals";
   pd.vertexSource = pd.pixelSource = source;
@@ -200,6 +203,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   const gfx::Texture t = Resolve(texture);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
+  decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
   return true;
 }
 
@@ -226,6 +230,10 @@ bool Decals::AddLight(const std::string& texture, const std::string& ramp, Vec3 
 
 void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now) {
   drawn = 0;
+  // the snow that has fallen since the last frame (a mark is covered by one unit of it)
+  if (snowClock_ >= 0 && now > snowClock_) snowFallen_ += snowing * static_cast<float>(std::min(now - snowClock_, 0.5)) / 90.0f;
+  snowClock_ = now;
+  settled_ = true;
   // those whose time is over go
   decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [now](const Decal& d) { return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds); }),
                 decals_.end());
@@ -256,6 +264,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.alpha = alpha;
     n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
     n.light = d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
+    // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
+    if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
     n.glow = glow;
     visible_.push_back({d.texture.id, d.ramp.id, d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
   }

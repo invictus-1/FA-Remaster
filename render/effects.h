@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "decals.h"
+#include "tracks.h"
 #include "frame.h"
 #include "lights.h"
 #include "linalg.h"
@@ -38,6 +39,8 @@ class Effects {
   bool OnEntity(uint32_t entity) const { return hanging_.count(entity) != 0; }
 
   int live = 0;        // effects being kept
+  // The tracks in lying snow (tracks.h): the prints the game lays under units are pressed into it too.
+  void SetTracks(Tracks* tracks) { tracks_ = tracks; }
   int shotLights = 0;  // lights given this frame to shots in flight and to weapons' beams
   float shotLight = 1.0f;  // how strong those are (0: none)
   int started = 0;     // since the beginning
@@ -79,6 +82,7 @@ class Effects {
   Particles* particles_;
   Ribbons* ribbons_;
   Decals* decals_;
+  Tracks* tracks_ = nullptr;
   Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;

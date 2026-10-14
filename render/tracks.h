@@ -5,6 +5,11 @@
 // 1 all). Every frame the units on the ground are stamped into it as soft discs, and while it snows
 // the whole picture fades back toward untrodden. The ground's shader (lighting.h, SURFACE_TRACKS)
 // reads it where it lays the snow.
+//
+// The picture is coarse (half a world unit a pixel on a map of 1024): it gives the trodden way, not
+// its pattern. The pattern is the game's own: the tread marks and footprints its scripts lay under
+// units are ground marks (decals.h), and one laid on lying snow shows on the snow until new snow
+// covers it.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -31,9 +36,14 @@ class Tracks {
   // thing it is (a unit's id): the way it has come since the frame before is trodden too, so a fast
   // unit leaves a track and not a row of dots.
   void Add(uint32_t id, Vec3 position, float radius);
-  // Draws the frame's stamps into the picture, and lets `covering` (0..1) of the trodden snow lie
-  // again (new snowfall); `clear`: all of it at once (no snow lies any more). Its own pass: call
-  // before the scene's.
+  // A print the game itself lays under a unit as it goes (a commander's footprint, a piece of a
+  // tank's tread mark), `sizeX` by `sizeZ` world units about `centre`: the snow is trodden there. A
+  // unit that lays such prints leaves no plain path (Add does nothing for it from then on): its
+  // prints are its track, so a walker leaves footprints and not a furrow.
+  void AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ);
+  // Draws what trod since the last time into the picture, and lets `covering` (0..1) of the trodden
+  // snow lie again (new snowfall); `clear`: all of it at once (no snow lies any more). Its own
+  // pass: call before the scene's.
   void Draw(float covering, bool clear);
   // The picture (none before SetMap), and what a place's x and z are multiplied by to read it.
   gfx::Texture Map() const { return map_; }
@@ -58,12 +68,14 @@ class Tracks {
   struct Stamp {
     float x, z, radius;
   };
-  std::vector<Stamp> stamps_;
+  std::vector<Stamp> stamps_;  // this frame's
+  std::vector<Stamp> prints_;  // since the last Draw (they come with the game's beats, not with frames)
   struct Last {
     float x, z;
     uint32_t frame;
   };
-  std::unordered_map<uint32_t, Last> last_;  // where each thing was when it last trod
+  std::unordered_map<uint32_t, Last> last_;          // where each thing was when it last trod
+  std::unordered_map<uint32_t, uint32_t> printers_;  // the units that lay their own prints
   uint32_t frame_ = 0;
   std::vector<Vertex> vertices_;
 };

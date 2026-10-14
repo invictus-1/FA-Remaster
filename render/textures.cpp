@@ -1,11 +1,15 @@
 #include "textures.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
 #include "core/vfs.h"
 #include "dds.h"
+#include "linalg.h"
 
 namespace render {
 namespace {
@@ -90,6 +94,81 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
   return device_->CreateTexture(td);
 }
 
+namespace {
+
+// The direction a pixel of a cube map's face looks in (the faces in the order +x, -x, +y, -y, +z,
+// -z; u to the right and v down across the face, each -1..1), not of unit length.
+Vec3 CubeDirection(int face, float u, float v) {
+  switch (face) {
+    case 0: return {1, -v, -u};
+    case 1: return {-1, -v, u};
+    case 2: return {u, 1, v};
+    case 3: return {u, -1, -v};
+    case 4: return {u, -v, 1};
+    default: return {-u, -v, -1};
+  }
+}
+
+// The sky cube's small levels (faces of 32 pixels and less) made anew, each pixel the light of the
+// whole sky as a surface of that level's roughness gathers it about that direction, in place of
+// the 2 x 2 averages (which know nothing of the neighbouring faces: the blurriest level was six
+// flat colours with hard edges between them). The lighting reads level roughness x 8 for what a
+// surface mirrors and level 8 for the light from all sides, so level L is gathered with the lobe
+// of roughness L / 8: weight cos^e about the direction, e = (2 / roughness^4 - 2) / 4 and never
+// under 1 (the plain cosine of light from all sides). Gathered from the 16 pixel level in linear
+// light, each of its pixels by the piece of sky it covers.
+void PrefilterSky(std::vector<std::vector<uint8_t>> levels[6], int width) {
+  int from = -1;
+  for (size_t l = 0; l < levels[0].size(); ++l)
+    if ((width >> l) == 16) from = static_cast<int>(l);
+  if (from < 1) return;  // (a cube smaller than that: left as it is)
+  struct Sample {
+    Vec3 direction;
+    float light[3];  // linear
+    float covers;    // the piece of sky the pixel covers
+  };
+  std::vector<Sample> sky;
+  sky.reserve(6 * 16 * 16);
+  for (int f = 0; f < 6; ++f)
+    for (int y = 0; y < 16; ++y)
+      for (int x = 0; x < 16; ++x) {
+        const float u = (static_cast<float>(x) + 0.5f) / 8 - 1, v = (static_cast<float>(y) + 0.5f) / 8 - 1;
+        const uint8_t* p = &levels[f][static_cast<size_t>(from)][(static_cast<size_t>(y) * 16 + static_cast<size_t>(x)) * 4];
+        Sample s;
+        s.direction = Normalize(CubeDirection(f, u, v));
+        for (int c = 0; c < 3; ++c) s.light[c] = std::pow(static_cast<float>(p[c]) / 255.0f, 2.2f);
+        s.covers = 1 / std::pow(1 + u * u + v * v, 1.5f);
+        sky.push_back(s);
+      }
+  for (size_t l = 0; l < levels[0].size(); ++l) {
+    const int size = width >> l;
+    if (size > 32 || size < 1) continue;
+    const float roughness = std::min(static_cast<float>(l) / 8.0f, 1.0f), a2 = roughness * roughness * roughness * roughness;
+    const float e = std::max((2 / std::max(a2, 1e-4f) - 2) * 0.25f, 1.0f);
+    for (int f = 0; f < 6; ++f)
+      for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x) {
+          const float half = static_cast<float>(size) * 0.5f;
+          const Vec3 d = Normalize(CubeDirection(f, (static_cast<float>(x) + 0.5f) / half - 1, (static_cast<float>(y) + 0.5f) / half - 1));
+          float sum[3] = {0, 0, 0}, weights = 0;
+          for (const Sample& s : sky) {
+            const float facing = Dot(d, s.direction);
+            if (facing <= 0) continue;
+            const float w = (e == 1.0f ? facing : std::pow(facing, e)) * s.covers;
+            sum[0] += s.light[0] * w;
+            sum[1] += s.light[1] * w;
+            sum[2] += s.light[2] * w;
+            weights += w;
+          }
+          uint8_t* q = &levels[f][l][(static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)) * 4];
+          for (int c = 0; c < 3; ++c)
+            q[c] = static_cast<uint8_t>(std::min(std::pow(weights > 0 ? sum[c] / weights : 0.0f, 1 / 2.2f) * 255.0f + 0.5f, 255.0f));
+        }
+  }
+}
+
+}  // namespace
+
 gfx::Texture TextureCache::SkyCube(const std::string& path) {
   if (path.empty()) return greyCube_;
   const std::string key = "sky:" + moho::Vfs::Normalize(path);
@@ -104,13 +183,14 @@ gfx::Texture TextureCache::SkyCube(const std::string& path) {
   } else {
     // every face as RGBA, then each level from the one above by averaging 2 x 2 pixels
     std::vector<uint8_t> all, face, next;
+    std::vector<std::vector<uint8_t>> levels[6];  // per face, per level
     int mips = 0;
     bool ok = true;
     for (int layer = 0; layer < 6 && ok; ++layer) {
       ok = DecodeRgba(image, layer, &face);
       mips = 0;
       for (int size = image.width; ok && size >= 1; size /= 2, ++mips) {
-        all.insert(all.end(), face.begin(), face.end());
+        levels[layer].push_back(face);
         if (size == 1) {
           ++mips;
           break;
@@ -128,6 +208,14 @@ gfx::Texture TextureCache::SkyCube(const std::string& path) {
         face.swap(next);
       }
     }
+    if (ok) {
+      const auto t0 = std::chrono::steady_clock::now();
+      PrefilterSky(levels, image.width);
+      printf("render: sky cube %s: its blurred levels gathered in %.0f ms\n", path.c_str(),
+             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    for (int layer = 0; layer < 6 && ok; ++layer)
+      for (const std::vector<uint8_t>& level : levels[layer]) all.insert(all.end(), level.begin(), level.end());
     if (ok) {
       gfx::TextureDesc d;
       d.width = d.height = image.width;
