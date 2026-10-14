@@ -184,12 +184,18 @@ gfx::Texture Decals::Resolve(const std::string& texture) {
   return {};
 }
 
+bool Decals::IsDepositMark(const std::string& texture, bool* hydrocarbon) {
+  std::string name = texture;
+  for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const bool mass = name.find("mass_marker") != std::string::npos, hydro = name.find("hydrocarbon_marker") != std::string::npos;
+  if (hydrocarbon) *hydrocarbon = hydro;
+  return mass || hydro;
+}
+
 bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
   {  // a resource deposit's mark: remembered, for its icon from far up
-    std::string name = texture;
-    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    const bool mass = name.find("mass_marker") != std::string::npos, hydrocarbon = name.find("hydrocarbon_marker") != std::string::npos;
-    if ((mass || hydrocarbon) && seconds <= 0 && deposits_.size() < 4096) deposits_.push_back({centre, hydrocarbon, cutoff});
+    bool hydrocarbon = false;
+    if (IsDepositMark(texture, &hydrocarbon) && seconds <= 0 && deposits_.size() < 4096) deposits_.push_back({centre, hydrocarbon, cutoff});
   }
   const gfx::Texture t = Resolve(texture);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)

@@ -74,7 +74,7 @@ bool StrategicIcons::Init(std::string* error) {
 // The symbol of that name, put into the shared texture when it is first asked for. -1: no such file.
 int StrategicIcons::Icon(const std::string& name, const char* suffix) { return Load(name, kIconFolder + name + suffix + ".dds"); }
 
-int StrategicIcons::Load(const std::string& name, const std::string& path) {
+int StrategicIcons::Load(const std::string& name, const std::string& path, int size) {
   auto known = iconByName_.find(name);
   if (known != iconByName_.end()) return known->second;
   int index = -1;
@@ -87,6 +87,32 @@ int StrategicIcons::Load(const std::string& name, const std::string& path) {
   } else if (!ParseDds(*file, &image, &error) || !DecodeRgba(image, 0, &pixels)) {
     fprintf(stderr, "render: strategic icon %s: %s\n", path.c_str(), error.empty() ? "a format symbols are not read from" : error.c_str());
   } else {
+    if (size > 0 && size < image.width && size < image.height) {
+      // made smaller: each new pixel the average of the old ones it covers (colours weighed by
+      // their alpha, so see-through pixels do not darken the edge)
+      std::vector<uint8_t> small(static_cast<size_t>(size) * static_cast<size_t>(size) * 4);
+      for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x) {
+          const int x0 = x * image.width / size, x1 = std::max((x + 1) * image.width / size, x0 + 1);
+          const int y0 = y * image.height / size, y1 = std::max((y + 1) * image.height / size, y0 + 1);
+          float sum[4] = {0, 0, 0, 0};
+          for (int v = y0; v < y1; ++v)
+            for (int u = x0; u < x1; ++u) {
+              const uint8_t* p = &pixels[(static_cast<size_t>(v) * static_cast<size_t>(image.width) + static_cast<size_t>(u)) * 4];
+              const float a = static_cast<float>(p[3]);
+              sum[0] += static_cast<float>(p[0]) * a;
+              sum[1] += static_cast<float>(p[1]) * a;
+              sum[2] += static_cast<float>(p[2]) * a;
+              sum[3] += a;
+            }
+          uint8_t* q = &small[(static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)) * 4];
+          const float count = static_cast<float>((x1 - x0) * (y1 - y0));
+          for (int c = 0; c < 3; ++c) q[c] = static_cast<uint8_t>(sum[3] > 0 ? std::min(sum[c] / sum[3] + 0.5f, 255.0f) : 0.0f);
+          q[3] = static_cast<uint8_t>(std::min(sum[3] / count + 0.5f, 255.0f));
+        }
+      pixels.swap(small);
+      image.width = image.height = size;
+    }
     if (rowX_ + image.width + 1 > kAtlasSize) {  // the row is full: start the next
       rowX_ = 1;
       rowY_ += rowHeight_ + 1;

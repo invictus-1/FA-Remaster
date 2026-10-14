@@ -1,6 +1,7 @@
 #include "ribbons.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -17,7 +18,7 @@ constexpr float kTick = 0.1f;  // seconds: blueprint times are in simulation tic
 const char kShader[] = R"hlsl(
 cbuffer RibbonSet : register(b1) {
   float4 options;  // x: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied),
-                   // y: brightness of what glows in the modern look, z: 1 = a trail (it ends where its age does),
+                   // y: brightness of what glows in the modern look, z: 1 = a trail (it ends where its age does), 2 = a trail drawn as a tracer,
                    // w: 1 = adds its colour as it is, whatever its alpha (the original's beams)
 };
 Texture2D bandTexture : register(t0);
@@ -50,6 +51,15 @@ float4 PS(VOut i) : SV_Target {
   float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
   if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
   if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y * (falling.w > 0 ? falling.w : 1) : 1);
+  if (look > 0.5 && options.z > 1.5) {
+    // a tracer: its own brightness in the colours of something hot, by how old that part of the
+    // trail is: white at the shell, yellow, orange, a dull red where it ends
+    float age = saturate(i.rampUv.x);
+    float3 heat = lerp(lerp(float3(1.0, 0.93, 0.72) * 3.5, float3(1.0, 0.45, 0.10) * 1.8, smoothstep(0.0, 0.35, age)),
+                       float3(0.7, 0.12, 0.03) * 0.7, smoothstep(0.35, 1.0, age));
+    heat += float3(1.0, 0.95, 0.85) * (6.0 * exp(-age * 45.0));  // (the bead at the shell: white hot)
+    c.rgb = dot(c.rgb, float3(0.3, 0.6, 0.1)) * heat;
+  }
   if (look > 0.5 && weather.z > 0) {  // thick air between it and the eye
     float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
     c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor(), lost);
@@ -124,6 +134,10 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
   const Kind* kind = Blueprint(blueprint);
   if (!kind->ok || kind->blend != 2) return false;
   rampPath->clear();
+  if (kind->trail && kind->hot && tracers) {  // (a tracer glows warm, whatever its white ramp says)
+    *color = Vec3{1.0f, 0.62f, 0.28f};
+    return true;
+  }
   if (kind->trail) *rampPath = kind->rampPath;
   else *color = Vec3{kind->startColor[0], kind->startColor[1], kind->startColor[2]} * std::min(kind->startColor[3] * 4, 1.0f);
   return kind->trail ? !rampPath->empty() : true;
@@ -147,6 +161,11 @@ const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
     kind->ramp = textures_->Get(v["RampTexture"].StringOr(std::string()), textures_->White());
     kind->rampPath = v["RampTexture"].StringOr(std::string());
     kind->blend = BlendKind(static_cast<int>(Number(v["BlendMode"], 3)));
+    {
+      std::string ramp = kind->rampPath;
+      for (char& c : ramp) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      kind->hot = kind->blend == 2 && ramp.find("ramp_white") != std::string::npos;
+    }
     kind->halfWidth = Number(v["Size"], 0.1f);
     kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);
     kind->repeatRate = Number(v["TextureRepeatRate"], 1);
@@ -320,7 +339,16 @@ void Ribbons::Draw(const View& view) {
       place(i + 1, &b, &ageB, &vB);
       const float uvA[2] = {0, vA}, uvB[2] = {0, vB};
       const float rampA[2] = {ageA, 0}, rampB[2] = {ageB, 0};
-      Band(batch, view, a, b, k.halfWidth, k.halfWidth, uvA, uvB, rampA, rampB, 0xffffffffu, 0xffffffffu);
+      // (a tracer: wider at the shell, thinner toward its end, and nowhere under a pixel's width,
+      // or from far up it is a line that flickers in and out)
+      auto half = [&](Vec3 p, float age) {
+        if (!tracers || !k.hot) return k.halfWidth;
+        const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye);
+        // (and a head: over the first twentieth of its length it swells to a bright bead at the shell)
+        const float t = std::clamp(age, 0.0f, 1.0f);
+        return std::max(k.halfWidth, 0.6f * pixel) * (1.7f - 1.2f * t + 2.6f * std::exp(-t * 45.0f));
+      };
+      Band(batch, view, a, b, half(a, ageA), half(b, ageB), uvA, uvB, rampA, rampB, 0xffffffffu, 0xffffffffu);
     }
     if (count > 1) ++drawnBands;
   }
@@ -334,7 +362,7 @@ void Ribbons::Draw(const View& view) {
     if (b.vertices.empty()) continue;
     device_->SetPipeline(pipelines_[b.kind->blend]);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? 1.0f : 0.0f,
+    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
     device_->SetConstants(1, options, sizeof options);
     device_->SetTexture(0, b.kind->texture);

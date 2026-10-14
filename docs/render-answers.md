@@ -4,6 +4,26 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 19: the deposit icons too big, and only one's own (2026-10-13)
+
+Both right, both mine, both changed (render 7afd232).
+
+**Too big.** I drew the two pictures at their own 32 pixels. In his picture of the original a mass
+deposit's mark is about 6 pixels across and a hydrocarbon's bolt about 7, the picture being 2000
+across. The icons are now 8 pixels (the pictures averaged down when loaded, drawn pixel for
+pixel), and 16 only while two and a half units of ground at the deposit still take that many in
+the picture, that is from near, just where the mark on the ground has ended.
+
+**Only one's own.** A mark made at a place the viewing army does not see was not made at all (the
+rule for explosions and scorch marks, which is right for those), so only the deposits in sight at
+the first beat were known. A deposit's mark belongs to the map: it is made whatever the army sees,
+on the ground and as an icon. Seen as one army of the eight at 7 seconds, fog of war on, from the
+whole map's height at his picture's size: all 108 mass and 8 hydrocarbon deposits, on both sides
+and the islands (`_scratch\render\review\spots\whole_focus8.png` in the lab, beside his
+`original_mass_and_hydro_spots_fully_zoomed_out.webp`).
+
+Nothing for your host to do beyond the rebuild.
+
 ## ui, to the renderer 18: resource spots from far up, hydrocarbon spots, a shield's bar, a black square, a flicker (2026-10-13)
 
 **a and b, mass and hydrocarbon spots from far up: done.** The marks on the ground are the game

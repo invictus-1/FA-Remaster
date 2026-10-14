@@ -276,11 +276,21 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     {
       const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
                               static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
-      // (by the lamps of the units before this one: a unit's own lamps do not cut each other)
+      // (by the units before this one: a unit's own lamps do not cut each other. Beams are counted by
+      // the UNITS that shine one into the square, not by the beams: the first unit there keeps all
+      // its beams, the next three one each, so that in a crowd every unit has its cone and none a
+      // whole column goes dark because one engineer's three beams filled the square)
       const auto found = lampSquares_.find(square);
       const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
-      const uint32_t beams = count & 0xffffu, others = count >> 16;
-      if (light.cone > 0 ? beams >= 3 : others >= 2) continue;
+      const uint32_t beamUnits = count & 0xffffu, others = count >> 16;
+      if (light.cone > 0) {
+        if (beamUnits >= 4) continue;
+        bool ownHere = false;
+        for (size_t i = 0; i < takenCount; ++i) ownHere = ownHere || (takenBeam[i] && taken[i] == square);
+        if (beamUnits >= 1 && ownHere) continue;
+      } else if (others >= 2) {
+        continue;
+      }
       if (takenCount < 16) {
         taken[takenCount] = square;
         takenBeam[takenCount++] = light.cone > 0;
@@ -330,7 +340,12 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       lights.Add(at, light.radius * model->scale, tint * on);
     }
   }
-  for (size_t i = 0; i < takenCount; ++i) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
+  for (size_t i = 0; i < takenCount; ++i) {
+    // (a beam's square is counted once for the unit, however many of its beams lie in it)
+    bool counted = false;
+    for (size_t k = 0; takenBeam[i] && k < i; ++k) counted = counted || (takenBeam[k] && taken[k] == taken[i]);
+    if (!counted) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
+  }
 }
 
 float World::GroundHeight(float x, float z) const {
@@ -484,13 +499,19 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   icons.Begin(view);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn
   if (depositIcons && !decals.Deposits().empty()) {
-    if (massIcon_ == -2) {
-      massIcon_ = icons.Picture("/env/common/splats/mass_strategic.dds");
-      hydrocarbonIcon_ = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds");
+    // (small, as the original has them from all the way up: 8 pixels, measured in Chris's picture
+    // of it; 16 while two and a half units of ground at the deposit still take that many)
+    if (massIcon_[0] == -2) {
+      for (int k = 0; k < 2; ++k) {
+        massIcon_[k] = icons.Picture("/env/common/splats/mass_strategic.dds", k ? 16 : 8);
+        hydrocarbonIcon_[k] = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds", k ? 16 : 8);
+      }
     }
+    const float perUnit = static_cast<float>(std::max(view.height, 1)) / (2 * std::tan(camera.fovY * 0.5f));  // pixels a world unit takes at distance 1
     for (const Decals::Deposit& d : decals.Deposits()) {
-      const float full = std::max(d.cutoff * depositIconFrom, 1.0f);
-      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_ : massIcon_, d.position, Clamp((Length(d.position - view.eye) - full * 0.8f) / (full * 0.2f), 0, 1));
+      const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
+      const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((away - full * 0.8f) / (full * 0.2f), 0, 1));
     }
   }
   lights.Begin(clock);

@@ -55,10 +55,11 @@
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --inspect <what>  a view for checking art (modern look): every lit surface shows one of its own numbers in
-//           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow or lights (the small
+//           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
 //           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
+// --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -154,6 +155,7 @@ struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
   bool lampShadows = true;              // --no-lamp-shadows
+  bool tracers = true;                  // --no-tracers
   std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
@@ -225,6 +227,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--paused") o->paused = true;
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
+    else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -484,8 +487,9 @@ int main(int argc, char** argv) {
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
-  static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights"};
-  for (int i = 1; i < 8; ++i)
+  world.ribbons.tracers = opt.tracers;
+  static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail"};
+  for (int i = 1; i < 10; ++i)
     if (opt.inspect == kInspect[i]) world.inspect = i;
   if (!opt.inspect.empty() && !world.inspect) fprintf(stderr, "render: --inspect %s: expected albedo, normals, roughness, metal, occlusion, shadow or lights\n", opt.inspect.c_str());
   world.iconsOn = opt.icons;
@@ -888,7 +892,7 @@ int main(int argc, char** argv) {
           }
           if (e.key == 'C') world.cloudCover = world.cloudCover >= 0.95f ? 0 : std::min(world.cloudCover + 0.25f, 1.0f);
           if (e.key == 'N') {  // the views for checking art, one after another, then the picture again
-            world.inspect = (world.inspect + 1) % 8;
+            world.inspect = (world.inspect + 1) % 10;
             printf("render: inspect: %s\n", world.inspect ? kInspect[world.inspect] : "off");
           }
           if (e.key == 'I') iconsOn = !iconsOn;

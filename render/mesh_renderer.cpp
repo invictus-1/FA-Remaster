@@ -210,6 +210,13 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   i.color.a = min(i.color.a, 1);
+  if (inspect.x > 8.5 && look > 0.5) {
+    // a view for checking art: which level of detail each model is drawn at: white the finest,
+    // then yellow, orange, red, violet; shaded a little by which way the surface faces
+    float level = kind5.z;
+    float3 mark = level < 0.5 ? float3(1, 1, 1) : level < 1.5 ? float3(1, 0.9, 0.25) : level < 2.5 ? float3(1, 0.55, 0.15) : level < 3.5 ? float3(1, 0.2, 0.15) : float3(0.7, 0.3, 1);
+    return float4(mark * (0.45 + 0.55 * saturate(normalize(i.normal).y * 0.5 + 0.5)) * (modern.x * lightMultiplier) * 0.6, 1);
+  }
   if (kind.y > 9.5) {
     // the flash on a shield where it is hit (the original's "ShieldImpact" and its Cybran kind,
     // after what its shader computes): a patch of the bubble turned toward the hit, its age in
@@ -794,6 +801,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       kind[11] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
     }
     kind[16] = haveInsectLookup_ ? 1.0f : 0.0f;
+    kind[18] = static_cast<float>(lod - items_[at].entry->model->lods.data());  // (which level this is, for the checking view)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);

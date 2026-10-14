@@ -45,6 +45,16 @@ float SunShadow(float3 world, float3 normal) {
   return 1;
 }
 
+// Which of the sun's shadow maps a place is looked up in (0 the nearest and sharpest; -1: none).
+int SunCascade(float3 world) {
+  if (shadowsOn < 0.5) return -1;
+  for (int i = 0; i < int(cascadeCount); ++i) {
+    float3 s = mul(shadowMatrix[i], float4(world, 1)).xyz;
+    if (all(s.xy > 0.02) && all(s.xy < 0.98) && s.z > 0 && s.z < 1) return i;
+  }
+  return -1;
+}
+
 // The original's light on a surface: sun by N.L and shadow, plus ambience, scaled by the map's
 // multiplier, with the "shadow fill" colour filling what the light leaves.
 float3 OriginalLight(float sunDotN, float shadow) {
@@ -175,6 +185,12 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
                  : inspect.x < 5.5 ? occlusion
                  : shadow;
     if (inspect.x < 6.5) return pow(max(value, 0), 2.2) * (modern.x * lightMultiplier);
+    if (inspect.x > 7.5 && inspect.x < 8.5) {
+      // which shadow map each place uses: red the nearest, then green, blue, yellow; grey: none
+      int map = SunCascade(world);
+      float3 mark = map == 0 ? float3(1, 0.25, 0.2) : map == 1 ? float3(0.25, 0.9, 0.3) : map == 2 ? float3(0.3, 0.45, 1) : map == 3 ? float3(1, 0.9, 0.25) : float3(0.5, 0.5, 0.5);
+      return mark * (0.25 + 0.75 * dot(pow(max(albedo, 0), 1 / 2.2), float3(0.3, 0.6, 0.1)) * shadow) * (modern.x * lightMultiplier);
+    }
   }
   float3 V = normalize(cameraPosition - world);
   float3 L = sunDirection;
@@ -195,7 +211,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
   float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
-  if (inspect.x > 6.5) return small;
+  if (inspect.x > 6.5 && inspect.x < 7.5) return small;
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
   // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
   // dark paint of middling roughness shows more sheen than colour)
