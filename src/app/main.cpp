@@ -46,6 +46,7 @@ struct Options {
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
   bool hasSeed = false;
   std::string orders;   // --orders file: orders issued through the command writer at given ticks (testing)
+  std::string stream;   // --stream file: with --session, a played game's command stream to play back
   bool view = false;    // --view: collect what a host reads (sync tables, armies, units) and log a summary
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
@@ -597,6 +598,17 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64: session %s: %zu armies, %zu command sources, focus army %d, seed %u, cheats %s",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, h.cheats ? "on" : "off");
+  // --stream: the orders of a game that was played from this table (the interface host's --replay-out: every
+  // batch it applied, an Advance per beat), played back here. The session is still a played one, not a replay.
+  if (!o.stream.empty()) {
+    const auto bytes = hostfs::ReadFile(o.stream);
+    if (!bytes) {
+      Logf(LogLevel::Error, "cannot read %s", o.stream.c_str());
+      return 1;
+    }
+    Logf(LogLevel::Info, "moho64: playing the command stream %s (%zu bytes)", o.stream.c_str(), bytes->size());
+    return RunSession(o, vfs, hookDirs, uids, session, &*bytes);
+  }
   return RunSession(o, vfs, hookDirs, uids, session, nullptr);
 }
 
@@ -632,6 +644,7 @@ int main(int argc, char** argv) {
       o.hasSeed = true;
     } else if (a == "--view") o.view = true;
     else if (a == "--orders") o.orders = next();
+    else if (a == "--stream") o.stream = next();
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
