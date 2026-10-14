@@ -171,6 +171,13 @@ class World {
   // is out there for the game: no unit goes there. `borders` (the original's frame of machinery)
   // are not drawn then. false: the map ends at its edge, with its frame, as the original.
   bool worldBeyond = true;
+  // The two looks of the map's edge Chris chose between (2026-10-14): MACHINERY, the original's
+  // way: worldBeyond false, frame true (the frame whole, nothing past it). NO MACHINERY: worldBeyond
+  // true, frame false, beyondHaze false: the land beyond, greyed, with no haze over it but at the
+  // very end of what is drawn, where it meets the horizon. `frame`: the original's frame of
+  // machinery (`borders`) is drawn. `beyondHaze`: the land beyond is lost in haze from the edge out.
+  bool frame = true;
+  bool beyondHaze = true;
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;

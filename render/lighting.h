@@ -110,11 +110,14 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     back = BeyondGrey(look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture);
   }
   float t = saturate(outside * beyond.z);
+  // without the haze (beyond.w < 0): the land stays clear and is lost only in the last tenth of
+  // the way, where it meets the horizon
+  if (beyond.w < 0) t = saturate((t - 0.9) * 10);
   // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the
   // edge that keeps its width in the picture at any zoom: where the playable ground ends must be
   // plain from all the way up
   float near = saturate(outside / 6);
-  color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, beyond.w, near);
+  color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, abs(beyond.w), near);
   if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
   return lerp(color, back, t * t * (3 - 2 * t));
 }
