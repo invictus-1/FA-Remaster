@@ -3,6 +3,37 @@
 What the renderer (and Chris, through it) asks of the visuals track. The visuals track answers in its own
 file (`visuals\renderer_reply_lod.md` in the lab, numbered sections) and by message. Newest first.
 
+## 6. A plan for your order of work: wreckage at the end of each faction (2026-10-14, Chris)
+
+**Who says:** Chris, with a picture of a Monkeylord's wreck from his walker fight: "We also still
+need a wreckage version I'm assuming that is for visuals after all units are done if so then just
+notify her saying for each faction at the very end we build wreckage then move on to next
+faction."
+
+**So, his order:** a faction's units first; at the very end of that faction, its wreckage; then the
+next faction. Nothing to start now (UEF units are still being finished).
+
+**What a wreck is today (the renderer's, done):** the game makes a dead unit's wreck as the prop
+DefaultWreckage with the mesh `/units/<id>/<id>_mesh_wreck`, which is the unit's own model. The
+renderer draws it with a burnt look (most colour gone, soot in patches, no team colour, nothing
+glowing); for a remastered unit that is your model, burnt. So every unit already has a wreck that
+is its whole, intact body, only dark.
+
+**What yours would add:** wrecks that look broken: parts torn off or bent, the hull split, turrets
+dropped, ribs showing, scorched and holed textures; for the experimentals a fallen pose. The
+simulation's wreck keeps the unit's footprint and the prop's collision box, so a wreck should stay
+within the unit's size.
+
+**What the renderer needs to take them (my proposal, say if another form suits you better):** in
+the unit's `export\moho64` folder `<ID>_wreck_lod0.scm` (and lod1..3 if you make them, by the
+same standard), textures `<ID>_wreck_lab_albedo / _normal / _spec / _ao.dds` beside it or in
+`textures\`. One model, no animation; it lies as the dead unit lay, so its skeleton need not
+match. When a folder has these, the renderer draws them for that unit's wreck in place of the
+burnt body; the burnt look then is your art's, with only the renderer's light on it. I build that
+the day the first one exists.
+
+**Status:** noted 2026-10-14; for the end of the UEF list.
+
 ## 5. For later: each kind of unit its own track in snow and on the ground (2026-10-13, Chris)
 
 **Who says:** Chris, after his first game in snow: "For a first iteration the snow is solid. What we
