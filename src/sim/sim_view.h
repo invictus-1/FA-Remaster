@@ -140,6 +140,10 @@ struct ProjectileView {
   // then). A host draws at `size` and needs none of scale / drawScale / scaleVelocity above; between two beats it
   // may add scaleVelocity x the time since the beat.
   float size[3] = {1, 1, 1};
+  // SetVizToFocusPlayer / Allies / Enemies / Neutrals as last called on the shell, as on EntityView: 0 never
+  // called, 1 'Always', 2 'Never', 3 'Intel'. FAF's ShieldCollider shell (the box it hangs on a crashing
+  // aircraft so that a shield stops it) sets all four to 'Never': it is not meant to be seen by anybody.
+  uint8_t vizFocus = 0, vizAllies = 0, vizEnemies = 0, vizNeutrals = 0;
 };
 
 // A weapon's collision beam while it is on: from its muzzle to where it ends this beat.

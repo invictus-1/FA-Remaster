@@ -519,19 +519,76 @@ void EndPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   if (c.moving) StopMoving(u);
 }
 
+// The script's answer to "what does reclaiming this cost": CUnitReclaimTask asks the BUILDER, builder:
+// GetReclaimCosts(target) (0x61f79c for a unit, 0x61fbae for a prop or an unfinished unit), and takes exactly
+// three numbers: seconds, energy, mass. (FAF's Unit.GetReclaimCosts hands a prop's question on to the prop.)
+static bool ReclaimCosts(Sim& sim, lua_State* L, Unit* u, Entity* e, float* time, float* energy, float* mass) {
+  (void)sim;
+  int top = lua_gettop(L);
+  PushObject(L, u);
+  int obj = lua_gettop(L);
+  lua_pushstring(L, "GetReclaimCosts");
+  lua_gettable(L, obj);
+  if (!lua_isfunction(L, -1)) {
+    lua_settop(L, top);
+    return false;
+  }
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_insert(L, -2);
+  lua_pushvalue(L, obj);
+  PushObject(L, e);
+  if (lua_pcall(L, 2, LUA_MULTRET, top + 2) != 0) {
+    LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    lua_settop(L, top);
+    return false;
+  }
+  if (lua_gettop(L) - (top + 2) != 3) {
+    Logf(LogLevel::Warning, "Failed to get valid reclaim costs from the target");
+    lua_settop(L, top);
+    return false;
+  }
+  *time = static_cast<float>(lua_tonumber(L, -3));
+  *energy = static_cast<float>(lua_tonumber(L, -2));
+  *mass = static_cast<float>(lua_tonumber(L, -1));
+  lua_settop(L, top);
+  return true;
+}
+
+// CUnitReclaimTask::Execute 0x61f000 with an entity for a target: a prop (the child clearing a build site, or a
+// Reclaim order) or a unit (a Reclaim order). States as the original's (mobile_build.md 8.4 for a prop):
+//   0 the target must be RECLAIMABLE (not asked of an unfinished unit); too far (gap > MaxBuildDistance, the gap
+//     being the distance less the larger side of each one's FOOTPRINT) or nearer than 1: walk;
+//   1 still too far: over. The arm is aimed (the script's OnPrepareArmToBuild opens it), OnStartReclaim;
+//   2 A FINISHED UNIT, every beat: wait for the arm; ask the costs; the target loses MaxHealth / max(1, seconds x
+//     10) health (and what it regenerates in a beat on top), is marked BeingReclaimed; when it has no more than
+//     that left: its OnReclaimed, its CreateWreckageProp(0), Destroy, and the WRECK is the target from here on
+//     (state 3): that is where a reclaimed unit's mass comes from. Nothing is paid out while the unit shrinks,
+//     and the builder's resource shortage does not slow it.
+//     Anything else: state 3 next beat;
+//   3 wait for the arm, the costs, what is left := min(left, health / max health);
+//   4 a step a beat, paid out as it goes; the end is the next beat's first test.
 int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
   if (!e || e->destroyQueued) return kTaskFailed;
+  Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   Vec3 tp = e->position;
   float dx = u->position.x - tp.x, dz = u->position.z - tp.z;
   float dist = std::sqrt(dx * dx + dz * dz);
   const NamedFootprint& bf = Footprint(*u->blueprint);
-  float pfx = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeX", 1), pfz = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeZ", 1);
+  float pfx, pfz;
+  if (tu) {
+    const NamedFootprint& tf = Footprint(*tu->blueprint);
+    pfx = static_cast<float>(tf.sizeX);
+    pfz = static_cast<float>(tf.sizeZ);
+  } else {
+    pfx = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeX", 1);
+    pfz = PropBpNum(sim, L, *e->blueprint, "Footprint", "SizeZ", 1);
+  }
   float gap = dist - static_cast<float>(std::max(bf.sizeX, bf.sizeZ)) - std::max(pfx, pfz);
   float maxBD = u->bpData->maxBuildDistance;
   for (;;) switch (c.state) {
     case 0:
-      if (!BpInCategory(sim, e->blueprint, "RECLAIMABLE") || e == u) return kTaskFailed;
+      if (!(tu && tu->beingBuilt) && (!BpInCategory(sim, e->blueprint, "RECLAIMABLE") || e == u)) return kTaskFailed;
       if (gap > maxBD || dist < 1.0f) {  // PrepareMove next to the prop's footprint rect, reserve, move
         if (!CanMove(u)) return kTaskFailed;
         int px0 = RoundEven(tp.x - pfx * 0.5f), pz0 = RoundEven(tp.z - pfz * 0.5f);
@@ -566,32 +623,58 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       }
       c.state = 2;
       continue;
-    case 2:
+    case 2: {
+      if (!tu || tu->beingBuilt) {
+        c.state = 3;
+        return kTaskRunning;
+      }
+      // a finished unit (0x61f69f..0x61fa4d)
+      if (!u->builderArms.empty() && dist > 1.0f && !u->armReady) return kTaskRunning;
+      if (gap > maxBD) return kTaskFailed;
+      float time, energy, mass;
+      if (!ReclaimCosts(sim, L, u, e, &time, &energy, &mass)) return kTaskFailed;
+      u->unitStates.insert("Reclaiming");
+      u->focusId = EntityRef(e);
+      const float ticks = std::max(1.0f, time * 10.0f);
+      float amount = tu->maxHealth / ticks;
+      if (tu->regenRate > 0.0f) amount = tu->regenRate * 0.1f + amount;
+      if (tu->health > amount) {
+        EntityAdjustHealth(L, tu, nullptr, -0.0f - amount);
+        if (Alive(tu)) tu->unitStates.insert("BeingReclaimed");
+        return kTaskRunning;
+      }
+      PushObject(L, u);
+      sim.CallMethod(L, tu, "OnReclaimed", 1);
+      // its wreck (0x620760: the script's CreateWreckageProp with an overkill of 0), then the unit goes
+      Entity* wreck = nullptr;
+      if (tu->HasLuaObject()) {
+        int top = lua_gettop(L);
+        PushObject(L, tu);
+        int obj = lua_gettop(L);
+        lua_pushstring(L, "CreateWreckageProp");
+        lua_gettable(L, obj);
+        if (lua_isfunction(L, -1)) {
+          lua_pushcfunction(L, ScriptTraceback);
+          lua_insert(L, -2);
+          lua_pushvalue(L, obj);
+          lua_pushnumber(L, 0);
+          if (lua_pcall(L, 2, 1, top + 2) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+          else wreck = ToObject<Entity>(L, -1);
+        }
+        lua_settop(L, top);
+      }
+      if (!tu->destroyQueued) sim.QueueDestroy(tu);
+      if (wreck && !wreck->destroyQueued) {
+        c.goalId = EntityRef(wreck);
+        u->focusId = EntityRef(wreck);
+      }
       c.state = 3;
       return kTaskRunning;
+    }
     case 3: {
       if (!u->builderArms.empty() && dist > 1.0f && !u->armReady) return kTaskRunning;
-      int top = lua_gettop(L);
-      PushObject(L, e);
-      int obj = lua_gettop(L);
-      lua_pushstring(L, "GetReclaimCosts");
-      lua_gettable(L, obj);
-      if (!lua_isfunction(L, -1)) {
-        lua_settop(L, top);
-        return kTaskFailed;
-      }
-      lua_pushcfunction(L, ScriptTraceback);
-      lua_insert(L, -2);
-      lua_pushvalue(L, obj);
-      PushObject(L, u);
-      if (lua_pcall(L, 2, 3, top + 2) != 0) {
-        LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
-        lua_settop(L, top);
-        return kTaskFailed;
-      }
-      float time = static_cast<float>(lua_tonumber(L, -3)), energy = static_cast<float>(lua_tonumber(L, -2)),
-            mass = static_cast<float>(lua_tonumber(L, -1));
-      lua_settop(L, top);
+      float time, energy, mass;
+      if (!ReclaimCosts(sim, L, u, e, &time, &energy, &mass)) return kTaskFailed;
       float rate = std::max(1.0f, time * 10.0f);
       c.reclaimStep = 1.0f / rate;
       if (energy < 0 || mass < 0) return kTaskFailed;
@@ -930,6 +1013,10 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   if (tu && tu->unitStates.count("NoReclaim")) return kTaskFailed;
+  // The original's task, state by state (above). (MOHO64_OLD_RECLAIM=1: the shorter form this had before, kept
+  // for comparing the two on a replay.)
+  static const bool oldForm = getenv("MOHO64_OLD_RECLAIM") != nullptr;
+  if (!oldForm) return TickPropReclaim(sim, L, u, t);
   // range: like building, with the target's size
   auto inRange = [&]() {
     float sx = 1, sz = 1;
@@ -2530,6 +2617,15 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   if (Alive(u)) {
     u->unitStates.erase("Reclaiming");
     if (t.type == CommandType::Reclaim && u->focusId == t.goalId) u->focusId = 0;
+    if (t.type == CommandType::Reclaim) {
+      // CUnitReclaimTask's dtor 0x620280: the arm let go (SetAimTarget(0, 0, 0)); a walk still under way gives its
+      // reserved ground back
+      if (!u->builderArms.empty()) SetArmAimTarget(sim, u, Vec3{});
+      if (t.moving) {
+        t.moving = false;
+        GroundFreeRect(sim, u);
+      }
+    }
     u->unitStates.erase("Building");
     u->unitStates.erase("Repairing");
     if (!t.child && (t.type == CommandType::BuildAssist || t.type == CommandType::AssistCommander)) {

@@ -272,6 +272,10 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.size[0] = p->drawSize.x;
     v.size[1] = p->drawSize.y;
     v.size[2] = p->drawSize.z;
+    v.vizFocus = p->viz[0];
+    v.vizAllies = p->viz[1];
+    v.vizEnemies = p->viz[2];
+    v.vizNeutrals = p->viz[3];
     out->push_back(std::move(v));
   }
 }
