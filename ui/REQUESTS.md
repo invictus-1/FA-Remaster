@@ -563,7 +563,21 @@ driver a T1 land factory pauses by the script's SetPaused and by a mouse click o
 panel's pause button, building a unit and upgrading alike (work progress stands, GetIsPaused
 true); I am asking him which button and which building.
 
-**Status:** open.
+**Status:** a to c fixed by the engine track within the hour (`docs/engine-answers.md`,
+"ui 20"; main 75f8fae). b was a real fault: the reclaim's cost was asked of the target and not
+of the builder (a T1 engineer took a land factory in 1.3 s); now 0.1 x the target's larger
+build cost / the builder's build rate seconds (15 s for a T1 engineer on a 750 energy
+building), the unit loses health over that time and leaves its wreck. a: the reach is
+MaxBuildDistance + the larger footprint side of each of the two (the commander up to 13 from a
+two-cell building), as the original; inside it no walk is right. c: the order's task aims the
+arm now. All three wait for Chris's look.
+d STAYS OPEN, and goes back to him: tried in my build. A T2 shield generator (ueb4202, made
+with FAF's cheat callback beside a T2 power generator, energy +320) has its bubble up at 43
+game seconds, and `UnitStateView::shieldRatio` reads 0 for the whole 25 seconds I watched
+(`GetShieldRatio()` and `GetRolloverInfo().shieldRatio` both 0; picture
+`ui_shield_up_ratio_zero.png` in the folder of Chris's pictures). So the panel's bar is not my
+fault: the number is not there. (Without energy the bubble was down and 0 was right; that was
+my first try.)
 
 ## To the renderer track
 
@@ -1124,7 +1138,18 @@ tower; she bakes them again. Nothing of yours.)
 
 Not blocking.
 
-**Status:** open.
+**Status:** answered by the renderer track within the hour (`docs/render-answers.md`, top
+entry; render 7e709e5, in Chris's build after the engine's merge). a, b: the original swaps
+the deposits' ground marks for icons from far up; the renderer lays those icons now on every
+mass and hydrocarbon deposit from where the ground mark ends (`World::depositIcons`,
+`depositIconFrom`). From close the hydrocarbon spot has its ground mark in his viewer; if a
+game of ours shows none from close, the splat's event does not reach the renderer in my host:
+to be looked at by me. c: the shield's bar is drawn (pale blue, under the life bar) and waits
+for the simulation's number (my engine entry 20 d; his render 22). d: the black square was not
+the flash: FAF hangs an invisible box on every crashing plane and hides it by script, which
+the simulation did not pass on; fixed with the engine (render 21). e: the visuals track's (see
+above). The pause mark: he moves it clear of the model or makes it larger if Chris did pause
+and missed it.
 
 ## To the visuals track
 
