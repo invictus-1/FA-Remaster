@@ -34,8 +34,10 @@ struct FrameUnit {
   // How far its work is (a build, an upgrade, an enhancement), 0..1; 0: none. And whether the
   // player has paused it.
   float workProgress = 0;
-  // Its shield, when it carries one (a generator's bubble, a personal shield): how much of it is left,
-  // 0..1, as the shield's script last said (0: down, or none).
+  // Its shield, when it carries one (a generator's bubble, a personal shield): whether it has one
+  // at all, and how much of it is left, 0..1, as the shield's script last said (0 with a shield:
+  // it is down or switched off).
+  bool hasShield = false;
   float shieldRatio = 0;
   bool paused = false;
   // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,

@@ -29,6 +29,10 @@ the life bar, as wide and as thick, pale blue, filled by `FrameUnit::shieldRatio
 bar shows and the ratio is above 0 (the work bar moves down under it). The ratio is in the
 engine's `UnitStateView` only, which is asked unit by unit; I have asked for it in the plain unit
 view as `paused` is (render/REQUESTS.md 22). Until then the bar does not show.
+LATER THE SAME EVENING: the engine gave `UnitView::hasShield` and `shieldRatio` (and found that
+the ratio had always read 0 before, a wrong key on its side). The bar is fed and shows: seen in a
+game on a pile of UEF shield generators, full pale blue bars under their life bars. A unit that
+has a shield which is down shows the bar empty; a unit without a shield shows none.
 
 **d, the black square at a shield under fire: found and fixed.** It was not the flash. FAF hangs a
 helper shell on every crashing plane so that the plane can hit a shield

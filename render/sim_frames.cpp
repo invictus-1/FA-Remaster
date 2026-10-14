@@ -280,6 +280,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.beingBuilt = v.beingBuilt;
     u.workProgress = v.workProgress;
     u.paused = v.paused;
+    u.hasShield = v.hasShield;
+    u.shieldRatio = v.shieldRatio;
     auto posed = e.poseOf.find(v.id);
     auto hides = e.hiddenOf.find(v.id);
     if (posed != e.poseOf.end() || hides != e.hiddenOf.end()) {
