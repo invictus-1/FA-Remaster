@@ -866,7 +866,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const float away = Length(position - view.eye);
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       const bool life = lifeBars && u.maxHealth > 0 && (isSelected || u.id == hover || away < kind->fadeIn * 0.9f);
-      const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1;
+      // (a firing cycle only on the unit under the mouse or selected: Chris, 2026-10-14, the Summit's
+      // reload bar "should only show if I put my cursor over it instead of at all times")
+      const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
       if (life || work) {
         // (the size, height and place the unit's blueprint gives its life bar, in world units: the bar
         // lies that far from the unit's middle down the screen, along the ground)
