@@ -75,6 +75,9 @@ struct ViewConstants {
   // 7 the small lights alone, 8 which of the sun's shadow maps each place uses, 9 which level of
   // detail each model is drawn at.
   float inspect[4];
+  // The tracks in lying snow (tracks.h): x, y what a place's x and z are multiplied by to read the
+  // picture of what is trodden; z: 1 = there is one.
+  float tracksArea[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -107,6 +110,7 @@ cbuffer View : register(b0) {
   float4 falling;         // x rain 0..1; y snow 0..1; z a lightning's flash; w: the night's dimming of glowing effects (0: none)
   float4 mist;            // the mist on low ground: x thickness per world unit at its floor; y the floor's height; z 1 / its depth; w the most it hides
   float4 inspect;         // x: what lit surfaces show instead of their lit colour (0: nothing special; view.h)
+  float4 tracksArea;      // the tracks in lying snow: x, y: 1 / the map's width and height; z: 1 = there are tracks
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);

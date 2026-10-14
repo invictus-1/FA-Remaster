@@ -20,6 +20,9 @@ inline const char kLightingShaderBlock[] = R"hlsl(
 #ifndef SURFACE_PUDDLES
 #define SURFACE_PUDDLES 0.0
 #endif
+#ifdef SURFACE_TRACKS
+Texture2D tracksMap : register(t26);  // (the ground only) how much of the lying snow is trodden away at a place
+#endif
 Texture2DArray<float> lampShadowMaps : register(t27);
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
@@ -170,6 +173,14 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float takes = patch * 0.75 + saturate((N.y - 0.35) * 1.6) * 0.25;  // how readily it lies here
     float bar = 1.02 - fallen * 1.15;
     float lying = smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, N.y);
+#ifdef SURFACE_TRACKS
+    // where units have stood and driven the snow is trodden away, down to a dark wet ground
+    [branch] if (tracksArea.z > 0.5 && lying > 0) {
+      float trodden = tracksMap.SampleLevel(samplerLinearClamp, world.xz * tracksArea.xy, 0).r;
+      albedo *= 1 - 0.15 * trodden * lying;
+      lying *= 1 - 0.78 * trodden;  // (trodden snow, not bare earth: some of it stays)
+    }
+#endif
     N = normalize(lerp(N, float3(0, 1, 0), 0.5 * lying * saturate(fallen * 2 - 0.8)));
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
     metallic *= 1 - lying;

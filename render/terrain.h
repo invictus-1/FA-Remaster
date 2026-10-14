@@ -25,6 +25,9 @@ class Terrain {
   // the joints of rock) instead of fading evenly into each other. false: as a stock map is drawn.
   // Without the layers' third maps it changes nothing.
   bool richGround = true;
+  // The picture of where lying snow is trodden away (tracks.h), set by the host each frame; none:
+  // the snow lies untrodden.
+  gfx::Texture tracksMap;
   int MaterialLayers() const;  // how many of the map's layers have a third map
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.

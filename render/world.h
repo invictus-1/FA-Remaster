@@ -23,6 +23,7 @@
 
 #include "ambient_occlusion.h"
 #include "shafts.h"
+#include "tracks.h"
 #include "sight.h"
 #include "sky.h"
 #include "weather.h"
@@ -235,6 +236,7 @@ class World {
   std::vector<RememberedGone> rememberedGone;
   int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
+  Tracks tracks;          // where lying snow is trodden away by units (tracks.on switches it)
   Wakes wakes;            // the foam behind what moves on the water
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
@@ -281,6 +283,7 @@ class World {
   std::vector<Pickable> pickables_;
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
+  float tracksCovering_ = 0;  // this frame: how much of the trodden snow new snowfall covers again
   float lampsOn_ = 0;       // 0 by day .. 1 when it is dark
   // where each unit was at the frame before and how fast it went (for the wakes): by entity id
   struct Moving {
