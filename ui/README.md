@@ -105,7 +105,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the same game again without the interface: `prefix.stream` holds, for every beat, the bytes of
   the orders handed to the simulation before it (each batch as `CommandWriter` gave it) and then
   `CommandWriter::AdvanceMessage(1)`; a paused beat leaves only the orders given in it.
-  `prefix.seed` is four lines of text (`seed`, `map`, `armies`, `focus army`). The launch table
+  `prefix.seed` is lines of text (`seed`, `map`, `armies`, `focus army`, then `session` with the
+  launch table's file and a `maps` line for every `--maps` folder). The launch table
   is the `--session` file, or for a game launched from the lobby `prefix.session.lua` (unless
   `--session-out` names another place). A second game of one run writes `prefix.2.stream`.
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)

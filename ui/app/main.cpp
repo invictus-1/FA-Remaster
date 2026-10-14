@@ -302,6 +302,8 @@ int main(int argc, char** argv) {
   session.wantPicture = !noWorld;
   session.sky = sky;
   session.replayOut = replayOut;
+  session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
+  session.replayMaps = moreMaps;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
