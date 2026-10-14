@@ -1216,6 +1216,29 @@ first beat were known: every deposit is made now, seen or not (checked with fog 
 all 108 mass and 8 hydrocarbon deposits of Seton's at 7 seconds). In Chris's build after the
 engine's merge. Waiting for his look.
 
+### 20. From Chris: the map's edge as two choices, "machinery" and "no machinery"
+Chris, 2026-10-14 (his words, after your 2227b01 put the frame back together with the world
+beyond): "For the map edge tell boundary I want the full machinery back like we have an option
+of machinery and no machinery and if its no machinery we remove that white fog that covers the
+area we can't go just cause the square around the map that is greyed out beyond is good
+enough."
+
+As I read it, two looks for the edge, one of them chosen by the player:
+1. MACHINERY: the original's frame of machinery round the map, whole ("the full machinery
+   back").
+2. NO MACHINERY: no frame; the land and sea beyond the edge, greyed out (the dimmed square you
+   made, which he finds "good enough"), and WITHOUT the white fog / haze that now lies over the
+   ground he cannot go to.
+What I do not know from his words: whether with MACHINERY the land beyond should show too
+(behind or round the frame) or the original's look exactly. Your call by your pictures; ask him
+if it matters.
+
+What I need from you: the switches for the two looks (I expect `World::borders` and
+`World::worldBeyond`, and the haze either gone or a third switch), and which one is the
+original's way (MACHINERY, by his rule that the original's look is always one of the choices).
+I then put the choice in the players' options (with the day, weather and the others), and the
+launchers keep the default until he says which he wants by default. Not blocking.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
@@ -1355,3 +1378,5 @@ camera's distance changes. Fixed in her script (the plate stands 0.22 proud); th
 factories (UEB0101, UEB0201, ZEB9501, UEB0301, ZEB9601) are baked again later today, with HOLD
 files while they bake. She also writes a check that finds such face pairs in every rebuilt
 unit. Waiting for the re-bake and Chris's look.
+DONE: all five re-baked (ZEB9601 last, 2026-10-14 06:20). CHRIS'S LOOK, 2026-10-14: "For land
+factory that flicker is now fixed." Closed.
