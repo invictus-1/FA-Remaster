@@ -30,6 +30,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       falling(device),
       sight(device),
       shafts(device),
+      tracks(device),
       wakes(device),
       ranges(device),
       placedDraw(device, &models),
@@ -39,7 +40,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -70,6 +71,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       return false;
     }
     haveMap_ = true;
+    tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
     {  // the ground's lowest and highest (for what the map lies in)
@@ -408,6 +410,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // (snow builds up over two and a half minutes of snowfall and is gone in five; while it melts,
     // the ground it leaves is wet)
     snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
+    // (the tracks in it: falling snow covers them again in about a minute and a half of heavy fall)
+    tracksCovering_ = snow > 0 ? dt * snow / 90 : 0;
     if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover);
@@ -495,6 +499,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
 
+  // the tracks in lying snow: read by the ground while snow lies
+  tracks.Begin();
+  if (haveMap_ && tracks.on && snowLying > 0 && look == Look::Modern && timeOfDay >= 0) {
+    c.tracksArea[0] = tracks.InverseWidth();
+    c.tracksArea[1] = tracks.InverseHeight();
+    c.tracksArea[2] = 1;
+  }
+  terrain.tracksMap = tracks.Map();
   meshes.Begin();
   icons.Begin(view);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn
@@ -832,6 +844,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (blip) {
       // (its blip alone, which can be pointed at)
     } else if (model && model->ok) {
+      // (it treads the lying snow where it stands: what is on the ground and seen; a track must not
+      // give away a unit the army does not see)
+      if (snowLying > 0 && haveMap_ && !u.dead && u.Seen() && position.y - GroundHeight(position.x, position.z) < 1.0f) {
+        const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+        tracks.Add(u.id, position, std::clamp(std::max(size.x, size.z) * 0.42f, 0.35f, 12.0f));
+      }
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -980,6 +998,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
 
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
+  // (the tracks' picture first: its own pass)
+  if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
+  tracksCovering_ = 0;
   lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   {  // the bones of posed models, once for all the frame's passes
