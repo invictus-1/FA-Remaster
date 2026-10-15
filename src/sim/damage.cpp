@@ -28,6 +28,7 @@
 #include "script/script_state.h"
 #include "sim/transport.h"
 #include "sim/air.h"
+#include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -115,6 +116,10 @@ void DoDamagePoint(Sim& sim, lua_State* L, const DamageSpec& d, Entity* target, 
   if (target->kind == Entity::Kind::Unit) damage = amount * sim.ArmorMult(static_cast<Unit*>(target), d.type);
   if (d.instigator && d.instigator->army) AddStat(d.instigator->army, "DamageStats_TotalDamageDealt", damage);
   if (d.instigator && target->army) AddStat(target->army, "DamageStats_TotalDamageReceived", damage);
+  if (d.instigator)  // the platoons' lifetime stats (+0xec dealt by a unit, +0xf0 taken by a unit; damage.md 4)
+    PlatoonStatDamage(d.instigator->army && d.instigator->kind == Entity::Kind::Unit ? static_cast<Unit*>(d.instigator)
+                                                                                      : nullptr,
+                      target->army && target->kind == Entity::Kind::Unit ? static_cast<Unit*>(target) : nullptr, damage);
   {
     // MOHO64_DEBUG_DAMAGE=<entity id>: every damage that entity is dealt (who, how much, the script's call chain)
     static const long dbgDmg = getenv("MOHO64_DEBUG_DAMAGE") ? atol(getenv("MOHO64_DEBUG_DAMAGE")) : -1;
@@ -322,6 +327,8 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
     energy *= u->fractionComplete;
   }
   AddStat(u->army, "Units_Killed", 1);
+  PlatoonStatKill(u, instigator && instigator->kind == Entity::Kind::Unit && instigator->army &&
+                         IsEnemy(u->army, instigator->army) ? static_cast<Unit*>(instigator) : nullptr);
   AddStat(u->army, "Units_MassValue_Lost", mass);
   AddStat(u->army, "Units_EnergyValue_Lost", energy);
   if (instigator && instigator->army && IsEnemy(u->army, instigator->army)) {

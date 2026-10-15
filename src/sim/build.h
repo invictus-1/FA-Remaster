@@ -52,6 +52,7 @@ struct BuildTask : public ScriptObject {
   // CUnitCaptureTask: +0x4c started, +0x50 progress and +0x54 total (beats), +0x58 the request, +0x5c / +0x60
   // the per-beat energy and mass
   Quat orderOri;  // CUnitTeleportTask +0x58: the unit's orientation when the order was dispatched
+  uint32_t teleporterId = 0;  // CUnitTeleportTask +0x50: the teleporter (weak; entity ref): the unit, or a TELEPORTATION unit
   bool capStarted = false;
   int capProgress = 0, capTotal = 0;
   float capPerTick[2] = {0, 0};
@@ -112,6 +113,8 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 // 0x5f9e50; silo: helping a silo build its missile) and the reclaim task (IssueReclaimTask 0x61ef60).
 BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo);
 BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target);
+// The teleport a unit makes through a teleporter (CUnitCallTeleport state 3): CUnitTeleportTask to the point dest.
+BuildTask* MakeTeleportChild(Sim& sim, Unit* u, Unit* teleporter, const Vec3& dest);
 void SiloAssist(Sim& sim, Unit* u, const float amount[2]);  // a helper's resources for the missile being built
 bool SiloQueueAmmo(Sim& sim, Unit* u, int kind);
 // For the panels, [0] tactical, [1] nuke: the missiles asked for and not finished yet (the one being built

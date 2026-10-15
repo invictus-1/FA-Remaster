@@ -321,8 +321,9 @@ void StartHead(Sim& sim, Unit* u) {
   // beat, also while the unit still falls (seen: a tank dropped by "unload these units" has that order in its own
   // queue, three times; it cannot carry them out and all three are gone the beat after the drop, long before it
   // lands). Not in the beat of the drop itself: the transport's thread, woken by its arrival, has its turn after
-  // the cargo's.
-  if ((u->parentId && u->attachFull) || u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
+  // the cargo's. What blocks is unit state Attached alone (IAiCommandDispatchImpl::TaskTick 0x598f89, IsUnitState
+  // 14), not the attach link: cargo a script took out of that state runs its orders (a DetachFromTransport, say).
+  if (u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
     u->headState = kNotStarted;
     return;
   }
@@ -377,6 +378,16 @@ void StartHead(Sim& sim, Unit* u) {
       sim.CallMethod(sim.L(), u, u->paused ? "OnPaused" : "OnUnpaused", 0);
       PopHead(u);
       continue;
+    }
+    {
+      // DetachFromTransport, a teleporter's new destination, a carrier docking on itself (transport.cpp): no task, so
+      // the dispatcher pops the order and goes on with the next one in the same beat (TaskTick answers 0)
+      std::shared_ptr<UnitCommand> keep = u->commands.front();
+      if (TransportOrderOnTheSpot(sim, u, c)) {
+        if (u->dead || u->destroyQueued) return;
+        if (!u->commands.empty() && u->commands.front() == keep) PopHead(u);
+        continue;
+      }
     }
     if (c.type == CommandType::SpecialAction) {  // 0x6095d0: the script's OnSpecialAction(target position)
       Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
@@ -793,8 +804,13 @@ namespace {
 // that takes it)
 std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& d) {
   auto c = std::make_shared<UnitCommand>();
-  c->id = d.id;
-  c->fromStream = true;
+  if ((d.id >> 24) == 0xffu) {  // AddIssueData 0x6e0db0: an engine-made order (the CPlatoon movers) gets a sim id
+    c->id = sim.nextCommandId++;
+    sim.commandsById[c->id] = c;
+  } else {
+    c->id = d.id;
+    c->fromStream = true;
+  }
   c->type = static_cast<CommandType>(d.type);
   c->blueprintId = d.blueprint;
   for (auto& ch : c->blueprintId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -823,7 +839,7 @@ std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& 
     if (PushSerializedLua(L, d.lua) && lua_istable(L, -1)) c->scriptRef = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_settop(L, top);
   }
-  sim.streamCommands[d.id] = c;
+  if (c->fromStream) sim.streamCommands[d.id] = c;
   return c;
 }
 }  // namespace
@@ -960,6 +976,17 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     AirSpeedThroughEvent(sim, u);  // queue event 0
   }
   return c;
+}
+
+void IssueClearCommandsTo(Sim& sim, Unit* u) {
+  const bool moveAsleep =
+      !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+  const bool stopped = HeadTaskStopsMotion(u);
+  ForgetUnitCommands(u);
+  if (!stopped) MotionStop(u);
+  SetMoving(u, false);
+  if (moveAsleep) sim.ResumeCommandThread(u);
+  AttackerStop(sim, u);
 }
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
@@ -1173,17 +1200,8 @@ int l_IssueClearCommands(lua_State* L) {
   // CAiAttackerImpl::Stop 0x5d56f0 = SetDesiredTarget(none)): its weapons' acquire tasks start their period again
   // from this beat. Seen in Experimental2: BlackOps drones are given IssueClearCommands + IssueAttack at 964, and
   // in the original their depth charges (TargetCheckInterval 2) take the enemy at 1084 = 964 + 6 x 20, ours at the
-  // old phase (1095).
-  for (Unit* u : UnitsArg(L, 1)) {
-    const bool moveAsleep =
-        !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
-    const bool stopped = HeadTaskStopsMotion(u);
-    ForgetUnitCommands(u);
-    if (!stopped) MotionStop(u);
-    SetMoving(u, false);
-    if (moveAsleep) S(L)->ResumeCommandThread(u);
-    AttackerStop(*S(L), u);
-  }
+  // old phase (1095). (Both steps: IssueClearCommandsTo.)
+  for (Unit* u : UnitsArg(L, 1)) IssueClearCommandsTo(*S(L), u);
   return 0;
 }
 

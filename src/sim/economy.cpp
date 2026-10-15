@@ -7,6 +7,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/sim.h"
@@ -344,7 +345,8 @@ void EconomyBeginBeat(Sim& sim) {
     if (u->dead) continue;
     for (int i = 0; i < 2; ++i) u->producedTick[i] = u->consumedTick[i] = 0;
   }
-  for (auto& a : sim.armies()) {  // CArmyImpl::OnTick: economy, then (tick > 10) the stat triggers
+  for (auto& a : sim.armies()) {  // CArmyImpl::OnTick: platoons, economy, then (tick > 10) the stat triggers
+    CleanUpPlatoons(sim, *a);  // 0x6ffdb8 (sim/ai_platoon.cpp)
     ProcessArmyEconomy(sim, *a);
     if (sim.tick() > 10) EvaluateStatTriggers(sim, *a);
   }

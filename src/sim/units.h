@@ -310,14 +310,7 @@ class Projectile : public Entity {
   UnitWeapon* weapon = nullptr;  // created by (miss tracking)
 };
 
-class Platoon : public ScriptObject {
- public:
-  Platoon() { typeBits |= kTypePlatoon; }
-  Army* army = nullptr;
-  std::string name;  // unique name ("ArmyPool")
-  std::string plan;
-  std::vector<Unit*> units;
-};
+// class Platoon: sim/ai_platoon.h
 
 template <> struct ScriptTypeOf<Unit> { static constexpr uint32_t bit = kTypeUnit; };
 template <> struct ScriptTypeOf<UnitWeapon> { static constexpr uint32_t bit = kTypeWeapon; };

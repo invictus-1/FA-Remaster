@@ -55,6 +55,7 @@ class Army {
   std::string plans;
   AiBrain* brain = nullptr;
   Platoon* pool = nullptr;      // the "ArmyPool" platoon every army has
+  std::vector<Platoon*> platoons;  // CArmyImpl+0x228, in creation order (sim/ai_platoon.cpp)
   float startX = 0, startZ = 0;
   bool hasStart = false;
   uint32_t serial = 0;          // entity ids of this army
