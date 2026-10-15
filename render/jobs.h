@@ -1,6 +1,7 @@
 // Work spread over the processor's cores: a few worker threads wait for a job; the thread that hands
 // one over takes part in it and returns when all of it is done. For the parts of a frame that are
-// many small independent pieces (which models a pass sees). One job at a time, from one thread.
+// many small independent pieces (which models a pass sees). One job at a time: a job handed over
+// while another thread's is running is done by its own thread alone.
 #pragma once
 
 #include <atomic>
@@ -37,6 +38,7 @@ class Jobs {
   std::atomic<int> next_{0}, done_{0};
   int busy_ = 0;  // workers still in the current job
   bool stopping_ = false;
+  std::atomic<bool> inUse_{false};  // a job is running
 };
 
 }  // namespace render
