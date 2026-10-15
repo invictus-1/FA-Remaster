@@ -1326,6 +1326,12 @@ namespace {
 bool Coast(Unit* u, bool turned = false) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
+  // 0x6c2761..0x6c278a: every path without a spline point (after the turn, and the two jumps to 0x6c2768 from
+  // 0x6c25d4 / 0x6c25e3) sets the acceleration (m+0x44) to zero before the velocity is read. CalcMoveHover leans on
+  // it (0x6c2c0a), so a hover unit pushed by a collision does not lean on the push. (Seen: bench 654, Seraphim
+  // engineer 0x20000a pushed back (velocity -0.19 -> +0.10) at its factory's edge next to 0x200008: its hull stays
+  // level in the original; ours kept the impulse in m.accel and leant 0.07, 0.12, 0.17 over three beats.)
+  m.accel = {};
   // v = the entity velocity (m+0x38 for a land unit, 3-D: a fresh spline point's terrain y counts too)
   float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
   if (!turned && v2 < kStopSq) {
@@ -1583,6 +1589,14 @@ void HoverMove(Sim& sim, Unit* u) {
   // CalcMoveHover 0x6c2e8d..0x6c2ee7: SnapToGround unless Teleporting, or when motion+0x90 asks; m+0x90 cleared
   if (!u->unitStates.count("Teleporting") || m.needSnap || m.surfaceNext) HoverSnap(sim, u);
   m.needSnap = false;
+  static const long dbgHov = getenv("MOHO64_DEBUG_HOVER") ? atol(getenv("MOHO64_DEBUG_HOVER")) : -1;
+  if (dbgHov == static_cast<long>(u->id))
+    fprintf(stderr,
+            "hover: tick %u accel %.6f %.6f %.6f lean %.6f %.6f %.6f wob %.9g %.9g %.9g wvel %.9g %.9g %.9g wtgt %.9g "
+            "%.9g plat %d q %.5f %.5f %.5f %.5f\n",
+            sim.tick(), m.accel.x, m.accel.y, m.accel.z, m.hoverLean.x, m.hoverLean.y, m.hoverLean.z, m.wobble.x,
+            m.wobble.y, m.wobble.z, m.wobbleVel.x, m.wobbleVel.y, m.wobbleVel.z, m.wobbleTarget.x, m.wobbleTarget.z,
+            RaisedPlatform(sim, u) ? 1 : 0, u->orientation.x, u->orientation.y, u->orientation.z, u->orientation.w);
 }
 bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHover (0x6b9f10..0x6b9f87)
   return !u->beingBuilt && !u->immobile && !u->unitStates.count("Immobile") && !u->stunned;
