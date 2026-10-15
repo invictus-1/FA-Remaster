@@ -1413,6 +1413,11 @@ void Sim::Tick() {
     u->lastPosTick = tick_;
     PurgeShooters(*this, u);
     HoldShape(u);
+    // Unit::MotionTick 0x6a906e: the stun's countdown (u+0x29c, while > 0), every unit, after UpdateInfoCache and
+    // before CUnitMotion::MotionTick (neither the guard formation nor the info cache reads it): a unit stunned in a
+    // beat after its own turn (a Loyalist's death stun) is held for (int)(seconds * 10) of its turns, and its weapons,
+    // which run before the entity stage, fire again in the beat after the count reached 0.
+    if (u->stunned > 0) --u->stunned;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
       UnitEconomyTick(*this, u);

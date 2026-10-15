@@ -178,7 +178,9 @@ class Unit : public Entity {
   int attackState = 0;             // the reporting weapon's state code (see TickAttack)
   bool attackStateSignal = false;  // changed since the attack task last looked
   int fireState = 0;               // 0 ReturnFire, 1 HoldFire, 2 HoldGround
-  bool stunned = false;
+  // u+0x29c: the beats the stun still lasts (Unit:SetStunned 0x6c68e0 writes (int)(seconds * 10); Unit::MotionTick
+  // 0x6a906e counts it down, before the motion). Stunned while it is not 0.
+  int stunned = 0;
   uint8_t recon[16] = {};          // per army index: Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went

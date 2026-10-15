@@ -1606,12 +1606,12 @@ void FireTick(Sim& sim, UnitWeapon* w) {
     const Vec3 tp = has ? TargetPos(sim, w->target, false) : Vec3{};
     Logf(LogLevel::Info,
          "wdbg %u unit %u %s clock %d enabled %d target %d(%u = entity %d%s at %.2f %.2f %.2f) canAttack %d canFire %d "
-         "onTarget %d status %d",
+         "onTarget %d status %d stun %d",
          sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
          w->target.entityId, te ? static_cast<int>(te->id) : -1, w->target.viaBlip ? ", its blip" : "", tp.x, tp.y, tp.z,
          has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
-         has ? TargetStatus(sim, w, w->target) : -1);
+         has ? TargetStatus(sim, w, w->target) : -1, u->stunned);
   }
   if (!w->enabled || w->bp->manualFire) {
     if (w->fireClock == 0) w->fireSuspended = true;  // (returns -2: off the run list until woken)
@@ -3130,13 +3130,17 @@ int l_ToggleFireState(lua_State* L) {
   u->fireState = (u->fireState + 1) % 3;
   return 0;
 }
+// Unit:SetStunned(seconds) 0x6c68e0: a number of beats, not a flag: lua_tonumber x 10.0 (0x6c69a5, a float product:
+// the x87 runs at 24 bits), truncated (_ftol 0xa89cc0), into u+0x29c, which Unit::MotionTick counts down. (Seen: LAND
+// 1469, a dying Loyalist's SetStunned(1.5) holds an Othuum's guns for 15 beats, it fires again at 1484; ours held it
+// for good.)
 int l_SetStunned(lua_State* L) {
   Unit* u = U(L);
-  u->stunned = lua_toboolean(L, 2) != 0;
+  u->stunned = static_cast<int>(static_cast<float>(luaL_checknumber(L, 2)) * 10.0f);
   return 0;
 }
 int l_IsStunned(lua_State* L) {
-  lua_pushboolean(L, U(L)->stunned);
+  lua_pushboolean(L, U(L)->stunned != 0);  // (0x6c5d1c)
   return 1;
 }
 int l_ReachedMaxShooters(lua_State* L) {
