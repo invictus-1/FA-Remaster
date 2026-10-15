@@ -649,6 +649,24 @@ Monkeylord dying in the walker fight shakes the camera for a second (5 at its mi
 50); with the game's "Shake intensity" at 0 the view stays still (`ui/tests/templates.lua`).
 Waiting for Chris's look. b: noted by the engine, for the stock-AI work after the replays.
 
+### 23. Replays of our own games: played with the script fixes on, as they were recorded
+Mine, 2026-10-15; not blocking, but a replay of one of Chris's games may drift without it.
+
+The host now writes every game as a real .SCFAReplay (main 454e76d: `replays/<profile>/
+LastGame.SCFAReplay` beside the preferences, your header format, then the command stream) and
+plays one back from the game's Replay dialog: `SessionDescription` from `ReadReplayHeader`
+with `replay = true`, the stream through `CommandStream::ApplyUntilAdvance`. Checked: a recorded
+walk plays back to the same places beat for beat.
+
+The gap: `Sim::Start(SessionDescription)` sets `fixes = !session.replay`, right for a recording
+of the original, wrong for a replay of a game played here, which ran with the fixes on (e.g.
+"Sacrificing" as a unit state). Wanted: a way for the host to say "this replay was played with
+the fixes" at the start, e.g. `SessionDescription::fixes` (-1 = by `replay` as now, 0 / 1 =
+say so), set before `Start`. How I would know: I can mark our replays in the header's scenario
+Options (say `RemasterFixes = "on"`, unknown to the original, harmless to it) when I write
+them, and read it back at the launch. If you prefer another mark (or the engine's own
+version line), say which.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
