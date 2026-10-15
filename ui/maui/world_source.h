@@ -112,6 +112,10 @@ class WorldSource {
   virtual ~WorldSource() = default;
   // What the next pictures show beside the world itself; it stays until it is set again.
   virtual void SetScene(const WorldScene& scene) = 0;
+  // True when the world is shown in the window by the renderer itself (the interface laid over
+  // it): Draw then gives no pixels to copy (a token), and the world view leaves its part of the
+  // interface's picture transparent.
+  virtual bool DrawsToWindow() const { return false; }
   // The minimap: the whole map from straight above with every unit's icon, width * height pixels
   // as Draw gives them (the map's height fills the picture's height: give a width in the map's
   // proportion). MapSize: the map's size in world units. The other two go between the world and

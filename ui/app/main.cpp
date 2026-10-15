@@ -62,6 +62,16 @@ bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
 bool noSound = false;             // --no-sound: a live window without the sound device
+// The world shown by the renderer in the window itself, the interface laid over it on the card
+// (no read-back), and without a game the menus through the renderer's picture without a world
+// (a window that has had the renderer's swap chain no longer shows a plain copy). --gdi: the old
+// way, the world's picture read back and everything copied to the window.
+bool directWindow = true;
+// --window-capture <prefix>: what the window shows, read back by the renderer (checking):
+// <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left.
+std::string windowCapture;
+int capturedFrames = 0, menuFrames = 0;
+bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
 // --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
@@ -203,6 +213,8 @@ int main(int argc, char** argv) {
     else if (a == "--dump-ui") dumpUi = true;
     else if (a == "--screenshot") screenshot = next();
     else if (a == "--window") windowed = true;
+    else if (a == "--gdi") directWindow = false;
+    else if (a == "--window-capture") windowCapture = next();
     else if (a == "--session-out") sessionFile = next();
     else if (a == "--game-lua") gameLuaFile = next();
     else if (a == "--session") sessionIn = next();
@@ -302,6 +314,7 @@ int main(int argc, char** argv) {
   session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.wantPicture = !noWorld;
+  session.waitForWindow = windowed && directWindow;  // (a launched table's picture opens on the window)
   session.sky = sky;
   session.replayOut = replayOut;
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
@@ -433,15 +446,32 @@ int main(int argc, char** argv) {
   };
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
+    // The world is shown by the renderer in the game's window itself, the interface laid over it
+    // on the card (no picture read back and copied again): the renderer track's way, with Chris's
+    // go-ahead (2026-10-15). --gdi: the old way (see directWindow).
+    ui::WindowHooks hooks;
+    if (directWindow) {
+      hooks.opened = [&](void* handle) {
+        session.window = handle;
+        session.OpenPictureIfDue();  // (a launched table's game: its picture opens now, the window still hidden)
+      };
+      hooks.direct = [&]() { return session.DrawsToWindow(); };
+      hooks.present = [&](const ui::SoftwareTarget& layer) { session.PresentToWindow(layer); };
+    }
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
+                           session.OpenPictureIfDue();
                            session.Advance(seconds);
                            listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
                            startGameInterface();
+                           if (!windowCapture.empty() && session.DrawsToWindow()) {
+                             if (game && ++capturedFrames == 300) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
+                             if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
+                           }
                          },
-                         fullScreen);
+                         fullScreen, hooks);
     if (done < 0) ok = false;
   } else {
     for (; done < o.frames && !ui::ExitRequested(); ++done) {

@@ -197,6 +197,7 @@ struct LookSettings {
   bool tracers = true;            // tank shells' hot tracers (false: the original's plain line)
   bool richGround = true;         // a remastered map's richer ground
   bool snowTracks = true;         // units tread tracks into lying snow
+  float upscale = 1.0f;           // AMD FSR 1: the share of the picture's size the scene is drawn at (1: off)
 };
 LookSettings& Looks();
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,

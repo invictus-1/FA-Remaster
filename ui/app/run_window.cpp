@@ -20,7 +20,8 @@ namespace moho::ui {
 // state gives way to a game's). Returns the number of frames shown, or -1 when no window could
 // be opened.
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
-              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen) {
+              const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen,
+              const WindowHooks& hooks) {
   auto target = std::make_unique<SoftwareTarget>(width, height);
   Window window;
   Window::Callbacks cb;
@@ -33,9 +34,15 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     target = std::make_unique<SoftwareTarget>(w, h);
     current().ui().Resize(w, h);
   };
-  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen)) {
+  // (With hooks the window first stays hidden: the world's picture may be opened on it at once,
+  // which takes seconds, and a window shown but not answering would be marked so by the system.)
+  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen, !hooks.opened)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
+  }
+  if (hooks.opened) {
+    hooks.opened(window.Handle());
+    window.Show();
   }
   // The mouse pointer: the texture the scripts last set, as the system's own pointer.
   std::string pointerTexture, pointersShown;
@@ -77,13 +84,17 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     current().Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
     frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
     auto t0 = Clock::now();
-    target->Clear(0xff000000u);
+    // (Shown by the renderer: the interface over a transparent background, which the colour
+    // blending then keeps premultiplied by alpha, as the renderer takes it.)
+    const bool direct = hooks.direct && hooks.direct() && hooks.present;
+    target->Clear(direct ? 0x00000000u : 0xff000000u);
     UserState& user = current();
     user.ui().Render(user.L(), *target, 0);
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
     renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     const auto tp = Clock::now();
-    window.Present(*target);
+    if (direct) hooks.present(*target);  // (the world under it and the screen's wait are the renderer's)
+    else window.Present(*target);
     presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
     updatePointer(current());
     window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
@@ -94,7 +105,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // 2 to 16). The window's picture is copied without waiting for the screen, so "vertical
     // sync" here is the screen's rate as a pace, not a true wait for it.
     const FramePacing& pacing = Pacing();
-    const double period = pacing.verticalSync ? 1.0 / std::max(24, refresh) : pacing.frameMs / 1000.0;
+    // (Shown by the renderer with vertical sync, its present waits for the screen: no wait here.)
+    const double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
@@ -112,6 +124,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
          world * 1000.0 / frames, worlds);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
+  LogDrawProfile();
   return frames;
 }
 

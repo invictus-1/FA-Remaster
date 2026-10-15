@@ -618,7 +618,8 @@ class WorldView : public Control {
     }
     if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
+      target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
     if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {

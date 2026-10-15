@@ -603,6 +603,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
     if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
     if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    if (key == "REMASTER_UPSCALE") {
+      if (!value.empty()) looks.upscale = std::max(0.25f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
+      return;
+    }
     // The game's own frame-rate options (its Video tab; FramePacing).
     if (key == "SC_VERTICALSYNC") return void(Pacing().verticalSync = on);
     if (key == "SC_FRAMETIMECLAMP") {

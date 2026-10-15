@@ -64,7 +64,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [-- <the game's own arguments>]
 ```
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
-  frames). Without it the host runs headless on its own clock.
+  frames). Without it the host runs headless on its own clock. In the window the renderer shows
+  the picture itself (its swap chain on the window, true vertical sync): the world is drawn on
+  the card and the interface, drawn by this program over a transparent background (premultiplied
+  ARGB), is laid over it there (`WorldPicture::SetInterfaceLayer` / `DrawToWindow`); without a
+  game a picture without a world shows the menus the same way, and one picture at a time holds
+  the window (the menu's goes before a game's opens). A launched table's picture opens while the
+  window is still hidden. Measured in a game on the rebuilt Seton's: 13.4 ms a frame at
+  1600x900 (15.4 the old way), 16.1 ms at 3840x2160 (43.1). `--gdi`: the old way (the world's
+  picture read back, everything copied to the window). `--window-capture <prefix>`: what the
+  window shows, read back, as `<prefix>_game.png` and, after a game is left, `<prefix>_menu.png`.
 - `--screenshot file.png` draws the head once at the end and saves the picture.
 - The day and the weather of a game's picture (the renderer's; they are only seen) are GAME
   OPTIONS, chosen in the lobby with the game's other options: Time of Day (the map's own fixed

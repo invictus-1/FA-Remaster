@@ -28,6 +28,22 @@ local looks = {
         },
     },
     {
+        title = "Upscaling (FSR 1)",
+        key = 'remaster_upscale',
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_upscale"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 1 },
+                { text = "Ultra Quality", key = 0.77 },
+                { text = "Quality", key = 0.67 },
+                { text = "Balanced", key = 0.59 },
+                { text = "Performance", key = 0.5 },
+            },
+        },
+    },
+    {
         title = "Remastered Effects",
         key = 'remaster_effects',
         type = 'toggle',
