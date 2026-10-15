@@ -738,10 +738,19 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     RequestContinuation(sim, u, n, 3);
     return;
   }
-  if (!n.path.empty() && n.path.back() == n.target && !u->unitStates.count("WaitingForTransport") &&
-      PathUnitBlocked(u, n.target.x, n.target.z, 1)) {
-    n.wait = 10;
-    return;
+  // 0x5aec1a: the target cell goes to UnitBlocked 0x62aba0 as the point (x, 0, z) of its corner, not its centre, and
+  // 0x62aba0 tests the cell of a unit standing at that point: fistp(x - SizeX/2), fistp(z - SizeZ/2), rounded half
+  // to even. So an odd footprint tests the cell itself or the one before it (x - 0.5 rounds to the even one), an
+  // even one the cell diagonally before it. Seen: LAND 1306, Titan 4 one diagonal step from its goal cell (285, 683),
+  // whose corner a standing AA unit's box touches by 0.05: the original tests (284, 682), finds it free and asks for
+  // a continuation path at once (its target becomes (287, 684) at 1307 and the move ends at 1310); ours tested
+  // (285, 683) and waited ten beats.
+  if (!n.path.empty() && n.path.back() == n.target && !u->unitStates.count("WaitingForTransport")) {
+    const PathCell c = CellOf(u, static_cast<float>(n.target.x), static_cast<float>(n.target.z));
+    if (PathUnitBlocked(u, c.x, c.z, 1)) {
+      n.wait = 10;
+      return;
+    }
   }
   RequestContinuation(sim, u, n, 2);
 }
