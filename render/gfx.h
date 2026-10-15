@@ -159,6 +159,10 @@ struct DeviceDesc {
   int width = 0, height = 0;
   bool vsync = true;
   bool debug = false;      // the API's validation layer, when installed
+  // Where compiled shaders are kept from one run to the next (compiling them all takes seconds; a
+  // shader whose source has not changed is read back instead). Empty: the user's local application
+  // data, "FA Remastered\shaders"; "-": none kept.
+  std::string shaderCache;
 };
 
 class Device {
