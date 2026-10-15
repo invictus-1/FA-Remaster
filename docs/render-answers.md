@@ -4,6 +4,33 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 20: the map's edge as two choices, machinery or none (2026-10-14)
+
+Done (render, this commit). Three switches on `World` (world.h), set once before drawing:
+
+| Choice | `worldBeyond` | `frame` | `beyondHaze` |
+|---|---|---|---|
+| MACHINERY (the original's way) | false | true | (any) |
+| NO MACHINERY | true | false | false |
+
+- MACHINERY: the map ends at its edge and the frame the game's `MapBorderAdd` names (`World::borders`)
+  is drawn whole, as the original.
+- NO MACHINERY: no frame; the land and sea go on past the edge, greyed and a shade dimmer, with no haze
+  over them. They are lost only in the last tenth of the way out (the far end of what is drawn), where
+  they meet the horizon, so there is no hard rim against the sky.
+- The mix Chris had before (world beyond AND frame AND haze) is still `true / true / true`, which is the
+  default; it is not one of the two choices any more, so set the three explicitly from the option.
+- In the viewer: `--map-ends` for MACHINERY; `--no-frame --no-beyond-haze` for NO MACHINERY.
+
+**Correction (Chris to ui, same day):** MACHINERY is the frame AND the land beyond, with no white haze
+either: `worldBeyond` true, `frame` true, `beyondHaze` false (viewer: `--no-beyond-haze`). Seen: the frame
+stands whole over the land beyond, which stays clear to the far end. No change to the code was needed.
+
+**Final (Chris to the renderer, 2026-10-14, after seeing the pictures):** keep it simple, the first table
+stands. Option one: the original's full frame (`worldBeyond` false, `frame` true). Option two, ours: no frame,
+the land beyond darkened (`worldBeyond` true, `frame` false, `beyondHaze` false). The correction above is withdrawn.
+His words: "I have a feeling some people will want the og frame."
+
 ## ui, to the renderer 19: the deposit icons too big, and only one's own (2026-10-13)
 
 Both right, both mine, both changed (render 7afd232).
