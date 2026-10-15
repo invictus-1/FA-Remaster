@@ -124,6 +124,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
          world * 1000.0 / frames, worlds);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
+  LogDrawProfile();
   return frames;
 }
 

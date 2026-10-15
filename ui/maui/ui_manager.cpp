@@ -1,6 +1,10 @@
 // Root frames, the cursor, input capture and draggers.
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <string>
 
 #include "core/log.h"
 #include "maui/control.h"
@@ -129,17 +133,60 @@ void UiManager::Update(lua_State* L, float seconds) {
 // reclaim labels sit at a thousandth of their mass (0.1 for a rock of 113), the view at 3.
 // (INFERRED that the original's world lies under all controls: seen by those labels showing
 // there; its order of drawing world and interface is not read.)
+namespace {
+// Where drawing the interface's picture goes, by kind of control (with MOHO64UI_DRAW_PROFILE set;
+// logged by LogDrawProfile at the end of a window run): for finding what to draw less often.
+struct DrawCost {
+  double seconds = 0;
+  long long draws = 0;
+};
+std::map<std::string, DrawCost>& DrawCosts() {
+  static std::map<std::string, DrawCost> costs;
+  return costs;
+}
+long long g_renders = 0;
+}  // namespace
+
 void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   Frame* frame = GetFrame(head);
   if (!frame) return;
+  static const bool profile = std::getenv("MOHO64UI_DRAW_PROFILE") != nullptr;
+  using Clock = std::chrono::steady_clock;
+  const auto t0 = Clock::now();
   std::vector<Control*> all{frame};
   Collect(frame, all);
   std::vector<std::pair<float, Control*>> order;
   for (Control* c : all)
     if (!c->dead() && !c->IsHidden()) order.emplace_back(c->DrawsBeneathAll() ? -1e30f : c->depth.Get(), c);
   std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-  for (auto& [depth, c] : order)
-    if (!c->dead()) c->Draw(L, target);
+  if (!profile) {
+    for (auto& [depth, c] : order)
+      if (!c->dead()) c->Draw(L, target);
+    return;
+  }
+  ++g_renders;
+  DrawCost& sorting = DrawCosts()["(collecting and sorting the controls)"];
+  sorting.seconds += std::chrono::duration<double>(Clock::now() - t0).count(), sorting.draws += static_cast<long long>(all.size());
+  for (auto& [depth, c] : order) {
+    if (c->dead()) continue;
+    const auto a = Clock::now();
+    c->Draw(L, target);
+    DrawCost& cost = DrawCosts()[c->ClassName()];
+    cost.seconds += std::chrono::duration<double>(Clock::now() - a).count();
+    ++cost.draws;
+  }
+}
+
+void LogDrawProfile() {
+  if (g_renders == 0) return;
+  std::vector<std::pair<double, std::string>> rows;
+  for (const auto& [name, cost] : DrawCosts()) rows.emplace_back(cost.seconds, name);
+  std::sort(rows.rbegin(), rows.rend());
+  for (const auto& [seconds, name] : rows) {
+    const DrawCost& cost = DrawCosts()[name];
+    Logf(LogLevel::Info, "moho64ui: drawing: %-40s %7.3f ms a frame, %6.1f drawn a frame", name.c_str(), seconds * 1000.0 / g_renders,
+         static_cast<double>(cost.draws) / g_renders);
+  }
 }
 
 void UiManager::Forget(Control* c) {
