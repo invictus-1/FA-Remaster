@@ -615,6 +615,33 @@ is built and the order is still in the queue (`ui/tests/templates.lua`, two chec
 and not asked: an assisting factory taking over the switch of the factory it assists. Waiting
 for Chris's look.
 
+### 22. Camera shake: Entity:ShakeCamera's events for the host; and the AI's stubs, for your list
+Found in Chris's game logs of 2026-10-14 (`_scratch\ui\game_newcommander.log`, `game_fight_*`),
+not reported by him; not blocking.
+
+a. `Entity:ShakeCamera(radius, maxShakeEpicenter, minShakeAtRadius, interval)` is a stub in the
+simulation ("moho64: stub Entity:ShakeCamera" in the fight logs). The game's scripts call it
+for big blasts: a unit's death (`Unit.lua` 3602, 3868, 3966: the blueprint's `Display.
+CameraShake...`), a weapon's firing (`DefaultProjectileWeapon.lua` 534), the UEF artillery
+shell (`terranprojectiles.lua` 187), the Seraphim bombs' effect controllers. In the original
+the camera shakes. As I read the exe: `func_ShakeCamera` (0x692700) pushes a 28-byte record
+(7 floats: as I take them, the place x y z, radius, max, min, interval) onto a list, and the
+user side shakes its camera with them (`CameraImpl::CameraShake` 0x7a7130, per frame
+`func_CameraImplUpdateShake` 0x7a67c0; the world view's `CanShake`). Wanted: the beat's shake
+records in what the host reads after a beat (like collectEffects / the sound events), each
+with the place and the four numbers. I then shake the camera the original's way (I read
+0x7a67c0 for the falloff).
+
+b. For your list, in case it is not on it: the simulation's stubs the AI ("AI: Normal") calls
+in those games: `CAiBrain:GetCurrentEnemy`, `GetHighestThreatPosition`, `GetThreatAtPosition`,
+`AssignThreatAtPosition`, `CheckBlockingTerrain`, `PlatoonExists`, `AssignUnitsToPlatoon`,
+`DisbandPlatoon`, `CPlatoon:CanFormPlatoon`, `CPlatoon:CalculatePlatoonThreat`; and
+`TryCopyPose`, `DebugGetSelection`, `HasLocalizedVO`, `AudioSetLanguage` (the last two the sim
+state's own, the user state's are built). Two script errors that may come from them, once per
+game: `medium-ai.lua:1005: bad argument #2 to 'VDist3' (table expected, got nil)` in
+PickEnemyLogic, and `threatbuildconditions.lua:66: attempt to call a table value`. So the AI
+may play weaker than the original's; Chris has not said so.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
