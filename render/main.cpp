@@ -72,6 +72,7 @@
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
+// --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12: being built, step by step
 // --prepass  the models' depth is laid first (MeshRenderer::depthPrepass; off by default), to measure it
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
@@ -192,6 +193,8 @@ struct Options {
   bool fxAt = false, fxFrom = false, fxTo = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = false;                 // --prepass
+  bool vulkan = false;                  // --vulkan
+  bool vulkanClear = false;             // --vulkan-clear
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
@@ -274,6 +277,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
     else if (a == "--fx-compare") o->fx.compare = true;
+    else if (a == "--vulkan") o->vulkan = true;
+    else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -483,7 +488,21 @@ int main(int argc, char** argv) {
   dd.height = window->Height();
   dd.vsync = opt.vsync;
   dd.debug = opt.debug;
+  dd.backend = opt.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
   auto device = gfx::Device::Create(dd, &error);
+  if (device && opt.vulkanClear) {  // --vulkan-clear: the backend's first step alone: frames cleared, shown and read back
+    printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
+    std::vector<uint8_t> shot;
+    for (int i = 0; i < std::max(opt.frames, 3); ++i) {
+      window->Pump(nullptr);
+      const float c[4] = {0.2f + 0.1f * static_cast<float>(i % 3), 0.4f, 0.7f, 1};
+      device->BeginFrame(c);
+      device->EndFrame(i + 1 == std::max(opt.frames, 3) ? &shot : nullptr);
+    }
+    if (!opt.screenshot.empty() && !shot.empty())
+      printf("render: --vulkan-clear: %s\n", WritePng(opt.screenshot, shot.data(), device->Width(), device->Height()) ? opt.screenshot.c_str() : "could not be written");
+    return 0;
+  }
   if (!device) {
     fprintf(stderr, "render: no graphics device: %s\n", error.c_str());
     return 1;

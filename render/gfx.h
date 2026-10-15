@@ -155,6 +155,9 @@ struct PipelineDesc {
 };
 
 struct DeviceDesc {
+  // Direct3D 12 (Windows), or Vulkan (gfx_vulkan.cpp: other systems, and tried on Windows)
+  enum class Backend : uint8_t { Direct3D12, Vulkan };
+  Backend backend = Backend::Direct3D12;
   void* window = nullptr;  // the platform's window handle (HWND)
   int width = 0, height = 0;
   bool vsync = true;
