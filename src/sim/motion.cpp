@@ -76,7 +76,11 @@ bool RotateToward(float& x, float& z, float tx, float tz, float maxAngle) {
     return true;
   }
   float s = SinApprox(maxAngle);
-  if (x * tz - z * tx < 0.0f) s = -s;  // target is clockwise (x toward -z)
+  // 0x6993c4..0x6993df works in the (x, -z) frame: cross' = to'.y f'.x - f'.y to'.x, which is minus ours, and turns
+  // by +sin unless cross' < 0. So ours turns by -sin when OUR cross is <= 0: a target exactly behind (cross 0) is
+  // turned toward the same side as in the original. (Seen: Economy 1869, support commander 39 at x 860.5 facing +z
+  // with its spline target at x 860.5 behind it: the original turned toward +x, ours toward -x.)
+  if (x * tz - z * tx <= 0.0f) s = -s;  // target is clockwise (x toward -z), or exactly behind
   float n = s * s + c * c;
   if (std::fabs(n - 1.0f) > 0.0010000000474974513f) {
     float l = std::sqrt(n);
@@ -1576,7 +1580,8 @@ void HoverMove(Sim& sim, Unit* u) {
   ClampLength(m.wobbleVel, b.wobbleSpeed);
   m.wobble = {m.wobble.x * 0.98f + m.wobbleVel.x, m.wobbleVel.y + m.wobble.y * 0.98f,
               m.wobbleVel.z + m.wobble.z * 0.98f};
-  if (!u->unitStates.count("Teleporting") || m.needSnap) HoverSnap(sim, u);
+  // CalcMoveHover 0x6c2e8d..0x6c2ee7: SnapToGround unless Teleporting, or when motion+0x90 asks; m+0x90 cleared
+  if (!u->unitStates.count("Teleporting") || m.needSnap || m.surfaceNext) HoverSnap(sim, u);
   m.needSnap = false;
 }
 bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHover (0x6b9f10..0x6b9f87)
@@ -1824,9 +1829,10 @@ void MotionTick(Sim& sim, Unit* u) {
       // m+0x90 asks; CalcMoveWater 0x6c34b0 when CalcMoveCommon moved it
       if (landCalc ? (common && !u->unitStates.count("Teleporting")) || m.surfaceNext : common) FindRaisedPlatform(sim, u);
       // CalcMoveLand 0x6c3180: SnapToGround runs when the unit moved AND is not Teleporting (state 19: a unit
-      // in a transport's beam, whose task places it), or when motion+0x90 asks for it
+      // in a transport's beam, whose task places it), or when motion+0x90 asks for it: 0x6c31b7 tests m+0x90 on its
+      // own, so a unit standing still snaps too (a flattening under it, 0x74b35a), and clears it (0x6c31fa)
       const bool beamed = u->unitStates.count("Teleporting") > 0 && !m.surfaceNext;
-      if (((moved || m.needSnap) && !beamed) || diving) {
+      if (((moved || m.needSnap) && !beamed) || diving || (landCalc && m.surfaceNext)) {
         SnapUnit(sim, u);
         m.needSnap = false;
       }
