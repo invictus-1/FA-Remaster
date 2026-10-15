@@ -482,29 +482,32 @@ void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz) {
 
 // CUnitMotion::SnapToGround (FA exe 0x6c1610) / SnapToWater: height and tilt from the terrain
 // under the four corners of the unit's size box.
-// FindIntersectingRaisedPlatform 0x6c2f00: the nearest immobile unit with RaisedPlatforms whose box
-// meets the unit's (the original takes it from the unit's surface-collision list, m+0x178, and keeps the result in
-// m+0x114 until the next search: tried 2026-10-14 with our collision pass's hits, it broke the Transports replay
-// and put Skirmish two beats back; the box test stays until that list is read properly).
-const Unit* FindRaisedPlatform(Sim& sim, const Unit* u) {
-  const MotionBlueprint& b = *u->motion.bp;
-  float r = std::max(b.sizeX, b.sizeZ) * 0.5f;
-  const Unit* best = nullptr;
-  float bestD = std::numeric_limits<float>::infinity();
-  sim.ForUnitsInRect(u->position.x - 16, u->position.z - 16, u->position.x + 16, u->position.z + 16, [&](Unit* p) {
-    if (p == u || p->dead || !p->motion.bp || p->motion.bp->motionType != kMotionNone) return;
-    const MotionBlueprint& pb = *p->motion.bp;
-    if (pb.raisedPlatforms.size() < 12) return;
-    if (std::fabs(p->position.x - u->position.x) > pb.sizeX * 0.5f + r) return;
-    if (std::fabs(p->position.z - u->position.z) > pb.sizeZ * 0.5f + r) return;
-    float dx = p->position.x - u->position.x, dy = p->position.y - u->position.y, dz = p->position.z - u->position.z;
-    float d = dx * dx + dy * dy + dz * dz;
-    if (d < bestD) {
+// FindIntersectingRaisedPlatform 0x6c2f00: drops the last pick (m+0x114), then takes the nearest live unit with
+// RaisedPlatforms among the contacts of the last contact pass (m+0x178), by (dx^2 + dz^2) + dy^2. Called by
+// CalcMoveLand / Hover / Water only on a beat the unit moved (or m+0x90 asks); SnapToGround stands on the pick,
+// which therefore lasts while the unit stands still.
+void FindRaisedPlatform(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  m.platformRef = 0;
+  float bestD = std::numeric_limits<float>::max();
+  for (uint32_t ref : m.contacts) {
+    Entity* e = sim.FindEntity(ref);
+    if (!e || e->kind != Entity::Kind::Unit) continue;
+    const Unit* p = static_cast<const Unit*>(e);
+    if (p->dead || !p->motion.bp || p->motion.bp->raisedPlatforms.size() < 12) continue;
+    const float dx = u->position.x - p->position.x, dy = u->position.y - p->position.y, dz = u->position.z - p->position.z;
+    const float d = (dx * dx + dz * dz) + dy * dy;
+    if (bestD > d) {
       bestD = d;
-      best = p;
+      m.platformRef = ref;
     }
-  });
-  return best;
+  }
+}
+// m+0x114 as SnapToGround reads it (a weak reference: gone with its unit)
+const Unit* RaisedPlatform(const Sim& sim, const Unit* u) {
+  if (!u->motion.platformRef) return nullptr;
+  Entity* e = sim.FindEntity(u->motion.platformRef);
+  return e && e->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e) : nullptr;
 }
 // 0x62af70: the first quad (unrotated, from the platform's position) holding p, bilinear in it
 float PlatformHeight(const Unit* P, float x, float z) {
@@ -561,7 +564,7 @@ void SnapUnit(const Sim& csim, Unit* u) {
   // FindIntersectingRaisedPlatform 0x6c2f00) for every type: a hover unit's corners are the surface (0x62b160:
   // the higher of ground and water) plus the platform's height. (Seen: Aeon and Seraphim engineers, which hover,
   // stand on their factory's deck when they are let go: 0.5 and 0.65 higher than the ground.)
-  const Unit* plat = FindRaisedPlatform(sim, u);
+  const Unit* plat = RaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {r.x + u->position.x, 0, r.z + u->position.z};
@@ -1500,7 +1503,7 @@ void HoverSnap(Sim& sim, Unit* u) {
   // the corners are the surface (0x62b160: the higher of ground and water) plus the raised platform the unit
   // stands on, when there is one (motion+0x114, CalcMoveHover 0x6c2c05 -> FindIntersectingRaisedPlatform): an Aeon
   // or Seraphim engineer let go by its factory stands on the deck, 0.5 to 0.65 above the ground
-  const Unit* plat = FindRaisedPlatform(sim, u);
+  const Unit* plat = RaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
     Vec3 r = Rotate(u->orientation, offs[i]);
     c[i] = {u->position.x + r.x, 0, u->position.z + r.z};
@@ -1773,6 +1776,8 @@ void MotionTick(Sim& sim, Unit* u) {
     }
     if (b.motionType == kMotionHover) {
       if (m.needSnap && !(m.pointNow && !m.pushed)) u->orientation = LookQuat(m.bx, 0.0f, m.bz);  // turned in place
+      // CalcMoveHover 0x6c2bf5: the platform search when CalcMoveCommon moved the unit or m+0x90 asks
+      if (HoverRuns(u) && (common || m.surfaceNext)) FindRaisedPlatform(sim, u);
       if (HoverRuns(u)) HoverMove(sim, u);
       else if (moved || m.needSnap) {
         SnapUnit(sim, u);
@@ -1781,7 +1786,11 @@ void MotionTick(Sim& sim, Unit* u) {
     } else {
       // CalcMoveWater 0x6c3480 (every layer but Land and Seabed): the dive / surfacing step comes after the
       // move, and the unit is put at its depth while it lasts
-      const bool diving = u->layer != "Land" && u->layer != "Seabed" && HandleDivingAndSurfacing(sim, u);
+      const bool landCalc = u->layer == "Land" || u->layer == "Seabed";
+      const bool diving = !landCalc && HandleDivingAndSurfacing(sim, u);
+      // the platform search: CalcMoveLand 0x6c31a2 when CalcMoveCommon moved the unit and it is not Teleporting, or
+      // m+0x90 asks; CalcMoveWater 0x6c34b0 when CalcMoveCommon moved it
+      if (landCalc ? (common && !u->unitStates.count("Teleporting")) || m.surfaceNext : common) FindRaisedPlatform(sim, u);
       // CalcMoveLand 0x6c3180: SnapToGround runs when the unit moved AND is not Teleporting (state 19: a unit
       // in a transport's beam, whose task places it), or when motion+0x90 asks for it
       const bool beamed = u->unitStates.count("Teleporting") > 0 && !m.surfaceNext;

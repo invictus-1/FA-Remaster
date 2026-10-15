@@ -3,6 +3,32 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 23, finished: where the four bracket pieces sit (corrects one line of the entry below)
+
+Read to the last store in 0x7fc820 (2026-10-14).
+
+**Correction.** The box the pieces sit on is NOT a square: its corners are the rectangle's own,
+`centre ± hx x X ± hz x Z` (X, Z the unit's own axes; hx = SelectionSizeX x 0.75, hz = SelectionSizeZ x 0.75, half
+sides; y extent 0). Only the piece size uses M = the larger half side.
+
+**Each piece** is a square of side `2 x f x M` CENTRED ON its box corner: half inside the box, half outside. Its
+four vertices are the corner plus `(-fM, 0, -fM)`, `(+fM, 0, -fM)`, `(+fM, 0, +fM)`, `(-fM, 0, +fM)`, those
+offsets turned by the unit's orientation.
+
+**Texture.** One picture of the whole bracket, its four quarters drawn at the four corners; u runs along X, v
+along Z:
+- corner (-X, -Z): u 0 to 0.5, v 0 to 0.5;
+- corner (+X, -Z): u 0.5 to 1, v 0 to 0.5;
+- corners (+X, +Z) and (-X, +Z): by the same pattern u 0.5 to 1 / 0 to 0.5 with v 0.5 to 1 (the third quad does
+  start at the (+X, +Z) corner; its texture stores I did not follow to the end).
+
+**The minimum 3.** w is the place dotted with the camera's LOD-scale row (GeomCamera3 +0x2a4, made in
+GeomCamera3::Init 0x4700a0 and SetLODScale 0x470b90: a row of the camera's matrix, times the LOD scale, divided
+by the camera's field +0x2bc), plus its fourth element. So `f x M / w` is the piece's half size in the units the
+original's level-of-detail choice uses for "size on screen"; `ren_SelectBracketMinPixelSize` says pixels, and
+that holds if +0x2bc is the viewport's size in pixels, which I have not read. Your LOD-by-screen-size measure
+is the closest thing you have; f is raised to `3 x w / M` when the piece would be smaller.
+
 ## render 23: how the original sizes a selection bracket — the rule read; the four pieces' exact corners not yet
 
 Read in the original's own drawing routine (0x7fc820) and its parameter loader (0x7fc4b0, the Lua table

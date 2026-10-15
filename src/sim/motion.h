@@ -158,6 +158,10 @@ struct UnitMotion {
   uint32_t colTick = 0xffffffffu;
   Vec3 sideStep;           // st+0x84
   bool surfaceNext = false;  // m+0x90: process contacts next tick (set by AddImpulse)
+  // m+0x178: what the last contact pass found under the unit's box (EntityRefs; emptied when a pass starts, also one
+  // that stops early), and m+0x114: the raised platform the last search picked from it (SnapToGround stands on it)
+  std::vector<uint32_t> contacts;
+  uint32_t platformRef = 0;
   // CalcMoveWater 0x6c3480 (ships and submarines): m+0x5c the depth below the water (<= 0: the unit rides at
   // water + depth), m+0x60 this tick's dive / surfacing step, m+0x74 the layer the dive or surfacing ends on,
   // m+0x80 the vertical event of a non-flying unit (0 Top, 1 Bottom, 2 Up, 3 Down), and the unit attribute
