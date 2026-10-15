@@ -151,6 +151,7 @@ struct PipelineDesc {
   // pixel covers (smooth edges on surfaces with holes, without blending or sorting).
   bool alphaToCoverage = false;
   bool depthTarget = true;  // false for a pass that has a colour target only (full-screen work)
+  bool colorWrite = true;   // false: the colour target is left as it is (a pass that only lays depth)
 };
 
 struct DeviceDesc {

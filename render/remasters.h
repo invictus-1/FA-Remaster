@@ -16,6 +16,8 @@ namespace render {
 // /remastered, unless it holds a file named HOLD.
 // Mounts every unit's folder found under `root` that has a first level and no file named HOLD
 // (the visuals track puts one into a folder that must not be used). Returns how many.
-int MountRemasters(moho::Vfs* vfs, const std::string& root);
+// `effectsDespiteHold`: the effects' folder even with a HOLD in it (the viewer's effects test stand:
+// the visuals track keeps working on effects that games must not see yet).
+int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold = false);
 
 }  // namespace render

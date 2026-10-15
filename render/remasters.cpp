@@ -9,7 +9,7 @@
 
 namespace render {
 
-int MountRemasters(moho::Vfs* vfs, const std::string& root) {
+int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold) {
   int mounted = 0;
   {  // the remastered effects (effect_files.h): one folder with the game's paths below it
     const std::string effects = root + "/_effects/export/moho64";
@@ -20,6 +20,7 @@ int MountRemasters(moho::Vfs* vfs, const std::string& root) {
         for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         if (low == "hold") hold = true;
       }
+      if (effectsDespiteHold) hold = false;
       if (!hold && vfs->Mount(effects, kRemasteredEffects)) printf("render: remastered effects from %s\n", effects.c_str());
       // remastered projectiles' meshes: projectiles/<ID>/<ID>_lod0.scm and its LabPBR textures beside
       // it, each mounted where a remastered model is looked for (/preview/<id>, models.h); the
