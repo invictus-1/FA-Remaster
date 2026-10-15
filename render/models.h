@@ -53,6 +53,10 @@ struct ModelLight {
 };
 
 struct ModelLod {
+  // its number in the order levels were made (a wreck's copy gets its own): what the model
+  // renderer sorts a pass's meshes by, so the order they are drawn in does not hang on where in
+  // memory each was made
+  uint32_t serial = 0;
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
   gfx::Texture albedo, normals, specular;

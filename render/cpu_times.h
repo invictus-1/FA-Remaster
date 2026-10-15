@@ -15,6 +15,7 @@ struct CpuTimes {
   inline static bool on = false;
   inline static std::vector<std::pair<const char*, double>> parts;  // name (a string literal), ms
 
+  static const char* Current() { return current_; }  // (to go back to it after parts of one's own)
   static void Part(const char* name) {
     if (!on) return;
     const auto now = std::chrono::steady_clock::now();

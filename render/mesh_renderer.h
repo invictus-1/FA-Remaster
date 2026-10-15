@@ -137,7 +137,20 @@ class MeshRenderer {
   std::vector<Group> groups_;
   std::vector<uint32_t> groupsListed_;
   void Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
-                float smallest, float wish);
+                float smallest, float wish, std::vector<Item>* out) const;
+  // A pass's models are tested in pieces of up to kPieceModels, spread over the processor's cores;
+  // each piece's items are put together in the pieces' order afterwards (the same order as one loop).
+  static constexpr size_t kPieceModels = 1024;
+  struct Piece {
+    const Cull* culls;
+    Entry* entries;
+    size_t count;
+  };
+  std::vector<Piece> pieces_;
+  std::vector<std::vector<Item>> pieceItems_;
+  std::vector<Item> sorting_;     // (the sort's second buffer)
+  std::vector<uint32_t> buckets_;  // (and its counts)
+  void SortItems();
   void DrawItems(const View& view, gfx::Texture environment, bool shadowPass, bool glass);
   std::vector<Item> items_;
   std::vector<Instance> batch_;

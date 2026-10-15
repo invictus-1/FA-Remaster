@@ -1,5 +1,8 @@
 #include "mesh_renderer.h"
 
+#include "cpu_times.h"
+#include "jobs.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -744,24 +747,38 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   if (!prepared_) Prepare({});  // (a caller that did not say which views there are: every posed model's bones)
   // What this view sees, each at the level its size on the SCREEN asks for (view.eye, fovY and height
   // are the camera's in a shadow pass too, so a model's shadow comes from a level near the one drawn).
+  const char* outer = CpuTimes::Current();
+  CpuTimes::Part("models: tested for each pass");
   items_.clear();
   const float focal = static_cast<float>(view.height) / (2 * std::tan(view.fovY * 0.5f));
   const float smallest = shadowPass ? shadowMinPixels : minPixels;
   const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
   const uint8_t needed = glass ? kHasGlass : kHasSolid;  // (a model with no level of this pass's kind is passed over at once)
+  // (the scenery's groups first, then the frame's own list: in pieces, each tested on its own)
+  pieces_.clear();
+  auto cut = [&](const Cull* culls, Entry* entries, size_t count) {
+    for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at)});
+  };
   if (part != 2)
-    for (uint32_t g : groupsListed_) {
-      Group& group = groups_[g];
-      for (size_t i = 0; i < group.culls.size(); ++i)
-        Consider(group.culls[i], group.entries[i], view, shadowPass, glass, part, needed, focal, smallest, wish);
-    }
-  for (size_t i = 0; i < culls_.size(); ++i) Consider(culls_[i], entries_[i], view, shadowPass, glass, part, needed, focal, smallest, wish);
+    for (uint32_t g : groupsListed_) cut(groups_[g].culls.data(), groups_[g].entries.data(), groups_[g].culls.size());
+  cut(culls_.data(), entries_.data(), culls_.size());
+  if (pieceItems_.size() < pieces_.size()) pieceItems_.resize(pieces_.size());
+  Jobs::Shared().Run(static_cast<int>(pieces_.size()), [&](int k) {
+    const Piece& p = pieces_[static_cast<size_t>(k)];
+    std::vector<Item>& out = pieceItems_[static_cast<size_t>(k)];
+    out.clear();
+    for (size_t i = 0; i < p.count; ++i) Consider(p.culls[i], p.entries[i], view, shadowPass, glass, part, needed, focal, smallest, wish, &out);
+  });
+  for (size_t k = 0; k < pieces_.size(); ++k) items_.insert(items_.end(), pieceItems_[k].begin(), pieceItems_[k].end());
+  if (!shadowPass)
+    for (const Item& item : items_) posedInstances += item.entry->posed ? 1 : 0;
   DrawItems(view, environment, shadowPass, glass);
+  CpuTimes::Part(outer);
 }
 
 // Whether a pass draws that model, and at which level: onto items_ if it does.
 void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
-                            float smallest, float wish) {
+                            float smallest, float wish, std::vector<Item>* out) const {
   {
     if (!(c.flags & needed)) return;
     if (part != 0 && ((c.flags & kScenery) != 0) != (part == 1)) return;
@@ -793,19 +810,65 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (lod->hidden || lod->glass != glass) return;
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) return;
-    items_.push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
-    if (!shadowPass && e.posed) ++posedInstances;
+    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
   }
+}
+
+// items_ by mesh (by its level's serial number), the blended ones last, and otherwise in the order
+// they were found: what a stable sort by (blended, serial) gives, done as a radix sort of the
+// key's bits, eleven at a time from the lowest (which keeps each step's order).
+void MeshRenderer::SortItems() {
+  const size_t n = items_.size();
+  if (n < 64) {
+    std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
+      return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod->serial < b.lod->serial;
+    });
+    return;
+  }
+  auto key = [](const Item& item) {
+    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 32) | static_cast<uint64_t>(item.lod->serial);
+  };
+  // (only the bits that differ between the items need sorting)
+  uint64_t all = 0, any = 0, first = key(items_[0]);
+  for (const Item& item : items_) {
+    const uint64_t k = key(item);
+    any |= k ^ first;
+  }
+  (void)all;
+  if (!any) return;  // one mesh only
+  int top = 63;
+  while (top > 0 && !((any >> top) & 1)) --top;
+  int low = 0;
+  while (low < top && !((any >> low) & 1)) ++low;
+  constexpr int kBits = 11;
+  constexpr uint32_t kBuckets = 1u << kBits;
+  buckets_.resize(kBuckets);
+  sorting_.resize(n);
+  std::vector<Item>* from = &items_;
+  std::vector<Item>* to = &sorting_;
+  for (int shift = low; shift <= top; shift += kBits) {
+    std::fill(buckets_.begin(), buckets_.end(), 0u);
+    for (const Item& item : *from) ++buckets_[(key(item) >> shift) & (kBuckets - 1)];
+    uint32_t sum = 0;
+    for (uint32_t& b : buckets_) {
+      const uint32_t c = b;
+      b = sum;
+      sum += c;
+    }
+    for (const Item& item : *from) (*to)[buckets_[(key(item) >> shift) & (kBuckets - 1)]++] = item;
+    std::swap(from, to);
+  }
+  if (from != &items_) items_.swap(sorting_);
 }
 
 // Draws items_: by mesh, each mesh's instances together.
 void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool shadowPass, bool glass) {
   if (items_.empty()) return;
+  CpuTimes::Part("models: sorted by mesh");
   // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
-  std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
-    return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod < b.lod;
-  });
+  SortItems();
 
+  CpuTimes::Part("models: handed to the card");
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
   device_->SetShaderBuffer(boneBuffer_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);

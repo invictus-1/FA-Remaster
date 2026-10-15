@@ -55,6 +55,11 @@ void ReadScmBones(const std::string& file, std::vector<ModelBone>* bones) {
 
 // `skeleton`: the bones the model's vertices are to follow by index (Model::bones). Where the file
 // lists its own bones in another order, its vertices are renumbered by the bones' names.
+uint32_t NextLodSerial() {
+  static uint32_t made = 0;
+  return ++made;
+}
+
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error) {
   auto fail = [&](const char* what) {
@@ -248,6 +253,7 @@ const Model* ModelCache::Wreck(const Model* of, bool ownScale) {
   if (!ownScale) wreck->scale = 1;
   wreck->lights.clear();
   for (ModelLod& lod : wreck->lods) {
+    lod.serial = NextLodSerial();
     lod.wreck = true;
     lod.sway = 0;  // (a burnt tree does not wave)
   }
@@ -368,6 +374,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   for (size_t i = 0; i < sources.size(); ++i) {
     const LodSource& s = sources[i];
     ModelLod lod;
+    lod.serial = NextLodSerial();
     lod.cutoff = s.cutoff;
     lod.shaderName = s.shader;
     // (the first game's names, which many blueprints still carry, mean today's techniques: the
