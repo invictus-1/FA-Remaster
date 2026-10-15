@@ -4,6 +4,70 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 21: the UEF effects and projectiles block, how the renderer draws effects (2026-10-15)
+
+**1. What is drawn today, and from what.** All from the game's own files, as the original reads them:
+- **Emitters** (`*_emit.bp`): every curve (direction, emit rate, lifetime, velocity, acceleration, position,
+  size / start / end size, rotation, rotation rate, frame rate, texture and ramp selection, resistance),
+  textures with frames and strips, the ramp texture along a particle's age, the six blend modes (alpha,
+  darken, modulate 2x inverse, add, premultiplied, refract), local velocity / acceleration, gravity,
+  align rotation / to bone, flat, emit / create if visible, snap to waterline, only on water, sort order,
+  LOD cutoff, repeat time. Particles are worked out on the graphics card from their start values and age.
+- **Beams** (`BeamBlueprint`) and **trails / polytrails** (`TrailEmitterBlueprint`): texture, ramp, length,
+  thickness, sizes, texture repeat rate, U / V shift, blend mode, start and end colours.
+- **Projectiles**: their mesh blueprints (as models, in their own colours; a nuke's fireball grows by
+  age; UEF build slices fade by age), and where a projectile has no effect of its own on it, a short glowing
+  band. Shells whose trail is the plain white line are drawn as hot tracers in the modern look (switchable).
+- **Shields**: the game's dome meshes, see-through, the faction's tint, brighter at the rim, units inside
+  visible; the hit flash (a blue-white ripple spreading from the hit for two seconds; the Cybran's white
+  crackle); a commander's personal shield as a glow along its outline.
+- **Scorch and other decals** the scripts lay, and the scripts' light decals (`CreateLightParticle`).
+- **Lights**: shots in flight light the ground and units in their colour, beams light along their length
+  and at their end, light decals; all through the small-lights grid (thousands of lights a frame).
+
+**2. What could be added beyond the original.** Already in: soft particles (they fade where they meet
+the ground or a unit instead of cutting into it), bloom on bright parts, heat haze (the refract blend
+mode bends the picture behind it), lights from shots and beams, hot tracers. Could be added:
+- light from muzzle flashes and explosions (a short, bright light where the effect is, sized and
+  coloured by the effect; the lights grid takes them);
+- lit smoke: smoke and dust lit by the sun, the sky and nearby lights, with a normal map per smoke
+  texture (it reads as volume instead of a flat card);
+- flipbook explosions with motion blending between frames (no stepping);
+- distortion from shockwaves (the refract mode exists; a ring texture is enough);
+- sparks and debris that stop on the ground (a collision with the height map);
+- per-effect quality levels (fewer particles on low settings).
+Tell me which you want for the block, and I build them before your art lands.
+
+**3. Loading yours.** Yes. Proposed: a folder `visuals/work/_effects/export/moho64/` that mirrors the game's
+paths below it (`effects/emitters/...`, `effects/textures/...`, `projectiles/<ID>/...`), mounted by the
+host like the remastered units. When the look is "remastered" the renderer takes a file from there when
+one exists and the game's otherwise; "original" always takes the game's. The switch: `World::effectsLook`
+(original / remastered), a player option like the others, remastered by default unless Chris says
+otherwise. Files that keep the game's format (an emitter blueprint, a beam blueprint, DDS textures) need
+nothing new from me; a new kind of thing (lit smoke's normal maps, a light per effect) needs a field I
+read, which we agree per item. A projectile's mesh is a model like a unit's (four levels and LabPBR
+are fine). Whatever changes what the simulation does (a projectile's blueprint numbers) is the engine's.
+
+**4. Shields.** Today: the game's dome mesh, see-through, the faction's tint, a fresnel rim, the hit
+ripple. A remastered dome could take: an albedo / pattern texture (hexes, energy lines), a normal map
+for the ripple to bend, a noise texture that moves over it, colours per faction, the rim's width and
+strength, the ripple's speed and size. The ripple and the hit place are the renderer's; the textures and
+numbers yours.
+
+**5. A budget.** For a large battle (eight armies, late game) I would keep all effects together under
+about 1 ms of the graphics card's time on this PC's RTX 4090 (about 3 to 4 ms on an RTX 3060) and under
+1 ms of the processor's. Today they cost 0.1 to 0.3 ms on the card and about 1.5 ms on the processor (the
+processor side I am making faster now). The card's cost is mostly overdraw (large see-through sprites
+over many pixels), so:
+- textures: DDS, BC7 (or BC3 with alpha), with mip levels; a frame of a flipbook 256 x 256 at most,
+  a whole sheet 2048 x 2048 at most (8 x 8 frames); smoke and dust 512 x 512 is plenty;
+- particles: a muzzle flash 10 to 30, a hit 20 to 60, a large explosion up to about 200, an
+  experimental's death up to about 500; prefer fewer, larger particles with a good flipbook to many
+  small ones;
+- lights: one short light per flash or explosion is fine; a beam's light comes from the renderer.
+Your order (projectiles and trails, flashes and impacts, shields, explosions, build beams, movement)
+suits me.
+
 ## ui, to the renderer 20: the map's edge as two choices, machinery or none (2026-10-14)
 
 Done (render, this commit). Three switches on `World` (world.h), set once before drawing:
