@@ -2077,9 +2077,30 @@ void AirStopHere(Sim& sim, Unit* u) {
   if (u->motion.air) Stop(sim, u, nullptr);
 }
 
+// The navigator's SetGoal 0x5a4c60: SetMotionTarget 0x5a4a90 = CUnitMotion::SetTarget at once, status 2. Ours takes
+// a goal up in the unit's motion step of the beat it was given in (a.pending, AirMotionTick).
+void TakePendingGoal(Sim& sim, Unit* u) {
+  AirMotion& a = A(u);
+  a.pending = false;
+  a.goal = a.pendingGoal;
+  a.steering = true;
+  SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
+  a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
+  if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
+    Formation* f = GetFormation(sim, u);
+    a.inFormation = f && FormationIsForm(*f);
+  }
+}
+
 void AirAbort(Sim& sim, Unit* u) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
+  // A goal given earlier in this beat and aborted before the motion step: in the original that SetGoal has
+  // already set the motion's target, and with it the facing toward it (SetTarget 0x6b85e0: no direction given and
+  // farther than StartTurnDistance), which Stop 0x6b8460 keeps; the brake that follows turns the unit to it. Seen:
+  // a Soul Ripper whose attack order ends because its target died (Experimental2 586): the attack task's last
+  // Update (state 1 on the weapon's report "target lost") gives the goal again, then the task ends and aborts.
+  if (a.pending && sim.tick() >= a.pendingTick && u->fractionComplete >= 1.0f) TakePendingGoal(sim, u);
   a.pending = false;
   a.destEntity = 0;
   Vec3 p = PredictAhead(sim, u, 1.0f);
@@ -2147,17 +2168,7 @@ void AirMotionTick(Sim& sim, Unit* u) {
   AirMotion& a = A(u);
   if (u->fractionComplete < 1.0f) return;
   // the navigator's SetGoal (steered from this beat's motion on)
-  if (a.pending && sim.tick() >= a.pendingTick) {
-    a.pending = false;
-    a.goal = a.pendingGoal;
-    a.steering = true;
-    SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
-    a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
-    if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
-      Formation* f = GetFormation(sim, u);
-      a.inFormation = f && FormationIsForm(*f);
-    }
-  }
+  if (a.pending && sim.tick() >= a.pendingTick) TakePendingGoal(sim, u);
   // UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while the leader steers
   if (a.steering && a.inFormation && !(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation)) && !State(u, "Ferrying")) {
     Formation* f = GetFormation(sim, u);

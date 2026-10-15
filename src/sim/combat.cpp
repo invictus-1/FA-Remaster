@@ -2406,6 +2406,24 @@ bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
 }
 bool CanFlyU(const Unit* u) { return u->motion.bp && u->motion.bp->canFly; }
 
+// CAiTarget::HasTarget 0x5e2a10 as the attack task asks it of its own target. A player's order holds the army's
+// recon BLIP of the enemy (CommandTarget: viaBlip), and of a blip HasTarget asks the blip itself (0x5e2a5a: its
+// +0x99, which only Entity::Kill 0x679a80 sets - Unit::Kill's call, and slot 31 - and nothing kills a blip): the
+// order's target lasts as long as the blip, past its unit's death. (The weapons keep HasTarget's own rule.)
+bool TaskHasTarget(Sim& sim, const AiTarget& t) {
+  if (t.type == 1 && t.viaBlip && !t.fakeId)
+    if (Entity* e = TargetEntity(sim, t); e && e->kind == Entity::Kind::Unit)
+      return static_cast<const Unit*>(e)->blip != nullptr;
+  return HasTarget(sim, t);
+}
+// CAiTarget::EntityLost 0x5e2db0: the entity behind the target (a blip's unit, GetEntity 0x5e2ce0) is killed (its
+// +0x99). A dead unit's blip HAS a target that is LOST.
+bool TaskTargetLost(Sim& sim, const AiTarget& t) {
+  if (t.type != 1) return false;
+  const Entity* e = TargetEntity(sim, t);
+  return e && e->dead;
+}
+
 void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   auto d = std::make_shared<AttackData>();
   d->coordinated = coordinated;
@@ -2417,7 +2435,7 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   if (target.type == 1)
     if (Entity* e = sim.FindEntity(target.entityId))
       d->trackMobile = e->kind == Entity::Kind::Unit && BpInCategory(sim, e->blueprint, "MOBILE");
-  if (HasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);  // UpdatePos
+  if (TaskHasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);  // UpdatePos
   if (IsZeroV(d->lastPos)) d->lastPos = u->position;
   if (CanFlyU(u)) d->firstUpdate = false;
 }
@@ -2500,7 +2518,7 @@ void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
 // Update 0x5f3020 (no formation)
 void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
-  bool has = HasTarget(sim, target);
+  bool has = TaskHasTarget(sim, target);
   // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
   // command's formation, which is laid out around the target, not for the target itself.
   UnitCommand* fc = nullptr;
@@ -2626,7 +2644,7 @@ void AttackEvent(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
   if (t.state == 5) return;
   bool mobile = TaskCanMove(u);
-  if (!HasTarget(sim, target)) {
+  if (!TaskHasTarget(sim, target)) {
     t.state = mobile ? 3 : 5;
   } else {
     switch (u->attackState) {
@@ -2660,7 +2678,7 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
                        ? u->weapons[static_cast<size_t>(d.ocWeapon)] : nullptr;
   UnitWeapon* w = oc ? oc : u->weapons.empty() ? nullptr : TargetWeapon(sim, u, target);
   bool direct = BpInCategory(sim, u->blueprint, "DIRECTFIRE");
-  if (!HasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
+  if (!TaskHasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
   if (!w && !d.coordinated && !direct) return -1;
   bool mobile = TaskCanMove(u);
   switch (t.state) {
@@ -2692,9 +2710,9 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       return 0;
     }
     case 3: {  // chase
-      bool has = HasTarget(sim, target);
+      bool has = TaskHasTarget(sim, target);
       bool busy = u->motion.hasGoal;
-      if (!has) {
+      if (!has || TaskTargetLost(sim, target)) {  // 0x5f3994: EntityLost 0x5e2db0, then HasTarget 0x5e2a10
         if (VectorInAttackRange(u, d.lastPos)) return -1;
         if (busy) return 1;
         AttackUpdate(sim, u, t, target);
@@ -2744,7 +2762,7 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       if (!CanFlyU(u)) AbortNavigation(u);
       // AI.AttackAngle (0x5f3d..): the unit keeps the target that many degrees off its bow; the direction to the
       // target turned about the up axis away from the target's side goes to the motion (SetFacing 0x6b8590)
-      if (const float aa = CB(u).attackAngle; aa > 0 && HasTarget(sim, target)) {
+      if (const float aa = CB(u).attackAngle; aa > 0 && TaskHasTarget(sim, target)) {
         Vec3 tp = TargetPos(sim, target, false);
         if (!IsNaN(tp)) {
           Vec3 v{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
