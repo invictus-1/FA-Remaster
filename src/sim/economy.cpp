@@ -422,7 +422,9 @@ void UnitEconomyTick(Sim& sim, Unit* u) {
       if (u->health <= 0.0f) sim.CallMethod(L, u, "OnDecayed", 0);
     }
   }
-  if (u->destroyQueued) return;
+  // (a unit whose Destroy is queued still does its resource step: it is only gone after the beat's destroy queue.
+  // Seen: a mex upgraded at beat 1549 of the Upgrades replay; the old one's mass still counts in the share-out of
+  // 1550 in the original.)
   // Unit::HandleResourceManagement
   u->resourceConsumed = 0;
   float prodMult = 1.0f;
