@@ -921,6 +921,7 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 0: {
       if (!t.bp) return kTaskFailed;
       if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit)
+      u->unitStates.insert("NoCost");  // (0x5f89c3, before the unit is made; cleared by the task's dtor 0x5f855a)
       u->unitStates.insert("Upgrading");
       // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation)
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
@@ -931,7 +932,10 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       nu->unitStates.insert("BeingUpgraded");
       SetFocus(sim, L, u, nu, t);
       t.state = 1;
-      return kTaskRunning;
+      // CUnitUpgradeTask::TaskTick 0x5f8890 goes on to its next state in the same call (0x5f8afd -> 0x5f8b01):
+      // the first work step is in the beat the unit is made. (Seen: a mex upgrade in the Upgrades replay, the new
+      // unit at 3.2 health in its first beat in the original, 1.0 in ours.)
+      [[fallthrough]];
     }
     case 1: {
       Unit* target = FindUnit(sim, t.targetId);
@@ -2581,6 +2585,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     // CUnitUpgradeTask dtor (0x5f84c0): done -> OnStopBuild(true); otherwise the engine destroys the
     // upgrade unit itself (its ground released, the builder's taken back), then OnStopBuild(false)
     u->unitStates.erase("Upgrading");
+    u->unitStates.erase("NoCost");  // (0x5f855a)
     if (t.completed) {
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
     } else {
