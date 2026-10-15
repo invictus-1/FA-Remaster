@@ -80,8 +80,8 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Experimental units, first set (947 beats) | **none: identical to the end** |
 | Transports and ferries (2,181 beats) | **none: identical to the end** |
 | Air battle (1,176 beats) | **none: identical to the end** |
+| Upgrades (3,216 beats) | beat 3214 |
 | Economy | beat 1780 |
-| Upgrades | beat 1549 |
 | Engineers | beat 1373 |
 | Land battle (2,091 beats) | beat 1251 |
 | Submarines | beat 1136 |

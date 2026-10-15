@@ -2587,6 +2587,8 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     u->unitStates.erase("Upgrading");
     u->unitStates.erase("NoCost");  // (0x5f855a)
     if (t.completed) {
+      // (0x5f859b: the new unit is no longer BeingUpgraded, before OnStopBuild)
+      if (Unit* nu = FindUnit(sim, t.targetId)) nu->unitStates.erase("BeingUpgraded");
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
     } else {
       Unit* target = FindUnit(sim, t.targetId);
