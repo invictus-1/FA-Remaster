@@ -76,6 +76,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and travel in the game's options as `RemasterDayStart`, `RemasterDayLength`, `RemasterWeather`.
   Unless chosen otherwise a game has the map's own light, as the original (Chris's choice). The
   weather is ONE choice, so kinds that exclude each other (rain and snow) cannot be had together.
+  The program's own looks are options of each player instead (Chris, 2026-10-15), in the Video
+  tab of the game's Options menu (`ui/data/hook/lua/options/options.lua`, a hook file):
+  Remastered Effects (on / the original's), Effects Quality (full, three quarters, half), Shell
+  Tracers (on / the original's plain line), Rich Ground on Remastered Maps, Tracks in Snow. They
+  send console commands (`remaster_effects`, `remaster_effects_quality`, `remaster_tracers`,
+  `remaster_rich_ground`, `remaster_snow_tracks`; `ui/user/keymap.cpp`, `LookSettings`) that the
+  game's picture follows at once. The player's saved options take effect at the start, as in
+  the original (its start-up runs `/lua/options/optionslogic.lua`'s `Apply`, FA exe 0x8c6cf0):
+  that needed FAF's `SetInvertMidMouseButton` (its option "Invert pan direction with middle mouse
+  button", now built).
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
   "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is

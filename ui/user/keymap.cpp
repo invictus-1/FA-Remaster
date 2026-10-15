@@ -1,5 +1,6 @@
 #include "user/keymap.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -321,6 +322,23 @@ int l_FlushEvents(lua_State*) { return 0; }
 
 // moho64ui_KeyMapAction(key): the console command bound to a key ("Ctrl-A"), or nil. The host's
 // own function for tests.
+// moho64ui_Looks() -> the program's own looks as they stand (LookSettings; the host's own
+// function for tests).
+int l_LooksForTests(lua_State* L) {
+  const LookSettings& looks = Looks();
+  lua_newtable(L);
+  const char* names[4] = {"remasteredEffects", "tracers", "richGround", "snowTracks"};
+  const bool values[4] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks};
+  for (int i = 0; i < 4; ++i) {
+    lua_pushstring(L, names[i]);
+    lua_pushboolean(L, values[i]);
+    lua_rawset(L, -3);
+  }
+  lua_pushstring(L, "effectsQuality");
+  lua_pushnumber(L, looks.effectsQuality);
+  lua_rawset(L, -3);
+  return 1;
+}
 int l_KeyMapAction(lua_State* L) {
   KeyMap& map = Map(L);
   uint32_t code = 0;
@@ -565,6 +583,21 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     on = a == std::string::npos ? !on : (rest[a] != '0' && rest.compare(a, 5, "false") != 0);
     return;
   }
+  {  // the program's own looks (LookSettings): "<name> <value>", from the Options menu
+    const std::string key = Upper(name);
+    const size_t at = rest.find_first_not_of(" \t");
+    const std::string value = at == std::string::npos ? std::string() : rest.substr(at);
+    const bool on = !value.empty() && value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0;
+    LookSettings& looks = Looks();
+    if (key == "REMASTER_EFFECTS") return void(looks.remasteredEffects = on);
+    if (key == "REMASTER_EFFECTS_QUALITY") {
+      if (!value.empty()) looks.effectsQuality = std::max(0.05f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
+      return;
+    }
+    if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
+    if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
+    if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+  }
   if (Upper(name) == "CAM_SHAKEMULT") {  // the game's option "Shake intensity" sends it (0 to 1)
     if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));
     return;
@@ -632,6 +665,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   SetGlobal(L, "RemoveConsoleOutputReciever", l_RemoveConsoleOutputReciever);
   SetGlobal(L, "FlushEvents", l_FlushEvents);
   lua_register(L, "moho64ui_KeyMapAction", l_KeyMapAction);
+  lua_register(L, "moho64ui_Looks", l_LooksForTests);
   lua_register(L, "moho64ui_LifeBars", l_LifeBars);
 }
 

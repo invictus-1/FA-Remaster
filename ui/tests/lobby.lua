@@ -64,4 +64,22 @@ check("a day takes twenty minutes unless chosen", options.RemasterDayLength.valu
 check("the map's edge has no machinery unless chosen (Chris's choice)", options.RemasterMapEdge.values[options.RemasterMapEdge.default].key, 'beyond')
 check("and the original's frame is the other choice", options.RemasterMapEdge.values[2].key, 'frame')
 
+-- The program's own looks: options of each player in the Options menu's Video tab, applied at
+-- the start (optionslogic.Apply) and when changed.
+local video = {}
+for _, item in import('/lua/options/options.lua').options.video.items do
+    video[item.key] = item
+end
+for _, key in {'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_rich_ground', 'remaster_snow_tracks'} do
+    check("the Video tab has " .. key, video[key] ~= nil and video[key].set ~= nil, true)
+end
+check("the remastered effects are on unless chosen", video.remaster_effects and video.remaster_effects.default, 1)
+check("the options took effect at the start", moho64ui_Looks().remasteredEffects, true)
+video.remaster_tracers.set('remaster_tracers', 0, false)
+check("a look switched off in the menu is off", moho64ui_Looks().tracers, false)
+video.remaster_tracers.set('remaster_tracers', 1, false)
+video.remaster_effects_quality.set('remaster_effects_quality', 0.5, false)
+check("and the effects quality follows", moho64ui_Looks().effectsQuality, 0.5)
+video.remaster_effects_quality.set('remaster_effects_quality', 1, false)
+
 LOG("TEST done: " .. failed .. " failed")

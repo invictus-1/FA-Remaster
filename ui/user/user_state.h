@@ -186,6 +186,19 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float minAtRadius, float seconds);
 // The console's cam_ShakeMult (the game's option "Shake intensity", 0 to 1): how much shake.
 void SetCameraShakeMult(float mult);
+// The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
+// 2026-10-15: "The new looks will go into options menu for each player"). The options send them
+// as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,
+// remaster_rich_ground, remaster_snow_tracks; keymap.cpp), and the game's picture takes them
+// every frame (ui/app/game_session.cpp). One set for the whole program, as the console's are.
+struct LookSettings {
+  bool remasteredEffects = true;  // the visuals track's remastered effects (false: the original's)
+  float effectsQuality = 1.0f;    // the share of particles effects throw out
+  bool tracers = true;            // tank shells' hot tracers (false: the original's plain line)
+  bool richGround = true;         // a remastered map's richer ground
+  bool snowTracks = true;         // units tread tracks into lying snow
+};
+LookSettings& Looks();
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).

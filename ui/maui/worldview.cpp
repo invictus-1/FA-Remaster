@@ -29,6 +29,15 @@
 namespace moho::ui {
 namespace {
 
+// SetInvertMidMouseButton(on): FAF's function (its patched exe) for the option "Invert pan
+// direction with middle mouse button": a drag with the middle button moves the camera the other
+// way. One setting for the whole program.
+bool g_invertMiddlePan = false;
+int l_SetInvertMidMouseButton(lua_State* L) {
+  g_invertMiddlePan = lua_toboolean(L, 1) != 0;
+  return 0;
+}
+
 // --- cameras ---
 
 // The original's camera settings: the defaults of its console variables (FA exe 0xf57fc4 on):
@@ -754,7 +763,8 @@ class WorldView : public Control {
     if (!cameraDrag_) return;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    PanCamera(GetCameraObject(L, cameraName), e.x - lastX_, e.y - lastY_, r.x1 - r.x0);
+    const float turn = g_invertMiddlePan ? -1.0f : 1.0f;  // (the player's option: SetInvertMidMouseButton)
+    PanCamera(GetCameraObject(L, cameraName), (e.x - lastX_) * turn, (e.y - lastY_) * turn, r.x1 - r.x0);
     lastX_ = e.x, lastY_ = e.y;
   }
   // The outline of the ground a building takes at a site, as lines on the ground: a rectangle of
@@ -1479,6 +1489,10 @@ void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float m
   if (seconds > 0) g_pendingShakes.push_back({{at[0], at[1], at[2]}, radius, maxAtMiddle, minAtRadius, seconds});
 }
 void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
+LookSettings& Looks() {
+  static LookSettings looks;
+  return looks;
+}
 
 namespace {
 // moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
@@ -1571,6 +1585,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetGlobal(L, "MapBorderClear", l_MapBorderClear);
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
+  SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);
   PushPrefetchSet(L);

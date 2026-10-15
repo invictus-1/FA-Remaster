@@ -329,6 +329,12 @@ int main(int argc, char** argv) {
   // for every change between front end and game, FA exe 0x885de0).
   auto front = std::make_unique<ui::UserState>(&vfs, cfg);
   bool ok = front->Boot();
+  // The player's options take effect at the start, as in the original (its app start-up runs
+  // /lua/options/optionslogic.lua's Apply: StartupHelpers::OPTIONS_Apply, FA exe 0x8c6cf0, called
+  // at 0x8cf81f): every option's `set` with its saved value (sound volumes, the camera's shake,
+  // the program's own looks). INFERRED: the argument (startup = true).
+  if (ok && !front->RunString("import('/lua/options/optionslogic.lua').Apply(true)", "=(options at start-up)"))
+    Logf(LogLevel::Warning, "moho64ui: the options could not be applied at the start");
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)

@@ -38,6 +38,8 @@ struct GameSession::Picture : WorldSource {
 #ifdef MOHO64UI_WORLD_PICTURE
   render::WorldPicture picture;
   GameSession* session = nullptr;
+  LookSettings lookNow;      // the player's looks as last given to the picture
+  bool lookApplied = false;
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
     render::Camera cam;
@@ -118,6 +120,17 @@ struct GameSession::Picture : WorldSource {
     // Life bars over the player's and his allies' units only, as the original (render request
     // 21), unless the player asks for the enemies' too.
     picture.SetLifeBarsOnEnemies(scene.lifeBarsOnEnemies);
+    // The player's own looks (the Options menu's Video tab), when they change.
+    const LookSettings& looks = Looks();
+    if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
+    if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
+    if (render::World* w = picture.world()) {
+      w->ribbons.tracers = looks.tracers;
+      w->terrain.richGround = looks.richGround;
+      w->tracks.on = looks.snowTracks;
+    }
+    lookNow = looks;
+    lookApplied = true;
     if (session && session->sim_) {
       const int focus = session->sim_->focusArmy + 1;
       std::vector<int> allies;
