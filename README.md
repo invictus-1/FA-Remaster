@@ -73,7 +73,7 @@ The new engine writes the same recording for the same replay, and a tool names t
 the two differ, and what differs. Thirteen replays are compared after every change to the
 simulation; a change that makes any of them differ earlier is not accepted as it is.
 
-First beat on which any unit differs from the original (10 beats = 1 second), 2026-10-14:
+First beat on which any unit differs from the original (10 beats = 1 second), 2026-10-15:
 
 | Replay | First difference |
 |---|---|
@@ -88,7 +88,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Experimental units, second set | beat 586 |
 | Naval battle (1,079 beats) | beat 507 |
 | Skirmish against an AI | beat 467 |
-| Missiles | beat 408 |
+| Missiles | beat 428 |
 | Eight-army AI game | beat 345 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same

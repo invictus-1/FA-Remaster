@@ -1741,12 +1741,11 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
         u->unitStates.erase("Moving");
         t.workId = t.goalId;
-        // aim = the target's bone -1 world transform (Unit::GetBoneWorldTransform 0x6aa5c0): the transform with
-        // local offset (0, SizeY / 2, 0)
+        // aim = the target's bone -1 world transform (Unit::GetBoneWorldTransform 0x6aa5c0): half its SizeY
+        // straight up from its position, in the world's axes (0x6aa637)
         if (Unit* w = FindUnit(sim, t.workId)) {
           float hy = w->bpData ? w->bpData->sizeY * 0.5f : 0.0f;
-          Vec3 o = vm::Rotate(w->orientation, Vec3{0, hy, 0});
-          SetArmAimTarget(sim, u, Vec3{w->position.x + o.x, w->position.y + o.y, w->position.z + o.z});
+          SetArmAimTarget(sim, u, Vec3{w->position.x, w->position.y + hy, w->position.z});
         }
         [[fallthrough]];
       }
@@ -1923,9 +1922,8 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (gap > 10.0f) return kTaskFailed;
       if (!T || T->dead) return kTaskDone;
       GroundFreeRect(sim, u);
-      float hy = T->bpData ? T->bpData->sizeY * 0.5f : 0.0f;  // the arm aims at the target's bone -1
-      Vec3 o = vm::Rotate(T->orientation, Vec3{0, hy, 0});
-      SetArmAimTarget(sim, u, Vec3{T->position.x + o.x, T->position.y + o.y, T->position.z + o.z});
+      float hy = T->bpData ? T->bpData->sizeY * 0.5f : 0.0f;  // the arm aims at the target's bone -1 (0x6aa637: straight up)
+      SetArmAimTarget(sim, u, Vec3{T->position.x, T->position.y + hy, T->position.z});
       u->unitStates.insert("Capturing");
       t.state = 2;
       return kTaskRunning;

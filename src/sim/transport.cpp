@@ -193,10 +193,12 @@ void BoneLocal(const Unit* u, int bone, Vec3* pos, Quat* rot) {
 }
 void BoneWorldT(const Unit* u, int bone, Vec3* pos, Quat* rot) {
   if (bone == -1) {
+    // Unit::GetBoneWorldTransform 0x6aa637: 0x549c20(the unit's transform, the offset) composes them the other way
+    // round from a bone's (the offset is the outer one), so half the SizeY goes straight up, not turned with the unit
     Vec3 lp;
     Quat lr;
     BoneLocal(u, -1, &lp, &lr);
-    *pos = Add(u->position, Rotate(u->orientation, lp));
+    *pos = Add(u->position, lp);
     *rot = u->orientation;
     return;
   }
