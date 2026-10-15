@@ -66,6 +66,7 @@
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
+// --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
 //           x,z[,height] (else where the camera looks) every --fx-repeat seconds (2)
@@ -181,6 +182,7 @@ struct Options {
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
+  float effectsQuality = 1;             // --effects-quality
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -323,6 +325,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
     else if (a == "--fx") o->fx.fx = v;
+    else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--fx-shot") o->fx.shot = v;
     else if (a == "--fx-hit") o->fx.hit = v;
     else if (a == "--fx-repeat") o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
@@ -536,6 +539,7 @@ int main(int argc, char** argv) {
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
+  world.effectsQuality = opt.effectsQuality;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail"};

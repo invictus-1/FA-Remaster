@@ -52,6 +52,20 @@ struct EmitterBlueprint {
   // frame, stopping at the last one or, with TextureGridLoop, starting again; TextureFrameBlend (and
   // every grid) blends each frame into the next instead of stepping.
   bool gridAnimate = false, gridLoop = false, frameBlend = false;
+  // More of the visuals track's (the remastered look's; the original's emitters have none of them):
+  // NormalTexture: smoke and dust lit by the sun and the sky through this normal map (the frame's
+  // place in it as in Texture); RefractionScale: how far a bending particle (blend mode 5, a shock
+  // wave's ring) moves what is behind it, times the original's; CollideGround: a particle that
+  // falls to the ground stops there (sparks, debris); KeepAtLowQuality: thrown out in full at any
+  // effects quality; LightRadius / LightSeconds / LightStrength: the light it throws when started
+  // (by default a short emitter that adds its light throws one sized by its particles; strength 0:
+  // none).
+  std::string normalPath;
+  gfx::Texture normals;
+  float refractionScale = 1;
+  bool collideGround = false, keepAtLowQuality = false;
+  float lightRadius = 0, lightSeconds = 0, lightStrength = 1;
+  float largestSize = 0;  // the largest size its size curves give (for the light it throws)
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -120,6 +134,22 @@ class Particles {
   bool Bending() const { return bending_; }
   void DrawBending(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
 
+  // The effects quality setting: the share of particles emitters throw out (1 all; 0.5 for a slower
+  // card), but for those whose blueprint says KeepAtLowQuality.
+  float quality = 1;
+  // The light of flashes and explosions (the remastered look's): what emitters started lately throw.
+  // The world turns each into a small light, fading over its time; `color` it fills in from `ramp`
+  // the first time (colored).
+  struct Flash {
+    Vec3 position;
+    double born = 0;
+    float seconds = 0.3f, radius = 4, strength = 1;
+    std::string ramp;
+    Vec3 color;
+    bool colored = false;
+  };
+  std::vector<Flash> flashes;
+  double Now() const { return now_; }
   // The modern look: how much brighter than its texture a particle that adds its light is (it is
   // light, and the picture's last pass brings it back into what a screen shows).
   float glow = 2.5f;

@@ -96,6 +96,9 @@ class World {
   // has made some, effect_files.h): a player's choice, remastered at first (Chris, 2026-10-15).
   enum class EffectsLook { Original, Remastered };
   EffectsLook effectsLook = EffectsLook::Remastered;
+  // The effects quality setting: the share of their particles effects throw out (1 all, 0.5 for a
+  // slower card; what an emitter's blueprint marks KeepAtLowQuality is thrown out in full).
+  float effectsQuality = 1;
   // Life bars go over the units of the army the picture is for and of its allies (bit n of
   // `alliedArmies`: army n, counted from 0), as the original's; over the enemy units the army sees
   // now only with `lifeBarsOnEnemies` (the console's ui_ForceLifbarsOnEnemy, FAF's "Always Show
