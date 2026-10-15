@@ -423,6 +423,18 @@ namespace {
 BuildTask* NewChild(Sim& sim, CommandType type, const char* order);
 bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4], int spacing = 0);
 
+// CUnitReclaimTask ctor 0x61eb60 (0x61ecde..0x61ecf0; reached only through IssueReclaimTask 0x61ef60, which makes
+// the task only for a live entity): the builder's navigator (unit+0x54c) gets vt+0x10 = AbortMove 0x5a3750,
+// whatever it is doing. An idle navigator whose steering still holds a brake spline makes that spline afresh from
+// the speed and facing of now (MakeIdle -> SetWaypoints(0, 0) -> CAiPathSpline::Update(3)) and hands out its first
+// point at once. Seen (Skirmish 471): an engineer braking after its Move was cleared at 470 gets a mobile build
+// whose site has a tree group on it; the reclaim child made in state 0 at 471 rebuilds the brake: the original moves
+// 0.1107 in motion 471 (0.1512 laid along its pitched facing, 0.1487, less the brake 0.0380), not the old spline's
+// second point 0.1132.
+void ReclaimTaskAbortMove(Unit* u) {
+  if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+}
+
 // A prop blueprint's float field (default when missing).
 float PropBpNum(Sim& sim, lua_State* L, const BlueprintInfo& bp, const char* sect, const char* key, float def) {
   int top = lua_gettop(L);
@@ -755,6 +767,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (Entity* p = FindSiteProp(sim, L, u, t)) {  // 0x5f6ea0: clear the site first
         BuildTask* c = NewChild(sim, CommandType::Reclaim, "Reclaim");
         c->goalId = EntityRef(p);
+        ReclaimTaskAbortMove(u);  // (the reclaim task's ctor)
         t.sub = c;
         t.subFrom = sim.tick() + 1;
         return kTaskRunning;
@@ -2187,9 +2200,9 @@ BuildTask* MakeRepairChild(Sim& sim, Unit* u, Unit* target, bool silo) {
   return t;
 }
 BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target) {
-  (void)u;
   BuildTask* t = NewChild(sim, CommandType::Reclaim, "Reclaim");
   t->goalId = EntityRef(target);
+  ReclaimTaskAbortMove(u);  // (the reclaim task's ctor)
   return t;
 }
 
@@ -2345,6 +2358,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         GuardAbort(U);
         child = NewChild(sim, CommandType::Reclaim, "Reclaim");
         child->goalId = G->focusId;
+        ReclaimTaskAbortMove(U);  // (the reclaim task's ctor: a second AbortMove, as in the original)
         break;
       }
       if (Unit* c = AssistCandidate(sim, U, g)) {
@@ -2431,6 +2445,8 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->order = "Reclaim";
       t->goalId = c.targetId;
       if (!c.targetId) t->site = c.pos;
+      if (c.targetId && sim.FindEntity(c.targetId))
+        ReclaimTaskAbortMove(u);  // (the reclaim task's ctor: DispatchTask 0x60989c -> IssueReclaimTask 0x61ef60)
       break;
     case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus
       if (!c.targetId) return nullptr;
