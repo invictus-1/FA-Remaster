@@ -1104,6 +1104,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (a nuke's ball of fire is drawn by its age)
       const bool fire = !model->lods.empty() && model->lods[0].nuke;
       if (left > 0) meshes.Add(model, at, fire ? Vec3{p.age, 0, 0} : Vec3{1, 1, 1}, left);
+      // a remastered missile's engine lights the ground under it (its lights list, as a unit's lamps)
+      if (left > 0 && !model->lights.empty()) AddLamps(model, position, orientation, nullptr, nullptr);
     } else if (!effects.OnEntity(p.id)) {
       const Vec3 velocity{p.velocity[0], p.velocity[1], p.velocity[2]};
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
