@@ -199,8 +199,8 @@ int l_CreateUnitHPR(lua_State* L) {
 }
 
 // FlattenMapRect(x, z, sizeX, sizeZ, elevation) 0x74b120: the grid vertices [x, x+sx] x [z, z+sz] take
-// the elevation (truncated to the height scale); structures standing there (Land / Seabed, no motion)
-// are warped to the new ground, moving units re-snap.
+// the elevation (truncated to the height scale); the units standing there (Land / Seabed) take the new ground:
+// structures (no motion) are warped to it, units with a motion snap to it in their next motion tick.
 int l_FlattenMapRect(lua_State* L) {
   Sim& sim = *S(L);
   TerrainMap* m = sim.mutableMap();
@@ -211,12 +211,14 @@ int l_FlattenMapRect(lua_State* L) {
   for (int j = z; j <= std::min(z + sz, m->height()); ++j)
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
   AirTerrainChanged(m, x, z, x + sx, z + sz);
-  for (Unit* u : sim.units()) {
-    if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
-    if (!u->motion.bp || u->motion.bp->motionType == kMotionNone) continue;  // (below)
-    if (u->position.x < x - 1 || u->position.x > x + sx + 1 || u->position.z < z - 1 || u->position.z > z + sz + 1) continue;
-    u->motion.needSnap = true;
-  }
+  // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
+  // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground
+  // (0x6c31b7 / 0x6c2e9f) although it stands still. Seen (Economy 1804): FAF's FlattenGradientMapRect flattens an
+  // Aeon land factory's skirt vertex by vertex (rows z 426..434); support commander 39 stands still at z 435.27,
+  // 1.27 past the last row: inside the box of that row's flattenings (z 432..436) but more than 1 from them (the
+  // old selection here: centre within 1 of the rect), and the original's re-snap lifts it 0.006 (its size
+  // box's back corners stand in the cell the row 434 bounds). Before, motion+0x90 alone did not snap in ours (only
+  // with a move or needSnap), which is why setting it here alone had changed Economy at 959.
   // A unit without a motion is Warped to where it stands (0x74b363: IUnit::GetTransform, then the entity's Warp,
   // Unit::Warp 0x6aa310: the layer from Entity::GetStartingLayer for the place, the height from CalcSpawnElevation,
   // SetCurrentLayer), when it is not dead nor being destroyed (IUnit vt+0x28 / +0x2c) and is on Land or the Seabed
@@ -249,10 +251,16 @@ int l_FlattenMapRect(lua_State* L) {
       if (!ShapeOverlapsOBox(ws, centre, axes, half)) continue;
       warp.push_back(u);
     }
-    static const bool dbg = getenv("MOHO64_DEBUG_FLATTEN") != nullptr;  // every unit the flattening warps
+    static const bool dbg = getenv("MOHO64_DEBUG_FLATTEN") != nullptr;  // every unit the flattening warps or marks
     for (Unit* u : warp) {
       if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
-      if (u->motion.bp && u->motion.bp->motionType != kMotionNone) continue;
+      if (u->motion.bp && u->motion.bp->motionType != kMotionNone) {
+        u->motion.surfaceNext = true;  // motion+0x90 = 1
+        if (dbg)
+          Logf(LogLevel::Info, "flatten %u rect %d %d %d %d: unit %u (%s) at %.4f %.4f: motion+0x90", sim.tick(), x, z, sx, sz,
+               u->id, u->blueprint ? u->blueprint->id.c_str() : "?", u->position.x, u->position.z);
+        continue;
+      }
       const std::string oldLayer = u->layer;
       const float oldY = u->position.y;
       sim.WarpUnit(L, u, u->position, u->orientation);
