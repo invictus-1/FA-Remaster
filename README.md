@@ -83,10 +83,10 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Upgrades (9,014 beats) | **none: identical to the end** |
 | Missiles (6,649 beats) | **none: identical to the end** |
 | Engineers | beat 2370 |
-| Economy | beat 2008 |
+| Economy | beat 2278 |
+| Land battle (2,091 beats) | beat 1484 |
+| Submarines | beat 1399 |
 | Experimental units, second set | beat 1311 |
-| Land battle (2,091 beats) | beat 1307 |
-| Submarines | beat 1136 |
 | Eight-army AI game | beat 679 |
 | Skirmish against an AI | beat 533 |
 | Naval battle (1,079 beats) | beat 519 |

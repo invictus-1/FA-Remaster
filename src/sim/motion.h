@@ -50,6 +50,7 @@ struct MotionBlueprint {
   int motionType = kMotionNone;
   float maxSpeed = 0, maxSpeedReverse = 0, maxAccel = 0, maxBrake = 0, maxSteerForce = 0;
   float bankingSlope = 0, wobbleFactor = 0, wobbleSpeed = 0;  // Physics +0x3c, +0x48, +0x4c (hover)
+  float rollStability = 0, rollDamping = 0;  // Physics +0x40, +0x44 (registered 0x520be3 / 0x520bfb): CalcRollHack
   float turnRadius = 0, turnRate = 0, turnFacingRate = 0;
   float elevation = 0;
   float diveSurfaceSpeed = 1;         // Physics.DiveSurfaceSpeed (P+0x24)
@@ -172,6 +173,12 @@ struct UnitMotion {
   // elevation (u+0x428+0x30; Physics.Elevation until Unit:SetElevation)
   float depth = 0, depthStep = 0, elevationAttr = 0;
   int targetLayer = 0, vertEvent = 0;
+  // CalcRollHack 0x6c1350 (SnapToWater 0x6c1cb0's up axis): m+0x68 the dive / surfacing pitch, m+0xcc the roll's
+  // velocity (written only there and by AddRecoilImpulse 0x6b89b0, Unit:RecoilImpulse); the roll's offset is m+0xc0,
+  // the field the hover's lean uses (hoverLean). committedOri: the orientation as the beat began (the committed
+  // transform IUnit::GetTransform 0x6a49c0 returns, u+0xa4), whose forward axis the pitch leans against.
+  Vec3 diveTilt, rollVel;
+  Quat committedOri;
   // m+0x7c: the horizontal event of a non-flying unit (0 Cruise, 1 TopSpeed, 2 Stopping, 3 Stopped), which
   // scripts hear as OnMotionHorzEventChange (ProcessCommonMotionState 0x6c2a40)
   int horzEvent = 3;

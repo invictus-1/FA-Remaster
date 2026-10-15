@@ -350,11 +350,22 @@ bool HasTarget(Sim& sim, const AiTarget& t) {
   Entity* e = TargetEntity(sim, t);
   if (!e) return false;
   if (e->kind == Entity::Kind::Unit) {
-    // (a blip taken after its unit died: the blip itself is asked, 0x5e2a5a, and it is not dead while it exists)
-    if (t.viaBlip && t.pastDeath) return static_cast<const Unit*>(e)->blip != nullptr;
+    // A target held as the army's recon BLIP (a player's order, or a blip a weapon took after its unit died): the
+    // blip itself is asked (0x5e2a5a: its +0x99, which only Entity::Kill 0x679a80 sets, and nothing kills a blip),
+    // so it lasts as long as the blip, past its unit's death; EntityLost says that unit is dead. Seen (Subs 1240):
+    // two torpedo bombers ordered onto a submarine that died at 1239 kept the dead sub's blip at 1240 (the
+    // weapon reports 4 = lost, the order ends) and only auto-attacked the next sub at 1242, when SetDesiredTarget's
+    // two-beat wait was over; ours took the next sub at 1240.
+    if (t.viaBlip) return static_cast<const Unit*>(e)->blip != nullptr;
     return !e->dead;
   }
   return true;
+}
+// CAiTarget::EntityLost 0x5e2db0: the entity behind the target (a blip's unit, GetEntity 0x5e2ce0) is killed (+0x99)
+bool EntityLost(Sim& sim, const AiTarget& t) {
+  if (t.type != 1) return false;
+  const Entity* e = TargetEntity(sim, t);
+  return e && e->dead;
 }
 
 }  // namespace combat
@@ -1393,7 +1404,8 @@ bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
     const Entity* f = sim.FindEntity(c.targetFakeId);
     return !f || f->destroyQueued;
   }
-  if (e && c.targetViaBlip && c.targetPastDeath && e->kind == Entity::Kind::Unit)
+  // (a player's order names the army's blip: it stands while the blip does, also after its unit died)
+  if (e && c.targetViaBlip && e->kind == Entity::Kind::Unit)
     return e->destroyQueued || !static_cast<const Unit*>(e)->blip;
   return !e || e->dead || e->destroyQueued;
 }
@@ -1432,7 +1444,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   bool reporter = (dHas && tw) ? (w == tw) : (w == prim);
   int tc = dHas ? TargetStatus(sim, w, d) : 3;
   int code;
-  if (!dHas) code = 4;
+  if (!dHas || EntityLost(sim, d)) code = 4;  // (0x5d8fca: EntityLost 0x5e2db0, then HasTarget)
   else if (LeashOrInvisible(sim, u) || TargetExempt(u, TargetEntity(sim, d))) code = 5;
   else if (w->suppress != 0 || !w->canReach) code = 6;
   else if (tc == 0 && !CanAttackTarget(sim, w, d)) code = 3;
@@ -2409,7 +2421,7 @@ bool CanFlyU(const Unit* u) { return u->motion.bp && u->motion.bp->canFly; }
 // CAiTarget::HasTarget 0x5e2a10 as the attack task asks it of its own target. A player's order holds the army's
 // recon BLIP of the enemy (CommandTarget: viaBlip), and of a blip HasTarget asks the blip itself (0x5e2a5a: its
 // +0x99, which only Entity::Kill 0x679a80 sets - Unit::Kill's call, and slot 31 - and nothing kills a blip): the
-// order's target lasts as long as the blip, past its unit's death. (The weapons keep HasTarget's own rule.)
+// order's target lasts as long as the blip, past its unit's death. (HasTarget itself now says the same.)
 bool TaskHasTarget(Sim& sim, const AiTarget& t) {
   if (t.type == 1 && t.viaBlip && !t.fakeId)
     if (Entity* e = TargetEntity(sim, t); e && e->kind == Entity::Kind::Unit)

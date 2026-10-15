@@ -989,17 +989,17 @@ void LandNavTickAll(Sim& sim) {
   double t1 = prof ? NowS() : 0;
   T.WorkAll(0);
   double t2 = prof ? NowS() : 0;
+  // A search that ends the move (state 1, Failed: an empty first path, a continuation blocked after its
+  // retries, the same dead end twice) only sets the path state here: OnEvent 0x5aeeb0 writes +0xc = 1 and
+  // returns (0x5af004, 0x5af17a, 0x5af1fb; it never calls the broadcaster 0x5a6c50, whose only land caller is
+  // Execute 0x5a4409). The move task hears of it from the NEXT beat's Execute (0x5a43d4: state <= 1 -> the
+  // steering's stop, MakeIdle, event 0 / 2), so the command thread wakes one beat later (Economy 2006/2007,
+  // the oracle's wn lines of unit 0x27: its new goal comes in beat 2007).
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     LandNav* n = Nav(u);
     if (!n || !n->active || !n->pf.delivered) continue;
     OnPath(sim, u, *n);
-    if (n->state < 2) {
-      n->active = false;
-      n->hasTarget = false;
-      u->unitStates.erase("PathFinding");
-      MotionNavDone(u, n->state == 0);
-    }
   }
   if (prof) {
     double t3 = NowS();

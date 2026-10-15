@@ -445,6 +445,8 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
       m.bankingSlope = GetNum(L, p, "BankingSlope", 0);
       m.wobbleFactor = GetNum(L, p, "WobbleFactor", 0);
       m.wobbleSpeed = GetNum(L, p, "WobbleSpeed", 0);
+      m.rollStability = GetNum(L, p, "RollStability", 0);
+      m.rollDamping = GetNum(L, p, "RollDamping", 0);
       m.turnRadius = GetNum(L, p, "TurnRadius", 0);
       m.turnRate = GetNum(L, p, "TurnRate", 0);
       m.turnFacingRate = GetNum(L, p, "TurnFacingRate", 0);
@@ -536,6 +538,7 @@ float PlatformHeight(const Unit* P, float x, float z) {
 
 namespace {
 void AlignUp(Quat& q, Vec3 n);
+Vec3 RollHack(Unit* u);
 }
 
 void SnapUnit(const Sim& csim, Unit* u) {
@@ -548,6 +551,14 @@ void SnapUnit(const Sim& csim, Unit* u) {
     // SnapToWater 0x6c1cb0: at water + depth, but never closer than 0.25 to the bottom; a submerged unit stays
     // under the surface and its depth follows the bottom
     UnitMotion& m = u->motion;
+    // SnapToWater's first call is CalcRollHack 0x6c1350 (0x6c1cea), its last COORDS_Tilt 0x50b820 (0x6c1e06): the
+    // transform's up axis is turned onto the roll's and the dive's up vector (level (0, 1, 0) for a ship that
+    // neither rolls nor dives). Seen: a surfacing T2 submarine standing still (Subs, unit 8 at 1136-1205) pitched
+    // its bow up by up to 19 degrees, and down when it dived again (1231-1300); ours stayed level. (Not for the
+    // ground end of a layer blend, which SnapToGround makes in the original.)
+    const bool tilt = !m.snapTerrain && u->layer != "Land" && u->layer != "Seabed";
+    Vec3 up{};
+    if (tilt) up = RollHack(u);
     const float water = map->hasWater ? map->waterElevation : -10000.0f;
     float y = map->TerrainHeight(u->position.x, u->position.z) + 0.25f;
     if (water + m.depth > y) y = water + m.depth;
@@ -556,6 +567,7 @@ void SnapUnit(const Sim& csim, Unit* u) {
       m.depth = y - water;
     }
     u->position.y = y;
+    if (tilt) AlignUp(u->orientation, up);
     return;
   }
   if (b.motionType == kMotionAir) return;
@@ -1536,6 +1548,41 @@ void AlignUp(Quat& q, Vec3 n) {
   o.z = ((q0 * rz + q3 * rw) + q2 * rx) - q1 * ry;
   q = o;
 }
+// CUnitMotion::CalcRollHack 0x6c1350: the up vector SnapToWater tilts a ship or a submarine to.
+// The roll: velocity B (m+0xcc) and offset A (m+0xc0) lose their y; B *= 1 - RollDamping; A += B;
+// B -= A x RollStability (only Unit:RecoilImpulse ever starts it). The dive pitch C (m+0x68): v from the
+// COMMITTED transform's forward axis F (rows of 0x4ec590: F = (2(wy + xz), ., 1 - 2(xx + yy))) and this beat's
+// depth step s (m+0x60, HandleDivingAndSurfacing ran first): MovingUp (state 11) v = (-F.x, -0, -F.z) x s x 4,
+// MovingDown (state 10) v = (F.x, 0, F.z) x s x 4, else 0; C = C x 0.75 + v x 0.25. Up = A + (0, 1, 0) + C,
+// normalised by 0x452af0 (and again by COORDS_Tilt).
+Vec3 RollHack(Unit* u) {
+  UnitMotion& m = u->motion;
+  const MotionBlueprint& b = *m.bp;
+  Vec3& A = m.hoverLean;
+  Vec3& B = m.rollVel;
+  A.y = 0.0f;
+  B.y = 0.0f;
+  const float keep = 1.0f - b.rollDamping;
+  B = {B.x * keep, B.y * keep, B.z * keep};
+  A = {A.x + B.x, B.y + A.y, B.z + A.z};
+  const float k = b.rollStability;
+  B = {B.x - A.x * k, B.y - A.y * k, B.z - A.z * k};
+  Vec3 v{0.0f, 0.0f, 0.0f};
+  const bool up = u->unitStates.count("MovingUp") != 0;
+  if (up || u->unitStates.count("MovingDown")) {
+    const Quat& q = m.committedOri;
+    const float f6 = (q.w * 2.0f) * q.y + (q.z * 2.0f) * q.x;           // 0x4ec590: m[6]
+    const float f8 = 1.0f - ((q.y * 2.0f) * q.y + (q.x * 2.0f) * q.x);  // m[8]
+    const float s = m.depthStep;
+    if (up) v = {((-0.0f - f6) * s) * 4.0f, (s * -0.0f) * 4.0f, ((-0.0f - f8) * s) * 4.0f};
+    else v = {(f6 * s) * 4.0f, (s * 0.0f) * 4.0f, (f8 * s) * 4.0f};
+  }
+  Vec3& C = m.diveTilt;
+  C = {v.x * 0.25f + C.x * 0.75f, v.y * 0.25f + C.y * 0.75f, v.z * 0.25f + C.z * 0.75f};
+  Vec3 n{C.x + A.x, C.y + (A.y + 1.0f), C.z + A.z};
+  NormalizeExe(n);
+  return n;
+}
 // SnapToGround 0x6c1610 for MotionType 7: corners from the transform as it is (tilted by last beat's snap
 // unless the move just rebuilt it), surface heights, normal + wobble + lean, then AlignUp
 void HoverSnap(Sim& sim, Unit* u) {
@@ -1669,6 +1716,7 @@ void MotionTick(Sim& sim, Unit* u) {
     return;
   }
   Vec3 start = u->position;
+  m.committedOri = u->orientation;  // (CalcRollHack reads the committed transform, u+0xa4)
   const MotionBlueprint& b = *m.bp;
   bool moved = false;
   bool common = false;  // CalcMoveCommon's result (for ProcessCommonMotionState)
@@ -1849,7 +1897,11 @@ void MotionTick(Sim& sim, Unit* u) {
       // in a transport's beam, whose task places it), or when motion+0x90 asks for it: 0x6c31b7 tests m+0x90 on its
       // own, so a unit standing still snaps too (a flattening under it, 0x74b35a), and clears it (0x6c31fa)
       const bool beamed = u->unitStates.count("Teleporting") > 0 && !m.surfaceNext;
-      if (((moved || m.needSnap) && !beamed) || diving || (landCalc && m.surfaceNext)) {
+      // CalcMoveWater 0x6c3523: a unit that neither moved nor dives is still set on the water while its dive pitch
+      // (m+0x68, CalcRollHack) dies away: |pitch|^2 > 1e-6 (so a surfaced submarine keeps a last trace of it)
+      const Vec3& C = m.diveTilt;
+      const bool pitched = !landCalc && ((C.x * C.x + C.y * C.y) + C.z * C.z) > 9.99999997e-07f;
+      if (((moved || m.needSnap) && !beamed) || diving || (landCalc && m.surfaceNext) || pitched) {
         SnapUnit(sim, u);
         m.needSnap = false;
       }
