@@ -380,6 +380,7 @@ float World::GroundHeight(float x, float z) const {
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = effectsLook == EffectsLook::Remastered;
+  particles.quality = effectsQuality;
   camera = cam;
   time_ = time;
   clock_ = clock;
@@ -1116,6 +1117,19 @@ void World::Render() {
   tracksCovering_ = 0;
   CpuTimes::Part("lights and lamp shadows placed");
   lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
+  // the light of flashes and explosions (the remastered look's: particles.h, Flash), fading over its time
+  for (Particles::Flash& f : particles.flashes) {
+    const float age = static_cast<float>(clock_ - f.born) / std::max(f.seconds, 1e-3f);
+    if (age < 0 || age >= 1) continue;
+    if (!f.colored) {
+      const Vec3 c = lights.RampGlow(f.ramp);
+      const float most = std::max({c.x, c.y, c.z, 1e-3f});
+      f.color = c * (std::min(most * 3, 1.0f) / most);  // (as bright as its colour is strong, in its own hue)
+      f.colored = true;
+    }
+    const float fade = (1 - age) * (1 - age);
+    lights.Add(f.position + Vec3{0, 0.6f, 0}, f.radius, f.color * (1.6f * f.strength * fade * lights.night));
+  }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   {  // the bones of posed models, once for all the frame's passes
     std::vector<const View*> views{&view};

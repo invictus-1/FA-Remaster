@@ -83,6 +83,9 @@ class WorldPicture {
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.
   void SetRemasteredEffects(bool on);
+  // The effects quality setting: the share of their particles effects throw out (1, as at first, all;
+  // 0.5 for a slower card). A player's option.
+  void SetEffectsQuality(float share);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).

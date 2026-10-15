@@ -34,11 +34,14 @@ cbuffer ParticleSet : register(b1) {
   float4 meeting;       // x: over how many world units a particle fades where it meets something solid
   float4 grid;          // x: 1 = frames run across the whole grid, y: 1 = and start again after the last,
                         // z: frames in the grid, w: 1 = each frame blends into the next
+  float4 extra;         // x: 1 = lit through a normal map, y: how far it bends what is behind (x the
+                        // original's), z: 1 = it stops on the ground (the row's last number: its height)
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
 Texture2D rampTexture : register(t1);
 Texture2D behindTexture : register(t2);  // (bending particles only)
+Texture2D particleNormals : register(t4);  // (lit particles only)
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t3);
 #else
@@ -50,6 +53,8 @@ struct VOut {
   float2 uv : TEXCOORD0;
   float2 rampUv : TEXCOORD1;
   float3 next : TEXCOORD3;  // the next frame's place in the texture, and how far toward it (blended frames)
+  float3 across : TEXCOORD4;  // the texture's right and down in the world (lit particles)
+  float3 down : TEXCOORD5;
   float3 world : TEXCOORD2;
 };
 
@@ -63,6 +68,8 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.uv = 0;
   o.rampUv = 0;
   o.next = 0;
+  o.across = float3(1, 0, 0);
+  o.down = float3(0, 0, 1);
   if (t < 0 || age >= 1) return o;  // not thrown yet, or over: a quad of no size
 
   const float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(1, 1), float2(-1, -1), float2(1, 1), float2(-1, 1)};
@@ -77,6 +84,23 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
     } else {
       position += p1.xyz * t + 0.5 * p2.xyz * t * t;
       flight = p1.xyz + p2.xyz * t;
+      if (extra.z > 0.5) {
+        // stops where its fall meets the ground: p0.y + v t + a t^2 / 2 = ground
+        float qa = 0.5 * p2.y, qb = p1.y, qc = p0.y - p4.w, hit = -1;
+        if (abs(qa) < 1e-5) {
+          if (qb < 0) hit = -qc / qb;
+        } else {
+          float disc = qb * qb - 4 * qa * qc;
+          if (disc >= 0) {
+            float s = sqrt(disc), r1 = (-qb - s) / (2 * qa), r2 = (-qb + s) / (2 * qa);
+            hit = min(r1 > 0 ? r1 : 1e9, r2 > 0 ? r2 : 1e9);
+          }
+        }
+        if (hit > 0 && hit < 1e8 && t > hit) {
+          position = p0.xyz + p1.xyz * hit + 0.5 * p2.xyz * hit * hit;
+          flight = p1.xyz + p2.xyz * hit;
+        }
+      }
     }
   }
   float size = p3.y + p3.z * t;
@@ -85,12 +109,16 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
     float3 along = normalize(flight + float3(0, 1e-5, 0));
     float3 across = normalize(cross(along, cameraPosition - position));
     position += (across * corner.x + along * corner.y) * size;
+    o.across = across;
+    o.down = along;
   } else {
     float s, c;
     sincos(p0.w + p1.w * t, s, c);
     float2 turned = float2(corner.x * c - corner.y * s, corner.x * s + corner.y * c);
-    if (cameraUp.w > 0.5) position += (turned.x * float3(1, 0, 0) + turned.y * float3(0, 0, 1)) * size;
-    else position += (turned.x * cameraRight.xyz + turned.y * cameraUp.xyz) * size;
+    float3 r = cameraUp.w > 0.5 ? float3(1, 0, 0) : cameraRight.xyz, u = cameraUp.w > 0.5 ? float3(0, 0, 1) : cameraUp.xyz;
+    position += (turned.x * r + turned.y * u) * size;
+    o.across = c * r + s * u;
+    o.down = -s * r + c * u;
   }
   o.position = mul(viewProj, float4(position, 1));
   o.world = position;
@@ -165,7 +193,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // how much of that shows, by the texture's alpha and the ramp's
     float4 bend = Frame(i);
     float shows = bend.a * rampTexture.Sample(samplerLinearClamp, i.rampUv).a;
-    float2 at = i.position.xy * viewport.zw + 0.005 * (2 * bend.rg - 1);
+    float2 at = i.position.xy * viewport.zw + 0.005 * extra.y * (2 * bend.rg - 1);
     return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, shows * meets);
   }
   float4 c = Frame(i) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
@@ -174,6 +202,19 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // the modern look's picture is linear light; what adds its light is given more of it, to glow
     // (what does not add light, smoke and dust, is lit by the day: darker in a computed night)
     c.rgb = pow(max(c.rgb, 0), 2.2) * (options.z > 1.5 && options.z < 2.5 ? options.w * (falling.w > 0 ? falling.w : 1) : skyZenith.w > 0.5 ? skyGlow.w : 1);
+    [branch] if (extra.x > 0.5 && (options.z < 0.5 || options.z > 2.5)) {
+      // smoke and dust lit through its normal map: the sun on the side that faces it (softly: smoke
+      // lets light through), the sky from above, around the brightness it had unlit
+      float3 t = particleNormals.Sample(samplerLinear, i.uv).xyz * 2 - 1;
+      float3 out_ = normalize(cross(i.down, i.across));
+      if (dot(out_, cameraPosition - i.world) < 0) out_ = -out_;
+      float3 n = normalize(i.across * t.x - i.down * t.y + out_ * max(t.z, 0.05));
+      float sunSide = saturate((dot(n, sunDirection) + 0.35) / 1.35);
+      float3 sunTint = pow(max(sunColor, 0.001), 2.2);
+      sunTint /= max(max(sunTint.r, sunTint.g), max(sunTint.b, 1e-3));
+      float above = saturate(n.y * 0.5 + 0.5);
+      c.rgb *= 0.45 + 0.85 * sunSide * sunTint + 0.25 * above;
+    }
     if (weather.z > 0) {  // thick air between it and the eye: its own light is lost in it, its colour goes to the air's
       float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
       c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor() * (options.z > 2.5 ? c.a : 1), lost);
@@ -293,6 +334,13 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   bp->gridAnimate = Flag(v["TextureGridAnimate"], false);
   bp->gridLoop = Flag(v["TextureGridLoop"], false);
   bp->frameBlend = Flag(v["TextureFrameBlend"], false) || bp->gridAnimate;
+  bp->normalPath = v["NormalTexture"].StringOr(std::string());
+  bp->refractionScale = Number(v["RefractionScale"], 1);
+  bp->collideGround = Flag(v["CollideGround"], false);
+  bp->keepAtLowQuality = Flag(v["KeepAtLowQuality"], false);
+  bp->lightRadius = Number(v["LightRadius"], 0);
+  bp->lightSeconds = Number(v["LightSeconds"], 0);
+  bp->lightStrength = Number(v["LightStrength"], 1);
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
   bp->lodCutoff = std::max(0.0f, Number(v["LODCutoff"], 0));
   bp->texturePath = v["Texture"].StringOr(std::string());
@@ -313,6 +361,9 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   for (const Vec3& key : bp->particleLifetime.keys) bp->longestLife = std::max(bp->longestLife, key.y + std::fabs(key.z) * 0.5f);
   bp->texture = textures_->Get(EffectFile(*vfs_, bp->texturePath, remastered), textures_->White());
   bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(EffectFile(*vfs_, bp->rampPath, remastered), textures_->White());
+  bp->normals = bp->normalPath.empty() ? textures_->FlatNormal() : textures_->Get(EffectFile(*vfs_, bp->normalPath, remastered), textures_->FlatNormal());
+  for (const EmitterCurve* c : {&bp->size, &bp->startSize, &bp->endSize})
+    for (const Vec3& key : c->keys) bp->largestSize = std::max(bp->largestSize, key.y + std::fabs(key.z) * 0.5f);
   bp->ok = true;
   return bp;
 }
@@ -346,6 +397,21 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.started = startedAt >= 0 ? startedAt : now_;
   index_[e.id] = emitters_.size();
   emitters_.push_back(e);
+  // the remastered look: a flash or an explosion lights what is around it for a moment. By
+  // default a short emitter (three seconds at most) whose particles add their light, as large as
+  // they are; the blueprint may say otherwise (LightRadius, LightSeconds, LightStrength)
+  const bool adds = (bp->blendMode == 2 || bp->blendMode == 3) && !bp->rampPath.empty();
+  const bool brief = bp->lifetime > 0 && bp->lifetime <= 30;
+  if (remastered && bp->lightStrength > 0 && (bp->lightRadius > 0 || (adds && brief)) && flashes.size() < 400) {
+    Flash f;
+    f.position = position;
+    f.born = e.started;
+    f.radius = bp->lightRadius > 0 ? bp->lightRadius * scale : std::clamp(bp->largestSize * scale * 3.0f, 1.5f, 14.0f);
+    f.seconds = bp->lightSeconds > 0 ? bp->lightSeconds : std::clamp(bp->longestLife * kTick, 0.12f, 0.8f);
+    f.strength = bp->lightStrength;
+    f.ramp = EffectFile(*vfs_, bp->rampPath, remastered);
+    flashes.push_back(std::move(f));
+  }
   return e.id;
 }
 
@@ -458,7 +524,8 @@ void Particles::Emit(Emitter* emitter, int tick) {
     curve->At(x, &value, &spread);
     return value + (Random() - 0.5f) * spread;
   };
-  const float wanted = std::max(0.0f, read(bp.emitRate)) + emitter->carry;
+  const float share = bp.keepAtLowQuality ? 1.0f : std::clamp(quality, 0.0f, 1.0f);
+  const float wanted = std::max(0.0f, read(bp.emitRate)) * share + emitter->carry;
   const int count = static_cast<int>(wanted);
   emitter->carry = wanted - static_cast<float>(count);
   const double tickStart = emitter->started + static_cast<double>(tick) * kTick;
@@ -522,7 +589,7 @@ void Particles::Emit(Emitter* emitter, int tick) {
     p.stripV = animated ? std::floor(read(bp.textureSelection)) / static_cast<float>(bp.stripCount) : 0;
     p.rampV = read(bp.rampSelection);  // (as it is: the ramp texture is read at this height, held at its edges)
     p.drag = bp.resistance ? std::max(0.0f, read(bp.resistanceCurve)) / kTick : 0;
-    p.unused = 0;
+    p.unused = bp.collideGround ? (groundHeight_ ? groundHeight_(position.x, position.z) : emitter->position.y) : 0;
     emitter->set->particles.push_back(p);
   }
   emitter->positionBefore = emitter->position;
@@ -539,6 +606,8 @@ void Particles::Update(double now, const View* view) {
   const auto t0 = std::chrono::steady_clock::now();
   now_ = now;
   quietEmitters = 0;
+  flashes.erase(std::remove_if(flashes.begin(), flashes.end(), [now](const Flash& f) { return now - f.born > f.seconds || now < f.born - 1; }),
+                flashes.end());
   for (Emitter& e : emitters_) {
     // every whole tick of the emitter's own time that has begun, up to its lifetime
     const int due = static_cast<int>((now - e.started) / kTick) + 1;
@@ -632,16 +701,18 @@ void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind, gf
     }
     // which of the original's vertex paths: Align, else AlignToBone (Flat with Flat), else Flat, else plain
     const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
-    const float constants[24] = {right.x, right.y, right.z, now,
+    const float constants[28] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
                                  static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
                                  1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
                                  soften, 0, 0, 0,
                                  bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,
-                                 static_cast<float>(bp.frameCount * bp.stripCount), bp.frameBlend ? 1.0f : 0.0f};
+                                 static_cast<float>(bp.frameCount * bp.stripCount), bp.frameBlend ? 1.0f : 0.0f,
+                                 bp.normalPath.empty() ? 0.0f : 1.0f, bp.refractionScale, bp.collideGround ? 1.0f : 0.0f, 0};
     device_->SetConstants(1, constants, sizeof constants);
     device_->SetTexture(0, bp.texture);
     device_->SetTexture(1, bp.ramp);
+    device_->SetTexture(4, bp.normals);
     device_->Draw(6, 0, static_cast<uint32_t>(spans[i].second));
   }
 }
