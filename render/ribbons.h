@@ -30,6 +30,9 @@ class Ribbons {
  public:
   Ribbons(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
+  // Beams and trails read the remastered effects' files where there are some (effect_files.h);
+  // false: always the game's. The world sets it from its effects look.
+  bool remastered = true;
 
   // A beam of that blueprint ("/effects/emitters/x_beam_01_emit.bp") from `start` to `end`, for
   // this frame. False when the blueprint cannot be read (reported once).

@@ -80,6 +80,9 @@ class WorldPicture {
   // "Always Show Enemy Lifebars": OFF at first, as the original). For no one army: every unit's.
   void SetAllies(const std::vector<int>& armies);
   void SetLifeBarsOnEnemies(bool on);
+  // The game's effects remastered (the visuals track's files where it has made some: true, as at
+  // first) or as the original has them (false). A player's option.
+  void SetRemasteredEffects(bool on);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).
