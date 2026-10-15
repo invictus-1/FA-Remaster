@@ -1,4 +1,4 @@
--- FA Remastered: the day, its length and the weather as game options, added to the game's own list
+-- FA Remastered: the day, its length, the weather and the map's edge as game options, added to the game's own list
 -- (this file is a hook: the program reads it after the game's /lua/ui/lobby/lobbyOptions.lua, which
 -- stays as it is). They are only seen: nothing in the simulation depends on them. The program
 -- reads them from the game's options when it starts the game's picture (ui/app/game_session.cpp).
@@ -49,5 +49,16 @@ table.insert(globalOpts, 3, {
         { text = "Always Storm", help = "A storm with lightning for the whole game", key = 'storm' },
         { text = "Always Fog", help = "Fog for the whole game", key = 'fog' },
         { text = "Always Snow", help = "Snow for the whole game", key = 'snow' },
+    },
+})
+
+table.insert(globalOpts, 4, {
+    default = 1,
+    label = "Map Edge",
+    help = "What lies round the map, where no unit can go",
+    key = 'RemasterMapEdge',
+    values = {
+        { text = "No Machinery", help = "The land and sea go on past the map's edge, greyed out where units cannot go", key = 'beyond' },
+        { text = "Machinery", help = "The frame of machinery round the map, as in the original game", key = 'frame' },
     },
 })

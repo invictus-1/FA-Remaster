@@ -1239,6 +1239,15 @@ original's way (MACHINERY, by his rule that the original's look is always one of
 I then put the choice in the players' options (with the day, weather and the others), and the
 launchers keep the default until he says which he wants by default. Not blocking.
 
+DONE (render 38d9196, in main e6d466c). Chris settled it with you after your pictures: option
+one the original's frame (worldBeyond false, frame true), option two ours (worldBeyond true,
+frame false, beyondHaze false), and to me: "for default have option 2". In the host: the
+lobby's option Map Edge (`RemasterMapEdge`: "No Machinery" = 'beyond', the default;
+"Machinery" = 'frame'), `--map-edge frame|beyond` for launched tables, all three switches set
+at a game's start (`ui/app/game_session.cpp`). Checked from far up on the rebuilt Seton's, both
+ways: `_scratch\ui\chris_20261013\ui_map_edge_no_machinery_left_machinery_right.png`. Waiting
+for Chris's look.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

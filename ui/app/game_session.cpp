@@ -201,6 +201,8 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
     if (length == "still") skyNow_.dayLengthSeconds = 0;
     else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
     if (!weather.empty()) skyNow_.weather = weather;
+    const std::string edge = option("RemasterMapEdge");
+    if (edge == "frame" || edge == "beyond") skyNow_.edge = edge;
   }
   lua_pop(L, 1);
   if (!StartSession(session, uids, why)) return false;
@@ -302,6 +304,15 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);
+      // The map's edge, one of the two looks (the renderer's answer to ui request 20: all three
+      // switches set, as their defaults are neither look).
+      if (render::World* w = pic->picture.world()) {
+        const bool frame = skyNow_.edge == "frame";
+        w->worldBeyond = !frame;
+        w->frame = frame;
+        w->beyondHaze = false;
+        Logf(LogLevel::Info, "moho64ui: session: the map's edge: %s", frame ? "the original's frame of machinery" : "no machinery, the land beyond");
+      }
       if (skyNow_.startHour >= 0) {
         // Weather that changes by itself is the renderer's (by the game's seed and clock); one
         // kind that stays is set on its world here, with the values its own kinds have

@@ -69,6 +69,7 @@ int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's movi
 // rain, storm, fog, snow) / --no-weather: the day and the weather in the picture of a game whose
 // configuration does not say (a game from the lobby says: its options RemasterDayStart,
 // RemasterDayLength, RemasterWeather). Without them such a game has the map's own fixed light.
+// --map-edge frame|beyond: likewise the map's edge (RemasterMapEdge); without it, "beyond".
 ui::GameSession::Sky sky;
 // --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
 // (maps in the making). --remasters <folder>: the remastered units' own files, one folder per
@@ -215,6 +216,7 @@ int main(int argc, char** argv) {
     else if (a == "--day-length") sky.dayLengthSeconds = static_cast<float>(std::atof(next().c_str()));
     else if (a == "--weather") sky.weather = next();
     else if (a == "--no-weather") sky.weather = "none";
+    else if (a == "--map-edge") sky.edge = next();
     else if (a == "--maps") moreMaps.push_back(next());
     else if (a == "--remasters") remastersFolder = next();
     else if (a == "--own") ownFolder = next();

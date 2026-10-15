@@ -76,6 +76,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and travel in the game's options as `RemasterDayStart`, `RemasterDayLength`, `RemasterWeather`.
   Unless chosen otherwise a game has the map's own light, as the original (Chris's choice). The
   weather is ONE choice, so kinds that exclude each other (rain and snow) cannot be had together.
+  Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
+  greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
+  "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is
+  the same for a game given with `--session`.
 - `--day-weather`, `--day <hour>`, `--day-length <seconds>` (0: the hour stands), `--weather
   <kind>` (changing, cold, dry, none, clear, cloudy, overcast, rain, storm, fog, snow),
   `--no-weather`: the same for a game whose configuration does not say (a recorded one given with

@@ -57,8 +57,8 @@ class GameSession {
   bool wantPicture = true;
   // The day and the weather in the picture (the renderer's WorldPicture::SetDayAndWeather and its
   // world's settings). They are only seen. `sky` is what a game gets whose configuration says
-  // nothing (set before a game is launched); a game's options RemasterDayStart, RemasterDayLength
-  // and RemasterWeather (the lobby's, ui/data/hook) go before it.
+  // nothing (set before a game is launched); a game's options RemasterDayStart, RemasterDayLength,
+  // RemasterWeather and RemasterMapEdge (the lobby's, ui/data/hook) go before it.
   struct Sky {
     // The hour the game starts at, 0..24 (6 sunrise, 18 sunset); negative: the map's own fixed
     // light, as the original has it, and no weather.
@@ -69,6 +69,12 @@ class GameSession {
     // (by itself: mostly clear), or one kind that stays: "none" (fair), "clear", "cloudy",
     // "overcast", "rain", "storm", "fog", "snow".
     std::string weather = "changing";
+    // The map's edge (the renderer's World::worldBeyond / frame / beyondHaze): "beyond" (no
+    // machinery: no frame, the land and sea go on past the edge, greyed out where units cannot
+    // go, no haze over it) or "frame" (the original's frame of machinery round the map, nothing
+    // past it). Chris, 2026-10-14, chose between the two: "for default have option 2", the land
+    // beyond; the original's frame stays a choice.
+    std::string edge = "beyond";
   };
   Sky sky;
   // What plays the world's sounds (the host's sound system); nullptr: the simulation is not asked
