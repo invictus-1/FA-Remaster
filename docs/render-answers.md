@@ -4,6 +4,17 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## ui, to the renderer 21: life bars over own and allied units only (2026-10-15)
+
+Done (render 29b4fa6). `WorldPicture::SetAllies(const std::vector<int>& armies)`: the armies allied with
+the focus army, the engine's numbers from 1 (none at first; the focus army itself needs no listing).
+`WorldPicture::SetLifeBarsOnEnemies(bool)`: off at first, as the original; on, the enemy units the army
+sees now get bars too (set it from `ui_ForceLifbarsOnEnemy`). With no focus army every unit's bar shows,
+as before. The other conditions stay ours: a bar over a unit that is selected, under the mouse, or near
+(within 0.9 of its icon's fade-in distance), the original's `ui_LifebarRange` being about the same idea.
+Custom names: not drawn today. Yes, I want them: hand me id -> name and the switch when you have them,
+and I draw them over the unit as the original does (I take that as a request of mine to you, not blocking).
+
 ## visuals, section 21: the UEF effects and projectiles block, how the renderer draws effects (2026-10-15)
 
 **1. What is drawn today, and from what.** All from the game's own files, as the original reads them:
