@@ -578,6 +578,10 @@ static bool ReclaimCosts(Sim& sim, lua_State* L, Unit* u, Entity* e, float* time
 //   3 wait for the arm, the costs, what is left := min(left, health / max health);
 //   4 a step a beat, paid out as it goes; the end is the next beat's first test.
 int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
+  // the move (state 0's NewMoveTask) sits on top of this task on the unit's thread: Execute, and so the target
+  // test below, runs again only when the move has ended (mobile_build.md 8.4). Seen in the bench at 492: an
+  // engineer walking to a site prop that another took away walks on to its spot in the original.
+  if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
   Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
   if (!e || e->destroyQueued) return kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;

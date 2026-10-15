@@ -1,4 +1,5 @@
 // Unit motion (see motion.h for what the original does and how it was checked).
+#include "core/backtrace.h"
 #include "core/dmath.h"
 #include "sim/motion.h"
 #include "sim/formation.h"
@@ -686,6 +687,19 @@ void MotionNavDone(Unit* u, bool succeeded) {
 void MotionStop(Unit* u) {
   UnitMotion& m = u->motion;
   Sim& sim = *Sim::From(u->luaState());
+  // MOHO64_DEBUG_STOP=<unit id> (or -2: every unit): each abort of a unit's move, with the calling frames
+  static const long dbgStop = getenv("MOHO64_DEBUG_STOP") ? atol(getenv("MOHO64_DEBUG_STOP")) : -1;
+  if (dbgStop == -2 || dbgStop == static_cast<long>(u->id)) {
+    void* fr[8];
+    const int n = CaptureFrames(fr, 8);
+    std::string s;
+    for (int i = 1; i < n; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+      s += b;
+    }
+    Logf(LogLevel::Info, "stop %u unit %u goal %d from%s", sim.tick(), u->id, m.hasGoal ? 1 : 0, s.c_str());
+  }
   if (m.air) {
     AirAbort(sim, u);
     m.hasGoal = false;
