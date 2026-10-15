@@ -165,6 +165,8 @@ struct Page {
 struct Span {
   uint8_t* cpu = nullptr;
   D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
+  ID3D12Resource* resource = nullptr;  // the page it lies in, and where in it (copies into textures)
+  uint64_t offset = 0;
 };
 
 struct BufferRec {
@@ -234,6 +236,7 @@ class D3D12Device final : public Device {
   Buffer CreateBuffer(const BufferDesc& desc) override;
   void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) override;
   Texture CreateTexture(const TextureDesc& desc) override;
+  void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) override;
   Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
   void Destroy(Buffer buffer) override;
@@ -253,7 +256,7 @@ class D3D12Device final : public Device {
   void SetShaderBuffer(Buffer buffer, int slot) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
-  void EndFrame(std::vector<uint8_t>* capture) override;
+  void EndFrame(std::vector<uint8_t>* capture, bool present) override;
 
  private:
   bool CreateTargets();
@@ -624,7 +627,7 @@ Span D3D12Device::Allocate(size_t size, size_t align) {
       size_t at = (f.offset + align - 1) / align * align;
       if (at + size <= p.size) {
         f.offset = at + size;
-        return {p.cpu + at, p.gpu + at};
+        return {p.cpu + at, p.gpu + at, p.resource.Get(), at};
       }
       ++f.page;
       f.offset = 0;
@@ -1287,7 +1290,40 @@ void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t 
   list_->DrawIndexedInstanced(indexCount, instances, firstIndex, baseVertex, 0);
 }
 
-void D3D12Device::EndFrame(std::vector<uint8_t>* capture) {
+void D3D12Device::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
+  TextureRec* rec = Find(texture);
+  if (!rec || rec->target || !inFrame_ || width <= 0 || height <= 0 || !data) return;
+  const D3D12_RESOURCE_DESC rd = rec->resource->GetDesc();
+  if (rd.MipLevels != 1 || rd.DepthOrArraySize != 1 || x < 0 || y < 0 || static_cast<UINT64>(x + width) > rd.Width ||
+      static_cast<UINT>(y + height) > rd.Height)
+    return;
+  const UINT unit = 4;  // (the formats it takes: four bytes a pixel)
+  const UINT row = static_cast<UINT>(width) * unit;
+  const UINT rowPitch = (row + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) / D3D12_TEXTURE_DATA_PITCH_ALIGNMENT * D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+  Span s = Allocate(static_cast<size_t>(rowPitch) * static_cast<size_t>(height), D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+  if (!s.cpu) return;
+  for (int r = 0; r < height; ++r)
+    std::memcpy(s.cpu + static_cast<size_t>(r) * rowPitch, static_cast<const uint8_t*>(data) + static_cast<size_t>(r) * pitch, row);
+  const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  D3D12_RESOURCE_BARRIER b = Transition(rec->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_DEST);
+  list_->ResourceBarrier(1, &b);
+  D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
+  to.pResource = rec->resource.Get();
+  to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  from.pResource = s.resource;
+  from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  from.PlacedFootprint.Offset = s.offset;
+  from.PlacedFootprint.Footprint.Format = rd.Format;
+  from.PlacedFootprint.Footprint.Width = static_cast<UINT>(width);
+  from.PlacedFootprint.Footprint.Height = static_cast<UINT>(height);
+  from.PlacedFootprint.Footprint.Depth = 1;
+  from.PlacedFootprint.Footprint.RowPitch = rowPitch;
+  list_->CopyTextureRegion(&to, static_cast<UINT>(x), static_cast<UINT>(y), 0, &from, nullptr);
+  b = Transition(rec->resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, readable);
+  list_->ResourceBarrier(1, &b);
+}
+
+void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   FrameSlot& f = frames_[cur_];
   ReleasePassTargets();
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
@@ -1331,8 +1367,10 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture) {
   list_->Close();
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
-  HRESULT hr = swapChain_->Present(vsync_ ? 1 : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
-  if (FAILED(hr)) Complain("Present", hr);
+  if (present) {
+    HRESULT hr = swapChain_->Present(vsync_ ? 1 : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
+    if (FAILED(hr)) Complain("Present", hr);
+  }
   if (infoQueue_) {  // --debug: the validation layer's messages, which otherwise only a debugger sees
     std::vector<char> buf;
     for (UINT64 i = 0, n = infoQueue_->GetNumStoredMessages(); i < n; ++i) {
