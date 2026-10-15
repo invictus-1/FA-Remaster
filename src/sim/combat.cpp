@@ -2623,7 +2623,13 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     }
     if (R < 1) AttackSetPosGoal(sim, u, p);
     else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
-  } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
+  } else if (d.trackMobile && has && e && !e->destroyQueued) {
+    // 0x5f32e3..0x5f3325: a mobile target goes to the navigator's SetDestUnit (vt+0xc) whenever HasTarget says so,
+    // with the target's own entity (+0x64): for a blip-held target that is the blip, which outlives its unit. No
+    // test of the unit's death: the Update of state 1 that follows the weapon's "lost" report (code 4) sets the
+    // destination on the dead unit's blip, and the air SetTarget turns the facing toward it before the task ends.
+    // Seen: Experimental2 1310, a Tempest's drones whose target died at 1309 turned toward the dead ship's place;
+    // ours took the goal cell of its aim bone (another facing for the hover after the abort).
     AttackSetDestUnit(sim, u, e);
   } else {
     AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
