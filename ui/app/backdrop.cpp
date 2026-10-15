@@ -94,6 +94,8 @@ bool Backdrop::WaitUntilReady(double seconds) {
 void Backdrop::Run() {
 #ifdef MOHO64UI_WORLD_PICTURE
   using Clock = std::chrono::steady_clock;
+  while (running_ && !begun_) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  if (!running_) return;
   render::WorldPicture picture;
   std::string error;
   auto t0 = Clock::now();

@@ -31,6 +31,7 @@
 #include "maui/control.h"
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/remasters.h"
+#include "render/view.h"
 #endif
 #include "script/script_state.h"
 #include "sim/session.h"
@@ -338,6 +339,17 @@ int main(int argc, char** argv) {
     backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
     cfg.backdrop = backdrop.get();
   }
+  session.releaseWorlds = [&backdrop]() {
+    if (backdrop) backdrop->Stop();
+  };
+  // The scene's samples (the player's Anti-Aliasing) are set before any world is made, and
+  // afterwards only while none lives: the background begins once they are known.
+  auto beginBackdrop = [&backdrop]() {
+#ifdef MOHO64UI_WORLD_PICTURE
+    render::gSceneSamples = ui::Looks().sceneSamples;
+#endif
+    if (backdrop) backdrop->Begin();
+  };
   // The front end's state. A new one is made when a game is left (the original makes a new state
   // for every change between front end and game, FA exe 0x885de0).
   auto front = std::make_unique<ui::UserState>(&vfs, cfg);
@@ -356,6 +368,7 @@ int main(int argc, char** argv) {
                               "ConExecute('SC_AntiAliasingSamples ' .. tostring(o.antialiasing or 4))",
                               "=(anti-aliasing at start-up)"))
     Logf(LogLevel::Warning, "moho64ui: the anti-aliasing option could not be read at the start");
+  beginBackdrop();
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
@@ -436,6 +449,7 @@ int main(int argc, char** argv) {
       backdrop.reset();
       backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
       cfg.backdrop = backdrop.get();
+      beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
     }
     auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
     if (fresh->Boot() && fresh->StartMainScript() && fresh->StartFrontEnd()) {

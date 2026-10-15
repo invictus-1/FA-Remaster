@@ -1348,6 +1348,18 @@ fight: the enemy Monkeylord has no bar, the player's Colossus has one
 (`_scratch\ui\chris_20261013\ui_no_life_bar_on_enemy_monkeylord.png`). Custom names: he wants
 them (id -> name and the switch); next on my side.
 
+### 22. Anti-Aliasing Off also takes away the modern water
+From the interface chat, 2026-10-15, not blocking. The game's own Anti-Aliasing option now sets
+gSceneSamples (Off 1, 2, 4; ui commit 87285ef + the fix after it). Chris chose "settings mean
+what they say": Off should mean jagged edges only. But with 1 sample, `render/terrain.cpp:258`
+leaves out MODERN_WATER and `render/water.cpp:398` builds no "water, modern", so a player with
+Anti-Aliasing Off (the game's Fidelity Presets Low and Medium set it) gets the original's water.
+Could the modern water read a 1-sample depth as well (no MS texture)? If it cannot, say so and
+I note it beside the option ("Off also uses the original water").
+Also for you to know: the host now changes gSceneSamples only while no world lives. The menu's
+background waits for it before it opens, and is ended before a game's picture opens with a
+different value. Post::BeginScene's re-read on a resize is then safe.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

@@ -637,7 +637,10 @@ void GameSession::OpenPicture() {
     // (On the game's window when it has one: the renderer shows the picture there itself, the
     // interface laid over it, without reading it back; see PresentToWindow.)
     menuPicture_.reset();  // (one picture per window: the menu's goes first)
-    render::gSceneSamples = Looks().sceneSamples;  // (the player's anti-aliasing, taken when a picture is made)
+    if (render::gSceneSamples != Looks().sceneSamples) {  // (the player's anti-aliasing, taken when a picture is made)
+      if (releaseWorlds) releaseWorlds();
+      render::gSceneSamples = Looks().sceneSamples;
+    }
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {

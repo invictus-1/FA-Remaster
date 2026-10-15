@@ -152,6 +152,9 @@ class GameSession {
   void RunFirstBeat();
   // The player's orders since the last beat, as the command stream's bytes; asked before each beat.
   std::function<std::string()> takeOrders;
+  // Ends the other worlds alive (the menu's background), asked before the scene's samples change
+  // for a new picture: they must not change while a world lives (render/world.h).
+  std::function<void()> releaseWorlds;
   // The command source the player speaks for, and the ground's height at a place of the map.
   int commandSource() const { return commandSource_; }
   float TerrainHeight(float x, float z) const;
