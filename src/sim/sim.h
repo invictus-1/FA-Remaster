@@ -123,6 +123,8 @@ class Sim {
   bool collectEffects = false;
   // The same for the sounds the scripts play in the world (SoundEvents in sim/sim_view.h).
   bool collectSounds = false;
+  // The same for the camera shakes the scripts ask for (ShakeEvents in sim/sim_view.h).
+  bool collectShakes = false;
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 

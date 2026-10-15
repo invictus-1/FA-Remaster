@@ -453,12 +453,22 @@ Entity* FindSiteProp(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   sim.entityGrid().GatherBox(mn.x, mn.z, mx.x, mx.z, 2, &cand);
   Entity* best = nullptr;
   float bestD = std::numeric_limits<float>::infinity();
+  // MOHO64_DEBUG_PREPMOVE=<unit id>: the site, every prop gathered and what became of it
+  static const long dbg = getenv("MOHO64_DEBUG_PREPMOVE") ? atol(getenv("MOHO64_DEBUG_PREPMOVE")) : -1;
+  const bool say = dbg == static_cast<long>(u->id);
+  if (say)
+    Logf(LogLevel::Info, "siteprop %u unit %u bp %s site %.3f %.3f rect %d %d %d %d, %zu gathered", sim.tick(), u->id,
+         t.bp->id.c_str(), t.site.x, t.site.z, x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ, cand.size());
   for (Entity* p : cand) {
     if (p->kind != Entity::Kind::Prop || !p->blueprint) continue;
     WorldShape ws;
     if (!GetWorldShape(p, &ws)) continue;
     Vec3 a, b;
     ShapeBounds(ws, &a, &b);
+    if (say)
+      Logf(LogLevel::Info, "siteprop %u   prop %s at %.3f %.3f shape %d bounds x %.3f..%.3f z %.3f..%.3f overlap %d obstructs %d",
+           sim.tick(), p->blueprint->id.c_str(), p->position.x, p->position.z, static_cast<int>(ws.type), a.x, b.x, a.z,
+           b.z, ShapeOverlapsAABox(ws, mn, mx) ? 1 : 0, BpInCategory(sim, p->blueprint, "OBSTRUCTSBUILDING") ? 1 : 0);
     if (a.x > mx.x || b.x < mn.x || a.y > mx.y || b.y < mn.y || a.z > mx.z || b.z < mn.z) continue;
     if (!ShapeOverlapsAABox(ws, mn, mx)) continue;
     if (!BpInCategory(sim, p->blueprint, "OBSTRUCTSBUILDING")) continue;

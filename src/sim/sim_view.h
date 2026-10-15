@@ -254,6 +254,20 @@ struct SoundEvent {
   float position[3] = {0, 0, 0};      // where the entity stood at the call
 };
 
+// Entity:ShakeCamera(radius, maxShakeEpicenter, minShakeAtRadius, interval) calls in a beat, in the order of the
+// calls (cfunc_EntityShakeCameraL 0x68ab70: the original keeps the same seven numbers per call for its user side,
+// CameraImpl::CameraShake 0x7a7130). Listed only while Sim::collectShakes is set. Every army's calls are listed;
+// the host decides whether its camera shakes.
+struct ShakeEvent {
+  uint32_t entity = 0xffffffff;   // the entity it was called on
+  int army = 0;                   // that entity's army, 1-based, 0 = none
+  float position[3] = {0, 0, 0};  // where the entity stood at the call
+  // the four arguments as given. The exe's own help text: radius = distance from the epicenter at which shaking
+  // falls off to min; max = size of shaking in world units when looking at the epicenter; min = size of shaking in
+  // world units at radius or farther; interval = how long it shakes, in seconds
+  float radius = 0, maxShakeEpicenter = 0, minShakeAtRadius = 0, interval = 0;
+};
+
 // What an army knows now, as the simulation's own recon has it. Bits: 1 on radar, 2 on sonar, 4 on omni, 8 seen
 // (vision; water vision for what is under water). army: 1-based. Allies' intel counts as the army's own, as it
 // does for the simulation.
@@ -366,6 +380,9 @@ void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);
 // The sounds since the last call (and the loops that ended with their entity); the list is then empty again.
 // Take it once per beat, after Tick(), with Sim::collectSounds set from before the first beat.
 void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out);
+// The camera shakes since the last call; the list is then empty again. Take it once per beat, after Tick(), with
+// Sim::collectShakes set from before the first beat.
+void ShakeEvents(const Sim& sim, std::vector<ShakeEvent>* out);
 // (The scenario info for SessionGetScenarioInfo is Sim::sessionScenario: the launched table as bytes.)
 
 }  // namespace moho
