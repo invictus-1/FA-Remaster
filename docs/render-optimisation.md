@@ -119,3 +119,19 @@ When every faction is done and the remaining work is mods: the mods' units we re
 the same costs as our own units (levels, triangles, textures, lights, effects), measured with the
 same tools, and checked so the AI can use them without special cases. On FAF, badly built mod units
 were the main cause of slow games; ours must not be.
+
+## 8. Done so far (2026-10-15)
+
+Measured on this PC (Ryzen 9 9950X3D, RTX 4090), eight-army M28 game ten minutes in.
+
+- **Processor, the renderer's frame:** 11.8 -> 3.5 ms at the whole-map view (stock Seton's), 10.3 -> 4.2 ms
+  on the rebuilt map. Model lookups cached; trees and rocks kept in per-square groups; which models a pass
+  sees tested on up to eight threads; a radix sort; effects' lookups by map. Same picture.
+- **The game's window** (with the interface chat): the world drawn straight into the game's window and the
+  interface laid over it on the card, instead of a read-back and a Windows copy every frame. World picture:
+  1600x900 6.7 -> 2.7 ms, 3840x2160 24.5 -> 7.9 ms (plus 0.5 / 3.3 ms of Windows copy gone). The interface's
+  own drawing on the processor (9 to 14 ms) is the interface chat's next piece.
+- **FSR 1** (AMD, MIT): the card's frame at 3840x2160 on the rebuilt map 12.6 ms off, 6.5 Ultra Quality,
+  3.9 Quality, 2.5 Performance. A player's option.
+- **Tried and left off:** laying the models' depth first (the card already skips hidden pixels; it cost
+  more than it saved on the 4090). Kept as a switch to try on slower cards.
