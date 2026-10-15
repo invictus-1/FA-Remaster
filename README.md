@@ -215,6 +215,9 @@ The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake -
 - `third_party/`: Lua 5.0 (MIT) changed to the game's dialect, zlib inflate, mimalloc.
 - `render/third_party/fsr1/`: AMD FidelityFX Super Resolution 1 (MIT, Copyright (c) 2021 Advanced Micro
   Devices, Inc.), the upscaler offered as a player's option.
+- `render/third_party/vulkan/`: Khronos Vulkan-Headers 1.3.296, C headers only (Apache-2.0 OR MIT).
+- `render/third_party/dxc/`: DirectX Shader Compiler headers `dxcapi.h`, `dxcerrors.h` (University of
+  Illinois/NCSA). The compiler DLL itself is not in the repository (see `docs/render-vulkan.md`).
 
 ## Legal
 

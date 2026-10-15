@@ -1499,7 +1499,10 @@ void D3D12Device::TakeTimes(std::vector<std::pair<const char*, double>>* out) { 
 
 }  // namespace
 
+std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* error);  // gfx_vulkan.cpp
+
 std::unique_ptr<Device> Device::Create(const DeviceDesc& desc, std::string* error) {
+  if (desc.backend == DeviceDesc::Backend::Vulkan) return CreateVulkanDevice(desc, error);
   auto d = std::make_unique<D3D12Device>();
   if (!d->Init(desc, error)) return nullptr;
   return d;
