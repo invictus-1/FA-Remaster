@@ -43,7 +43,10 @@ struct PathCell {
 // One searcher (CAiPathFinder): a land navigator owns one.
 struct PathTraveler {
   Unit* unit = nullptr;
-  NamedFootprint fp;
+  NamedFootprint fp;  // the cluster map's (CAiPathFinder::GetFootprint 0x5a9d30: unit+0x124 only)
+  // the grids of the unit's Footprint and AltFootprint: CanTraverseCell's level-0 test takes Entity::GetFootprint
+  // as it is when the cell is tested (the AltFootprint while unit+0x124 or +0x125 is set)
+  const PathGrid* fitGrid[2] = {nullptr, nullptr};
   int S = 1;  // max(SizeX, SizeZ)
   PathCell anchor;
   int goal[4] = {0, 0, 0, 0};   // half-open rect x0, z0, x1, z1

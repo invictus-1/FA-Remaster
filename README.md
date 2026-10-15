@@ -82,14 +82,14 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Air battle (1,176 beats) | **none: identical to the end** |
 | Upgrades (9,014 beats) | **none: identical to the end** |
 | Missiles (6,649 beats) | **none: identical to the end** |
+| Experimental units, second set (2,246 beats) | **none: identical to the end** |
+| Economy | beat 2427 |
 | Engineers | beat 2370 |
-| Economy | beat 2278 |
-| Land battle (2,091 beats) | beat 1484 |
-| Submarines | beat 1399 |
-| Experimental units, second set | beat 1311 |
+| Land battle (2,091 beats) | beat 1612 |
+| Submarines | beat 1416 |
 | Eight-army AI game | beat 679 |
 | Skirmish against an AI | beat 533 |
-| Naval battle (1,079 beats) | beat 519 |
+| Naval battle (1,079 beats) | beat 536 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed

@@ -1606,12 +1606,12 @@ void FireTick(Sim& sim, UnitWeapon* w) {
     const Vec3 tp = has ? TargetPos(sim, w->target, false) : Vec3{};
     Logf(LogLevel::Info,
          "wdbg %u unit %u %s clock %d enabled %d target %d(%u = entity %d%s at %.2f %.2f %.2f) canAttack %d canFire %d "
-         "onTarget %d status %d",
+         "onTarget %d status %d stun %d",
          sim.tick(), u->id, w->label.c_str(), w->fireClock, static_cast<int>(w->enabled), w->target.type,
          w->target.entityId, te ? static_cast<int>(te->id) : -1, w->target.viaBlip ? ", its blip" : "", tp.x, tp.y, tp.z,
          has ? static_cast<int>(CanAttackTarget(sim, w, w->target, true)) : -1,
          has ? static_cast<int>(CanFire(sim, w)) : -1, static_cast<int>(w->onTarget),
-         has ? TargetStatus(sim, w, w->target) : -1);
+         has ? TargetStatus(sim, w, w->target) : -1, u->stunned);
   }
   if (!w->enabled || w->bp->manualFire) {
     if (w->fireClock == 0) w->fireSuspended = true;  // (returns -2: off the run list until woken)
@@ -2398,6 +2398,9 @@ struct AttackData {
   Vec3 lastPos;              // +0x80: the target's position at the last goal update (zero: none)
   bool trackMobile = false;  // +0x8c: the target is a MOBILE unit
   bool coordinated = false;  // +0x8d: FormAttack
+  // +0x58, the command's formation (the ctor's argument): dropped for good once the target is in reach (state 3's
+  // in-range branch, 0x5f3a10), and from then on Update 0x5f3020 takes its branch without a formation
+  bool formation = true;
   bool firstUpdate = true;   // +0x8e
   bool listening = false;    // the attacker-event listener is linked (from the first UpdateAttacker on)
   int result = 0;            // 1 success, 2 failure (the listener's result)
@@ -2409,11 +2412,10 @@ namespace {
 bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
 // !Unit::WontFitAt 0x62aa90: the unit's footprint fits at world position p
 bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
-  const MotionBlueprint& b = *u->motion.bp;
-  const PathGrid* g = FootprintGrid(sim, b);
+  const PathGrid* g = UnitFootprintGrid(sim, u);  // (Entity::GetFootprint 0x62aaa0)
   if (!g) return true;
   int cx, cz;
-  GoalCell(b, p.x, p.z, &cx, &cz);
+  GoalCell(UnitFootprint(u), p.x, p.z, &cx, &cz);
   return g->Passable(cx, cz);
 }
 bool CanFlyU(const Unit* u) { return u->motion.bp && u->motion.bp->canFly; }
@@ -2471,7 +2473,7 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
     // differences, the first of equals), and the point flown to is that cell's footprint centre (CellToWorld
     // 0x50b0f0: cell + size / 2), not the rect's middle. The navigator's goal is no order to move: the unit's
     // states stay as they are.
-    const NamedFootprint& fp = u->motion.bp->footprint;
+    const NamedFootprint& fp = UnitFootprint(u);
     const int ux = static_cast<int16_t>(std::nearbyint(u->position.x - fp.sizeX * 0.5f));
     const int uz = static_cast<int16_t>(std::nearbyint(u->position.z - fp.sizeZ * 0.5f));
     int bx = x0, bz = z0;
@@ -2504,9 +2506,9 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
 }
 // a 1x1 goal at the footprint-origin cell of p
 void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
-  const MotionBlueprint& b = *u->motion.bp;
-  int cx = static_cast<int>(std::nearbyint(p.x - b.footprint.sizeX * 0.5f));
-  int cz = static_cast<int>(std::nearbyint(p.z - b.footprint.sizeZ * 0.5f));
+  const NamedFootprint& f = UnitFootprint(u);  // (0x5f2df9: Entity::GetFootprint)
+  int cx = static_cast<int>(std::nearbyint(p.x - f.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(p.z - f.sizeZ * 0.5f));
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
@@ -2532,10 +2534,12 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
   bool has = TaskHasTarget(sim, target);
   // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
-  // command's formation, which is laid out around the target, not for the target itself.
+  // command's formation, which is laid out around the target, not for the target itself. (Only while the task
+  // still holds the formation: it lets go of it when the target first comes within reach, d.formation.)
   UnitCommand* fc = nullptr;
-  if (!t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp && u->motion.bp->mobile() &&
-      !BpInCategory(sim, u->blueprint, "TARGETCHASER") && FormationHas(*u->commands.front(), u))
+  if (d.formation && !t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp &&
+      u->motion.bp->mobile() && !BpInCategory(sim, u->blueprint, "TARGETCHASER") &&
+      FormationHas(*u->commands.front(), u))
     fc = u->commands.front().get();
   if (fc) {
     Vec3 cell;
@@ -2623,7 +2627,13 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     }
     if (R < 1) AttackSetPosGoal(sim, u, p);
     else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
-  } else if (d.trackMobile && has && e && !e->dead && !e->destroyQueued) {
+  } else if (d.trackMobile && has && e && !e->destroyQueued) {
+    // 0x5f32e3..0x5f3325: a mobile target goes to the navigator's SetDestUnit (vt+0xc) whenever HasTarget says so,
+    // with the target's own entity (+0x64): for a blip-held target that is the blip, which outlives its unit. No
+    // test of the unit's death: the Update of state 1 that follows the weapon's "lost" report (code 4) sets the
+    // destination on the dead unit's blip, and the air SetTarget turns the facing toward it before the task ends.
+    // Seen: Experimental2 1310, a Tempest's drones whose target died at 1309 turned toward the dead ship's place;
+    // ours took the goal cell of its aim bone (another facing for the hover after the abort).
     AttackSetDestUnit(sim, u, e);
   } else {
     AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
@@ -2742,6 +2752,13 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         bool any = false;
         for (UnitWeapon* x : u->weapons) any = any || (x->bp && CanAttackTarget(sim, x, target));
         if (!any) return -1;
+        // 0x5f3a10: the task lets go of the command's formation (+0x58 = 0) and of FormAttack (+0x8d = 0); then the
+        // navigator ignores formations. Seen (Subs 1240): two torpedo bombers given one attack order on a sub
+        // (977) are in reach long before it dies; the Update after its death takes the branch WITHOUT a formation
+        // and flies at the dead sub's blip (SetDestUnit: its very place, the facing the brake turns to; bit-exact),
+        // not at its aim point's cell (the formation branch's SetPosGoal).
+        d.formation = false;
+        d.coordinated = false;
         u->navIgnoreFormation = true;
         UpdateAttacker(sim, u, t, target);
         if (oc) {  // the overcharge weapon is given the target by the task itself (0x6d5f30)
@@ -3130,13 +3147,17 @@ int l_ToggleFireState(lua_State* L) {
   u->fireState = (u->fireState + 1) % 3;
   return 0;
 }
+// Unit:SetStunned(seconds) 0x6c68e0: a number of beats, not a flag: lua_tonumber x 10.0 (0x6c69a5, a float product:
+// the x87 runs at 24 bits), truncated (_ftol 0xa89cc0), into u+0x29c, which Unit::MotionTick counts down. (Seen: LAND
+// 1469, a dying Loyalist's SetStunned(1.5) holds an Othuum's guns for 15 beats, it fires again at 1484; ours held it
+// for good.)
 int l_SetStunned(lua_State* L) {
   Unit* u = U(L);
-  u->stunned = lua_toboolean(L, 2) != 0;
+  u->stunned = static_cast<int>(static_cast<float>(luaL_checknumber(L, 2)) * 10.0f);
   return 0;
 }
 int l_IsStunned(lua_State* L) {
-  lua_pushboolean(L, U(L)->stunned);
+  lua_pushboolean(L, U(L)->stunned != 0);  // (0x6c5d1c)
   return 1;
 }
 int l_ReachedMaxShooters(lua_State* L) {

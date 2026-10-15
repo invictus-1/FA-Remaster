@@ -45,7 +45,8 @@ std::map<const Sim*, std::unique_ptr<HPathTables>>& TablesMap() {
 }
 
 const MotionBlueprint& Bp(const Unit* u) { return *u->motion.bp; }
-const NamedFootprint& Fp(const Unit* u) { return u->motion.bp->footprint; }
+// Entity::GetFootprint 0x678880: the AltFootprint while unit+0x124 or +0x125 is set (UnitFootprint, sim/motion.h)
+const NamedFootprint& Fp(const Unit* u) { return UnitFootprint(u); }
 int SX(const Unit* u) { return std::max<int>(1, Fp(u).sizeX); }
 int SZ(const Unit* u) { return std::max<int>(1, Fp(u).sizeZ); }
 
@@ -53,7 +54,7 @@ PathCell CellOf(const Unit* u, float x, float z) {
   return {static_cast<int>(std::nearbyint(x - SX(u) * 0.5f)), static_cast<int>(std::nearbyint(z - SZ(u) * 0.5f))};
 }
 
-const PathGrid* Grid(Sim& sim, const Unit* u) { return FootprintGrid(sim, *u->motion.bp); }
+const PathGrid* Grid(Sim& sim, const Unit* u) { return UnitFootprintGrid(sim, u); }
 
 // FootprintFits(cell, MobileCheck caps): terrain and structures
 bool Fits(Sim& sim, const Unit* u, const PathCell& c) {
@@ -253,8 +254,11 @@ void QueueSearch(Sim& sim, Unit* u, LandNav& n) {
   PathTraveler& t = n.pf;
   t.unit = u;
   // BeginQuery takes the cluster map of slot 0 0x5a9d30: unit+0x124 ? the AltFootprint (+0x20 = bp+0x300) :
-  // the Footprint (+0x1c = bp+0x2fc), both named ones
-  t.fp = n.waterAlt ? u->motion.bp->altFootprint : Fp(u);
+  // the Footprint (+0x1c = bp+0x2fc), both named ones; CanTraverseCell tests level 0 with Entity::GetFootprint
+  // (0x5aa73e / 0x5aa7ca), which also follows +0x125
+  t.fp = PathFinderFootprint(u);
+  t.fitGrid[0] = FootprintGrid(sim, Bp(u));
+  t.fitGrid[1] = AltFootprintGrid(sim, Bp(u));
   t.S = std::max(SX(u), SZ(u));
   t.armyIndex = u->army ? u->army->index : 0;
   PathCell c = CellOf(u, u->position.x, u->position.z);
@@ -301,7 +305,7 @@ void SetFinderGoal(Sim& sim, Unit* u, LandNav& n, const int* g) {
 // it touched was still to make (about 2,950 x 10 budget) and the answer came a beat later.
 void UpdateWaterFavor(Sim& sim, Unit* u, LandNav& n) {
   if (!BpInCategory(sim, u->blueprint, "FAVORSWATER")) return;
-  n.waterAlt = false;
+  u->altFootprintNav = false;
   const TerrainMap* map = sim.map();
   if (!map) return;
   auto onLand = [&](float x, float z) {
@@ -328,19 +332,20 @@ void UpdateWaterFavor(Sim& sim, Unit* u, LandNav& n) {
           cellCentreOnLand(v, commandPos(*v->commands.front(), v)))
         return;
     }
-    n.waterAlt = true;
+    u->altFootprintNav = true;
     return;
   }
   if (onLand(u->position.x, u->position.z)) return;
   if (onLand(n.goal[0] + SX(u) * 0.5f, n.goal[1] + SZ(u) * 0.5f)) return;
-  n.waterAlt = true;
+  u->altFootprintNav = true;
 }
 
 // RequestPath 0x5adfe0
 void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
   UpdateWaterFavor(sim, u, n);
   if (Dbg() && BpInCategory(sim, u->blueprint, "FAVORSWATER"))
-    Logf(LogLevel::Info, "nav: tick %u unit %u water favor: alt footprint %d", sim.tick(), u->id, n.waterAlt ? 1 : 0);
+    Logf(LogLevel::Info, "nav: tick %u unit %u water favor: alt footprint %d (forced %d)", sim.tick(), u->id,
+         u->altFootprintNav ? 1 : 0, u->altFootprintForced ? 1 : 0);
   n.pf.anchor = n.cur;
   SetFinderGoal(sim, u, n, n.goal);
   n.pf.mode = mode;
@@ -373,6 +378,8 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   // new goal does not leave PathFinding standing)
   u->unitStates.erase("PathFinding");
   u->unitStates.erase("ProblemGettingToGoal");
+  // 0x5ada33: unit+0x124 := 0 (the navigator's AltFootprint flag; RequestPath sets it again for a FAVORSWATER unit)
+  u->altFootprintNav = false;
   // (0x5ad9c0 leaves the splice count +0x5c alone: only ConsumePathPrefix 0x5ad830 and the splice itself write
   // it, so a move dropped with spliced cells ahead hands the count to the next goal's first waypoints)
 }
@@ -654,7 +661,11 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
 
 // UpdateCurrentPosition 0x5ae2d0
 void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
-  n.cur = CellOf(u, u->position.x, u->position.z);
+  {  // SetCurrentPosition 0x5ae210: the size of the path-finder's footprint (+0x124 only)
+    const NamedFootprint& f = PathFinderFootprint(u);
+    n.cur = {static_cast<int>(std::nearbyint(u->position.x - std::max<int>(1, f.sizeX) * 0.5f)),
+             static_cast<int>(std::nearbyint(u->position.z - std::max<int>(1, f.sizeZ) * 0.5f))};
+  }
   if (n.thinkDelay > 0) {
     if (--n.thinkDelay == 0) RequestPath(sim, u, n, n.requestMode);
     n.target = n.cur;  // (0x5ae37f) the target is the own cell
@@ -795,6 +806,9 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     n.hasTarget = false;  // (a navigator that went idle starts its next goal with a target change)
     Tables(sim).Cancel(&n.pf);
     u->unitStates.erase("PathFinding");
+    // (0x5a43fb: MakeIdle, vt+0x4c = 0x5a3e00, runs ResetPathState 0x5ad9c0, which clears unit+0x124: a FAVORSWATER
+    // unit stands on its Footprint again once its move is over)
+    u->altFootprintNav = false;
     MotionNavDone(u, ok);
   }
 }
@@ -813,7 +827,7 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   if (map && (x < 0 || z < 0 || x > map->width() || z > map->height())) return false;
   // 0x720aa0 -> OCCUPY_FootprintFits(caps = -1): the occupancy layers only clear the land (1, 2) and water (8)
   // bits, so a footprint that may be in the Air (16) always fits (a build drone over a factory)
-  if (u->blueprint && u->blueprint->hasFootprint && (u->blueprint->footprint.caps & 0x10)) return true;
+  if (u->blueprint && u->blueprint->hasFootprint && (Fp(u).caps & 0x10)) return true;
   return Fits(sim, u, CellOf(u, x, z));
 }
 

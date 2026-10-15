@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "core/log.h"
+#include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/build.h"
 #include "sim/combat.h"
@@ -75,8 +76,10 @@ struct TransportTaskData {
   Vec3 bonePos, fwd, approach;       // +0x44, +0x50, +0x5c
   bool isCarrier = false;            // CUnitRefuel+0x39: the platform is a carrier
   // pod assist (CUnitPodAssist): the owner is `transport`; the assist task it started and that task's first beat
+  // (CUnitCallTeleport: the teleport task it started)
   BuildTask* work = nullptr;
   uint32_t workFrom = 0;
+  bool rectHeld = false;  // CUnitCallTeleport+0x39: the unit's o-grid rect is reserved
 };
 
 namespace {
@@ -465,6 +468,59 @@ void AddPickupUnits(Sim& sim, TransportObj& T, const std::vector<Unit*>& units, 
   for (Unit* u : units) T.pickup.push_back(EntityRef(u));
   std::sort(T.pickup.begin(), T.pickup.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
   T.atPickup = false;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A teleporter's beacon (CAiTransportImpl+0x10, transport_core.md 3.7) and the waiting list (+0x30, 3.6)
+
+// The beacon as the weak pointer gives it: null once the entity is gone.
+Unit* BeaconOf(Sim& sim, const TransportObj& T) {
+  Entity* e = T.teleportBeacon ? sim.FindEntity(T.teleportBeacon) : nullptr;
+  return e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+}
+// TransportSetTeleportDest 0x5e8080 (vt+0x9c): with a beacon, the teleporter's script hears of it first,
+// tu:OnSetTeleportDest(the beacon's position) (0x5e80b6 the position, 0x5e80e1 the call); then the weak link takes
+// the beacon, or nothing (0x5e80f8, also without one).
+void SetTeleportDest(Sim& sim, TransportObj& T, Unit* beacon) {
+  if (beacon) {
+    lua_State* L = sim.L();
+    PushVector(L, beacon->position.x, beacon->position.y, beacon->position.z);
+    sim.CallMethod(L, T.owner, "OnSetTeleportDest", 1);
+  }
+  T.teleportBeacon = beacon ? EntityRef(beacon) : 0;
+}
+// TransportGetTeleportDest 0x5e8120 (vt+0xa0): the beacon's position while it is neither dead (IUnit vt+0x28) nor
+// being destroyed (vt+0x2c); else the zero vector (0xf3d21c), which the callers read as "no destination".
+Vec3 GetTeleportDest(Sim& sim, const TransportObj& T) {
+  Unit* b = BeaconOf(sim, T);
+  if (!b || b->dead || b->destroyQueued) return {};
+  return b->position;
+}
+bool NoTeleportDest(const Vec3& p) { return p.x == 0.0f && p.y == 0.0f && p.z == 0.0f; }  // memcmp 0x4f0a50
+// TransportIsTeleportBeaconReady 0x5e81d0 (vt+0xa8): the beacon lives and is idle, Unit::IsIdleState 0x6a7d60 (its
+// queue has no current command)
+bool IsTeleportBeaconReady(Sim& sim, const TransportObj& T) {
+  Unit* b = BeaconOf(sim, T);
+  if (!b || b->dead || b->destroyQueued) return false;
+  return b->commands.empty();
+}
+// TransportGenerateWaitingFormationForUnits 0x5e5f40 (vt+0x94): the units join the waiting set (AddAll 0x57eb00, an
+// EntitySet: ascending id, each once), then a formation is made for the set in the sim's formation database
+// (sim+0x980 vt+0x14, AI.GuardFormationName ubp+0x470, at the transport) and kept at T+0x110. (The formation
+// itself is not built here: only that it exists, which is what GetWaitingFormation vt+0x90 tells the load task.
+// Read: the call is made whatever the name; not read: whether the database can return none.)
+void GenerateWaitingFormation(Sim& sim, TransportObj& T, const std::vector<uint32_t>& units) {
+  for (uint32_t r : units)
+    if (std::find(T.waiting.begin(), T.waiting.end(), r) == T.waiting.end()) T.waiting.push_back(r);
+  std::sort(T.waiting.begin(), T.waiting.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
+  T.waitingFormation = true;
+}
+void RemoveFromWaitingList(TransportObj& T, const Unit* u) {  // vt+0x88
+  T.waiting.erase(std::remove(T.waiting.begin(), T.waiting.end(), EntityRef(u)), T.waiting.end());
+}
+void ClearWaitingFormation(TransportObj& T) {  // vt+0x98: the formation deleted, the waiting set emptied
+  T.waiting.clear();
+  T.waitingFormation = false;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1063,6 +1119,7 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
     L.push_back(u);
     d.cargo.erase(std::remove(d.cargo.begin(), d.cargo.end(), EntityRef(u)), d.cargo.end());
     ++d.assigned;
+    if (O.waitingFormation) RemoveFromWaitingList(O, u);  // 0x625423..0x625462
     ++i;
   }
   if (full && !O.isTeleporter && !O.isAirStaging && !State(T, "AssistMoving") && !State(T, "Ferrying") &&
@@ -1092,12 +1149,16 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
       d.picks.clear();
     }
   }
+  // 0x625879..0x6258bd: a teleporter (or staging platform) keeps the units it had no slot for waiting, for a later
+  // round
+  if (!d.cargo.empty() && !O.waitingFormation && (O.isTeleporter || O.isAirStaging)) GenerateWaitingFormation(sim, O, d.cargo);
 }
 
 int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
   TransportObj& O = *T->transport;
-  if (O.isTeleporter) {  // teleport destinations are not kept yet: always "(0,0,0)"
-    Logf(LogLevel::Warning, "No teleport destination set for this teleporter. Cancelling teleportation task.");
+  // 0x625979: a teleporter without a destination (no beacon, or a dead one) gives up, every run
+  if (O.isTeleporter && NoTeleportDest(GetTeleportDest(sim, O))) {
+    Logf(LogLevel::Info, "No teleport destination set for this teleporter. Cancelling teleportation task.");
     return kTaskFailed;
   }
   if (T->layer == "Seabed") return kTaskFailed;
@@ -1161,6 +1222,17 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
       case 3:
         ++d.counter;
         if (PickupUnitCount(sim, O) != 0 && d.counter <= 300) return kTaskRunning;
+        // 0x625d34..0x625d7f: the waiting units join the cargo (AddAll); a teleporter with cargo left goes round
+        // again (state 0, return 1), with a slot for each in turn, whether or not the 300 beats ran out
+        if (!O.waiting.empty()) {  // (only a teleporter's or a staging platform's load fills it)
+          for (uint32_t r : O.waiting)
+            if (std::find(d.cargo.begin(), d.cargo.end(), r) == d.cargo.end()) d.cargo.push_back(r);
+          std::sort(d.cargo.begin(), d.cargo.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
+        }
+        if (!d.cargo.empty() && O.isTeleporter) {
+          t.state = 0;
+          return kTaskRunning;
+        }
         d.success = d.counter <= 300;
         return d.success ? kTaskDone : kTaskFailed;
       default:
@@ -1175,6 +1247,7 @@ void EndLoad(Sim& sim, Unit* T, TransportTaskData& d) {
   SetState(T, "TransportLoading", false);
   SetState(T, "HoldingPattern", false);
   if (!T->transport) return;
+  ClearWaitingFormation(*T->transport);  // dtor 0x624cc0: TransportClearWaitingFormation (vt+0x98)
   if (!d.success) {
     Callback(sim, T, "OnTransportAborted");
     for (const auto& p : d.picks) {
@@ -2427,6 +2500,139 @@ void EndPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
   SetState(u, "AssistingCommander", false);
 }
 
+// --- the cargo's side of a teleporter's load: CUnitCallTeleport (new 0x6012b0, ctor 0x600e90, TaskTick 0x6013d0,
+// dtor 0x600ef0) -------------------------------------------------------------------------------------------------
+// TransportLoadUnits or Dock on a TELEPORTATION unit T. The unit waits until T's load has it in its round, walks to
+// the cell under its attach point, waits until T's beacon is idle and then teleports itself there: a child
+// CUnitTeleportTask with T as the teleporter and the beacon's place as a ground target (the unit's script runs the
+// teleport, as for a teleport of its own).
+
+enum { kCallTeleport = 11 };
+
+// Unit::PrepareMove 0x62b780 with no rect to keep clear: a free spot near *p for u (false: none).
+bool CallTeleportPrepareMove(Sim& sim, Unit* u, Vec3* p) {
+  static const float none[4] = {0, 0, 0, 0};
+  return CanFly(u) ? AirPrepareMove(sim, u, p) : GroundPrepareMove(sim, u, p, none);
+}
+// The cell of u's footprint at p (SFootprint::ToCellPos 0x579300)
+void CallTeleportCell(const Unit* u, const Vec3& p, int* cx, int* cz) {
+  const NamedFootprint& fp = Fp(u);
+  *cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+  *cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+}
+// u's footprint rect at p reserved (COORDS_ToGridRect 0x50b010, Unit::ReserveOgridRect 0x6ab6f0), task+0x39 = 1
+void CallTeleportReserve(Sim& sim, Unit* u, const Vec3& p, TransportTaskData& d) {
+  const NamedFootprint& fp = Fp(u);
+  int cx, cz;
+  CallTeleportCell(u, p, &cx, &cz);
+  const int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
+  GroundReserveRect(sim, u, r);
+  d.rectHeld = true;
+}
+// NewMoveTask(SNavGoal(cell), 0, null, 0) 0x6190a0: a plain move child to the cell
+void CallTeleportWalk(Sim& sim, Unit* u, TransportTaskData& d, int cx, int cz) {
+  const NamedFootprint& fp = Fp(u);
+  TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, 0, cz + fp.sizeZ * 0.5f});
+  d.childMove = true;  // the move task sets Moving
+  SetState(u, "Moving", true);
+  AirSpeedThroughEvent(sim, u);
+}
+
+int TickCallTeleport(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (d.work) {  // the teleport runs above this task; when it ends this one runs again in the same beat
+    if (sim.tick() < d.workFrom) return kTaskRunning;
+    if (TickBuildTask(sim, u, *d.work) == kTaskRunning) return kTaskRunning;
+    d.work = nullptr;
+  }
+  if (RunChild(sim, u, t, d)) return kTaskRunning;  // a walk
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  // Every run (0x6013f5..0x6014c5): ends when the unit is dead, T gone or dead, T's load over (after state 0), or
+  // T without a destination; a unit already handed to its teleport (state 4) then counts as a success (0x60188c)
+  auto end = [&] {
+    if (t.state == 4) d.success = true;
+    return d.success ? kTaskDone : kTaskFailed;
+  };
+  Unit* T = UnitRef(sim, d.transport);
+  if (u->dead || !T || T->dead || !T->transport) return end();
+  if (t.state != 0 && !State(T, "TransportLoading")) return end();
+  TransportObj& O = *T->transport;
+  if (NoTeleportDest(GetTeleportDest(sim, O))) return end();
+  const bool assigned = InPickup(O, u);  // TransportIsUnitAssignedForPickup (vt+0x3c), asked before the switch
+  switch (t.state) {
+    case 0:  // 0x6014cc: T loading and on the same command as this unit, else again in 10 beats
+      if (State(T, "TransportLoading") && Current(T) == Current(u)) {
+        t.state = 1;
+        t.waitUntil = sim.tick() + 2;  // return 3
+        return kTaskRunning;
+      }
+      t.waitUntil = sim.tick() + 9;  // return 10
+      return kTaskRunning;
+    case 1:  // 0x60154e: no slot yet: walk to a free spot near T (a unit with no spot gives up)
+      if (!assigned) {
+        Vec3 p = T->position;
+        if (!CallTeleportPrepareMove(sim, u, &p)) return kTaskFailed;  // 0x6015d4
+        CallTeleportReserve(sim, u, p, d);
+        int cx, cz;
+        CallTeleportCell(u, p, &cx, &cz);
+        CallTeleportWalk(sim, u, d, cx, cz);
+      }
+      t.state = 2;
+      return kTaskRunning;  // return 1
+    case 2: {  // 0x601678: the walk's rect is given back; with a slot: WaitingForTransport, walk under the attach point
+      if (d.rectHeld) {
+        GroundFreeRect(sim, u);
+        d.rectHeld = false;
+      }
+      if (!assigned) return kTaskRunning;  // return 1
+      SetState(u, "WaitingForTransport", true);
+      int cx, cz;
+      if (!GetAttachPosition(O, u, &cx, &cz)) return kTaskFailed;  // TransportGetAttachPosition (vt+0x50), 0x5ff620
+      CallTeleportWalk(sim, u, d, cx, cz);
+      t.state = 3;
+      return kTaskRunning;  // return 0: the walk starts now
+    }
+    case 3: {  // 0x60173f: once the beacon is idle: off T's list, a spot at the beacon, the teleport
+      if (!IsTeleportBeaconReady(sim, O)) {
+        t.waitUntil = sim.tick() + 9;  // return 10
+        return kTaskRunning;
+      }
+      TransportAttach(sim, O, u);  // TransportAttachUnit (vt+0x30): a teleporter only takes it off its pickup list
+      Vec3 dest = GetTeleportDest(sim, O);
+      CallTeleportPrepareMove(sim, u, &dest);  // (its answer is not looked at, 0x6017e4)
+      CallTeleportReserve(sim, u, dest, d);
+      d.work = MakeTeleportChild(sim, u, T, dest);  // CUnitCallTeleport::BuildGroundTeleportTarget 0x5e2340, new 0x60aac0
+      d.workFrom = sim.tick() + 1;                  // return 1: the child runs from the next beat
+      t.state = 4;
+      return kTaskRunning;
+    }
+    default:  // 4: the teleport is over; wait for T's load to end (the preamble then ends this one, a success)
+      return kTaskRunning;
+  }
+}
+
+void EndCallTeleport(Sim& sim, Unit* u, TransportTaskData& d) {
+  if (d.work) {  // the child first (CTask::TaskInterruptSubtasks): its dtor, OnFailedTeleport if it had not finished
+    EndBuildTask(sim, u, *d.work, false);
+    d.work = nullptr;
+  }
+  if (d.childMove) {  // the walk's move task (as CUnitCallTransport's walk)
+    d.childMove = false;
+    SetState(u, "Moving", false);
+    if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  }
+  SetState(u, "TransportLoading", false);
+  SetState(u, "WaitingForTransport", false);
+  if (d.rectHeld) {
+    GroundFreeRect(sim, u);
+    d.rectHeld = false;
+  }
+  Unit* T = UnitRef(sim, d.transport);
+  if (T && !T->dead && T->transport) {
+    RemoveFromWaitingList(*T->transport, u);
+    if (!d.success) RemovePickupUnit(sim, *T->transport, u, true);
+  }
+}
+
 int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
   if (!t.tdata) return kTaskFailed;
   TransportTaskData& d = *t.tdata;
@@ -2441,6 +2647,7 @@ int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
     case kCarrierRetrieve: return u->transport ? TickCarrierRetrieve(sim, u, t, d) : kTaskFailed;
     case kCarrierLaunch: return u->transport ? TickCarrierLaunch(sim, u, t, d) : kTaskFailed;
     case kPod: return TickPod(sim, u, t, d);
+    case kCallTeleport: return TickCallTeleport(sim, u, t, d);
     default: return kTaskFailed;
   }
 }
@@ -2483,11 +2690,27 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       }
     }
     t->order = "Ferry";
-  } else if (c.type == CommandType::TransportLoadUnits) {
+  } else if (c.type == CommandType::TransportLoadUnits || c.type == CommandType::Dock) {
+    // DispatchTask 0x609ac6 (the jump table 0x60a3e8 sends both 22 and 39 there): the two differ only where the
+    // command type is tested, at a CARRIER (0x609d23, 0x609e71)
+    const bool dock = c.type == CommandType::Dock;
     if (!target) return nullptr;
     bool ferryTarget = InCat(sim, target, "FERRYBEACON") ||
                        (InCat(sim, target, "FACTORY") && !InCat(sim, target, "AIRSTAGINGPLATFORM") &&
                         !InCat(sim, target, "TELEPORTATION"));
+    // IssueRefuelTask 0x622110: dock on the platform (a carrier: be stored in it), refuel / repair, take off. No
+    // task for a dead platform or one being built; one without a staging transport is gpg::Die in the original
+    // ("Attepted to call illegal refuel on non-air staging platform %s"), nothing here.
+    auto refuel = [&]() -> bool {
+      if (target->dead || target->beingBuilt || !target->transport || !target->transport->isAirStaging) return false;
+      d->kind = kRefuel;
+      d->transport = EntityRef(target);
+      d->isCarrier = InCat(sim, target, "CARRIER");  // CUnitRefuel+0x39
+      SetState(u, "Refueling", true);
+      AirSpeedThroughEvent(sim, u);  // refuel task ctor
+      t->order = "Refuel";
+      return true;
+    };
     if (ferryTarget) {  // wait at the beacon for a ferry (CUnitWaitForFerryTask)
       d->kind = kWaitFerry;
       d->beacon = EntityRef(target);
@@ -2495,6 +2718,8 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       u->focusId = EntityRef(target);
       Callback(sim, u, "OnAssignedFocusEntity");
       t->order = "WaitForFerry";
+    } else if (target != u && InCat(sim, target, "CARRIER") && dock) {  // 0x609e91: Dock on a carrier refuels in it
+      if (!refuel()) return nullptr;
     } else if (target != u && InCat(sim, target, "CARRIER")) {  // IssueCarrierLandTask 0x606d80
       if (target->dead || !target->transport) return nullptr;
       d->kind = kCarrierLand;
@@ -2504,21 +2729,26 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       Callback(sim, u, "OnAssignedFocusEntity");
       t->order = "CarrierLand";
     } else if (target == u && InCat(sim, u, "CARRIER") && u->transport) {  // CUnitCarrierRetrieve
+      // (a Dock on itself never gets here: TransportOrderOnTheSpot)
       std::vector<uint32_t> cargo;
       for (Unit* o : c.units)
         if (o != u) cargo.push_back(EntityRef(o));
       d = NewRetrieve(sim, u, std::move(cargo));
       t->order = "CarrierRetrieve";
     } else if (target != u && InCat(sim, target, "AIRSTAGINGPLATFORM") && !InCat(sim, target, "CARRIER")) {
-      // IssueRefuelTask 0x622110: dock on the platform, refuel / repair, take off
-      if (target->dead || target->beingBuilt || !target->transport || !target->transport->isAirStaging) return nullptr;
-      d->kind = kRefuel;
+      if (!refuel()) return nullptr;
+    } else if (target != u && InCat(sim, target, "TELEPORTATION")) {
+      // IssueCallTeleportTask 0x6012b0: none for a dead T (IUnit vt+0x28); a T outside TELEPORTATION is warned of
+      // ("Attepted to call illegal teleport %s") but cannot get here. Ctor 0x600e90: TransportLoading on the unit.
+      if (target->dead) return nullptr;
+      d->kind = kCallTeleport;
       d->transport = EntityRef(target);
-      SetState(u, "Refueling", true);
-      AirSpeedThroughEvent(sim, u);  // refuel task ctor
-      t->order = "Refuel";
+      SetState(u, "TransportLoading", true);
+      t->order = "CallTeleport";
     } else if (target != u) {  // cargo
-      if (!target->transport || !IsAirUnit(sim, target)) return nullptr;  // TODO: land/naval transports, carriers
+      // (an AIR transport: NewCallTransportCommand 0x5ffbb0; any other: IssueCallLandTransportTask 0x6007c0,
+      // CUnitCallLandTransport, which is not built)
+      if (!target->transport || !IsAirUnit(sim, target)) return nullptr;  // TODO: land/naval transports
       d->kind = kCall;
       d->transport = EntityRef(target);
       SetState(u, "TransportLoading", true);
@@ -2535,6 +2765,7 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
     }
   } else if ((c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) &&
              u->transport && u->transport->isAirStaging && InCat(sim, u, "CARRIER")) {
+    // (a teleporter's unload on an entity never gets here: TransportOrderOnTheSpot)
     if (LoadedUnits(sim, u).empty()) return nullptr;  // (refuelling aircraft do not count)
     d->kind = kCarrierLaunch;
     for (Unit* o : c.units)
@@ -2570,6 +2801,41 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
 
 int TickTransportTask(Sim& sim, Unit* u, BuildTask& t) { return TickTask(sim, u, t, &t); }
 
+// The cases of the transport orders in which DispatchTask makes no task, carried out on the spot:
+bool TransportOrderOnTheSpot(Sim& sim, Unit* u, const UnitCommand& c) {
+  if (c.type == CommandType::DetachFromTransport) {
+    // 0x60a3b2 -> DetachDispatchUnitFromTransport 0x626a90: the unit's attach parent (unit+0x194), when it is a unit
+    // (Entity vt+0x10) with a transport (+0x55c), lets it go: TransportDetachUnit (vt+0x34), the same detach an
+    // unload makes (OnTransportDetach, the fall of a land unit). Nothing else. (The dispatcher runs nothing for a
+    // unit in state Attached, so the order acts only on cargo a script took out of that state; for any other it
+    // waits in the queue until the unit is let go, and does nothing then.)
+    Entity* p = u->parentId ? sim.FindEntity(u->parentId) : nullptr;
+    if (p && p->kind == Entity::Kind::Unit && static_cast<Unit*>(p)->transport)
+      TransportDetach(sim, *static_cast<Unit*>(p)->transport, u);
+    return true;
+  }
+  if ((c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) &&
+      u->transport && u->transport->isTeleporter) {
+    // 0x60a1fa..0x60a228: a teleporter told to unload on an entity (IssueTeleportToBeacon) takes it as its
+    // destination, TrySetTransportTeleportDestinationFromTarget 0x60b8b0: a unit becomes the beacon
+    // (TransportSetTeleportDest vt+0x9c); any other entity changes nothing. Without an entity: an ordinary unload.
+    Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+    if (!e) return false;
+    if (e->kind == Entity::Kind::Unit) SetTeleportDest(sim, *u->transport, static_cast<Unit*>(e));
+    return true;
+  }
+  if (c.type == CommandType::Dock && c.targetId && UnitRef(sim, c.targetId) == u && InCat(sim, u, "CARRIER")) {
+    // 0x609d4e: a carrier told to dock on itself only resets its reservations (TransportResetReservation vt+0x80)
+    if (u->transport) ResetReservation(*u->transport);
+    return true;
+  }
+  return false;
+}
+
+bool TeleportBeaconReady(Sim& sim, const Unit* teleporter) {
+  return teleporter && teleporter->transport && IsTeleportBeaconReady(sim, *teleporter->transport);
+}
+
 void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   if (!t.tdata) return;
   TransportTaskData& d = *t.tdata;
@@ -2587,6 +2853,7 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     case kCarrierRetrieve: EndCarrierRetrieve(sim, u, d); break;
     case kCarrierLaunch: EndChild(sim, u, d); SetState(u, "TransportUnloading", false); break;
     case kPod: EndPod(sim, u, t, d); break;
+    case kCallTeleport: EndCallTeleport(sim, u, d); break;
     default: break;
   }
 }
@@ -2911,6 +3178,52 @@ int l_IssueFerry(lua_State* L) {
 int l_IssueTransportUnload(lua_State* L) { return IssueUnload(L, false); }
 int l_IssueTransportUnloadSpecific(lua_State* L) { return IssueUnload(L, true); }
 
+// IssueTeleportToBeacon(units, beacon) 0x6f7850: two arguments; the units with the Transport cap (FilterByCommandCap
+// 0x6eecf0, 0x100) get one TransportUnloadUnits (24) that, unlike IssueTransportUnload's, keeps its entity target
+// (CAiTarget::SetTarget 0x6eef60 and the encode 0x5e27d0, no GetTargetPosGun): a teleporter dispatching it takes
+// the beacon as its destination. Issued with clear 0 (IssueCommandToUnits 0x6f12c0); ValidateIssue's unload case
+// (0x6f1189) refuses a unit on the Seabed and one that neither is a transport nor is carried. Returns nothing.
+int l_IssueTeleportToBeacon(lua_State* L) {
+  Sim& sim = *S(L);
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "IssueTeleportToBeacon", 2, lua_gettop(L));
+  std::vector<Unit*> set;
+  for (Unit* u : UnitList(L, 1))
+    if (LiveCommandCaps(L, u) & kCapTransport) set.push_back(u);
+  if (set.empty()) return 0;
+  auto c = NewCommand(sim, CommandType::TransportUnloadUnits);
+  if (Entity* e = ToObject<Entity>(L, 2)) {
+    c->targetId = EntityRef(e);
+    c->pos = e->position;
+    c->hasPos = true;
+  } else if (lua_istable(L, 2)) {
+    float v[3] = {0, 0, 0};
+    for (int i = 0; i < 3; ++i) {
+      lua_rawgeti(L, 2, i + 1);
+      v[i] = static_cast<float>(lua_tonumber(L, -1));
+      lua_pop(L, 1);
+    }
+    c->pos = {v[0], v[1], v[2]};
+    c->hasPos = true;
+  } else if (!lua_isnil(L, 2)) {
+    return luaL_error(L, "Invalid target set in %s; expected an entity or a Vec3 but got a %s", "IssueTeleportToBeacon",
+                      lua_typename(L, lua_type(L, 2)));
+  }
+  for (Unit* u : set) {
+    if (u->dead || u->layer == "Seabed" || (!u->transport && !u->transportedBy)) continue;
+    Append(u, c);
+  }
+  return 0;
+}
+
+// Unit:HasValidTeleportDest() 0x6cd860: the unit is a transport whose destination is not the zero vector
+int l_HasValidTeleportDest(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "HasValidTeleportDest", 1, lua_gettop(L));
+  Unit* u = CheckObject<Unit>(L, 1);
+  lua_pushboolean(L, u->transport && !NoTeleportDest(GetTeleportDest(*S(L), *u->transport)));
+  return 1;
+}
+
 }  // namespace
 
 // Unit:SetCreator(creator) 0x6c3c80: the unit's creator (u+0x4b8); a drone's owner
@@ -2939,6 +3252,8 @@ void RegisterTransportBindings(lua_State* L) {
   lua_register(L, "IssueTransportLoad", l_IssueTransportLoad);
   lua_register(L, "IssueTransportUnload", l_IssueTransportUnload);
   lua_register(L, "IssueTransportUnloadSpecific", l_IssueTransportUnloadSpecific);
+  SetGlobal(L, "IssueTeleportToBeacon", l_IssueTeleportToBeacon);
+  SetMethod(L, "Unit", "HasValidTeleportDest", l_HasValidTeleportDest);
 }
 
 // The factory hand-off's TransportLoadUnits(R) for one finished unit (IssueCommandToUnits, append).

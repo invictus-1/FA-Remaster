@@ -28,6 +28,8 @@
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/ai_personality.h"
+#include "sim/ai_platoon.h"
+#include "sim/ai_threat.h"
 #include "sim/session.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -767,6 +769,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterThreadBindings(L, threads_.get());
   RegisterSimBindings(L);
   RegisterEntityBindings(L);
+  RegisterPlatoonBindings(L);
   RegisterCommandBindings(L);
   RegisterEffectBindings(L);
   RegisterEconomyBindings(L);
@@ -779,6 +782,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterAirBindings(L);
   RegisterTransportBindings(L);
   RegisterIntelBindings(L);
+  RegisterThreatBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -901,6 +905,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
   }
 
   InitIntelGrids(*this, L);  // each army's recon DB (CArmyImpl ctor)
+  InitThreatMaps(*this);     // and its threat map (CArmyImpl ctor 0x6feb94)
 
   // Brains: an instance of /lua/aibrain.lua's AIBrain bound to the engine brain.
   for (auto& a : armies_) {
@@ -928,7 +933,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     BindObject(L, -1, brain);
     owned_.emplace_back(brain);
     lua_settop(L, top);
-    a->pool = CreatePlatoon(L, a.get(), "ArmyPool", "");
+    a->pool = CreateArmyPool(*this, L, a.get());  // CArmyImpl ctor 0x6ff179 (sim/ai_platoon.cpp)
     lua_pushnumber(L, a->index);
     PushObject(L, brain);
     lua_pushstring(L, a->name.c_str());
@@ -1049,15 +1054,8 @@ void Sim::ProcessDestroyQueue() {
       RemoveUnitFromLists(u);
     }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
-    if (e->army && e->army->pool) {
-      auto& v = e->army->pool->units;
-      v.erase(std::remove(v.begin(), v.end(), static_cast<Unit*>(nullptr)), v.end());
-      for (size_t k = 0; k < v.size(); ++k)
-        if (static_cast<Entity*>(v[k]) == e) {
-          v.erase(v.begin() + static_cast<long>(k));
-          break;
-        }
-    }
+    // the squads' EntitySets drop a purged unit (sim/ai_platoon.cpp)
+    if (e->kind == Entity::Kind::Unit) PlatoonsForgetUnit(*this, static_cast<Unit*>(e));
     done.push_back(e);
   }
   destroyQueue_.clear();
@@ -1343,6 +1341,10 @@ void Sim::Tick() {
   LandNavBackground(*this);  // AdvanceBeat step 3: path tables' background build
   // the armies' stage: economy, navigators and path queues, weapons (acquire, fire)
   EconomyBeginBeat(*this);
+  // CArmyImpl::OnTick 0x6ffe11, after the army's economy and stats: the army whose slot it is (tick % 30) sums its
+  // threat map. It reads only the blips (changed at the beat's end) and writes only the map, so doing it here for
+  // that army rather than between the armies' other stages changes nothing (inferred from what it reads).
+  ThreatMapBeat(*this);
   threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
   g_prof.Lap(0);
   LandNavTickAll(*this);
@@ -1413,6 +1415,11 @@ void Sim::Tick() {
     u->lastPosTick = tick_;
     PurgeShooters(*this, u);
     HoldShape(u);
+    // Unit::MotionTick 0x6a906e: the stun's countdown (u+0x29c, while > 0), every unit, after UpdateInfoCache and
+    // before CUnitMotion::MotionTick (neither the guard formation nor the info cache reads it): a unit stunned in a
+    // beat after its own turn (a Loyalist's death stun) is held for (int)(seconds * 10) of its turns, and its weapons,
+    // which run before the entity stage, fire again in the beat after the count reached 0.
+    if (u->stunned > 0) --u->stunned;
     if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
       UnitEconomyTick(*this, u);

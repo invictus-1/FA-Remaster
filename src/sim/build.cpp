@@ -35,6 +35,7 @@
 #include "core/dmath.h"
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
@@ -403,6 +404,15 @@ void StopMoving(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
+// A task's move child torn down with the task (CUnitMoveTask's dtor 0x618700): Moving off (0x6187bd), and the
+// navigator's AbortMove (0x618884) unless the queue is being cleared for an order its table 0x618998 keeps
+// (u->clearKeepsMove, set by IssueFromStream). (A move that ends by itself goes through StopMoving: queue+0x1c is 0
+// then, and the table aborts for 0.)
+void EndMoveChild(Unit* u) {
+  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  u->unitStates.erase("Moving");
+}
+
 // A unit of the same kind being built at the site (join it instead of starting another).
 Unit* ExistingAtSite(Sim& sim, const Unit* builder, const BlueprintInfo& bp, const Vec3& site) {
   Unit* found = nullptr;
@@ -542,7 +552,7 @@ void EndPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   u->unitStates.erase("Reclaiming");
   u->focusId = 0;
   u->workProgress = 0;
-  if (c.moving) StopMoving(u);
+  if (c.moving) EndMoveChild(u);
 }
 
 // The script's answer to "what does reclaiming this cost": CUnitReclaimTask asks the BUILDER, builder:
@@ -839,7 +849,7 @@ void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4], int fl
     blockers.push_back(b);
   }
   for (Unit* b : blockers) {
-    const NamedFootprint& fp = b->motion.bp->footprint;
+    const NamedFootprint& fp = UnitFootprint(b);  // (Entity::GetFootprint, SIM_TryToBuild 0x62e235..)
     auto rectAt = [&](float wx, float wz, int* q) {
       q[0] = static_cast<int16_t>(RoundEven(wx - fp.sizeX * 0.5f));
       q[1] = static_cast<int16_t>(RoundEven(wz - fp.sizeZ * 0.5f));
@@ -2249,7 +2259,7 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     SetArmAimTarget(sim, u, Vec3{});
     if (t.moving) {
       t.moving = false;
-      StopMoving(u);
+      EndMoveChild(u);
     }
     GroundFreeRect(sim, u);
   }
@@ -2365,7 +2375,7 @@ void EndSacrifice(Sim& sim, Unit* u, BuildTask& t) {
     u->unitStates.erase("Repairing");  // the dtor clears unit state 16
     if (t.moving) {
       t.moving = false;
-      StopMoving(u);
+      EndMoveChild(u);
     }
     if (t.state == 1) GroundFreeRect(sim, u);
     // a task that got as far as state 2 takes the unit with it, however it ends (0x5faeb1)
@@ -2376,14 +2386,20 @@ void EndSacrifice(Sim& sim, Unit* u, BuildTask& t) {
 // ---- teleport (CUnitTeleportTask: new 0x60aac0, ctor 0x60ab20, TaskTick 0x60ac00, dtor 0x60aec0) ----
 // The engine only finds the landing spot and hands over to the script: OnTeleportUnit(teleporter, location,
 // orientation) starts the script's teleport, which holds the unit Immobile while it charges; the task waits for
-// that to end. Ended early (a new order): the script's OnFailedTeleport. Here the teleporter is the unit itself
-// (the dispatch 0x6096fc); the form with another unit as the teleporter is not built.
+// that to end. Ended early (a new order): the script's OnFailedTeleport. The teleporter (+0x50, a weak pointer) is
+// the unit itself for a Teleport order (the dispatch 0x6096fc), or a TELEPORTATION unit whose beacon the unit goes
+// to (CUnitCallTeleport, MakeTeleportChild). The ctor aborts the unit's move (0x60abd0: navigator vt+0x10).
+void TeleportTaskAbortMove(Unit* u) {
+  if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+}
 int TickTeleport(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  Unit* tp = UnitOfRef(sim, t.teleporterId);  // (the weak pointer: null once the teleporter is gone)
   if (t.state == 0) {
     Vec3 p = t.site;
     if (!LandFreeSpot(sim, u, &p)) return kTaskFailed;  // FindFreeSpot 0x62b200 (whole map)
     u->unitStates.insert("Teleporting");
-    PushObject(L, u);
+    if (!tp || tp->dead) return kTaskFailed;  // 0x60ad94..0x60adbf (the dtor clears Teleporting)
+    PushObject(L, tp);
     PushVector(L, p.x, 0.0f, p.z);  // the spot's x and z; y is 0
     PushVector(L, 0, 0, 0);
     const float q[4] = {t.orderOri.x, t.orderOri.y, t.orderOri.z, t.orderOri.w};
@@ -2395,9 +2411,24 @@ int TickTeleport(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     sim.CallMethod(L, u, "OnTeleportUnit", 3);
     return kTaskRunning;
   }
+  // state 1 (0x60ac39): the teleporter gone, dead (IUnit vt+0x28) or being destroyed (vt+0x2c) ends it; so does
+  // another unit's beacon that is no longer ready (TransportIsTeleportBeaconReady, vt+0xa8)
+  if (!tp || tp->dead || tp->destroyQueued) return kTaskFailed;
+  if (tp != u && tp->transport && !TeleportBeaconReady(sim, tp)) return kTaskFailed;
   if (u->immobile || u->unitStates.count("Immobile")) return kTaskRunning;  // (Unit:SetImmobile keeps a flag here)
   t.state = 2;
   return kTaskDone;
+}
+
+// CUnitCallTeleport state 3 (0x601836..0x601862): new CUnitTeleportTask(parent = the call task, teleporter = T, the
+// unit's transform of now, a ground target at dest, BuildGroundTeleportTarget 0x5e2340)
+BuildTask* MakeTeleportChild(Sim& sim, Unit* u, Unit* teleporter, const Vec3& dest) {
+  BuildTask* t = NewChild(sim, CommandType::Teleport, "Teleport");
+  t->site = dest;
+  t->orderOri = u->orientation;
+  t->teleporterId = EntityRef(teleporter);
+  TeleportTaskAbortMove(u);  // (the ctor)
+  return t;
 }
 
 void EndTeleport(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
@@ -2642,6 +2673,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::Script:
       return StartScriptTask(sim, u, c);
     case CommandType::TransportLoadUnits:
+    case CommandType::Dock:  // (DispatchTask 0x609ac6: one case for both)
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
     case CommandType::Ferry:
@@ -2672,12 +2704,14 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       u->focusId = c.targetId;
       sim.CallMethod(sim.L(), u, "OnAssignedFocusEntity", 0);
       break;
-    case CommandType::Teleport: {  // DispatchTask 0x6096fc
+    case CommandType::Teleport: {  // DispatchTask 0x6096fc: the unit is its own teleporter
       Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
       if (!e && !c.hasPos) return nullptr;
       t->order = "Teleport";
       t->site = e ? e->position : c.pos;
       t->orderOri = u->orientation;
+      t->teleporterId = EntityRef(u);
+      TeleportTaskAbortMove(u);  // (the ctor)
       break;
     }
     case CommandType::Sacrifice: {  // DispatchTask 0x609a12
@@ -2725,6 +2759,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Teleport: r = TickTeleport(sim, L, u, t); break;
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
+    case CommandType::Dock:
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
     case CommandType::Ferry: r = TickTransportTask(sim, u, t); break;
@@ -2852,7 +2887,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         if (t.state == 1 && !t.noMove) GroundFreeRect(sim, u);
         if (t.moving) {
           t.moving = false;
-          StopMoving(u);
+          EndMoveChild(u);
         }
       }
       if (Unit* w = FindUnitAny(sim, t.workId)) w->unitStates.erase("NoReclaim");
@@ -2899,10 +2934,20 @@ bool TaskCanMove(const Unit* u) { return CanMove(u); }
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
 void TaskStopMoving(Unit* u) { StopMoving(u); }
 
+// The motion's part of a build-like task's teardown. None of these tasks' own dtors touches the navigator or the
+// motion (read: CUnitMobileBuildTask 0x5f6ac0, CUnitRepairTask 0x5f8e20, CUnitReclaimTask 0x620280,
+// CUnitCaptureTask 0x6050f0, CUnitSacrificeTask 0x5fae40, CUnitTeleportTask 0x60aec0, CUnitUpgradeTask 0x5f84c0,
+// CFactoryBuildTask 0x5fa010: the arm's SetAimTarget(0, 0, 0), unit states, FreeOgridRect, callbacks, nothing at
+// unit+0x54c). Their walks are CUnitMoveTask children (NewMoveTask 0x6190a0 from each TaskTick), deleted first
+// (CTask::TaskInterruptSubtasks 0x408d70, top down), and it is that child's dtor 0x618700 that aborts the move
+// (nav vt+0x10 at 0x618884), by its table 0x618998: not when the queue is cleared for an order the table keeps
+// (u->clearKeepsMove). Seen (Economy 2277): a support commander (uel0301_ras, unit 0xb) whose Reclaim walk is under
+// way gets a player's Move with clear, its queue holding only the Reclaim; the original keeps accelerating along the
+// old turn until the new Move task sets the goal in 2278 (watch log: wn 2278 status 1, goal (708.5, 339.5)), ours
+// braked in 2278-2279.
 void StopMovingIfTask(Unit* u, const BuildTask& t) {
   if (t.type == CommandType::BuildFactory || t.type == CommandType::Upgrade) return;
-  if (u->motion.hasGoal) MotionStop(u);
-  u->unitStates.erase("Moving");
+  EndMoveChild(u);
 }
 
 // ---- factories -----------------------------------------------------------------------------------
@@ -3264,6 +3309,7 @@ int l_NotifyUpgrade(lua_State* L) {
   if (!from || !to) return 0;
   SetGuardedUnit(sim, to, FindUnit(sim, from->guardedId));
   for (Unit* g : Guards(sim, from)) SetGuardedUnit(sim, g, to);
+  PlatoonsNotifyUpgrade(from, to);  // 0x6cd0c7: the upgrade takes the old unit's place in its platoon's squad
   return 0;
 }
 int l_SetBusy(lua_State* L) {

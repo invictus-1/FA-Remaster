@@ -107,6 +107,11 @@ class Unit : public Entity {
   Vec3 leashPos;                    // u+0x4e8: where an engagement started (patrol) / the guard reference; zero: none
   NavigatorObject* navigator = nullptr;               // Lua's GetNavigator() object (owned by the sim)
   bool immobile = false;
+  // entity+0x11c / +0x11d (unit+0x124 / +0x125): the unit stands and paths with its AltFootprint (UnitFootprint,
+  // sim/motion.h). +0x124 is the navigator's: UpdateWaterFavorAltFootprintMode 0x5adc70 sets it for a FAVORSWATER
+  // unit whose whole move is on water, ResetPathState 0x5ad9c0 (0x5ada33) clears it. +0x125 is the script's: FAF's
+  // Unit:ForceAltFootprint(bool) 0x128dd70 (the Salem's weapon toggle, urs0201_script.lua:176 / 186).
+  bool altFootprintNav = false, altFootprintForced = false;
   int headState = 0;  // progress of the head command (sim/commands.cpp)
 
   // Economy (sim/economy.cpp): per-second rates as scripts set them, the request that claims the
@@ -178,7 +183,9 @@ class Unit : public Entity {
   int attackState = 0;             // the reporting weapon's state code (see TickAttack)
   bool attackStateSignal = false;  // changed since the attack task last looked
   int fireState = 0;               // 0 ReturnFire, 1 HoldFire, 2 HoldGround
-  bool stunned = false;
+  // u+0x29c: the beats the stun still lasts (Unit:SetStunned 0x6c68e0 writes (int)(seconds * 10); Unit::MotionTick
+  // 0x6a906e counts it down, before the motion). Stunned while it is not 0.
+  int stunned = 0;
   uint8_t recon[16] = {};          // per army index: Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went
@@ -308,14 +315,7 @@ class Projectile : public Entity {
   UnitWeapon* weapon = nullptr;  // created by (miss tracking)
 };
 
-class Platoon : public ScriptObject {
- public:
-  Platoon() { typeBits |= kTypePlatoon; }
-  Army* army = nullptr;
-  std::string name;  // unique name ("ArmyPool")
-  std::string plan;
-  std::vector<Unit*> units;
-};
+// class Platoon: sim/ai_platoon.h
 
 template <> struct ScriptTypeOf<Unit> { static constexpr uint32_t bit = kTypeUnit; };
 template <> struct ScriptTypeOf<UnitWeapon> { static constexpr uint32_t bit = kTypeWeapon; };

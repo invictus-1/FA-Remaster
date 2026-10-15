@@ -66,9 +66,11 @@ struct MotionBlueprint {
   std::vector<float> raisedPlatforms;  // Physics.RaisedPlatforms: quads of (x, z, h) x 4 from the position
   NamedFootprint footprint;
   NamedFootprint altFootprint;  // the named AltFootprint (bp+0x300): a FAVORSWATER unit's water-only paths
-  // the footprint's passability grid (cached; grids live as long as the sim's Navigation)
+  // the footprints' passability grids (cached; grids live as long as the sim's Navigation)
   mutable const class PathGrid* grid = nullptr;
   mutable const void* gridOwner = nullptr;
+  mutable const class PathGrid* altGrid = nullptr;
+  mutable const void* altGridOwner = nullptr;
   bool mobile() const { return motionType != kMotionNone; }
 };
 // Read once per blueprint (the unit's blueprint table must be the reflected sim table).
@@ -204,10 +206,31 @@ struct UnitMotion {
   bool pushed = false, wasMoving = false;
 };
 
-// The passability grid of a motion blueprint's footprint (cached).
+// The passability grid of a motion blueprint's footprint, and of its AltFootprint (cached).
 const class PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b);
+const class PathGrid* AltFootprintGrid(Sim& sim, const MotionBlueprint& b);
 // Goal cell of a footprint at a world position (round half to even, as the original).
 void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz);
+void GoalCell(const NamedFootprint& f, float x, float z, int* cx, int* cz);
+// Entity::GetFootprint 0x678880 of a unit: the AltFootprint (bp+0xe8) while unit+0x124 or +0x125 is set, else the
+// Footprint (bp+0xd8). The stock exe tests +0x124 (entity+0x11c) alone; FAF's patch (0x6788a5 -> 0x128e9a6) adds
+// +0x125 (entity+0x11d). The footprint tests of a moving unit all call it (223 call sites): the path-finder's fit
+// tests (SetGoal's ring 0x5aa13a, QueueSearch's start cell 0x5aa3e8 / 0x5aa45f, CanTraverseCell 0x5aa73e /
+// 0x5aa7ca), the navigator's (FootprintFits in RequestPath 0x5ae11b, UpdateCurrentPosition 0x5ae591 and
+// RequestContinuationPath 0x5aed81; Reach 0x5af549; the corridor 0x720bbb; SetGoal's free spot 0x5a3f7b; the
+// target point's place 0x5ad992), Unit::WontFitAt 0x62aa90 (the hard rule, CalcMoveCommon 0x6c2197 / 0x6c2958, and
+// the spline's look-ahead, Generate 0x5b4488 / 0x5b460e), IsAtPosition 0x62cc40, PrepareMove 0x62b7c1, the unit
+// blocking tests (UnitIsBlocked 0x72136b, PathTransitionBlocked 0x7219ca, COORDS_CanMoveAt 0x720fdb), the layer
+// change's offset (UpdateCurrentLayer 0x6c368b), Unit:CanPathTo 0x6cba42, the collision pass (DoCollisionsFor
+// 0x59808b..). Only a unit with an AltMotionType has an AltFootprint other than its Footprint (the Salem: named
+// WaterLand4x4 / Water4x4, the same size; caps 9 / 8, MinWaterDepth 0 / 1.5).
+const NamedFootprint& UnitFootprint(const Unit* u);
+const class PathGrid* UnitFootprintGrid(Sim& sim, const Unit* u);
+// CAiPathFinder::GetFootprint 0x5a9d30 (slot 0: the cluster map BeginQuery searches) and the navigator's
+// SetCurrentPosition 0x5ae210: the named AltFootprint (+0x20 = bp+0x300) while unit+0x124 is set; they do not look
+// at +0x125 (a Salem forced onto its AltFootprint by its script searches the WaterLand4x4 map, but every cell of
+// level 0 is tested with Water4x4).
+const NamedFootprint& PathFinderFootprint(const Unit* u);
 
 // One sim tick of a unit's motion (after its commands ran).
 void MotionTick(Sim& sim, Unit* u);

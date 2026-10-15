@@ -213,10 +213,10 @@ float UnitTopSpeed(const Unit* u) {  // u+0x594
 // AtPatrolGoal 0x61b610
 bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty() || !u->motion.bp) return false;
-  const MotionBlueprint& b = *u->motion.bp;
+  const NamedFootprint& f = UnitFootprint(u);  // (0x61b671: Entity::GetFootprint)
   Vec3 g = TargetPos(sim, *u->commands.front(), u);
-  int gx = static_cast<int>(std::nearbyint(g.x - b.footprint.sizeX * 0.5f));
-  int gz = static_cast<int>(std::nearbyint(g.z - b.footprint.sizeZ * 0.5f));
+  int gx = static_cast<int>(std::nearbyint(g.x - f.sizeX * 0.5f));
+  int gz = static_cast<int>(std::nearbyint(g.z - f.sizeZ * 0.5f));
   int x0 = gx, z0 = gz, x1 = gx + 1, z1 = gz + 1;
   if (p.goalIssued) {
     int m = static_cast<int>(std::ceil(UnitTopSpeed(u)));
@@ -225,8 +225,8 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
     x1 += m;
     z1 += m;
   }
-  int cx = static_cast<int>(std::nearbyint(u->position.x - b.footprint.sizeX * 0.5f));
-  int cz = static_cast<int>(std::nearbyint(u->position.z - b.footprint.sizeZ * 0.5f));
+  int cx = static_cast<int>(std::nearbyint(u->position.x - f.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(u->position.z - f.sizeZ * 0.5f));
   return x0 <= cx && cx <= x1 && z0 <= cz && cz <= z1;
 }
 
@@ -321,8 +321,9 @@ void StartHead(Sim& sim, Unit* u) {
   // beat, also while the unit still falls (seen: a tank dropped by "unload these units" has that order in its own
   // queue, three times; it cannot carry them out and all three are gone the beat after the drop, long before it
   // lands). Not in the beat of the drop itself: the transport's thread, woken by its arrival, has its turn after
-  // the cargo's.
-  if ((u->parentId && u->attachFull) || u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
+  // the cargo's. What blocks is unit state Attached alone (IAiCommandDispatchImpl::TaskTick 0x598f89, IsUnitState
+  // 14), not the attach link: cargo a script took out of that state runs its orders (a DetachFromTransport, say).
+  if (u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
     u->headState = kNotStarted;
     return;
   }
@@ -377,6 +378,16 @@ void StartHead(Sim& sim, Unit* u) {
       sim.CallMethod(sim.L(), u, u->paused ? "OnPaused" : "OnUnpaused", 0);
       PopHead(u);
       continue;
+    }
+    {
+      // DetachFromTransport, a teleporter's new destination, a carrier docking on itself (transport.cpp): no task, so
+      // the dispatcher pops the order and goes on with the next one in the same beat (TaskTick answers 0)
+      std::shared_ptr<UnitCommand> keep = u->commands.front();
+      if (TransportOrderOnTheSpot(sim, u, c)) {
+        if (u->dead || u->destroyQueued) return;
+        if (!u->commands.empty() && u->commands.front() == keep) PopHead(u);
+        continue;
+      }
     }
     if (c.type == CommandType::SpecialAction) {  // 0x6095d0: the script's OnSpecialAction(target position)
       Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
@@ -793,8 +804,13 @@ namespace {
 // that takes it)
 std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& d) {
   auto c = std::make_shared<UnitCommand>();
-  c->id = d.id;
-  c->fromStream = true;
+  if ((d.id >> 24) == 0xffu) {  // AddIssueData 0x6e0db0: an engine-made order (the CPlatoon movers) gets a sim id
+    c->id = sim.nextCommandId++;
+    sim.commandsById[c->id] = c;
+  } else {
+    c->id = d.id;
+    c->fromStream = true;
+  }
   c->type = static_cast<CommandType>(d.type);
   c->blueprintId = d.blueprint;
   for (auto& ch : c->blueprintId) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -823,7 +839,7 @@ std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& 
     if (PushSerializedLua(L, d.lua) && lua_istable(L, -1)) c->scriptRef = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_settop(L, top);
   }
-  sim.streamCommands[d.id] = c;
+  if (c->fromStream) sim.streamCommands[d.id] = c;
   return c;
 }
 }  // namespace
@@ -960,6 +976,17 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     AirSpeedThroughEvent(sim, u);  // queue event 0
   }
   return c;
+}
+
+void IssueClearCommandsTo(Sim& sim, Unit* u) {
+  const bool moveAsleep =
+      !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+  const bool stopped = HeadTaskStopsMotion(u);
+  ForgetUnitCommands(u);
+  if (!stopped) MotionStop(u);
+  SetMoving(u, false);
+  if (moveAsleep) sim.ResumeCommandThread(u);
+  AttackerStop(sim, u);
 }
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):
@@ -1173,17 +1200,8 @@ int l_IssueClearCommands(lua_State* L) {
   // CAiAttackerImpl::Stop 0x5d56f0 = SetDesiredTarget(none)): its weapons' acquire tasks start their period again
   // from this beat. Seen in Experimental2: BlackOps drones are given IssueClearCommands + IssueAttack at 964, and
   // in the original their depth charges (TargetCheckInterval 2) take the enemy at 1084 = 964 + 6 x 20, ours at the
-  // old phase (1095).
-  for (Unit* u : UnitsArg(L, 1)) {
-    const bool moveAsleep =
-        !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
-    const bool stopped = HeadTaskStopsMotion(u);
-    ForgetUnitCommands(u);
-    if (!stopped) MotionStop(u);
-    SetMoving(u, false);
-    if (moveAsleep) S(L)->ResumeCommandThread(u);
-    AttackerStop(*S(L), u);
-  }
+  // old phase (1095). (Both steps: IssueClearCommandsTo.)
+  for (Unit* u : UnitsArg(L, 1)) IssueClearCommandsTo(*S(L), u);
   return 0;
 }
 
@@ -1298,11 +1316,12 @@ bool CanPath(Sim& sim, Unit* u, const Vec3& to) {
   if (!u->motion.bp || !u->motion.bp->mobile()) return false;
   if (u->motion.bp->motionType == kMotionAir) return true;
   std::vector<Vec3> path;
-  if (!sim.navigation().FindPath(u->motion.bp->footprint, u->position, to, &path) || path.empty()) return false;
+  const NamedFootprint& f = UnitFootprint(u);  // (Unit:CanPathTo 0x6cba42: Entity::GetFootprint)
+  if (!sim.navigation().FindPath(f, u->position, to, &path) || path.empty()) return false;
   // reachable only if the path ends in the goal's cell
   int gx, gz, ex, ez;
-  GoalCell(*u->motion.bp, to.x, to.z, &gx, &gz);
-  GoalCell(*u->motion.bp, path.back().x, path.back().z, &ex, &ez);
+  GoalCell(f, to.x, to.z, &gx, &gz);
+  GoalCell(f, path.back().x, path.back().z, &ex, &ez);
   return gx == ex && gz == ez;
 }
 
@@ -1364,6 +1383,22 @@ int l_SetImmobile(lua_State* L) {
   } else {
     u->unitStates.erase("Immobile");
   }
+  return 0;
+}
+
+// Unit:ForceAltFootprint(flag): FAF's binding (its code at 0x128dcxx..0x128dd7e, registered by the FAF exe): two
+// arguments, unit+0x125 := lua_toboolean(2) (0x128dd70), nothing else; Entity::GetFootprint 0x678880 then gives the
+// AltFootprint (FAF patch 0x128e9a6). The Salem's script calls it from OnScriptBitSet / OnScriptBitClear of its
+// weapon toggle (bit 1), which OnStopBeingBuilt sets for a human army's Salem off the land; M28AI's overseer calls
+// it too. MOHO64_DEBUG_ALTFP=1 logs each call.
+int l_ForceAltFootprint(lua_State* L) {
+  if (lua_gettop(L) != 2) luaL_error(L, "%s\n  expected %d args, but got %d", "ForceAltFootprint", 2, lua_gettop(L));
+  Unit* u = U(L);
+  u->altFootprintForced = lua_toboolean(L, 2) != 0;
+  static const bool dbg = getenv("MOHO64_DEBUG_ALTFP") != nullptr;
+  if (dbg)
+    Logf(LogLevel::Info, "altfp: tick %u unit %u ForceAltFootprint(%d) layer %s", S(L)->tick(), u->id,
+         u->altFootprintForced ? 1 : 0, u->layer.c_str());
   return 0;
 }
 
@@ -1596,6 +1631,7 @@ void RegisterCommandBindings(lua_State* L) {
   SetMethod(L, "Unit", "SetBreakOffTriggerMult", l_SetMult<3>);
   SetMethod(L, "Unit", "SetBreakOffDistanceMult", l_SetMult<4>);
   SetMethod(L, "Unit", "SetImmobile", l_SetImmobile);
+  SetMethod(L, "Unit", "ForceAltFootprint", l_ForceAltFootprint);
   SetMethod(L, "Unit", "IsMobile", l_IsMobile);
   SetMethod(L, "Unit", "GetNavigator", l_GetNavigator);
 

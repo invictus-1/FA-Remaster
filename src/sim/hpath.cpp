@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "sim/navigation.h"
+#include "sim/units.h"
 
 namespace moho {
 
@@ -462,7 +463,10 @@ bool HPathTables::ShouldSearchRect(const PathTraveler& t, const int* r) const {
 // CanTraverseCell 0x5aa710 (level 0 only)
 bool HPathTables::CanTraverse(const Search& s, const PathCell& n) const {
   const PathTraveler& t = *s.t;
-  const PathGrid* g = s.cm->grid;
+  // 0x5aa73e / 0x5aa7ca: Entity::GetFootprint of the unit (its AltFootprint while unit+0x124 or +0x125 is set), not
+  // the cluster map's footprint (slot 0, +0x124 only)
+  const bool alt = t.unit && (t.unit->altFootprintNav || t.unit->altFootprintForced);
+  const PathGrid* g = t.fitGrid[alt ? 1 : 0] ? t.fitGrid[alt ? 1 : 0] : s.cm->grid;
   if (t.ignoreStructures) {
     if (!g || !g->Caps(n.x, n.z)) return false;
   } else if (t.startStandable) {

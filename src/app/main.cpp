@@ -301,7 +301,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   size_t viewMax[4] = {0, 0, 0, 0};
   std::string viewSample[3];
   std::string lastSync;
-  // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z>] [queue]",
+  // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z> | @<entity id>] [queue]",
   // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>", "<tick> lua <one line of Lua run in
   // the sim state: a test building its case, not an order>"; <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
@@ -336,14 +336,21 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         if (std::sscanf(text, "%*s %lu %63s %63s", &id, key, value) == 3) writer.ProcessInfoPair(static_cast<uint32_t>(id), key, value);
       }
       else if (!std::strcmp(what, "issue")) {
-        int n = std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
+        // (an entity target: "<tick> issue <type> <unit ids> @<entity id> [queue]")
+        char at[32] = "";
+        const bool onEntity = std::sscanf(text, "%*s %*d %*255s %31s", at) == 1 && at[0] == '@';
+        int n = onEntity ? std::sscanf(text, "%*s %d %255s %*s %31s", &type, ids, tail) + 1
+                         : std::sscanf(text, "%*s %d %255s %f %f %f %31s", &type, ids, &x, &y, &z, tail);
         if (n < 2) continue;
         std::vector<uint32_t> units;
         for (char* tok = std::strtok(ids, ","); tok; tok = std::strtok(nullptr, ","))
           units.push_back(static_cast<uint32_t>(std::strtoul(tok, nullptr, 0)));
         StreamIssueData d;
         d.type = type;
-        if (n >= 5) {
+        if (onEntity) {
+          d.target.type = 1;
+          d.target.entity = static_cast<uint32_t>(std::strtoul(at + 1, nullptr, 0));
+        } else if (n >= 5) {
           d.target.type = 2;
           d.target.pos = {x, y, z};
         }

@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/ai_threat.h"
 #include "sim/combat.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
@@ -256,6 +257,7 @@ void UpdateBlip(Sim& sim, lua_State* L, int a, Unit* u, uint8_t flags) {
   flags |= old & 0x30;
   if (flags & 8) flags |= 0x10;
   u->recon[a] = static_cast<uint8_t>(kReconInUse | flags);
+  ThreatUpdateBlipPosition(sim, a, u->blip);  // UpdateBlip 0x5c1f53
   CheckIntelEvents(sim, L, a, u->blip, old, flags);
 }
 
@@ -345,6 +347,7 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
     flags |= 0x20;
   }
   b->rflags[a] = static_cast<uint8_t>(kReconInUse | flags);
+  ThreatUpdateBlipPosition(sim, a, b);  // UpdateBlip 0x5c1f53
   CheckIntelEvents(sim, L, a, b, old, flags);
 }
 
@@ -364,6 +367,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     bool allied = u->army && combat::Relation(u->army, sim.armies()[static_cast<size_t>(a)].get()) == 2;
     Vec3 p = b ? b->position : u->position;
     if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p) & 8)) {
+      if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);  // a structure confirmed gone (0x5c0da6 / 0x5c0f91)
       DeleteEntry(sim, L, a, u);
       if (b) DestroyIfUnused(sim, b);
     } else {
@@ -435,7 +439,9 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     Unit* u = p.u;
     if (u->destroyQueued) continue;
     if (p.fake) {
-      UpdateFake(sim, L, a, FindOrCreateFake(sim, L, a, u));
+      ReconBlip* fake = FindOrCreateFake(sim, L, a, u);
+      UpdateFake(sim, L, a, fake);
+      ThreatInsertEntry(sim, a, fake);  // 0x5c0bd0
       if (u->HasLuaObject()) {
         lua_pushnumber(L, a + 1);
         sim.CallMethod(L, u, "OnDetectedBy", 1);
@@ -445,6 +451,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     if (!u->blip) u->blip = MakeBlip(sim, L, u);
     u->recon[a] = kReconInUse;
     UpdateBlip(sim, L, a, u, p.flags);
+    ThreatInsertEntry(sim, a, u->blip);  // GenerateNewBlips 0x5c0bd0: the army's threat map gets the blip
     if (u->HasLuaObject()) {
       lua_pushnumber(L, a + 1);
       sim.CallMethod(L, u, "OnDetectedBy", 1);

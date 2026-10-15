@@ -56,6 +56,13 @@ struct TransportObj {
   // internal storage (carriers, carriers.md 6): T+0x20 reserve index, +0x24 launch index, +0x28 stagger
   int resIdx = 0, launchIdx = 0, stagger = 0, storageSlots = 0;
   std::vector<uint32_t> stored, storageReserved;  // entity refs
+  // a teleporter (TELEPORTATION): T+0x10 the beacon it sends its cargo to (weak; entity ref), set by an unload
+  // order on an entity (IssueTeleportToBeacon)
+  uint32_t teleportBeacon = 0;
+  // T+0x30 the units waiting for a later round of a teleporter's (or staging platform's) load (entity refs,
+  // ascending id), and whether T+0x110, the waiting formation made for them, exists
+  std::vector<uint32_t> waiting;
+  bool waitingFormation = false;
 };
 
 // Unit creation: a transport object for units with the Transport command cap.
@@ -75,7 +82,13 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp);
 uint32_t LiveCommandCaps(lua_State* L, const Unit* u);
 
 // Command dispatch (sim/build.cpp StartBuildTask/TickBuildTask/EndBuildTask call these).
+// TransportLoadUnits (22) and Dock (39) share one case of the dispatch; the unload types (24, 25) and Ferry (17).
 BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c);
+// The transport orders DispatchTask carries out without a task: DetachFromTransport (26), an unload order a
+// teleporter gets on an entity (its destination), a carrier's Dock on itself. true: done (the order is popped).
+bool TransportOrderOnTheSpot(Sim& sim, Unit* u, const UnitCommand& c);
+// CAiTransportImpl::TransportIsTeleportBeaconReady 0x5e81d0 of a teleporter (false: none, or not a transport).
+bool TeleportBeaconReady(Sim& sim, const Unit* teleporter);
 int TickTransportTask(Sim& sim, Unit* u, BuildTask& t);
 void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 

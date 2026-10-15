@@ -29,6 +29,7 @@
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/air.h"
+#include "sim/ai_platoon.h"
 #include "sim/skeleton.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -933,33 +934,7 @@ int l_weapon_GetBlueprint(lua_State* L) {
   return 1;
 }
 
-// ---- Platoon -------------------------------------------------------------------------------
-
-Platoon* P(lua_State* L) { return CheckObject<Platoon>(L, 1); }
-
-int l_platoon_GetBrain(lua_State* L) { return PushNew(L, P(L)->army->brain); }
-int l_platoon_GetPlatoonUnits(lua_State* L) {
-  Platoon* p = P(L);
-  lua_newtable(L);
-  int i = 0;
-  for (Unit* u : p->units) {
-    PushObject(L, u);
-    lua_rawseti(L, -2, ++i);
-  }
-  return 1;
-}
-int l_platoon_UniquelyNamePlatoon(lua_State* L) {
-  P(L)->name = luaL_checkstring(L, 2);
-  return 0;
-}
-int l_platoon_GetPlatoonUniqueName(lua_State* L) {
-  lua_pushstring(L, P(L)->name.c_str());
-  return 1;
-}
-int l_platoon_GetAIPlan(lua_State* L) {
-  lua_pushstring(L, P(L)->plan.c_str());
-  return 1;
-}
+// ---- Platoon: sim/ai_platoon.cpp ----------------------------------------------------------------
 
 // ---- Brain (unit and platoon queries) -------------------------------------------------------
 
@@ -970,19 +945,6 @@ int l_brain_GetArmyStartPos(lua_State* L) {
   lua_pushnumber(L, a->startX);
   lua_pushnumber(L, a->startZ);
   return 2;
-}
-int l_brain_MakePlatoon(lua_State* L) {  // MakePlatoon(name, plan)
-  AiBrain* b = B(L);
-  std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
-  std::string plan = lua_isstring(L, 3) ? lua_tostring(L, 3) : "";
-  return PushNew(L, S(L)->CreatePlatoon(L, b->army, name, plan));
-}
-int l_brain_GetPlatoonUniquelyNamed(lua_State* L) {
-  AiBrain* b = B(L);
-  std::string name = luaL_checkstring(L, 2);
-  if (name == "ArmyPool") return PushNew(L, b->army->pool);
-  lua_pushnil(L);
-  return 1;
 }
 // GetListOfUnits(category, needToBeIdle, requireBuilt)
 int l_brain_GetListOfUnits(lua_State* L) {
@@ -1155,16 +1117,9 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "UnitWeapon", "GetBlueprint", l_weapon_GetBlueprint);
   SetMethod(L, "UnitWeapon", "BeenDestroyed", l_BeenDestroyed);
 
-  SetMethod(L, "CPlatoon", "GetBrain", l_platoon_GetBrain);
-  SetMethod(L, "CPlatoon", "GetPlatoonUnits", l_platoon_GetPlatoonUnits);
-  SetMethod(L, "CPlatoon", "UniquelyNamePlatoon", l_platoon_UniquelyNamePlatoon);
-  SetMethod(L, "CPlatoon", "GetPlatoonUniqueName", l_platoon_GetPlatoonUniqueName);
-  SetMethod(L, "CPlatoon", "GetAIPlan", l_platoon_GetAIPlan);
 
   SetMethod(L, "CAiBrain", "GetArmyStartPos", l_brain_GetArmyStartPos);
   SetMethod(L, "CAiBrain", "GetMapWaterRatio", l_brain_GetMapWaterRatio);
-  SetMethod(L, "CAiBrain", "MakePlatoon", l_brain_MakePlatoon);
-  SetMethod(L, "CAiBrain", "GetPlatoonUniquelyNamed", l_brain_GetPlatoonUniquelyNamed);
   SetMethod(L, "CAiBrain", "GetListOfUnits", l_brain_GetListOfUnits);
   SetMethod(L, "CAiBrain", "GetCurrentUnits", l_brain_GetCurrentUnits);
 }
@@ -1366,8 +1321,10 @@ namespace {
 // The layer a unit starts on (Entity::GetStartingLayer 0x62ad30; `want` = the construction params' layer, 0 =
 // choose). The footprint's caps decide, not the motion type: an EXPERIMENTAL aircraft starts on Land (it appears on
 // the ground and takes off), an experimental submarine on the surface, a land unit under water on the Seabed.
-uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, const Vec3& p, uint8_t want) {
-  const NamedFootprint& fp = bp.footprint;
+// (Entity::GetFootprint 0x62ad51: the AltFootprint while the unit uses it, for a unit warped by its script)
+uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, const Vec3& p, uint8_t want,
+                      bool alt = false) {
+  const NamedFootprint& fp = alt ? bp.altFootprint : bp.footprint;
   // the cell's caps (OCCUPY_FootprintFits 0x7209e0 with caps -1: the terrain's answer for this footprint)
   int cx = static_cast<int16_t>(std::lrintf(p.x - static_cast<float>(fp.sizeX) * 0.5f));
   int cz = static_cast<int16_t>(std::lrintf(p.z - static_cast<float>(fp.sizeZ) * 0.5f));
@@ -1514,7 +1471,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   }
   if (builder) u->creatorId = EntityRef(builder);
   if (u->isFactoryBuilder) SetUpInitialRally(*this, u);  // Unit ctor end (0x6a6413)
-  if (army && army->pool) army->pool->units.push_back(u);
+  if (army) AssignNewUnitToPool(army, u);  // Unit ctor 0x6a63e6 (sim/ai_platoon.cpp)
 
   u->isPod = BpInCategory(*this, u->blueprint, "POD") || BpInCategory(*this, u->blueprint, "STATIONASSISTPOD");
   u->isEngineer = BpInCategory(*this, u->blueprint, "ENGINEER");
@@ -1637,7 +1594,7 @@ void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
   if (!u->blueprint) return;
   const BlueprintInfo& bp = *u->blueprint;
   const TerrainMap* m = map_.get();
-  const uint8_t layer = StartingLayer(*this, bp, m, pos, 0);
+  const uint8_t layer = StartingLayer(*this, bp, m, pos, 0, u->altFootprintNav || u->altFootprintForced);
   const float water = m && m->hasWater ? m->waterElevation : -10000.0f;
   const bool mobile = u->motion.bp && u->motion.bp->mobile();
   if (layer & (kLayerLand | kLayerSeabed)) {
@@ -1736,27 +1693,6 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   return e;
 }
 
-Platoon* Sim::CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan) {
-  int top = lua_gettop(L);
-  if (!PushImport(L, "/lua/platoon.lua")) return nullptr;
-  lua_pushstring(L, "Platoon");
-  lua_gettable(L, -2);
-  auto owned = std::make_unique<Platoon>();
-  Platoon* p = owned.get();
-  p->army = army;
-  p->name = name;
-  p->plan = plan;
-  lua_newtable(L);
-  lua_insert(L, -2);
-  lua_setmetatable(L, -2);
-  BindObject(L, -1, p);
-  owned_.push_back(std::move(owned));
-  lua_settop(L, top);
-  // the CPlatoon ctor ends with its script's OnCreate(plan) (0x724e84), the army pool's included
-  lua_pushstring(L, plan.c_str());
-  CallMethod(L, p, "OnCreate", 1);
-  lua_settop(L, top);
-  return p;
-}
+// Sim::CreatePlatoon: sim/ai_platoon.cpp
 
 }  // namespace moho
