@@ -203,6 +203,12 @@ class Device {
   // Presents the frame. With `capture`, also reads the finished image back: width * height * 4 bytes,
   // RGBA, top row first.
   virtual void EndFrame(std::vector<uint8_t>* capture = nullptr) = 0;
+  // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
+  // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
+  virtual void Mark(const char* name) = 0;
+  // The stages of the newest frame the card has finished, in milliseconds, in their order (a stage
+  // marked more than once in a frame is added up). Empty until a frame with marks has finished.
+  virtual void TakeTimes(std::vector<std::pair<const char*, double>>* out) = 0;
 };
 
 }  // namespace render::gfx
