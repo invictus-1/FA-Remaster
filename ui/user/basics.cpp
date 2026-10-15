@@ -176,6 +176,17 @@ void RegisterBasicBindings(lua_State* L) {
   for (const char* name : {"SessionIsActive", "SessionIsReplay", "WorldIsLoading", "WorldIsPlaying", "GpgNetActive"})
     SetGlobal(L, name, kFalse);
   SetGlobal(L, "GpgNetSend", kNothing);
+  // GetAntiAliasingOptions(): the anti-aliasing sample counts the graphics card offers (the game's
+  // Fidelity Presets take the last as Ultra's, the middle one as High's). Here the renderer's:
+  // 2 and 4 samples (its scene draws with 1, 2 or 4).
+  SetGlobal(L, "GetAntiAliasingOptions", [](lua_State* L) -> int {
+    lua_newtable(L);
+    lua_pushnumber(L, 2);
+    lua_rawseti(L, -2, 1);
+    lua_pushnumber(L, 4);
+    lua_rawseti(L, -2, 2);
+    return 1;
+  });
 }
 
 }  // namespace moho::ui

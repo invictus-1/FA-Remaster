@@ -349,7 +349,13 @@ int main(int argc, char** argv) {
   if (ok && !front->RunString("import('/lua/options/optionslogic.lua').Apply(true)", "=(options at start-up)"))
     Logf(LogLevel::Warning, "moho64ui: the options could not be applied at the start");
   // (The window's frame rate at the start is the player's "Frame Rate" option, set by the Apply
-  // above; the game's own Vertical Sync and Frametime skip their `set` at the start.)
+  // above; the game's own Vertical Sync and Frametime skip their `set` at the start.) The game's
+  // Anti-Aliasing skips its `set` at the start too, the original taking it when it makes its
+  // device: here from the saved options (4 when there are none, as the hook's default).
+  if (ok && !front->RunString("local o = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {} "
+                              "ConExecute('SC_AntiAliasingSamples ' .. tostring(o.antialiasing or 4))",
+                              "=(anti-aliasing at start-up)"))
+    Logf(LogLevel::Warning, "moho64ui: the anti-aliasing option could not be read at the start");
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)

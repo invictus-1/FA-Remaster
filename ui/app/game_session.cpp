@@ -20,6 +20,7 @@
 #include "sim/terrain.h"
 
 #ifdef MOHO64UI_WORLD_PICTURE
+#include "render/view.h"
 #include "render/world.h"
 #include "render/world_picture.h"
 #endif
@@ -143,7 +144,11 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);
     if (render::World* w = picture.world()) {
       w->ribbons.tracers = looks.tracers;
-      w->terrain.richGround = looks.richGround;
+      w->terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
+      w->ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
+      w->shadowsOn = looks.shadows >= 1;
+      w->lampShadows = looks.shadows >= 3;
+      w->meshes.detail = looks.meshDetail;
       w->tracks.on = looks.snowTracks;
     }
     lookNow = looks;
@@ -632,6 +637,7 @@ void GameSession::OpenPicture() {
     // (On the game's window when it has one: the renderer shows the picture there itself, the
     // interface laid over it, without reading it back; see PresentToWindow.)
     menuPicture_.reset();  // (one picture per window: the menu's goes first)
+    render::gSceneSamples = Looks().sceneSamples;  // (the player's anti-aliasing, taken when a picture is made)
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {

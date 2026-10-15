@@ -340,6 +340,14 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "verticalSync");
   lua_pushboolean(L, Pacing().verticalSync);
   lua_rawset(L, -3);
+  const char* gfx[4] = {"fidelity", "shadows", "sceneSamples", "meshDetail"};
+  const double gfxValues[4] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
+                               static_cast<double>(looks.sceneSamples), looks.meshDetail};
+  for (int i = 0; i < 4; ++i) {
+    lua_pushstring(L, gfx[i]);
+    lua_pushnumber(L, gfxValues[i]);
+    lua_rawset(L, -3);
+  }
   lua_pushstring(L, "frameMs");
   lua_pushnumber(L, Pacing().frameMs);
   lua_rawset(L, -3);
@@ -603,6 +611,19 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
     if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
     if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    // The game's own graphics settings (LookSettings).
+    if (key == "GRAPHICS_FIDELITY") return void(looks.fidelity = std::max(0, std::min(2, std::atoi(value.c_str()))));
+    if (key == "SHADOW_FIDELITY") return void(looks.shadows = std::max(0, std::min(3, std::atoi(value.c_str()))));
+    if (key == "SC_ANTIALIASINGSAMPLES") {
+      const int samples = std::atoi(value.c_str());
+      looks.sceneSamples = samples >= 4 ? 4 : samples >= 2 ? 2 : 1;
+      return;
+    }
+    if (key == "SC_CAMERASCALELOD") {
+      const double lod = std::atof(value.c_str());
+      looks.meshDetail = lod < 0.5 ? 0.5f : lod < 1.5 ? 0.75f : 1.0f;
+      return;
+    }
     if (key == "REMASTER_UPSCALE") {
       if (!value.empty()) looks.upscale = std::max(0.25f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
       return;

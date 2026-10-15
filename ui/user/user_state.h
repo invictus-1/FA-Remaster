@@ -198,6 +198,13 @@ struct LookSettings {
   bool richGround = true;         // a remastered map's richer ground
   bool snowTracks = true;         // units tread tracks into lying snow
   float upscale = 1.0f;           // AMD FSR 1: the share of the picture's size the scene is drawn at (1: off)
+  // The game's own graphics settings (its Video tab; Chris, 2026-10-15: they drive the renderer's
+  // switches and mean what they say): graphics_Fidelity 0..2 (Low: no ambient occlusion, plain
+  // ground), shadow_Fidelity 0..3 (Off: none; Low, Medium: the sun's; High: the lamps' too),
+  // SC_AntiAliasingSamples (the scene's samples 1 / 2 / 4, from the next picture made),
+  // SC_CameraScaleLOD 0..2 (model detail 0.5 / 0.75 / 1). Until told: today's full look.
+  int fidelity = 2, shadows = 3, sceneSamples = 4;
+  float meshDetail = 1.0f;
 };
 LookSettings& Looks();
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
