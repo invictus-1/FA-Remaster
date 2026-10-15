@@ -176,6 +176,7 @@ class GameSession {
   std::map<uint32_t, ForeignLoop> foreignLoops_;
   std::set<uint32_t> heardLoops_;
   void NoteBeat();  // a beat has run: the picture hears of it
+  void TimedTick();
   // The game's replay file being written (LastGame), and a replay being played back: its bytes
   // and the stream over them. `profile_`: the player's profile name at the launch.
   std::FILE* replay_ = nullptr;
