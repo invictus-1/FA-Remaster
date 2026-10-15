@@ -48,6 +48,11 @@ class WorldPicture {
   bool Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error);
 
   // --- the picture straight into the host's window (the way without a read-back) ---
+  // With UseWindow and an empty map path, Open makes no world: DrawToWindow then shows the interface
+  // alone (the menu's screens; its moving background drawn by another WorldPicture into the layer).
+  // A window takes one such picture at a time: close one (destroy the WorldPicture) before the next
+  // opens on it - the menu's before the game's, the game's before the menu's again. (A window that
+  // has shown pictures this way does not show the host's GDI drawing any more.)
   // Before Open: the device is made on the host's window `hwnd` (its whole client area) and shows
   // the picture there itself, through the graphics card's swap chain (DrawToWindow); nothing is
   // read back and the window is not to be drawn into by the host otherwise. Draw is then not to be

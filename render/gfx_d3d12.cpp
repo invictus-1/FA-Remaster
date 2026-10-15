@@ -299,6 +299,7 @@ class D3D12Device final : public Device {
   int width_ = 0, height_ = 0;
   bool vsync_ = true, tearing_ = false, inFrame_ = false;
   std::string adapterName_;
+  std::string shaderCache_;  // the folder compiled shaders are kept in (empty: none)
 
   Com<IDXGIFactory4> factory_;
   Com<ID3D12Device> device_;
@@ -362,6 +363,20 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     return false;
   };
   hwnd_ = static_cast<HWND>(desc.window);
+  // where compiled shaders are kept (the user's local application data unless the host says)
+  if (desc.shaderCache != "-") {
+    std::string dir = desc.shaderCache;
+    if (dir.empty()) {
+      char local[MAX_PATH] = {};
+      const DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", local, sizeof local);
+      if (n > 0 && n < sizeof local) {
+        dir = std::string(local) + "\\FA Remastered";
+        CreateDirectoryA(dir.c_str(), nullptr);
+        dir += "\\shaders";
+      }
+    }
+    if (!dir.empty() && (CreateDirectoryA(dir.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS)) shaderCache_ = dir;
+  }
   width_ = std::max(1, desc.width);
   height_ = std::max(1, desc.height);
   vsync_ = desc.vsync;
@@ -964,14 +979,49 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
 }
 
 Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+  constexpr UINT kFlags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
   auto compile = [&](std::string_view source, const char* entry, const char* target, Com<ID3DBlob>& out) {
+    // (kept from an earlier run when the same source was compiled the same way: by a hash of all of it)
+    std::string cached;
+    if (!shaderCache_.empty()) {
+      uint64_t h = 1469598103934665603ull;
+      auto mix = [&h](const void* data, size_t size) {
+        for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const uint8_t*>(data)[i]) * 1099511628211ull;
+      };
+      const char kVersion[] = "d3dcompile/1";
+      mix(kVersion, sizeof kVersion);
+      mix(source.data(), source.size());
+      mix(entry, std::strlen(entry) + 1);
+      mix(target, std::strlen(target) + 1);
+      mix(&kFlags, sizeof kFlags);
+      char name[32];
+      snprintf(name, sizeof name, "%016llx.cso", static_cast<unsigned long long>(h));
+      cached = shaderCache_ + "\\" + name;
+      if (FILE* f = fopen(cached.c_str(), "rb")) {
+        fseek(f, 0, SEEK_END);
+        const long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        bool ok = size > 0 && SUCCEEDED(D3DCreateBlob(static_cast<SIZE_T>(size), out.Put())) &&
+                  fread(out->GetBufferPointer(), 1, static_cast<size_t>(size), f) == static_cast<size_t>(size);
+        fclose(f);
+        if (ok) return true;
+        out.Reset();
+      }
+    }
     Com<ID3DBlob> errors;
-    HRESULT hr = D3DCompile(source.data(), source.size(), desc.name, nullptr, nullptr, entry, target,
-                            D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, out.Put(), errors.Put());
+    HRESULT hr = D3DCompile(source.data(), source.size(), desc.name, nullptr, nullptr, entry, target, kFlags, 0, out.Put(), errors.Put());
     if (FAILED(hr)) {
       std::string text = errors ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "";
       if (error) *error = std::string(desc.name) + " (" + entry + "): " + text;
       return false;
+    }
+    if (!cached.empty()) {  // (written under another name first, so a half-written file is never read)
+      const std::string part = cached + ".part";
+      if (FILE* f = fopen(part.c_str(), "wb")) {
+        const bool ok = fwrite(out->GetBufferPointer(), 1, out->GetBufferSize(), f) == out->GetBufferSize();
+        fclose(f);
+        if (!ok || !MoveFileExA(part.c_str(), cached.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileA(part.c_str());
+      }
     }
     return true;
   };

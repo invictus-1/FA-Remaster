@@ -2,6 +2,8 @@
 
 #include "cpu_times.h"
 
+#include <chrono>
+
 #include "dds.h"
 
 #include <algorithm>
@@ -42,11 +44,22 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       vfs_(vfs) {}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
+  // (how long each step of opening takes, for the log: loading is measured like the frames)
+  auto stepStart = std::chrono::steady_clock::now();
+  std::string steps;
+  auto step = [&](const char* name) {
+    const auto now = std::chrono::steady_clock::now();
+    char b[96];
+    snprintf(b, sizeof b, "%s%s %.2f s", steps.empty() ? "" : ", ", name, std::chrono::duration<double>(now - stepStart).count());
+    steps += b;
+    stepStart = now;
+  };
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
       !ao.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
+  step("shaders");
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
   if (!options.displayTable.empty()) {
@@ -65,11 +78,13 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       *error = "map " + mapPath + ": " + why;
       return false;
     }
+    step("map file");
     if (!terrain.Load(&map, &why)) {
       *error = "terrain: " + why;
       return false;
     }
     if (options.lodPixels > 0) terrain.quadPixels = options.lodPixels;
+    step("ground");
     if (!water.Load(&map, &why)) {
       *error = "water: " + why;
       return false;
@@ -126,6 +141,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     for (const auto& cube : map.environmentCubemaps)
       if (cube.first == "<default>") environment_ = textures.Get(cube.second);
+    step("water, decals, mist");
     // the map's props (trees, rocks, wrecks): where each stands does not change
     for (const MapProp& p : map.props) {
       const Model* model = models.Blueprint(p.blueprint);
@@ -165,6 +181,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     selectionRing_ = device_->CreateTexture(td);
     LoadBrackets();
   }
+  step("props and the rest");
+  fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
 }
 

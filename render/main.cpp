@@ -35,6 +35,9 @@
 // --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
 //           to which the map's decals are drawn
 // --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
+// --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
+//           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
+//           the interface does; what each showed is written as <name>_menu1.png, _game.png, _menu2.png
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -190,6 +193,7 @@ struct Options {
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = false;                 // --prepass
   bool pictureWindow = false;           // --picture-window
+  bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
   bool frame = true;                    // --no-frame
@@ -271,6 +275,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--timings") o->timings = true;
     else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--picture-window") o->pictureWindow = true;
+    else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
@@ -490,6 +495,45 @@ int main(int argc, char** argv) {
   MountGameFiles(opt, &vfs);
   if (vfs.MountCount()) printf("render: %zu archives and folders, %zu files\n", vfs.MountCount(), vfs.FileCount());
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
+  if (opt.windowCycle) {  // --window-cycle
+    std::string error;
+    auto window = Window::Create("FA Remastered (window cycle)", opt.width, opt.height, &error, true, false);
+    if (!window) {
+      fprintf(stderr, "render: --window-cycle: %s\n", error.c_str());
+      return 1;
+    }
+    const int w = window->Width(), h = window->Height();
+    std::vector<uint32_t> layer(static_cast<size_t>(w) * static_cast<size_t>(h), 0u);
+    for (int y = 40; y < 140; ++y)
+      for (int x = 40; x < 340; ++x) layer[static_cast<size_t>(y) * w + x] = 0xffff2020u;  // (a red box: the menu's "interface")
+    const std::string base = opt.screenshot.empty() ? std::string("window_cycle") : opt.screenshot.substr(0, opt.screenshot.rfind('.'));
+    Camera cam;
+    cam.target = {opt.hasAt ? opt.at[0] : 512.0f, 0, opt.hasAt ? opt.at[1] : 512.0f};
+    cam.distance = 120;
+    cam.pitch = 0.9f;
+    auto shoot = [&](const char* what, const std::string& map) {
+      WorldPicture p;
+      p.UseWindow(window->Handle());
+      std::string why;
+      if (!p.Open(&vfs, map, &why)) {
+        printf("render: --window-cycle: %s could not open: %s\n", what, why.c_str());
+        return;
+      }
+      std::vector<uint8_t> shown;
+      for (int i = 0; i < 3; ++i) {
+        window->Pump(nullptr);
+        p.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, i == 0 ? w : 0, i == 0 ? h : 0);
+        if (i == 2) p.CaptureNextWindowFrame(&shown);
+        p.DrawToWindow(cam, w, h, 0);
+      }
+      const std::string file = base + "_" + what + ".png";
+      printf("render: --window-cycle: %s %s\n", what, shown.size() >= static_cast<size_t>(w) * h * 4 && WritePng(file, shown.data(), w, h) ? file.c_str() : "showed nothing");
+    };
+    shoot("menu1", "");
+    shoot("game", opt.map);
+    shoot("menu2", "");
+    return 0;
+  }
   WorldPicture picture;
   std::unique_ptr<Window> pictureWindow;  // --picture-window
   LiveSim live;
