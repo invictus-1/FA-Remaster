@@ -949,6 +949,29 @@ void AttachedUnitsTick(Sim& sim) {
       if (pass == 0 && p->kind == Entity::Kind::Unit) SetUnitLayer(sim, u, static_cast<Unit*>(p)->layer);
       if (pos.x != before.x || pos.y != before.y || pos.z != before.z) u->lastMoveTick = sim.tick();
     }
+  // A unit hung on cargo (not cargo itself: AttachTo / AttachBoneTo) takes its place again now that the cargo has
+  // moved. The original ticks a child only after its parent (Entity::TaskTick returns -4, "not yet", for a child
+  // of a parent not ticked this beat), so it follows the cargo in the same beat; our main pass placed it from where
+  // the cargo stood before. (Seen: a UEF construction drone docking on its commander; the original's guard dummy,
+  // AttachTo(drone, -1), is on the docked drone in that beat, ours came a beat later.)
+  for (Unit* u : sim.units()) {
+    if (u->destroyQueued || !u->parentId || u->attachFull) continue;
+    Entity* p = sim.FindEntity(u->parentId);
+    if (!p || p->destroyQueued || p->kind != Entity::Kind::Unit) continue;
+    const Unit* pu = static_cast<const Unit*>(p);
+    if (!pu->parentId || !pu->attachFull) continue;
+    const Vec3 before = u->position;
+    Vec3 bp;
+    Quat bq;
+    BoneWorld(p, u->parentBone, &bp, &bq);
+    if (u->parentBone == -1 && pu->motion.bp) bp = Add(bp, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
+    Vec3 np = bp;
+    Quat nq = bq;
+    if (u->ownBone >= -1) AttachedTransform(u, bp, bq, &np, &nq);
+    u->position = np;
+    u->orientation = nq;
+    if (np.x != before.x || np.y != before.y || np.z != before.z) u->lastMoveTick = sim.tick();
+  }
   sim.MarkUnitsMoved();
 }
 
