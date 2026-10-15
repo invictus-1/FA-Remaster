@@ -28,6 +28,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       draw(device),
       ao(device),
       post(device),
+      upscaler(device),
       skyDraw(device),
       falling(device),
       sight(device),
@@ -42,7 +43,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -384,7 +385,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   camera = cam;
   time_ = time;
   clock_ = clock;
-  view = View::Make(camera, width, height, time);
+  // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
+  // screen - icons, bars, the points the interface asks about - at the screen's own)
+  screenWidth_ = width;
+  screenHeight_ = height;
+  const float share = std::clamp(upscale, 0.25f, 1.0f);
+  const int sceneWidth = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(width) * share))) : width;
+  const int sceneHeight = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(height) * share))) : height;
+  view = View::Make(camera, sceneWidth, sceneHeight, time);
   // the light: the map's sun, in the chosen look
   ViewConstants& c = view.constants;
   const Vec3 sunDirection = haveMap_ ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
@@ -545,7 +553,17 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   terrain.tracksMap = tracks.Map();
   meshes.Begin();
-  icons.Begin(view);
+  // (icons and bars at the screen's size: the scene's view with the screen's numbers)
+  screenView_ = view;
+  if (screenWidth_ != view.width || screenHeight_ != view.height) {
+    screenView_.width = screenWidth_;
+    screenView_.height = screenHeight_;
+    screenView_.constants.viewport[0] = static_cast<float>(screenWidth_);
+    screenView_.constants.viewport[1] = static_cast<float>(screenHeight_);
+    screenView_.constants.viewport[2] = 1.0f / static_cast<float>(screenWidth_);
+    screenView_.constants.viewport[3] = 1.0f / static_cast<float>(screenHeight_);
+  }
+  icons.Begin(screenView_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn
   if (depositIcons && !decals.Deposits().empty()) {
     // (small, as the original has them from all the way up: 8 pixels, measured in Chris's picture
@@ -556,7 +574,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         hydrocarbonIcon_[k] = icons.Picture("/env/common/splats/hydrocarbon_strategic.dds", k ? 16 : 8);
       }
     }
-    const float perUnit = static_cast<float>(std::max(view.height, 1)) / (2 * std::tan(camera.fovY * 0.5f));  // pixels a world unit takes at distance 1
+    const float perUnit = static_cast<float>(std::max(screenHeight_, 1)) / (2 * std::tan(camera.fovY * 0.5f));  // pixels a world unit takes at distance 1
     for (const Decals::Deposit& d : decals.Deposits()) {
       const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
       const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
@@ -918,7 +936,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (life || work) {
         // (the size, height and place the unit's blueprint gives its life bar, in world units: the bar
         // lies that far from the unit's middle down the screen, along the ground)
-        const float perPixel = std::max(2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * away, 1e-5f);
+        const float perPixel = std::max(2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(screenHeight_, 1)) * away, 1e-5f);
         // (straight down the screen for every unit, wherever in the picture it stands: against the
         // camera's up, along the ground. Toward the eye itself would pull the bars of units at the
         // picture's sides inward, off their units.)
@@ -1271,7 +1289,7 @@ void World::Render() {
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
   Stage("finishing (exposure, bloom)");
-  post.Present(view);
+  post.Present(view, &upscaler, screenWidth_, screenHeight_);
   Stage("icons, bars");
   icons.showSymbols = iconsOn;
   icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
@@ -1282,23 +1300,23 @@ bool World::Project(Vec3 p, float* x, float* y) const {
   const Mat4& m = view.constants.viewProj;
   const float w = m.m[3][0] * p.x + m.m[3][1] * p.y + m.m[3][2] * p.z + m.m[3][3];
   if (w <= 1e-4f) return false;
-  *x = ((m.m[0][0] * p.x + m.m[0][1] * p.y + m.m[0][2] * p.z + m.m[0][3]) / w * 0.5f + 0.5f) * static_cast<float>(view.width);
-  *y = (0.5f - (m.m[1][0] * p.x + m.m[1][1] * p.y + m.m[1][2] * p.z + m.m[1][3]) / w * 0.5f) * static_cast<float>(view.height);
+  *x = ((m.m[0][0] * p.x + m.m[0][1] * p.y + m.m[0][2] * p.z + m.m[0][3]) / w * 0.5f + 0.5f) * static_cast<float>(screenWidth_);
+  *y = (0.5f - (m.m[1][0] * p.x + m.m[1][1] * p.y + m.m[1][2] * p.z + m.m[1][3]) / w * 0.5f) * static_cast<float>(screenHeight_);
   return true;
 }
 
 bool World::GroundAt(float x, float y, Vec3* hit) const {
-  if (view.height <= 0) return false;
-  const Ray ray = camera.PixelRay(x, y, static_cast<float>(view.width), static_cast<float>(view.height));
+  if (screenHeight_ <= 0) return false;
+  const Ray ray = camera.PixelRay(x, y, static_cast<float>(screenWidth_), static_cast<float>(screenHeight_));
   if (haveMap_ && HitGround(map, ray, true, hit)) return true;
   return HitPlaneY(ray, camera.target.y, hit);
 }
 
 uint32_t World::UnitAt(float x, float y) const {
-  if (view.height <= 0) return 0xffffffffu;
-  const Ray ray = camera.PixelRay(x, y, static_cast<float>(view.width), static_cast<float>(view.height));
+  if (screenHeight_ <= 0) return 0xffffffffu;
+  const Ray ray = camera.PixelRay(x, y, static_cast<float>(screenWidth_), static_cast<float>(screenHeight_));
   // a far-away unit is its strategic icon: it can be hit within about ten pixels of its middle
-  const float worldPerPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height);
+  const float worldPerPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(screenHeight_);
   uint32_t best = 0xffffffffu;
   float bestAlong = 1e30f;
   for (const Pickable& p : pickables_) {

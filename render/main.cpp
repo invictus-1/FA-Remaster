@@ -70,6 +70,8 @@
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
 // --prepass  the models' depth is laid first (MeshRenderer::depthPrepass; off by default), to measure it
+// --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
+//           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
@@ -189,6 +191,7 @@ struct Options {
   bool prepass = false;                 // --prepass
   bool pictureWindow = false;           // --picture-window
   float effectsQuality = 1;             // --effects-quality
+  float upscale = 1;                    // --fsr
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -334,6 +337,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
+    else if (a == "--fsr") {  // FSR 1's modes, or the share itself
+      const std::string m = v;
+      o->upscale = m == "off" ? 1.0f : m == "ultra" ? 1 / 1.3f : m == "quality" ? 1 / 1.5f : m == "balanced" ? 1 / 1.7f
+                 : m == "performance" ? 0.5f : static_cast<float>(atof(v));
+      if (!(o->upscale > 0)) o->upscale = 1;
+    }
     else if (a == "--fx-shot") o->fx.shot = v;
     else if (a == "--fx-hit") o->fx.hit = v;
     else if (a == "--fx-repeat") o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
@@ -553,6 +562,7 @@ int main(int argc, char** argv) {
   world.worldBeyond = opt.worldBeyond;
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.effectsQuality = opt.effectsQuality;
+  world.upscale = opt.upscale;
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;

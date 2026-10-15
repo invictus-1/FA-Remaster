@@ -44,6 +44,7 @@ struct WorldPicture::Impl {
   bool lifeBarsOnEnemies = false;      // SetLifeBarsOnEnemies
   bool remasteredEffects = true;       // SetRemasteredEffects
   float effectsQuality = 1;            // SetEffectsQuality
+  float upscale = 1;                   // SetUpscale
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -225,6 +226,7 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
   m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
   m.world->effectsLook = m.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   m.world->effectsQuality = m.effectsQuality;
+  m.world->upscale = m.upscale;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -323,6 +325,8 @@ void WorldPicture::SetLifeBarsOnEnemies(bool on) { impl_->lifeBarsOnEnemies = on
 void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on; }
 
 void WorldPicture::SetEffectsQuality(float share) { impl_->effectsQuality = share; }
+
+void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;

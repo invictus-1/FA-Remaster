@@ -106,6 +106,10 @@ class WorldPicture {
   // The effects quality setting: the share of their particles effects throw out (1, as at first, all;
   // 0.5 for a slower card). A player's option.
   void SetEffectsQuality(float share);
+  // AMD's FSR 1 (upscale.h): the scene drawn at `share` of the picture's width and height and brought up
+  // to it: 1 off (as at first), 1/1.3 "Ultra Quality", 1/1.5 "Quality", 1/1.7 "Balanced", 1/2
+  // "Performance". Icons, bars and the interface stay sharp. A player's option, for slower cards.
+  void SetUpscale(float share);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).
