@@ -1042,6 +1042,23 @@ UnitMotion::SplinePoint PointOf(const Gen& g) {
   return q;
 }
 
+// The height a point of a batch is stored with: STIMap::GetElevation 0x44fb90 at the point, and for MotionType 3,
+// 7 and 8 (Water, Hover, AmphibiousFloating) the water surface where that is higher (map+0x1534 / +0x1538).
+// Generate 0x5b40fd..0x5b417c and Update 0x5b2ecb..0x5b2f4d write it just before they append the point. The motion
+// takes its own height (CalcMoveCommon), so only the readers of the stored points see it: the collision
+// prediction (Predict 0x597800: its 3-D distance test, and its 3-beat "velocities" whose stopping distances count
+// the climb) and ResolvePossibleCollision 0x596f30. (Ours kept the unit's height at generation for every point.
+// Seen: LAND, Pillar 10 and Archer 3 both climbing about 0.05 a beat; with the climb counted, the meeting that
+// Pillar 10's batch of 1242 predicts comes due at +6 (1248), where it no longer holds, instead of +9 (1251), where
+// ours side-stepped the Pillar while the original drove it on and braked the Archer by its own record at 1252.)
+float PointHeight(const Sim& sim, const MotionBlueprint& b, float x, float z, float fallback) {
+  const TerrainMap* map = sim.map();
+  if (!map) return fallback;
+  const bool surface =
+      b.motionType == kMotionWater || b.motionType == kMotionHover || b.motionType == kMotionAmphibiousFloating;
+  return surface ? map->SurfaceHeight(x, z) : map->TerrainHeight(x, z);
+}
+
 // Batch size: 20 points, 5 in a form formation, three times that for wide turners.
 int BatchSize(Sim& sim, Unit* u) {
   int n = 20;
@@ -1128,7 +1145,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
       }
     }
     if (!StepMove(b, Pn, m, g, tgt, mode)) break;
-    g.p.y = u->position.y;
+    g.p.y = PointHeight(sim, b, g.p.x, g.p.z, u->position.y);  // (0x5b40fd)
     m.spline.push_back(PointOf(g));
     ++n;
     float rx = tgt.x - g.p.x, rz = tgt.z - g.p.z;
@@ -1220,6 +1237,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     }
     bool zero = g.vel.x == 0 && g.vel.z == 0;
     if (zero && (mode == 3 || (mode == 4 && m.spline.size() > 5))) stop = true;
+    g.p.y = PointHeight(sim, *m.bp, g.p.x, g.p.z, g.p.y);  // (0x5b2ecb)
     m.spline.push_back(PointOf(g));
     if (stop) break;
   }
