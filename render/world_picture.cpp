@@ -22,6 +22,8 @@ struct WorldPicture::Impl {
   Frame frame;
   float dayStart = -1, dayLength = 0;  // SetDayAndWeather
   int focusArmy = 0;                   // SetFocusArmy (1-based; 0: none)
+  uint64_t allies = 0;                 // SetAllies (bit n: army n + 1)
+  bool lifeBarsOnEnemies = false;      // SetLifeBarsOnEnemies
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -76,6 +78,8 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
+  m.world->alliedArmies = m.allies;
+  m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -170,6 +174,14 @@ void WorldPicture::SetDayAndWeather(float startHour, float dayLengthSeconds, boo
 void WorldPicture::SetLifeBars(bool on) {
   if (impl_->world) impl_->world->lifeBars = on;
 }
+
+void WorldPicture::SetAllies(const std::vector<int>& armies) {
+  impl_->allies = 0;
+  for (int a : armies)
+    if (a >= 1 && a <= 64) impl_->allies |= uint64_t{1} << (a - 1);
+}
+
+void WorldPicture::SetLifeBarsOnEnemies(bool on) { impl_->lifeBarsOnEnemies = on; }
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;
