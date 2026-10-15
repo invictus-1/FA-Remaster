@@ -254,7 +254,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       for (uint32_t e : side.carried) world.particles.Move(e, at, turn);
       if (f < 1) {
         const Model* model = world.models.Blueprint(projectile_, !(sides_.size() == 2 ? side.remastered : lookRemastered));
-        if (model && model->ok) world.meshes.Add(model, Mat4::FromTRS(at, turn, model->scale), {1, 1, 1});
+        if (model && model->ok) {
+          world.meshes.Add(model, Mat4::FromTRS(at, turn, model->scale), {1, 1, 1});
+          world.AddLamps(model, at, turn, nullptr, nullptr);  // (a missile's engine light)
+        }
       } else {
         side.flying = false;
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
