@@ -1129,10 +1129,29 @@ int l_IssueStop(lua_State* L) {
 }
 
 int l_IssueClearCommands(lua_State* L) {
+  // MOHO64_DEBUG_CALL=IssueClearCommands: each call with its units and the Lua frames that made it
+  static const bool dbg = getenv("MOHO64_DEBUG_CALL") && strcmp(getenv("MOHO64_DEBUG_CALL"), "IssueClearCommands") == 0;
+  if (dbg) {
+    std::string s;
+    for (Unit* u : UnitsArg(L, 1)) s += " " + std::to_string(u->id);
+    s += " from";
+    lua_Debug ar;
+    for (int lv = 1; lv < 16 && lua_getstack(L, lv, &ar); ++lv)
+      if (lua_getinfo(L, "Sl", &ar)) s += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+    Logf(LogLevel::Info, "call %u IssueClearCommands%s", S(L)->tick(), s.c_str());
+  }
+  // cfunc_IssueClearCommandsL 0x6f1950: ClearCommandQueue 0x6ee2d0 for each unit, the same as an order with clear
+  // (above): a dispatched Move asleep on its navigator's event is woken by its command's end and its thread is
+  // linked in at the stage's end. Seen in the bench at 342: Cybran build drones whose move (IdleState.Main) was
+  // cleared at 301 (BuildState.Main) ran their dispatchers after their commander's (re-linked at 300) and stopped
+  // repairing right after it finished the structure, before the drone script's next beam step.
   for (Unit* u : UnitsArg(L, 1)) {
+    const bool moveAsleep =
+        !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
     ForgetUnitCommands(u);
     MotionStop(u);
     SetMoving(u, false);
+    if (moveAsleep) S(L)->ResumeCommandThread(u);
   }
   return 0;
 }

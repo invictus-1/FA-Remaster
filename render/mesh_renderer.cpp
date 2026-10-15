@@ -209,6 +209,24 @@ void ShadowPS(VOut i) {
   }
 }
 
+// the scene's depth laid first (MeshRenderer::depthPrepass): only the holes the full shading cuts
+// (leaves' soft edges with the same coverage, a cut-out's alpha, what is not built yet)
+float4 DepthPS(VOut i) : SV_Target {
+  float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
+  float cover = 1;
+  if (kind2.y > 0.5) {
+    cover = saturate((albedo.a - kind.x) / max(fwidth(albedo.a), 1e-4) + 0.5);
+    clip(cover - 0.02);
+  } else if (kind.x > 0) {
+    clip(albedo.a - kind.x);
+  }
+  if (min(i.color.a, 1) < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
+    float3 work;
+    clip(BuildSolid(int(kind2.x + 0.5), min(i.color.a, 1), i.shape, work));
+  }
+  return float4(0, 0, 0, cover);
+}
+
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -590,7 +608,17 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaToCoverage = true;
   leaves_ = device_->CreatePipeline(pd, error);
   if (!leaves_) return false;
+  pd.name = "models, leaves' depth first";
+  pd.pixelEntry = "DepthPS";
+  pd.colorWrite = false;
+  prepassLeaves_ = device_->CreatePipeline(pd, error);
+  if (!prepassLeaves_) return false;
   pd.alphaToCoverage = false;
+  pd.cull = gfx::Cull::Back;
+  pd.name = "models, depth first";
+  prepass_ = device_->CreatePipeline(pd, error);
+  if (!prepass_) return false;
+  pd.colorWrite = true;
   pd.name = "models, shadow";
   pd.samples = 1;
   pd.blend = gfx::Blend::Opaque;
@@ -886,12 +914,26 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     device_->SetTexture(6, seraphimFalloff_);
   }
 
-  int drawing = 0;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended
+  // (the scene's solid models: their depth first, then in full; a level of a look of its own - see-
+  // through, unlit, a shield, a frame of light - is drawn in full alone)
+  const bool prepass = depthPrepass && !shadowPass && !glass && prepass_ && prepassLeaves_;
+  auto plain = [](const ModelLod* l) {
+    return !l->blend && !l->glass && !l->impact && !l->unlit && !l->nuke && !l->fades && !l->shield && !l->frame;
+  };
+  for (int round = prepass ? 0 : 1; round < 2; ++round) {
+  const bool depthOnly = round == 0;
+  int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ...
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    const int wanted = shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
+    if (depthOnly && !plain(lod)) {  // (not in the depth round)
+      while (at < items_.size() && items_[at].lod == lod) ++at;
+      continue;
+    }
+    const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
+                       : shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : pipeline_);
+      device_->SetPipeline(wanted == 7 ? prepassLeaves_ : wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ :
+                           wanted == 2 ? blended_ : wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
@@ -930,13 +972,15 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
     const int triangles = static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
-    if (shadowPass) {
+    if (depthOnly) {
+    } else if (shadowPass) {
       shadowTriangles += triangles;
     } else {
       drawnInstances += static_cast<int>(n);
       drawnTriangles += triangles;
     }
     at += n;
+  }
   }
 }
 
