@@ -73,6 +73,13 @@ class MeshRenderer {
   float minPixels = 1.5f;         // smaller than this on screen: not drawn (a strategic icon's job)
   float shadowMinPixels = 12;     // smaller than this: casts no shadow
   float shadowDetail = 0.25f;     // shadows are drawn from coarser levels: this share of the triangles
+  // The scene's solid models first lay their depth alone (with the holes of leaves and of what is
+  // being built), so that the full shading runs once a pixel, for what is in front, and not again
+  // for every tree behind it. The same picture. OFF: measured on an RTX 4090 (2026-10-15) it costs
+  // more than it saves (units and scenery at 1440p, rebuilt Seton's: 3.9 against 2.8 ms from low, 3.5
+  // against 2.9 at middle zoom); the card's own early depth test already spares what is hidden. Kept
+  // to try on slower cards (viewer --prepass).
+  bool depthPrepass = false;
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
@@ -121,6 +128,7 @@ class MeshRenderer {
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
+  gfx::Pipeline prepass_, prepassLeaves_;  // (depthPrepass: depth alone, the scene's samples)
   // two of the game's lookup textures for the original look (where the game's files have them):
   // the Cybran's highlight by how the sun's mirror image and the sun itself stand to the surface,
   // and the Seraphim's ramp of how strongly a surface mirrors by the angle it is seen at

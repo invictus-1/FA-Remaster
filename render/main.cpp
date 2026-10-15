@@ -66,6 +66,7 @@
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
+// --prepass  the models' depth is laid first (MeshRenderer::depthPrepass; off by default), to measure it
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
@@ -182,6 +183,7 @@ struct Options {
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
+  bool prepass = false;                 // --prepass
   float effectsQuality = 1;             // --effects-quality
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
@@ -261,6 +263,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
     else if (a == "--fx-compare") o->fx.compare = true;
+    else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
@@ -409,7 +412,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -540,6 +543,7 @@ int main(int argc, char** argv) {
   world.worldBeyond = opt.worldBeyond;
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.effectsQuality = opt.effectsQuality;
+  world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail"};
