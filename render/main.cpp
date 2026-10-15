@@ -966,6 +966,7 @@ int main(int argc, char** argv) {
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
+    double worst = 0;  // the longest whole frame (a hitch)
     void Add(const std::string& name, double ms) {
       for (auto& s : sums)
         if (s.first == name) {
@@ -1517,6 +1518,7 @@ int main(int argc, char** argv) {
       timing.Add("cpu: drawing recorded", ms(renderStart, renderEnd));
       timing.Add("cpu: handed over and shown", ms(renderEnd, frameEnd));
       timing.Add("cpu: whole frame", ms(frameStart, frameEnd));
+      timing.worst = std::max(timing.worst, ms(frameStart, frameEnd));
       std::vector<std::pair<const char*, double>> stages;
       device->TakeTimes(&stages);
       double gpu = 0;
@@ -1586,6 +1588,7 @@ int main(int argc, char** argv) {
         printf("render: --timings: %d frames at %dx%d on %s%s, average ms a frame:\n", timing.frames, device->Width(), device->Height(),
                device->AdapterName().c_str(), vsync ? " (vsync on: the waits include it)" : "");
         for (const auto& s : timing.sums) printf("render: --timings:   %-48s %7.3f\n", s.first.c_str(), s.second / timing.frames);
+        printf("render: --timings:   %-48s %7.3f\n", "cpu: the longest frame", timing.worst);
       }
       break;
     }
