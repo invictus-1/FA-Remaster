@@ -1,5 +1,7 @@
 #include "world.h"
 
+#include "cpu_times.h"
+
 #include "dds.h"
 
 #include <algorithm>
@@ -166,6 +168,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
 }
 
 void World::SetLooks(const std::vector<BlueprintLook>& looks) {
+  iconKinds_.clear();  // (what was looked up before may look different now)
+  unitModels_.clear();
+  shotModels_.clear();
+  entityModels_.clear();
   int units = 0;
   for (const BlueprintLook& look : looks) {
     models.SetLook(look);
@@ -372,6 +378,7 @@ float World::GroundHeight(float x, float z) const {
 }
 
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
+  CpuTimes::Part("light, sky, weather set");
   camera = cam;
   time_ = time;
   clock_ = clock;
@@ -523,7 +530,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     SetSky(skyLight, &c);
     lightDirection = skyLight.direction;
   }
+  CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
+  CpuTimes::Part("tracks, icons, deposits begun");
 
   // the tracks in lying snow: read by the ground while snow lies
   tracks.Begin();
@@ -554,6 +563,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   lights.Begin(clock);
   pickables_.clear();
+  CpuTimes::Part("scenery listed");
   // the scenery's changes that are due by now, then the scenery
   while (!propEvents_.empty() && static_cast<double>(propEvents_.front().tick) * 0.1 <= clock + 1e-6) {
     ApplyPropEvent(propEvents_.front());
@@ -567,28 +577,32 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const float margin = propReach_ + 30;
     for (int cz = 0; cz < propCellsZ_; ++cz)
       for (int cx = 0; cx < propCellsX_; ++cx) {
-        const PropCell& cell = propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)];
+        PropCell& cell = propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)];
         if (cell.ofMap.empty() && cell.made.empty()) continue;
         const Vec3 lo{static_cast<float>(cx) * kPropCell - margin, ranges.low - 20, static_cast<float>(cz) * kPropCell - margin};
         const Vec3 hi{static_cast<float>(cx + 1) * kPropCell + margin, ranges.high + 60, static_cast<float>(cz + 1) * kPropCell + margin};
         if (!view.BoxVisible(lo, hi)) continue;
         ++propCellsSeen;
-        for (uint32_t i : cell.ofMap) {
-          meshes.Add(props_[i].model, props_[i].world, {1, 1, 1});
-          ++propsAdded;
+        // (its group with the model renderer, filled anew when a prop of it has changed)
+        if (cell.group == 0xffffffffu) cell.group = meshes.AddGroup();
+        if (cell.changed) {
+          meshes.ClearGroup(cell.group);
+          for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
+          for (uint32_t id : cell.made) {
+            auto made = madeProps_.find(id);
+            if (made != madeProps_.end() && made->second.model) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
+          }
+          cell.changed = false;
         }
-        for (uint32_t id : cell.made) {
-          auto made = madeProps_.find(id);
-          if (made == madeProps_.end() || !made->second.model) continue;
-          meshes.Add(made->second.model, made->second.world, {1, 1, 1});
-          ++propsAdded;
-        }
+        meshes.ListGroup(cell.group);
+        propsAdded += static_cast<int>(cell.ofMap.size() + cell.made.size());
       }
   }
   // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
   // mirrored copies of the map the ground out there is made of, turned as its mirror image is
   // turned (the model itself is not mirrored: that would turn it inside out), as far out as the
   // ground goes. They follow the map's own: a wood felled on the map is felled out there.
+  CpuTimes::Part("scenery beyond the edge listed");
   propsBeyond = 0;
   if (terrain.beyondReach > 0 && !propCells_.empty()) {
     const float w = static_cast<float>(map.width), h = static_cast<float>(map.height), reach = terrain.beyondReach;
@@ -628,6 +642,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
           }
       }
   }
+  CpuTimes::Part("frame, ghosts, placed, lines");
   meshes.addingScenery = false;
   // (the original's frame round the map, also with a world that goes on beyond it: Chris, 2026-10-14,
   // "keep the out of bounds thing but just have the mechanical thing")
@@ -678,6 +693,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       before = p;
     }
   }
+  CpuTimes::Part(nullptr);
 }
 
 std::vector<Vec3> World::WreckPlaces(size_t most) const {
@@ -703,6 +719,7 @@ void World::ListProp(PlacedProp* prop, uint32_t key, bool made) {
   prop->cell = prop->model ? PropCellAt(prop->world) : -1;
   if (prop->cell < 0) return;
   PropCell& cell = propCells_[static_cast<size_t>(prop->cell)];
+  cell.changed = true;
   (made ? cell.made : cell.ofMap).push_back(key);
   // how far it reaches from its place: its bounds' far corner, by the matrix's largest scale
   const Model* m = prop->model;
@@ -714,6 +731,7 @@ void World::ListProp(PlacedProp* prop, uint32_t key, bool made) {
 void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {
   if (prop->cell < 0 || static_cast<size_t>(prop->cell) >= propCells_.size()) return;
   PropCell& cell = propCells_[static_cast<size_t>(prop->cell)];
+  cell.changed = true;
   std::vector<uint32_t>& list = made ? cell.made : cell.ofMap;
   for (size_t i = 0; i < list.size(); ++i)
     if (list[i] == key) {
@@ -786,6 +804,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
+  CpuTimes::Part("units listed");
   ++frameStamp_;
   rememberedGone.clear();
   dyingDrawn = 0;
@@ -798,7 +817,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // going down, a walker toppling. Drawn as the simulation moves and poses it, without anything
       // that belongs to a live unit (symbol, bars, lamps, wake; it cannot be pointed at).
       const std::string& dying = (*frame.blueprints)[u.blueprint];
-      const Model* body = u.Seen() && !dying.empty() ? models.Unit(dying) : nullptr;
+      const Model* body = u.Seen() && !dying.empty()
+                              ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(dying); })
+                              : nullptr;
       if (body && body->ok) {
         Pose pose;
         pose.now = frame.bones.data() + u.firstBone;
@@ -852,7 +873,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       icons.Add(kind, position, color, isSelected, blip, known);
-      const Model* bracketed = (isSelected || u.id == hover) && !blip ? models.Unit(blueprint) : nullptr;
+      const Model* bracketed = (isSelected || u.id == hover) && !blip
+                                   ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); })
+                                   : nullptr;
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, *kind, bracketed);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
@@ -862,7 +885,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         AddBrackets(hoverKind, position, orientation, *kind, bracketed);
       }
     }
-    const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
+    const Model* model = blueprint.empty() || blip
+                             ? nullptr
+                             : Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); });
     // Its bars, as the original draws them (Chris's pictures of it, 2026-10-13): the life bar under
     // the unit, about as wide as the unit, black with a filling that is green, yellow at middling
     // health and red when low, on every unit near enough to be a model (and on a selected or
@@ -1008,13 +1033,15 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     ++it;
   }
+  CpuTimes::Part("projectiles, entities, beams listed");
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
   for (const FrameProjectile& p : frame.projectiles) {
     if (!p.seen) continue;
     const Vec3 position{p.position[0], p.position[1], p.position[2]};
     const std::string& blueprint = (*frame.blueprints)[p.blueprint];
-    const Model* model = blueprint.empty() ? nullptr : models.Blueprint(blueprint);
+    const Model* model = Known(shotModels_, p.blueprint, frame.blueprints->size(),
+                               [&]() -> const Model* { return blueprint.empty() ? nullptr : models.Blueprint(blueprint); });
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
@@ -1041,9 +1068,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   for (const FrameEntity& f : frame.entities) {
     if (!f.seen || f.mesh >= frame.blueprints->size()) continue;
     const std::string& mesh = (*frame.blueprints)[f.mesh];
-    if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) continue;  // (a script may write the name in any case)
-    const Model* model = models.Blueprint(mesh + ".bp");
-    if (!model->ok) continue;
+    const Model* model = Known(entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
+      if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
+      return models.Blueprint(mesh + ".bp");
+    });
+    if (!model || !model->ok) continue;
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
@@ -1068,14 +1097,21 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     const Vec3 c = colorOf(b.army) * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
+  CpuTimes::Part(nullptr);
 }
 
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
-  device_->Mark("snow tracks");
+  // (a stage of the frame: timed on the graphics card and on the processor, for --timings)
+  auto Stage = [this](const char* name) {
+    device_->Mark(name);
+    CpuTimes::Part(name);
+  };
+  Stage("snow tracks");
   // (the tracks' picture first: its own pass)
   if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
   tracksCovering_ = 0;
+  CpuTimes::Part("lights and lamp shadows placed");
   lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   {  // the bones of posed models, once for all the frame's passes
@@ -1083,13 +1119,15 @@ void World::Render() {
     if (shadowed)
       for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
     for (int i = 0; i < lampShadowsDrawn; ++i) views.push_back(&lights.ShadowView(i));
+    CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
+  CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
 
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
-  device_->Mark("sun shadows");
+  Stage("sun shadows");
   if (shadowed) {
     for (int i = 0; i < shadows.Count(); ++i) {
       device_->BeginPass(shadows.Pass(i));
@@ -1098,7 +1136,7 @@ void World::Render() {
     }
   }
   // the lamps' shadow maps: units and scenery as each lamp sees them
-  device_->Mark("lamp shadows");
+  Stage("lamp shadows");
   for (int i = 0; i < lampShadowsDrawn; ++i) {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
@@ -1110,9 +1148,9 @@ void World::Render() {
   device_->SetTexture(kEnvironmentSlot, sky_);
   lights.Bind();
   if (haveMap_) {
-    device_->Mark("ground");
+    Stage("ground");
     terrain.Draw(view);
-    device_->Mark("marks on the ground");
+    Stage("marks on the ground");
     // decals on the ground, before anything stands on it: they read the ground's depth
     if (decals.Count() && hide.find("decals") == std::string::npos) {
       post.BeginColorOnly();
@@ -1123,7 +1161,7 @@ void World::Render() {
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
-    device_->Mark("units and scenery");
+    Stage("units and scenery");
     if (ranges.Any()) {
       ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
       ranges.night = lights.night;
@@ -1143,15 +1181,15 @@ void World::Render() {
     }
     draw.Flush(view);
     // ambient occlusion: from the depth of everything solid, laid over it before the water
-    device_->Mark("ambient occlusion");
+    Stage("ambient occlusion");
     if (look == Look::Modern && ao.strength > 0) {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();
       ao.Apply(view);
     }
-    device_->Mark("sky");
+    Stage("sky");
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
-    device_->Mark("water");
+    Stage("water");
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
       post.BeginColorOnly();
@@ -1175,10 +1213,10 @@ void World::Render() {
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
-  device_->Mark("see-through (shields)");
+  Stage("see-through (shields)");
   meshes.Draw(view, environment_, false, true);
   if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
-  device_->Mark("wakes, beams, trails");
+  Stage("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
@@ -1186,9 +1224,9 @@ void World::Render() {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
     post.BeginColorOnly();
-    device_->Mark("lamp shafts");
+    Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
-    device_->Mark("particles");
+    Stage("particles");
     if (hide.find("particles") == std::string::npos) {
       particles.Draw(view, post.Depth(), camera.zNear);
       // those that bend what is behind them (the shimmer over heat): with the picture as it is now
@@ -1200,20 +1238,21 @@ void World::Render() {
     post.ContinueScene();
     lights.Bind();
   }
-  device_->Mark("rain, snow");
+  Stage("rain, snow");
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
-  device_->Mark("fog of war");
+  Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
     sight.neverSeen = unexplored ? 0.04f : sight.darkness;
     sight.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
-  device_->Mark("finishing (exposure, bloom)");
+  Stage("finishing (exposure, bloom)");
   post.Present(view);
-  device_->Mark("icons, bars");
+  Stage("icons, bars");
   icons.showSymbols = iconsOn;
   icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
+  CpuTimes::Part(nullptr);
 }
 
 bool World::Project(Vec3 p, float* x, float* y) const {

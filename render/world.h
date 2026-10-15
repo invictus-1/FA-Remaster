@@ -281,6 +281,10 @@ class World {
   struct PropCell {
     std::vector<uint32_t> ofMap;  // indices into props_
     std::vector<uint32_t> made;   // entity ids in madeProps_
+    // its group of still scenery with the model renderer (made the first time it is drawn), and
+    // whether the group must be filled anew (a prop of it has changed)
+    uint32_t group = 0xffffffffu;
+    bool changed = true;
   };
   static constexpr float kPropCell = 32;
   std::vector<PropCell> propCells_;
@@ -293,6 +297,24 @@ class World {
   const Model* PropModel(const std::string& blueprint, const std::string& mesh);
   void ApplyPropEvent(const FramePropEvent& event);
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet
+  // The models of the frame's blueprints by their number in Frame::blueprints, looked up by name once
+  // instead of every frame (a lookup makes several strings): a unit's, a projectile's, and a script
+  // entity's mesh blueprint. Emptied when the simulation says anew how blueprints look (SetLooks).
+  struct KnownModel {
+    const Model* model = nullptr;
+    bool known = false;
+  };
+  std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
+  template <typename LookUp>
+  const Model* Known(std::vector<KnownModel>& list, uint32_t index, size_t count, LookUp lookUp) {
+    if (index >= list.size()) list.resize(std::max(count, static_cast<size_t>(index) + 1));
+    KnownModel& k = list[index];
+    if (!k.known) {
+      k.model = lookUp();
+      k.known = true;
+    }
+    return k.model;
+  }
   std::vector<Pickable> pickables_;
   float time_ = 0;
   float weatherTime_ = -1;  // when wet and snowLying were last moved on
