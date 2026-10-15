@@ -253,6 +253,7 @@ void DeriveUnit(lua_State* L, int t, const BlueprintInfo& bp, const SimBlueprint
   WriteFootprint(L, fpT, fp);
   WriteFootprint(L, altT, alt);
   bp.footprint = fp;
+  bp.altFootprint = alt;
   bp.hasFootprint = true;
 
   SetF(L, p, "SkirtOffsetX", std::min(GetF(L, p, "SkirtOffsetX", 0), 0.0f));

@@ -33,6 +33,7 @@ struct BlueprintInfo {
   // Units: the footprint the engine uses (the nearest named footprint; set by DeriveBlueprint).
   mutable bool hasFootprint = false;
   mutable NamedFootprint footprint;
+  mutable NamedFootprint altFootprint;  // the AltFootprint likewise (bp+0x300; the main one when there is none)
 };
 
 

@@ -64,6 +64,7 @@ struct MotionBlueprint {
   mutable int8_t naval = -1, airCat = -1;  // in category NAVAL / AIR (u+0x68a / u+0x68b; -1: not looked up)
   std::vector<float> raisedPlatforms;  // Physics.RaisedPlatforms: quads of (x, z, h) x 4 from the position
   NamedFootprint footprint;
+  NamedFootprint altFootprint;  // the named AltFootprint (bp+0x300): a FAVORSWATER unit's water-only paths
   // the footprint's passability grid (cached; grids live as long as the sim's Navigation)
   mutable const class PathGrid* grid = nullptr;
   mutable const void* gridOwner = nullptr;

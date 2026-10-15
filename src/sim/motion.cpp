@@ -477,6 +477,9 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
   if (bp.hasFootprint) m.footprint = bp.footprint;
   if (!m.footprint.sizeX) m.footprint.sizeX = 1;
   if (!m.footprint.sizeZ) m.footprint.sizeZ = 1;
+  m.altFootprint = bp.hasFootprint ? bp.altFootprint : m.footprint;
+  if (!m.altFootprint.sizeX) m.altFootprint.sizeX = 1;
+  if (!m.altFootprint.sizeZ) m.altFootprint.sizeZ = 1;
   return cache.emplace(&bp, m).first->second;
 }
 
