@@ -707,10 +707,10 @@ bool GroundCanReserve(Sim& sim, Unit* u, const int* r) {
   if (own) FillRes(sim, u->ogridRect, 1);
   return !blocked;
 }
-// MOHO64_DEBUG_PREPMOVE=<unit id>: every spot tested and why it was refused
-long PrepDbg() {
+// MOHO64_DEBUG_PREPMOVE=<unit id> (or -2: every unit): every spot tested and why it was refused
+bool PrepDbgOn(const Unit* u) {
   static const long v = getenv("MOHO64_DEBUG_PREPMOVE") ? atol(getenv("MOHO64_DEBUG_PREPMOVE")) : -1;
-  return v;
+  return v == -2 || v == static_cast<long>(u->id);
 }
 bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl,
                       const char** why) {
@@ -748,7 +748,7 @@ bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int c
 bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl) {
   const char* why = "";
   const bool ok = GroundSpotOkImpl(sim, u, fp, cx, cz, w, excl, &why);
-  if (PrepDbg() == static_cast<long>(u->id))
+  if (PrepDbgOn(u))
     Logf(LogLevel::Info, "prepmove %u unit %u spot (%d,%d) %s", sim.tick(), u->id, cx, cz, why);
   return ok;
 }
@@ -758,7 +758,7 @@ bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4], in
   const NamedFootprint& fp = u->motion.bp->footprint;
   int cx = static_cast<int>(std::nearbyint(pos->x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(pos->z - fp.sizeZ * 0.5f));
-  if (PrepDbg() == static_cast<long>(u->id))
+  if (PrepDbgOn(u))
     Logf(LogLevel::Info, "prepmove %u unit %u from %.3f %.3f at %.3f %.3f excl %.2f %.2f %.2f %.2f spacing %d", sim.tick(),
          u->id, pos->x, pos->z, u->position.x, u->position.z, excl ? excl[0] : 0.0f, excl ? excl[1] : 0.0f,
          excl ? excl[2] : 0.0f, excl ? excl[3] : 0.0f, spacing);
