@@ -1257,11 +1257,19 @@ bool Blacklisted(const UnitWeapon* w, const Entity* e) {
   return false;
 }
 
-// IsTargetExempt 0x5d7340: reclaim / capture targets are never shot.
-bool TargetExempt(const Unit* u, const Entity* e) {
+// IsTargetExempt 0x5d7340: reclaim / capture targets are never shot: the unit's own (its queue's Reclaim and
+// Capture orders), and (0x5d7423..0x5d74fd) a unit BeingCaptured (IsUnitState 0x1b) that one of the attacker's
+// army's ENGINEER units (army vt+0x9c with the category "ENGINEER" 0xe1a690; not dead, not being destroyed) has for
+// its focus (unit+0x4d0). Seen: Engineers 2678, a SACU cheat-spawned beside a unit three engineers of its army are
+// capturing; the original's leaves it alone, ours shot it
+bool TargetExempt(Sim& sim, const Unit* u, const Entity* e) {
   if (!e) return false;
   for (const auto& c : u->commands)
     if ((c->type == CommandType::Reclaim || c->type == CommandType::Capture) && c->targetId == EntityRef(e)) return true;
+  if (e->kind != Entity::Kind::Unit || !static_cast<const Unit*>(e)->unitStates.count("BeingCaptured")) return false;
+  const uint32_t ref = EntityRef(e);
+  for (Unit* x : sim.units())
+    if (x->army == u->army && Alive(x) && x->focusId == ref && BpInCategory(sim, x->blueprint, "ENGINEER")) return true;
   return false;
 }
 
@@ -1323,7 +1331,7 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
       } else if (e->layer == "Air" && e->beingBuilt) {
         continue;
       }
-      if (Blacklisted(w, e) || TargetExempt(u, e) || e->unitStates.count("DoNotTarget")) continue;
+      if (Blacklisted(w, e) || TargetExempt(sim, u, e) || e->unitStates.count("DoNotTarget")) continue;
     }
     if (e->layer != "Air" && !InMap(sim, ep)) continue;
     if (!Targetable(sim, w, e)) continue;
@@ -1445,7 +1453,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   int tc = dHas ? TargetStatus(sim, w, d) : 3;
   int code;
   if (!dHas || EntityLost(sim, d)) code = 4;  // (0x5d8fca: EntityLost 0x5e2db0, then HasTarget)
-  else if (LeashOrInvisible(sim, u) || TargetExempt(u, TargetEntity(sim, d))) code = 5;
+  else if (LeashOrInvisible(sim, u) || TargetExempt(sim, u, TargetEntity(sim, d))) code = 5;
   else if (w->suppress != 0 || !w->canReach) code = 6;
   else if (tc == 0 && !CanAttackTarget(sim, w, d)) code = 3;
   else if (!cb.canFly && tc != 0) code = tc == 1 ? 7 : 2;
@@ -1465,7 +1473,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
                         ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1);
   const bool keeps = !engaging && !b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 &&
                      CanAttackTarget(sim, w, w->target) && HasTarget(sim, w->target) &&
-                     !TargetExempt(u, TargetEntity(sim, w->target));
+                     !TargetExempt(sim, u, TargetEntity(sim, w->target));
   if (dbgAcq2) {
     const Entity* ce = w->target.type == 1 ? sim.FindEntity(w->target.entityId) : nullptr;
     const Entity* de = d.type == 1 ? sim.FindEntity(d.entityId) : nullptr;
@@ -2079,9 +2087,13 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     }
     if (e.kind == 4) {  // the arm's angles from this beat's MoveManipulator
       BuilderArm* a = static_cast<BuilderArm*>(e.p);
-      if (!a->alive || !a->enabled) continue;
-      PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
-      PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
+      const int call = a->trackCall;  // (its step's tracking callback, after the bones turned: see ArmStep)
+      a->trackCall = 0;
+      if (a->alive && a->enabled) {
+        PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
+        PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
+      }
+      if (call && a->alive) sim.CallMethod(sim.L(), u, call == 1 ? "OnStartBuilderTracking" : "OnStopBuilderTracking", 0);
       continue;
     }
     if (e.kind == 5) {
@@ -3588,8 +3600,14 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
         ComposeQ(bones[static_cast<size_t>(a->pitchBone)].localRot, AxisAngle({1, 0, 0}, -a->pitch));
   }
   bool moving = (r & 2) != 0;
-  if (moving && !a->tracking) sim.CallMethod(sim.L(), u, "OnStartBuilderTracking", 0);
-  else if (!moving && a->tracking) sim.CallMethod(sim.L(), u, "OnStopBuilderTracking", 0);
+  // Step 0x6361a6 / 0x6361e5: the callbacks come from the arm's own MoveManipulator, which runs in its precedence
+  // slot of UpdateManipulators 0x63aa80, after the open animation (FAF: BuildingOpenAnimManip precedence 1, the arm
+  // 5). Ours computes the arm before the unit's animators, so the call waits for the arm's slot. Seen: Engineers
+  // 3190, engineer b's arm comes home and OnStopBuilderTracking reverses the open animation; called before the
+  // animation's beat it took a step back, so at 3191 OnPrepareArmToBuild's WaitFor(open animation) waited a beat
+  // and the arm (and the repair) started at 3192 / 3195; the original's at 3191 / 3194
+  if (moving && !a->tracking) a->trackCall = 1;
+  else if (!moving && a->tracking) a->trackCall = 2;
   a->tracking = moving;
   return (r & 1) == 0;
 }

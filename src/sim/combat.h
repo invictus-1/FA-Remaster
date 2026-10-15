@@ -213,6 +213,9 @@ class BuilderArm : public ScriptObject {
   float hCenter = 0, hHalf = 3.14159265f, hSlew = 0.0628318563f;  // +0x98..+0xa0
   float pCenter = 15.0f, pHalf = 30.0f, pSlew = 0.0610865243f;    // +0xa4..+0xac
   bool tracking = false, onTarget = false, enabled = true, alive = true;
+  // the tracking callback this beat's step owes (1 OnStartBuilderTracking, 2 OnStopBuilderTracking): it is made at
+  // the arm's place among the unit's manipulators (UnitAimTickManipulators), after the lower-precedence ones moved
+  int trackCall = 0;
   int precedence = 0;
   uint32_t seq = 0;
   int EventState() const override { return onTarget ? 1 : 0; }
