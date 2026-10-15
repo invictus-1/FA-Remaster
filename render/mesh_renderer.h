@@ -36,6 +36,15 @@ class MeshRenderer {
   // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
   // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr);
+  // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
+  // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
+  // after Begin), not where each tree stands and how large it is. A group is filled anew
+  // (ClearGroup, then AddToGroup for each) when something in it has changed. It counts as scenery.
+  // The groups' models come first in the frame's list, in the order they are listed.
+  uint32_t AddGroup();  // a new, empty group's number
+  void ClearGroup(uint32_t group);
+  void AddToGroup(uint32_t group, const Model* model, const Mat4& world);
+  void ListGroup(uint32_t group) { groupsListed_.push_back(group); }
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
   // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them
   // to the shaders once for all passes.
@@ -77,6 +86,15 @@ class MeshRenderer {
     float color[4];                   // team colour, w: fraction complete
     float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none)
   };
+  // What a pass tests first, for every model of the list, kept apart from the rest so that going
+  // through tens of thousands of them reads little memory.
+  enum : uint8_t { kScenery = 1, kPosed = 2, kHasGlass = 4, kHasSolid = 8 };
+  struct Cull {
+    Vec3 centre;
+    float radius;
+    float sizeRadius;
+    uint8_t flags;
+  };
   struct Entry {
     const Model* model;
     Vec3 centre;   // of its bounding sphere, in the world
@@ -87,7 +105,13 @@ class MeshRenderer {
     bool posed = false;
     bool scenery = false;
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
+    uint8_t flags = 0;  // Cull's
   };
+  Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint) const;
+  void Push(const Entry& e) {
+    entries_.push_back(e);
+    culls_.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
+  }
   struct Item {
     const ModelLod* lod;
     Entry* entry;
@@ -105,6 +129,29 @@ class MeshRenderer {
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;
+  std::vector<Cull> culls_;  // one for each of entries_, in the same order
+  struct Group {
+    std::vector<Entry> entries;
+    std::vector<Cull> culls;  // one for each of entries
+  };
+  std::vector<Group> groups_;
+  std::vector<uint32_t> groupsListed_;
+  void Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
+                float smallest, float wish, std::vector<Item>* out) const;
+  // A pass's models are tested in pieces of up to kPieceModels, spread over the processor's cores;
+  // each piece's items are put together in the pieces' order afterwards (the same order as one loop).
+  static constexpr size_t kPieceModels = 1024;
+  struct Piece {
+    const Cull* culls;
+    Entry* entries;
+    size_t count;
+  };
+  std::vector<Piece> pieces_;
+  std::vector<std::vector<Item>> pieceItems_;
+  std::vector<Item> sorting_;     // (the sort's second buffer)
+  std::vector<uint32_t> buckets_;  // (and its counts)
+  void SortItems();
+  void DrawItems(const View& view, gfx::Texture environment, bool shadowPass, bool glass);
   std::vector<Item> items_;
   std::vector<Instance> batch_;
   // Bones: for every posed model a pass has seen, three rows of four numbers per bone: the matrix

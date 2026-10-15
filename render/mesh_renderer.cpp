@@ -1,5 +1,8 @@
 #include "mesh_renderer.h"
 
+#include "cpu_times.h"
+#include "jobs.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -606,15 +609,19 @@ bool MeshRenderer::Init(std::string* error) {
 
 void MeshRenderer::Begin() {
   entries_.clear();
+  culls_.clear();
+  groupsListed_.clear();
   rows_.clear();
   prepared_ = false;
 }
 
 void MeshRenderer::Prepare(const std::vector<const View*>& views) {
   const auto t0 = std::chrono::steady_clock::now();
-  for (Entry& e : entries_) {
-    if (!e.posed) continue;
-    const Vec3 r{e.radius, e.radius, e.radius};
+  for (size_t i = 0; i < culls_.size(); ++i) {
+    const Cull& c = culls_[i];
+    if (!(c.flags & kPosed)) continue;
+    Entry& e = entries_[i];
+    const Vec3 r{c.radius, c.radius, c.radius};
     bool seen = views.empty();
     for (const View* view : views)
       if (view->BoxVisible(e.centre - r, e.centre + r)) {
@@ -667,11 +674,9 @@ void MeshRenderer::BuildRows(Entry* entry) {
   }
 }
 
-void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint) {
-  if (!model || !model->ok) return;
+MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint) const {
   Entry e;
   e.model = model;
-  e.scenery = addingScenery;
   // the model's bounding sphere in the world (the matrix is a rotation with one scale)
   const Vec3 centre = (model->boundsMin + model->boundsMax) * 0.5f;
   const float scale = std::sqrt(world.m[0][0] * world.m[0][0] + world.m[1][0] * world.m[1][0] + world.m[2][0] * world.m[2][0]);
@@ -692,12 +697,41 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   e.instance.bones[2] = tint ? tint->y : 0;
   e.instance.bones[3] = tint ? tint->z : 0;
   e.sizeRadius = e.radius;
+  for (const ModelLod& lod : model->lods) e.flags |= lod.glass ? kHasGlass : kHasSolid;
+  return e;
+}
+
+void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint) {
+  if (!model || !model->ok) return;
+  Entry e = MakeEntry(model, world, teamColor, built, tint);
+  e.scenery = addingScenery;
+  if (addingScenery) e.flags |= kScenery;
   if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
     e.pose = *pose;
     e.posed = true;
+    e.flags |= kPosed;
     e.radius *= 1.25f;  // parts swing out of the rest pose's bounds
   }
-  entries_.push_back(e);
+  Push(e);
+}
+
+uint32_t MeshRenderer::AddGroup() {
+  groups_.emplace_back();
+  return static_cast<uint32_t>(groups_.size() - 1);
+}
+
+void MeshRenderer::ClearGroup(uint32_t group) {
+  groups_[group].entries.clear();
+  groups_[group].culls.clear();
+}
+
+void MeshRenderer::AddToGroup(uint32_t group, const Model* model, const Mat4& world) {
+  if (!model || !model->ok) return;
+  Entry e = MakeEntry(model, world, {1, 1, 1}, 1, nullptr);
+  e.scenery = true;
+  e.flags |= kScenery;
+  groups_[group].entries.push_back(e);
+  groups_[group].culls.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
 }
 
 void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass, bool glass, int part) {
@@ -713,19 +747,48 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   if (!prepared_) Prepare({});  // (a caller that did not say which views there are: every posed model's bones)
   // What this view sees, each at the level its size on the SCREEN asks for (view.eye, fovY and height
   // are the camera's in a shadow pass too, so a model's shadow comes from a level near the one drawn).
+  const char* outer = CpuTimes::Current();
+  CpuTimes::Part("models: tested for each pass");
   items_.clear();
   const float focal = static_cast<float>(view.height) / (2 * std::tan(view.fovY * 0.5f));
   const float smallest = shadowPass ? shadowMinPixels : minPixels;
   const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
-  for (Entry& e : entries_) {
-    const Vec3 r{e.radius, e.radius, e.radius};
-    if (part != 0 && e.scenery != (part == 1)) continue;
-    if (!view.BoxVisible(e.centre - r, e.centre + r)) continue;
-    if (shadowPass && view.CoveredByNearer(e.centre, e.radius)) continue;  // the nearer shadow map has it
-    if (view.reach > 0 && Length(e.centre - view.reachFrom) - e.radius > view.reach) continue;  // beyond a lamp's light
-    if (view.hasCarrier && Length(e.centre - view.carrier) < 0.02f) continue;                   // what the lamp rides on
-    const float pixels = 2 * e.sizeRadius * focal / std::max(Length(e.centre - view.eye), 0.01f);  // its diameter on screen
-    if (pixels < smallest) continue;
+  const uint8_t needed = glass ? kHasGlass : kHasSolid;  // (a model with no level of this pass's kind is passed over at once)
+  // (the scenery's groups first, then the frame's own list: in pieces, each tested on its own)
+  pieces_.clear();
+  auto cut = [&](const Cull* culls, Entry* entries, size_t count) {
+    for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at)});
+  };
+  if (part != 2)
+    for (uint32_t g : groupsListed_) cut(groups_[g].culls.data(), groups_[g].entries.data(), groups_[g].culls.size());
+  cut(culls_.data(), entries_.data(), culls_.size());
+  if (pieceItems_.size() < pieces_.size()) pieceItems_.resize(pieces_.size());
+  Jobs::Shared().Run(static_cast<int>(pieces_.size()), [&](int k) {
+    const Piece& p = pieces_[static_cast<size_t>(k)];
+    std::vector<Item>& out = pieceItems_[static_cast<size_t>(k)];
+    out.clear();
+    for (size_t i = 0; i < p.count; ++i) Consider(p.culls[i], p.entries[i], view, shadowPass, glass, part, needed, focal, smallest, wish, &out);
+  });
+  for (size_t k = 0; k < pieces_.size(); ++k) items_.insert(items_.end(), pieceItems_[k].begin(), pieceItems_[k].end());
+  if (!shadowPass)
+    for (const Item& item : items_) posedInstances += item.entry->posed ? 1 : 0;
+  DrawItems(view, environment, shadowPass, glass);
+  CpuTimes::Part(outer);
+}
+
+// Whether a pass draws that model, and at which level: onto items_ if it does.
+void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
+                            float smallest, float wish, std::vector<Item>* out) const {
+  {
+    if (!(c.flags & needed)) return;
+    if (part != 0 && ((c.flags & kScenery) != 0) != (part == 1)) return;
+    const Vec3 r{c.radius, c.radius, c.radius};
+    if (!view.BoxVisible(c.centre - r, c.centre + r)) return;
+    if (shadowPass && view.CoveredByNearer(c.centre, c.radius)) return;  // the nearer shadow map has it
+    if (view.reach > 0 && Length(c.centre - view.reachFrom) - c.radius > view.reach) return;  // beyond a lamp's light
+    if (view.hasCarrier && Length(c.centre - view.carrier) < 0.02f) return;                   // what the lamp rides on
+    const float pixels = 2 * c.sizeRadius * focal / std::max(Length(c.centre - view.eye), 0.01f);  // its diameter on screen
+    if (pixels < smallest) return;
     const float wanted = wish * pixels * pixels;
     // the level whose triangle count is nearest to that wish (nearest by ratio: a step down is taken
     // at the geometric mean of two neighbours, so chains with big gaps - a tree and its flat card -
@@ -744,18 +807,68 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
         ++level;
     }
     const ModelLod* lod = &lods[level];
-    if (lod->hidden || lod->glass != glass) continue;
+    if (lod->hidden || lod->glass != glass) return;
     // the far-away cards of trees are flat pictures: they cast no shadow
-    if (shadowPass && lod->blend) continue;
-    items_.push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
-    if (!shadowPass && e.posed) ++posedInstances;
+    if (shadowPass && lod->blend) return;
+    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
   }
-  if (items_.empty()) return;
-  // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
-  std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
-    return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod < b.lod;
-  });
+}
 
+// items_ by mesh (by its level's serial number), the blended ones last, and otherwise in the order
+// they were found: what a stable sort by (blended, serial) gives, done as a radix sort of the
+// key's bits, eleven at a time from the lowest (which keeps each step's order).
+void MeshRenderer::SortItems() {
+  const size_t n = items_.size();
+  if (n < 64) {
+    std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
+      return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod->serial < b.lod->serial;
+    });
+    return;
+  }
+  auto key = [](const Item& item) {
+    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 32) | static_cast<uint64_t>(item.lod->serial);
+  };
+  // (only the bits that differ between the items need sorting)
+  uint64_t all = 0, any = 0, first = key(items_[0]);
+  for (const Item& item : items_) {
+    const uint64_t k = key(item);
+    any |= k ^ first;
+  }
+  (void)all;
+  if (!any) return;  // one mesh only
+  int top = 63;
+  while (top > 0 && !((any >> top) & 1)) --top;
+  int low = 0;
+  while (low < top && !((any >> low) & 1)) ++low;
+  constexpr int kBits = 11;
+  constexpr uint32_t kBuckets = 1u << kBits;
+  buckets_.resize(kBuckets);
+  sorting_.resize(n);
+  std::vector<Item>* from = &items_;
+  std::vector<Item>* to = &sorting_;
+  for (int shift = low; shift <= top; shift += kBits) {
+    std::fill(buckets_.begin(), buckets_.end(), 0u);
+    for (const Item& item : *from) ++buckets_[(key(item) >> shift) & (kBuckets - 1)];
+    uint32_t sum = 0;
+    for (uint32_t& b : buckets_) {
+      const uint32_t c = b;
+      b = sum;
+      sum += c;
+    }
+    for (const Item& item : *from) (*to)[buckets_[(key(item) >> shift) & (kBuckets - 1)]++] = item;
+    std::swap(from, to);
+  }
+  if (from != &items_) items_.swap(sorting_);
+}
+
+// Draws items_: by mesh, each mesh's instances together.
+void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool shadowPass, bool glass) {
+  if (items_.empty()) return;
+  CpuTimes::Part("models: sorted by mesh");
+  // by mesh, the blended ones last (they are not sorted by distance among themselves yet)
+  SortItems();
+
+  CpuTimes::Part("models: handed to the card");
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
   device_->SetShaderBuffer(boneBuffer_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);

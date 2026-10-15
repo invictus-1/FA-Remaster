@@ -89,3 +89,26 @@ speed (100 ms a tick), but it limits fast-forward to about 3x. The engine chat's
 4. **Order:** processor side first (my recommendation, it is the limit today) or quality settings first?
 5. **Vulkan** (other systems than Windows, roadmap f06): before the optimisation, after it, or later?
 6. **Frame cap:** vsync on by default (smooth, no tearing, caps at the screen's rate), or uncapped?
+
+## 5. Chris's answers (2026-10-15)
+
+1. Target: 60 frames a second, without giving up quality ("we'll see how feasible it is").
+2. Test hardware: only this PC. Lower hardware is estimated: fewer cores by limiting the viewer to some
+   of them, a slower card by drawing at a higher resolution than the screen's.
+3. Upscaling: FSR only. No DLSS for now.
+4. Order: the processor side first.
+5. Vulkan: the renderer's recommendation, given above all for Linux and Mac (people have asked him for
+   both; he has neither): see the next section.
+6. Frame rate: vsync on, vsync off and frame caps all offered as options; vsync on by default.
+
+## 6. Vulkan: the plan
+
+- Linux players can already run the Windows build through Steam's Proton or Wine, which turn Direct3D 12
+  into Vulkan (vkd3d-proton). A native Vulkan build makes that unnecessary but is not needed for them to play.
+- The Mac has no Vulkan of its own: Vulkan runs there through MoltenVK (Vulkan on Apple's Metal), and the
+  Mac build would also need its own window code and an Apple Silicon build.
+- So: the optimisation first, on Direct3D 12, with every new part of the drawing interface (several cores
+  recording at once, scenery kept on the card) shaped so that Vulkan can do the same. Then the Vulkan
+  backend, written and tested on Windows on this PC (Vulkan runs there too), which catches nearly all of
+  its mistakes without a Linux machine. Then a Linux build, which can be tried on this PC from a Linux
+  USB stick (free, no install); the Mac last, through MoltenVK, with players who own a Mac testing it.

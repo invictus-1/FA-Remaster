@@ -115,6 +115,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "cpu_times.h"
 #include "camera.h"
 #include "core/hostfs.h"
 #include "remasters.h"
@@ -876,6 +877,7 @@ int main(int argc, char** argv) {
   double titleTime = 0;
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
   auto countedFrom = start;
+  CpuTimes::on = opt.timings;
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
@@ -1027,7 +1029,9 @@ int main(int argc, char** argv) {
     if (playing) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
       playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
+      CpuTimes::Part("the game's beats blended");
       frameAt(playTick, &frame);
+      CpuTimes::Part(nullptr);
       if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
         framedLive = true;
         lookAtUnits();
@@ -1249,8 +1253,10 @@ int main(int argc, char** argv) {
         live.TakePropEvents(&changed);
         if (!changed.empty()) world.AddPropEvents(changed);
       }
+      CpuTimes::Part("effects");
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
+      CpuTimes::Part(nullptr);
     }
     effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
     if (playing) world.AddFrame(frame, armyColors);
@@ -1400,8 +1406,10 @@ int main(int argc, char** argv) {
         gpu += s.second;
       }
       if (!stages.empty()) timing.Add("gpu: whole frame", gpu);
+      for (const auto& part : CpuTimes::parts) timing.Add(std::string("cpu part: ") + part.first, part.second);
       ++timing.frames;
     }
+    CpuTimes::parts.clear();
     if (shoot && !capture.empty()) {
       std::string path = wantScreenshot ? "screenshot" + std::to_string(++shotNumber) + ".png" : opt.screenshot;
       if (series && !wantScreenshot) {
