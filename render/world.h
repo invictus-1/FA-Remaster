@@ -318,6 +318,7 @@ class World {
     bool known = false;
   };
   std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
+  EffectsLook shotsLook_ = EffectsLook::Remastered;  // (the look shotModels_ were looked up in)
   template <typename LookUp>
   const Model* Known(std::vector<KnownModel>& list, uint32_t index, size_t count, LookUp lookUp) {
     if (index >= list.size()) list.resize(std::max(count, static_cast<size_t>(index) + 1));

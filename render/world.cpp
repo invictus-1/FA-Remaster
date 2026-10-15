@@ -1044,8 +1044,14 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (!p.seen) continue;
     const Vec3 position{p.position[0], p.position[1], p.position[2]};
     const std::string& blueprint = (*frame.blueprints)[p.blueprint];
-    const Model* model = Known(shotModels_, p.blueprint, frame.blueprints->size(),
-                               [&]() -> const Model* { return blueprint.empty() ? nullptr : models.Blueprint(blueprint); });
+    // (a shot's model is an effect's: the remastered look takes the visuals track's where there is one)
+    if (shotsLook_ != effectsLook) {
+      shotModels_.clear();
+      shotsLook_ = effectsLook;
+    }
+    const Model* model = Known(shotModels_, p.blueprint, frame.blueprints->size(), [&]() -> const Model* {
+      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, effectsLook == EffectsLook::Original);
+    });
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
