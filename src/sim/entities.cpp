@@ -1321,8 +1321,10 @@ namespace {
 // The layer a unit starts on (Entity::GetStartingLayer 0x62ad30; `want` = the construction params' layer, 0 =
 // choose). The footprint's caps decide, not the motion type: an EXPERIMENTAL aircraft starts on Land (it appears on
 // the ground and takes off), an experimental submarine on the surface, a land unit under water on the Seabed.
-uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, const Vec3& p, uint8_t want) {
-  const NamedFootprint& fp = bp.footprint;
+// (Entity::GetFootprint 0x62ad51: the AltFootprint while the unit uses it, for a unit warped by its script)
+uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, const Vec3& p, uint8_t want,
+                      bool alt = false) {
+  const NamedFootprint& fp = alt ? bp.altFootprint : bp.footprint;
   // the cell's caps (OCCUPY_FootprintFits 0x7209e0 with caps -1: the terrain's answer for this footprint)
   int cx = static_cast<int16_t>(std::lrintf(p.x - static_cast<float>(fp.sizeX) * 0.5f));
   int cz = static_cast<int16_t>(std::lrintf(p.z - static_cast<float>(fp.sizeZ) * 0.5f));
@@ -1592,7 +1594,7 @@ void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
   if (!u->blueprint) return;
   const BlueprintInfo& bp = *u->blueprint;
   const TerrainMap* m = map_.get();
-  const uint8_t layer = StartingLayer(*this, bp, m, pos, 0);
+  const uint8_t layer = StartingLayer(*this, bp, m, pos, 0, u->altFootprintNav || u->altFootprintForced);
   const float water = m && m->hasWater ? m->waterElevation : -10000.0f;
   const bool mobile = u->motion.bp && u->motion.bp->mobile();
   if (layer & (kLayerLand | kLayerSeabed)) {

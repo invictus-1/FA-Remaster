@@ -107,6 +107,11 @@ class Unit : public Entity {
   Vec3 leashPos;                    // u+0x4e8: where an engagement started (patrol) / the guard reference; zero: none
   NavigatorObject* navigator = nullptr;               // Lua's GetNavigator() object (owned by the sim)
   bool immobile = false;
+  // entity+0x11c / +0x11d (unit+0x124 / +0x125): the unit stands and paths with its AltFootprint (UnitFootprint,
+  // sim/motion.h). +0x124 is the navigator's: UpdateWaterFavorAltFootprintMode 0x5adc70 sets it for a FAVORSWATER
+  // unit whose whole move is on water, ResetPathState 0x5ad9c0 (0x5ada33) clears it. +0x125 is the script's: FAF's
+  // Unit:ForceAltFootprint(bool) 0x128dd70 (the Salem's weapon toggle, urs0201_script.lua:176 / 186).
+  bool altFootprintNav = false, altFootprintForced = false;
   int headState = 0;  // progress of the head command (sim/commands.cpp)
 
   // Economy (sim/economy.cpp): per-second rates as scripts set them, the request that claims the

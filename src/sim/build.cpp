@@ -404,6 +404,15 @@ void StopMoving(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
+// A task's move child torn down with the task (CUnitMoveTask's dtor 0x618700): Moving off (0x6187bd), and the
+// navigator's AbortMove (0x618884) unless the queue is being cleared for an order its table 0x618998 keeps
+// (u->clearKeepsMove, set by IssueFromStream). (A move that ends by itself goes through StopMoving: queue+0x1c is 0
+// then, and the table aborts for 0.)
+void EndMoveChild(Unit* u) {
+  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  u->unitStates.erase("Moving");
+}
+
 // A unit of the same kind being built at the site (join it instead of starting another).
 Unit* ExistingAtSite(Sim& sim, const Unit* builder, const BlueprintInfo& bp, const Vec3& site) {
   Unit* found = nullptr;
@@ -543,7 +552,7 @@ void EndPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   u->unitStates.erase("Reclaiming");
   u->focusId = 0;
   u->workProgress = 0;
-  if (c.moving) StopMoving(u);
+  if (c.moving) EndMoveChild(u);
 }
 
 // The script's answer to "what does reclaiming this cost": CUnitReclaimTask asks the BUILDER, builder:
@@ -840,7 +849,7 @@ void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4], int fl
     blockers.push_back(b);
   }
   for (Unit* b : blockers) {
-    const NamedFootprint& fp = b->motion.bp->footprint;
+    const NamedFootprint& fp = UnitFootprint(b);  // (Entity::GetFootprint, SIM_TryToBuild 0x62e235..)
     auto rectAt = [&](float wx, float wz, int* q) {
       q[0] = static_cast<int16_t>(RoundEven(wx - fp.sizeX * 0.5f));
       q[1] = static_cast<int16_t>(RoundEven(wz - fp.sizeZ * 0.5f));
@@ -2250,7 +2259,7 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     SetArmAimTarget(sim, u, Vec3{});
     if (t.moving) {
       t.moving = false;
-      StopMoving(u);
+      EndMoveChild(u);
     }
     GroundFreeRect(sim, u);
   }
@@ -2366,7 +2375,7 @@ void EndSacrifice(Sim& sim, Unit* u, BuildTask& t) {
     u->unitStates.erase("Repairing");  // the dtor clears unit state 16
     if (t.moving) {
       t.moving = false;
-      StopMoving(u);
+      EndMoveChild(u);
     }
     if (t.state == 1) GroundFreeRect(sim, u);
     // a task that got as far as state 2 takes the unit with it, however it ends (0x5faeb1)
@@ -2878,7 +2887,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         if (t.state == 1 && !t.noMove) GroundFreeRect(sim, u);
         if (t.moving) {
           t.moving = false;
-          StopMoving(u);
+          EndMoveChild(u);
         }
       }
       if (Unit* w = FindUnitAny(sim, t.workId)) w->unitStates.erase("NoReclaim");
@@ -2925,10 +2934,20 @@ bool TaskCanMove(const Unit* u) { return CanMove(u); }
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
 void TaskStopMoving(Unit* u) { StopMoving(u); }
 
+// The motion's part of a build-like task's teardown. None of these tasks' own dtors touches the navigator or the
+// motion (read: CUnitMobileBuildTask 0x5f6ac0, CUnitRepairTask 0x5f8e20, CUnitReclaimTask 0x620280,
+// CUnitCaptureTask 0x6050f0, CUnitSacrificeTask 0x5fae40, CUnitTeleportTask 0x60aec0, CUnitUpgradeTask 0x5f84c0,
+// CFactoryBuildTask 0x5fa010: the arm's SetAimTarget(0, 0, 0), unit states, FreeOgridRect, callbacks, nothing at
+// unit+0x54c). Their walks are CUnitMoveTask children (NewMoveTask 0x6190a0 from each TaskTick), deleted first
+// (CTask::TaskInterruptSubtasks 0x408d70, top down), and it is that child's dtor 0x618700 that aborts the move
+// (nav vt+0x10 at 0x618884), by its table 0x618998: not when the queue is cleared for an order the table keeps
+// (u->clearKeepsMove). Seen (Economy 2277): a support commander (uel0301_ras, unit 0xb) whose Reclaim walk is under
+// way gets a player's Move with clear, its queue holding only the Reclaim; the original keeps accelerating along the
+// old turn until the new Move task sets the goal in 2278 (watch log: wn 2278 status 1, goal (708.5, 339.5)), ours
+// braked in 2278-2279.
 void StopMovingIfTask(Unit* u, const BuildTask& t) {
   if (t.type == CommandType::BuildFactory || t.type == CommandType::Upgrade) return;
-  if (u->motion.hasGoal) MotionStop(u);
-  u->unitStates.erase("Moving");
+  EndMoveChild(u);
 }
 
 // ---- factories -----------------------------------------------------------------------------------

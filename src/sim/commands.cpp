@@ -213,10 +213,10 @@ float UnitTopSpeed(const Unit* u) {  // u+0x594
 // AtPatrolGoal 0x61b610
 bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty() || !u->motion.bp) return false;
-  const MotionBlueprint& b = *u->motion.bp;
+  const NamedFootprint& f = UnitFootprint(u);  // (0x61b671: Entity::GetFootprint)
   Vec3 g = TargetPos(sim, *u->commands.front(), u);
-  int gx = static_cast<int>(std::nearbyint(g.x - b.footprint.sizeX * 0.5f));
-  int gz = static_cast<int>(std::nearbyint(g.z - b.footprint.sizeZ * 0.5f));
+  int gx = static_cast<int>(std::nearbyint(g.x - f.sizeX * 0.5f));
+  int gz = static_cast<int>(std::nearbyint(g.z - f.sizeZ * 0.5f));
   int x0 = gx, z0 = gz, x1 = gx + 1, z1 = gz + 1;
   if (p.goalIssued) {
     int m = static_cast<int>(std::ceil(UnitTopSpeed(u)));
@@ -225,8 +225,8 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
     x1 += m;
     z1 += m;
   }
-  int cx = static_cast<int>(std::nearbyint(u->position.x - b.footprint.sizeX * 0.5f));
-  int cz = static_cast<int>(std::nearbyint(u->position.z - b.footprint.sizeZ * 0.5f));
+  int cx = static_cast<int>(std::nearbyint(u->position.x - f.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(u->position.z - f.sizeZ * 0.5f));
   return x0 <= cx && cx <= x1 && z0 <= cz && cz <= z1;
 }
 
@@ -1316,11 +1316,12 @@ bool CanPath(Sim& sim, Unit* u, const Vec3& to) {
   if (!u->motion.bp || !u->motion.bp->mobile()) return false;
   if (u->motion.bp->motionType == kMotionAir) return true;
   std::vector<Vec3> path;
-  if (!sim.navigation().FindPath(u->motion.bp->footprint, u->position, to, &path) || path.empty()) return false;
+  const NamedFootprint& f = UnitFootprint(u);  // (Unit:CanPathTo 0x6cba42: Entity::GetFootprint)
+  if (!sim.navigation().FindPath(f, u->position, to, &path) || path.empty()) return false;
   // reachable only if the path ends in the goal's cell
   int gx, gz, ex, ez;
-  GoalCell(*u->motion.bp, to.x, to.z, &gx, &gz);
-  GoalCell(*u->motion.bp, path.back().x, path.back().z, &ex, &ez);
+  GoalCell(f, to.x, to.z, &gx, &gz);
+  GoalCell(f, path.back().x, path.back().z, &ex, &ez);
   return gx == ex && gz == ez;
 }
 
@@ -1382,6 +1383,22 @@ int l_SetImmobile(lua_State* L) {
   } else {
     u->unitStates.erase("Immobile");
   }
+  return 0;
+}
+
+// Unit:ForceAltFootprint(flag): FAF's binding (its code at 0x128dcxx..0x128dd7e, registered by the FAF exe): two
+// arguments, unit+0x125 := lua_toboolean(2) (0x128dd70), nothing else; Entity::GetFootprint 0x678880 then gives the
+// AltFootprint (FAF patch 0x128e9a6). The Salem's script calls it from OnScriptBitSet / OnScriptBitClear of its
+// weapon toggle (bit 1), which OnStopBeingBuilt sets for a human army's Salem off the land; M28AI's overseer calls
+// it too. MOHO64_DEBUG_ALTFP=1 logs each call.
+int l_ForceAltFootprint(lua_State* L) {
+  if (lua_gettop(L) != 2) luaL_error(L, "%s\n  expected %d args, but got %d", "ForceAltFootprint", 2, lua_gettop(L));
+  Unit* u = U(L);
+  u->altFootprintForced = lua_toboolean(L, 2) != 0;
+  static const bool dbg = getenv("MOHO64_DEBUG_ALTFP") != nullptr;
+  if (dbg)
+    Logf(LogLevel::Info, "altfp: tick %u unit %u ForceAltFootprint(%d) layer %s", S(L)->tick(), u->id,
+         u->altFootprintForced ? 1 : 0, u->layer.c_str());
   return 0;
 }
 
@@ -1614,6 +1631,7 @@ void RegisterCommandBindings(lua_State* L) {
   SetMethod(L, "Unit", "SetBreakOffTriggerMult", l_SetMult<3>);
   SetMethod(L, "Unit", "SetBreakOffDistanceMult", l_SetMult<4>);
   SetMethod(L, "Unit", "SetImmobile", l_SetImmobile);
+  SetMethod(L, "Unit", "ForceAltFootprint", l_ForceAltFootprint);
   SetMethod(L, "Unit", "IsMobile", l_IsMobile);
   SetMethod(L, "Unit", "GetNavigator", l_GetNavigator);
 

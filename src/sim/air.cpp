@@ -755,7 +755,7 @@ bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, c
 }  // namespace
 
 bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int spacing) {
-  const NamedFootprint& fp = u->motion.bp->footprint;
+  const NamedFootprint& fp = UnitFootprint(u);  // (Unit::PrepareMove 0x62b7c1: Entity::GetFootprint)
   int cx = static_cast<int>(std::nearbyint(pos->x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(pos->z - fp.sizeZ * 0.5f));
   if (PrepDbgOn(u))
@@ -2069,7 +2069,7 @@ void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImp
 void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
 bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]) { return GroundCanReserve(sim, u, r); }
 bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz) {  // as GroundSpotOkImpl's "caps" test
-  const NamedFootprint& fp = u->motion.bp->footprint;
+  const NamedFootprint& fp = UnitFootprint(u);
   const PathGrid* g = sim.navigation().Grid(fp);
   int c = g ? g->Caps(cx, cz) : 0;
   if (u->layer == "Water") c &= ~kSub;

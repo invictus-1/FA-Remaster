@@ -2409,11 +2409,10 @@ namespace {
 bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
 // !Unit::WontFitAt 0x62aa90: the unit's footprint fits at world position p
 bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
-  const MotionBlueprint& b = *u->motion.bp;
-  const PathGrid* g = FootprintGrid(sim, b);
+  const PathGrid* g = UnitFootprintGrid(sim, u);  // (Entity::GetFootprint 0x62aaa0)
   if (!g) return true;
   int cx, cz;
-  GoalCell(b, p.x, p.z, &cx, &cz);
+  GoalCell(UnitFootprint(u), p.x, p.z, &cx, &cz);
   return g->Passable(cx, cz);
 }
 bool CanFlyU(const Unit* u) { return u->motion.bp && u->motion.bp->canFly; }
@@ -2471,7 +2470,7 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
     // differences, the first of equals), and the point flown to is that cell's footprint centre (CellToWorld
     // 0x50b0f0: cell + size / 2), not the rect's middle. The navigator's goal is no order to move: the unit's
     // states stay as they are.
-    const NamedFootprint& fp = u->motion.bp->footprint;
+    const NamedFootprint& fp = UnitFootprint(u);
     const int ux = static_cast<int16_t>(std::nearbyint(u->position.x - fp.sizeX * 0.5f));
     const int uz = static_cast<int16_t>(std::nearbyint(u->position.z - fp.sizeZ * 0.5f));
     int bx = x0, bz = z0;
@@ -2504,9 +2503,9 @@ void AttackSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1) {
 }
 // a 1x1 goal at the footprint-origin cell of p
 void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
-  const MotionBlueprint& b = *u->motion.bp;
-  int cx = static_cast<int>(std::nearbyint(p.x - b.footprint.sizeX * 0.5f));
-  int cz = static_cast<int>(std::nearbyint(p.z - b.footprint.sizeZ * 0.5f));
+  const NamedFootprint& f = UnitFootprint(u);  // (0x5f2df9: Entity::GetFootprint)
+  int cx = static_cast<int>(std::nearbyint(p.x - f.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(p.z - f.sizeZ * 0.5f));
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))

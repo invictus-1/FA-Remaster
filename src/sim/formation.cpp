@@ -38,8 +38,9 @@ bool Gone(const Unit* u) { return !u || u->dead || u->destroyQueued; }
 bool ValidMember(const Unit* u) { return !Gone(u) && Mobile(u) && !u->beingBuilt && !u->parentId; }
 bool IsAirUnit(const Unit* u) { return u->motion.bp && u->motion.bp->motionType == kMotionAir; }
 int LayerIndex(const Unit* u) { return IsAirUnit(u) ? 1 : 0; }
-int FpSizeX(const Unit* u) { return u->motion.bp ? std::max<int>(1, u->motion.bp->footprint.sizeX) : 1; }
-int FpSizeZ(const Unit* u) { return u->motion.bp ? std::max<int>(1, u->motion.bp->footprint.sizeZ) : 1; }
+// Entity::GetFootprint (COORDS_CanMoveAt 0x720fdb): the AltFootprint while the unit uses it
+int FpSizeX(const Unit* u) { return u->motion.bp ? std::max<int>(1, UnitFootprint(u).sizeX) : 1; }
+int FpSizeZ(const Unit* u) { return u->motion.bp ? std::max<int>(1, UnitFootprint(u).sizeZ) : 1; }
 // F+0x320: air (SizeX+SizeZ)/2, others max(SizeX, SizeZ)
 int FormFootprint(const Unit* u) {
   if (!u->motion.bp) return 1;

@@ -160,7 +160,8 @@ void SetLayer(Sim& sim, Unit* u, const char* layer) {
 
 // CUnitMotion::UpdateCurrentLayer 0x6c35c0 (engine-ref layer_change.md): run by MotionTick before this tick's
 // move, on the committed position (end of the previous tick), only while the last move |v|^2 > 1e-6.
-// thr = water elevation (-10000 without water) + LayerChangeOffsetHeight when the footprint occupies Land;
+// thr = water elevation (-10000 without water) + LayerChangeOffsetHeight when the footprint occupies Land
+// (Entity::GetFootprint 0x6c368b: the AltFootprint's caps while it is the unit's; a Salem on Water4x4 has none);
 // strictly above: Seabed->Land (Land, Amphibious), Water->Land (Hover, AmphibiousFloating, Water); strictly
 // below: Land->Seabed (Land, Amphibious), Land->Water (Hover, AmphibiousFloating).
 void UpdateLayer(Sim& sim, Unit* u) {
@@ -169,10 +170,9 @@ void UpdateLayer(Sim& sim, Unit* u) {
   if (!map) return;
   const int mt = b.motionType;
   float thr = map->hasWater ? map->waterElevation : -10000.0f;
-  // footprint OccupancyCaps & Land (by motion type: Land, Biped, Amphibious, Hover, AmphibiousFloating)
-  if (mt == kMotionLand || mt == kMotionBiped || mt == kMotionAmphibious || mt == kMotionHover ||
-      mt == kMotionAmphibiousFloating)
-    thr = thr + b.layerChangeOffset;
+  // footprint OccupancyCaps & Land (the Footprint's: by motion type Land, Biped, Amphibious, Hover,
+  // AmphibiousFloating)
+  if (UnitFootprint(u).caps & kLayerLand) thr = thr + b.layerChangeOffset;
   float h = map->TerrainHeight(u->position.x, u->position.z);
   const std::string& L = u->layer;
   auto set = [&](const char* to) { SetLayer(sim, u, to); };
@@ -485,9 +485,20 @@ const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp,
   return cache.emplace(&bp, m).first->second;
 }
 
-void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz) {
-  *cx = static_cast<int>(std::nearbyint(x - b.footprint.sizeX * 0.5f));
-  *cz = static_cast<int>(std::nearbyint(z - b.footprint.sizeZ * 0.5f));
+void GoalCell(const MotionBlueprint& b, float x, float z, int* cx, int* cz) { GoalCell(b.footprint, x, z, cx, cz); }
+void GoalCell(const NamedFootprint& f, float x, float z, int* cx, int* cz) {
+  *cx = static_cast<int>(std::nearbyint(x - f.sizeX * 0.5f));
+  *cz = static_cast<int>(std::nearbyint(z - f.sizeZ * 0.5f));
+}
+
+const NamedFootprint& UnitFootprint(const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  return (u->altFootprintNav || u->altFootprintForced) ? b.altFootprint : b.footprint;
+}
+
+const NamedFootprint& PathFinderFootprint(const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  return u->altFootprintNav ? b.altFootprint : b.footprint;
 }
 
 // CUnitMotion::SnapToGround (FA exe 0x6c1610) / SnapToWater: height and tilt from the terrain
@@ -751,6 +762,20 @@ const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
   return b.grid;
 }
 
+const PathGrid* AltFootprintGrid(Sim& sim, const MotionBlueprint& b) {
+  Navigation* nav = &sim.navigation();
+  if (b.altGridOwner != nav) {
+    b.altGrid = nav->Grid(b.altFootprint);
+    b.altGridOwner = nav;
+  }
+  return b.altGrid;
+}
+
+const PathGrid* UnitFootprintGrid(Sim& sim, const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  return (u->altFootprintNav || u->altFootprintForced) ? AltFootprintGrid(sim, b) : FootprintGrid(sim, b);
+}
+
 namespace {
 
 // The body follows the steering facing: at once, or at TurnFacingRate when the body may turn
@@ -771,21 +796,21 @@ void UpdateBody(UnitMotion& m) {
 }
 
 // Can the unit's footprint stand at world position (x, z)? (Unit::WontFitAt 0x62aa90, negated:
-// inside the map, terrain and structures at the footprint-origin cell)
-bool StandableAt(Sim& sim, const MotionBlueprint& b, float x, float z) {
+// inside the map, terrain and structures at the footprint-origin cell; Entity::GetFootprint 0x62aaa0)
+bool StandableAt(Sim& sim, const Unit* u, float x, float z) {
   const TerrainMap* map = sim.map();
   if (map && (x < 0 || z < 0 || x > static_cast<float>(map->width()) || z > static_cast<float>(map->height())))
     return false;
-  const PathGrid* g = FootprintGrid(sim, b);
+  const PathGrid* g = UnitFootprintGrid(sim, u);
   if (!g) return true;
   int cx, cz;
-  GoalCell(b, x, z, &cx, &cz);
+  GoalCell(UnitFootprint(u), x, z, &cx, &cz);
   return g->Passable(cx, cz);
 }
 
 // The spline's look-ahead point (CAiPathSpline::Generate 0x5b2ff0): the new point plus the step
 // set to the length max(SizeX, SizeZ) + stopping distance (the point itself when it did not move).
-bool LookAheadFits(Sim& sim, const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
+bool LookAheadFits(Sim& sim, const Unit* u, const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
   float l = std::sqrt(sx * sx + sz * sz);
   float x = p.x, z = p.z;
   if (l > 0.0f) {
@@ -793,7 +818,7 @@ bool LookAheadFits(Sim& sim, const MotionBlueprint& b, const Vec3& p, float sx, 
     x += sx * k;
     z += sz * k;
   }
-  return StandableAt(sim, b, x, z);
+  return StandableAt(sim, u, x, z);
 }
 
 // CAiSteeringImpl / CAiPathSpline::SteeringParams + the speed a turn allows (FA exe 0x699760):
@@ -1012,7 +1037,7 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
 
 // The state rules after a point (land_motion_blocking.md 2.2). True: the batch ends here without
 // saving a state (the continuation starts in state 7).
-bool StepRules(Sim& sim, const MotionBlueprint& b, const StepParams& P, Gen& g, const Vec3& tgt, int mode) {
+bool StepRules(Sim& sim, const Unit* u, const MotionBlueprint& b, const StepParams& P, Gen& g, const Vec3& tgt, int mode) {
   float nspeed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
   float frac = P.maxF > 0 ? nspeed / P.maxF : 0;
   float ndx = tgt.x - g.p.x, ndz = tgt.z - g.p.z;
@@ -1029,7 +1054,7 @@ bool StepRules(Sim& sim, const MotionBlueprint& b, const StepParams& P, Gen& g, 
       if (frac <= 0.0099999998f) g.state = (b.maxSpeedReverse <= 0.0f || b.rotateOnSpot) ? 7 : 5;
       break;
     case 5:
-      if (!LookAheadFits(sim, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 6;
+      if (!LookAheadFits(sim, u, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 6;
       else if (!g.reverse ? ndot > 0.150000006f : stopDist > ndist) g.state = 6;
       break;
     case 6:
@@ -1041,7 +1066,7 @@ bool StepRules(Sim& sim, const MotionBlueprint& b, const StepParams& P, Gen& g, 
     case 7:
       if (mode == 0 && ndist < stopDist) g.state = 3;
       if (ndot < 0.865999997f) {
-        if (!LookAheadFits(sim, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 4;
+        if (!LookAheadFits(sim, u, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 4;
       }
       break;
     default:
@@ -1175,7 +1200,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     }
     if (realAt) end = true;
     const int s0 = g.state;
-    if (!end && StepRules(sim, b, P, g, tgt, mode)) end = true;
+    if (!end && StepRules(sim, u, b, P, g, tgt, mode)) end = true;
     if (dbgPts == static_cast<long>(u->id))
       fprintf(stderr, "  pt %d state %d->%d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f end %d\n", n, s0, g.state,
               g.reverse ? 1 : 0, g.p.x, g.p.z, g.vel.x, g.vel.z, g.fx, g.fz, end ? 1 : 0);
@@ -1302,10 +1327,10 @@ void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode) {
 }
 
 bool AtPosition(const Unit* u, const Vec3& q) {
-  const MotionBlueprint& b = *u->motion.bp;
+  const NamedFootprint& f = UnitFootprint(u);  // (Unit::IsAtPosition 0x62cc40: Entity::GetFootprint 0x62cc52)
   int ax, az, bx, bz;
-  GoalCell(b, u->position.x, u->position.z, &ax, &az);
-  GoalCell(b, q.x, q.z, &bx, &bz);
+  GoalCell(f, u->position.x, u->position.z, &ax, &az);
+  GoalCell(f, q.x, q.z, &bx, &bz);
   return ax == bx && az == bz;
 }
 
@@ -1732,7 +1757,7 @@ void MotionTick(Sim& sim, Unit* u) {
     const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
     // UpdateCurrentLayer 0x6b9f64: before the move, on the committed position, while the last move is non-zero
     if (!held && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) UpdateLayer(sim, u);
-    const bool oldFits = StandableAt(sim, b, start.x, start.z);
+    const bool oldFits = StandableAt(sim, u, start.x, start.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {
       m.prevPos = start;
@@ -1861,7 +1886,7 @@ void MotionTick(Sim& sim, Unit* u) {
         u->orientation = m.turnQ;
       }
     }
-    if (moved && oldFits && !StandableAt(sim, b, u->position.x, u->position.z)) {
+    if (moved && oldFits && !StandableAt(sim, u, u->position.x, u->position.z)) {
       float dx = start.x - u->position.x, dz = start.z - u->position.z;
       u->position = start;
       m.vel = {};

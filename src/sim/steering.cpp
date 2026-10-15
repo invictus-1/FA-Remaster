@@ -40,10 +40,13 @@ bool AirCat(const Unit* u) {
 }
 bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
 bool Immobile(const Unit* u) { return u->immobile || St(u, "Immobile"); }
-int FpFlags(const Unit* u) { return u->motion.bp ? u->motion.bp->footprint.flags : 0; }
+// Entity::GetFootprint (DoCollisionsFor 0x59808b.., ResolvePossibleCollision 0x59741c / 0x59742a): the AltFootprint
+// while the unit uses it
+int FpFlags(const Unit* u) { return u->motion.bp ? UnitFootprint(u).flags : 0; }
 float FpMax(const Unit* u) {
-  const MotionBlueprint* b = u->motion.bp;
-  return b ? static_cast<float>(std::max(b->footprint.sizeX, b->footprint.sizeZ)) : 1.0f;
+  if (!u->motion.bp) return 1.0f;
+  const NamedFootprint& f = UnitFootprint(u);
+  return static_cast<float>(std::max(f.sizeX, f.sizeZ));
 }
 float Mass(const MotionBlueprint& b) { return b.averageDensity * b.sizeZ * b.sizeY * b.sizeX; }
 // Units that have a land steering (CAiSteeringImpl): mobile, not aircraft.
@@ -709,10 +712,10 @@ int Resolve(Sim& sim, Unit* Y) {
   }
   Vec3 T = Add(B, Scale(s, clr));
   // FindFreeSpot 0x62b200 gates the side-step (outline): the footprint must fit there
-  const PathGrid* g = FootprintGrid(sim, by);
+  const PathGrid* g = UnitFootprintGrid(sim, Y);
   if (g) {
     int cx, cz;
-    GoalCell(by, T.x, T.z, &cx, &cz);
+    GoalCell(UnitFootprint(Y), T.x, T.z, &cx, &cz);
     if (!g->Passable(cx, cz)) return 0;
   }
   SetCol(Y, 2, T);
