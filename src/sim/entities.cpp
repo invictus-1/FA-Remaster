@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 
+#include "core/backtrace.h"
 #include "core/dmath.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -1278,6 +1279,23 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
   if (!lua_isfunction(L, -1)) {
     lua_settop(L, base);
     return true;
+  }
+  // MOHO64_DEBUG_CALL=<method name>: every engine call of that script method, with the calling C++ frames
+  static const char* dbgCall = getenv("MOHO64_DEBUG_CALL");
+  if (dbgCall && strcmp(dbgCall, method) == 0) {
+    void* fr[8];
+    const int n = CaptureFrames(fr, 8);
+    std::string s;
+    for (int i = 1; i < n; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+      s += b;
+    }
+    lua_Debug ar;
+    for (int lv = 0; lv < 16 && lua_getstack(L, lv, &ar); ++lv)  // the Lua frames below, when called from a script
+      if (lua_getinfo(L, "Sl", &ar)) s += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
+    const Entity* e = dynamic_cast<const Entity*>(obj);
+    Logf(LogLevel::Info, "call %u %s entity %u from%s", tick_, method, e ? e->id : 0u, s.c_str());
   }
   lua_pushcfunction(L, ScriptTraceback);
   lua_insert(L, base + 1);   // handler below the args
