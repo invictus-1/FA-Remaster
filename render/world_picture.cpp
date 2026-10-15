@@ -107,6 +107,8 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
     m.layerPipeline = m.device->CreatePipeline(pd, error);
     if (!m.layerPipeline) return false;
   }
+  // (in the host's window with no map: no world at all, only the interface shown - the menu's)
+  if (m.hostWindow && mapPath.empty()) return true;
   m.world = std::make_unique<World>(m.device.get(), vfs);
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
@@ -173,10 +175,16 @@ void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int heig
 
 void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
-  if (!m.world || !m.hostWindow) return;
+  if (!m.device || !m.hostWindow) return;
   width = std::max(width, 16);
   height = std::max(height, 16);
-  RenderWorld(camera, width, height, tick);
+  if (m.world) {
+    RenderWorld(camera, width, height, tick);
+  } else {  // (the menu's: the interface alone, over black)
+    if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
+    const float black[4] = {0, 0, 0, 1};
+    m.device->BeginFrame(black);
+  }
   // the interface over it: its texture made anew at a new size, and what has changed in it handed over
   if (m.layerPixels && m.layerWidth > 0 && m.layerHeight > 0) {
     if (!m.layer || m.layerMadeWidth != m.layerWidth || m.layerMadeHeight != m.layerHeight) {
