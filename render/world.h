@@ -327,7 +327,7 @@ class World {
   gfx::Texture brackets_[4][4];
   bool haveBrackets_ = false;
   void LoadBrackets();
-  void AddBrackets(int kind, Vec3 position, const Quat& orientation, float halfX, float halfZ);
+  void AddBrackets(int kind, Vec3 position, const Quat& orientation, const StrategicIcons::Kind& unit, const Model* model);
   int lampUnits_ = 0, lampUnitsBefore_ = 0;  // units whose lamps were lit this frame, and the frame before
   std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
   // MOHO64_DEBUG_LAMPS=<part of a bone's name> (or 1 for every bone): world.cpp, AddLamps

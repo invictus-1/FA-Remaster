@@ -38,6 +38,11 @@ class StrategicIcons {
     // the ring under a selected unit: half its extent along the unit's own x and z (the blueprint's
     // SelectionSizeX, SelectionSizeZ)
     float selectionX = 0.5f, selectionZ = 0.5f;
+    bool selectionGiven = false;  // the blueprint says SelectionSizeX and Z (else the brackets go by the mesh)
+    // the brackets' share of the selection square (SelectionThickness; 0: the game's 0.2), and where
+    // the square's centre lies in the unit's own frame (SelectionCenterOffsetX / Y / Z)
+    float selectionThickness = 0;
+    float selectionOffset[3] = {0, 0, 0};
     // its life bar, in world units as the blueprint says them (LifeBarSize, LifeBarHeight,
     // LifeBarOffset): how wide, how high, and how far from the unit's middle toward the eye it
     // lies. Where the blueprint says none: by the selection's size.
@@ -55,7 +60,8 @@ class StrategicIcons {
   // Says what the kind of that blueprint file shows, in place of reading the file (the values the
   // simulation has). `icon` empty: none; `fadeIn`, `selectionX`, `selectionZ` 0: not said.
   void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ,
-              float lifeBarSize = 0, float lifeBarHeight = 0, float lifeBarOffset = 0);
+              float lifeBarSize = 0, float lifeBarHeight = 0, float lifeBarOffset = 0, float selectionThickness = 0,
+              const float* selectionOffset = nullptr);
 
   // Empties the list; `view` is what the frame is seen with.
   void Begin(const View& view);
@@ -139,6 +145,8 @@ class StrategicIcons {
     std::string icon;
     int priority = 0;
     float fadeIn = 0, selectionX = 0, selectionZ = 0, lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;
+    float selectionThickness = 0;
+    float selectionOffset[3] = {0, 0, 0};
   };
   std::unordered_map<std::string, Said> said_;
 

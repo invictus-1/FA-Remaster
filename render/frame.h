@@ -162,6 +162,8 @@ struct BlueprintLook {
   int iconPriority = 0;
   float iconFadeIn = 0;
   float selectionX = 0, selectionZ = 0;
+  float selectionThickness = 0;               // SelectionThickness (0: not said)
+  float selectionOffset[3] = {0, 0, 0};       // SelectionCenterOffsetX / Y / Z
   float lifeBarSize = 0, lifeBarHeight = 0, lifeBarOffset = 0;  // a unit's life bar, world units (0: not said)
 };
 
