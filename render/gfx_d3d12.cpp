@@ -262,8 +262,14 @@ class D3D12Device final : public Device {
   bool CreateTargets();
   void WaitFence(uint64_t value);
   void WaitIdle();
+  // Uploads (a new texture's or buffer's contents) go into one open batch, sent to the card ahead of
+  // the next frame's own work (FlushUploads, from EndFrame), without the processor waiting for them:
+  // a texture made in the middle of a game no longer stops everything until the card is idle. A
+  // batch's staging copies are let go once the card is done with it. A batch that grows large
+  // (a map loading) is sent at once, so they do not pile up.
   bool BeginUpload();
-  void EndUpload();
+  void KeepStaging(Com<ID3D12Resource> staging, uint64_t bytes);
+  void FlushUploads();
   Span Allocate(size_t size, size_t align);
   void BindTextures();
   void Retire(IUnknown* object);
@@ -300,7 +306,13 @@ class D3D12Device final : public Device {
   Com<ID3D12CommandQueue> queue_;
   Com<IDXGISwapChain3> swapChain_;
   Com<ID3D12GraphicsCommandList> list_, uploadList_;
-  Com<ID3D12CommandAllocator> uploadAllocator_;
+  static constexpr int kUploadBatches = 4;
+  Com<ID3D12CommandAllocator> uploadAllocators_[kUploadBatches];
+  uint64_t uploadFences_[kUploadBatches] = {};
+  std::vector<Com<ID3D12Resource>> uploadStaging_[kUploadBatches];
+  int uploadBatch_ = 0;
+  bool uploadOpen_ = false;
+  uint64_t uploadBytes_ = 0;
   Com<ID3D12Fence> fence_;
   HANDLE fenceEvent_ = nullptr;
   uint64_t fenceNext_ = 1;
@@ -452,12 +464,14 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(f.allocator.Put()));
     if (FAILED(hr)) return fail("CreateCommandAllocator", hr);
   }
-  hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(uploadAllocator_.Put()));
-  if (FAILED(hr)) return fail("CreateCommandAllocator", hr);
+  for (Com<ID3D12CommandAllocator>& a : uploadAllocators_) {
+    hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(a.Put()));
+    if (FAILED(hr)) return fail("CreateCommandAllocator", hr);
+  }
   hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames_[0].allocator.Get(), nullptr, IID_PPV_ARGS(list_.Put()));
   if (FAILED(hr)) return fail("CreateCommandList", hr);
   list_->Close();
-  hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocator_.Get(), nullptr, IID_PPV_ARGS(uploadList_.Put()));
+  hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocators_[0].Get(), nullptr, IID_PPV_ARGS(uploadList_.Put()));
   if (FAILED(hr)) return fail("CreateCommandList", hr);
   uploadList_->Close();
   hr = device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence_.Put()));
@@ -578,6 +592,7 @@ void D3D12Device::WaitFence(uint64_t value) {
 }
 
 void D3D12Device::WaitIdle() {
+  FlushUploads();
   uint64_t v = fenceNext_++;
   queue_->Signal(fence_.Get(), v);
   WaitFence(v);
@@ -600,15 +615,34 @@ void D3D12Device::Resize(int width, int height) {
 }
 
 bool D3D12Device::BeginUpload() {
-  if (FAILED(uploadAllocator_->Reset())) return false;
-  return SUCCEEDED(uploadList_->Reset(uploadAllocator_.Get(), nullptr));
+  if (uploadOpen_) return true;
+  // (the batch's allocator and staging copies are free again once the card is done with its last use)
+  const int k = uploadBatch_;
+  WaitFence(uploadFences_[k]);
+  uploadStaging_[k].clear();
+  if (FAILED(uploadAllocators_[k]->Reset()) || FAILED(uploadList_->Reset(uploadAllocators_[k].Get(), nullptr))) return false;
+  uploadOpen_ = true;
+  uploadBytes_ = 0;
+  return true;
 }
 
-void D3D12Device::EndUpload() {
+void D3D12Device::KeepStaging(Com<ID3D12Resource> staging, uint64_t bytes) {
+  uploadStaging_[uploadBatch_].push_back(std::move(staging));
+  uploadBytes_ += bytes;
+  if (uploadBytes_ > (256ull << 20)) FlushUploads();  // (a map loading: sent on, so copies do not pile up)
+}
+
+void D3D12Device::FlushUploads() {
+  if (!uploadOpen_) return;
   uploadList_->Close();
   ID3D12CommandList* lists[] = {uploadList_.Get()};
   queue_->ExecuteCommandLists(1, lists);
-  WaitIdle();
+  const uint64_t v = fenceNext_++;
+  queue_->Signal(fence_.Get(), v);
+  uploadFences_[uploadBatch_] = v;
+  uploadBatch_ = (uploadBatch_ + 1) % kUploadBatches;
+  uploadOpen_ = false;
+  uploadBytes_ = 0;
 }
 
 void D3D12Device::Retire(IUnknown* object) {
@@ -676,7 +710,7 @@ Buffer D3D12Device::CreateBuffer(const BufferDesc& desc) {
     std::memcpy(mapped, desc.data, desc.size);
     staging->Unmap(0, nullptr);
     uploadList_->CopyBufferRegion(rec.resource.Get(), 0, staging.Get(), 0, desc.size);
-    EndUpload();
+    KeepStaging(std::move(staging), desc.size);
     rec.gpu = rec.resource->GetGPUVirtualAddress();
   }
   uint32_t index;
@@ -789,7 +823,7 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   D3D12_RESOURCE_BARRIER b = Transition(rec.resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   uploadList_->ResourceBarrier(1, &b);
-  EndUpload();
+  KeepStaging(std::move(staging), total);
 
   D3D12_SHADER_RESOURCE_VIEW_DESC view = {};
   view.Format = format;
@@ -1365,6 +1399,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
                             static_cast<UINT64>(first) * 8);
   }
   list_->Close();
+  FlushUploads();  // (what this frame draws with is on the card before it)
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
   if (present) {
