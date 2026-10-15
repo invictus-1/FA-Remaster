@@ -170,6 +170,12 @@ bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear);
 // it looks at, the direction to the screen's right along the ground, and its zoom. False before
 // the camera is placed.
 bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], float* zoom);
+// A blast shakes the world's cameras (the simulation's Entity:ShakeCamera: where, how far it
+// reaches, how hard at its middle and at its reach, how long; worldview.cpp). The host posts a
+// beat's shakes; the next frame's camera step takes them.
+void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float minAtRadius, float seconds);
+// The console's cam_ShakeMult (the game's option "Shake intensity", 0 to 1): how much shake.
+void SetCameraShakeMult(float mult);
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).

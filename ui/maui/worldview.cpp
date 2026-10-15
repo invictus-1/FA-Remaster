@@ -74,6 +74,13 @@ class Camera : public ScriptObject {
   bool moving = false;
   float moveFromFocus[3] = {0, 0, 0}, moveFocus[3] = {0, 0, 0};
   float moveFromZoom = 0, moveZoom = 0, moveSeconds = 0, moveTime = 0;
+  // The shake a blast gives the camera (the original's +0x428..+0x448, see ShakeCamera below):
+  // where it is, how far it reaches, how hard at its middle and at its reach, how long it lasts
+  // and how long it has lasted; `shakeSign` turns over every frame. `shakeOffset`: this frame's
+  // shift of the whole view.
+  float shakeAt[3] = {0, 0, 0};
+  float shakeRadius = 0, shakeMax = 0, shakeMin = 0, shakeSeconds = 0, shakeTime = 0, shakeSign = 1;
+  float shakeOffset[3] = {0, 0, 0};
 };
 
 // The farthest zoom (FA exe 0x7a7310): the map takes 1 / maxZoomMult of what would just fill the
@@ -434,7 +441,8 @@ class WorldView : public Control {
     Camera* c = GetCameraObject(L, cameraName);
     TakeAspect(c);
     WorldCamera w;
-    w.target[0] = c->focus[0], w.target[1] = c->focus[1], w.target[2] = c->focus[2];
+    // (a blast's shake shifts the whole view: ShakeCamera below)
+    for (int i = 0; i < 3; ++i) w.target[i] = c->focus[i] + c->shakeOffset[i];
     w.distance = EyeDistance(c);
     w.heading = c->heading - kPi;
     w.pitch = PitchOf(c);
@@ -1416,9 +1424,93 @@ uint32_t UnitUnderMouse(lua_State* L) {
   return v ? v->UnitUnder(L, ui.mouseX, ui.mouseY, false) : 0xffffffffu;
 }
 
+// The camera shake of big blasts (the simulation's Entity:ShakeCamera calls, ui request engine
+// 22). As read in the original (FA exe):
+// - a new shake (CameraImpl::CameraShake 0x7a7130) takes the camera's place when the camera can
+//   shake and its shake is over or the new one is harder at its middle; its clock starts at 0;
+// - every frame (CameraImpl::Frame 0x7a9060) the clock runs on, up to the shake's length, and a
+//   sign turns over;
+// - the shift (0x7a67c0): the direction d from where the camera is to the blast, on the ground,
+//   made of length 1 (closer than 10: a random direction); t = min(1, distance / radius); the
+//   strength amp = (1 - time / length) * (max + (min - max) * t); then s = a random number in
+//   [0, amp) * sign * 0.5 and q = a random number in [-amp, amp] * 0.25, and the shift is
+//   s * d + q * (d.z, 0, -d.x): back and forth toward the blast, a little sideways;
+// - the shift is added to the camera's position before its view is made (UpdateCoords 0x7aa828),
+//   so the whole view moves by it.
+// INFERRED: which point "where the camera is" is (the exe's camera +0x360; here the place it looks
+// at); that every army's blasts shake it (the simulation lists them all); and where the player's
+// "Shake intensity" (the game's option, the console's cam_ShakeMult, "How much camera shake to
+// allow.") goes in: here it scales the whole shift, so 0 is no shake. Which cameras: the world's
+// own ("WorldCamera..."), not the minimap's (the original asks the world view, CanShake).
+namespace {
+struct PendingShake {
+  float at[3], radius, max, min, seconds;
+};
+std::vector<PendingShake> g_pendingShakes;
+float g_shakeMult = 1.0f;
+uint32_t g_shakeRandom = 0x2545f491u;
+float ShakeRandom(float lo, float hi) {  // (only seen: any random numbers do)
+  g_shakeRandom ^= g_shakeRandom << 13, g_shakeRandom ^= g_shakeRandom >> 17, g_shakeRandom ^= g_shakeRandom << 5;
+  return lo + (hi - lo) * static_cast<float>(g_shakeRandom & 0xffffffu) / 16777216.0f;
+}
+void ShakeStep(Camera* c, float seconds) {
+  c->shakeOffset[0] = c->shakeOffset[1] = c->shakeOffset[2] = 0;
+  if (c->shakeSeconds <= 0) return;
+  c->shakeTime = std::min(c->shakeSeconds, c->shakeTime + seconds);
+  c->shakeSign = -c->shakeSign;
+  if (c->shakeTime >= c->shakeSeconds) return;
+  float dx = c->shakeAt[0] - c->focus[0], dz = c->shakeAt[2] - c->focus[2];
+  const float distance = std::sqrt(dx * dx + dz * dz);
+  if (distance < 10) dx = ShakeRandom(-1, 1), dz = ShakeRandom(-1, 1);
+  const float length = std::sqrt(dx * dx + dz * dz);
+  if (length <= 0) return;
+  dx /= length, dz /= length;
+  const float t = c->shakeRadius > 0 ? std::min(1.0f, distance / c->shakeRadius) : 1.0f;
+  const float amp = (1 - c->shakeTime / c->shakeSeconds) * (c->shakeMax + (c->shakeMin - c->shakeMax) * t);
+  if (amp <= 0) return;
+  const float s = ShakeRandom(0, amp) * c->shakeSign * 0.5f, q = ShakeRandom(-amp, amp) * 0.25f;
+  c->shakeOffset[0] = (s * dx + q * dz) * g_shakeMult;
+  c->shakeOffset[2] = (s * dz - q * dx) * g_shakeMult;
+}
+}  // namespace
+
+void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float minAtRadius, float seconds) {
+  if (seconds > 0) g_pendingShakes.push_back({{at[0], at[1], at[2]}, radius, maxAtMiddle, minAtRadius, seconds});
+}
+void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
+
+namespace {
+// moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
+// now (the host's own function for tests); offset: this frame's shift, its length.
+int l_CameraShakeForTests(lua_State* L) {
+  Camera* c = GetCameraObject(L, "WorldCamera");
+  lua_newtable(L);
+  const float values[6] = {c->shakeMax, c->shakeMin, c->shakeRadius, c->shakeSeconds, c->shakeTime,
+                           std::sqrt(c->shakeOffset[0] * c->shakeOffset[0] + c->shakeOffset[2] * c->shakeOffset[2])};
+  const char* names[6] = {"max", "min", "radius", "seconds", "time", "offset"};
+  for (int i = 0; i < 6; ++i) {
+    lua_pushstring(L, names[i]);
+    lua_pushnumber(L, values[i]);
+    lua_rawset(L, -3);
+  }
+  return 1;
+}
+}  // namespace
+
 void AdvanceCameras(lua_State* L, float seconds) {
   UserState* user = UserState::From(L);
   for (auto& entry : user->cameras) AdvanceCamera(L, static_cast<Camera*>(entry.second.get()), seconds);
+  for (auto& entry : user->cameras) {
+    Camera* c = static_cast<Camera*>(entry.second.get());
+    if (c->name.rfind("WorldCamera", 0) != 0) continue;
+    for (const PendingShake& p : g_pendingShakes) {
+      if (c->shakeTime < c->shakeSeconds && p.max <= c->shakeMax) continue;
+      for (int i = 0; i < 3; ++i) c->shakeAt[i] = p.at[i];
+      c->shakeRadius = p.radius, c->shakeMax = p.max, c->shakeMin = p.min, c->shakeSeconds = p.seconds, c->shakeTime = 0;
+    }
+    ShakeStep(c, seconds);
+  }
+  g_pendingShakes.clear();
   // The world view the mouse is over has its script choose the mouse pointer, every frame (the
   // original's frame function, FA exe 0x871140: "OnUpdateCursor").
   if (user->gameInterface) {
@@ -1477,6 +1569,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetGlobal(L, "MapBorderAdd", l_MapBorderAdd);
   SetGlobal(L, "MapBorderClear", l_MapBorderClear);
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
+  lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);
   PushPrefetchSet(L);

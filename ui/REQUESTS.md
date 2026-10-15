@@ -642,6 +642,13 @@ game: `medium-ai.lua:1005: bad argument #2 to 'VDist3' (table expected, got nil)
 PickEnemyLogic, and `threatbuildconditions.lua:66: attempt to call a table value`. So the AI
 may play weaker than the original's; Chris has not said so.
 
+a DONE (`docs/engine-answers.md`, top entry; main 320a73a): `Sim::collectShakes` and
+`ShakeEvents(sim, &out)` after each beat. In the host: every beat's shakes go to the world's
+cameras (`PostCameraShake`), shaken the original's way (README, "CAMERA SHAKE"). Checked: the
+Monkeylord dying in the walker fight shakes the camera for a second (5 at its middle, reaching
+50); with the game's "Shake intensity" at 0 the view stays still (`ui/tests/templates.lua`).
+Waiting for Chris's look. b: noted by the engine, for the stock-AI work after the replays.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

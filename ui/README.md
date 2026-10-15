@@ -508,6 +508,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   folder `/sounds/voice/<language>`, 0x8ae300), `AddConsoleOutputReciever` /
   `RemoveConsoleOutputReciever` (the receivers are kept; no built console command prints a
   line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host).
+  CAMERA SHAKE: big blasts and heavy footsteps shake the camera (the simulation's
+  Entity:ShakeCamera calls, the engine's ShakeEvents, handed to the cameras by
+  `PostCameraShake`; `ui/maui/worldview.cpp` ShakeStep). Read from the original: a new shake
+  takes over when the old one is over or the new one is harder; its strength falls from its
+  middle to its reach and over its length; the view is shifted back and forth toward the blast
+  and a little sideways, the sign turning every frame. INFERRED: the point the distance is taken
+  from (where the camera looks), that every army's blasts count, and that the game's option
+  "Shake intensity" (`cam_ShakeMult`) scales the whole shift (0: none). Tested in
+  `ui/tests/templates.lua` (a Monkeylord destroyed near the camera).
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is

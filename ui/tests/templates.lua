@@ -2,7 +2,7 @@
 -- and taken back, and placed it orders every building of it where it stood beside the first.
 -- With them the small functions around a game that have no test of their own.
 -- Run it like victory.lua (a launched game whose options have CheatsEnabled = "true": the
--- buildings are made by the game's own cheat callback), with --frames 5400.
+-- buildings are made by the game's own cheat callback), with --frames 6900.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -141,5 +141,39 @@ ForkThread(function()
         WaitSeconds(0.5)
         check("and it goes off again", factory:IsRepeatQueue(), false)
     end
+
+    -- The camera shake (the simulation's Entity:ShakeCamera calls): a Monkeylord of ours
+    -- destroyed with Ctrl+K near what the camera looks at shakes it; with the game's option
+    -- "Shake intensity" at 0 (the console's cam_ShakeMult 0) the same blast moves nothing.
+    local function blast(mult)
+        ConExecute("cam_ShakeMult " .. mult)
+        SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {x + 25, c[2], z - 10}, bpId = "url0402", count = 1, yaw = 0}})
+        WaitSeconds(1.5)
+        UISelectionByCategory("url0402", false, false, false, false)
+        local ml = (GetSelectedUnits() or {})[1]
+        if not ml then return nil end
+        local cam = GetCamera("WorldCamera")
+        local s = cam:SaveSettings()
+        s.Focus = ml:GetPosition()
+        s.Zoom = 80
+        cam:RestoreSettings(s)
+        moho64ui_Key("k", "Ctrl")
+        local most, shook = 0, nil
+        for i = 1, 48 do
+            WaitSeconds(0.25)
+            local now = moho64ui_CameraShake()
+            if now.offset > most then most = now.offset end
+            if now.time < now.seconds then shook = now end
+        end
+        return most, shook, ml:IsDead()
+    end
+    local most, shook, dead = blast(1)
+    check("a Monkeylord destroyed near the camera", dead, true)
+    check("shakes the camera as its blueprint says (5 at the middle, reaching 50)", shook and (shook.max .. " " .. shook.radius), "5 50")
+    check("and the view moves", (most or 0) > 0.1, true)
+    most, shook, dead = blast(0)
+    check("with Shake intensity at 0 the next blast is still there", shook ~= nil, true)
+    check("but the view does not move", most, 0)
+    ConExecute("cam_ShakeMult 1")
     LOG("TEST done: " .. failed .. " failed")
 end)

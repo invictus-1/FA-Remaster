@@ -559,6 +559,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  if (Upper(name) == "CAM_SHAKEMULT") {  // the game's option "Shake intensity" sends it (0 to 1)
+    if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));
+    return;
+  }
   if (Upper(name) == "UI_SELECTBYCATEGORY") {
     SelectByCategoryCommand(L, rest);
     return;

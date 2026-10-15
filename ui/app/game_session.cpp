@@ -25,6 +25,7 @@
 #include <cstdlib>
 
 #include "sim/sim_view.h"
+#include "user/user_state.h"
 #include "sound/sound_system.h"
 
 namespace moho::ui {
@@ -262,6 +263,7 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
   sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
   sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
+  sim->collectShakes = true;               // and the camera shakes they ask for (PostCameraShake)
 #endif
   if (!sim->Start(session)) {
     *why = "the simulation did not start";
@@ -398,6 +400,10 @@ void GameSession::NoteBeat() {
   if (picture_) picture_->picture.Beat(*sim_);
 #endif
   PlayBeatSounds();
+  // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
+  std::vector<ShakeEvent> shakes;
+  ShakeEvents(*sim_, &shakes);
+  for (const ShakeEvent& e : shakes) PostCameraShake(e.position, e.radius, e.maxShakeEpicenter, e.minShakeAtRadius, e.interval);
 }
 
 // The world's sounds of the beat (the engine's SoundEvents): one-shots at their place, and the
