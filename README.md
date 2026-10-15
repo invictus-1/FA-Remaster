@@ -81,15 +81,15 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Transports and ferries (2,181 beats) | **none: identical to the end** |
 | Air battle (1,176 beats) | **none: identical to the end** |
 | Upgrades (3,216 beats) | beat 3214 |
-| Economy | beat 1780 |
+| Economy | beat 1804 |
 | Engineers | beat 1710 |
 | Land battle (2,091 beats) | beat 1251 |
 | Submarines | beat 1136 |
+| Experimental units, second set | beat 965 |
 | Missiles | beat 707 |
-| Experimental units, second set | beat 586 |
+| Eight-army AI game | beat 649 |
+| Skirmish against an AI | beat 533 |
 | Naval battle (1,079 beats) | beat 507 |
-| Skirmish against an AI | beat 471 |
-| Eight-army AI game | beat 345 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed
@@ -213,9 +213,12 @@ The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake -
 - `tools/`: build script, the recording comparison (`recdiff.py`, `regress.py`), generators.
 - `tests/`: dialect tests. `ui/tests/`: interface tests that run in the game's Lua state.
 - `third_party/`: Lua 5.0 (MIT) changed to the game's dialect, zlib inflate, mimalloc.
+- `render/third_party/fsr1/`: AMD FidelityFX Super Resolution 1 (MIT, Copyright (c) 2021 Advanced Micro
+  Devices, Inc.), the upscaler offered as a player's option.
 
 ## Legal
 
 MIT licensed (see `LICENSE`): use it, change it, build on it.
 This is an independent reimplementation. It contains no code or data from the original game.
-Supreme Commander is a trademark of its owners. Third-party licences are in `third_party/`.
+Supreme Commander is a trademark of its owners. Third-party licences are in `third_party/` and
+`render/third_party/`.
