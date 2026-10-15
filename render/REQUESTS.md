@@ -51,7 +51,7 @@ unseen things on the renderer's list. He looks in the game; if a record is kept
 **How you place the units is yours** (a session's script, a cheat's spawn, the engine's help): if
 it needs something of the engine, ask him directly.
 
-## 23. How the original sizes a selection bracket (2026-10-13, open, not blocking)
+## 23. How the original sizes a selection bracket (2026-10-13, DONE 2026-10-15: engine answered in docs/engine-answers.md "render 23, finished"; built in World::AddBrackets)
 
 **Who asks:** the renderer. **What:** the original's rule for the four corner pieces round a
 selected unit, and the numbers it needs in `BlueprintDisplay`: which of `SelectionSizeX`,

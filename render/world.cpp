@@ -171,7 +171,7 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
     models.SetLook(look);
     if (look.kind != 0) continue;
     icons.Define(models.UnitBlueprintPath(look.id), look.icon, look.iconPriority, look.iconFadeIn, look.selectionX, look.selectionZ, look.lifeBarSize,
-                 look.lifeBarHeight, look.lifeBarOffset);
+                 look.lifeBarHeight, look.lifeBarOffset, look.selectionThickness, look.selectionOffset);
     ++units;
   }
   if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);
@@ -209,20 +209,34 @@ void World::LoadBrackets() {
   }
 }
 
-// Four corner pieces about a unit's box on the ground. A piece is as large as nine tenths of the
-// box's shorter half side, and never so small that its line is thinner than three pixels (the
-// game's ren_SelectBracketMinPixelSize; its line is about a ninth of a piece).
-void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, float halfX, float halfZ) {
+// Four corner pieces about a unit, by the original's rule (docs/engine-answers.md, "render 23"):
+// the selection rectangle has half sides SelectionSizeX and Z times 0.75 (without them: the mesh's
+// half extents times 1.85), its centre moved by SelectionCenterOffset in the unit's own frame. On
+// each of its corners sits, centred, a square piece of side 2 f M, M the larger half side and f the
+// blueprint's SelectionThickness (else 0.2); f is raised so that a piece's half side is never under
+// 3 pixels (ren_SelectBracketMinPixelSize; the engine's reading says pixels, its unit not read).
+void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const StrategicIcons::Kind& unit, const Model* model) {
+  float hx = unit.selectionX * 0.75f, hz = unit.selectionZ * 0.75f;
+  if (!unit.selectionGiven && model && model->ok) {
+    hx = (model->boundsMax.x - model->boundsMin.x) * 0.5f * model->scale * 1.85f;
+    hz = (model->boundsMax.z - model->boundsMin.z) * 0.5f * model->scale * 1.85f;
+  }
+  const float* o = unit.selectionOffset;
+  if (o[0] != 0 || o[1] != 0 || o[2] != 0) position = position + Rotate(orientation, {o[0], o[1], o[2]});
+  const float most = std::max(hx, hz);
+  if (most <= 0) return;
+  float f = std::fabs(unit.selectionThickness) >= 0.00001f ? unit.selectionThickness : 0.2f;
   const Vec3 eye = camera.target + (camera.PixelRay(view.width * 0.5f, view.height * 0.5f, static_cast<float>(view.width), static_cast<float>(view.height)).direction * -camera.distance);
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(position - eye);
-  const float piece = std::max(std::min(halfX, halfZ) * 0.9f, 27 * perPixel);
-  halfX = std::max(halfX, piece);
-  halfZ = std::max(halfZ, piece);
+  f = std::max(f, 3 * perPixel / most);
+  const float piece = 2 * f * most;
   const Vec3 forward = Rotate(orientation, {0, 0, 1});
   const float heading = std::atan2(forward.x, forward.z);
   for (int c = 0; c < 4; ++c) {
-    const float sx = (c & 1) ? 1.0f : -1.0f, sz = (c >> 1) ? 1.0f : -1.0f;  // (a mark's picture has its top at the unit's back)
-    const Vec3 at = position + Rotate(orientation, {sx * (halfX - piece * 0.5f), 0, sz * (halfZ - piece * 0.5f)});
+    // (the quarter of the bracket's picture at (-X, -Z) is u 0..0.5, v 0..0.5; a mark's picture
+    // has its top at the unit's back)
+    const float sx = (c & 1) ? 1.0f : -1.0f, sz = (c >> 1) ? 1.0f : -1.0f;
+    const Vec3 at = position + Rotate(orientation, {sx * hx, 0, sz * hz});
     decals.AddMark(brackets_[kind][c], at, piece, piece, heading);
   }
 }
@@ -838,13 +852,14 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       icons.Add(kind, position, color, isSelected, blip, known);
+      const Model* bracketed = (isSelected || u.id == hover) && !blip ? models.Unit(blueprint) : nullptr;
       if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
-        AddBrackets(0, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
+        AddBrackets(0, position, orientation, *kind, bracketed);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
         const Vec3 forward = Rotate(orientation, {0, 0, 1});
         decals.AddMark(selectionRing_, position, kind->selectionX * 2.2f, kind->selectionZ * 2.2f, std::atan2(forward.x, forward.z));
       } else if (u.id == hover && hoverKind >= 1 && hoverKind <= 3 && haveBrackets_) {
-        AddBrackets(hoverKind, position, orientation, kind->selectionX * 1.1f, kind->selectionZ * 1.1f);
+        AddBrackets(hoverKind, position, orientation, *kind, bracketed);
       }
     }
     const Model* model = blueprint.empty() || blip ? nullptr : models.Unit(blueprint);
