@@ -2398,6 +2398,9 @@ struct AttackData {
   Vec3 lastPos;              // +0x80: the target's position at the last goal update (zero: none)
   bool trackMobile = false;  // +0x8c: the target is a MOBILE unit
   bool coordinated = false;  // +0x8d: FormAttack
+  // +0x58, the command's formation (the ctor's argument): dropped for good once the target is in reach (state 3's
+  // in-range branch, 0x5f3a10), and from then on Update 0x5f3020 takes its branch without a formation
+  bool formation = true;
   bool firstUpdate = true;   // +0x8e
   bool listening = false;    // the attacker-event listener is linked (from the first UpdateAttacker on)
   int result = 0;            // 1 success, 2 failure (the listener's result)
@@ -2531,10 +2534,12 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
   bool has = TaskHasTarget(sim, target);
   // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
-  // command's formation, which is laid out around the target, not for the target itself.
+  // command's formation, which is laid out around the target, not for the target itself. (Only while the task
+  // still holds the formation: it lets go of it when the target first comes within reach, d.formation.)
   UnitCommand* fc = nullptr;
-  if (!t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp && u->motion.bp->mobile() &&
-      !BpInCategory(sim, u->blueprint, "TARGETCHASER") && FormationHas(*u->commands.front(), u))
+  if (d.formation && !t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp &&
+      u->motion.bp->mobile() && !BpInCategory(sim, u->blueprint, "TARGETCHASER") &&
+      FormationHas(*u->commands.front(), u))
     fc = u->commands.front().get();
   if (fc) {
     Vec3 cell;
@@ -2747,6 +2752,13 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         bool any = false;
         for (UnitWeapon* x : u->weapons) any = any || (x->bp && CanAttackTarget(sim, x, target));
         if (!any) return -1;
+        // 0x5f3a10: the task lets go of the command's formation (+0x58 = 0) and of FormAttack (+0x8d = 0); then the
+        // navigator ignores formations. Seen (Subs 1240): two torpedo bombers given one attack order on a sub
+        // (977) are in reach long before it dies; the Update after its death takes the branch WITHOUT a formation
+        // and flies at the dead sub's blip (SetDestUnit: its very place, the facing the brake turns to; bit-exact),
+        // not at its aim point's cell (the formation branch's SetPosGoal).
+        d.formation = false;
+        d.coordinated = false;
         u->navIgnoreFormation = true;
         UpdateAttacker(sim, u, t, target);
         if (oc) {  // the overcharge weapon is given the target by the task itself (0x6d5f30)
