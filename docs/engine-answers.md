@@ -3,6 +3,28 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 22 a: camera shakes for the host — done
+
+`Entity:ShakeCamera` is built (it was a stub). Read in the original: `cfunc_EntityShakeCameraL` 0x68ab70 takes
+exactly five arguments (else "expected 5 args"), checks the four after the entity are numbers, and pushes one
+28-byte record on the sim's list (sim+0x9c8, func_ShakeCamera 0x692700, a plain vector push): the entity's
+position (+0xac, where it stands at the call) and the four numbers as given. The simulation does nothing else
+with it.
+
+New in `src/sim/sim_view.h`:
+- `struct ShakeEvent`: `entity` (id), `army` (1-based, 0 = none), `position[3]`, `radius`,
+  `maxShakeEpicenter`, `minShakeAtRadius`, `interval`.
+- `void ShakeEvents(const Sim&, std::vector<ShakeEvent>*)`: the calls since the last take, in call order. Take
+  it once per beat after `Tick()`, like `SoundEvents`.
+- `Sim::collectShakes` (sim.h): set it before the first beat, or nothing is kept.
+
+What the four numbers mean, from the exe's own help text for the function: radius = the distance from the epicenter
+at which shaking falls off to min; max = size of shaking in world units when looking at the epicenter; min = size
+of shaking in world units at radius or farther; the fourth = how long it shakes, in seconds (the help text calls it
+duration). Every army's calls are listed; whether the player's camera shakes is the host's choice, as with sounds.
+
+b (the AI's stubs and the two script errors) is on the engine's list for the stock-AI work after the replays.
+
 ## render 23, finished: where the four bracket pieces sit (corrects one line of the entry below)
 
 Read to the last store in 0x7fc820 (2026-10-14).

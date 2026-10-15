@@ -381,6 +381,44 @@ void RecordPlaySound(lua_State* L, const Entity* e, int arg) {
   Snd().events.push_back(std::move(ev));
 }
 
+// ---- camera shakes for the host ---------------------------------------------------------------
+// cfunc_EntityShakeCameraL 0x68ab70: five arguments (the entity and four numbers, each checked to be a number),
+// one 28-byte record pushed on the sim's list (sim+0x9c8, func_ShakeCamera 0x692700): the entity's position
+// (+0xac) and the four numbers as given. The simulation does nothing else with it; the user side shakes.
+namespace {
+std::vector<ShakeEvent>& Shakes() {
+  static std::vector<ShakeEvent> l;
+  return l;
+}
+int l_e_ShakeCamera(lua_State* L) {
+  const int n = lua_gettop(L);
+  if (n != 5)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "Entity:ShakeCamera(radius, max, min, duration)", 5, n);
+  Entity* e = ToObject<Entity>(L, 1);
+  float v[4];
+  for (int i = 0; i < 4; ++i) v[i] = static_cast<float>(luaL_checknumber(L, i + 2));
+  Sim* sim = Sim::From(L);
+  if (!e || !sim || !sim->collectShakes) return 0;
+  ShakeEvent ev;
+  ev.entity = e->id;
+  ev.army = e->army ? e->army->index : 0;
+  ev.position[0] = e->position.x;
+  ev.position[1] = e->position.y;
+  ev.position[2] = e->position.z;
+  ev.radius = v[0];
+  ev.maxShakeEpicenter = v[1];
+  ev.minShakeAtRadius = v[2];
+  ev.interval = v[3];
+  Shakes().push_back(ev);
+  return 0;
+}
+}  // namespace
+
+void ShakeEvents(const Sim& /*sim*/, std::vector<ShakeEvent>* out) {
+  out->clear();
+  out->swap(Shakes());
+}
+
 void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out) {
   SoundLog& s = Snd();
   // a loop ends with its entity
@@ -405,6 +443,7 @@ void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out) {
 void RegisterEffectBindings(lua_State* L) {
   SetMethod(L, "Entity", "PlaySound", l_e_PlaySound);
   SetMethod(L, "Entity", "SetAmbientSound", l_e_SetAmbientSound);
+  SetMethod(L, "Entity", "ShakeCamera", l_e_ShakeCamera);
   for (const char* cls : kChainClasses) {
     PushClassTable(L, cls);
     int t = lua_gettop(L);

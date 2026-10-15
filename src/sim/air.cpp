@@ -707,21 +707,50 @@ bool GroundCanReserve(Sim& sim, Unit* u, const int* r) {
   if (own) FillRes(sim, u->ogridRect, 1);
   return !blocked;
 }
-bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl) {
+// MOHO64_DEBUG_PREPMOVE=<unit id>: every spot tested and why it was refused
+long PrepDbg() {
+  static const long v = getenv("MOHO64_DEBUG_PREPMOVE") ? atol(getenv("MOHO64_DEBUG_PREPMOVE")) : -1;
+  return v;
+}
+bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl,
+                      const char** why) {
   if (excl && excl[2] > excl[0] && excl[3] > excl[1] && cx <= excl[2] && excl[0] <= cx + 1 && cz <= excl[3] &&
-      excl[1] <= cz + 1)  // closed: a cell touching the rect is out
+      excl[1] <= cz + 1) {  // closed: a cell touching the rect is out
+    *why = "excluded";
     return false;
+  }
   int S = std::max(fp.sizeX, fp.sizeZ);
-  if (!IsWithin(sim, w, static_cast<float>(S))) return false;
+  if (!IsWithin(sim, w, static_cast<float>(S))) {
+    *why = "outside";
+    return false;
+  }
   const PathGrid* g = sim.navigation().Grid(fp);
   int c = g ? g->Caps(cx, cz) : 0;
   if (u->layer == "Water") c &= ~kSub;
   if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) c &= ~3;
-  if (!c) return false;
+  if (!c) {
+    *why = "caps";
+    return false;
+  }
   int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
-  if (!GroundCanReserve(sim, u, r)) return false;
+  if (!GroundCanReserve(sim, u, r)) {
+    *why = "reserved";
+    return false;
+  }
   float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
-  return NoBlockingUnits(sim, u, x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ);
+  if (!NoBlockingUnits(sim, u, x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ)) {
+    *why = "unit";
+    return false;
+  }
+  *why = "ok";
+  return true;
+}
+bool GroundSpotOk(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int cz, const Vec3& w, const float* excl) {
+  const char* why = "";
+  const bool ok = GroundSpotOkImpl(sim, u, fp, cx, cz, w, excl, &why);
+  if (PrepDbg() == static_cast<long>(u->id))
+    Logf(LogLevel::Info, "prepmove %u unit %u spot (%d,%d) %s", sim.tick(), u->id, cx, cz, why);
+  return ok;
 }
 }  // namespace
 
@@ -729,6 +758,10 @@ bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4], in
   const NamedFootprint& fp = u->motion.bp->footprint;
   int cx = static_cast<int>(std::nearbyint(pos->x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(pos->z - fp.sizeZ * 0.5f));
+  if (PrepDbg() == static_cast<long>(u->id))
+    Logf(LogLevel::Info, "prepmove %u unit %u from %.3f %.3f at %.3f %.3f excl %.2f %.2f %.2f %.2f spacing %d", sim.tick(),
+         u->id, pos->x, pos->z, u->position.x, u->position.z, excl ? excl[0] : 0.0f, excl ? excl[1] : 0.0f,
+         excl ? excl[2] : 0.0f, excl ? excl[3] : 0.0f, spacing);
   if (GroundSpotOk(sim, u, fp, cx, cz, *pos, excl)) return true;
   int step = spacing > 0 ? spacing : 2 * std::max(fp.sizeX, fp.sizeZ);
   int tested = 0;
