@@ -211,6 +211,7 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
     b->offset = Vec3{gx * r, 0, gz * r};
   }
   b->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
+  b->prevPos = b->position;
   b->orientation = u->orientation;
   int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
@@ -588,6 +589,10 @@ void ReconBeat(Sim& sim) {
   for (ReconBlip* b : g_blips) {
     Unit* u = b->source;
     if (!u || u->destroyQueued) continue;
+    // (current := the unit's committed transform, pending := its pending one; AdvanceCoords then makes the first the
+    // previous: so prevPos is where the unit stood when this beat began)
+    const Vec3& from = u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+    b->prevPos = Vec3{from.x + b->offset.x, from.y + b->offset.y, from.z + b->offset.z};
     b->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
     b->orientation = u->orientation;
     b->health = u->health;

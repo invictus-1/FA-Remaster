@@ -250,6 +250,11 @@ class ReconBlip : public Entity {
   bool fake = false;
   Vec3 offset;
   uint8_t rflags[16] = {};
+  // Its committed previous place (entity +0xc8): ReconBlip::Refresh 0x5bf810 gives the blip the unit's committed
+  // transform as its current one and the unit's pending one as its pending one, so after AdvanceCoords the previous
+  // place is where the unit stood when the beat began. The blip's GetVelocity (vtable slot 15 = Entity::GetVelocity
+  // 0x678dc0) is position - prevPos: the unit's move of the beat before.
+  Vec3 prevPos;
 };
 
 // CollisionBeamEntity (sim/combat.cpp): a weapon's beam, attached to its unit's muzzle bone.

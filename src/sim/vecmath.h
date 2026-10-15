@@ -128,6 +128,26 @@ inline Quat Nlerp(const Quat& a, Quat b, float t) {
   if (d < 0) b = {-b.x, -b.y, -b.z, -b.w};
   return QNorm({a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t});
 }
+// func_QuatLERP 0x4eba80, in its order of operations (a shell's orientation at its hit: MotionTick 0x69c7ec): a
+// itself when every part is within 1e-6 of b's (0x4eded0); else t clamped to [0, 1], b negated when the dot product
+// (summed w, x, y, z) is below 0, each part a x (1 - t) + t x b, then normalised by 0x4edaa0 (the squares summed
+// w, x, y, z, the parts times 1 / length; a length of 1e-6 or less gives zero).
+inline Quat NlerpExe(const Quat& a, Quat b, float t) {
+  const float eps = 9.99999997e-07f;
+  if (std::fabs(a.w - b.w) <= eps && std::fabs(a.x - b.x) <= eps && std::fabs(a.y - b.y) <= eps &&
+      std::fabs(a.z - b.z) <= eps)
+    return a;
+  if (!(1.0f > t)) t = 1.0f;
+  if (0.0f > t) t = 0.0f;
+  const float d = ((a.w * b.w + a.x * b.x) + a.y * b.y) + a.z * b.z;
+  const float s = 1.0f - t;
+  if (0.0f > d) b = {-0.0f - b.x, -0.0f - b.y, -0.0f - b.z, -0.0f - b.w};
+  Quat r{a.x * s + t * b.x, a.y * s + t * b.y, a.z * s + t * b.z, a.w * s + t * b.w};
+  const float len = std::sqrt(((r.w * r.w + r.x * r.x) + r.y * r.y) + r.z * r.z);
+  if (!(len > 9.99999997e-07f)) return Quat{0.0f, 0.0f, 0.0f, 0.0f};
+  const float inv = 1.0f / len;
+  return {r.x * inv, r.y * inv, r.z * inv, r.w * inv};
+}
 // Rotation vector (axis * angle) to quaternion.
 inline Quat FromRotVec(Vec3 r) {
   float a = Len(r);
