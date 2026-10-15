@@ -1576,9 +1576,12 @@ on; a callback reaches `/lua/SimCallbacks.lua`'s `DoCallback`.
 to do: the order a player gives with a factory selected); it is carried out since 2026-10-12. Building
 from a factory is an ordinary `IssueCommand` of type 7 (BuildFactory) with the blueprint and a count.
 
-Known gaps on the engine side: classic AI opponents (below), and three rare orders that still end at
-once: `DetachFromTransport`, `Dock` on a unit that is not an air staging platform, and a teleport
-through another unit's beacon. The others are carried out (nuke and tactical launch, overcharge,
+Known gaps on the engine side (updated 2026-10-16): classic AI opponents (below; their threat map and
+platoons are built since 2026-10-16, their build functions are in work), `Dock` or `CallTransport` on a
+transport that cannot fly (CUnitCallLandTransport 0x6007c0 is not built), and order type 23
+(`TransportReverseLoadUnits`). `DetachFromTransport`, `Dock` (it had no case at all before, even on a
+staging platform) and a teleport through another unit's beacon are carried out since 2026-10-16. The
+others are carried out (nuke and tactical launch, overcharge,
 capture, sacrifice, teleport, special action, kill / destroy self and pause since 2026-10-12; a
 captured unit changes army through `ChangeUnitArmy`).
 
