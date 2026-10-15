@@ -509,7 +509,15 @@ void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   } else {
     m.needSnap = true;
   }
-  if (!skipBallistic) SetUnitLayer(sim, child, "Air");
+  // (an aircraft takes the Air layer in its own motion step of this beat, CUnitMotion::MotionTick 0x6ba128: until
+  // then it is still in its dock's layer, and what asks for its velocity before that gets the motion's own
+  // vector, zero. Seen: UEF drones let go by their commander through IssueClearCommands: the AbortMove that
+  // follows in the same script call aims exactly where they are, while their flight step later in the beat reads
+  // the dock's last swing as their speed (Missiles 440, Upgrades 3214).)
+  if (!skipBallistic) {
+    if (CanFly(child)) child->motion.airLayerPending = true;
+    else SetUnitLayer(sim, child, "Air");
+  }
   AirNotifyDetached(sim, child);
   if (CanFly(child)) AirWarp(sim, child);
   sim.MarkUnitsMoved();
@@ -944,7 +952,9 @@ void AttachedUnitsTick(Sim& sim) {
       }
       u->orientation = q;
       u->position = pos;
-      u->motion.lastMove = Sub(pos, before);
+      // (the second pass, for cargo of cargo, adds to the first's step: replacing it zeroed the beat's move of
+      // every piece of cargo, which an aircraft let go in the next beat reads as its velocity)
+      u->motion.lastMove = pass == 0 ? Sub(pos, before) : Add(u->motion.lastMove, Sub(pos, before));
       u->motion.vel = {};
       if (pass == 0 && p->kind == Entity::Kind::Unit) SetUnitLayer(sim, u, static_cast<Unit*>(p)->layer);
       if (pos.x != before.x || pos.y != before.y || pos.z != before.z) u->lastMoveTick = sim.tick();
