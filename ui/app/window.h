@@ -29,6 +29,9 @@ class Window {  // (the host's one window)
   bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false);
   // The main screen's size in pixels; false when there is no window system.
   static bool ScreenSize(int* width, int* height);
+  // How many times a second the main screen shows a new picture (its refresh rate); 60 when it
+  // cannot be told.
+  static int RefreshRate();
   // Handle the waiting window messages (the callbacks run from here). False once the window is closed.
   bool Pump();
   // Show the target's pixels.

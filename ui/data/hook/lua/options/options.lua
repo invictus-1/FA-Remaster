@@ -12,6 +12,22 @@ end
 
 local looks = {
     {
+        title = "Frame Rate",
+        key = 'remaster_frame_rate',
+        type = 'toggle',
+        default = 'vsync',
+        set = Look("remaster_frame_rate"),
+        custom = {
+            states = {
+                { text = "Vertical Sync", key = 'vsync' },
+                { text = "Uncapped", key = 'uncapped' },
+                { text = "60", key = 60 },
+                { text = "120", key = 120 },
+                { text = "144", key = 144 },
+            },
+        },
+    },
+    {
         title = "Remastered Effects",
         key = 'remaster_effects',
         type = 'toggle',

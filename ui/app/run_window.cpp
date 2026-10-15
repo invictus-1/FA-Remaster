@@ -1,4 +1,5 @@
 // The host's live mode: the interface in a window, in real time, with the mouse and the keyboard.
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -63,7 +64,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   };
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
-  double drawSeconds = 0;
+  const int refresh = Window::RefreshRate();
+  Logf(LogLevel::Info, "moho64ui: window: the screen shows %d pictures a second", refresh);
+  double drawSeconds = 0, presentSeconds = 0, frameSeconds = 0, renderSeconds = 0;
+  const FrameTimes timesBefore = Times();
   int frames = 0;
   while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     auto now = Clock::now();
@@ -71,23 +75,42 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     last = now;
     current().ui().edgeScroll = fullScreen;  // the mouse cannot leave: the screen's edge moves the view
     current().Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
+    frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
     auto t0 = Clock::now();
     target->Clear(0xff000000u);
     UserState& user = current();
     user.ui().Render(user.L(), *target, 0);
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+    renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
+    const auto tp = Clock::now();
     window.Present(*target);
+    presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
     updatePointer(current());
     window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
-    // About 60 frames per second; the software backend has no vertical sync to wait for.
-    std::this_thread::sleep_until(now + std::chrono::microseconds(16667));
+    // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as
+    // at first, keeps to the screen's own rate; off, Frametime gives the shortest frame in ms,
+    // 2 to 16). The window's picture is copied without waiting for the screen, so "vertical
+    // sync" here is the screen's rate as a pace, not a true wait for it.
+    const FramePacing& pacing = Pacing();
+    const double period = pacing.verticalSync ? 1.0 / std::max(24, refresh) : pacing.frameMs / 1000.0;
+    std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
   if (frames)
     Logf(LogLevel::Info, "moho64ui: window: %d frames in %.1f s, drawing %.2f ms per frame", frames, total,
          drawSeconds * 1000.0 / frames);
+  if (frames) {  // (where the frame's time goes: the world's picture, the interface, the copy to the window)
+    const FrameTimes& now = Times();
+    const int worlds = now.worldDraws - timesBefore.worldDraws;
+    const double world = now.worldDraw - timesBefore.worldDraw;
+    Logf(LogLevel::Info,
+         "moho64ui: window: per frame %.2f ms in all: %.2f ms the interface's frame (scripts, the game's beats), %.2f ms drawing "
+         "the interface, %.2f ms the copy to the window; of these %.2f ms the world's pictures (%d, inside the first two)",
+         total * 1000.0 / frames, frameSeconds * 1000.0 / frames, renderSeconds * 1000.0 / frames, presentSeconds * 1000.0 / frames,
+         world * 1000.0 / frames, worlds);
+  }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
   return frames;
 }

@@ -335,6 +335,8 @@ int main(int argc, char** argv) {
   // the program's own looks). INFERRED: the argument (startup = true).
   if (ok && !front->RunString("import('/lua/options/optionslogic.lua').Apply(true)", "=(options at start-up)"))
     Logf(LogLevel::Warning, "moho64ui: the options could not be applied at the start");
+  // (The window's frame rate at the start is the player's "Frame Rate" option, set by the Apply
+  // above; the game's own Vertical Sync and Frametime skip their `set` at the start.)
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)

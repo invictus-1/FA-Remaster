@@ -337,6 +337,12 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "effectsQuality");
   lua_pushnumber(L, looks.effectsQuality);
   lua_rawset(L, -3);
+  lua_pushstring(L, "verticalSync");
+  lua_pushboolean(L, Pacing().verticalSync);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "frameMs");
+  lua_pushnumber(L, Pacing().frameMs);
+  lua_rawset(L, -3);
   return 1;
 }
 int l_KeyMapAction(lua_State* L) {
@@ -597,6 +603,19 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
     if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
     if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    // The game's own frame-rate options (its Video tab; FramePacing).
+    if (key == "SC_VERTICALSYNC") return void(Pacing().verticalSync = on);
+    if (key == "SC_FRAMETIMECLAMP") {
+      if (!value.empty()) Pacing().frameMs = std::max(1, std::atoi(value.c_str()));
+      return;
+    }
+    if (key == "REMASTER_FRAME_RATE") {  // vsync | uncapped | frames a second
+      FramePacing& pacing = Pacing();
+      const int fps = std::atoi(value.c_str());
+      pacing.verticalSync = Upper(value) == "VSYNC";
+      if (!pacing.verticalSync) pacing.frameMs = fps > 0 ? 1000.0 / fps : 0.0;
+      return;
+    }
   }
   if (Upper(name) == "CAM_SHAKEMULT") {  // the game's option "Shake intensity" sends it (0 to 1)
     if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));
