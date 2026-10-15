@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 
+#include "core/log.h"
 #include "maui/control.h"
 #include "maui/input.h"
 #include "maui/world_source.h"
@@ -978,6 +979,8 @@ class WorldView : public Control {
       // (No command mode ends here: the script's own handler ends it on a right click before this.)
       uint32_t under = UnitUnder(L, e.x, e.y);
       std::string order = RightClickOrder(L, under);
+      Logf(LogLevel::Debug, "moho64ui: right press at %.1f %.1f (world %.1f %.1f): under %u, order %s%s%s", e.x, e.y, world[0], world[2],
+           under, order.c_str(), e.shift ? " +Shift" : "", e.alt ? " +Alt" : "");
       if (order.rfind("RULEUCC_", 0) != 0) return false;
       order = order.substr(8);
       // (With Alt held, a right click that would be a move is FAF's attack-move.)
