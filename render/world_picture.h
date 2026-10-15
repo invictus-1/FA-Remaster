@@ -44,7 +44,27 @@ class WorldPicture {
   ~WorldPicture();
 
   // Makes an invisible window and a graphics device and loads the map. `vfs` must outlive this.
+  // After UseWindow: the device draws into the host's window instead (no invisible window).
   bool Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error);
+
+  // --- the picture straight into the host's window (the way without a read-back) ---
+  // Before Open: the device is made on the host's window `hwnd` (its whole client area) and shows
+  // the picture there itself, through the graphics card's swap chain (DrawToWindow); nothing is
+  // read back and the window is not to be drawn into by the host otherwise. Draw is then not to be
+  // used; DrawMinimap still is (its ground is drawn without being shown).
+  void UseWindow(void* hwnd);
+  // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels
+  // (the window's size), each 0xAARRGGBB with the colour already multiplied by its alpha (alpha 0:
+  // the world shows through), `pitch` pixels from one row to the next. (x, y, w, h) is the part that
+  // has changed since the last call: all of it the first time and after a change of size; w or h 0:
+  // nothing has. The pixels must stay where they are until that DrawToWindow.
+  void SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h);
+  // The world as Draw draws it, the interface over it, shown in the window.
+  void DrawToWindow(const Camera& camera, int width, int height, double tick);
+  // DrawToWindow waits for the screen's refresh (vertical sync, as at first) or not.
+  void SetVsync(bool on);
+  // For checking: the next DrawToWindow also reads what it shows back into `out` (RGBA bytes).
+  void CaptureNextWindowFrame(std::vector<uint8_t>* out);
   void GameStarted(const moho::Sim& sim);
   void Beat(const moho::Sim& sim);
 
@@ -86,6 +106,10 @@ class WorldPicture {
   // The effects quality setting: the share of their particles effects throw out (1, as at first, all;
   // 0.5 for a slower card). A player's option.
   void SetEffectsQuality(float share);
+  // AMD's FSR 1 (upscale.h): the scene drawn at `share` of the picture's width and height and brought up
+  // to it: 1 off (as at first), 1/1.3 "Ultra Quality", 1/1.5 "Quality", 1/1.7 "Balanced", 1/2
+  // "Performance". Icons, bars and the interface stay sharp. A player's option, for slower cards.
+  void SetUpscale(float share);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).
@@ -195,6 +219,7 @@ class WorldPicture {
   World* world();
 
  private:
+  void RenderWorld(const Camera& camera, int width, int height, double tick);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

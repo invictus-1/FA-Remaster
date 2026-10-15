@@ -102,6 +102,11 @@ bool Post::Init(std::string* error) {
   pd.depthTest = pd.depthWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
+  pd.name = "present, before FSR";
+  pd.depthTarget = false;
+  toTarget_ = device_->CreatePipeline(pd, error);
+  if (!toTarget_) return false;
+  pd.depthTarget = true;
   std::string glow = std::string(kViewShaderBlock) + kGlowShader;
   pd.name = "glow, smaller";
   pd.vertexSource = pd.pixelSource = glow;
@@ -128,10 +133,11 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    for (gfx::Texture t : {color_, depth_, drawn_, behind_})
+    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_})
       if (t) device_->Destroy(t);
     drawn_ = {};
     behind_ = {};
+    ldr_ = {};
     for (gfx::Texture& t : glowSteps_) {
       if (t) device_->Destroy(t);
       t = {};
@@ -189,7 +195,7 @@ void Post::BeginColorOnly() {
   device_->BeginPass(pass);
 }
 
-void Post::Present(const View& view) {
+void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int screenHeight) {
   if (drawn_) device_->Resolve(drawn_, color_);
   // the glow (modern look): smaller and smaller, then laid back over each other into the first
   const bool glowing = view.constants.look > 0.5f && glow > 0 && glowSteps_[0];
@@ -221,15 +227,29 @@ void Post::Present(const View& view) {
     }
     // (the first now holds all of them; the strength was taken at the first step)
   }
+  // drawn smaller than the screen: the picture as a screen shows it first, then FSR brings it up
+  const bool scaled = upscaler && screenWidth > 0 && screenHeight > 0 && (screenWidth != width_ || screenHeight != height_);
+  if (scaled && !ldr_) {
+    gfx::TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = gfx::Format::RGBA8;
+    ldr_ = device_->CreateTarget(td);
+  }
   gfx::PassDesc pass;
-  pass.window = true;
-  pass.clearColor = false;
+  if (scaled && ldr_) {
+    pass.color = ldr_;
+  } else {
+    pass.window = true;
+    pass.clearColor = false;
+  }
   device_->BeginPass(pass);
-  device_->SetPipeline(pipeline_);
+  device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetTexture(0, color_);
   device_->SetTexture(1, glowing ? glowSteps_[0] : black_);
   device_->Draw(3);
+  if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
 }
 
 }  // namespace render

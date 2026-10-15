@@ -176,6 +176,11 @@ class Device {
   virtual Buffer CreateBuffer(const BufferDesc& desc) = 0;
   virtual void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) = 0;  // dynamic buffers
   virtual Texture CreateTexture(const TextureDesc& desc) = 0;
+  // Replaces a rectangle of a texture's first level with `data` (rows `pitch` bytes apart), within a
+  // frame (between BeginFrame and EndFrame), before a draw reads it. An uncompressed texture of one
+  // level and one layer (RGBA8, BGRA8, ...). For what changes every frame (an interface drawn on the
+  // processor).
+  virtual void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) = 0;
   virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;
   virtual void Destroy(Buffer buffer) = 0;
@@ -203,7 +208,9 @@ class Device {
                            uint32_t instances = 1) = 0;
   // Presents the frame. With `capture`, also reads the finished image back: width * height * 4 bytes,
   // RGBA, top row first.
-  virtual void EndFrame(std::vector<uint8_t>* capture = nullptr) = 0;
+  // `present` false: the frame is drawn (and read back with `capture`) but not shown; the next frame
+  // draws into the same picture.
+  virtual void EndFrame(std::vector<uint8_t>* capture = nullptr, bool present = true) = 0;
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;

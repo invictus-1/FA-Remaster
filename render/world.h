@@ -99,6 +99,11 @@ class World {
   // The effects quality setting: the share of their particles effects throw out (1 all, 0.5 for a
   // slower card; what an emitter's blueprint marks KeepAtLowQuality is thrown out in full).
   float effectsQuality = 1;
+  // The share of the screen's width and height the scene is drawn at, FSR 1 bringing it up to the
+  // screen (upscale.h; a player's option for slower cards): 1 the screen's own size, 1/1.3 FSR's "ultra
+  // quality", 1/1.5 "quality", 1/1.7 "balanced", 1/2 "performance". Icons, bars and the interface stay
+  // at the screen's size.
+  float upscale = 1;
   // Life bars go over the units of the army the picture is for and of its allies (bit n of
   // `alliedArmies`: army n, counted from 0), as the original's; over the enemy units the army sees
   // now only with `lifeBarsOnEnemies` (the console's ui_ForceLifbarsOnEnemy, FAF's "Always Show
@@ -131,6 +136,8 @@ class World {
   // --- where things are, for the frame last begun (x, y in pixels of its width and height) ---
   // Where a place in the world is on the screen. False when it is behind the camera.
   bool Project(Vec3 world, float* x, float* y) const;
+  int ScreenWidth() const { return screenWidth_; }
+  int ScreenHeight() const { return screenHeight_; }
   // The place on the ground (or the water's surface) under a point of the screen.
   bool GroundAt(float x, float y, Vec3* hit) const;
   // The unit under a point of the screen (the nearest one whose body or strategic icon is there);
@@ -245,6 +252,7 @@ class World {
   DebugDraw draw;
   AmbientOcclusion ao;
   Post post;
+  Upscaler upscaler;
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
@@ -284,6 +292,8 @@ class World {
   };
   gfx::Device* device_;
   const moho::Vfs* vfs_;
+  int screenWidth_ = 1, screenHeight_ = 1;  // the picture's size on the screen (the scene's is the view's)
+  View screenView_;  // the view at the screen's size (icons and bars are drawn by it)
   bool haveMap_ = false;
   gfx::Texture environment_, sky_, selectionRing_;
   std::vector<PlacedProp> props_;  // the map's, by their index in the map file's list

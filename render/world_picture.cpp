@@ -11,12 +11,30 @@
 #include "window.h"
 #include "world.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 namespace render {
 
 struct WorldPicture::Impl {
   const moho::Vfs* vfs = nullptr;
   std::unique_ptr<Window> window;
+  void* hostWindow = nullptr;          // UseWindow: the host's own (the picture is shown there)
   std::unique_ptr<gfx::Device> device;
+  // the host's interface over the world (SetInterfaceLayer)
+  gfx::Texture layer;
+  gfx::Pipeline layerPipeline;
+  int layerWidth = 0, layerHeight = 0;
+  int layerMadeWidth = 0, layerMadeHeight = 0;  // (the texture's)
+  const uint32_t* layerPixels = nullptr;
+  int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
+  bool vsync = true;
+  std::vector<uint8_t>* checkCapture = nullptr;  // CaptureNextWindowFrame
   std::unique_ptr<World> world;
   SimFrames frames;
   Frame frame;
@@ -26,6 +44,7 @@ struct WorldPicture::Impl {
   bool lifeBarsOnEnemies = false;      // SetLifeBarsOnEnemies
   bool remasteredEffects = true;       // SetRemasteredEffects
   float effectsQuality = 1;            // SetEffectsQuality
+  float upscale = 1;                   // SetUpscale
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -50,15 +69,44 @@ WorldPicture::~WorldPicture() = default;
 bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error) {
   Impl& m = *impl_;
   m.vfs = vfs;
-  m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
-  if (!m.window) return false;
   gfx::DeviceDesc dd;
-  dd.window = m.window->Handle();
   dd.width = 640;
   dd.height = 360;
   dd.vsync = false;
+  if (m.hostWindow) {  // (the host's window: the picture is shown there, at its size)
+    dd.window = m.hostWindow;
+    RECT r{};
+    if (GetClientRect(static_cast<HWND>(m.hostWindow), &r) && r.right > r.left && r.bottom > r.top) {
+      dd.width = r.right - r.left;
+      dd.height = r.bottom - r.top;
+    }
+    dd.vsync = m.vsync;
+  } else {
+    m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
+    if (!m.window) return false;
+    dd.window = m.window->Handle();
+  }
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
+  if (m.hostWindow) {  // the interface laid over the world: its pixels as they are, over what is there
+    static const char kLayer[] = R"hlsl(
+Texture2D layer : register(t0);
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 p = float2((id << 1) & 2, id & 2);
+  return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0)); }
+)hlsl";
+    gfx::PipelineDesc pd;
+    pd.name = "the interface over the world";
+    pd.vertexSource = pd.pixelSource = kLayer;
+    pd.cull = gfx::Cull::None;
+    pd.depthTest = pd.depthWrite = false;
+    pd.blend = gfx::Blend::Premultiplied;
+    pd.colorFormat = gfx::Format::RGBA8;
+    m.layerPipeline = m.device->CreatePipeline(pd, error);
+    if (!m.layerPipeline) return false;
+  }
   m.world = std::make_unique<World>(m.device.get(), vfs);
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
@@ -77,6 +125,100 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     m.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
     return m.pixels;
   }
+  RenderWorld(camera, width, height, tick);
+  m.device->EndFrame(&m.capture);
+
+  // red, green, blue, alpha bytes -> 0xAARRGGBB
+  m.pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+  const size_t count = std::min(m.pixels.size(), m.capture.size() / 4);
+  const uint8_t* p = m.capture.data();
+  for (size_t i = 0; i < count; ++i, p += 4) m.pixels[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
+  return m.pixels;
+}
+
+void WorldPicture::UseWindow(void* hwnd) { impl_->hostWindow = hwnd; }
+
+void WorldPicture::SetVsync(bool on) {
+  impl_->vsync = on;
+  if (impl_->device && impl_->hostWindow) impl_->device->SetVsync(on);
+}
+
+void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {
+  Impl& m = *impl_;
+  m.layerPixels = pixels;
+  m.layerPitch = pitch;
+  if (width != m.layerWidth || height != m.layerHeight) {  // a new size: all of it
+    m.layerWidth = width;
+    m.layerHeight = height;
+    x = y = 0;
+    w = width;
+    h = height;
+  }
+  // (what has changed since the last DrawToWindow: these rectangles together)
+  if (w > 0 && h > 0) {
+    if (m.dirtyW > 0 && m.dirtyH > 0) {
+      const int x1 = std::max(m.dirtyX + m.dirtyW, x + w), y1 = std::max(m.dirtyY + m.dirtyH, y + h);
+      m.dirtyX = std::min(m.dirtyX, x);
+      m.dirtyY = std::min(m.dirtyY, y);
+      m.dirtyW = x1 - m.dirtyX;
+      m.dirtyH = y1 - m.dirtyY;
+    } else {
+      m.dirtyX = x;
+      m.dirtyY = y;
+      m.dirtyW = w;
+      m.dirtyH = h;
+    }
+  }
+}
+
+void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, double tick) {
+  Impl& m = *impl_;
+  if (!m.world || !m.hostWindow) return;
+  width = std::max(width, 16);
+  height = std::max(height, 16);
+  RenderWorld(camera, width, height, tick);
+  // the interface over it: its texture made anew at a new size, and what has changed in it handed over
+  if (m.layerPixels && m.layerWidth > 0 && m.layerHeight > 0) {
+    if (!m.layer || m.layerMadeWidth != m.layerWidth || m.layerMadeHeight != m.layerHeight) {
+      if (m.layer) m.device->Destroy(m.layer);
+      std::vector<uint32_t> clear(static_cast<size_t>(m.layerWidth) * static_cast<size_t>(m.layerHeight), 0u);
+      gfx::TextureDesc td;
+      td.width = m.layerWidth;
+      td.height = m.layerHeight;
+      td.format = gfx::Format::BGRA8;  // (0xAARRGGBB as bytes in memory: blue, green, red, alpha)
+      td.data = clear.data();
+      td.dataSize = clear.size() * 4;
+      m.layer = m.device->CreateTexture(td);
+      m.layerMadeWidth = m.layerWidth;
+      m.layerMadeHeight = m.layerHeight;
+      m.dirtyX = m.dirtyY = 0;
+      m.dirtyW = m.layerWidth;
+      m.dirtyH = m.layerHeight;
+    }
+    if (m.layer && m.dirtyW > 0 && m.dirtyH > 0) {
+      const int x = std::clamp(m.dirtyX, 0, m.layerWidth), y = std::clamp(m.dirtyY, 0, m.layerHeight);
+      const int w = std::min(m.dirtyW, m.layerWidth - x), h = std::min(m.dirtyH, m.layerHeight - y);
+      if (w > 0 && h > 0)
+        m.device->UpdateTexture(m.layer, x, y, w, h, m.layerPixels + static_cast<size_t>(y) * static_cast<size_t>(m.layerPitch) + static_cast<size_t>(x),
+                                static_cast<uint32_t>(m.layerPitch) * 4);
+    }
+    m.dirtyW = m.dirtyH = 0;
+    if (m.layer && m.layerWidth == width && m.layerHeight == height) {
+      m.device->SetPipeline(m.layerPipeline);
+      m.device->SetTexture(0, m.layer);
+      m.device->Draw(3);
+    }
+  }
+  m.layerPixels = nullptr;
+  m.device->EndFrame(m.checkCapture, true);
+  m.checkCapture = nullptr;
+}
+
+void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
+
+// The world as `camera` sees it into the device's frame (begun here, ended by the caller).
+void WorldPicture::RenderWorld(const Camera& camera, int width, int height, double tick) {
+  Impl& m = *impl_;
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
@@ -84,6 +226,7 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
   m.world->effectsLook = m.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   m.world->effectsQuality = m.effectsQuality;
+  m.world->upscale = m.upscale;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -128,14 +271,6 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     m.world->AddFrame(m.frame, m.armyColors);
   }
   m.world->Render();
-  m.device->EndFrame(&m.capture);
-
-  // red, green, blue, alpha bytes -> 0xAARRGGBB
-  m.pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-  const size_t count = std::min(m.pixels.size(), m.capture.size() / 4);
-  const uint8_t* p = m.capture.data();
-  for (size_t i = 0; i < count; ++i, p += 4) m.pixels[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
-  return m.pixels;
 }
 
 void WorldPicture::SetSelection(const std::vector<uint32_t>& ids) {
@@ -190,6 +325,8 @@ void WorldPicture::SetLifeBarsOnEnemies(bool on) { impl_->lifeBarsOnEnemies = on
 void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on; }
 
 void WorldPicture::SetEffectsQuality(float share) { impl_->effectsQuality = share; }
+
+void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;
@@ -308,7 +445,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
     w.Render();
-    m.device->EndFrame(&m.capture);
+    m.device->EndFrame(&m.capture, !m.hostWindow);  // (in the host's window: read back, not shown)
     w.iconsOn = icons;
     w.shadowsOn = shadows;
     w.sightShown = true;
