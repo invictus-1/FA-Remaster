@@ -314,7 +314,10 @@ void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t)
 
 // One tick of work on the focus. Returns true when the work is done.
 bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
-  Unit* target = FindUnit(sim, t.targetId);
+  // the helper's target is a weak pointer (0x5f5bf0 reads helper+8 with no IsDead test): a killed unit is
+  // still worked on until it is freed. The build tasks test their target before they get here; the repair task
+  // does not (0x5f939d), so it keeps "repairing" a dead unit (whose health no longer rises, Entity::AdjustHealth)
+  Unit* target = FindUnitAny(sim, t.targetId);
   if (!target) return true;
   if (builder->paused) {  // (FAF patch 0x1291a27) a paused builder only shows the target's progress
     builder->workProgress = target->fractionComplete;
@@ -348,8 +351,9 @@ bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
   float delta = 0;
   if (rate != 0.0f && td.buildTime > 0.0f && builder->buildRate > 0.0f)
     delta = 1.0f / (td.buildTime / builder->buildRate) * rate * 0.1f;
+  const bool wasAlive = Alive(target);
   Materialize(sim, L, target, delta);
-  if (!Alive(target)) return true;
+  if (wasAlive && !Alive(target)) return true;
   if (t.order == "Repair" && !target->beingBuilt) {
     float f = target->maxHealth > 0 ? target->health / target->maxHealth : 1.0f;
     builder->workProgress = f;
@@ -773,12 +777,15 @@ std::vector<Unit*> UnitsMeetingBox(Sim& sim, float x0, float z0, float x1, float
 // Sim::LocationIsFree 0x62da50 with flag 0 (CUnitMobileBuildTask state 3, 0x5f7b04, on the footprint rect
 // task+0xc8): false when a unit in the rect's box (UnitsMeetingBox) other than `self`, alive and not on the Air
 // layer, is mobile (vt+0x30: it blocks at once) or, not mobile, has a skirt rect (0x51ec50) that overlaps the rect
-// strictly. (Flag 1, the factory's, also lets units with a command in their queue through: FactorySiteBlocked. A
-// unit the builder carries, builder+0x55c vt+0x70, does not count: not modelled, no mobile builder carries.)
-bool LocationFreeOfUnits(Sim& sim, lua_State* L, const Unit* self, const int r[4]) {
+// strictly. Flag 1 (the factory's, 0x5fa88f) also lets a unit with a command at the head of its queue through
+// (0x62dbca..0x62dbf9: unit+0x4b4 queue, its first entry's object non-null; the test of Unit::IsIdleState
+// 0x6a7d60): FactorySiteBlocked. A unit the builder carries, builder+0x55c vt+0x70, does not count: not modelled,
+// no mobile builder carries.
+bool LocationFreeOfUnits(Sim& sim, lua_State* L, const Unit* self, const int r[4], int flag) {
   for (Unit* e : UnitsMeetingBox(sim, static_cast<float>(r[0]), static_cast<float>(r[1]), static_cast<float>(r[2]),
                                  static_cast<float>(r[3]))) {
     if (e == self || e->dead || !e->blueprint) continue;
+    if (flag && !e->commands.empty()) continue;  // 0x62dbca
     if (e->layer == "Air") continue;
     if (!(e->motion.bp && e->motion.bp->mobile())) {
       const FRect s = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
@@ -807,7 +814,9 @@ bool LocationFreeOfUnits(Sim& sim, lua_State* L, const Unit* self, const int r[4
 // Seen: Economy 1779, commanders 36 / 38 building an Aeon land factory find commander 37 standing on its footprint
 // (it is still thinking about its own way out): 37 is sent to (856, 430) and starts one beat later than with the
 // goal (854, 427) its own PrepareMove gave it. (MOHO64_DEBUG_PREPMOVE=<blocker id> or -2: every call and spot.)
-void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4]) {
+// Flag 1 (the factory's, 0x5fa8ae) sends only units with no command (0x62df78: Unit::IsIdleState 0x6a7d60, the
+// queue unit+0x4b4 empty or its head gone); the spot tests inside are flag 0 in both cases (0x62e41d, 0x62e803).
+void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4], int flag) {
   const float cx = static_cast<float>(r[0] + r[2]) * 0.5f, cz = static_cast<float>(r[1] + r[3]) * 0.5f;
   const float hx = static_cast<float>(r[2] - r[0]) * 0.5f, hz = static_cast<float>(r[3] - r[1]) * 0.5f;
   const float R = hz > hx ? hz : hx;
@@ -820,8 +829,13 @@ void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4]) {
     if (!(b->motion.bp && b->motion.bp->mobile())) continue;  // vt+0x30
     const bool moved = b->position.x != b->lastPosition.x || b->position.y != b->lastPosition.y ||
                        b->position.z != b->lastPosition.z;
+    if (dbg == -2)
+      Logf(LogLevel::Info, "trytobuild %u cand %u pos %.9g %.9g %.9g last %.9g %.9g %.9g moved %d cmds %d layer %s",
+           sim.tick(), b->id, b->position.x, b->position.y, b->position.z, b->lastPosition.x, b->lastPosition.y,
+           b->lastPosition.z, moved, static_cast<int>(b->commands.size()), b->layer.c_str());
     if (moved && !BpInCategory(sim, b->blueprint, "AIR")) continue;
     if (b->layer == "Air" || b->dead || b->army != army) continue;
+    if (flag && !b->commands.empty()) continue;  // 0x62df78 -> 0x6a7d60
     blockers.push_back(b);
   }
   for (Unit* b : blockers) {
@@ -836,7 +850,7 @@ void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4]) {
       const bool touches = q[2] >= r[0] && r[2] >= q[0] && q[3] >= r[1] && r[3] >= q[1] && r[0] < r[2] &&
                            r[1] < r[3] && q[0] < q[2] && q[1] < q[3];
       return !touches && GroundCellFits(sim, b, q[0], q[1]) && GroundCanReserveRect(sim, b, q) &&
-             LocationFreeOfUnits(sim, L, b, q);
+             LocationFreeOfUnits(sim, L, b, q, 0);
     };
     const Vec3 pos = b->position;
     const float dx = pos.x - cx, dz = pos.z - cz;
@@ -1000,9 +1014,9 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         const NamedFootprint& sfp = Footprint(*t.bp);
         const int sx0 = RoundEven(t.site.x - sfp.sizeX * 0.5f), sz0 = RoundEven(t.site.z - sfp.sizeZ * 0.5f);
         const int fr[4] = {sx0, sz0, sx0 + sfp.sizeX, sz0 + sfp.sizeZ};
-        if (!LocationFreeOfUnits(sim, L, u, fr)) {
+        if (!LocationFreeOfUnits(sim, L, u, fr, 0)) {
           const int rr[4] = {fr[0], fr[1] - 1, fr[2] + 1, fr[3]};
-          TryToBuild(sim, L, u->army, rr);
+          TryToBuild(sim, L, u->army, rr, 0);
           ++t.tries;
           t.waitUntil = sim.tick() + 49;  // return 50: runs again 49 beats later
           return kTaskRunning;
@@ -1040,32 +1054,35 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskFailed;
 }
 
-// Sim::LocationIsFree 0x62da50 for a factory's own footprint rect (flag 1), the part for units that are NOT
-// mobile: a live unit other than the factory, not on the Air layer and not carried, whose collision primitive
-// meets the rect's box (y -100 .. 100) and whose skirt rect overlaps the rect (strictly) keeps the factory from
-// starting. Seen: a ferry beacon set down on a factory. NOT PORTED: the mobile half. A mobile unit there blocks
-// too, and SIM_TryToBuild 0x62dd40 then asks the standing ones of the army to move off; without that call a
-// blocked factory would wait for ever, so mobile units are let through here as before.
-bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F) {
+// Sim::LocationIsFree 0x62da50 for a factory's own footprint rect fr (0x51ed80 at the factory's place) with flag 1
+// (CFactoryBuildTask state 0, 0x5fa88f): a live unit other than the factory, not on the Air layer and not carried,
+// with no command at the head of its queue, whose collision primitive meets the rect's box (y -100 .. 100) keeps
+// the factory from starting if it is mobile (vt+0x30), or, not mobile, if its skirt rect overlaps the rect
+// (strictly). Seen: a ferry beacon set down on a factory; bench 649, Seraphim factory 0x200001 (footprint x 864..869)
+// with its idle engineer 0x200008 at x 863.667 (box out to 864.02): the original starts the next unit at 698,
+// 649 + 49 (return 50), and makes it 0x20000d; the unit rolling off with its Move (0x20000a) does not count.
+// TryToBuild sends nobody there: 0x200008 hovers, its y moved by one float step from 647 to 648, so it "moved".
+// (Units attached to a parent are let through as before: the carrier test builder+0x55c vt+0x70 is not modelled.)
+bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F, int fr[4]) {
   const NamedFootprint& fp = Footprint(*F->blueprint);
-  const int x0 = RoundEven(F->position.x - fp.sizeX * 0.5f), z0 = RoundEven(F->position.z - fp.sizeZ * 0.5f);
-  const float qx0 = static_cast<float>(x0), qz0 = static_cast<float>(z0);
-  const float qx1 = static_cast<float>(x0 + fp.sizeX), qz1 = static_cast<float>(z0 + fp.sizeZ);
-  const Vec3 mn{qx0, -100.0f, qz0}, mx{qx1, 100.0f, qz1};
-  bool blocked = false;
-  sim.ForUnitsInRect(qx0 - 16, qz0 - 16, qx1 + 16, qz1 + 16, [&](Unit* e) {
-    if (blocked || e == F || e->dead || e->destroyQueued || !e->blueprint) return;
-    if (e->parentId || e->unitStates.count("Attached") || e->layer == "Air") return;
-    if (e->motion.bp && e->motion.bp->mobile()) return;  // (see above)
-    WorldShape ws;
-    if (!GetWorldShape(e, &ws)) return;
-    Vec3 a, b;
-    ShapeBounds(ws, &a, &b);
-    if (!GridCellsMeet(mn, mx, a, b) || !ShapeOverlapsAABox(ws, mn, mx)) return;
-    const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
-    if (qx1 > r.x0 && r.x1 > qx0 && qz1 > r.z0 && r.z1 > qz0 && r.x1 > r.x0 && r.z0 < r.z1) blocked = true;
-  });
-  return blocked;
+  fr[0] = RoundEven(F->position.x - fp.sizeX * 0.5f);
+  fr[1] = RoundEven(F->position.z - fp.sizeZ * 0.5f);
+  fr[2] = fr[0] + fp.sizeX;
+  fr[3] = fr[1] + fp.sizeZ;
+  for (Unit* e : UnitsMeetingBox(sim, static_cast<float>(fr[0]), static_cast<float>(fr[1]), static_cast<float>(fr[2]),
+                                 static_cast<float>(fr[3]))) {
+    if (e == F || e->dead || e->destroyQueued || !e->blueprint) continue;
+    if (!e->commands.empty()) continue;  // flag 1: 0x62dbca
+    if (e->parentId || e->unitStates.count("Attached") || e->layer == "Air") continue;
+    if (!(e->motion.bp && e->motion.bp->mobile())) {
+      const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+      const float qx0 = static_cast<float>(fr[0]), qz0 = static_cast<float>(fr[1]);
+      const float qx1 = static_cast<float>(fr[2]), qz1 = static_cast<float>(fr[3]);
+      if (!(qx1 > r.x0 && r.x1 > qx0 && qz1 > r.z0 && r.z1 > qz0 && r.x1 > r.x0 && r.z0 < r.z1)) continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 // CFactoryBuildTask::Execute 0x5fa790 (factory_handoff.md 1). Waits ("return r") are kept in waitUntil.
@@ -1084,7 +1101,11 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return wait(1);
       }
       if (u->paused) return wait(10);
-      if (FactorySiteBlocked(sim, L, u)) return wait(50);  // 0x62da50 false: (SIM_TryToBuild,) return 50
+      int fr[4];
+      if (FactorySiteBlocked(sim, L, u, fr)) {  // 0x62da50 false: SIM_TryToBuild(army, rect, 1) 0x5fa8ba, return 50
+        TryToBuild(sim, L, u->army, fr, 1);
+        return wait(50);
+      }
       // (the params of 0x5f54d0: no orientation given, so the unit's own heading; the script attaches it to the
       // factory's build bone in OnStartBuild)
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
@@ -1889,7 +1910,11 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   }
   const float mbd = u->bpData->maxBuildDistance;
   for (int guard = 0; guard < 8; ++guard) {
-    Unit* tg = FindUnit(sim, t.goalId);
+    // target +0x88 is a weak pointer and the prologue tests only "null or the builder" (0x5f939d..0x5f93b5, no
+    // IsDead): a killed target is kept until it is freed. Seen: Engineers 1709, two engineers guarding engineer 7
+    // repair it while it dies (hp 0); the original keeps the repair (Repairing, 7 NoReclaim at 1712) and the guard
+    // until 7 is gone at 1715; ours ended both at 1710
+    Unit* tg = FindUnitAny(sim, t.goalId);
     if (!tg || tg == u) return kTaskFailed;
     if (tg->health == tg->maxHealth) {
       if (!t.assist) {
@@ -1953,7 +1978,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         t.workId = t.goalId;
         // aim = the target's bone -1 world transform (Unit::GetBoneWorldTransform 0x6aa5c0): half its SizeY
         // straight up from its position, in the world's axes (0x6aa637)
-        if (Unit* w = FindUnit(sim, t.workId)) {
+        if (Unit* w = FindUnitAny(sim, t.workId)) {
           float hy = w->bpData ? w->bpData->sizeY * 0.5f : 0.0f;
           SetArmAimTarget(sim, u, Vec3{w->position.x, w->position.y + hy, w->position.z});
         }
@@ -1969,7 +1994,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           t.waitUntil = sim.tick() + 9;
           return kTaskRunning;
         }
-        Unit* w = FindUnit(sim, t.workId);
+        Unit* w = FindUnitAny(sim, t.workId);
         if (!w) return kTaskFailed;
         w->unitStates.insert("NoReclaim");
         SetFocus(sim, L, u, w, t);
@@ -1980,7 +2005,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       case 4: {
         if (!tg->unitStates.count("Attached") && RepairGap(u, tg) > 2.0f * mbd) return kTaskFailed;
         if (!UpdateWorkProgress(sim, L, u, t)) {
-          Unit* w = FindUnit(sim, t.workId);
+          Unit* w = FindUnitAny(sim, t.workId);
           if (!t.inheritWork || !w || w->unitStates.count("Enhancing")) return kTaskRunning;
         }
         t.state = 5;
@@ -2541,8 +2566,12 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         child->site = site;
         break;
       }
+      // ResolveGuardedReclaimFocusEntity 0x612e80: G's focus is Unit::GetFocusEntity 0x585b10, the weak link +0x4d0,
+      // null once the focus is freed (not merely dead). Seen: Engineers 2025, engineer 7 guards 0xa, whose reclaim
+      // target (a tank) was reclaimed and freed in 2024; at 7's turn in 2025 0xa still reads Reclaiming in ours; the
+      // original's 7 starts nothing (no GuardBusy), ours started a reclaim of the freed id (it failed at 2026)
       if (g.hasUnit && G && U->bpData && U->bpData->hasBuilder && Cat(sim, U, "RECLAIM") &&
-          G->unitStates.count("Reclaiming") && G->focusId) {
+          G->unitStates.count("Reclaiming") && G->focusId && sim.FindEntity(G->focusId)) {
         GuardAbort(U);
         child = NewChild(sim, CommandType::Reclaim, "Reclaim");
         child->goalId = G->focusId;
@@ -3193,9 +3222,12 @@ int l_RestoreBuildRestrictions(lua_State* L) {
   return 0;
 }
 
-int l_GetFocusUnit(lua_State* L) {
+int l_GetFocusUnit(lua_State* L) {  // 0x6c46f0
   Unit* u = U(L);
-  Unit* f = FindUnit(*S(L), u->focusId);
+  // the weak focus +0x4d0 as a unit (vt+0x10), no IsDead test (0x6c4778..0x6c47b2): a killed focus is returned until
+  // it is freed (Engineers 1713: UpdateConsumptionValues of two engineers repairing a dying engineer requests the
+  // repair cost in the original)
+  Unit* f = FindUnitAny(*S(L), u->focusId);
   PushObject(L, f);
   return 1;
 }

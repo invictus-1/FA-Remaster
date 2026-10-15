@@ -58,6 +58,9 @@ struct LandNav {
   PathCell followCell;
   Vec3 followPos;  // following: the slot position the target was taken from (the steering drives to it)
   uint32_t lastFail = 0;
+  // unit+0x124 (UpdateWaterFavorAltFootprintMode 0x5adc70, RequestPath's first step): a FAVORSWATER unit with
+  // nothing of its move on land searches with its AltFootprint (CAiPathFinder slot 0 0x5a9d30 picks +0x20)
+  bool waterAlt = false;
 };
 
 // Start a move to world position `goal` (land units). speedThrough: drive through the goal.

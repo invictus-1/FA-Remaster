@@ -717,6 +717,30 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
 
 // ---- the command stream's orders (engine-ref command_stream.md 5) ----------------------------------------------
 
+// A command's entity target. The player's orders on an enemy name its recon blip (the UI only knows blips), and so
+// do scripts that pass a blip (Unit:GetBlip(army), a weapon's GetCurrentTarget): SCR_GetTarget 0x6eef60 takes any
+// entity (SCR_FromLuaNoError_Entity 0x5e3800) and CAiTarget::UpdateTarget 0x5d55b0 keeps it as given, so the
+// original's order holds the blip either way. Our tasks and weapons work on units, so a real blip stands for its
+// unit, and a jammer's fake blip for its unit with the fake named beside it (the target then stands where the fake
+// stands and lasts as long as it).
+void SetCommandEntityTarget(UnitCommand& c, Entity* e) {
+  c.targetViaBlip = false;
+  c.targetFakeId = 0;
+  Vec3 at = e->position;
+  if (e->kind == Entity::Kind::Blip) {
+    auto* b = static_cast<ReconBlip*>(e);
+    if (b->source && !b->source->destroyQueued) {
+      if (b->fake) c.targetFakeId = EntityRef(b);
+      e = b->source;
+      c.targetViaBlip = true;
+      if (!c.targetFakeId) at = e->position;
+    }
+  }
+  c.targetId = EntityRef(e);
+  c.pos = at;
+  c.hasPos = true;
+}
+
 }  // namespace
 
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t) {
@@ -727,22 +751,7 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
-      // The player's orders on an enemy name its recon blip (the UI only knows blips). Our tasks and weapons work
-      // on units, so a real blip stands for its unit, and a jammer's fake blip for its unit with the fake named
-      // beside it (the target then stands where the fake stands and lasts as long as it).
-      Vec3 at = e->position;
-      if (e->kind == Entity::Kind::Blip) {
-        auto* b = static_cast<ReconBlip*>(e);
-        if (b->source && !b->source->destroyQueued) {
-          if (b->fake) c.targetFakeId = EntityRef(b);
-          e = b->source;
-          c.targetViaBlip = true;
-          if (!c.targetFakeId) at = e->position;
-        }
-      }
-      c.targetId = EntityRef(e);
-      c.pos = at;
-      c.hasPos = true;
+      SetCommandEntityTarget(c, e);
     } else if (getenv("MOHO64_DEBUG_BLIP")) {
       Logf(LogLevel::Info, "command %u: target entity %#x does not exist", sim.tick(), t.entity);
     }
@@ -1016,9 +1025,10 @@ int l_IssueTarget(lua_State* L) {
   }
   auto c = Issue(L, units, T);
   if (Entity* e = te) {
-    c->targetId = EntityRef(e);
-    c->pos = e->position;
-    c->hasPos = true;
+    // a blip the script passed stands for its unit, as in a player's order (BlackOps' drone carriers:
+    // IssueAttack({drone}, unit:GetBlip(army)); seen in Experimental2 at 964: the original's drones fly at the
+    // enemy, ours ended the order at once - no weapon could take the blip itself)
+    SetCommandEntityTarget(*c, e);
     if (!c->units.empty()) c->targetPoint = TargetPointDraw(*S(L), e);
   } else {
     c->hasPos = PosArg(L, 2, &c->pos);
@@ -1159,6 +1169,11 @@ int l_IssueClearCommands(lua_State* L) {
   // linked in at the stage's end. Seen in the bench at 342: Cybran build drones whose move (IdleState.Main) was
   // cleared at 301 (BuildState.Main) ran their dispatchers after their commander's (re-linked at 300) and stopped
   // repairing right after it finished the structure, before the drone script's next beam step.
+  // After the queue, the unit's attacker is stopped (0x6f19eb..0x6f19f5: unit+0x544, when there is one ->
+  // CAiAttackerImpl::Stop 0x5d56f0 = SetDesiredTarget(none)): its weapons' acquire tasks start their period again
+  // from this beat. Seen in Experimental2: BlackOps drones are given IssueClearCommands + IssueAttack at 964, and
+  // in the original their depth charges (TargetCheckInterval 2) take the enemy at 1084 = 964 + 6 x 20, ours at the
+  // old phase (1095).
   for (Unit* u : UnitsArg(L, 1)) {
     const bool moveAsleep =
         !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
@@ -1167,6 +1182,7 @@ int l_IssueClearCommands(lua_State* L) {
     if (!stopped) MotionStop(u);
     SetMoving(u, false);
     if (moveAsleep) S(L)->ResumeCommandThread(u);
+    AttackerStop(*S(L), u);
   }
   return 0;
 }

@@ -6,6 +6,7 @@
 #include "sim/formation.h"
 #include "sim/air.h"
 #include "sim/commands.h"
+#include "sim/combat.h"
 
 #include <algorithm>
 #include <chrono>
@@ -251,7 +252,9 @@ bool InGoal(const LandNav& n, const PathCell& c) {
 void QueueSearch(Sim& sim, Unit* u, LandNav& n) {
   PathTraveler& t = n.pf;
   t.unit = u;
-  t.fp = Fp(u);
+  // BeginQuery takes the cluster map of slot 0 0x5a9d30: unit+0x124 ? the AltFootprint (+0x20 = bp+0x300) :
+  // the Footprint (+0x1c = bp+0x2fc), both named ones
+  t.fp = n.waterAlt ? u->motion.bp->altFootprint : Fp(u);
   t.S = std::max(SX(u), SZ(u));
   t.armyIndex = u->army ? u->army->index : 0;
   PathCell c = CellOf(u, u->position.x, u->position.z);
@@ -284,8 +287,60 @@ void SetFinderGoal(Sim& sim, Unit* u, LandNav& n, const int* g) {
       }
 }
 
+// UpdateWaterFavorAltFootprintMode 0x5adc70 (the first step of RequestPath; RequestContinuationPath keeps the
+// flag): only for a unit in category FAVORSWATER (the Cybran destroyer that walks ashore). unit+0x124 := 0; it
+// becomes 1 (paths with the AltFootprint, water only) unless some point of the move is on land, 0x5adc20: the
+// terrain elevation (0x44fb90) above the water elevation (map+0x1538; -10000 without water).
+//   head command: for each FAVORSWATER unit of the head command's unit list (not dead, 0x57d3f0 / vt+0x28 /
+//   vt+0x2c): its position; its place in the command (CUnitCommand::GetPosition 0x6e8a30: the formation cell, else
+//   the target, as the footprint-origin cell fistp(p - size / 2) and back to its centre 0x50b1a0); the same for its
+//   own head command when that is another one.
+//   no command: the unit's position, then the goal's corner cell (nav+0x30 / +0x34) at its centre (0x50b0f0).
+// Seen (Naval): the Salem 0x44's continuation at 495 searches the Water4x4 map, whose clusters the ships' searches
+// had already built, and is capped in beat 506 as the original's (target at wn 507); on WaterLand4x4 every cluster
+// it touched was still to make (about 2,950 x 10 budget) and the answer came a beat later.
+void UpdateWaterFavor(Sim& sim, Unit* u, LandNav& n) {
+  if (!BpInCategory(sim, u->blueprint, "FAVORSWATER")) return;
+  n.waterAlt = false;
+  const TerrainMap* map = sim.map();
+  if (!map) return;
+  auto onLand = [&](float x, float z) {
+    return map->TerrainHeight(x, z) > (map->hasWater ? map->waterElevation : -10000.0f);
+  };
+  auto cellCentreOnLand = [&](const Unit* v, const Vec3& p) {
+    const float sx = static_cast<float>(SX(v)), sz = static_cast<float>(SZ(v));
+    return onLand(std::nearbyint(p.x - sx * 0.5f) + sx * 0.5f, std::nearbyint(p.z - sz * 0.5f) + sz * 0.5f);
+  };
+  auto commandPos = [&](UnitCommand& c, Unit* v) {
+    Vec3 g;
+    if (c.form && FormationGoal(sim, c, v, &g)) return g;
+    if (c.targetId)
+      if (Entity* e = sim.FindEntity(c.targetId)) return e->position;
+    return c.pos;
+  };
+  if (!u->commands.empty() && u->commands.front()) {
+    UnitCommand& c = *u->commands.front();
+    for (Unit* v : c.units) {
+      if (!v || v->dead || v->destroyQueued || !BpInCategory(sim, v->blueprint, "FAVORSWATER")) continue;
+      if (onLand(v->position.x, v->position.z)) return;
+      if (cellCentreOnLand(v, commandPos(c, v))) return;
+      if (!v->commands.empty() && v->commands.front() && v->commands.front().get() != &c &&
+          cellCentreOnLand(v, commandPos(*v->commands.front(), v)))
+        return;
+    }
+    n.waterAlt = true;
+    return;
+  }
+  if (onLand(u->position.x, u->position.z)) return;
+  if (onLand(n.goal[0] + SX(u) * 0.5f, n.goal[1] + SZ(u) * 0.5f)) return;
+  n.waterAlt = true;
+}
+
 // RequestPath 0x5adfe0
 void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
+  UpdateWaterFavor(sim, u, n);
+  if (Dbg() && BpInCategory(sim, u->blueprint, "FAVORSWATER"))
+    Logf(LogLevel::Info, "nav: tick %u unit %u water favor: alt footprint %d", sim.tick(), u->id, n.waterAlt ? 1 : 0);
   n.pf.anchor = n.cur;
   SetFinderGoal(sim, u, n, n.goal);
   n.pf.mode = mode;
