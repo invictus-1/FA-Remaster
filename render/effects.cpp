@@ -20,14 +20,14 @@ void Effects::Queue(std::vector<FrameEffectEvent>&& events) {
   for (FrameEffectEvent& e : events) pending_.push_back(std::move(e));
 }
 
-bool Effects::Hidden(const Frame& frame, uint32_t entity) {
+bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
   if (entity == kNone) return false;
   auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
   if (unit != frame.units.end() && unit->id == entity) return !unit->Seen();
-  for (const FrameProjectile& p : frame.projectiles)
-    if (p.id == entity) return !p.seen;
-  for (const FrameEntity& f : frame.entities)
-    if (f.id == entity) return !f.seen;
+  auto shot = projectileAt_.find(entity);
+  if (shot != projectileAt_.end()) return !frame.projectiles[shot->second].seen;
+  auto made = entityAt_.find(entity);
+  if (made != entityAt_.end()) return !frame.entities[made->second].seen;
   return false;
 }
 
@@ -302,14 +302,20 @@ void Effects::Update(double tick, const Frame& frame) {
           // (a glow on a shot in flight: it lights what it passes)
           if (here && !hidden && shotLight > 0) {
             auto shot = projectileAt_.find(e.entity);
-            std::string ramp;
-            float scale = 1;
-            if (shot != projectileAt_.end() && particles_->Glows(e.handle, &ramp, &scale)) {
-              ShotGlow& g = shotGlow_[shot->second];
-              const Vec3 c = lights_->RampGlow(ramp);
-              if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
-              g.scale = std::max(g.scale, scale);
-              ++g.count;
+            if (shot != projectileAt_.end()) {
+              if (e.glows < 0) {  // (once: whether it glows, and in which colour)
+                std::string ramp;
+                float unused = 1;
+                e.glows = particles_->Glows(e.handle, &ramp, &unused) ? 1 : 0;
+                if (e.glows) e.glowColor = lights_->RampGlow(ramp);
+              }
+              if (e.glows) {
+                ShotGlow& g = shotGlow_[shot->second];
+                const Vec3 c = e.glowColor;
+                if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
+                g.scale = std::max(g.scale, particles_->ScaleOf(e.handle));
+                ++g.count;
+              }
             }
           }
         }
@@ -318,13 +324,20 @@ void Effects::Update(double tick, const Frame& frame) {
         if (!hidden) ribbons_->MoveTrail(e.handle, e.position);
         if (here && !hidden && shotLight > 0) {  // (a glowing trail's head lights as a glow does)
           auto shot = projectileAt_.find(e.entity);
-          std::string ramp;
-          Vec3 own;
-          if (shot != projectileAt_.end() && ribbons_->Glows(e.blueprint, &ramp, &own)) {
-            ShotGlow& g = shotGlow_[shot->second];
-            const Vec3 c = ramp.empty() ? own : lights_->RampGlow(ramp);  // (a tracer says its colour itself)
-            if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
-            ++g.count;
+          if (shot != projectileAt_.end()) {
+            if (e.glows < 0 || e.glowTracers != ribbons_->tracers) {  // (once, and again when tracers are switched)
+              std::string ramp;
+              Vec3 own;
+              e.glows = ribbons_->Glows(e.blueprint, &ramp, &own) ? 1 : 0;
+              if (e.glows) e.glowColor = ramp.empty() ? own : lights_->RampGlow(ramp);  // (a tracer says its colour itself)
+              e.glowTracers = ribbons_->tracers;
+            }
+            if (e.glows) {
+              ShotGlow& g = shotGlow_[shot->second];
+              const Vec3 c = e.glowColor;
+              if (c.x + c.y + c.z > g.color.x + g.color.y + g.color.z) g.color = c;
+              ++g.count;
+            }
           }
         }
         break;

@@ -88,6 +88,8 @@ class Particles {
   bool Running(uint32_t emitter) const;
   // Does that emitter glow (its particles add their light)? Then `rampPath` is its colour ramp's
   // file and `scale` how large a script has made it.
+  // The scale an emitter was given (1 when it was not, or it is not running).
+  float ScaleOf(uint32_t emitter) const;
   bool Glows(uint32_t emitter, std::string* rampPath, float* scale) const;
   // While hidden an emitter throws nothing out, and makes nothing up afterwards (what it hangs on
   // is not seen by whom the picture is for).

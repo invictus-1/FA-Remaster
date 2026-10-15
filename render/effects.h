@@ -69,6 +69,11 @@ class Effects {
     bool everHere = false, everEnd = false;
     bool hasEnd = false;  // the event said where the far end was
     Vec3 end;
+    // the colour it lights a shot in flight with, looked up the first time it is needed (its
+    // blueprint does not change): -1 not yet, 0 it does not glow, 1 it glows `glowColor`
+    int8_t glows = -1;
+    bool glowTracers = false;  // (a trail's: whether hot tracers were on when it was looked up)
+    Vec3 glowColor;
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);
@@ -77,7 +82,8 @@ class Effects {
   bool AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* position, Quat* orientation, const Model** model = nullptr);
   // Is that entity one the army the picture is for does not see (a unit that is not seen now, a
   // shot where it does not see)? What hangs on such a one is not shown.
-  static bool Hidden(const Frame& frame, uint32_t entity);
+  // (by this frame's lists of shots and script entities: Update makes them first)
+  bool Hidden(const Frame& frame, uint32_t entity) const;
 
   Particles* particles_;
   Ribbons* ribbons_;

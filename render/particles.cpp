@@ -327,6 +327,11 @@ bool Particles::Glows(uint32_t emitter, std::string* rampPath, float* scale) con
   return true;
 }
 
+float Particles::ScaleOf(uint32_t emitter) const {
+  auto it = index_.find(emitter);
+  return it == index_.end() ? 1.0f : emitters_[it->second].scale;
+}
+
 void Particles::SetScale(uint32_t emitter, float scale) {
   if (Emitter* e = Find(emitter)) e->scale = scale;
 }
