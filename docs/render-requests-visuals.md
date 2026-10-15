@@ -60,7 +60,7 @@ set it.
 
 **When:** later (his word). **Status:** noted 2026-10-13; nothing asked yet.
 
-## 4. The Striker's shell: a tad bigger, with some effects (2026-10-13, Chris, not blocking)
+## 4. The Striker's shell: a tad bigger, with some effects (2026-10-13, Chris, not blocking; 2026-10-15 Chris to visuals: "at the end since its not important right now", after the rest of UEF)
 
 **Who asks:** Chris, from a night game with the new tracers ("those tracers are fucking beautiful
 ... very very very good work"): "I think this is a visual job the projectile for strikers should be
