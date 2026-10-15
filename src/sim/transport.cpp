@@ -2246,7 +2246,12 @@ void PodLeave(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     }
   }
   if (!u->dead) {
-    MotionStop(u);  // CUnitMotion::Stop 0x6b8460
+    // CUnitMotion::Stop 0x6b8460(motion, 0): the motion's own stop, the target where the drone is now (not the
+    // navigator's AbortMove, which flies on to the point a second ahead). Seen: drones let go by their commander
+    // to repair; the original's target is the drone's own place in that beat, the second-ahead point comes a beat
+    // later, from the repair task.
+    MotionStop(u);
+    AirStopHere(sim, u);
     AirSetLandHeight(u, std::numeric_limits<float>::infinity());
   }
   d.slotHeld = false;

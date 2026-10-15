@@ -152,6 +152,8 @@ void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
 void GroundFreeRect(Sim& sim, Unit* u);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
+// CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
+void AirStopHere(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
 void AirSpeedThroughEvent(Sim& sim, Unit* u);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.

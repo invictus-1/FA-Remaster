@@ -2052,6 +2052,10 @@ bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   return PrepareMove(sim, u, pos);
 }
 
+void AirStopHere(Sim& sim, Unit* u) {
+  if (u->motion.air) Stop(sim, u, nullptr);
+}
+
 void AirAbort(Sim& sim, Unit* u) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
