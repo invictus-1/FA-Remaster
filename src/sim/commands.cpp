@@ -451,6 +451,18 @@ void StartHead(Sim& sim, Unit* u) {
 
 }  // namespace
 
+// The head task's teardown is itself the motion's last call: a pod's CUnitPodAssist. ClearCommandQueue 0x6ee2d0
+// tells the dispatcher (event 2, IAiCommandDispatchImpl::OnEvent 0x599030), which deletes the tasks above it top
+// down (CTask::TaskInterruptSubtasks 0x408d70): the assist child first, the pod task last, whose dtor 0x61d4f0 ->
+// Kill 0x61d820 ends with CUnitMotion::Stop 0x6b8460(motion, 0) (0x61d988: the target where the drone is; ours
+// EndPod -> PodLeave). Nothing after it aborts the move: cfunc_IssueClearCommandsL 0x6f1950 calls only
+// ClearCommandQueue (0x6f19e6) and CAiAttackerImpl::Stop (0x6f19f5). Seen (Upgrades 3697): a support commander's
+// OnStopBuild -> RefreshPodFocus clears its drone's queue while the drone assists; the original's target is the
+// drone's own place, ours (the navigator's AbortMove after the teardown) was the point a second ahead.
+static bool HeadTaskStopsMotion(const Unit* u) {
+  return u->isPod && u->task && u->task->type == CommandType::AssistCommander;
+}
+
 void ForgetUnitCommands(Unit* u) {
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
@@ -747,6 +759,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   if (i == q.size()) return false;
   std::shared_ptr<UnitCommand> keep = q[i];
   if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
+    const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
     if (u->engageId) ClearEngagement(sim, u);
     if (u->task) {
       EndBuildTask(sim, u, *u->task, false);
@@ -757,7 +770,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
     u->headState = kNotStarted;
     auto& pq = sim.pathQueue;
     pq.erase(std::remove(pq.begin(), pq.end(), u), pq.end());
-    MotionStop(u);
+    if (!stopped) MotionStop(u);
     SetMoving(u, false);
   } else {
     q.erase(q.begin() + static_cast<long>(i));
@@ -907,6 +920,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // its spot at dispatch (formation AdjustPosition); the ones already moving came last and had to give way.
       const bool moveAsleep = hadCommands && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
       u->clearKeepsMove = keep;
+      const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
       ForgetUnitCommands(u);
       u->clearKeepsMove = false;
       // CUnitMoveTask's destructor takes the unit out of state Moving FIRST (0x6187bd: bit 2 of unit+0x4a0) and
@@ -915,7 +929,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep) SetMoving(u, false);
-      if (!keep && hadCommands) MotionStop(u);
+      if (!keep && hadCommands && !stopped) MotionStop(u);
       if (moveAsleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
       at = -1;
@@ -1148,8 +1162,9 @@ int l_IssueClearCommands(lua_State* L) {
   for (Unit* u : UnitsArg(L, 1)) {
     const bool moveAsleep =
         !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+    const bool stopped = HeadTaskStopsMotion(u);
     ForgetUnitCommands(u);
-    MotionStop(u);
+    if (!stopped) MotionStop(u);
     SetMoving(u, false);
     if (moveAsleep) S(L)->ResumeCommandThread(u);
   }
