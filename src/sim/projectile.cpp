@@ -338,6 +338,26 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     // 13). (With an aim bone the point comes from the unit's pose, which did move with the unit's own step: the
     // Experimental replay needs that, the Transports replay the other.)
     Vec3 t = TargetPosBeatStart(sim, p->target);
+    // ... once the unit HAS had its turn. The entity stage (task stage sim+0x930) runs one thread per entity in the
+    // order they were made, and a unit attached to a parent whose turn comes later is linked at the run list's end
+    // for good (Entity::TaskTick 0x679c40): a wreck on FAF's sinker shell has its turn behind every shell made
+    // before the sinker, so for those its pose (Unit::GetTargetPoint 0x6ab340 -> 0x6aa5c0) is still last beat's.
+    // (Ours moves every unit before the shells.) Seen: a torpedo homing on a sinking sub's wreck through bone 0 aims
+    // at where the bone stood a beat before (Subs replay, beats 560-595: the shell's place and turn to the last digit).
+    if (p->target.type == 1 && p->target.aimBone != -1 && !p->target.fakeId)
+      if (Entity* e = TargetEntity(sim, p->target); e && e->kind == Entity::Kind::Unit) {
+        Unit* u = static_cast<Unit*>(e);
+        const uint32_t turn = u->orderHandle ? u->orderHandle : u->handle;  // its place in the run list
+        if (turn > p->handle && u->poseSet && u->lastPosTick == sim.tick()) {
+          const Vec3 curPos = u->poseBasePos;
+          const Quat curOri = u->poseBaseOri;
+          u->poseBasePos = u->prevPoseBasePos;
+          u->poseBaseOri = u->prevPoseBaseOri;
+          t = TargetPos(sim, p->target, false);
+          u->poseBasePos = curPos;
+          u->poseBaseOri = curOri;
+        }
+      }
     if (!IsNaN(t)) p->lastTargetPos = t;
   }
   Vec3 aim = p->lastTargetPos;
@@ -348,6 +368,14 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     // beat's start, both are what is committed)
     Vec3 tv = te->kind == Entity::Kind::Projectile && te->shapeHeld ? static_cast<const Projectile*>(te)->heldVel
                                                                      : EntityVelocity(te);
+    // A target held through a recon blip IS the blip for the original's CAiTarget (+0x2f0), and the lead asks it
+    // (0x69c9fd, vtable +0x3c): the blip's own GetVelocity (ReconBlip slot 15 = Entity::GetVelocity 0x678dc0), its
+    // committed place minus its previous one = the unit's move of the beat before, not the unit's motion velocity
+    // (Unit::GetVelocity 0x6a9c90), which a wreck hanging on FAF's sinker keeps at 0. Seen: the torpedo above leads
+    // the sinking wreck by that move from its second beat of sinking on.
+    if (viaBlip)
+      if (const Entity* bl = BlipOfTarget(sim, p->target))
+        tv = Sub(bl->position, static_cast<const ReconBlip*>(bl)->prevPos);
     float k = 1 / (p->maxSpeed * 0.1f);
     float t1 = Len(Sub(pos, aim)) * k;
     Vec3 P1 = Add(aim, Mul(tv, t1));
@@ -710,7 +738,9 @@ void MotionTick(Sim& sim, Projectile* p) {
     // distance from the 1% extended start over the step's length; 1000 at fraction 0)
     p->velScale = t > 0.001f ? 1 / t : 1000;
     float f = p->hitFraction >= 0 ? std::clamp(p->hitFraction, 0.0f, 1.0f) : 0.0f;
-    p->orientation = Nlerp(qStart, q, f);
+    // (0x69c7ec: func_QuatLERP 0x4eba80 of the committed and the pending orientation; seen: a torpedo's turn at its
+    // hit on the sea floor one ulp off with the textbook form)
+    p->orientation = NlerpExe(qStart, q, f);
     p->position = p->hitPos;
     if (p->bouncePending) p->hitPos = {};
   } else {

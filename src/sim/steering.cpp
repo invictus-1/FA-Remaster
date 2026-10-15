@@ -497,32 +497,25 @@ bool WillCollide(const Unit* Y, const Unit* X, const Vec3& vY, const Vec3& pY, c
     float rx = 1 - 2 * (q.y * q.y + q.z * q.z), rz = 2 * (q.x * q.z - q.w * q.y);
     box[i] = {P[i]->x + fx * stop[i], P[i]->z + fz * stop[i], rx, rz, (b.sizeX + b.sizeZ) * 0.25f, fx, fz, r[i] * 0.5f};
   }
-  // separating axes of two 2-D boxes
-  float dx = box[1].cx - box[0].cx, dz = box[1].cz - box[0].cz;
-  auto sep = [&](float ax, float az) {
-    float ra = std::fabs(box[0].a0x * ax + box[0].a0z * az) * box[0].e0 + std::fabs(box[0].a1x * ax + box[0].a1z * az) * box[0].e1;
-    float rb = std::fabs(box[1].a0x * ax + box[1].a0z * az) * box[1].e0 + std::fabs(box[1].a1x * ax + box[1].a1z * az) * box[1].e1;
-    return std::fabs(dx * ax + dz * az) > ra + rb;
-  };
+  // Wm3 IntrBox2Box2::Test 0xa47d40 (box 0 = Y's, box 1 = X's, read 2026-10-15): the axes A0, A1, B0, B1 in that
+  // order, and on a box's own axis its own extent counts whole. The axes here are the x and z parts of the unit's
+  // 3-D right and forward, so on a slope they are shorter than 1 and not quite square to each other; a general
+  // projection (|axis . own axis| x extent) shortens a box along its own axes there.
+  const B2 &A = box[0], &B = box[1];
+  const float dx = B.cx - A.cx, dz = B.cz - A.cz;
+  const float c00 = std::fabs(B.a0x * A.a0x + B.a0z * A.a0z), c01 = std::fabs(B.a1z * A.a0z + B.a1x * A.a0x);
+  const float c10 = std::fabs(A.a1z * B.a0z + A.a1x * B.a0x), c11 = std::fabs(B.a1z * A.a1z + B.a1x * A.a1x);
+  float gap[4];  // (negative: the boxes overlap on that axis by that much)
+  gap[0] = std::fabs(A.a0x * dx + dz * A.a0z) - ((B.e0 * c00 + A.e0) + B.e1 * c01);
+  gap[1] = std::fabs(A.a1z * dz + A.a1x * dx) - ((B.e0 * c10 + A.e1) + B.e1 * c11);
+  gap[2] = std::fabs(B.a0x * dx + B.a0z * dz) - ((A.e0 * c00 + B.e0) + A.e1 * c10);
+  gap[3] = std::fabs(B.a1z * dz + B.a1x * dx) - ((A.e0 * c01 + B.e1) + A.e1 * c11);
   static const long dbgW = getenv("MOHO64_DEBUG_WILL") ? atol(getenv("MOHO64_DEBUG_WILL")) : -1;
-  if (dbgW >= 0 && (static_cast<long>(Y->id) == dbgW || static_cast<long>(X->id) == dbgW)) {
-    // the gap on each of the four axes (negative: the boxes overlap there by that much)
-    float gap[4];
-    int n = 0;
-    for (int i = 0; i < 2; ++i)
-      for (int a = 0; a < 2; ++a) {
-        const float ax = a ? box[i].a1x : box[i].a0x, az = a ? box[i].a1z : box[i].a0z;
-        const float ra = std::fabs(box[0].a0x * ax + box[0].a0z * az) * box[0].e0 + std::fabs(box[0].a1x * ax + box[0].a1z * az) * box[0].e1;
-        const float rb = std::fabs(box[1].a0x * ax + box[1].a0z * az) * box[1].e0 + std::fabs(box[1].a1x * ax + box[1].a1z * az) * box[1].e1;
-        gap[n++] = std::fabs(dx * ax + dz * az) - (ra + rb);
-      }
+  if (dbgW >= 0 && (static_cast<long>(Y->id) == dbgW || static_cast<long>(X->id) == dbgW))
     Logf(LogLevel::Info, "will Y %u X %u stop %.4f %.4f r %.4f %.4f centres %.4f %.4f / %.4f %.4f gaps %.5f %.5f %.5f %.5f", Y->id,
          X->id, stop[0], stop[1], r[0], r[1], box[0].cx, box[0].cz, box[1].cx, box[1].cz, gap[0], gap[1], gap[2], gap[3]);
-  }
-  for (int i = 0; i < 2; ++i) {
-    if (sep(box[i].a0x, box[i].a0z)) return false;
-    if (sep(box[i].a1x, box[i].a1z)) return false;
-  }
+  for (int i = 0; i < 4; ++i)
+    if (gap[i] > 0) return false;
   return true;
 }
 
