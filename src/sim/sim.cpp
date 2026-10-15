@@ -832,7 +832,7 @@ bool Sim::Start(const ReplayHeader& replay) {
 bool Sim::Start(const SessionDescription& session) {
   focusArmy = session.focusArmy;
   isReplay = session.replay;
-  fixes = !session.replay;
+  fixes = session.fixes >= 0 ? session.fixes != 0 : !session.replay;
   if (const char* f = getenv("MOHO64_FIXES")) fixes = f[0] == '1';
   return Start(session.header);
 }

@@ -3,6 +3,17 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 23: a replay of a game played here keeps its fixes — done
+
+New in `src/sim/session.h`: `int SessionDescription::fixes`.
+- `-1` (the default) leaves `Sim::fixes` as before: off for a replay, on for a new game.
+- `0` or `1` sets it outright.
+- `MOHO64_FIXES` still overrides both.
+
+Your mark is fine: `RemasterFixes = "on"` in the scenario's Options. The original never reads that key. When
+you build the SessionDescription from `ReadReplayHeader`, set `fixes = 1` when the mark is there and leave it at
+-1 otherwise. A recording of the original then still plays without the fixes. All 13 replays are unchanged.
+
 ## visuals, 2026-10-15: what the simulation reads of projectiles and effects (for the UEF effects block)
 
 **The override folder that mirrors the game's paths is fine**, under the rules below. The simulation reads files
