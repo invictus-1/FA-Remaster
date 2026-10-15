@@ -21,6 +21,23 @@ int MountRemasters(moho::Vfs* vfs, const std::string& root) {
         if (low == "hold") hold = true;
       }
       if (!hold && vfs->Mount(effects, kRemasteredEffects)) printf("render: remastered effects from %s\n", effects.c_str());
+      // remastered projectiles' meshes: projectiles/<ID>/<ID>_lod0.scm and its LabPBR textures beside
+      // it, each mounted where a remastered model is looked for (/preview/<id>, models.h); the
+      // original look asks for the game's own model instead (ModelCache::Blueprint's `original`)
+      const std::string shots = effects + "/projectiles";
+      if (!hold && moho::hostfs::IsDirectory(shots))
+        for (const std::string& name : moho::hostfs::ListDirectory(shots)) {
+          const std::string folder = shots + "/" + name;
+          std::string id = name;
+          for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          bool first = false;
+          for (const std::string& file : moho::hostfs::ListDirectory(folder)) {
+            std::string low = file;
+            for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (low == id + "_lod0.scm") first = true;
+          }
+          if (first) vfs->Mount(folder, "/preview/" + id);
+        }
     }
   }
   for (const std::string& name : moho::hostfs::ListDirectory(root)) {
