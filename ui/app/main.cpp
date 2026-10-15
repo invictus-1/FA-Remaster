@@ -307,6 +307,16 @@ int main(int argc, char** argv) {
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
   session.replayMaps = moreMaps;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
+  // The player's own files (replays, saved games) live beside the preferences file (special_files.cpp);
+  // every game is written there as LastGame.SCFAReplay, and the Replay dialog plays them back.
+  if (!cfg.prefsFile.empty()) {
+    const std::string prefs = hostfs::CleanPath(cfg.prefsFile);
+    const size_t slash = prefs.find_last_of('/');
+    cfg.userDir = slash == std::string::npos ? std::string(".") : prefs.substr(0, slash);
+  }
+  session.userDir = cfg.userDir;
+  cfg.launchReplay = [&session](lua_State* L, const std::string& file, std::string* why) { return session.LaunchReplay(L, file, why); };
+  cfg.currentReplay = [&session]() { return session.currentReplay; };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
@@ -348,6 +358,7 @@ int main(int argc, char** argv) {
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
     gameCfg.launchSession = nullptr;
+    gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
     gameCfg.sim = session.sim();
     gameCfg.commandSource = session.commandSource();
     gameCfg.world = session.world();

@@ -147,6 +147,11 @@ int l_GetSimTicksPerSecond(lua_State* L) {
   lua_pushnumber(L, 10);
   return 1;
 }
+// SessionIsReplay(): whether the game being shown is a replay played back (the simulation's own flag).
+int l_SessionIsReplay(lua_State* L) {
+  lua_pushboolean(L, TheSim(L)->isReplay);
+  return 1;
+}
 int l_SessionIsPaused(lua_State* L) {
   lua_pushboolean(L, TheSim(L)->pauseOwner != -1);
   return 1;
@@ -505,7 +510,8 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GetGameTime", l_GetGameTime);
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
-  for (const char* name : {"SessionIsReplay", "WorldIsLoading", "SessionIsMultiplayer",
+  SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
+  for (const char* name : {"WorldIsLoading", "SessionIsMultiplayer",
                            "SessionIsBeingRecorded", "SessionIsObservingAllowed", "IsObserver"})
     SetGlobal(L, name, l_False);
   SetGlobal(L, "GameTick", l_GameTick);

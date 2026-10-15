@@ -48,6 +48,12 @@ class UserState {
     // Starts a session from the game configuration table at stack index `config` when the lobby
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
+    // The player's own files (replays, saved games): their folder (special_files.cpp), and the
+    // host's replay hooks: start a session from a replay file (LaunchReplaySession; unset: none
+    // can be started from this state) and the replay file of the game running or last played.
+    std::string userDir;
+    std::function<bool(lua_State* L, const std::string& file, std::string* why)> launchReplay;
+    std::function<std::string()> currentReplay;
     int width = 1920, height = 1080;    // the head's size in pixels
     // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
     // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
@@ -149,6 +155,8 @@ void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
 // PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
 void RegisterSoundBindings(lua_State* L);
+// GetSpecialFiles, LaunchReplaySession and their kin: replays and saved games (special_files.cpp).
+void RegisterSpecialFileBindings(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);
 // Orders (user_units.cpp): an order with a place as its target for the selected units of the
 // player's army ("Move", "Attack", "Patrol", "AggressiveMove", or "BuildMobile" with the

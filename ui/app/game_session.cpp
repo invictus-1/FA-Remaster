@@ -4,12 +4,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
+#include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/font.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
+#include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/replay.h"
 #include "sim/session.h"
@@ -152,6 +155,38 @@ WorldSource* GameSession::world() const { return picture_.get(); }
 // The moment the picture shows: the simulation's tick and the part of the next beat that has passed.
 double GameSession::PictureTick() const { return sim_ ? static_cast<double>(sim_->tick()) + due_ / 0.1 : 0.0; }
 
+namespace {
+// The player's profile name (the game's own prefs.lua: GetCurrentProfile().Name), "" for none.
+std::string ProfileName(lua_State* L) {
+  const int top = lua_gettop(L);
+  std::string name;
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/user/prefs.lua");
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_getfield(L, -1, "GetCurrentProfile");
+    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_getfield(L, -1, "Name");
+      if (lua_isstring(L, -1)) name = lua_tostring(L, -1);
+    }
+  }
+  lua_settop(L, top);
+  return name;
+}
+// (UTF-8 text and paths both ways; std::filesystem's own u8 forms are char8_t under C++20)
+std::filesystem::path PathOf(const std::string& utf8) { return std::filesystem::path(std::u8string(utf8.begin(), utf8.end())); }
+std::string TextOf(const std::filesystem::path& p) {
+  const std::u8string s = p.u8string();
+  return std::string(s.begin(), s.end());
+}
+std::FILE* OpenForWriting(const std::filesystem::path& file) {
+#ifdef _WIN32
+  return _wfopen(file.wstring().c_str(), L"wb");
+#else
+  return std::fopen(TextOf(file).c_str(), "wb");
+#endif
+}
+}  // namespace
+
 bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   if (config < 0) config = lua_gettop(L) + config + 1;
   if (sim_) {
@@ -182,44 +217,155 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   // The day and the weather: the game's options where it has them (the lobby's Remaster...
   // options), the host's own otherwise.
   skyNow_ = sky;
+  seed_ = session.header.seed;
   lua_getfield(L, config, "GameOptions");
-  if (lua_istable(L, -1)) {
-    auto option = [&](const char* key) -> std::string {
-      lua_getfield(L, -1, key);
-      std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-      lua_pop(L, 1);
-      return v;
-    };
-    const std::string start = option("RemasterDayStart"), length = option("RemasterDayLength"), weather = option("RemasterWeather");
-    if (start == "map") skyNow_.startHour = -1;
-    else if (start == "dawn") skyNow_.startHour = 6.5f;   // (the renderer: at 6.0 the land is nearly as dark as at night)
-    else if (start == "morning") skyNow_.startHour = 9.0f;
-    else if (start == "noon") skyNow_.startHour = 12.0f;
-    else if (start == "afternoon") skyNow_.startHour = 15.0f;
-    else if (start == "dusk") skyNow_.startHour = 17.5f;  // (likewise 18.0)
-    else if (start == "night") skyNow_.startHour = 0.0f;
-    else if (start == "random") skyNow_.startHour = static_cast<float>(session.header.seed % 96u) * 0.25f;  // every player draws the same
-    if (length == "still") skyNow_.dayLengthSeconds = 0;
-    else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
-    if (!weather.empty()) skyNow_.weather = weather;
-    const std::string edge = option("RemasterMapEdge");
-    if (edge == "frame" || edge == "beyond") skyNow_.edge = edge;
-  }
+  if (lua_istable(L, -1)) ReadLookOptions(L, lua_gettop(L));
   lua_pop(L, 1);
+  profile_ = ProfileName(L);
+  playData_.clear();
+  play_.reset();
   if (!StartSession(session, uids, why)) return false;
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
+  lastWasReplay_ = false;
   return true;
 }
 
+void GameSession::ReadLookOptions(lua_State* L, int options) {
+  auto option = [&](const char* key) -> std::string {
+    lua_getfield(L, options, key);
+    std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return v;
+  };
+  const std::string start = option("RemasterDayStart"), length = option("RemasterDayLength"), weather = option("RemasterWeather");
+  if (start == "map") skyNow_.startHour = -1;
+  else if (start == "dawn") skyNow_.startHour = 6.5f;   // (the renderer: at 6.0 the land is nearly as dark as at night)
+  else if (start == "morning") skyNow_.startHour = 9.0f;
+  else if (start == "noon") skyNow_.startHour = 12.0f;
+  else if (start == "afternoon") skyNow_.startHour = 15.0f;
+  else if (start == "dusk") skyNow_.startHour = 17.5f;  // (likewise 18.0)
+  else if (start == "night") skyNow_.startHour = 0.0f;
+  else if (start == "random") skyNow_.startHour = static_cast<float>(seed_ % 96u) * 0.25f;  // every player draws the same
+  if (length == "still") skyNow_.dayLengthSeconds = 0;
+  else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
+  if (!weather.empty()) skyNow_.weather = weather;
+  const std::string edge = option("RemasterMapEdge");
+  if (edge == "frame" || edge == "beyond") skyNow_.edge = edge;
+}
+
+bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::string* why) {
+  if (sim_) {
+    *why = "a session is running already";
+    return false;
+  }
+  auto data = hostfs::ReadFile(file);
+  if (!data) {
+    *why = "cannot read " + file;
+    return false;
+  }
+  auto h = ReadReplayHeader(*data, why);
+  if (!h) return false;
+  SessionDescription session;
+  session.header = *h;
+  session.replay = true;     // (the simulation's SessionIsReplay)
+  session.focusArmy = -1;    // the player watches: no army of his (INFERRED: the original's start)
+  session.adjustableSpeed = true;
+  // The mods are the header's (GameMods as the launch had them: a list of tables with a uid).
+  std::vector<std::string> uids;
+  const int top = lua_gettop(L);
+  if (PushSerializedLua(L, h->mods) && lua_istable(L, -1)) {
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, top + 1, i);
+      if (!lua_istable(L, -1)) break;
+      lua_getfield(L, -1, "uid");
+      if (lua_isstring(L, -1)) uids.push_back(lua_tostring(L, -1));
+      lua_pop(L, 2);
+    }
+  }
+  lua_settop(L, top);
+  // The look of the game: the scenario's Options, as the lobby gave them.
+  skyNow_ = sky;
+  seed_ = h->seed;
+  if (PushSerializedLua(L, h->scenario) && lua_istable(L, -1)) {
+    lua_getfield(L, -1, "Options");
+    if (lua_istable(L, -1)) ReadLookOptions(L, lua_gettop(L));
+  }
+  lua_settop(L, top);
+  profile_ = ProfileName(L);
+  playData_ = std::move(*data);
+  play_.reset();
+  if (!StartSession(session, uids, why)) {
+    playData_.clear();
+    return false;
+  }
+  play_ = std::make_unique<CommandStream>(playData_, h->streamOffset);
+  last_ = std::make_unique<SessionDescription>(session);
+  lastUids_ = uids;
+  lastWasReplay_ = true;
+  Logf(LogLevel::Info, "moho64ui: playing the replay %s (%zu bytes, %zu armies)", file.c_str(), playData_.size(), h->armies.size());
+  return true;
+}
+
+// The replay file of a game being played (LastGame), the original's format (the header as the
+// engine's ReadReplayHeader reads it, sim/replay.cpp, then the command stream): so the game's
+// Replay dialog lists it and the original game could open it too.
+void GameSession::StartReplayFile(const SessionDescription& session) {
+  if (replay_) std::fclose(replay_), replay_ = nullptr;
+  if (session.replay || userDir.empty() || profile_.empty()) return;
+  std::error_code ec;
+  const std::filesystem::path folder = PathOf(userDir) / "replays" / PathOf(profile_);
+  std::filesystem::create_directories(folder, ec);
+  const std::filesystem::path file = folder / "LastGame.SCFAReplay";
+  replay_ = OpenForWriting(file);
+  if (!replay_) {
+    Logf(LogLevel::Warning, "moho64ui: cannot write the replay %s", TextOf(file).c_str());
+    return;
+  }
+  currentReplay = TextOf(file);
+  const ReplayHeader& h = session.header;
+  std::string out;
+  auto cstr = [&](const std::string& s) { out += s, out.push_back('\0'); };
+  auto u32 = [&](uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
+  };
+  auto blob = [&](const std::string& s) { u32(static_cast<uint32_t>(s.size())), out += s; };
+  cstr(h.version.empty() ? "Supreme Commander v1.50.3839" : h.version);
+  cstr("\r\n");
+  cstr((h.replayVersion.empty() ? std::string("Replay v1.9") : h.replayVersion) + "\r\n" + h.map);
+  cstr("\r\n\x1a");
+  blob(h.mods);
+  blob(h.scenario);
+  out.push_back(static_cast<char>(h.sources.size()));
+  for (const ReplayHeader::Source& s : h.sources) cstr(s.name), u32(static_cast<uint32_t>(s.pausesAllowed));
+  out.push_back(h.cheats ? 1 : 0);
+  out.push_back(static_cast<char>(h.armies.size()));
+  for (const ReplayHeader::Army& a : h.armies) {
+    blob(a.options);
+    for (int s : a.sources) out.push_back(static_cast<char>(s));
+    out.push_back(static_cast<char>(0xff));
+  }
+  u32(h.seed);
+  std::fwrite(out.data(), 1, out.size(), replay_);
+  std::fflush(replay_);
+  Logf(LogLevel::Info, "moho64ui: this game's replay is %s", currentReplay.c_str());
+}
+
 void GameSession::Record(const std::string& bytes) {
-  if (!stream_ || bytes.empty()) return;
+  if (bytes.empty()) return;
+  if (replay_) {
+    std::fwrite(bytes.data(), 1, bytes.size(), replay_);
+    std::fflush(replay_);
+  }
+  if (!stream_) return;
   std::fwrite(bytes.data(), 1, bytes.size(), stream_);
   std::fflush(stream_);  // (a game that ends badly keeps what it had)
 }
 
 void GameSession::End() {
   if (stream_) std::fclose(stream_), stream_ = nullptr;
+  if (replay_) std::fclose(replay_), replay_ = nullptr;
+  play_.reset();
   if (sounds) sounds->StopWorld();
   onSync = nullptr;
   takeOrders = nullptr;
@@ -241,6 +387,11 @@ bool GameSession::Relaunch(std::string* why) {
   }
   End();
   SessionDescription again = *last_;
+  if (lastWasReplay_) {  // a replay starts over from its first beat, with its own seed
+    if (!StartSession(again, lastUids_, why)) return false;
+    play_ = std::make_unique<CommandStream>(playData_, again.header.streamOffset);
+    return true;
+  }
   if (!seedGiven) again.header.seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
   return StartSession(again, lastUids_, why);
 }
@@ -280,6 +431,7 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
+  StartReplayFile(session);
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   if (!replayOut.empty()) {  // the game's record: see the header
     const std::string base = replayOut + (recorded_ ? "." + std::to_string(recorded_ + 1) : "");
@@ -377,6 +529,23 @@ void GameSession::Advance(double seconds) {
   if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
   while (due_ >= 0.1) {
     due_ -= 0.1;
+    if (play_) {  // a replay: its own orders, beat by beat; the player's only pause and resume it
+      if (takeOrders) ViewerControls(takeOrders());
+      if (sim_->Paused()) {
+        sim_->PausedBeat();
+      } else if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
+        if (sim_->Paused()) sim_->PausedBeat();
+        else sim_->Tick();
+      } else {
+        continue;  // the replay is over: the game stands where it ended
+      }
+      NoteBeat();
+      for (std::string& sync : sim_->TakeSync()) {
+        if (onSync) onSync(sync);
+        else pendingSync_.push_back(std::move(sync));
+      }
+      continue;
+    }
     if (takeOrders) {
       std::string orders = takeOrders();
       Record(orders);
@@ -392,6 +561,22 @@ void GameSession::Advance(double seconds) {
       if (onSync) onSync(sync);
       else pendingSync_.push_back(std::move(sync));
     }
+  }
+}
+
+// The player's orders while a replay plays: only his pause and resume count (the messages
+// RequestPause and Resume of the command stream, sim/command_stream.cpp 4 and 5), and they pause
+// the replay for him alone. INFERRED: what the original does with them in a replay (its replay
+// has no command source of the player's); the replay's own pauses are played as recorded.
+void GameSession::ViewerControls(const std::string& orders) {
+  size_t p = 0;
+  while (p + 3 <= orders.size()) {
+    const int type = static_cast<unsigned char>(orders[p]);
+    const size_t length = static_cast<unsigned char>(orders[p + 1]) | (static_cast<size_t>(static_cast<unsigned char>(orders[p + 2])) << 8);
+    if (length < 3) break;
+    if (type == 4) sim_->pauseOwner = 0;
+    else if (type == 5) sim_->pauseOwner = -1;
+    p += length;
   }
 }
 
@@ -481,6 +666,8 @@ void GameSession::PlayBeatSounds() {
 
 void GameSession::RunFirstBeat() {
   if (!sim_ || sim_->tick() != 0) return;
+  // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
+  if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);
   sim_->Tick();
   Record(CommandWriter::AdvanceMessage(1));
   NoteBeat();

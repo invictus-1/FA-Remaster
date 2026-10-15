@@ -517,6 +517,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   from (where the camera looks), that every army's blasts count, and that the game's option
   "Shake intensity" (`cam_ShakeMult`) scales the whole shift (0: none). Tested in
   `ui/tests/templates.lua` (a Monkeylord destroyed near the camera).
+  REPLAYS, the original's way: every game played is written as it runs to
+  `replays/<profile>/LastGame.SCFAReplay` in the player's folder (ours: the folder of the
+  `--prefs` file; the original's: its documents folder), in the original's format (the
+  session's header as the engine's `ReadReplayHeader` reads it, then the command stream). The
+  game's own Replay dialog lists them (`GetSpecialFiles`, `GetSpecialFileInfo`, from FA exe
+  0x844120 / 0x8455c0: the tables' keys), keeps the last game under a name (`CopyCurrentReplay`),
+  deletes one to the recycle bin (`RemoveSpecialFile`, the player's own choice in the dialog),
+  and plays one back (`LaunchReplaySession`: `GameSession::LaunchReplay`): the header makes the
+  session (`SessionIsReplay` true, the player watches with no army), the stream gives every
+  beat's orders, the player's pause and resume pause it for him alone (INFERRED), and the
+  replay stands where it ends. Saved games use the same folders (`savegames`, `.SCFASave`) but
+  are not written yet. Tests: `ui/tests/replay_record.lua` then `ui/tests/replay_play.lua`
+  (a game recorded, kept, opened in the dialog, played back, the commander walking as he did).
+  Known gap: the engine plays a replay with its script fixes off (`Sim::fixes`, for the
+  original's recordings), and our games are played with them on.
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is

@@ -19,6 +19,7 @@
 #include "script/lua.hpp"
 
 namespace moho {
+class CommandStream;
 class ScriptState;
 class Sim;
 class SimBlueprints;
@@ -105,6 +106,21 @@ class GameSession {
   std::string replayTable;
   std::vector<std::string> replayMaps;
 
+  // The game's own replays, the original's way: every game played is written as it runs to
+  // `<userDir>/replays/<profile>/LastGame.SCFAReplay` (the session's header, then the command
+  // stream: what the original's replay files hold), which the game's Replay dialog lists,
+  // copies under a name (CopyCurrentReplay) and plays back (LaunchReplaySession). `userDir`: the
+  // player's own files (ours: the folder of the preferences file; the original's is the
+  // documents folder); empty: no replay is written. `currentReplay`: the replay file of the game
+  // running or last played, "" for none.
+  std::string userDir;
+  std::string currentReplay;
+  // Start a session from a replay file (a host path): its header makes the session, a replay
+  // that the player watches (SessionIsReplay; the focus army none), and its command stream gives
+  // the orders, beat by beat. False with the reason when it cannot start.
+  bool LaunchReplay(lua_State* L, const std::string& file, std::string* why);
+  bool playingReplay() const { return play_ != nullptr; }
+
   bool running() const { return sim_ != nullptr; }
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
@@ -146,6 +162,16 @@ class GameSession {
   std::map<uint32_t, ForeignLoop> foreignLoops_;
   std::set<uint32_t> heardLoops_;
   void NoteBeat();  // a beat has run: the picture hears of it
+  // The game's replay file being written (LastGame), and a replay being played back: its bytes
+  // and the stream over them. `profile_`: the player's profile name at the launch.
+  std::FILE* replay_ = nullptr;
+  std::string playData_;
+  std::unique_ptr<CommandStream> play_;
+  bool lastWasReplay_ = false;
+  std::string profile_;
+  void ReadLookOptions(lua_State* L, int options);  // the lobby's Remaster... options into skyNow_
+  void StartReplayFile(const SessionDescription& session);
+  void ViewerControls(const std::string& orders);  // the player's pause / resume while a replay plays
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
   std::unique_ptr<Sim> sim_;
