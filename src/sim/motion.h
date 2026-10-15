@@ -162,6 +162,9 @@ struct UnitMotion {
   // that stops early), and m+0x114: the raised platform the last search picked from it (SnapToGround stands on it)
   std::vector<uint32_t> contacts;
   uint32_t platformRef = 0;
+  // An aircraft let go by its transport keeps its layer until its own motion step of that beat (CUnitMotion::
+  // MotionTick 0x6ba128 sets Air there): set by DetachUnitFrom, taken up by AirMotionTick
+  bool airLayerPending = false;
   // CalcMoveWater 0x6c3480 (ships and submarines): m+0x5c the depth below the water (<= 0: the unit rides at
   // water + depth), m+0x60 this tick's dive / surfacing step, m+0x74 the layer the dive or surfacing ends on,
   // m+0x80 the vertical event of a non-flying unit (0 Top, 1 Bottom, 2 Up, 3 Down), and the unit attribute

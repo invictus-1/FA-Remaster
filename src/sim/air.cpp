@@ -1715,6 +1715,12 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     if (distH > b.startTurnDistance || a.fullSpeed) horz = hspeed > maxSpeed * 0.08f ? 1 : 0;
     else if (a.combatState != 0) horz = 0;
     else horz = maxSpeed * 0.005f > hspeed ? 3 : 2;
+    {
+      static const long dbgH = getenv("MOHO64_DEBUG_AIR") ? atol(getenv("MOHO64_DEBUG_AIR")) : -1;
+      if (dbgH >= 0 && static_cast<long>(u->id) == dbgH)
+        Logf(LogLevel::Info, "airhorz %u unit %u horz %d hspeed %.5f distH %.4f lastMove %.5f %.5f %.5f layer %s", sim.tick(),
+             u->id, horz, hspeed, distH, u->motion.lastMove.x, u->motion.lastMove.y, u->motion.lastMove.z, u->layer.c_str());
+    }
     SetHorzEvent(sim, u, horz);
   }
 
@@ -2127,6 +2133,16 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
 
 void AirMotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
+  {
+    static const long dbgE = getenv("MOHO64_DEBUG_AIR") ? atol(getenv("MOHO64_DEBUG_AIR")) : -1;
+    if (dbgE >= 0 && static_cast<long>(u->id) == dbgE)
+      Logf(LogLevel::Info, "airenter %u unit %u lastMove %.5f %.5f %.5f layer %s", sim.tick(), u->id, m.lastMove.x,
+           m.lastMove.y, m.lastMove.z, u->layer.c_str());
+  }
+  if (m.airLayerPending) {  // let go by a transport this beat (DetachUnitFrom): the Air layer from its motion step
+    m.airLayerPending = false;
+    SetLayerBits(sim, u, kAir);
+  }
   if (!m.air) AirInit(sim, u);
   AirMotion& a = A(u);
   if (u->fractionComplete < 1.0f) return;
