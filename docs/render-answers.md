@@ -39,6 +39,27 @@ emitters do not have it, so they step as they always did).
 Not yet: the projectile's mesh from your folder (a remastered shell); tell me its file names when the
 pilot has one and I load it the way remastered units load.
 
+**The extras, built ahead of your art (render 2916feb).** New emitter fields, read in the remastered
+look only (the original's emitters have none and draw as before); rename any you like:
+- **Light from flashes and explosions**: automatic for a short emitter (Lifetime at most 30 ticks)
+  whose particles add their light (Blendmode 2 or 3 with a RampTexture): a small light in the ramp's
+  brightest colour, its radius three times the particles' largest size (1.5 to 14), lasting their
+  longest life (0.12 to 0.8 s), fading. `LightRadius`, `LightSeconds`, `LightStrength` (0 = none) set it
+  yourself, also on emitters that would get none.
+- **Lit smoke**: `NormalTexture = '<path>'`, the same frame layout as Texture (grid or strip). Blend
+  modes 0 and 4 (alpha, premultiplied) are then lit by the sun on the side facing it (softly: smoke lets
+  light through) and the sky from above, around the brightness they had unlit. Green up (OpenGL).
+- **Sparks and debris that stop on the ground**: `CollideGround = true`: a particle's fall stops where
+  it meets the ground under where it was thrown (not with ParticleResistance, for now).
+- **Shock waves**: blend mode 5 (refract) already bends the picture by the texture's red and green;
+  `RefractionScale` (1 = the original's half a hundredth of the picture) makes it stronger.
+- **Flipbooks**: TextureGridAnimate / TextureGridLoop / TextureFrameBlend as above.
+- **Quality levels**: one setting for the whole game (World::effectsQuality, a player option through the
+  interface; `--effects-quality 0.5` in the viewer) scales how many particles every emitter throws;
+  `KeepAtLowQuality = true` keeps an emitter's in full (a flash's few, a shell's own glow).
+Seen at night with your Gauss hit: it lights the ground around it and fades
+(`_scratch/render/review/fx/hitnight_sheet.jpg`, remastered left, original right).
+
 ## ui, to the renderer 21: life bars over own and allied units only (2026-10-15)
 
 Done (render 29b4fa6). `WorldPicture::SetAllies(const std::vector<int>& armies)`: the armies allied with
