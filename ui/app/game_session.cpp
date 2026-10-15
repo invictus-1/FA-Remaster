@@ -46,8 +46,6 @@ struct GameSession::Picture : WorldSource {
   render::Camera camera;
   int cameraW = 0, cameraH = 0;
   bool vsync = true;
-  std::vector<uint8_t> capture;  // (a frame read back for checking, CaptureNextWindowFrame)
-  std::string captureTo;
   bool DrawsToWindow() const override { return direct; }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
@@ -529,17 +527,67 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   return true;
 }
 
+#ifdef MOHO64UI_WORLD_PICTURE
+struct GameSession::MenuPicture {
+  render::WorldPicture picture;
+  bool vsync = true;
+};
+#else
+struct GameSession::MenuPicture {};
+#endif
+
 bool GameSession::DrawsToWindow() const {
 #ifdef MOHO64UI_WORLD_PICTURE
-  return picture_ && picture_->direct;
+  return window != nullptr && (!picture_ || picture_->direct);
 #else
   return false;
 #endif
 }
 
+#ifdef MOHO64UI_WORLD_PICTURE
+namespace {
+// What a picture showed in the window, read back by the renderer (RGBA bytes), saved as a PNG.
+void SaveWindowCapture(const std::vector<uint8_t>& rgba, int w, int h, const std::string& path) {
+  if (rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+    Logf(LogLevel::Warning, "moho64ui: the window's picture was not read back");
+    return;
+  }
+  std::vector<uint32_t> argb(static_cast<size_t>(w) * static_cast<size_t>(h));
+  for (size_t i = 0; i < argb.size(); ++i)
+    argb[i] = 0xff000000u | static_cast<uint32_t>(rgba[i * 4]) << 16 | static_cast<uint32_t>(rgba[i * 4 + 1]) << 8 | rgba[i * 4 + 2];
+  SoftwareTarget shot(w, h);
+  shot.DrawPixels(argb.data(), w, h, 0, 0);
+  if (shot.SavePng(path)) Logf(LogLevel::Info, "moho64ui: the window's picture is saved as %s", path.c_str());
+}
+}  // namespace
+#endif
+
 void GameSession::PresentToWindow(const SoftwareTarget& target) {
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (!picture_ || !picture_->direct) return;
+  if (!window) return;
+  if (!picture_) {  // no game: the menu's picture, the interface alone over black
+    if (!menuPicture_) {
+      auto menu = std::make_unique<MenuPicture>();
+      menu->picture.UseWindow(window);
+      std::string error;
+      if (!menu->picture.Open(vfs_, "", &error)) {
+        Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
+        return;
+      }
+      menuPicture_ = std::move(menu);
+    }
+    MenuPicture& menu = *menuPicture_;
+    const int w = target.Width(), h = target.Height();
+    menu.picture.SetInterfaceLayer(target.pixels().data(), w, h, w, 0, 0, w, h);
+    const bool vsync = Pacing().verticalSync;
+    if (vsync != menu.vsync) menu.picture.SetVsync(vsync), menu.vsync = vsync;
+    std::vector<uint8_t> rgba;
+    if (!captureTo_.empty()) menu.picture.CaptureNextWindowFrame(&rgba);
+    menu.picture.DrawToWindow(render::Camera(), w, h, 0.0);
+    if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
+    return;
+  }
+  if (!picture_->direct) return;
   Picture& pic = *picture_;
   const int w = target.Width(), h = target.Height();
   // The whole interface layer every frame (the renderer unions changed parts; the layer is drawn
@@ -547,22 +595,14 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
   pic.picture.SetInterfaceLayer(target.pixels().data(), w, h, w, 0, 0, w, h);
   const bool vsync = Pacing().verticalSync;
   if (vsync != pic.vsync) pic.picture.SetVsync(vsync), pic.vsync = vsync;
-  if (!pic.captureTo.empty()) pic.picture.CaptureNextWindowFrame(&pic.capture);
+  std::vector<uint8_t> rgba;
+  if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
   if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, PictureTick());
   FrameTimes& times = Times();
   times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   ++times.worldDraws;
-  if (!pic.captureTo.empty() && pic.capture.size() == static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
-    SoftwareTarget shot(w, h);  // (RGBA bytes into the target's 0xAARRGGBB, for its PNG writer)
-    std::vector<uint32_t> argb(static_cast<size_t>(w) * static_cast<size_t>(h));
-    for (size_t i = 0; i < argb.size(); ++i)
-      argb[i] = 0xff000000u | static_cast<uint32_t>(pic.capture[i * 4]) << 16 | static_cast<uint32_t>(pic.capture[i * 4 + 1]) << 8 |
-                pic.capture[i * 4 + 2];
-    shot.DrawPixels(argb.data(), w, h, 0, 0);
-    if (shot.SavePng(pic.captureTo)) Logf(LogLevel::Info, "moho64ui: the window's picture is saved as %s", pic.captureTo.c_str());
-    pic.captureTo.clear(), pic.capture.clear();
-  }
+  if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
 #else
   (void)target;
 #endif
@@ -570,7 +610,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
 
 void GameSession::CaptureWindow(const std::string& path) {
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (picture_ && picture_->direct) picture_->captureTo = path;
+  captureTo_ = path;
 #else
   (void)path;
 #endif
@@ -591,6 +631,7 @@ void GameSession::OpenPicture() {
     pic->session = this;
     // (On the game's window when it has one: the renderer shows the picture there itself, the
     // interface laid over it, without reading it back; see PresentToWindow.)
+    menuPicture_.reset();  // (one picture per window: the menu's goes first)
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {

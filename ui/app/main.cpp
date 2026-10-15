@@ -62,13 +62,16 @@ bool dumpUi = false;              // --dump-ui: log the control tree at the end
 std::string screenshot;           // --screenshot file.png: draw the head at the end and save the picture
 bool windowed = false;            // --window: run live in a window until it is closed
 bool noSound = false;             // --no-sound: a live window without the sound device
-// --direct-window: the world shown by the renderer in the window itself, the interface laid over
-// it on the card (no read-back). OFF for now: once the renderer has shown a game in the window,
-// the front end's own copy (GDI) no longer shows there after the game is left (seen 2026-10-15:
-// the last game frame stays); asked of the renderer track.
-bool directWindow = false;
-std::string windowCapture;        // --window-capture <file.png>: what the window shows, 300 frames into a game (checking)
-int capturedFrames = 0;
+// The world shown by the renderer in the window itself, the interface laid over it on the card
+// (no read-back), and without a game the menus through the renderer's picture without a world
+// (a window that has had the renderer's swap chain no longer shows a plain copy). --gdi: the old
+// way, the world's picture read back and everything copied to the window.
+bool directWindow = true;
+// --window-capture <prefix>: what the window shows, read back by the renderer (checking):
+// <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left.
+std::string windowCapture;
+int capturedFrames = 0, menuFrames = 0;
+bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
 // --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
@@ -210,7 +213,7 @@ int main(int argc, char** argv) {
     else if (a == "--dump-ui") dumpUi = true;
     else if (a == "--screenshot") screenshot = next();
     else if (a == "--window") windowed = true;
-    else if (a == "--direct-window") directWindow = true;
+    else if (a == "--gdi") directWindow = false;
     else if (a == "--window-capture") windowCapture = next();
     else if (a == "--session-out") sessionFile = next();
     else if (a == "--game-lua") gameLuaFile = next();
@@ -445,7 +448,7 @@ int main(int argc, char** argv) {
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
     // The world is shown by the renderer in the game's window itself, the interface laid over it
     // on the card (no picture read back and copied again): the renderer track's way, with Chris's
-    // go-ahead (2026-10-15). Only with --direct-window for now (see directWindow).
+    // go-ahead (2026-10-15). --gdi: the old way (see directWindow).
     ui::WindowHooks hooks;
     if (directWindow) {
       hooks.opened = [&](void* handle) {
@@ -463,7 +466,10 @@ int main(int argc, char** argv) {
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
                            startGameInterface();
-                           if (!windowCapture.empty() && game && session.DrawsToWindow() && ++capturedFrames == 300) session.CaptureWindow(windowCapture);
+                           if (!windowCapture.empty() && session.DrawsToWindow()) {
+                             if (game && ++capturedFrames == 300) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
+                             if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
+                           }
                          },
                          fullScreen, hooks);
     if (done < 0) ok = false;

@@ -187,6 +187,7 @@ class GameSession {
   void StartReplayFile(const SessionDescription& session);
   void OpenPicture();
   bool pictureDue_ = false;
+  std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
   void ViewerControls(const std::string& orders);  // the player's pause / resume while a replay plays
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
@@ -195,6 +196,11 @@ class GameSession {
   std::vector<std::string> pendingSync_;
   struct Picture;
   std::unique_ptr<Picture> picture_;
+  // Without a game, on the window: the renderer's picture without a world, which shows the
+  // interface (the menus, their moving background's pixels in it) over black. One picture per
+  // window at a time: it goes before a game's opens and comes back after the game.
+  struct MenuPicture;
+  std::unique_ptr<MenuPicture> menuPicture_;
   int commandSource_ = 0;
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
   std::unique_ptr<ScriptState> rules_;
