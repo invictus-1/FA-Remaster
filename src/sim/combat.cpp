@@ -2990,7 +2990,22 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     }
     if (sim.tick() < t.waitUntil) return kTaskRunning;
     for (int guard = 0; guard < 16; ++guard) {
+      const int st0 = t.state;
       int r = AttackStep(sim, u, t, target);
+      {
+        // MOHO64_DEBUG_ATTACKTASK=<unit id>: every step of the unit's attack task (state, the step's code, its target)
+        static const long dbgAT = getenv("MOHO64_DEBUG_ATTACKTASK") ? atol(getenv("MOHO64_DEBUG_ATTACKTASK")) : -1;
+        if (dbgAT >= 0 && static_cast<long>(u->id) == dbgAT) {
+          const Entity* te = TargetEntity(sim, target);
+          Logf(LogLevel::Info,
+               "attacktask %u unit %u state %d -> %d r %d has %d lost %d queue %zu target type %d entity %u (%s) via blip %d "
+               "attackState %d lastPos %.4f %.4f %.4f",
+               sim.tick(), u->id, st0, t.state, r, TaskHasTarget(sim, target) ? 1 : 0, TaskTargetLost(sim, target) ? 1 : 0,
+               u->commands.size(), target.type, te ? te->id : 0u,
+               !te ? "-" : te->kind == Entity::Kind::Unit ? "unit" : te->kind == Entity::Kind::Blip ? "blip" : "other",
+               target.viaBlip ? 1 : 0, u->attackState, d.lastPos.x, d.lastPos.y, d.lastPos.z);
+        }
+      }
       if (r == 0) continue;
       if (r == -1) return d.result == 2 ? kTaskFailed : kTaskDone;
       if (r == -2) t.waitUntil = 0xffffffffu;
@@ -3046,6 +3061,14 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   // one, gets OnLostTarget - a missile launcher packs up), then AbortMove (the caller)
   if (!u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
   u->navIgnoreFormation = false;
+}
+
+// CAiAttackerImpl::Stop 0x5d56f0: SetDesiredTarget (vt+0x20) with an empty target. Every weapon drops its target
+// and its acquire task starts its period again from now (a weapon without AutoInitiateAttackCommand: a whole
+// TargetCheckInterval).
+void AttackerStop(Sim& sim, Unit* u) {
+  if (u->dead || u->destroyQueued || u->combatGone || u->weapons.empty()) return;
+  SetDesiredTarget(sim, u, AiTarget{});
 }
 
 void ClearEngagement(Sim& sim, Unit* u) {

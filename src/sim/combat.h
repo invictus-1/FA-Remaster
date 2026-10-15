@@ -271,6 +271,8 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t);
 // (0: none) the move stops for.
 // The command it was engaging for ended.
 void ClearEngagement(Sim& sim, Unit* u);
+// CAiAttackerImpl::Stop 0x5d56f0: the unit's desired target is cleared (SetDesiredTarget(none)).
+void AttackerStop(Sim& sim, Unit* u);
 
 // UnitWeapon::CanAttackTarget 0x6d5720.
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t);
