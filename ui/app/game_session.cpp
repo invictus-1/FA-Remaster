@@ -301,7 +301,14 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   seed_ = h->seed;
   if (PushSerializedLua(L, h->scenario) && lua_istable(L, -1)) {
     lua_getfield(L, -1, "Options");
-    if (lua_istable(L, -1)) ReadLookOptions(L, lua_gettop(L));
+    if (lua_istable(L, -1)) {
+      ReadLookOptions(L, lua_gettop(L));
+      // A game played here with the engine's script fixes is played back with them (the mark
+      // StartReplayFile writes; ui request engine 23). Without the mark (the original's
+      // recordings) the engine's own rule stands: no fixes for a replay.
+      lua_getfield(L, -1, "RemasterFixes");
+      if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "on") session.fixes = 1;
+    }
   }
   lua_settop(L, top);
   profile_ = ProfileName(L);
@@ -315,7 +322,8 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;
-  Logf(LogLevel::Info, "moho64ui: playing the replay %s (%zu bytes, %zu armies)", file.c_str(), playData_.size(), h->armies.size());
+  Logf(LogLevel::Info, "moho64ui: playing the replay %s (%zu bytes, %zu armies, %s)", file.c_str(), playData_.size(), h->armies.size(),
+       sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
   return true;
 }
 
@@ -347,7 +355,26 @@ void GameSession::StartReplayFile(const SessionDescription& session) {
   cstr((h.replayVersion.empty() ? std::string("Replay v1.9") : h.replayVersion) + "\r\n" + h.map);
   cstr("\r\n\x1a");
   blob(h.mods);
-  blob(h.scenario);
+  // (A game played with the engine's script fixes says so in its scenario's Options,
+  // RemasterFixes = "on", so that its replay is played with them too; the original ignores it.)
+  std::string scenario = h.scenario;
+  if (sim_ && sim_->fixes) {
+    lua_State* S = sim_->L();
+    const int top = lua_gettop(S);
+    if (PushSerializedLua(S, h.scenario) && lua_istable(S, -1)) {
+      lua_pushstring(S, "Options");
+      lua_rawget(S, top + 1);
+      if (lua_istable(S, -1)) {
+        lua_pushstring(S, "RemasterFixes");
+        lua_pushstring(S, "on");
+        lua_rawset(S, -3);
+        scenario.clear();  // (SerializeLua appends)
+        SerializeLua(S, top + 1, &scenario);
+      }
+    }
+    lua_settop(S, top);
+  }
+  blob(scenario);
   out.push_back(static_cast<char>(h.sources.size()));
   for (const ReplayHeader::Source& s : h.sources) cstr(s.name), u32(static_cast<uint32_t>(s.pausesAllowed));
   out.push_back(h.cheats ? 1 : 0);

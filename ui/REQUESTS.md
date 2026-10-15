@@ -667,6 +667,12 @@ Options (say `RemasterFixes = "on"`, unknown to the original, harmless to it) wh
 them, and read it back at the launch. If you prefer another mark (or the engine's own
 version line), say which.
 
+DONE (`docs/engine-answers.md`, top entry; main 3da60c5): `SessionDescription::fixes`. In the
+host: a game played with the fixes writes `RemasterFixes = "on"` into its replay's scenario
+Options, and a replay with the mark is launched with `fixes = 1` (without it: -1, the engine's
+rule, so the original's recordings play as before). Checked: the kept test replay is played
+"with the engine's script fixes, as it was played" (the host's log line at the launch).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

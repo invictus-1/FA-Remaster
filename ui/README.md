@@ -530,8 +530,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   replay stands where it ends. Saved games use the same folders (`savegames`, `.SCFASave`) but
   are not written yet. Tests: `ui/tests/replay_record.lua` then `ui/tests/replay_play.lua`
   (a game recorded, kept, opened in the dialog, played back, the commander walking as he did).
-  Known gap: the engine plays a replay with its script fixes off (`Sim::fixes`, for the
-  original's recordings), and our games are played with them on.
+  A game played with the engine's script fixes (`Sim::fixes`, docs/deviations.md) marks its
+  replay (`RemasterFixes = "on"` in the scenario's Options, unknown to the original) and is
+  played back with them (`SessionDescription::fixes`); the original's recordings, without the
+  mark, are played without them.
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is
