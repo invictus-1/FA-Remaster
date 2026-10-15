@@ -121,6 +121,8 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
     look.iconFadeIn = d.iconFadeInZoom;
     look.selectionX = d.selectionSizeX;
     look.selectionZ = d.selectionSizeZ;
+    look.selectionThickness = d.selectionThickness;
+    for (int i = 0; i < 3; ++i) look.selectionOffset[i] = d.selectionCenterOffset[i];
     look.lifeBarSize = d.lifeBarSize;
     look.lifeBarHeight = d.lifeBarHeight;
     look.lifeBarOffset = d.lifeBarOffset;

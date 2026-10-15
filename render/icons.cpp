@@ -167,6 +167,9 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
     if (s.selectionX > 0) kind->selectionX = s.selectionX;
     if (s.selectionZ > 0) kind->selectionZ = s.selectionZ;
+    kind->selectionGiven = s.selectionX > 0 && s.selectionZ > 0;
+    kind->selectionThickness = s.selectionThickness;
+    for (int i = 0; i < 3; ++i) kind->selectionOffset[i] = s.selectionOffset[i];
     // (its life bar as the simulation's blueprint says it; where that says none, by the selection's size)
     kind->lifeBarSize = s.lifeBarSize > 0 ? s.lifeBarSize : kind->selectionX * 2;
     if (s.lifeBarHeight > 0) kind->lifeBarHeight = s.lifeBarHeight;
@@ -185,6 +188,11 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   }
   kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
   kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));
+  kind->selectionGiven = bp["SelectionSizeX"].NumberOr(0) > 0 && bp["SelectionSizeZ"].NumberOr(0) > 0;
+  kind->selectionThickness = static_cast<float>(bp["SelectionThickness"].NumberOr(0));
+  kind->selectionOffset[0] = static_cast<float>(bp["SelectionCenterOffsetX"].NumberOr(0));
+  kind->selectionOffset[1] = static_cast<float>(bp["SelectionCenterOffsetY"].NumberOr(0));
+  kind->selectionOffset[2] = static_cast<float>(bp["SelectionCenterOffsetZ"].NumberOr(0));
   kind->lifeBarSize = static_cast<float>(bp["LifeBarSize"].NumberOr(kind->selectionX * 2));
   kind->lifeBarHeight = static_cast<float>(bp["LifeBarHeight"].NumberOr(0.075));
   kind->lifeBarOffset = static_cast<float>(bp["LifeBarOffset"].NumberOr(kind->selectionZ));
@@ -192,8 +200,12 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
 }
 
 void StrategicIcons::Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ,
-                            float lifeBarSize, float lifeBarHeight, float lifeBarOffset) {
-  said_[blueprintPath] = {icon, priority, fadeIn, selectionX, selectionZ, lifeBarSize, lifeBarHeight, lifeBarOffset};
+                            float lifeBarSize, float lifeBarHeight, float lifeBarOffset, float selectionThickness,
+                            const float* selectionOffset) {
+  Said& s = said_[blueprintPath];
+  s = {icon, priority, fadeIn, selectionX, selectionZ, lifeBarSize, lifeBarHeight, lifeBarOffset};
+  s.selectionThickness = selectionThickness;
+  for (int i = 0; selectionOffset && i < 3; ++i) s.selectionOffset[i] = selectionOffset[i];
   kinds_.erase(blueprintPath);  // read anew the next time a unit of that kind is shown
 }
 
