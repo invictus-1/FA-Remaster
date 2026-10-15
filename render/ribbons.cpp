@@ -1,5 +1,7 @@
 #include "ribbons.h"
 
+#include "effect_files.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -144,21 +146,22 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
 }
 
 const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
-  const std::string key = moho::Vfs::Normalize(path);
+  const std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
   auto known = kinds_.find(key);
   if (known != kinds_.end()) return known->second.get();
   Kind* kind = kinds_.emplace(key, std::make_unique<Kind>()).first->second.get();
-  auto text = vfs_->ReadFile(key);
+  const std::string file = moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
+  auto text = vfs_->ReadFile(file);
   BpValue v;
   if (!text || !ReadBlueprintFile(*text, &v)) {
-    fprintf(stderr, "render: beam or trail %s: %s\n", key.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
+    fprintf(stderr, "render: beam or trail %s: %s\n", file.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
     return kind;
   }
   kind->ramp = textures_->White();
   if (v["RepeatTexture"].kind == BpValue::String) {  // a trail
     kind->trail = true;
-    kind->texture = textures_->Get(v["RepeatTexture"].StringOr(std::string()), textures_->White());
-    kind->ramp = textures_->Get(v["RampTexture"].StringOr(std::string()), textures_->White());
+    kind->texture = textures_->Get(EffectFile(*vfs_, v["RepeatTexture"].StringOr(std::string()), remastered), textures_->White());
+    kind->ramp = textures_->Get(EffectFile(*vfs_, v["RampTexture"].StringOr(std::string()), remastered), textures_->White());
     kind->rampPath = v["RampTexture"].StringOr(std::string());
     kind->blend = BlendKind(static_cast<int>(Number(v["BlendMode"], 3)));
     {
@@ -170,7 +173,7 @@ const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
     kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);
     kind->repeatRate = Number(v["TextureRepeatRate"], 1);
   } else {
-    kind->texture = textures_->Get(v["TextureName"].StringOr(std::string()), textures_->White());
+    kind->texture = textures_->Get(EffectFile(*vfs_, v["TextureName"].StringOr(std::string()), remastered), textures_->White());
     kind->blend = BlendKind(static_cast<int>(Number(v["Blendmode"], 3)));
     kind->halfWidth = Number(v["Thickness"], 0.05f);
     kind->length = Number(v["Length"], 10);

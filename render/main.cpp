@@ -66,6 +66,16 @@
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
+// --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
+//           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
+//           x,z[,height] (else where the camera looks) every --fx-repeat seconds (2)
+// --fx-shot <projectile>  fires that projectile (an id such as TDFGauss01, or its blueprint) from --fx-from
+//           x,z,height to --fx-to x,z[,height] (else across where the camera looks, away from it), with the
+//           trails and the hit its script class gives it; --fx-hit land|unit|water|underwater|prop|shield|air|none
+// --fx-compare  the remastered effects on the left, the original's on the right (--fx-spacing apart, 8)
+//           (with --frames n --shots k --screenshot <name>.png: a numbered picture every k frames)
+// --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
+//           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
@@ -116,6 +126,7 @@
 
 #include "ambient_occlusion.h"
 #include "cpu_times.h"
+#include "fx_stand.h"
 #include "camera.h"
 #include "core/hostfs.h"
 #include "remasters.h"
@@ -167,6 +178,9 @@ struct Options {
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
+  FxStandSetup fx;                      // --fx, --fx-shot and their places
+  bool fxAt = false, fxFrom = false, fxTo = false;
+  bool remasteredEffects = true;        // --effects-look original|remastered
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -244,6 +258,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
+    else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
@@ -306,6 +321,18 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
+    else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
+    else if (a == "--fx") o->fx.fx = v;
+    else if (a == "--fx-shot") o->fx.shot = v;
+    else if (a == "--fx-hit") o->fx.hit = v;
+    else if (a == "--fx-repeat") o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
+    else if (a == "--fx-spacing") o->fx.spacing = static_cast<float>(atof(v));
+    else if (a == "--fx-at" || a == "--fx-from" || a == "--fx-to") {  // x,z[,height above the ground]
+      float x = 0, z = 0, h = 0;
+      if (sscanf(v, "%f,%f,%f", &x, &z, &h) < 2) return false;
+      (a == "--fx-at" ? o->fx.at : a == "--fx-from" ? o->fx.from : o->fx.to) = Vec3{x, h, z};
+      (a == "--fx-at" ? o->fxAt : a == "--fx-from" ? o->fxFrom : o->fxTo) = true;
+    }
     else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
@@ -508,6 +535,7 @@ int main(int argc, char** argv) {
   world.ribbons.tracers = opt.tracers;
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;
+  world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail"};
@@ -853,6 +881,35 @@ int main(int argc, char** argv) {
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
+  // --fx, --fx-shot: the effects test stand
+  std::unique_ptr<FxStand> fxStand;
+  if (!opt.fx.fx.empty() || !opt.fx.shot.empty()) {
+    if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
+    if (!opt.hasCam) {  // close to it, a little from above
+      camera.distance = opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long)
+      camera.pitch = 0.55f;
+    }
+    {  // (a shot not placed: across the spot, away from the camera)
+      Vec3 right, up, back;
+      camera.Axes(&right, &up, &back);
+      Vec3 away{-back.x, 0, -back.z};
+      away = Length(away) > 1e-4f ? Normalize(away) : Vec3{0, 0, -1};
+      if (!opt.fxFrom) opt.fx.from = opt.fx.at - away * 14 + Vec3{0, 1.5f, 0};
+      if (!opt.fxTo) opt.fx.to = opt.fx.at + away * 14;
+    }
+    fxStand = std::make_unique<FxStand>();
+    std::string fxError;
+    if (fxStand->Init(&vfs, opt.fx, &fxError)) {
+      printf("render: --fx: %s%s\n", fxStand->Describe().c_str(), opt.fx.compare ? "; remastered left, original right" : "");
+      if (!opt.hasCam) {
+        const Vec3 c = opt.fx.shot.empty() ? opt.fx.at : (opt.fx.from + opt.fx.to) * 0.5f;
+        camera.target = {c.x, groundHeight(c.x, c.z) + 1, c.z};
+      }
+    } else {
+      fprintf(stderr, "render: --fx: %s\n", fxError.c_str());
+      fxStand.reset();
+    }
+  }
   // what the pointer is on: the ground, or failing that the level plane through the camera's target
   auto pick = [&](int px, int py, Vec3* hit) {
     const float w = static_cast<float>(window->Width()), h = static_cast<float>(window->Height());
@@ -1133,6 +1190,11 @@ int main(int argc, char** argv) {
     }
     world.Begin(camera, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
 
+    if (fxStand) {  // the effects test stand
+      Vec3 right, up, back;
+      camera.Axes(&right, &up, &back);
+      fxStand->Update(world, time, right, groundHeight);
+    }
     // --emit: every emitter is started again once all have ended and three seconds have passed
     if (!opt.emit.empty()) {
       bool running = false;

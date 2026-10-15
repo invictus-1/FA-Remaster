@@ -12,6 +12,8 @@ class Vfs;
 
 namespace render {
 
+// Also mounts the remastered effects' folder there (_effects/export/moho64, effect_files.h) at
+// /remastered, unless it holds a file named HOLD.
 // Mounts every unit's folder found under `root` that has a first level and no file named HOLD
 // (the visuals track puts one into a folder that must not be used). Returns how many.
 int MountRemasters(moho::Vfs* vfs, const std::string& root);

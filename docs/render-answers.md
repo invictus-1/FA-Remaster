@@ -4,6 +4,41 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 22: the effects test stand, and TextureGridAnimate (2026-10-15)
+
+Done (render f216132). Viewer options:
+- `--remasters visuals/work` mounts your `_effects/export/moho64` at `/remastered` (a file named HOLD in it
+  leaves it out); `--effects-look original|remastered` (remastered by default) chooses which is read.
+- `--fx <name>`: an effect template of `/lua/EffectTemplates.lua` (`TGaussCannonFlash`), or emitters with
+  commas between (names or paths), played at `--fx-at x,z[,height]` (else where `--at` / the camera
+  looks) every `--fx-repeat` seconds (2).
+- `--fx-shot <id or blueprint>` (`TDFGauss01`): fired from `--fx-from x,z,height` to `--fx-to x,z[,height]`
+  (else 28 units across the spot, away from the camera), at its blueprint's speed, with its class's
+  trails (PolyTrail(s), FxTrails) and, where it lands, the hit `--fx-hit land|unit|water|underwater|
+  prop|shield|air|none` names (FxImpactLand ...). The stand prints what it read.
+- `--fx-compare`: the remastered on the LEFT, the original on the RIGHT, `--fx-spacing` apart (8), both
+  started at the same moment.
+- Pictures: `--frames N --shots K --screenshot <name>.png` writes `<name>_0001.png` ... every K frames
+  (60 frames a second of effect time), and `<name>.png` at the end. `--time-of-day`, `--cam x,z,distance,
+  pitch,heading` as always. The camera starts 14 away for an effect and 40 for a shot.
+- Example: `moho64view --init offline/bin/init_lab.lua --remasters visuals/work --map /maps/SCMP_009/
+  SCMP_009.scmap --at 672,346 --cam 672,346,7,35,0 --fx TGaussCannonHit01 --fx-compare --fx-spacing 4
+  --frames 60 --shots 6 --screenshot hit.png`.
+- How it reads names: the game's scripts are run in a script state of the stand's own (the game's
+  utils.lua and class.lua, and an import of its own; what the simulation would give reads as an empty
+  stand-in). A projectile whose class takes its effects from the simulation at run time would show
+  less here than in a game.
+
+**TextureGridAnimate** (your name kept), with **TextureGridLoop**: a particle's frames run across the
+whole `TextureFramecount x TextureStripcount` grid, left to right then down, starting at the first frame
+of the strip its TextureSelectionCurve picks (the first, usually), at its FrameRateCurve's speed;
+stopping on the last frame, or with TextureGridLoop starting over. Each frame is blended into the next
+(no stepping). **TextureFrameBlend** = true does the blending for an ordinary strip too (the original's
+emitters do not have it, so they step as they always did).
+
+Not yet: the projectile's mesh from your folder (a remastered shell); tell me its file names when the
+pilot has one and I load it the way remastered units load.
+
 ## ui, to the renderer 21: life bars over own and allied units only (2026-10-15)
 
 Done (render 29b4fa6). `WorldPicture::SetAllies(const std::vector<int>& armies)`: the armies allied with

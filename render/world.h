@@ -92,6 +92,10 @@ class World {
   // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
   // way of reading a unit's life is the panel at the bottom left).
   bool lifeBars = false;
+  // The game's effects as the original has them, or remastered (the visuals track's files where it
+  // has made some, effect_files.h): a player's choice, remastered at first (Chris, 2026-10-15).
+  enum class EffectsLook { Original, Remastered };
+  EffectsLook effectsLook = EffectsLook::Remastered;
   // Life bars go over the units of the army the picture is for and of its allies (bit n of
   // `alliedArmies`: army n, counted from 0), as the original's; over the enemy units the army sees
   // now only with `lifeBarsOnEnemies` (the console's ui_ForceLifbarsOnEnemy, FAF's "Always Show

@@ -47,6 +47,11 @@ struct EmitterBlueprint {
   bool alignRotation = false, alignToBone = false, flat = false, interpolateEmission = true;
   bool emitIfVisible = true, createIfVisible = false, snapToWaterline = false, onlyEmitOnWater = false;
   bool resistance = false;  // particles are slowed as by air (ResistanceCurve says how much)
+  // The visuals track's flipbooks (not the original's): TextureGridAnimate runs a particle's frames
+  // across the whole Framecount x Stripcount grid (left to right, then down), from its strip's first
+  // frame, stopping at the last one or, with TextureGridLoop, starting again; TextureFrameBlend (and
+  // every grid) blends each frame into the next instead of stepping.
+  bool gridAnimate = false, gridLoop = false, frameBlend = false;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -64,6 +69,9 @@ class Particles {
   // The map's water, for emitters that keep to its surface: its level, and the ground's height at a
   // place. Without it there is no water.
   void SetWater(float level, std::function<float(float, float)> groundHeight);
+  // Emitters started from now on read the remastered effects' files where there are some
+  // (effect_files.h); false: always the game's. The world sets it from its effects look.
+  bool remastered = true;
 
   // Starts an emitter of that blueprint ("/effects/emitters/x_emit.bp") there. Returns its handle;
   // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was

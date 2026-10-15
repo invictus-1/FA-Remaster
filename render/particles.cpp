@@ -1,5 +1,7 @@
 #include "particles.h"
 
+#include "effect_files.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -30,6 +32,8 @@ cbuffer ParticleSet : register(b1) {
   float4 sheet;         // x: 1 / frames, y: 1 / strips, z: 1 = particles are slowed as by air,
                         // w: the camera's near distance (the scene's depth is that over the distance)
   float4 meeting;       // x: over how many world units a particle fades where it meets something solid
+  float4 grid;          // x: 1 = frames run across the whole grid, y: 1 = and start again after the last,
+                        // z: frames in the grid, w: 1 = each frame blends into the next
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
@@ -45,6 +49,7 @@ struct VOut {
   float4 position : SV_Position;
   float2 uv : TEXCOORD0;
   float2 rampUv : TEXCOORD1;
+  float3 next : TEXCOORD3;  // the next frame's place in the texture, and how far toward it (blended frames)
   float3 world : TEXCOORD2;
 };
 
@@ -57,6 +62,7 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.position = float4(0, 0, 0, 1);
   o.uv = 0;
   o.rampUv = 0;
+  o.next = 0;
   if (t < 0 || age >= 1) return o;  // not thrown yet, or over: a quad of no size
 
   const float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(1, 1), float2(-1, -1), float2(1, 1), float2(-1, 1)};
@@ -90,8 +96,27 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.world = position;
   o.uv = (corner + 1) * 0.5;
   if (options.y > 0.5) {
-    o.uv.x = (o.uv.x + floor(p3.w * t)) * sheet.x;
-    o.uv.y = o.uv.y * sheet.y + p4.x;
+    float2 cell = o.uv;
+    float passed = p3.w * t;  // frames passed
+    if (grid.x > 0.5) {
+      // across the whole grid, from the first frame of the particle's strip
+      float frames = round(1 / sheet.x), total = grid.z;
+      float n = round(p4.x / sheet.y) * frames + passed;
+      float n0 = floor(n), n1 = n0 + 1;
+      if (grid.y > 0.5) {
+        n0 = fmod(n0, total);
+        n1 = fmod(n1, total);
+      } else {
+        n0 = min(n0, total - 1);
+        n1 = min(n1, total - 1);
+      }
+      o.uv = (cell + float2(fmod(n0, frames), floor(n0 / frames))) * sheet.xy;
+      o.next = float3((cell + float2(fmod(n1, frames), floor(n1 / frames))) * sheet.xy, grid.w > 0.5 ? frac(n) : 0);
+    } else {
+      o.uv.x = (cell.x + floor(passed)) * sheet.x;
+      o.uv.y = cell.y * sheet.y + p4.x;
+      o.next = float3(o.uv.x + sheet.x, o.uv.y, grid.w > 0.5 ? frac(passed) : 0);
+    }
   }
   o.rampUv = float2(age, p4.y);
   return o;
@@ -124,6 +149,13 @@ float Meets(VOut i, out uint coverage) {
   return coverage == 0 ? 0 : saturate(nearest / max(meeting.x, 1e-3));
 }
 
+// The particle's texture: its frame, blended into the next one where frames blend.
+float4 Frame(VOut i) {
+  float4 c = particleTexture.Sample(samplerLinear, i.uv);
+  if (i.next.z > 0) c = lerp(c, particleTexture.Sample(samplerLinear, i.next.xy), i.next.z);
+  return c;
+}
+
 float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float meets = Meets(i, coverage);
   if (meets <= 0) discard;
@@ -131,12 +163,12 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // it bends what is behind it: the picture as it was, taken a little to the side, by the
     // texture's red and green (the original's measure: half a hundredth of the picture at most);
     // how much of that shows, by the texture's alpha and the ramp's
-    float4 bend = particleTexture.Sample(samplerLinear, i.uv);
+    float4 bend = Frame(i);
     float shows = bend.a * rampTexture.Sample(samplerLinearClamp, i.rampUv).a;
     float2 at = i.position.xy * viewport.zw + 0.005 * (2 * bend.rg - 1);
     return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, shows * meets);
   }
-  float4 c = particleTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
+  float4 c = Frame(i) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
   if (options.z > 0.5 && options.z < 1.5) return float4(saturate(c.rgb) * meets, 1);  // darkening: what is there x (1 - this)
   if (look > 0.5) {
     // the modern look's picture is linear light; what adds its light is given more of it, to glow
@@ -229,14 +261,16 @@ float Particles::Random() {
 }
 
 const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
-  const std::string key = moho::Vfs::Normalize(path);
+  // (each look its own: the remastered one may take a remastered texture for the game's blueprint)
+  const std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
   auto known = blueprints_.find(key);
   if (known != blueprints_.end()) return known->second.get();
   EmitterBlueprint* bp = blueprints_.emplace(key, std::make_unique<EmitterBlueprint>()).first->second.get();
-  auto text = vfs_->ReadFile(key);
+  const std::string file = moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
+  auto text = vfs_->ReadFile(file);
   BpValue v;
   if (!text || !ReadBlueprintFile(*text, &v)) {
-    fprintf(stderr, "render: emitter %s: %s\n", key.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
+    fprintf(stderr, "render: emitter %s: %s\n", file.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
     return bp;
   }
   bp->lifetime = Number(v["Lifetime"], 1);
@@ -256,6 +290,9 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   bp->snapToWaterline = Flag(v["SnapToWaterline"], false);
   bp->onlyEmitOnWater = Flag(v["OnlyEmitOnWater"], false);
   bp->resistance = Flag(v["ParticleResistance"], false);
+  bp->gridAnimate = Flag(v["TextureGridAnimate"], false);
+  bp->gridLoop = Flag(v["TextureGridLoop"], false);
+  bp->frameBlend = Flag(v["TextureFrameBlend"], false) || bp->gridAnimate;
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
   bp->lodCutoff = std::max(0.0f, Number(v["LODCutoff"], 0));
   bp->texturePath = v["Texture"].StringOr(std::string());
@@ -274,8 +311,8 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   for (const auto& c : curves) ReadCurve(v[c.name], c.curve);
   bp->longestLife = 1;
   for (const Vec3& key : bp->particleLifetime.keys) bp->longestLife = std::max(bp->longestLife, key.y + std::fabs(key.z) * 0.5f);
-  bp->texture = textures_->Get(bp->texturePath, textures_->White());
-  bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(bp->rampPath, textures_->White());
+  bp->texture = textures_->Get(EffectFile(*vfs_, bp->texturePath, remastered), textures_->White());
+  bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(EffectFile(*vfs_, bp->rampPath, remastered), textures_->White());
   bp->ok = true;
   return bp;
 }
@@ -595,11 +632,13 @@ void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind, gf
     }
     // which of the original's vertex paths: Align, else AlignToBone (Flat with Flat), else Flat, else plain
     const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
-    const float constants[20] = {right.x, right.y, right.z, now,
+    const float constants[24] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
                                  static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
                                  1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
-                                 soften, 0, 0, 0};
+                                 soften, 0, 0, 0,
+                                 bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,
+                                 static_cast<float>(bp.frameCount * bp.stripCount), bp.frameBlend ? 1.0f : 0.0f};
     device_->SetConstants(1, constants, sizeof constants);
     device_->SetTexture(0, bp.texture);
     device_->SetTexture(1, bp.ramp);

@@ -24,6 +24,7 @@ struct WorldPicture::Impl {
   int focusArmy = 0;                   // SetFocusArmy (1-based; 0: none)
   uint64_t allies = 0;                 // SetAllies (bit n: army n + 1)
   bool lifeBarsOnEnemies = false;      // SetLifeBarsOnEnemies
+  bool remasteredEffects = true;       // SetRemasteredEffects
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -80,6 +81,7 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
   m.world->alliedArmies = m.allies;
   m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
+  m.world->effectsLook = m.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -182,6 +184,8 @@ void WorldPicture::SetAllies(const std::vector<int>& armies) {
 }
 
 void WorldPicture::SetLifeBarsOnEnemies(bool on) { impl_->lifeBarsOnEnemies = on; }
+
+void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on; }
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;
