@@ -4,6 +4,27 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui (offered, 2026-10-15): graphics settings for slower cards, measured
+
+All already in World (reach them through `WorldPicture::world()`), except FSR and effects which have
+their own calls. What each saves on an RTX 4090, 2560x1440, rebuilt Seton's, eight armies, middle zoom
+(graphics card time a frame; the 3060 is roughly three to four times slower, the shares about the same):
+
+| Setting | Field | Saves | Note |
+|---|---|---|---|
+| Upscaling (FSR 1) | `SetUpscale` | most: 4K 12.6 -> 3.9 ms at Quality | the biggest lever |
+| Anti-aliasing | `render::gSceneSamples` = 4 / 2 / 1, set BEFORE Open (the next game) | 4x -> 2x 0.7 ms, -> off 1.7 ms (a third) | edges get rougher |
+| Ambient occlusion | `world()->ao.strength` = 1 / 0 | 0.65 ms (13 %) | contact shading under units and trees |
+| Rich ground (remastered maps) | `world()->terrain.richGround` | 0.5 ms | already your option |
+| Sun shadows | `world()->shadowsOn` | 0.36 ms by day (10 %), nothing at night | |
+| Model detail | `world()->meshes.detail` = 1 / 0.75 / 0.5 | 0.3 ms at 0.5 | coarser levels sooner |
+| Lamp shadows | `world()->lampShadows` | 0.12 ms at night | |
+| Effects quality | `SetEffectsQuality` | small in this scene; more in big fights | |
+
+Suggested presets (all on as today = High): **Medium**: anti-aliasing 2x, model detail 0.75, FSR Ultra
+Quality at 4K; **Low**: anti-aliasing off, ambient occlusion off, model detail 0.5, lamp shadows off,
+effects 0.5, FSR Quality. Every one stays its own switch under the preset.
+
 ## visuals, section 22: the effects test stand, and TextureGridAnimate (2026-10-15)
 
 Done (render f216132). Viewer options:
