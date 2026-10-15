@@ -1282,6 +1282,41 @@ at a game's start (`ui/app/game_session.cpp`). Checked from far up on the rebuil
 ways: `_scratch\ui\chris_20261013\ui_map_edge_no_machinery_left_machinery_right.png`. Waiting
 for Chris's look.
 
+### 21. Life bars: the original shows none on enemy units (unless the player's option says so)
+Mine, from reading the exe (2026-10-15), not from Chris; not blocking. A difference from the
+original in what the picture shows, so his rule "the original's way as one of the choices"
+applies.
+
+What ours does (render/world.cpp ~910): with life bars on, a bar over a unit that is selected,
+under the mouse, or damaged and near, for EVERY army's units.
+
+What the original does (CWldSession::RenderStrategicIcons 0x85b6e0, the part at 0x85bfdb..
+0x85c0a4), as I read it; per unit, a bar only if:
+- `ui_RenderUnitBars` is on (byte 0xf57b26; your `lifeBars`, which the host sets), and a
+  distance (esp+0x74, of the camera's I think) is under `ui_LifebarRange`'s value (float
+  0xf57b74; its help: "range of all lifebars"), and two unit flags I did not identify (+0x71
+  zero, +0xf8 set);
+- AND by army: the unit is the player's own or an ally's (0x5bd630 on the unit's army: sets
+  the flag at esp+0x54), OR it is seen now (its recon bits & 8) AND either the console's
+  `ui_ForceLifbarsOnEnemy` is on (byte 0x10a644a; FAF's option "Always Show Enemy Lifebars",
+  default OFF) or its army is the focus army;
+- AND (0x85c058) not in category 0x25 (a vfunc +0x3c with 0x25: a category test, which one I
+  did not read), and its blueprint's byte +0x275 is 0 (a "no life bar" flag, I take it).
+So with the default options an enemy unit NEVER gets a life bar, hovered, selected or damaged:
+the player learns its health from the rollover panel. FAF added the option to show them.
+
+Wanted from you: life bars for the focus army's and its allies' units only, and a switch (say
+`lifeBarsOnEnemies`, false) that adds the enemy units the army sees now; I set it from the
+console's `UI_ForceLifbarsOnEnemy` (the game's option sends it at the game's start). Whether the
+original also shows bars on undamaged own units within the range (no damage test in that part
+as far as I read it) you may want to check against your "damaged and near"; I did not read
+what +0xf8 is.
+
+Also noticed, smaller: the game's option "Always Show Custom Names" (`ui_RenderCustomNames`,
+string 0xe46a24, default off) draws the names players give their units (Unit:SetCustomName,
+kept in the host as UserUnit::customName) over them. Do you draw custom names at all? If you
+want them, I can hand you the names with the units (say a map id -> name) and the switch.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
