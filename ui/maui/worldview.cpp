@@ -481,6 +481,7 @@ class WorldView : public Control {
     }
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
+    scene.lifeBarsOnEnemies = user->lifeBarsOnEnemies;
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();

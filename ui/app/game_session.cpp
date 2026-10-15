@@ -115,6 +115,18 @@ struct GameSession::Picture : WorldSource {
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
     picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
+    // Life bars over the player's and his allies' units only, as the original (render request
+    // 21), unless the player asks for the enemies' too.
+    picture.SetLifeBarsOnEnemies(scene.lifeBarsOnEnemies);
+    if (session && session->sim_) {
+      const int focus = session->sim_->focusArmy + 1;
+      std::vector<int> allies;
+      for (const ArmyView& a : ArmyViews(*session->sim_))
+        if (focus >= 1 && a.index >= 1 && a.index != focus && focus <= static_cast<int>(a.alliance.size()) &&
+            a.alliance[static_cast<size_t>(focus - 1)] == 2)
+          allies.push_back(a.index);
+      picture.SetAllies(allies);
+    }
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);

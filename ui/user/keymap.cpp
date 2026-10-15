@@ -559,6 +559,12 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
+    size_t a = rest.find_first_not_of(" \t");
+    bool& on = UserState::From(L)->lifeBarsOnEnemies;
+    on = a == std::string::npos ? !on : (rest[a] != '0' && rest.compare(a, 5, "false") != 0);
+    return;
+  }
   if (Upper(name) == "CAM_SHAKEMULT") {  // the game's option "Shake intensity" sends it (0 to 1)
     if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));
     return;

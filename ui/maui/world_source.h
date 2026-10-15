@@ -82,6 +82,10 @@ struct WorldScene {
   // Life bars over units (the selected ones, the one under the mouse, damaged ones near by): the
   // player's switch (UI_RenderUnitBars).
   bool lifeBars = false;
+  // And over the enemy units the army sees now too: the player's option "Always Show Enemy
+  // Lifebars" (the console's UI_ForceLifbarsOnEnemy). Off, as the original's: then only the
+  // army's own and its allies' units have life bars.
+  bool lifeBarsOnEnemies = false;
 };
 
 // A game's pace, kept by the host (the original's client manager keeps it, FA exe 0x53e590):

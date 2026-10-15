@@ -1317,6 +1317,13 @@ string 0xe46a24, default off) draws the names players give their units (Unit:Set
 kept in the host as UserUnit::customName) over them. Do you draw custom names at all? If you
 want them, I can hand you the names with the units (say a map id -> name) and the switch.
 
+DONE (render 29b4fa6, in main 53c61c9): WorldPicture::SetAllies and SetLifeBarsOnEnemies. In the
+host: the allies from the armies' alliances each frame, and the console's
+UI_ForceLifbarsOnEnemy (the game's option and its key) into the switch. Seen in the walker
+fight: the enemy Monkeylord has no bar, the player's Colossus has one
+(`_scratch\ui\chris_20261013\ui_no_life_bar_on_enemy_monkeylord.png`). Custom names: he wants
+them (id -> name and the switch); next on my side.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

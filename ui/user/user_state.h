@@ -107,6 +107,8 @@ class UserState {
   // put away for now.
   int lifeBars = -1;
   bool lifeBarsPutAway = false;
+  // The console's UI_ForceLifbarsOnEnemy (the game's option "Always Show Enemy Lifebars").
+  bool lifeBarsOnEnemies = false;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
