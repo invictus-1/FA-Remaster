@@ -215,6 +215,9 @@ FramePacing& Pacing();
 struct FrameTimes {
   double worldDraw = 0;
   int worldDraws = 0;
+  // the game's beats: the simulation's own, the picture's per-beat update, the sounds
+  double simBeats = 0, pictureBeats = 0, soundBeats = 0;
+  int beats = 0;
 };
 FrameTimes& Times();
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over

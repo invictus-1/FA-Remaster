@@ -714,7 +714,7 @@ void GameSession::Advance(double seconds) {
         sim_->PausedBeat();
       } else if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
         if (sim_->Paused()) sim_->PausedBeat();
-        else sim_->Tick();
+        else TimedTick();
       } else {
         continue;  // the replay is over: the game stands where it ended
       }
@@ -732,7 +732,7 @@ void GameSession::Advance(double seconds) {
     }
     if (sim_->Paused()) sim_->PausedBeat();
     else {
-      sim_->Tick();
+      TimedTick();
       Record(CommandWriter::AdvanceMessage(1));
     }
     NoteBeat();
@@ -759,11 +759,22 @@ void GameSession::ViewerControls(const std::string& orders) {
   }
 }
 
+void GameSession::TimedTick() {  // (a beat of the simulation, timed for the window's log)
+  const auto ts = std::chrono::steady_clock::now();
+  sim_->Tick();
+  Times().simBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+  ++Times().beats;
+}
+
 void GameSession::NoteBeat() {
 #ifdef MOHO64UI_WORLD_PICTURE
+  const auto tp = std::chrono::steady_clock::now();
   if (picture_) picture_->picture.Beat(*sim_);
+  Times().pictureBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count();
 #endif
+  const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
+  Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
   // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
   std::vector<ShakeEvent> shakes;
   ShakeEvents(*sim_, &shakes);

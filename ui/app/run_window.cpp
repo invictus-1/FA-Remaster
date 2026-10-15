@@ -73,8 +73,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto last = Clock::now(), start = last;
   const int refresh = Window::RefreshRate();
   Logf(LogLevel::Info, "moho64ui: window: the screen shows %d pictures a second", refresh);
-  double drawSeconds = 0, presentSeconds = 0, frameSeconds = 0, renderSeconds = 0;
-  const FrameTimes timesBefore = Times();
+  double drawSeconds = 0, presentSeconds = 0, frameSeconds = 0, renderSeconds = 0, hostSeconds = 0;
+  FrameTimes timesBefore = Times();
+  // (The averages leave out the first frames when there are many: the loading, a game interface's start-up.)
+  const int warmUp = maxFrames >= 600 ? 300 : 0;
+  int statsFrom = 0;
   int frames = 0;
   while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     auto now = Clock::now();
@@ -90,7 +93,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     target->Clear(direct ? 0x00000000u : 0xff000000u);
     UserState& user = current();
     user.ui().Render(user.L(), *target, 0);
+    const auto te = Clock::now();
     if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+    hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
     renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     const auto tp = Clock::now();
     if (direct) hooks.present(*target);  // (the world under it and the screen's wait are the renderer's)
@@ -100,6 +105,12 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
+    if (warmUp && frames == warmUp) {
+      start = Clock::now();
+      drawSeconds = presentSeconds = frameSeconds = renderSeconds = hostSeconds = 0;
+      timesBefore = Times();
+      statsFrom = frames;
+    }
     // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as
     // at first, keeps to the screen's own rate; off, Frametime gives the shortest frame in ms,
     // 2 to 16). The window's picture is copied without waiting for the screen, so "vertical
@@ -110,18 +121,25 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
-  if (frames)
-    Logf(LogLevel::Info, "moho64ui: window: %d frames in %.1f s, drawing %.2f ms per frame", frames, total,
-         drawSeconds * 1000.0 / frames);
-  if (frames) {  // (where the frame's time goes: the world's picture, the interface, the copy to the window)
+  const int counted = frames - statsFrom;
+  if (counted > 0)
+    Logf(LogLevel::Info, "moho64ui: window: %d frames in %.1f s, drawing %.2f ms per frame", counted, total,
+         drawSeconds * 1000.0 / counted);
+  if (counted > 0) {  // (where the frame's time goes: the world's picture, the interface, the copy to the window)
     const FrameTimes& now = Times();
     const int worlds = now.worldDraws - timesBefore.worldDraws;
     const double world = now.worldDraw - timesBefore.worldDraw;
     Logf(LogLevel::Info,
-         "moho64ui: window: per frame %.2f ms in all: %.2f ms the interface's frame (scripts, the game's beats), %.2f ms drawing "
-         "the interface, %.2f ms the copy to the window; of these %.2f ms the world's pictures (%d, inside the first two)",
-         total * 1000.0 / frames, frameSeconds * 1000.0 / frames, renderSeconds * 1000.0 / frames, presentSeconds * 1000.0 / frames,
-         world * 1000.0 / frames, worlds);
+         "moho64ui: window: per frame %.2f ms in all: %.2f ms the interface's frame (its scripts), %.2f ms drawing the "
+         "interface, %.2f ms the host's step (the game's beats, the sounds), %.2f ms showing it; the world's pictures %.2f ms "
+         "(%d, inside these)",
+         total * 1000.0 / counted, frameSeconds * 1000.0 / counted, (renderSeconds - hostSeconds) * 1000.0 / counted,
+         hostSeconds * 1000.0 / counted, presentSeconds * 1000.0 / counted, world * 1000.0 / counted, worlds);
+    const int beats = now.beats - timesBefore.beats;
+    if (beats > 0)
+      Logf(LogLevel::Info, "moho64ui: window: %d beats: %.2f ms each the simulation's, %.2f ms the picture's update, %.2f ms the sounds",
+           beats, (now.simBeats - timesBefore.simBeats) * 1000.0 / beats, (now.pictureBeats - timesBefore.pictureBeats) * 1000.0 / beats,
+           (now.soundBeats - timesBefore.soundBeats) * 1000.0 / beats);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
   LogDrawProfile();
