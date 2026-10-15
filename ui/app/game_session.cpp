@@ -48,7 +48,11 @@ struct GameSession::Picture : WorldSource {
     cam.heading = c.heading;
     cam.pitch = c.pitch;
     cam.fovY = c.fovY;
+    const auto t0 = std::chrono::steady_clock::now();
     const std::vector<uint32_t>& pixels = picture.Draw(cam, width, height, session->PictureTick());
+    FrameTimes& times = Times();
+    times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    ++times.worldDraws;
     return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
   }
   bool Project(const float world[3], float* x, float* y) override {

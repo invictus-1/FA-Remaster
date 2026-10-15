@@ -199,14 +199,23 @@ struct LookSettings {
   bool snowTracks = true;         // units tread tracks into lying snow
 };
 LookSettings& Looks();
-// The frame rate the player's options ask for (the game's own Video tab: "Vertical Sync", the
-// console's SC_VerticalSync, on at first; "Frametime", SC_FrameTimeClamp, the shortest frame in
-// milliseconds when vertical sync is off, 8 at first). The window's loop keeps to it.
+// The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
+// 2026-10-15, via the renderer track: "have options for all and default is vsync on"):
+// remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"
+// (SC_VerticalSync) and "Frametime" (SC_FrameTimeClamp, the shortest frame in milliseconds),
+// set the same when changed in the menu. The window's loop keeps to it.
 struct FramePacing {
-  bool verticalSync = true;
-  int frameTimeMs = 8;
+  bool verticalSync = true;   // the screen's own rate
+  double frameMs = 8;         // otherwise the shortest frame; 0: as fast as it goes
 };
 FramePacing& Pacing();
+// Where a live window's frame time goes (for the log at the end of a window run): the world's
+// picture (WorldPicture::Draw: the renderer's frame and its read-back), in seconds and calls.
+struct FrameTimes {
+  double worldDraw = 0;
+  int worldDraws = 0;
+};
+FrameTimes& Times();
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).
