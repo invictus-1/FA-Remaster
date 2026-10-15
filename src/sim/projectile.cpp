@@ -449,6 +449,38 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   }
 }
 
+// The step's segment as CheckCollision builds it (0x69d247 -> 0x4fe130): centre p0 + h, unit direction h / |h|
+// (0 for a zero step), half length |h|, with h = (p1 - p0) x 0.5 and |h|^2 summed y, z, x.
+struct StepSegment {
+  Vec3 o, d;
+  float e;
+};
+StepSegment StepSegmentExe(Vec3 p0, Vec3 p1) {
+  const Vec3 h{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
+  const float e = std::sqrt((h.y * h.y + h.z * h.z) + h.x * h.x);
+  Vec3 d{};
+  if (e > 0) {
+    const float inv = 1.0f / e;
+    d = {inv * h.x, h.y * inv, h.z * inv};
+  }
+  return {{p0.x + h.x, p0.y + h.y, p0.z + h.z}, d, e};
+}
+
+// Wm3 DistVector3Segment3<float>::GetSquared 0xa484f0 as compiled (x87 at 24 bits: every operation rounds to
+// float): the point's parameter along the direction from the centre, clamped to [-e, e] (an end when at or past
+// it), the closest point (0xa39230 hands it out) and the squared distance to it.
+float DistSqPointSegmentExe(const StepSegment& s, Vec3 pt, Vec3* closest) {
+  const Vec3 df{pt.x - s.o.x, pt.y - s.o.y, pt.z - s.o.z};
+  const float t = (s.d.y * df.y + s.d.x * df.x) + s.d.z * df.z;
+  Vec3 c;
+  if (t <= -s.e) c = {s.o.x - s.d.x * s.e, s.o.y - s.d.y * s.e, s.o.z - s.d.z * s.e};
+  else if (s.e <= t) c = {s.o.x + s.d.x * s.e, s.o.y + s.d.y * s.e, s.o.z + s.d.z * s.e};
+  else c = {s.o.x + s.d.x * t, s.o.y + s.d.y * t, s.o.z + s.d.z * t};
+  *closest = c;
+  const Vec3 r{c.x - pt.x, c.y - pt.y, c.z - pt.z};
+  return (r.x * r.x + r.y * r.y) + r.z * r.z;
+}
+
 // CheckCollision 0x69d1d0 on the segment p0 -> p1.
 void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
   lua_State* L = sim.L();
@@ -504,14 +536,32 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
   if (p->collideEntity) {
     Entity* target = TargetEntity(sim, p->target);
     if (target && target->kind == Entity::Kind::Projectile && target->shape.type == ShapeType::None) {
-      // a shapeless projectile target: close enough to the segment
-      Vec3 tp = target->position;
-      float t = len > 0 ? std::clamp(Dot(Sub(tp, p0), seg) / (len * len), 0.0f, 1.0f) : 0;
-      Vec3 C = Add(p0, Mul(seg, t));
-      float d2 = Len2(Sub(tp, C));
-      if (d2 <= Len2(EntityVelocity(target)) + 0.5f) {
+      // A shapeless projectile target: close enough to the segment. Both the target's place and its velocity are
+      // the COMMITTED ones (0x69d671: the place +0xac; 0x69d6a7: vt+0x3c = Entity::GetVelocity 0x678dc0, +0xac
+      // minus the previous +0xc8, x the scale +0xd4), which AdvanceCoords 0x678f10 changes only at the beat's end:
+      // a target shell that has taken its step earlier in this pass is still met where, and as fast as, the beat
+      // began. Seen (Naval, beat 511): a torpedo homing on a UEF anti-torpedo (timantitorpedo01, turned onto it
+      // by its depth charge, which stepped first) ends its step 0.544 from the anti-torpedo's place of the beat's
+      // start (0.296 <= 0.59 = its 0.09 + 0.5: a hit) and 0.795 from its new one (0.633: none); the original's
+      // OnImpact ran in 512, ours in 513 (the first random draw apart, 80014). The torpedo's shell lines now agree
+      // to the last digit, hit and turn included.
+      const bool held = target->shapeHeld;  // (a shell's place before its own step: ProjectilesTick)
+      const Vec3 tp = held ? target->shapePos : target->position;
+      const Vec3 tv = held ? static_cast<const Projectile*>(target)->heldVel : EntityVelocity(target);
+      // 0x69d67f..0x69d692: the squared distance from the step's segment (Wm3's form, see above);
+      // 0x69d6a9..0x69d6e1: hit when |v|^2 + 0.5 >= it (an unordered compare is no hit)
+      const StepSegment s = StepSegmentExe(p0, p1);
+      Vec3 C;
+      const float d2 = DistSqPointSegmentExe(s, tp, &C);
+      if (Len2(tv) + 0.5f >= d2) {
         PushObject(L, p);
         if (CallMethodBool(sim, L, target, "OnCollisionCheck", 1) == 1) {
+          // 0x69d70b..0x69d7f1: the fraction is sqrt(|C - p0|^2 / |p1 - p0|^2) (each summed x, y, z), at most 1
+          // (and 1 when the quotient is not a number: a zero step), at least 0
+          const Vec3 a{C.x - p0.x, C.y - p0.y, C.z - p0.z}, b{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+          float t = std::sqrt(((a.x * a.x + a.y * a.y) + a.z * a.z) / ((b.x * b.x + b.y * b.y) + b.z * b.z));
+          if (!(1.0f > t)) t = 1.0f;
+          if (0.0f > t) t = 0.0f;
           p->hitFraction = t;
           p->hitPos = p1;
           p->hitEntity = EntityRef(target);
