@@ -1312,6 +1312,11 @@ body as `UEL0001` under the stock skeleton without upgrade parts, today, and say
 is in and which stock upgrade bones are empty. The stock upgrades themselves are not modelled:
 new design work that waits for Chris's order. The lights lists (commander, engineer, T1 power
 generator) are being reworked today.
+DONE 2026-10-15: `UEL0001` has its own model now (visuals\work\UEL0001\export\moho64, read at
+load): the rebuilt body with its own three stock upgrade parts (engineering suite, heavy
+anti-matter cannon, backpack), each shown only when its enhancement is fitted. Seen in my build
+(the NewMap launcher's game, no BlackOps mod): the rebuilt commander stands at the start. The
+upgrade parts wait for Chris's look in a game.
 
 ### 2. From Chris, after the new lights lists: the commander's eye beams, the land factory's lights
 Chris, 2026-10-13, in a game with your new lists (`Open-Game-DayNight.bat`, main c7790f2 or
