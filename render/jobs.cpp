@@ -24,7 +24,8 @@ Jobs::~Jobs() {
 
 void Jobs::Run(int pieces, const std::function<void(int)>& piece) {
   if (pieces <= 0) return;
-  if (threads_.empty() || pieces == 1) {
+  // (no workers, one piece, or the workers busy with another thread's job: a plain loop here)
+  if (threads_.empty() || pieces == 1 || inUse_.exchange(true)) {
     for (int i = 0; i < pieces; ++i) piece(i);
     return;
   }
@@ -47,6 +48,7 @@ void Jobs::Run(int pieces, const std::function<void(int)>& piece) {
   std::unique_lock<std::mutex> lock(mutex_);
   finished_.wait(lock, [this] { return busy_ == 0; });
   piece_ = nullptr;
+  inUse_.store(false);
 }
 
 void Jobs::Work() {

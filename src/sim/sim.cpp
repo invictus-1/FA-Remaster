@@ -1144,6 +1144,20 @@ const std::vector<Unit*>& Sim::ArmyStageOrder() {
 void Sim::ResumeCommandThread(Unit* u) {
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
+  // MOHO64_DEBUG_RESUME=<unit id> (or -2: every unit): a command thread re-linked at the end, and who did it
+  static const long dbg = getenv("MOHO64_DEBUG_RESUME") ? atol(getenv("MOHO64_DEBUG_RESUME")) : -1;
+  if (dbg == -2 || dbg == static_cast<long>(u->id)) {
+    void* fr[6];
+    const int n = CaptureFrames(fr, 6);
+    std::string s;
+    for (int i = 1; i < n; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+      s += b;
+    }
+    Logf(LogLevel::Info, "resume %u unit %u seq %llu from%s", tick_, u->id, static_cast<unsigned long long>(u->cmdSeq),
+         s.c_str());
+  }
 }
 void Sim::AddUnitToLists(Unit* u) {
   ++g_unitsCreated;

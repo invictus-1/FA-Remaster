@@ -92,6 +92,12 @@ class World {
   // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
   // way of reading a unit's life is the panel at the bottom left).
   bool lifeBars = false;
+  // Life bars go over the units of the army the picture is for and of its allies (bit n of
+  // `alliedArmies`: army n, counted from 0), as the original's; over the enemy units the army sees
+  // now only with `lifeBarsOnEnemies` (the console's ui_ForceLifbarsOnEnemy, FAF's "Always Show
+  // Enemy Lifebars", off in the original). With no one army (focusArmy -1): over every unit.
+  uint64_t alliedArmies = 0;
+  bool lifeBarsOnEnemies = false;
   int dyingDrawn = 0;    // units drawn in the last frame that are in their death (falling, sinking, toppling)
   bool workBars = true;  // the thin bar of a unit's work and the pause mark, also while the life bars are off
   int focusArmy = -1;    // the army the picture is for, counted from 0 (-1: no one army): whose work is shown

@@ -112,3 +112,10 @@ speed (100 ms a tick), but it limits fast-forward to about 3x. The engine chat's
   backend, written and tested on Windows on this PC (Vulkan runs there too), which catches nearly all of
   its mistakes without a Linux machine. Then a Linux build, which can be tried on this PC from a Linux
   USB stick (free, no install); the Mac last, through MoltenVK, with players who own a Mac testing it.
+
+## 7. Later: mods (Chris, 2026-10-15)
+
+When every faction is done and the remaining work is mods: the mods' units we remaster are held to
+the same costs as our own units (levels, triangles, textures, lights, effects), measured with the
+same tools, and checked so the AI can use them without special cases. On FAF, badly built mod units
+were the main cause of slow games; ours must not be.

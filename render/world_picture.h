@@ -74,6 +74,12 @@ class WorldPicture {
   // Life bars over units (selected, under the mouse, or damaged and near): OFF at first; a player's
   // switch for them is the interface's.
   void SetLifeBars(bool on);
+  // Life bars go over the units of the army the picture is for and of the armies allied with it
+  // (the engine's numbers, from 1; none at first), as the original's; over the enemy units the
+  // army sees now only with SetLifeBarsOnEnemies (the console's ui_ForceLifbarsOnEnemy, FAF's
+  // "Always Show Enemy Lifebars": OFF at first, as the original). For no one army: every unit's.
+  void SetAllies(const std::vector<int>& armies);
+  void SetLifeBarsOnEnemies(bool on);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).

@@ -609,8 +609,9 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         const NamedFootprint& ufp = Footprint(*u->blueprint);
         int x0 = static_cast<int>(std::nearbyint(a.x - ufp.sizeX * 0.5f));
         int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
-        int rr[4] = {x0, z0, x0 + ufp.sizeX, z0 + ufp.sizeZ};
-        GroundReserveRect(sim, u, rr);
+        // (no o-grid reservation: CUnitReclaimTask 0x61f000 reserves nothing, it is not among ReserveOgridRect's
+        // callers. Seen in the Skirmish oracle's navigator lines: a second engineer is given the very cell the
+        // first one is still walking to, 40 beats after the first took it.)
         MoveToward(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});
         c.moving = true;
       }

@@ -1366,9 +1366,10 @@ int main(int argc, char** argv) {
             break;
           }
         }
-      } else if (frame.blueprints) {  // a unit's blueprint id: the first unit of that kind
+      } else if (frame.blueprints) {  // a unit's blueprint id: the first unit of that kind (with --enhance: of that army)
         for (const FrameUnit& u : frame.units)
-          if (u.blueprint < frame.blueprints->size() && (*frame.blueprints)[u.blueprint] == opt.find) {
+          if (u.blueprint < frame.blueprints->size() && (*frame.blueprints)[u.blueprint] == opt.find &&
+              (opt.enhancement.empty() || static_cast<int>(u.Army()) + 1 == opt.enhanceArmy)) {
             camera.target = {u.position[0], u.position[1], u.position[2]};
             camera.distance = 9;
             break;
