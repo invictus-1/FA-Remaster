@@ -335,6 +335,13 @@ int main(int argc, char** argv) {
   // the program's own looks). INFERRED: the argument (startup = true).
   if (ok && !front->RunString("import('/lua/options/optionslogic.lua').Apply(true)", "=(options at start-up)"))
     Logf(LogLevel::Warning, "moho64ui: the options could not be applied at the start");
+  // (The frame-rate options skip their `set` at the start: the original takes them when it makes
+  // its device. Here they go to the window's pace from the saved options.)
+  if (ok && !front->RunString("local o = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {} "
+                              "ConExecute('SC_VerticalSync ' .. tostring(o.vsync or 1)) "
+                              "ConExecute('SC_FrameTimeClamp ' .. tostring(o.frametime or 8))",
+                              "=(frame rate at start-up)"))
+    Logf(LogLevel::Warning, "moho64ui: the frame-rate options could not be read at the start");
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)

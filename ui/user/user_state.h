@@ -199,6 +199,14 @@ struct LookSettings {
   bool snowTracks = true;         // units tread tracks into lying snow
 };
 LookSettings& Looks();
+// The frame rate the player's options ask for (the game's own Video tab: "Vertical Sync", the
+// console's SC_VerticalSync, on at first; "Frametime", SC_FrameTimeClamp, the shortest frame in
+// milliseconds when vertical sync is off, 8 at first). The window's loop keeps to it.
+struct FramePacing {
+  bool verticalSync = true;
+  int frameTimeMs = 8;
+};
+FramePacing& Pacing();
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).

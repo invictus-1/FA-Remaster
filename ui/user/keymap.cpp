@@ -597,6 +597,12 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
     if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
     if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    // The game's own frame-rate options (its Video tab; FramePacing).
+    if (key == "SC_VERTICALSYNC") return void(Pacing().verticalSync = on);
+    if (key == "SC_FRAMETIMECLAMP") {
+      if (!value.empty()) Pacing().frameTimeMs = std::max(1, std::atoi(value.c_str()));
+      return;
+    }
   }
   if (Upper(name) == "CAM_SHAKEMULT") {  // the game's option "Shake intensity" sends it (0 to 1)
     if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));

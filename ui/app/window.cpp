@@ -227,6 +227,13 @@ bool Window::ScreenSize(int* width, int* height) {
   return *width > 0 && *height > 0;
 }
 
+int Window::RefreshRate() {
+  DEVMODEW mode{};
+  mode.dmSize = sizeof mode;
+  if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1) return static_cast<int>(mode.dmDisplayFrequency);
+  return 60;
+}
+
 void Window::KeepMouseInside(bool keep) {
   if (!keep || !hwnd_) {
     ClipCursor(nullptr);
@@ -301,6 +308,7 @@ namespace moho::ui {
 Window::~Window() {}
 bool Window::Create(int, int, const char*, Callbacks, bool) { return false; }
 bool Window::ScreenSize(int*, int*) { return false; }
+int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}

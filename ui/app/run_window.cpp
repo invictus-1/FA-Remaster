@@ -1,4 +1,5 @@
 // The host's live mode: the interface in a window, in real time, with the mouse and the keyboard.
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -63,6 +64,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   };
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
+  const int refresh = Window::RefreshRate();
+  Logf(LogLevel::Info, "moho64ui: window: the screen shows %d pictures a second", refresh);
   double drawSeconds = 0;
   int frames = 0;
   while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
@@ -81,8 +84,13 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
-    // About 60 frames per second; the software backend has no vertical sync to wait for.
-    std::this_thread::sleep_until(now + std::chrono::microseconds(16667));
+    // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as
+    // at first, keeps to the screen's own rate; off, Frametime gives the shortest frame in ms,
+    // 2 to 16). The window's picture is copied without waiting for the screen, so "vertical
+    // sync" here is the screen's rate as a pace, not a true wait for it.
+    const FramePacing& pacing = Pacing();
+    const double period = pacing.verticalSync ? 1.0 / std::max(24, refresh) : std::max(2, pacing.frameTimeMs) / 1000.0;
+    std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
   if (frames)

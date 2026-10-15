@@ -1493,6 +1493,10 @@ LookSettings& Looks() {
   static LookSettings looks;
   return looks;
 }
+FramePacing& Pacing() {
+  static FramePacing pacing;
+  return pacing;
+}
 
 namespace {
 // moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
