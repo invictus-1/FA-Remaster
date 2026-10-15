@@ -40,6 +40,15 @@ struct GameSession::Picture : WorldSource {
   GameSession* session = nullptr;
   LookSettings lookNow;      // the player's looks as last given to the picture
   bool lookApplied = false;
+  // On the game's window (UseWindow): the world view's Draw only notes its camera and size, and
+  // the frame is drawn and shown by PresentToWindow with the interface over it.
+  bool direct = false;
+  render::Camera camera;
+  int cameraW = 0, cameraH = 0;
+  bool vsync = true;
+  std::vector<uint8_t> capture;  // (a frame read back for checking, CaptureNextWindowFrame)
+  std::string captureTo;
+  bool DrawsToWindow() const override { return direct; }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
     render::Camera cam;
@@ -48,6 +57,11 @@ struct GameSession::Picture : WorldSource {
     cam.heading = c.heading;
     cam.pitch = c.pitch;
     cam.fovY = c.fovY;
+    if (direct) {  // (drawn and shown with the interface by PresentToWindow)
+      camera = cam, cameraW = width, cameraH = height;
+      static const uint32_t token = 0;
+      return &token;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     const std::vector<uint32_t>& pixels = picture.Draw(cam, width, height, session->PictureTick());
     FrameTimes& times = Times();
@@ -128,6 +142,7 @@ struct GameSession::Picture : WorldSource {
     const LookSettings& looks = Looks();
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
+    if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);
     if (render::World* w = picture.world()) {
       w->ribbons.tracers = looks.tracers;
       w->terrain.richGround = looks.richGround;
@@ -504,13 +519,81 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   }
   pace.rate = session.gameSpeed;
   pace.adjustable = session.adjustableSpeed;
-#ifdef MOHO64UI_WORLD_PICTURE
+  pictureDue_ = false;
   if (wantPicture) {
+    // (A window that is still to come: the picture opens on it in its first frame,
+    // OpenPictureIfDue.)
+    if (waitForWindow && !window) pictureDue_ = true;
+    else OpenPicture();
+  }
+  return true;
+}
+
+bool GameSession::DrawsToWindow() const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  return picture_ && picture_->direct;
+#else
+  return false;
+#endif
+}
+
+void GameSession::PresentToWindow(const SoftwareTarget& target) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!picture_ || !picture_->direct) return;
+  Picture& pic = *picture_;
+  const int w = target.Width(), h = target.Height();
+  // The whole interface layer every frame (the renderer unions changed parts; the layer is drawn
+  // anew each frame, so all of it counts as changed).
+  pic.picture.SetInterfaceLayer(target.pixels().data(), w, h, w, 0, 0, w, h);
+  const bool vsync = Pacing().verticalSync;
+  if (vsync != pic.vsync) pic.picture.SetVsync(vsync), pic.vsync = vsync;
+  if (!pic.captureTo.empty()) pic.picture.CaptureNextWindowFrame(&pic.capture);
+  const auto t0 = std::chrono::steady_clock::now();
+  if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, PictureTick());
+  FrameTimes& times = Times();
+  times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  ++times.worldDraws;
+  if (!pic.captureTo.empty() && pic.capture.size() == static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+    SoftwareTarget shot(w, h);  // (RGBA bytes into the target's 0xAARRGGBB, for its PNG writer)
+    std::vector<uint32_t> argb(static_cast<size_t>(w) * static_cast<size_t>(h));
+    for (size_t i = 0; i < argb.size(); ++i)
+      argb[i] = 0xff000000u | static_cast<uint32_t>(pic.capture[i * 4]) << 16 | static_cast<uint32_t>(pic.capture[i * 4 + 1]) << 8 |
+                pic.capture[i * 4 + 2];
+    shot.DrawPixels(argb.data(), w, h, 0, 0);
+    if (shot.SavePng(pic.captureTo)) Logf(LogLevel::Info, "moho64ui: the window's picture is saved as %s", pic.captureTo.c_str());
+    pic.captureTo.clear(), pic.capture.clear();
+  }
+#else
+  (void)target;
+#endif
+}
+
+void GameSession::CaptureWindow(const std::string& path) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (picture_ && picture_->direct) picture_->captureTo = path;
+#else
+  (void)path;
+#endif
+}
+
+void GameSession::OpenPictureIfDue() {
+  if (!pictureDue_ || !window || !sim_) return;
+  pictureDue_ = false;
+  OpenPicture();
+}
+
+void GameSession::OpenPicture() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+  {
     auto t3 = std::chrono::steady_clock::now();
     auto pic = std::make_unique<Picture>();
     pic->session = this;
+    // (On the game's window when it has one: the renderer shows the picture there itself, the
+    // interface laid over it, without reading it back; see PresentToWindow.)
+    if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
-    if (pic->picture.Open(vfs_, h.map, &error)) {
+    if (pic->picture.Open(vfs_, map_, &error)) {
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);
@@ -557,7 +640,6 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
     }
   }
 #endif
-  return true;
 }
 
 bool GameSession::LoadInterfaceRules(lua_State* userState) {

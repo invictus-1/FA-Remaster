@@ -121,6 +121,20 @@ class GameSession {
   bool LaunchReplay(lua_State* L, const std::string& file, std::string* why);
   bool playingReplay() const { return play_ != nullptr; }
 
+  // The game's window (the live host's; nullptr without one): the world's picture is made on it
+  // and shown there by the renderer, the interface laid over it (PresentToWindow). With
+  // `waitForWindow` a session started before the window opens its picture in the window's first
+  // frame (OpenPictureIfDue).
+  void* window = nullptr;
+  bool waitForWindow = false;
+  void OpenPictureIfDue();
+  bool DrawsToWindow() const;
+  // The frame drawn and shown: the world, `target` (the interface, premultiplied ARGB, the
+  // window's size, transparent where the world shows) over it.
+  void PresentToWindow(const SoftwareTarget& target);
+  // For checking: the next shown frame is read back and saved as a PNG.
+  void CaptureWindow(const std::string& path);
+
   bool running() const { return sim_ != nullptr; }
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
@@ -171,6 +185,8 @@ class GameSession {
   std::string profile_;
   void ReadLookOptions(lua_State* L, int options);  // the lobby's Remaster... options into skyNow_
   void StartReplayFile(const SessionDescription& session);
+  void OpenPicture();
+  bool pictureDue_ = false;
   void ViewerControls(const std::string& orders);  // the player's pause / resume while a replay plays
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;

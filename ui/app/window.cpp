@@ -248,7 +248,7 @@ void Window::KeepMouseInside(bool keep) {
   ClipCursor(&clip);
 }
 
-bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full) {
+bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full, bool show) {
   callbacks = std::move(cb);
   fullScreen = full;
   SetProcessDPIAware();  // one interface pixel is one screen pixel
@@ -272,8 +272,12 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   hwnd_ = hwnd;
   arrow_ = wc.hCursor;
   SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-  ShowWindow(hwnd, SW_SHOW);
+  if (show) ShowWindow(hwnd, SW_SHOW);
   return true;
+}
+
+void Window::Show() {
+  if (hwnd_) ShowWindow(static_cast<HWND>(hwnd_), SW_SHOW);
 }
 
 bool Window::Pump() {
@@ -306,7 +310,8 @@ void Window::Present(const SoftwareTarget& target) {
 
 namespace moho::ui {
 Window::~Window() {}
-bool Window::Create(int, int, const char*, Callbacks, bool) { return false; }
+bool Window::Create(int, int, const char*, Callbacks, bool, bool) { return false; }
+void Window::Show() {}
 bool Window::ScreenSize(int*, int*) { return false; }
 int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}

@@ -81,6 +81,7 @@ video.remaster_tracers.set('remaster_tracers', 1, false)
 video.remaster_effects_quality.set('remaster_effects_quality', 0.5, false)
 check("and the effects quality follows", moho64ui_Looks().effectsQuality, 0.5)
 video.remaster_effects_quality.set('remaster_effects_quality', 1, false)
+check("the Video tab has Upscaling (FSR 1), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
 check("the Video tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
 check("the window keeps to the screen's rate at the start", moho64ui_Looks().verticalSync, true)
