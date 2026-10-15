@@ -829,6 +829,21 @@ void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
       a.facing = {inv * hx, inv * 0.0f, hz * inv};
     }
   }
+  {  // MOHO64_DEBUG_SETTARGET=<unit id>: every target set, the facing it leaves, and who set it (image offsets)
+    static const long dbgUnit = getenv("MOHO64_DEBUG_SETTARGET") ? atol(getenv("MOHO64_DEBUG_SETTARGET")) : -1;
+    if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {
+      void* fr[6];
+      const int n = CaptureFrames(fr, 6);
+      std::string s;
+      for (int i = 1; i < n; ++i) {
+        char buf[32];
+        snprintf(buf, sizeof buf, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+        s += buf;
+      }
+      Logf(LogLevel::Info, "settarget %u unit %u to %.3f %.3f dir %.4f %.4f facing %.4f %.4f from%s", sim.tick(), u->id, p.x,
+           p.z, dir.x, dir.z, a.facing.x, a.facing.z, s.c_str());
+    }
+  }
   FreeLandRect(sim, u);
 }
 

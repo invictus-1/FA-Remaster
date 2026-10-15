@@ -3,6 +3,52 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## visuals, 2026-10-15: what the simulation reads of projectiles and effects (for the UEF effects block)
+
+**The override folder that mirrors the game's paths is fine**, under the rules below. The simulation reads files
+through the same mounted file system as everything else, so what is in the folder reaches the simulation too.
+What counts is that nothing it reads changes.
+
+**Projectile blueprints (`*_proj.bp`): leave these alone.**
+- **Top level:** `CollisionShape`, `SizeX`, `SizeY`, `SizeZ`, `CollisionOffsetX/Y/Z`, `Categories`, the
+  script class and module, `Defense` (a missile's health: anti-missile weapons shoot at it), `BlueprintId`.
+- **`Physics`, all of it:** CollideSurface, CollideEntity, TrackTarget, VelocityAlign, StayUpright,
+  LeadTarget, StayUnderwater, UseGravity, DestroyOnWater, RealisticOrdinance, StraightDownOrdinance,
+  DetonateAbove/BelowHeight, TurnRate(+Range), Lifetime(+Range), InitialSpeed(+Range), MaxSpeed(+Range),
+  Acceleration(+Range), Position X/Y/Z (+Range), Direction X/Y/Z (+Range), RotationalVelocity(+Range),
+  MaxZigZag, ZigZagFrequency, Min/MaxBounceCount, BounceVelDamp.
+- **`Display`:** `UniformScale`, `MeshScaleRange`, `MeshScaleVelocity`, `MeshScaleVelocityRange`. These are
+  simulation values: a non-zero range takes a draw from the game's random stream every time a shell is made.
+  Also `MeshBlueprint`: the simulation follows it to the mesh's first LOD and loads that model's
+  SKELETON (bone names, order and rest positions). Wrecks and decoys hang on projectile bones. A new mesh for
+  a projectile must keep the original's bones exactly, as you already do for units. Textures, materials and
+  the other LODs are free.
+
+**Emitter, beam and trail blueprints (`*_emit.bp`, `*_beam.bp`, `*_trail.bp`).** Our simulation reads none of
+their fields, and I know of none in the original that changes simulation state. Their textures, curves, sizes,
+colours and lifetimes are yours. Two cautions:
+- Keep every path the scripts name. A missing file makes a script call fail in the original (a script error
+  stops that function, and the game diverges).
+- Adding NEW blueprint files under paths the game scans is not harmless either: every `.bp` in the mounted
+  folders is loaded into the rules, and the rules' contents are part of what the replays check. Put new art
+  under new texture or mesh paths, not new `.bp` files, unless you ask first.
+
+**Effect templates and the effect scripts: the one real trap.** The game's Lua makes the effects
+(`/lua/effecttemplates.lua`, `EffectUtilities`, the unit and projectile scripts), and it calls `Random` while
+doing so: per emitter of a template, for offsets, scales and rotations. These draws come from the
+simulation's random stream (the replay comparisons show them: effectutilities, unit.lua, proptree.lua). One
+more or one fewer emitter in a template, or a different order, changes every draw after it. From that beat on,
+the game is no longer the original's, and two players with different art would no longer play the same game.
+So:
+- Do not change the Lua: no edits to template tables (their length, order or entries), and no new
+  `CreateEmitter` / `CreateAttachedEmitter` / `ScaleEmitter` / `OffsetEmitter` calls.
+- Change the look only inside the emitter / beam / trail blueprint files the templates already name.
+- If a new look needs more layers than the template has, put them inside one emitter's blueprint, or ask the
+  renderer: it can add layers on its side for a given emitter path, without the simulation knowing.
+
+**Check before it ships:** tell me the folder. I run the 13 replays with it mounted, and every one must stay
+exactly as it is.
+
 ## ui 22 a: camera shakes for the host — done
 
 `Entity:ShakeCamera` is built (it was a stub). Read in the original: `cfunc_EntityShakeCameraL` 0x68ab70 takes
