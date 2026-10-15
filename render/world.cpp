@@ -1072,6 +1072,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
 
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
+  device_->Mark("snow tracks");
   // (the tracks' picture first: its own pass)
   if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
   tracksCovering_ = 0;
@@ -1088,6 +1089,7 @@ void World::Render() {
   ribbons.Update(clock_);
 
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
+  device_->Mark("sun shadows");
   if (shadowed) {
     for (int i = 0; i < shadows.Count(); ++i) {
       device_->BeginPass(shadows.Pass(i));
@@ -1096,6 +1098,7 @@ void World::Render() {
     }
   }
   // the lamps' shadow maps: units and scenery as each lamp sees them
+  device_->Mark("lamp shadows");
   for (int i = 0; i < lampShadowsDrawn; ++i) {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
@@ -1107,7 +1110,9 @@ void World::Render() {
   device_->SetTexture(kEnvironmentSlot, sky_);
   lights.Bind();
   if (haveMap_) {
+    device_->Mark("ground");
     terrain.Draw(view);
+    device_->Mark("marks on the ground");
     // decals on the ground, before anything stands on it: they read the ground's depth
     if (decals.Count() && hide.find("decals") == std::string::npos) {
       post.BeginColorOnly();
@@ -1118,6 +1123,7 @@ void World::Render() {
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
+    device_->Mark("units and scenery");
     if (ranges.Any()) {
       ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
       ranges.night = lights.night;
@@ -1137,12 +1143,15 @@ void World::Render() {
     }
     draw.Flush(view);
     // ambient occlusion: from the depth of everything solid, laid over it before the water
+    device_->Mark("ambient occlusion");
     if (look == Look::Modern && ao.strength > 0) {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();
       ao.Apply(view);
     }
+    device_->Mark("sky");
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
+    device_->Mark("water");
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
       post.BeginColorOnly();
@@ -1166,8 +1175,10 @@ void World::Render() {
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
+  device_->Mark("see-through (shields)");
   meshes.Draw(view, environment_, false, true);
   if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
+  device_->Mark("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
@@ -1175,7 +1186,9 @@ void World::Render() {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
     post.BeginColorOnly();
+    device_->Mark("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
+    device_->Mark("particles");
     if (hide.find("particles") == std::string::npos) {
       particles.Draw(view, post.Depth(), camera.zNear);
       // those that bend what is behind them (the shimmer over heat): with the picture as it is now
@@ -1187,14 +1200,18 @@ void World::Render() {
     post.ContinueScene();
     lights.Bind();
   }
+  device_->Mark("rain, snow");
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
+  device_->Mark("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
     sight.neverSeen = unexplored ? 0.04f : sight.darkness;
     sight.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
+  device_->Mark("finishing (exposure, bloom)");
   post.Present(view);
+  device_->Mark("icons, bars");
   icons.showSymbols = iconsOn;
   icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
 }

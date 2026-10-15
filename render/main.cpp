@@ -44,6 +44,8 @@
 //           trail (behind a point circling it); a name such as phalanx_munition_beam_01, or a path
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
 //           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
+// --timings  at the end of the run, what a frame cost on average, stage by stage: the graphics card's
+//           time for each (its own clock) and the processor's for preparing, recording and handing over
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
@@ -163,6 +165,7 @@ struct Options {
   bool tracers = true;                  // --no-tracers
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
+  bool timings = false;                 // --timings
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -239,6 +242,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
+    else if (a == "--timings") o->timings = true;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
@@ -872,6 +876,18 @@ int main(int argc, char** argv) {
   double titleTime = 0;
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
   auto countedFrom = start;
+  struct {  // --timings: each stage's time added up over the frames, in the order first met
+    std::vector<std::pair<std::string, double>> sums;
+    int frames = 0;
+    void Add(const std::string& name, double ms) {
+      for (auto& s : sums)
+        if (s.first == name) {
+          s.second += ms;
+          return;
+        }
+      sums.emplace_back(name, ms);
+    }
+  } timing;
 
   while (window->Pump(&events)) {
     auto now = std::chrono::steady_clock::now();
@@ -1102,7 +1118,9 @@ int main(int argc, char** argv) {
       break;
     }
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+    const auto frameStart = std::chrono::steady_clock::now();
     device->BeginFrame(clear);
+    const auto frameBegun = std::chrono::steady_clock::now();
     // effects run on the game's clock while a game plays (so they stand still when it is paused)
     {  // the time of day: where it started, what T added, and what has passed of a running day
       float hours = (opt.timeOfDay >= 0 ? opt.timeOfDay : 12) + dayShift;
@@ -1352,7 +1370,9 @@ int main(int argc, char** argv) {
       }
     }
     if (!haveMap) DrawTestScene(draw);
+    const auto renderStart = std::chrono::steady_clock::now();
     world.Render();
+    const auto renderEnd = std::chrono::steady_clock::now();
 
     if (!(automatic && liveBusy)) {  // an automatic run counts its frames from where it was asked to look
       if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
@@ -1364,6 +1384,24 @@ int main(int argc, char** argv) {
     const bool series = opt.shots > 0 && automatic && !liveBusy && !opt.screenshot.empty() && !lastFrame && frameCount % opt.shots == 0;
     const bool shoot = wantScreenshot || series || (lastFrame && !opt.screenshot.empty());
     device->EndFrame(shoot ? &capture : nullptr);
+    if (opt.timings && !(automatic && liveBusy) && frameCount > 2) {  // (the first frames load what they need)
+      const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+      const auto frameEnd = std::chrono::steady_clock::now();
+      timing.Add("cpu: waiting for a free frame", ms(frameStart, frameBegun));
+      timing.Add("cpu: the game's frame, units, effects listed", ms(frameBegun, renderStart));
+      timing.Add("cpu: drawing recorded", ms(renderStart, renderEnd));
+      timing.Add("cpu: handed over and shown", ms(renderEnd, frameEnd));
+      timing.Add("cpu: whole frame", ms(frameStart, frameEnd));
+      std::vector<std::pair<const char*, double>> stages;
+      device->TakeTimes(&stages);
+      double gpu = 0;
+      for (const auto& s : stages) {
+        timing.Add(std::string("gpu: ") + s.first, s.second);
+        gpu += s.second;
+      }
+      if (!stages.empty()) timing.Add("gpu: whole frame", gpu);
+      ++timing.frames;
+    }
     if (shoot && !capture.empty()) {
       std::string path = wantScreenshot ? "screenshot" + std::to_string(++shotNumber) + ".png" : opt.screenshot;
       if (series && !wantScreenshot) {
@@ -1417,6 +1455,11 @@ int main(int argc, char** argv) {
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       printf("\n");
+      if (opt.timings && timing.frames > 0) {
+        printf("render: --timings: %d frames at %dx%d on %s%s, average ms a frame:\n", timing.frames, device->Width(), device->Height(),
+               device->AdapterName().c_str(), vsync ? " (vsync on: the waits include it)" : "");
+        for (const auto& s : timing.sums) printf("render: --timings:   %-48s %7.3f\n", s.first.c_str(), s.second / timing.frames);
+      }
       break;
     }
 

@@ -216,6 +216,7 @@ struct FrameSlot {
   uint32_t descriptorsUsed = 0;
   std::unordered_map<TableKey, uint32_t, TableHash> tables;
   std::vector<Com<IUnknown>> garbage;
+  std::vector<const char*> marks;  // the stages whose times this frame's queries take
 };
 
 class D3D12Device final : public Device {
@@ -238,6 +239,8 @@ class D3D12Device final : public Device {
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
+  void Mark(const char* name) override;
+  void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
 
   void BeginFrame(const float clearColor[4]) override;
   void BeginPass(const PassDesc& pass) override;
@@ -310,6 +313,13 @@ class D3D12Device final : public Device {
   std::vector<std::pair<uint32_t, uint32_t>> freeDsv_;  // first view, count
   uint32_t passColor_ = 0, passDepth_ = 0;    // the current pass's targets (0: none, or the window's)
 
+  // the stages' times: kMarks timestamp queries for each frame slot, read back once the slot's
+  // frame is done
+  static constexpr uint32_t kMarks = 64;
+  Com<ID3D12QueryHeap> timeQueries_;
+  Com<ID3D12Resource> timeReadback_;
+  double ticksPerMs_ = 0;
+  std::vector<std::pair<const char*, double>> lastTimes_;
   FrameSlot frames_[kFrames];
   int cur_ = 0;
   uint64_t frameNumber_ = 0;
@@ -450,6 +460,21 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   hr = device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence_.Put()));
   if (FAILED(hr)) return fail("CreateFence", hr);
   fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  {  // the stages' times (none when the card cannot take them: the frames are drawn all the same)
+    UINT64 frequency = 0;
+    D3D12_QUERY_HEAP_DESC qd = {};
+    qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    qd.Count = kFrames * kMarks;
+    D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_READBACK);
+    D3D12_RESOURCE_DESC rd = BufferResourceDesc(static_cast<UINT64>(kFrames) * kMarks * 8);
+    if (SUCCEEDED(queue_->GetTimestampFrequency(&frequency)) && frequency &&
+        SUCCEEDED(device_->CreateQueryHeap(&qd, IID_PPV_ARGS(timeQueries_.Put()))) &&
+        SUCCEEDED(device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                   IID_PPV_ARGS(timeReadback_.Put()))))
+      ticksPerMs_ = static_cast<double>(frequency) / 1000.0;
+    else
+      timeQueries_ = {};
+  }
 
   // the one root signature
   D3D12_DESCRIPTOR_RANGE range = {};
@@ -1051,6 +1076,24 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   cur_ = static_cast<int>(swapChain_->GetCurrentBackBufferIndex());
   FrameSlot& f = frames_[cur_];
   WaitFence(f.fence);
+  if (timeQueries_ && f.marks.size() > 1) {  // the stages' times of this slot's last frame, done now
+    void* mapped = nullptr;
+    const size_t first = static_cast<size_t>(cur_) * kMarks;
+    D3D12_RANGE range = {first * 8, (first + f.marks.size()) * 8};
+    if (SUCCEEDED(timeReadback_->Map(0, &range, &mapped))) {
+      const uint64_t* t = static_cast<const uint64_t*>(mapped) + first;
+      lastTimes_.clear();
+      for (size_t i = 0; i + 1 < f.marks.size(); ++i) {
+        const double ms = t[i + 1] >= t[i] ? static_cast<double>(t[i + 1] - t[i]) / ticksPerMs_ : 0;
+        auto same = std::find_if(lastTimes_.begin(), lastTimes_.end(), [&](const auto& s) { return std::strcmp(s.first, f.marks[i]) == 0; });
+        if (same != lastTimes_.end()) same->second += ms;
+        else lastTimes_.emplace_back(f.marks[i], ms);
+      }
+      D3D12_RANGE none = {0, 0};
+      timeReadback_->Unmap(0, &none);
+    }
+  }
+  f.marks.clear();
   f.garbage.clear();
   f.page = f.offset = 0;
   f.descriptorsUsed = 0;
@@ -1278,6 +1321,13 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture) {
     D3D12_RESOURCE_BARRIER b = Transition(f.backBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     list_->ResourceBarrier(1, &b);
   }
+  if (timeQueries_ && !f.marks.empty()) {  // the frame's end, and its times copied out for later
+    const UINT first = static_cast<UINT>(cur_) * kMarks;
+    list_->EndQuery(timeQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first + static_cast<UINT>(f.marks.size()));
+    f.marks.push_back("(end)");
+    list_->ResolveQueryData(timeQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, static_cast<UINT>(f.marks.size()), timeReadback_.Get(),
+                            static_cast<UINT64>(first) * 8);
+  }
   list_->Close();
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
@@ -1314,6 +1364,15 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture) {
     readback_->Unmap(0, &none);
   }
 }
+
+void D3D12Device::Mark(const char* name) {
+  FrameSlot& f = frames_[cur_];
+  if (!timeQueries_ || !inFrame_ || f.marks.size() >= kMarks - 1) return;
+  list_->EndQuery(timeQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(cur_) * kMarks + static_cast<UINT>(f.marks.size()));
+  f.marks.push_back(name);
+}
+
+void D3D12Device::TakeTimes(std::vector<std::pair<const char*, double>>* out) { *out = lastTimes_; }
 
 }  // namespace
 
