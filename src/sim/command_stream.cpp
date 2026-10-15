@@ -348,6 +348,13 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       float qw = in.F32(), qx = in.F32(), qy = in.F32(), qz = in.F32();
       Vec3 p{in.F32(), in.F32(), in.F32()};
       if (!in.ok || !sim.cheats || !e) break;
+      // through the entity's own Warp (0x748d3f: vt+0x44), as Lua's Warp: a unit's is Unit::Warp 0x6aa310, which
+      // takes the layer of the new place (Entity::GetStartingLayer) and its height (CalcSpawnElevation). Seen: a
+      // tactical missile launcher warped from land into the sea turns Seabed in that beat (Missiles, tick 707).
+      if (e->kind == Entity::Kind::Unit) {
+        sim.WarpUnit(L, static_cast<Unit*>(e), p, Quat{qx, qy, qz, qw});
+        break;
+      }
       e->position = p;
       e->orientation = Quat{qx, qy, qz, qw};
       break;

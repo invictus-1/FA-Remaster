@@ -213,12 +213,53 @@ int l_FlattenMapRect(lua_State* L) {
   AirTerrainChanged(m, x, z, x + sx, z + sz);
   for (Unit* u : sim.units()) {
     if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
+    if (!u->motion.bp || u->motion.bp->motionType == kMotionNone) continue;  // (below)
     if (u->position.x < x - 1 || u->position.x > x + sx + 1 || u->position.z < z - 1 || u->position.z > z + sz + 1) continue;
-    if (!u->motion.bp || u->motion.bp->motionType == kMotionNone) {
-      u->position.y = m->TerrainHeight(u->position.x, u->position.z);
-      u->lastPosition = u->position;
-    } else {
-      u->motion.needSnap = true;
+    u->motion.needSnap = true;
+  }
+  // A unit without a motion is Warped to where it stands (0x74b363: IUnit::GetTransform, then the entity's Warp,
+  // Unit::Warp 0x6aa310: the layer from Entity::GetStartingLayer for the place, the height from CalcSpawnElevation,
+  // SetCurrentLayer), when it is not dead nor being destroyed (IUnit vt+0x28 / +0x2c) and is on Land or the Seabed
+  // (0x74b340). Which units: COGrid::CollectEntitiesInBox 0x721dc0 (the units' list, mask 0x100: grid cells, the
+  // collision AABB, then the primitive against the box, touching counts) with a box centred on the rect grown by
+  // one vertex each way (x - 1 not below 0, x + sx + 1 not past the last vertex) whose EXTENTS are that grown rect's
+  // full width and depth, and 100 in y around y = 0 (0x74b203..0x74b2ed: Box3 extents are half sizes, so the box
+  // is twice the rect). Seen: a UEF construction drone's guard dummy (no motion, AttachTo(drone, -1), Seabed since
+  // CreateUnitHPR at 0,0,0) turns Land in the beat a shield generator is begun 0.67 / 0.1 beyond one corner of a
+  // skirt vertex's grown rect (FAF's FlattenSkirt flattens vertex by vertex); a drone let go elsewhere keeps Seabed.
+  {
+    const int x0m = std::max(x - 1, 0), z0m = std::max(z - 1, 0);
+    const int x1c = std::min(m->width(), x + sx + 1), z1c = std::min(m->height(), z + sz + 1);
+    const Vec3 centre{static_cast<float>(x0m + x1c) * 0.5f, 0.0f, static_cast<float>(z0m + z1c) * 0.5f};
+    const float half[3] = {static_cast<float>(x1c - x0m), 100.0f, static_cast<float>(z1c - z0m)};
+    const Vec3 axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    const Vec3 boxMn{centre.x - half[0], -half[1], centre.z - half[2]};
+    const Vec3 boxMx{centre.x + half[0], half[1], centre.z + half[2]};
+    std::vector<Entity*> cand;
+    sim.entityGrid().GatherBox(boxMn.x, boxMn.z, boxMx.x, boxMx.z, 1, &cand);
+    std::vector<Unit*> warp;
+    for (Entity* e : cand) {
+      if (e->kind != Entity::Kind::Unit) continue;
+      Unit* u = static_cast<Unit*>(e);
+      WorldShape ws;
+      if (!GetWorldShape(u, &ws)) continue;
+      Vec3 mn, mx;
+      ShapeBounds(ws, &mn, &mx);
+      if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z || mn.z > boxMx.z) continue;
+      if (!ShapeOverlapsOBox(ws, centre, axes, half)) continue;
+      warp.push_back(u);
+    }
+    static const bool dbg = getenv("MOHO64_DEBUG_FLATTEN") != nullptr;  // every unit the flattening warps
+    for (Unit* u : warp) {
+      if (u->dead || u->destroyQueued || (u->layer != "Land" && u->layer != "Seabed")) continue;
+      if (u->motion.bp && u->motion.bp->motionType != kMotionNone) continue;
+      const std::string oldLayer = u->layer;
+      const float oldY = u->position.y;
+      sim.WarpUnit(L, u, u->position, u->orientation);
+      if (dbg)
+        Logf(LogLevel::Info, "flatten %u rect %d %d %d %d: unit %u (%s) at %.4f %.4f: %s -> %s, y %.6f -> %.6f", sim.tick(), x, z,
+             sx, sz, u->id, u->blueprint ? u->blueprint->id.c_str() : "?", u->position.x, u->position.z, oldLayer.c_str(),
+             u->layer.c_str(), oldY, u->position.y);
     }
   }
   sim.MarkUnitsMoved();
