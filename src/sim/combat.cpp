@@ -371,10 +371,10 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
   if (bone == kAimBoneMissing) {
     // A target point whose bone the model does not have (ues0201 lists 'UES0202', the cruiser's root): the point
     // is asked of Unit::GetBoneWorldTransform with bone -1, which is the pose's own place and half the unit's
-    // SizeY above it (0x6aa637), without the collision offset the centre below has.
+    // SizeY above it (0x6aa637: straight up in the world's axes, the offset composed as the outer transform),
+    // without the collision offset the centre below has.
     const Vec3& bp = u->poseSet ? u->poseBasePos : u->position;
-    const Quat& bq = u->poseSet ? u->poseBaseOri : u->orientation;
-    return Add(bp, RotateM(bq, Vec3{0.0f, u->bpSizeY * 0.5f, 0.0f}));
+    return Add(bp, Vec3{0.0f, u->bpSizeY * 0.5f, 0.0f});
   }
   if (u->blueprint) return Add(u->position, RotateM(u->orientation, u->bpCenter));  // bone -1 (0x679d19)
   return u->position;

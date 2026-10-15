@@ -1428,11 +1428,13 @@ void Sim::Tick() {
         Vec3 bp;
         Quat bq;
         BoneWorld(p, u->parentBone, &bp, &bq);
-        // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform
-        // 0x6aa637): a drone's guard dummy, AttachTo(drone, -1), rides there
+        // bone -1 of a unit is half its SizeY straight above its origin, in the world's axes, not the unit's
+        // (Unit::GetBoneWorldTransform 0x6aa637 composes the offset as the outer transform): a drone's guard dummy,
+        // AttachTo(drone, -1), rides there. (Seen: a UEF construction drone banking 0.004; the original's dummy
+        // keeps the drone's x to the last digit, ours, turning the offset, slid 0.001 aside.)
         if (u->parentBone == -1 && p->kind == Entity::Kind::Unit) {
           const Unit* pu = static_cast<const Unit*>(p);
-          if (pu->motion.bp) bp = vm::Add(bp, vm::RotateM(bq, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f}));
+          if (pu->motion.bp) bp = vm::Add(bp, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
         }
         Vec3 np = bp;
         Quat nq = bq;
@@ -1538,13 +1540,12 @@ void Sim::Tick() {
         e->orientation = p->shapeHeld ? p->shapeOri : p->orientation;
         if (e->attachBone == -1 && p->blueprint) e->position = vm::Add(e->position, vm::RotateM(e->orientation, p->bpCenter));
       }
-      // bone -1 of a unit is its centre, half its SizeY above its origin (Unit::GetBoneWorldTransform 0x6aa637):
-      // a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its origin
-      // before the ShieldVerticalOffset)
+      // bone -1 of a unit is half its SizeY straight above its origin, in the world's axes (Unit::GetBoneWorldTransform
+      // 0x6aa637): a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its
+      // origin before the ShieldVerticalOffset)
       if (e->attachBone == -1 && p->kind == Entity::Kind::Unit) {
         const Unit* pu = static_cast<const Unit*>(p);
-        if (pu->motion.bp)
-          e->position = vm::Add(e->position, vm::RotateM(e->orientation, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f}));
+        if (pu->motion.bp) e->position = vm::Add(e->position, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
       }
       // Entity:SetParentOffset 0x68c330: its transform relative to the bone (entity+0x19c: no rotation, the vector)
       if (e->attachOffset.x != 0 || e->attachOffset.y != 0 || e->attachOffset.z != 0)
