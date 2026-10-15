@@ -2067,6 +2067,15 @@ bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int sp
 }
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]) { GroundReserveRectImpl(sim, u, r); }
 void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
+bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]) { return GroundCanReserve(sim, u, r); }
+bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz) {  // as GroundSpotOkImpl's "caps" test
+  const NamedFootprint& fp = u->motion.bp->footprint;
+  const PathGrid* g = sim.navigation().Grid(fp);
+  int c = g ? g->Caps(cx, cz) : 0;
+  if (u->layer == "Water") c &= ~kSub;
+  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) c &= ~3;
+  return c != 0;
+}
 
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
   if (!u->motion.air) return false;

@@ -749,6 +749,178 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   }
 }
 
+// The units COGrid::CollectEntitiesInBox 0x721dc0 (mask 0x100) gives for the box [x0, x1] x [-100, 100] x
+// [z0, z1] (centre y 0, half height 100 [0xe4f744], as Sim::LocationIsFree and SIM_TryToBuild build it): the grid's
+// cells, then the collision primitive's bounds and its CollideBox against the box (touching counts), in grid order.
+std::vector<Unit*> UnitsMeetingBox(Sim& sim, float x0, float z0, float x1, float z1) {
+  const Vec3 mn{x0, -100.0f, z0}, mx{x1, 100.0f, z1};
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(mn.x, mn.z, mx.x, mx.z, 1, &cand);
+  std::vector<Unit*> out;
+  for (Entity* e : cand) {
+    if (e->kind != Entity::Kind::Unit) continue;
+    WorldShape ws;
+    if (!GetWorldShape(e, &ws)) continue;
+    Vec3 a, b;
+    ShapeBounds(ws, &a, &b);
+    if (a.x > mx.x || b.x < mn.x || a.y > mx.y || b.y < mn.y || a.z > mx.z || b.z < mn.z) continue;
+    if (!ShapeOverlapsAABox(ws, mn, mx)) continue;
+    out.push_back(static_cast<Unit*>(e));
+  }
+  return out;
+}
+
+// Sim::LocationIsFree 0x62da50 with flag 0 (CUnitMobileBuildTask state 3, 0x5f7b04, on the footprint rect
+// task+0xc8): false when a unit in the rect's box (UnitsMeetingBox) other than `self`, alive and not on the Air
+// layer, is mobile (vt+0x30: it blocks at once) or, not mobile, has a skirt rect (0x51ec50) that overlaps the rect
+// strictly. (Flag 1, the factory's, also lets units with a command in their queue through: FactorySiteBlocked. A
+// unit the builder carries, builder+0x55c vt+0x70, does not count: not modelled, no mobile builder carries.)
+bool LocationFreeOfUnits(Sim& sim, lua_State* L, const Unit* self, const int r[4]) {
+  for (Unit* e : UnitsMeetingBox(sim, static_cast<float>(r[0]), static_cast<float>(r[1]), static_cast<float>(r[2]),
+                                 static_cast<float>(r[3]))) {
+    if (e == self || e->dead || !e->blueprint) continue;
+    if (e->layer == "Air") continue;
+    if (!(e->motion.bp && e->motion.bp->mobile())) {
+      const FRect s = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+      const float rx0 = static_cast<float>(r[0]), rz0 = static_cast<float>(r[1]);
+      const float rx1 = static_cast<float>(r[2]), rz1 = static_cast<float>(r[3]);
+      if (!(rx1 > s.x0 && s.x1 > rx0 && rz1 > s.z0 && s.z1 > rz0 && s.x1 > s.x0 && s.z0 < s.z1 && rx1 > rx0 &&
+            rz0 < rz1))
+        continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// SIM_TryToBuild 0x62dd40 with flag 0 (CUnitMobileBuildTask state 3, 0x5f7b71): the army's units in the box of
+// the rect r that are mobile, not on the Air layer, alive, and stand still (position == previous, memcmp of
+// u+0xb4 / u+0xd0; AIR units (u+0x68b) need not) are sent away, each in gather order:
+// - along the ray from the rect's centre through the unit, from the unit's place (+0.5) out to 3 x the rect's
+//   larger half size (a grid traversal 0x40d860, cell by cell), the first cell w whose footprint rect
+//   (fistp(w - Size/2), integer w) does not touch r (closed), fits (terrain, structures), can be reserved and
+//   Sim::LocationIsFree(that unit, rect, 0) holds;
+// - else square rings around the unit stepping by 4 x its footprint size (900 candidates), the first that passes;
+// - the spot is reserved (ReserveOgridRect) and the unit's navigator gets SetGoal(1x1 at that cell) (vt+8)
+//   directly: no command, the move task it may run goes on listening.
+// At the end every blocker's reservation is freed (0x62ea40).
+// Seen: Economy 1779, commanders 36 / 38 building an Aeon land factory find commander 37 standing on its footprint
+// (it is still thinking about its own way out): 37 is sent to (856, 430) and starts one beat later than with the
+// goal (854, 427) its own PrepareMove gave it. (MOHO64_DEBUG_PREPMOVE=<blocker id> or -2: every call and spot.)
+void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4]) {
+  const float cx = static_cast<float>(r[0] + r[2]) * 0.5f, cz = static_cast<float>(r[1] + r[3]) * 0.5f;
+  const float hx = static_cast<float>(r[2] - r[0]) * 0.5f, hz = static_cast<float>(r[3] - r[1]) * 0.5f;
+  const float R = hz > hx ? hz : hx;
+  static const long dbg = getenv("MOHO64_DEBUG_PREPMOVE") ? atol(getenv("MOHO64_DEBUG_PREPMOVE")) : -1;
+  if (dbg == -2)
+    Logf(LogLevel::Info, "trytobuild %u army %d rect %d %d %d %d", sim.tick(), army ? army->index : -1, r[0], r[1], r[2],
+         r[3]);
+  std::vector<Unit*> blockers;
+  for (Unit* b : UnitsMeetingBox(sim, cx - hx, cz - hz, cx + hx, cz + hz)) {
+    if (!(b->motion.bp && b->motion.bp->mobile())) continue;  // vt+0x30
+    const bool moved = b->position.x != b->lastPosition.x || b->position.y != b->lastPosition.y ||
+                       b->position.z != b->lastPosition.z;
+    if (moved && !BpInCategory(sim, b->blueprint, "AIR")) continue;
+    if (b->layer == "Air" || b->dead || b->army != army) continue;
+    blockers.push_back(b);
+  }
+  for (Unit* b : blockers) {
+    const NamedFootprint& fp = b->motion.bp->footprint;
+    auto rectAt = [&](float wx, float wz, int* q) {
+      q[0] = static_cast<int16_t>(RoundEven(wx - fp.sizeX * 0.5f));
+      q[1] = static_cast<int16_t>(RoundEven(wz - fp.sizeZ * 0.5f));
+      q[2] = q[0] + fp.sizeX;
+      q[3] = q[1] + fp.sizeZ;
+    };
+    auto good = [&](const int* q) {
+      const bool touches = q[2] >= r[0] && r[2] >= q[0] && q[3] >= r[1] && r[3] >= q[1] && r[0] < r[2] &&
+                           r[1] < r[3] && q[0] < q[2] && q[1] < q[3];
+      return !touches && GroundCellFits(sim, b, q[0], q[1]) && GroundCanReserveRect(sim, b, q) &&
+             LocationFreeOfUnits(sim, L, b, q);
+    };
+    const Vec3 pos = b->position;
+    const float dx = pos.x - cx, dz = pos.z - cz;
+    float ux = 0.0f, uz = 1.0f;  // (0, 0, 1) when the unit stands on the centre (memcmp with 0xf3d21c)
+    uint32_t bx, bz;
+    std::memcpy(&bx, &dx, 4);
+    std::memcpy(&bz, &dz, 4);
+    if (bx != 0 || bz != 0) {
+      const float len = std::sqrt(dx * dx + dz * dz);
+      if (len > 1e-6f) {  // 0xd71bfc
+        const float inv = 1.0f / len;
+        ux = dx * inv;
+        uz = dz * inv;
+      } else {
+        ux = uz = 0.0f;
+      }
+    }
+    const float fx = pos.x + ux * R * 3.0f, fz = pos.z + uz * R * 3.0f;  // 0xe4f718
+    // InitGridTraversalLine 0x40d860 from (pos + 0.5) to (far + 0.5): mirrored (-0.0 - v, mask -1) toward -x / -z
+    float sx = pos.x + 0.5f, ex = fx + 0.5f, sz = pos.z + 0.5f, ez = fz + 0.5f;
+    int mxk = 0, mzk = 0;
+    if (ex < sx) {
+      sx = -0.0f - sx;
+      ex = -0.0f - ex;
+      mxk = -1;
+    }
+    if (ez < sz) {
+      sz = -0.0f - sz;
+      ez = -0.0f - ez;
+      mzk = -1;
+    }
+    const float ldx = ex - sx, ldz = ez - sz;
+    int gx = static_cast<int>(std::floor(sx)), gz = static_cast<int>(std::floor(sz));
+    bool found = false;
+    float wx = 0, wz = 0;
+    int q[4];
+    for (;;) {
+      wx = static_cast<float>(gx ^ mxk);
+      wz = static_cast<float>(gz ^ mzk);
+      rectAt(wx, wz, q);
+      if (good(q)) {
+        found = true;
+        break;
+      }
+      const int nx = gx + 1, nz = gz + 1;
+      const float tx = (static_cast<float>(nx) - ex) * ldz, tz = (static_cast<float>(nz) - ez) * ldx;
+      if (tz > tx) gx = nx;
+      else gz = nz;
+      if (static_cast<float>(gx) > ex || static_cast<float>(gz) > ez) break;
+    }
+    if (!found) {  // 0x62e4b1: rings of 4 x the footprint size around the unit, the first spot that passes
+      const int step = 4 * std::max<int>(fp.sizeX, fp.sizeZ);
+      int count = 0;
+      for (int ring = 1; !found && count < 900; ++ring)
+        for (int i = -ring; i <= ring && !found; ++i) {
+          const int jStep = (i == -ring || i == ring) ? 1 : 2 * ring;
+          for (int j = -ring; j <= ring; j += jStep) {
+            wx = b->position.x + static_cast<float>(i * step);
+            wz = b->position.z + static_cast<float>(j * step);
+            ++count;
+            rectAt(wx, wz, q);
+            if (good(q)) {
+              found = true;
+              break;
+            }
+          }
+        }
+    }
+    if (dbg == -2 || dbg == static_cast<long>(b->id))
+      Logf(LogLevel::Info, "trytobuild %u unit %u at %.3f %.3f rect %d %d %d %d: %s (%d,%d)", sim.tick(), b->id, pos.x,
+           pos.z, r[0], r[1], r[2], r[3], found ? "goal" : "no spot", found ? q[0] : 0, found ? q[1] : 0);
+    if (!found) continue;
+    GroundReserveRect(sim, b, q);
+    if (b->motion.bp->motionType == kMotionAir) {  // (the air navigator's SetGoal: the cell's world point)
+      MotionSetGoal(sim, b, std::vector<Vec3>{Vec3{q[0] + fp.sizeX * 0.5f, b->position.y, q[1] + fp.sizeZ * 0.5f}},
+                    b->motion.passThrough, sim.tick());
+    } else {  // CAiNavigatorLand::SetGoal 0x5a3ed0 (it keeps the speed-through request)
+      const bool through = b->motion.nav && b->motion.nav->speedThroughGoal;
+      LandNavSetGoalRect(sim, b, q[0], q[1], q[0] + 1, q[1] + 1, through);
+    }
+  }
+  for (Unit* b : blockers) GroundFreeRect(sim, b);
+}
+
 // CUnitMobileBuildTask::Tick 0x5f7440 (engine-ref mobile_build.md): states 1 -> 2 -> 3 run in one beat (the
 // original's return 0), so a builder whose arm is already on target creates the structure the beat after the
 // order; joining a structure at the site works in the same beat.
@@ -814,12 +986,28 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 3: {
       if (u->paused) return kTaskRunning;      // (return 10)
       if (sim.tick() < t.waitUntil) return kTaskRunning;
+      if (t.tries > 10) return kTaskFailed;  // 0x5f7a0b (tries: the "units in the way" rounds below)
       if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {  // join: no arm wait, work this beat
         SetFocus(sim, L, u, ex, t);
         t.state = 4;
         continue;
       }
       if (!LocationIsFree(sim, *t.bp, t.site.x, t.site.z)) return kTaskFailed;
+      {  // 0x5f7af9: Sim::LocationIsFree(builder, footprint rect +0xc8, 0); a unit there: SIM_TryToBuild on the
+         // footprint rect (0x51ed80) with z0 - 1 and x1 + 1 (x0, z1 unchanged, as compiled), tries + 1, return 50.
+         // Seen: bench 561, engineer 0x600004 does not start the hydro at (902.5, 80.5) while 0x600008 walks across
+         // its footprint (a moving unit blocks, but is not sent away); ours used to create it at once.
+        const NamedFootprint& sfp = Footprint(*t.bp);
+        const int sx0 = RoundEven(t.site.x - sfp.sizeX * 0.5f), sz0 = RoundEven(t.site.z - sfp.sizeZ * 0.5f);
+        const int fr[4] = {sx0, sz0, sx0 + sfp.sizeX, sz0 + sfp.sizeZ};
+        if (!LocationFreeOfUnits(sim, L, u, fr)) {
+          const int rr[4] = {fr[0], fr[1] - 1, fr[2] + 1, fr[3]};
+          TryToBuild(sim, L, u->army, rr);
+          ++t.tries;
+          t.waitUntil = sim.tick() + 49;  // return 50: runs again 49 beats later
+          return kTaskRunning;
+        }
+      }
       if (!u->armReady) return kTaskRunning;  // 0x5f7ba7: wait for the build arm (after the location checks)
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
       if (!UnderUnitCap(u->army, d)) {

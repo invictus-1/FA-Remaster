@@ -150,6 +150,11 @@ bool GroundPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float excl[4], int sp
 // A ground unit's o-grid reservation (ReserveOgridRect / FreeOgridRect).
 void GroundReserveRect(Sim& sim, Unit* u, const int r[4]);
 void GroundFreeRect(Sim& sim, Unit* u);
+// Unit::CanReserveOgridRect 0x6ab810 (its own reservation does not count).
+bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]);
+// OCCUPY_FootprintFits 0x7209e0 at a footprint-origin cell with OCCUPY_MobileCheck 0x564ab0's caps (no Sub on the
+// Water layer): terrain and structures.
+bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
 // CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
