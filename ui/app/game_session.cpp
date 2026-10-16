@@ -48,6 +48,7 @@ struct GameSession::Picture : WorldSource {
   render::Camera camera;
   int cameraW = 0, cameraH = 0;
   bool vsync = true;
+  int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
   bool DrawsToWindow() const override { return direct; }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
@@ -537,7 +538,19 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
 struct GameSession::MenuPicture {
   render::WorldPicture picture;
   bool vsync = true;
+  int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
 };
+namespace {
+// The interface layer to the renderer: only its changed part, but all of it the first time and
+// after a change of size (as SetInterfaceLayer asks).
+void GiveLayer(render::WorldPicture& picture, const SoftwareTarget& target, const IntRect& changed, int* layerW, int* layerH) {
+  const int w = target.Width(), h = target.Height();
+  IntRect part = changed.Intersect(IntRect{0, 0, w, h});
+  if (*layerW != w || *layerH != h) part = IntRect{0, 0, w, h}, *layerW = w, *layerH = h;
+  if (part.empty()) part = IntRect{};
+  picture.SetInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
+}
+}  // namespace
 #else
 struct GameSession::MenuPicture {};
 #endif
@@ -568,7 +581,7 @@ void SaveWindowCapture(const std::vector<uint8_t>& rgba, int w, int h, const std
 }  // namespace
 #endif
 
-void GameSession::PresentToWindow(const SoftwareTarget& target) {
+void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (!window) return;
   if (!picture_) {  // no game: the menu's picture, the interface alone over black
@@ -585,7 +598,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
     }
     MenuPicture& menu = *menuPicture_;
     const int w = target.Width(), h = target.Height();
-    menu.picture.SetInterfaceLayer(target.pixels().data(), w, h, w, 0, 0, w, h);
+    GiveLayer(menu.picture, target, changed, &menu.layerW, &menu.layerH);
     const bool vsync = Pacing().verticalSync;
     if (vsync != menu.vsync) menu.picture.SetVsync(vsync), menu.vsync = vsync;
     std::vector<uint8_t> rgba;
@@ -597,9 +610,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
   if (!picture_->direct) return;
   Picture& pic = *picture_;
   const int w = target.Width(), h = target.Height();
-  // The whole interface layer every frame (the renderer unions changed parts; the layer is drawn
-  // anew each frame, so all of it counts as changed).
-  pic.picture.SetInterfaceLayer(target.pixels().data(), w, h, w, 0, 0, w, h);
+  // (The renderer unions the changed parts until its next frame.)
+  GiveLayer(pic.picture, target, changed, &pic.layerW, &pic.layerH);
   const bool vsync = Pacing().verticalSync;
   if (vsync != pic.vsync) pic.picture.SetVsync(vsync), pic.vsync = vsync;
   std::vector<uint8_t> rgba;
@@ -612,6 +624,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
   if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
 #else
   (void)target;
+  (void)changed;
 #endif
 }
 

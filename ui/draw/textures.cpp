@@ -244,7 +244,10 @@ bool DecodePng(const std::string& d, Image& img) {
 
 }  // namespace
 
-bool DecodeImage(const std::string& data, Image& out) { return DecodeDds(data, out) || DecodePng(data, out); }
+bool DecodeImage(const std::string& data, Image& out) {
+  out.serial = NewImageSerial();  // (new pixels in place: new content for draw/recorder.h)
+  return DecodeDds(data, out) || DecodePng(data, out);
+}
 
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath) {
   static std::map<std::string, Image> cache;

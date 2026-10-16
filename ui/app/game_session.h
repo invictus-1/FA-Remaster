@@ -130,8 +130,9 @@ class GameSession {
   void OpenPictureIfDue();
   bool DrawsToWindow() const;
   // The frame drawn and shown: the world, `target` (the interface, premultiplied ARGB, the
-  // window's size, transparent where the world shows) over it.
-  void PresentToWindow(const SoftwareTarget& target);
+  // window's size, transparent where the world shows) over it. `changed`: the part of `target`
+  // drawn anew since the last call (a picture new or of another size takes all of it).
+  void PresentToWindow(const SoftwareTarget& target, const IntRect& changed);
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
 

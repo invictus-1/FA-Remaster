@@ -16,9 +16,14 @@ class Vfs;
 
 namespace moho::ui {
 
+// A number no image had before: an image's `serial` names its content, so a drawing that is
+// compared with the last frame's (draw/recorder.h) sees new content even under the same address.
+uint64_t NewImageSerial();
+
 struct Image {
   int width = 0, height = 0;
   std::vector<uint32_t> pixels;  // 0xAARRGGBB, row by row from the top
+  uint64_t serial = NewImageSerial();  // (a copy keeps it; new pixels in place need a new one)
   bool valid() const { return width > 0 && height > 0; }
 };
 
@@ -32,6 +37,15 @@ struct GlyphMask {
 
 struct Rect {
   float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
+// Whole pixels [x0, x1) x [y0, y1).
+struct IntRect {
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  bool empty() const { return x0 >= x1 || y0 >= y1; }
+  long long area() const { return empty() ? 0 : static_cast<long long>(x1 - x0) * (y1 - y0); }
+  IntRect Intersect(const IntRect& o) const;
+  IntRect Union(const IntRect& o) const;  // the box round both (an empty one adds nothing)
 };
 
 class DrawTarget {
@@ -69,13 +83,24 @@ class SoftwareTarget : public DrawTarget {
   void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) override;
 
   void Clear(uint32_t color);
+  // These pixels set to `color` (no blending), within the target.
+  void ClearRect(const IntRect& r, uint32_t color);
+  // The clip in whole pixels (within the target).
+  void SetClipPixels(const IntRect& r);
   const std::vector<uint32_t>& pixels() const { return pixels_; }  // 0xAARRGGBB rows from the top
   bool SavePng(const std::string& hostPath) const;
+  // The box round every pixel drawn since ResetTouched (Clear and ClearRect do not count).
+  void ResetTouched() { touched_ = IntRect{}; }
+  const IntRect& Touched() const { return touched_; }
 
  private:
+  void Touch(int x0, int y0, int x1, int y1) {
+    if (x0 < x1 && y0 < y1) touched_ = touched_.Union(IntRect{x0, y0, x1, y1});
+  }
   int width_, height_;
   int cx0_, cy0_, cx1_, cy1_;  // clip, in whole pixels
   std::vector<uint32_t> pixels_;
+  IntRect touched_;
 };
 
 // Decode a texture file's top mip level (.dds: DXT1/3/5 and uncompressed formats). An image that

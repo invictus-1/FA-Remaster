@@ -481,7 +481,7 @@ int main(int argc, char** argv) {
         session.OpenPictureIfDue();  // (a launched table's game: its picture opens now, the window still hidden)
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
-      hooks.present = [&](const ui::SoftwareTarget& layer) { session.PresentToWindow(layer); };
+      hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
