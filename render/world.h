@@ -186,6 +186,15 @@ class World {
   };
   std::vector<Line> lines;
   std::vector<Ring> rings;
+  // Pictures the interface lays on the ground (the game's UserDecal: the rings of a weapon's splash
+  // while the player aims, a nuke's two rings): a texture of the game's files, its middle and its
+  // size across in world units; square to the map (north up), in their own colours, under the units.
+  struct UserDecal {
+    std::string texture;
+    float x = 0, z = 0;
+    float sizeX = 1, sizeZ = 1;
+  };
+  std::vector<UserDecal> userDecals;
   // Meshes the interface's script places in the world (placed.h): rally points, cursor marks,
   // the mark where an order lands.
   std::vector<PlacedMesh> placed;
