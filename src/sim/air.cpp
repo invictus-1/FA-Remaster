@@ -501,28 +501,29 @@ bool IsMoveLikeType(CommandType t) {
 void UpdateSpeedThrough(Sim& sim, Unit* u) {
   if (!u->motion.bp) return;
   if (u->beingBuilt || u->dead || u->destroyQueued) return;
-  if (u->motion.bp->motionType != kMotionAir) {
-    // the same status for a land navigator (0x6ac940 is one function for every unit)
-    if (!u->motion.nav || !u->motion.bp->mobile()) return;
-    bool lv;
-    if (State(u, "ForceSpeedThrough")) lv = true;
-    else if (State(u, "Guarding") && !State(u, "Ferrying") && !InCategory(sim, u, "EXPERIMENTAL")) lv = true;
-    else {
-      const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
-      const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
-      lv = cur && next && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
-    }
-    LandNavSetSpeedThrough(u, lv);
-    return;
-  }
+  const bool air = u->motion.bp->motionType == kMotionAir;
+  // (a land navigator gets the same status: 0x6ac940 is one function for every unit)
+  if (!air && (!u->motion.nav || !u->motion.bp->mobile())) return;
+  const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
+  const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
   bool v;
-  if (State(u, "Refueling")) v = false;
-  else if (State(u, "ForceSpeedThrough") || State(u, "CannotFindPlaceToLand")) v = true;
-  else if (State(u, "Guarding") && !State(u, "Ferrying") && !InCategory(sim, u, "EXPERIMENTAL")) v = true;
-  else {
-    const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
-    const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
-    v = cur && next && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
+  if (State(u, "Refueling")) v = false;  // (state 30, 0x6ac9c9)
+  else if (State(u, "ForceSpeedThrough") || State(u, "CannotFindPlaceToLand")) v = true;  // (32, 36)
+  // 0x6ac9ff..0x6aca58: the guard rule asks the blueprint's Air.CanFly (ubp+0x368) first, so it is for flyers only.
+  // (Seen: Economy 3839, land SACU 0xc guarding with a Reclaim queued behind its Guard: the original's speed-through
+  // stays 0, ours turned it on.)
+  else if (u->motion.bp->canFly && State(u, "Guarding") && !State(u, "Ferrying") &&
+           !InCategory(sim, u, "EXPERIMENTAL"))
+    v = true;
+  else if (cur && State(u, "AssistMoving")) v = false;  // (state 22, 0x6aca87)
+  // 0x6aca91..0x6acac2: a formation follower (a leader link, unit+0x584, to another unit) on a move-like head: off
+  else if (cur && IsMoveLikeType(cur->type) && u->formLeader && u->formLeader != EntityRef(u)) v = false;
+  // NOT MODELLED: next.IsCoordinating() (0x5f24e0, cmd+0x148 non-empty) also turns it off; coordinated orders are not
+  // kept yet
+  else v = cur && next && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
+  if (!air) {
+    LandNavSetSpeedThrough(u, v);
+    return;
   }
   u->motion.airSpeedThrough = v;
   if (u->motion.air) A(u).fullSpeed = v;

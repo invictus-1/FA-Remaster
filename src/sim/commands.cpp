@@ -507,8 +507,39 @@ static bool HeadTaskStopsMotion(const Unit* u) {
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (u->commands.front()->type == CommandType::Move) return true;
+  return TaskThreadAsleepOnMove(u);  // (the head task's walking child, or its guard child's: build.cpp)
+}
+
+// Whether the navigator's event (Succeeded / Failed) re-links the unit's command thread. Only a move task listens
+// to the navigator: CUnitMoveTask (a Move order's own task, or a task's walking child, NewMoveTask 0x6190a0) and
+// CUnitFormAndMoveTask suspend the thread in their ctors (0x6186d6, 0x6194b8: +0x18 = 1, off the run list), and
+// their OnEvent (0x618c11, 0x6196db) puts a SUSPENDED thread back at the stage's new end (every inlined resume in
+// the exe tests +0x18 first). A goal set on the navigator directly wakes nobody:
+// - SIM_TryToBuild 0x62dd40 sends a standing unit away with navigator vt+8 SetGoal (no command, no task), whether
+//   the unit is idle or busy with a task of its own (build.cpp TryToBuild);
+// - the patrol / attack-move task (CUnitPatrolTask::TaskTick 0x61c130) calls nav.SetGoal and returns 7: no
+//   navigator listener (attack_move.md 2.3), so a patrol leg's arrival re-links nothing, and neither does a clear
+//   (its thread is not asleep);
+// - the attack task (CUnitAttackTargetTask) sets the navigator's goal itself and listens to its attacker and its
+//   command only (attack_move.md 3: in range it suspends with the navigator still going; the weapon codes wake it);
+// - a build-like task (build, repair, reclaim, capture ...) or a guard: only while its walking child runs.
+// Seen: Economy 4865, fourteen units given a Capture at 4864 reserve their spots beside the target in thread order.
+// Ours had re-linked the commander 0x0 at 3091 (the end of a SIM_TryToBuild walk of 3027) and the engineer 0x4 at
+// each patrol leg (4494-4506), so the engineer 0x3 (last re-linked 2095, its walk to a build site) came second and
+// took (671, 179), whose path runs west of the T3 generator 0x17; in the original 0x4 and 0x0 come before it, take
+// (671, 179) and (672, 179), and 0x3 takes (673, 179): its path and every beat of its walk until 5708 now match.
+// (The attack and guard cases are read, not seen: no gate replay changes with them. A plain Move / FormMove head and
+// the transport tasks keep re-linking at their navigator's end as before.)
+bool NavEventWakesCommandThread(const Unit* u) {
+  if (u->commands.empty() || u->headState == kNotStarted) return false;  // idle: a SIM_TryToBuild goal
   const BuildTask* t = u->task;
-  return t && (t->moving || (t->sub && t->sub->moving)) && u->motion.hasGoal;
+  if (IsPatrolType(u->commands.front()->type)) {  // only the patrol's child's walk listens
+    const BuildTask* c = t && t->pdata ? t->pdata->child : nullptr;
+    return c && (c->moving || (c->sub && c->sub->moving));
+  }
+  if (t && t->adata) return false;
+  if (t && !t->tdata && !t->pdata) return TaskThreadAsleepOnMove(u);  // (its walking child, or its guard child's)
+  return true;
 }
 
 void ForgetUnitCommands(Unit* u) {
@@ -574,7 +605,23 @@ void ArrivalStep(Sim& sim, Unit* u) {
 }
 
 void CommandStep(Sim& sim, Unit* u) {
-  if (!IsAlive(u)) return;
+  if (!u || u->dead) return;
+  if (u->destroyQueued) {
+    // Entity::Destroy 0x679af0 only flags and queues the entity; its command thread stays in the stage and the queue
+    // lives until ~Unit (Purge, after the beat's drain). A task already running therefore still runs in the beat its
+    // unit was destroyed in (CUnitUpgradeTask::TaskTick 0x5f8890 asks nothing of its unit's end). Nothing new is
+    // started here (not read: the dispatcher's own tests, 0x598f6d..0x598fa7, do not ask for DestroyQueued either).
+    // Seen: Economy 3952, T2 mex 0x3a reclaimed by 0xa (an earlier thread) while upgrading; the original's upgrade
+    // 0x57 still gains its step in that beat (574.4 -> 578.0).
+    if (u->task && u->headState == kRunning && !u->commands.empty()) {
+      BuildTask* task = u->task;
+      if (TickBuildTask(sim, u, *task) != kTaskRunning) {
+        u->task = nullptr;
+        PopHead(u);
+      }
+    }
+    return;
+  }
   if (u->commands.empty()) return;
   int& st = u->headState;
   if (st == kNotStarted) StartHead(sim, u);
@@ -993,7 +1040,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // idle ones are dispatched first, whatever their ids. Seen: 28 ships ordered to one place, each reserving
       // its spot at dispatch (formation AdjustPosition); the ones already moving came last and had to give way.
       const bool moveAsleep = hadCommands && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
-      const bool asleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
+      // (a task's walking child too, a guard's child's included. Seen: Economy 3965, SACUs 0x26 (a build walking) and
+      // 0x27 (guarding 0x26, its child walking) get a Reclaim with clear: both threads wake and go to the run list's end
+      // in the message's unit order, so 0x26 runs before 0x27 from then on; at 4483 the second of the two reclaimers of
+      // 0x40 takes its last step and gets the wreck: 0x27 in the original. Ours had 0x27 first (its last re-link 3263,
+      // 0x26's 3886).)
+      const bool asleep = ThreadAsleepOnMove(u);
       u->clearKeepsMove = keep;
       const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
       ForgetUnitCommands(u);

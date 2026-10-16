@@ -86,6 +86,8 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t);
 // The command goes away (cleared, unit destroyed, ...).
 void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 void StopMovingIfTask(Unit* u, const BuildTask& t);
+// The unit's command thread sleeps on a walking child of its head task (a clear of its queue wakes it: re-linked).
+bool TaskThreadAsleepOnMove(const Unit* u);
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);

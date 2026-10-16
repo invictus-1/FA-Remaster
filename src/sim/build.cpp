@@ -701,6 +701,12 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         if (Alive(tu)) tu->unitStates.insert("BeingReclaimed");
         return kTaskRunning;
       }
+      // 0x61f955..0x61f975: a builder in state Guarding (4) or AssistingCommander (0x1d) does not take the last step:
+      // the task returns 1 (ebx, 0x61f71e) and leaves the target as it is, for a reclaimer of its own order. (Seen:
+      // Economy 3896, SACU 0xa reclaims mex 0x15 and SACU 0xc, guarding 0xa, helps; 0xa's step leaves 23.5 of it,
+      // 0xc's would kill it but the original's 0x15 is still there after the beat; 0xa kills it at 3897 and goes on
+      // to reclaim the wreck until 3902. Ours let 0xc kill it at 3896, and 0xa went to its next order.)
+      if (u->unitStates.count("Guarding") || u->unitStates.count("AssistingCommander")) return kTaskRunning;
       PushObject(L, u);
       sim.CallMethod(L, tu, "OnReclaimed", 1);
       // its wreck (0x620760: the script's CreateWreckageProp with an overkill of 0), then the unit goes
@@ -745,7 +751,12 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       return kTaskRunning;
     }
     case 4: {
-      if (gap > maxBD) return kTaskFailed;
+      // 0x61fdae..0x61fddd: the range test asks the target's GetUnit (vt+0x10) first: only a UNIT out of range ends
+      // the reclaim here; a prop is reclaimed to the end from wherever the builder stands. (Seen: Economy 4483,
+      // SACU 0x27 kills the T3 power generator 0x40 from 12.45 away, its footprint 5 counting, and goes on to its wreck,
+      // footprint 1 (the DefaultWreckage prop has none): gap 10.45 > MaxBuildDistance 10; the original reclaims the wreck
+      // until 4510, ours dropped it at once.)
+      if (tu && gap > maxBD) return kTaskFailed;
       if (!c.reclaimStarted) {
         c.reclaimStarted = true;
         PushObject(L, e);
@@ -3001,6 +3012,26 @@ void StopMovingIfTask(Unit* u, const BuildTask& t) {
   EndMoveChild(u);
 }
 
+// Whether the unit's command thread sleeps on a walking child (a CUnitMoveTask pushed by the head task, or by the
+// guard's child, waits for the navigator's event: the thread is suspended until then, beat_order.md 2.6).
+bool TaskThreadAsleepOnMove(const Unit* u) {
+  if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
+  for (const BuildTask* t = u->task; t;) {
+    if (t->moving) return true;
+    if (t->sub) {
+      t = t->sub;
+      continue;
+    }
+    if (t->gdata) {
+      if (t->gdata->childMove) return true;
+      t = t->gdata->child;
+      continue;
+    }
+    break;
+  }
+  return false;
+}
+
 // ---- factories -----------------------------------------------------------------------------------
 
 // ---- the factory's rally queue (CAiBuilderImpl, factory_handoff.md 3) and the hand-off (1.3, 2) ----
@@ -3353,15 +3384,53 @@ int l_GetGuards(lua_State* L) {  // 0x6cd4e0: unit+0x500, ascending entity id
   }
   return 1;
 }
-// NotifyUpgrade(from, to) 0x6cce70: the upgrade takes over the old unit's guard links.
+// NotifyUpgrade(from, to) 0x6cce70 (FAF's StructureUnit.OnStopBuild, the upgrade finished, before from:Destroy()):
+// the upgrade takes over the old unit's orders, rally queue, platoon place, repeat switch, health fraction, guard
+// links and leash point, in this order.
 int l_NotifyUpgrade(lua_State* L) {
   Sim& sim = *S(L);
   Unit* from = ToObject<Unit>(L, 1);
   Unit* to = ToObject<Unit>(L, 2);
   if (!from || !to) return 0;
-  SetGuardedUnit(sim, to, FindUnit(sim, from->guardedId));
-  for (Unit* g : Guards(sim, from)) SetGuardedUnit(sim, g, to);
+  // 0x6ccf94..0x6cd05d: every command of the old unit's queue (a copy of it, 0x5db610) is added to the new unit's
+  // (CUnitCommandQueue::AddCommandToQueue 0x6edd80: the same command object, appended, queue event 0), except an
+  // Upgrade (cmd+0x98 == 0x1b) whose blueprint (cmd+0x60) is the new unit's own (the order just carried out). Seen:
+  // Economy 3079, four T1 extractors ordered Upgrade ueb1202 then Upgrade ueb1302 at 2740; the first T2 to finish
+  // (0x3b) starts its T3 upgrade in the beat the old one goes; ours' T2 stood idle.
+  // NOT MODELLED: AddCommandToQueue's patrol rule (a Patrol / FormPatrol added to a queue of more than one command
+  // whose head is a patrol goes before the queued command with the smallest cmd+0x13c, when that is not the head).
+  {
+    const std::vector<std::shared_ptr<UnitCommand>> mine(from->commands.begin(), from->commands.end());
+    for (const auto& c : mine) {
+      if (!c) continue;
+      if (c->type == CommandType::Upgrade && sim.blueprints().Find(c->blueprintId) == to->blueprint) continue;
+      if (!c->units.insert(to).second) continue;
+      to->commands.push_back(c);
+      AirSpeedThroughEvent(sim, to);  // queue event 0 (0x6edd21)
+    }
+  }
+  // 0x6cd060..0x6cd0c5: both have a builder (unit+0x554): the new one's rally queue is cleared (vf+0x38) and the old
+  // one's commands are appended to it (vf+0x28 with -1)
+  if (from->bpData && from->bpData->hasBuilder && to->bpData && to->bpData->hasBuilder) {
+    ClearFactoryCommandQueue(to);
+    const std::vector<std::shared_ptr<UnitCommand>> rally(from->factoryCommands.begin(), from->factoryCommands.end());
+    for (const auto& c : rally)
+      if (c) AddFactoryCommand(to, c);
+  }
   PlatoonsNotifyUpgrade(from, to);  // 0x6cd0c7: the upgrade takes the old unit's place in its platoon's squad
+  // 0x6cd11e..0x6cd156: the repeat switch (unit+0x2a2) is copied; the new unit's script hears of a change
+  if (from->repeatQueue != to->repeatQueue && to->HasLuaObject())
+    sim.CallMethod(L, to, from->repeatQueue ? "OnStartRepeatQueue" : "OnStopRepeatQueue", 0);
+  to->repeatQueue = from->repeatQueue;
+  // 0x6cd163..0x6cd1a3: the new unit's health = its maximum x the old unit's health fraction (Entity::SetHealth
+  // 0x679940 when that differs)
+  if (from->maxHealth > 0.0f) {
+    const float h = to->maxHealth * (from->health / from->maxHealth);
+    if (h != to->health) EntityAdjustHealth(L, to, nullptr, h - to->health);
+  }
+  SetGuardedUnit(sim, to, FindUnit(sim, from->guardedId));  // 0x6cd1a8 (unit+0x4e0)
+  to->leashPos = from->leashPos;                             // 0x6cd1c0 (unit+0x4e8..+0x4f0)
+  for (Unit* g : Guards(sim, from)) SetGuardedUnit(sim, g, to);  // 0x6cd22e (the guards, unit+0x500)
   return 0;
 }
 int l_SetBusy(lua_State* L) {

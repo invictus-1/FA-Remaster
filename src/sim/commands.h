@@ -139,6 +139,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t);
 void ReleaseCommand(Unit* u, UnitCommand& c);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
+// Whether the navigator's event (Succeeded / Failed) wakes the unit's command thread (a move task listens).
+bool NavEventWakesCommandThread(const Unit* u);
 void RegisterCommandBindings(lua_State* L);
 // Lua's view of a command (the Issue* functions' result; nil for none).
 void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c);

@@ -4,6 +4,7 @@
 #include "sim/motion.h"
 #include "sim/formation.h"
 #include "sim/combat.h"
+#include "sim/commands.h"
 #include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/air.h"
@@ -716,6 +717,7 @@ void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
 
 void MotionNavDone(Unit* u, bool succeeded) {
   UnitMotion& m = u->motion;
+  const bool wake = NavEventWakesCommandThread(u);  // (asked before the goal is gone)
   m.hasGoal = false;
   m.hasWaypoint = false;
   m.steerWpSet = false;  // (Execute's tail 0x5a43ef calls the navigator's MakeIdle: SetWaypoints(0, 0))
@@ -735,7 +737,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   if (unused) SteeringCheckCollisions(*Sim::From(u->luaState()), u);
   if (succeeded) m.arrived = true;
   else m.failed = true;
-  Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
+  if (wake) Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
 }
 
 // AbortMove 0x5a3750 (land: SetSpeedThroughGoal(0) + MakeIdle -> SetWaypoints(0, 0): a brake spline).

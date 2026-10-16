@@ -1059,7 +1059,6 @@ void Sim::ProcessDestroyQueue() {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);
       AdjacencyLost(*this, L, u);
-      ForgetUnitCommands(u);
       UnitEconomyRelease(u);
       ReleaseStructure(*this, u);
       RemoveUnitFromLists(u);
@@ -1070,6 +1069,14 @@ void Sim::ProcessDestroyQueue() {
     done.push_back(e);
   }
   destroyQueue_.clear();
+  // A destroyed unit's command queue goes with the unit object: Unit::OnDestroy 0x6a88d0 (above) leaves it alone, and
+  // only ~Unit 0x6a6bf0 clears it (0x6a6c66), when EntityDb::Purge 0x684560 deletes the entity in Sim::Sync, after
+  // this drain. So what the tasks' dtors destroy (an unfinished upgrade, CUnitUpgradeTask dtor 0x5f84c0) is queued
+  // for the NEXT beat's drain. (A killed unit's queue was cleared before, by Unit::KillCleanup in step 12.) Seen:
+  // Economy 3952, T2 mex 0x3a reclaimed while upgrading: the original's T3 0x57 is still listed after that beat and
+  // gone after the next; ours took it in the same drain.
+  for (Entity* e : done)
+    if (e->kind == Entity::Kind::Unit) ForgetUnitCommands(static_cast<Unit*>(e));
   // ~Entity in EntityDb::Purge: every kind gives its id back, recon blips too (the player's orders name blips
   // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
   for (Entity* e : done) ReleaseId(e->id);

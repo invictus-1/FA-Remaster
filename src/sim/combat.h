@@ -216,6 +216,10 @@ class BuilderArm : public ScriptObject {
   // the tracking callback this beat's step owes (1 OnStartBuilderTracking, 2 OnStopBuilderTracking): it is made at
   // the arm's place among the unit's manipulators (UnitAimTickManipulators), after the lower-precedence ones moved
   int trackCall = 0;
+  // this beat's step, asked for by BuilderArmsTick (last beat's pose: the aim direction, or a zero aim target) and
+  // made in the arm's slot among the unit's manipulators (this beat's pose)
+  bool stepPending = false, stepZero = false;
+  Vec3 stepDir;
   int precedence = 0;
   uint32_t seq = 0;
   int EventState() const override { return onTarget ? 1 : 0; }
