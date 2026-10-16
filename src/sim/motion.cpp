@@ -23,6 +23,7 @@
 
 #include "core/log.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 
@@ -415,7 +416,7 @@ Quat YawQuat(float fx, float fz) {
 }
 
 const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp, const SimBlueprints& bps) {
-  static std::map<const BlueprintInfo*, MotionBlueprint> cache;
+  static SimCache<std::map<const BlueprintInfo*, MotionBlueprint>> cache;  // (grid: the sim's navigation)
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   MotionBlueprint m;

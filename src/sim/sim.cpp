@@ -34,6 +34,7 @@
 #include "sim/ai_threat.h"
 #include "sim/ai_build.h"
 #include "sim/session.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -615,6 +616,8 @@ Sim::~Sim() {
   LandNavForget(*this);
   AirForget(*this);
   FormationsForget(*this);
+  MotorsForget(*this);
+  ClearSimCaches();  // what was read from this sim's blueprints and map (sim/sim_cache.h)
 }
 
 lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }

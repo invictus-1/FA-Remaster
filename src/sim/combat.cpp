@@ -44,6 +44,7 @@
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -525,7 +526,7 @@ void PoseRotate(Entity* e, int bone, const Quat& q) {
 
 bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
   if (!bp || bp->entityIndex < 0) return false;
-  static std::map<std::string, std::vector<bool>> cache;
+  static SimCache<std::map<std::string, std::vector<bool>>> cache;  // (over the sim's blueprint indices)
   auto it = cache.find(name);
   if (it == cache.end()) {
     std::vector<bool> bits(static_cast<size_t>(sim.blueprints().EntityCount()), false);
@@ -541,7 +542,7 @@ bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
 // ---- blueprint data --------------------------------------------------------------------------------
 
 const WeaponBp& GetWeaponBp(lua_State* L, int bpRef) {
-  static std::map<const void*, std::unique_ptr<WeaponBp>> cache;
+  static SimCache<std::map<const void*, std::unique_ptr<WeaponBp>>> cache;  // (by the table's address in the sim state)
   int top = lua_gettop(L);
   lua_rawgeti(L, LUA_REGISTRYINDEX, bpRef);
   int t = lua_gettop(L);
@@ -629,7 +630,7 @@ struct CombatBpData {
 };
 
 static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
-  static std::map<const BlueprintInfo*, CombatBpData> cache;
+  static SimCache<std::map<const BlueprintInfo*, CombatBpData>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   CombatBpData d;

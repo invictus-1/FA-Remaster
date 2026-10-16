@@ -8,7 +8,9 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/entity.h"
+#include "sim/script_bits.h"
 #include "sim/script_object.h"
+#include "sim/transport.h"
 
 namespace moho {
 namespace {
@@ -484,6 +486,25 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
       lua_pop(sim, 1);
     }
     if (reflect) ReflectBlueprint(sim, -1, info, *this);
+    if (kind == BpKind::Unit) {
+      // the caps for views (ui request 26). After the reflection both are strings (one cap's name or the mask in
+      // decimal) under keys every unit blueprint has, so reading them makes no new Lua value: the sim state's
+      // allocations, and so its collector's timing, stay as they were.
+      int t = lua_gettop(sim);
+      lua_pushstring(sim, "General");
+      lua_rawget(sim, t);
+      if (lua_istable(sim, -1)) {
+        lua_pushstring(sim, "CommandCaps");
+        lua_rawget(sim, -2);
+        info.commandCaps = CommandCapsOfValue(sim, -1);
+        lua_pop(sim, 1);
+        lua_pushstring(sim, "ToggleCaps");
+        lua_rawget(sim, -2);
+        info.toggleCaps = ToggleCapsOfValue(sim, -1);
+        lua_pop(sim, 1);
+      }
+      lua_settop(sim, t);
+    }
     info.ref = luaL_ref(sim, LUA_REGISTRYINDEX);
     if (dup == byId_.end()) {
       if (!id.empty()) byId_.emplace(Lower(id), all_.size());

@@ -52,6 +52,9 @@ struct UnitView {
   bool paused = false;     // Unit:SetPaused (the same flag as UnitStateView::paused)
   int queueLength = 0;     // commands in its queue
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
+  // what it can do this beat: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since); the
+  // same numbers as UnitStateView's
+  uint32_t commandCaps = 0, toggleCaps = 0;
   // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own
   std::string mesh;
   // A shield: hasShield while a shield entity hangs on the unit (a generator's bubble, a personal shield; the

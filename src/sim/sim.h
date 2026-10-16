@@ -166,6 +166,7 @@ class Sim {
   std::vector<Entity*> heldShapes_;
   FILE* rec_ = nullptr;
   uint32_t recTick_ = 0xffffffffu;  // the last game tick RecorderBeat wrote
+  std::set<uint32_t> recNamed_;     // units whose 'U' record is written, by creation handle (per sim: handles restart)
   uint64_t rngDraws_ = 0;
   bool beatStarted_ = false;
   void RngTrace(uint32_t r);

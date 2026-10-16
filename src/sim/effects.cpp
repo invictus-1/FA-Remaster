@@ -487,6 +487,7 @@ void ReleaseEffectObjects() {
   Things().clear();
   Fx() = EffectLog();
   Snd() = SoundLog();
+  Shakes().clear();
 }
 
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {

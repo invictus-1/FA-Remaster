@@ -22,7 +22,6 @@
 #include <cstring>
 #include <algorithm>
 #include <string>
-#include <unordered_set>
 
 #include "core/backtrace.h"
 #include "core/log.h"
@@ -127,9 +126,8 @@ void Sim::RecorderBeat() {
   // u16 0, u32 id, then `length` bytes of the blueprint id padded with zeros to a multiple of 4. (Ids are reused:
   // a later 'U' with the same id is a new unit.) For viewers; the comparison tools skip it.
   {
-    static std::unordered_set<uint32_t> named;  // by creation handle
     for (Unit* u : list) {
-      if (!u->blueprint || !named.insert(u->handle).second) continue;
+      if (!u->blueprint || !recNamed_.insert(u->handle).second) continue;
       const std::string& bp = u->blueprint->id;
       const size_t len = std::min<size_t>(bp.size(), 255);
       unsigned char uh[8] = {'U', static_cast<unsigned char>(len), 0, 0};

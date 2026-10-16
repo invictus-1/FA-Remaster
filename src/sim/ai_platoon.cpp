@@ -28,6 +28,7 @@
 #include "sim/formation.h"
 #include "sim/intel.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 
@@ -187,7 +188,7 @@ struct ThreatLevels {
   float v[4] = {0, 0, 0, 0};
 };
 const ThreatLevels& BlueprintThreat(Sim& sim, const BlueprintInfo* bp) {
-  static std::map<const BlueprintInfo*, ThreatLevels> cache;
+  static SimCache<std::map<const BlueprintInfo*, ThreatLevels>> cache;
   auto it = cache.find(bp);
   if (it != cache.end()) return it->second;
   ThreatLevels t;

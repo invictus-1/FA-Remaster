@@ -31,6 +31,22 @@ bool ParseToggleCaps(const char* s, uint32_t* out);
 
 // The blueprint's General.ToggleCaps as a mask. bp_reflect turns the table into the enum's lexical value: the
 // NAME when exactly one cap is set ("RULEUTC_JammingToggle"), else the mask as a decimal string.
+uint32_t ToggleCapsAt(lua_State* L, int idx) {
+  if (idx < 0) idx = lua_gettop(L) + idx + 1;
+  uint32_t caps = 0;
+  if (lua_isnumber(L, idx)) caps = static_cast<uint32_t>(lua_tonumber(L, idx));
+  else if (lua_type(L, idx) == LUA_TSTRING) ParseToggleCaps(lua_tostring(L, idx), &caps);
+  else if (lua_istable(L, idx)) {  // unconverted { RULEUTC_x = true, ... }
+    for (int i = 0; i < 9; ++i) {
+      lua_pushstring(L, kToggleNames[i]);
+      lua_gettable(L, idx);
+      if (lua_toboolean(L, -1)) caps |= 1u << i;
+      lua_pop(L, 1);
+    }
+  }
+  return caps;
+}
+
 uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
   lua_State* L = sim.L();
   int top = lua_gettop(L);
@@ -41,16 +57,7 @@ uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
   if (lua_istable(L, -1)) {
     lua_pushstring(L, "ToggleCaps");
     lua_gettable(L, -2);
-    if (lua_isnumber(L, -1)) caps = static_cast<uint32_t>(lua_tonumber(L, -1));
-    else if (lua_type(L, -1) == LUA_TSTRING) ParseToggleCaps(lua_tostring(L, -1), &caps);
-    else if (lua_istable(L, -1)) {  // unconverted { RULEUTC_x = true, ... }
-      for (int i = 0; i < 9; ++i) {
-        lua_pushstring(L, kToggleNames[i]);
-        lua_gettable(L, -2);
-        if (lua_toboolean(L, -1)) caps |= 1u << i;
-        lua_pop(L, 1);
-      }
-    }
+    caps = ToggleCapsAt(L, -1);
   }
   lua_settop(L, top);
   return caps;
@@ -163,6 +170,8 @@ int l_TestToggleCaps(lua_State* L) {
 }
 
 }  // namespace
+
+uint32_t ToggleCapsOfValue(lua_State* L, int idx) { return ToggleCapsAt(L, idx); }
 
 uint32_t UnitToggleCaps(Sim& sim, Unit* u) {
   if (u->toggleCaps < 0) u->toggleCaps = BlueprintToggleCaps(sim, *u->blueprint);

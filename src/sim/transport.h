@@ -82,6 +82,9 @@ BuildTask* StartPodTask(Sim& sim, Unit* u, const UnitCommand& c);
 Unit* FindPlatform(Sim& sim, Unit* plane);
 // Command caps of a unit's blueprint (RULEUCC_* bits).
 uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp);
+// A General.CommandCaps value at idx as RULEUCC_* bits: a number, one cap's name or the mask in decimal (as
+// bp_reflect leaves it), or an unconverted { RULEUCC_x = true } table.
+uint32_t CommandCapsOfValue(lua_State* L, int idx);
 // The unit's caps as they are now (scripts change them: Unit:AddCommandCap / RemoveCommandCap).
 uint32_t LiveCommandCaps(lua_State* L, const Unit* u);
 
