@@ -132,6 +132,16 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   // first runs at 1603 after its parent yields; the exe's CTaskThread joins the stage's list
   // ahead of the pass position). Forked between passes (engine callbacks) it runs in the next pass.
   t.wakeTick = current_ ? tick_ : tick_ + 1;
+  // ForkThread 0x4c9d80 makes the CTaskThread at once (0x4c9e8f -> 0x409050, linked at the stage's new end,
+  // 0x4090b0-0x4090bb), and an event's signal links a thread waiting on it at that same end at the moment of the
+  // signal (CTaskEvent::EventSetSignaled 0x406d90, 0x406dfc-0x406e07), e.g. a rotator reaching its target speed in
+  // its unit's beat (CRotateManipulator::MoveManipulator 0x643b75). Ours finds the signalled events only when
+  // WakeSignalled looks, so the threads whose event has been signalled by now go to the end before the new one
+  // does. Seen: Economy 4776, an Aeon mass fabricator's rotator (uab1104_script.lua:87 WaitFor) stopped in the
+  // fab's beat, then an Othuy's beam, made later, forked its ScorchThread in its OnImpact; at 4777 the original
+  // ran the fab's thread first (its Random(120, 300) before the scorch's Random()), ours after: the fab drew
+  // another number for its Goal and its next turn came at 4889 instead of 4885.
+  WakeSignalled();
   threads_.push_back(t);
 }
 
@@ -141,6 +151,15 @@ void ThreadScheduler::PushCurrent(lua_State* L) {
 }
 
 void ThreadScheduler::Release(Thread& t) {
+  if (t.inWaiters) {
+    t.inWaiters = false;
+    for (size_t i = 0; i < waiters_.size(); ++i)
+      if (waiters_[i] == &t) {
+        waiters_[i] = waiters_.back();
+        waiters_.pop_back();
+        break;
+      }
+  }
   if (t.ref != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.ref);
   t.ref = LUA_NOREF;
   if (t.waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.waitRef);
@@ -151,6 +170,10 @@ void ThreadScheduler::WaitCurrentOn(int ref) {
   if (!current_) return;
   if (current_->waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, current_->waitRef);
   current_->waitRef = ref;
+  if (!current_->inWaiters) {
+    current_->inWaiters = true;
+    waiters_.push_back(current_);
+  }
 }
 
 bool ThreadScheduler::StillWaiting(Thread& t) {
@@ -246,6 +269,26 @@ void ThreadScheduler::Step(Thread& t) {
 // flag one beat later, so the wreck is destroyed a beat later than a fixed order makes it.
 void ThreadScheduler::WakeSignalled() {
   if (threads_.empty()) return;
+  {  // (a quick look first: the walk below moves only a waiting thread whose event is signalled or gone)
+    bool any = false;
+    for (size_t i = 0; i < waiters_.size();) {
+      Thread* w = waiters_[i];
+      if (w->waitRef == LUA_NOREF) {  // (no longer waiting)
+        w->inWaiters = false;
+        waiters_[i] = waiters_.back();
+        waiters_.pop_back();
+        continue;
+      }
+      if (!any && !w->dead && w != current_) {
+        lua_rawgeti(L_, LUA_REGISTRYINDEX, w->waitRef);
+        ScriptObject* o = GetObject(L_, -1);
+        lua_pop(L_, 1);
+        any = !(o && o->EventState() == 0);  // = !StillWaiting, without its clean-up
+      }
+      ++i;
+    }
+    if (!any) return;
+  }
   const auto last = std::prev(threads_.end());
   for (auto it = threads_.begin();;) {
     const bool atLast = it == last;

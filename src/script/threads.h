@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <list>
 #include <string>
+#include <vector>
 
 #include "script/lua.hpp"
 
@@ -28,7 +29,8 @@ class ThreadScheduler {
   // WaitFor: the running thread waits until the event (registry ref) is signalled.
   void WaitCurrentOn(int ref);
   // The threads whose event has been signalled since the last call go to the END of the run order, where the
-  // original's wake links them (0x409420). Called between the beat's stages and when a pass begins.
+  // original's wake links them (0x409420). Called between the beat's stages, when a pass begins and before a
+  // new thread joins the list (Fork).
   void WakeSignalled();
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
@@ -47,9 +49,13 @@ class ThreadScheduler {
     bool dead = false;
     bool again = false;       // yielded 0: run again in this dispatch
     int waitRef = LUA_NOREF;  // WaitFor(event)
+    bool inWaiters = false;   // listed in waiters_
   };
   lua_State* L_;
   std::list<Thread> threads_;
+  // the threads that have had a WaitFor event since WakeSignalled last looked (a few at a time, against thousands of
+  // threads): WakeSignalled, now called at every Fork, walks the whole list only when one of them is signalled
+  std::vector<Thread*> waiters_;
   Thread* current_ = nullptr;
   uint32_t tick_ = 0;
 
