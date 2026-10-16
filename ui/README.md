@@ -543,11 +543,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   line starts one at once, without the front end, as the original's start-up does
   (`moho64ui ... -- /map X1CA_001 /diff 2 /faction 1`: SinglePlayerLaunch.StartCommandLineSession).
   The game's screen is now made as the original makes it (DoInitializing, FA exe 0x88c3f0: the
-  loading cover, then CreateGameInterface, told whether the session is a replay), before beat 1's
-  sync reaches its scripts (an operation's opening cinematic comes in it). Tests `tests/campaign.lua`
-  (the launch) and `tests/briefing.lua` (the operation briefing's own Launch button). Waiting: two of FAF's scripts
-  the stock operations trip over (ScenarioInfo.HumanPlayers stops the opening cinematic,
-  ScenarioUtils' area triggers), fixed in the engine behind its script fixes (engine request 32).
+  setup's own sync, the loading cover, then CreateGameInterface, told whether the session is a
+  replay, then beat 1's sync): the setup tells the screen it is a campaign's (the objectives panel),
+  and the opening cinematic, in beat 1, finds the screen there. Two of FAF's scripts the stock
+  operations trip over (ScenarioInfo.HumanPlayers, ScenarioUtils' area triggers) are fixed in the
+  engine's script fixes (engine requests 32, 33). X1CA_001 plays its whole start: the intro (camera
+  moves and talking heads answered), the faction choice, the commander's gate-in, the first
+  mission's objectives. Tests `tests/campaign.lua` (launch to the first objectives, then the
+  operation's end as the simulation hands it: noted in the profile, the next briefing waiting) and
+  `tests/briefing.lua` (the operation briefing's own Launch button).
   Built with the renderer
   (request 27): the playable part drawn (outside it black in the original's look, dimmed in the modern
   one; the minimap shows the part), the cinematics' switches UI_NisRenderIcons, ren_SelectBoxes,

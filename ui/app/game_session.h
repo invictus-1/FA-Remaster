@@ -154,8 +154,8 @@ class GameSession {
   std::vector<std::string> TakePendingSync() { return std::move(pendingSync_); }
   // The sync tables the simulation's start itself made (its setup: OnPopulate, OnStart; the
   // original's "beat 0", which DoInitializing 0x88c3f0 hands the scripts BEFORE the game's screen
-  // is made, while beat 1's and on come after it). Empty while the engine folds them into beat 1's
-  // (ui/REQUESTS.md engine 33).
+  // is made, while beat 1's and on come after it; the engine keeps it apart, ui/REQUESTS.md 33).
+  // An operation's has Sync.CampaignMode, which the screen's making reads (the objectives panel).
   std::vector<std::string> TakeSetupSync() { return std::move(setupSync_); }
   // Run the simulation's first beat now if it has not run yet: the interface is made for a game
   // that is under way, and the first beat's sync table tells it the playable area and more.

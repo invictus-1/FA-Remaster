@@ -866,6 +866,10 @@ Chris's rule for broken scripts is the one with `Sim::fixes`, docs/deviations.md
    ScenarioUtils.MultiAreaToMultiRect. (Best written from what the callers need: a later FAF's own code
    would bring its licence along into the engine's MIT.)
 Not blocking my next step (LaunchSinglePlayerSession), but X1CA_001 cannot get past its intro without 1.
+DONE (engine, main b537949; "ui 32" in docs/engine-answers.md, docs/deviations.md 2 and 3): hook files in
+data/fixes/hook joined by Sim::Start when fixes are on, in every host; HumanPlayers set at BeginSession
+when unset; GetUnitsInArea / FindUnitInArea, the count comparison back to the stock game's; the
+RemasterFixes mark read by the engine. X1CA_001 plays its start to the first objectives here.
 
 ### 33. The setup's "beat 0" sync apart from beat 1's (needed by the campaign's screen)
 From the interface chat, 2026-10-16. Read in the exe while placing the game's screen: DoInitializing
@@ -883,6 +887,9 @@ as the screen is made: gamemain.lua:306 makes the objectives panel only in campa
 panel only outside it, :544 hides the game's UI for the start animation only outside it. Arriving after
 the screen, a campaign game gets no objectives panel. (Before the screen, as one folded sync, the
 opening cinematic fails instead: neither order of the one sync is right.)
+DONE (engine, main 700f062): TakeSync right after Sim::Start returns the setup's table (on X1CA_001:
+CampaignMode, NewPlayableArea, CameraRequests, Restrictions, NavLayerData), beat 1's only its own. The
+interface host hands it over before the screen (TakeSetupSync); the objectives panel is there.
 
 ## To the renderer track
 

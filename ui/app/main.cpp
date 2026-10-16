@@ -508,8 +508,8 @@ int main(int argc, char** argv) {
       // scripts, as in the original (DoInitializing 0x88c3f0 runs the setup's "beat 0" at
       // 0x88c507, then StopLoadingDialog and CreateGameInterface; beat 1 and on come after). An
       // operation's opening cinematic comes in beat 1's sync (Sync.NISMode 'on': gamemain.NISMode
-      // asks the main world view, which CreateGameInterface makes). (Our engine folds the setup's
-      // own sync into beat 1's, so what the setup wrote also comes after the screen here.)
+      // asks the main world view, which CreateGameInterface makes). The setup's own sync went
+      // to the scripts above, before the screen (TakeSetupSync).
       game->GameLoaded();
       for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
       if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
