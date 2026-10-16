@@ -31,6 +31,7 @@
 #include "sim/ai_personality.h"
 #include "sim/ai_platoon.h"
 #include "sim/ai_threat.h"
+#include "sim/ai_build.h"
 #include "sim/session.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -785,6 +786,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterIntelBindings(L);
   RegisterThreatBindings(L);
   RegisterBrainBindings(L);
+  RegisterAiBuildBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");

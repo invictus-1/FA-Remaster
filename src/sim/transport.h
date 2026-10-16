@@ -68,6 +68,10 @@ struct TransportObj {
 // Unit creation: a transport object for units with the Transport command cap.
 void TransportCreate(Sim& sim, Unit* u);
 bool TransportHasCargo(const Unit* u);
+// CAiTransportImpl vt+0x2c TransportAssignSlot 0x5e6e30 (requested bone, -1: the first free fitting one) and vt+0x18
+// TransportRemoveUnitReservation 0x5e64d0 of a unit's transport object (false / nothing without one).
+bool TransportAssignSlotFor(Sim& sim, Unit* transport, Unit* cargo, int requested);
+void TransportRemoveReservationFor(Sim& sim, Unit* transport, const Unit* cargo);
 // The factory hand-off: append TransportLoadUnits(T) to u if the issue path accepts it.
 bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.

@@ -96,6 +96,10 @@ void TaskStopMoving(Unit* u);
 bool IsFactoryBuilder(Sim& sim, const Unit* u);   // a builder in category FACTORY (builder.IsFactory)
 // RUnitBlueprint::GetSkirtRect 0x51ec50 where the unit stands: {x0, z0, x1, z1} (the footprint where SkirtSize is 0)
 void UnitSkirtRect(const Unit* u, float r[4]);
+// ... and of a blueprint at (x, z) (a structure placed there).
+void BlueprintSkirtRect(Sim& sim, const BlueprintInfo& bp, float x, float z, float r[4]);
+// Sim::LocationIsFree 0x62da50 with flag 0 for the cell rect r = {x0, z0, x1, z1}: no unit stands in it.
+bool RectFreeOfUnits(Sim& sim, const int r[4]);
 bool IsImmobileFactory(Sim& sim, const Unit* u);
 void AddFactoryCommand(Unit* f, const std::shared_ptr<UnitCommand>& c);
 void ClearFactoryCommandQueue(Unit* f);

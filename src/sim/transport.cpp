@@ -674,6 +674,14 @@ float Elev(const TerrainMap* map, float x, float z) { return map ? map->TerrainH
 
 }  // namespace
 
+bool TransportAssignSlotFor(Sim& sim, Unit* transport, Unit* cargo, int requested) {
+  return transport && transport->transport && cargo && cargo->blueprint &&
+         AssignSlot(sim, *transport->transport, cargo, requested);
+}
+void TransportRemoveReservationFor(Sim& sim, Unit* transport, const Unit* cargo) {
+  if (transport && transport->transport) RemoveUnitReservation(sim, *transport->transport, cargo);
+}
+
 bool LandBallisticTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   if (!m.ballistic) return false;

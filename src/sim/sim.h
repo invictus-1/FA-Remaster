@@ -93,6 +93,7 @@ class AiBrain : public ScriptObject {
   AiBrain() { typeBits |= kTypeBrain; }
   Army* army = nullptr;
   AiPersonality* personality = nullptr;  // sim/ai_personality.h (owned by the Sim)
+  std::shared_ptr<struct AiBuildPlans> buildPlans;  // brain+0x98: BuildStructure's pending plans (sim/ai_build.cpp)
 };
 
 template <> struct ScriptTypeOf<AiBrain> { static constexpr uint32_t bit = kTypeBrain; };

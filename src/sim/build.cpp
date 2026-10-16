@@ -35,6 +35,7 @@
 #include "core/dmath.h"
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/ai_build.h"
 #include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
@@ -3265,14 +3266,15 @@ int l_CanBuild(lua_State* L) {
 }
 // brain:CanBuildStructureAt(blueprintId, position)
 int l_CanBuildStructureAt(lua_State* L) {
-  CheckObject<AiBrain>(L, 1);
+  AiBrain* b = CheckObject<AiBrain>(L, 1);
   const BlueprintInfo* bp = BlueprintArg(L, 2);
   Vec3 p;
   if (!bp || !PosArg(L, 3, &p)) {
     lua_pushboolean(L, 0);
     return 1;
   }
-  lua_pushboolean(L, CanBuildStructureAt(*S(L), *bp, p.x, p.z));
+  // (the brain's pending plans of BuildStructure, brain+0x98, also keep the skirt off: sim/ai_build.cpp)
+  lua_pushboolean(L, CanBuildStructureAt(*S(L), *bp, p.x, p.z) && !AiBuildPlansBlock(*S(L), b, *bp, p.x, p.z));
   return 1;
 }
 // CreateResourceDeposit(type, x, y, z, size): "Mass" or "Hydrocarbon"
@@ -4067,6 +4069,14 @@ bool SiloCommand(Sim& sim, Unit* u, const UnitCommand& c) {
 
 void UnitSkirtRect(const Unit* u, float r[4]) {
   const FRect s = SkirtRect(*u->blueprint, *u->bpData, u->position.x, u->position.z);
+  r[0] = s.x0;
+  r[1] = s.z0;
+  r[2] = s.x1;
+  r[3] = s.z1;
+}
+bool RectFreeOfUnits(Sim& sim, const int r[4]) { return LocationFreeOfUnits(sim, sim.L(), nullptr, r, 0); }
+void BlueprintSkirtRect(Sim& sim, const BlueprintInfo& bp, float x, float z, float r[4]) {
+  const FRect s = SkirtRect(bp, GetUnitBpData(sim.L(), bp), x, z);
   r[0] = s.x0;
   r[1] = s.z0;
   r[2] = s.x1;
