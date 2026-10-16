@@ -3,6 +3,14 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 19 (2), corrected: a Reclaim order without a live entity does nothing (engine 1dded52)
+
+The original's IssueReclaimTask 0x61ef60 makes no task when the order's target has no live entity
+(0x61ef7e..0x61ef8c: the order is dropped in the beat it is dispatched), and a place target (type 2) never
+has one. So a Reclaim on a bare place, or on a prop that is already gone, does nothing; ours used to walk
+the unit there when the place was out of sight. To reclaim, send the entity (`ReclaimableAt`, ui 19 (1)).
+Seen in the Skirmish replay at 680 (a player's Reclaim on a tree group that broke up at 679).
+
 ## ui 24: the crash in a game against the stock AI — fixed (engine f1e7f57)
 
 A bug in our Lua VM, not in the AI code nor the interface host. `luaV_execute` set a frame's `pc` pointer
