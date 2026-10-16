@@ -368,6 +368,11 @@ void Window::Present(const SoftwareTarget& target) {
 
 #else  // no window system here yet
 
+#include <cstdio>
+#ifdef __linux__
+#include <unistd.h>
+#endif
+
 namespace moho::ui {
 Window::~Window() {}
 bool Window::Create(int, int, const char*, Callbacks, bool, bool) { return false; }
@@ -384,6 +389,19 @@ bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }
 void Window::HidePointer(bool) {}
 void Window::HoldPointer(bool) {}
 bool Window::HeldMove(int, int, float*, float*) { return false; }
+// The memory the program holds (the stats lines): on Linux its resident pages; elsewhere not known.
+size_t Window::ProcessMemory() {
+#ifdef __linux__
+  size_t pages = 0, resident = 0;
+  if (std::FILE* f = std::fopen("/proc/self/statm", "r")) {
+    if (std::fscanf(f, "%zu %zu", &pages, &resident) != 2) resident = 0;
+    std::fclose(f);
+  }
+  return resident * static_cast<size_t>(sysconf(_SC_PAGESIZE));
+#else
+  return 0;
+#endif
+}
 }  // namespace moho::ui
 
 #endif

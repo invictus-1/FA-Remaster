@@ -278,11 +278,8 @@ int main(int argc, char** argv) {
   // This program's own files: what it adds to the game's scripts (ui/data/hook, taken as one more
   // hook folder, so the game's files stay as they are). Beside the program, or in its source tree.
   if (ownFolder.empty()) {
-    char exe[MAX_PATH] = {0};
-    GetModuleFileNameA(nullptr, exe, MAX_PATH);
-    std::string dir = exe;
-    const size_t cut = dir.find_last_of("/\\");
-    dir = cut == std::string::npos ? "." : dir.substr(0, cut);
+    std::string dir = hostfs::ProgramFolder();  // (the engine's: every system)
+    if (dir.empty()) dir = ".";
     for (const std::string& candidate : {dir + "/data", dir + "/../ui/data"}) {
       if (ownFolder.empty() && hostfs::IsDirectory(candidate + "/hook")) ownFolder = candidate;
     }
