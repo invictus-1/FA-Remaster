@@ -88,6 +88,14 @@ VOut VS(float2 grid : POSITION, uint instance : SV_InstanceID) {
   return o;
 }
 
+// A layer's normal map as read: x, y, z from red, green, blue (from 0..1 to -1..1). A two-channel one (BC5,
+// whose blue reads 0, which no three-channel normal map has: its z would point down) gets z from x and y.
+float4 LayerNormal(float4 raw) {
+  float4 n = raw * 2 - 1;
+  if (raw.b < 0.002) n.z = sqrt(saturate(1 - dot(n.xy, n.xy)));
+  return n;
+}
+
 float4 Ground(VOut i) {
   float2 xz = i.world.xz;
   float2 uv = MirrorUv(xz * mapSize.zw);
@@ -102,7 +110,7 @@ float4 Ground(VOut i) {
   // inside such a branch the sampler cannot work the steps out itself)
   float2 stepX = ddx(xz), stepY = ddy(xz);
   #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
-  #define NORMAL(n) (normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x) * 2 - 1)
+  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x))
   // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a
   // map's layers each cover a part of it only (most pixels need two or three of the ten)
   #define OVER(value, read, share) [branch] if ((share) > 0) value = lerp(value, read, share)

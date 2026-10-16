@@ -4,6 +4,37 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals (and the engine's performance lessons): BC5 normal maps are read (2026-10-16)
+
+Not asked yet; made ready so that a switch to BC5 needs nothing on this side.
+- **Layout:** the usual one, x (along the tangent, the texture's u) in red, y (along v) in green, as texconv
+  or any BC5 exporter writes it, DDS with a DX10 header (DXGI_FORMAT_BC5_UNORM, 83) or the old "ATI2"/"BC5U"
+  four-letter codes.
+- **Units' and decals' normal maps** (`_NormalsTS`, `_lab_normal`, normal decals): a BC5 texture is read as
+  (red, green, 0, red), so it lands where the game's DXT5 ones keep x and y (alpha and green). Checked with
+  a BC5 copy of UEL0201's normal map, against the DXT5 it was made from: on the tank, a mean difference of
+  0.06 (modern) and 0.12 (original look) of 255, max 14, the same on Direct3D 12 and Vulkan. Without this,
+  the difference was 9 to 13 on average, up to 203.
+- **The ground's layer normal maps:** these are read as red, green, blue. A BC5 one, whose blue is 0, gets
+  its third value made from the first two. Today's maps are unchanged: no three-channel normal map has a
+  blue of 0.
+- **Sizes:** BC5 is 1 byte a texel, as DXT5. It is not smaller, but its two channels are each as good as
+  DXT5's alpha, so the green no longer shares its block with colours.
+
+## To visuals: special looks checked on their units in a game (2026-10-16)
+
+A test mission placed, for army 1: URB4201 (the zapper's ball), UEB0304 (the quantum gate's field), the
+Aeon torpedo launchers UAB2109 and UAB2205 (glass domes), and the civilian buildings UEC1401, URC1401,
+UAC1401 and UAC1901 (windows and domes).
+- **Modern look:** all as they should be.
+- **Original look: the glass shone white.** The original look's bloom reads the frame's alpha as glow (render
+  28), and every see-through model wrote its blending alpha there. The original's own techniques say which
+  write it: GlassAlpha, UEFBuildCube, Cloud, OuterCloud, Explosion, Effect, NukeUEF and ShieldSeraphim write
+  colour alone. Those no longer add bloom (render dc9d1ad); the domes and windows are glass again.
+- **Glow kept where the original has it:** the zapper's ball, the quantum gate's field and the UEF, Aeon and
+  Cybran shields still glow in the original look.
+- **Not seen yet:** the zapper's active ball, while it fires at a missile.
+
 ## To ui, renderer request 28: a unit's transform as the coming frame draws it (2026-10-16)
 
 `bool WorldPicture::UnitTransform(uint32_t id, double tick, float position[3], float orientation[4]) const`.

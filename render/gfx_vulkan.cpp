@@ -1361,6 +1361,8 @@ Texture VulkanDevice::CreateTexture(const TextureDesc& desc) {
   vi.format = format;
   if (desc.format == Format::A8)  // (reads as (0, 0, 0, a))
     vi.components = {VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_R};
+  if (desc.format == Format::BC5)  // (red also in alpha: a normal map's x where the game's DXT5 ones keep it)
+    vi.components = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_R};
   vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(desc.mips), 0, static_cast<uint32_t>(desc.layers)};
   if (vkCreateImageView(device_, &vi, nullptr, &rec.view) != VK_SUCCESS) return {};
 
