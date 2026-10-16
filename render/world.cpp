@@ -1004,7 +1004,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
-      icons.Add(kind, position, color, isSelected, blip, known);
+      icons.Add(kind, position, blip && !known ? color : IconColor(u.Army(), color), isSelected, blip, known);
       const Model* bracketed = (isSelected || u.id == hover) && !blip
                                    ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); })
                                    : nullptr;
@@ -1161,7 +1161,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   }
   // remembered buildings that are gone (destroyed where the army did not see it): each stays, as
   // it was last seen, until the army sees the place again and finds it gone
-  if (noFocus) remembered_.clear();
+  // (what one army remembers is not another's: a new focus army begins with none)
+  if (noFocus || focusArmy != rememberedFor_) remembered_.clear();
+  rememberedFor_ = focusArmy;
   for (auto it = remembered_.begin(); it != remembered_.end();) {
     const Remembered& r = it->second;
     if (r.stamp == frameStamp_) {
@@ -1178,8 +1180,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (r.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[r.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
-      icons.Add(kind, r.position, r.color, false, false, true);
-      rememberedGone.push_back({kind, r.position, r.color});
+      const Vec3 iconColor = IconColor((it->first >> 20) & 0xff, r.color);
+      icons.Add(kind, r.position, iconColor, false, false, true);
+      rememberedGone.push_back({kind, r.position, iconColor});
       const Model* model = models.Unit(blueprint);
       if (model && model->ok) meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete);
     }
