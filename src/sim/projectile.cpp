@@ -272,7 +272,15 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     return p;
   }
   if (Entity* te = TargetEntity(*this, target)) {
-    std::string tl = te->kind == Entity::Kind::Unit ? static_cast<Unit*>(te)->layer : "";
+    // 0x69bb6e..0x69bbb1: the layer is the target ENTITY's own (+0x118), whatever it is: a shell in the air is in
+    // layer Air as an aircraft is (the ctor 0x69bca6), so a missile fired at a missile does not fly on to the last
+    // place it saw when its target is gone. Seen (Naval, 616-623): an Aeon cruiser's RedirectMissile shot
+    // (aifmissileserpentine03, made at 563 with an enemy missile as its target) was turned onto a flare by the
+    // flare's sphere; the flare ended at 622, and at 623 ours went on to its zig-zag (three draws) where the
+    // original's UpdateTracking returned after OnLostTarget (0x69c94f), the first random draw apart (105559).
+    std::string tl = te->kind == Entity::Kind::Unit         ? static_cast<Unit*>(te)->layer
+                     : te->kind == Entity::Kind::Projectile ? static_cast<Projectile*>(te)->layer
+                                                            : "";
     if (tl != "Air" && tl != "Sub") p->homeLastPos = true;
   }
   p->lastTargetPos = TargetPos(*this, target, false);
@@ -614,9 +622,17 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         if (!GetWorldShape(e, &ws) || !SegmentHit(ws, a, b2, &hit, &d)) continue;
         if (e != target) {
           if (e == p || (launcherUnit && e == launcherUnit) || e == p->launcher) continue;
-          if (p->ignoresAlly && p->army && e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->layer == "Air" &&
-              !IsEnemy(p->army, e->army))
-            continue;
+          // 0x69dbfd..0x69dc2d: IgnoresAlly skips whatever is in layer Air (Entity +0x118 == 0x10, read off the
+          // entity itself, not its unit part) and not an enemy (GetArmyIndex 0x678b90, IArmy::IsEnemy 0x5d5540).
+          // A shell in the air is in layer Air too (the ctor 0x69bca6 and the water crossings 0x69db6d set it), so
+          // two allied shells never meet. Seen (Naval, beat 570): two Aeon flares (aimantimissile01, a sphere of
+          // radius 1 each, SetCollisionShape in AIMFlareProjectile.OnCreate) of one ship rise and fall in the same
+          // column; ours had each strike the other where it left the other's sphere, the original let them fly
+          // on to their lifetimes' end (its "wi 574" / "wi 584" Air). (The beam's filter, GetClosestCollision
+          // 0x6d6a00, asks the unit part and stays for units: BeamCheck.)
+          const bool inAir = (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->layer == "Air") ||
+                             (e->kind == Entity::Kind::Projectile && static_cast<Projectile*>(e)->layer == "Air");
+          if (p->ignoresAlly && p->army && inAir && !IsEnemy(p->army, e->army)) continue;
         }
         if (p->hitFraction < 0 || d < p->hitFraction * len) {
           PushObject(L, p);
