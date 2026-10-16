@@ -3,6 +3,74 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 28: the original look's bloom, read in the exe
+
+Read in the FAF build of ForgedAlliance.exe and in the shaders (FAF's effects.nx2; its frame.fx, particle.fx and
+ui.fx equal Steam's). Inferred items are marked.
+
+**Console variables and parameters.**
+- `ren_Bloom` (bool, default 1), `ren_BloomBlurCount` (int, default 2), `ren_BloomBlurKernelScale` (float, 1.5),
+  `ren_BloomGlowCopyScale` (float, 2.0). No other ren_Bloom* / ren_Glow* variable; `ren_glowingDecals` (default 1)
+  gates the glowing decals; `ren_TTerrainGlow` is registered but never read.
+- `BlurScale` = ren_BloomBlurKernelScale and `GlowCopyScale` = ren_BloomGlowCopyScale, set on every frame.fx quad
+  (CRenFrame::Render 0x7f60a5..0x7f60ed); `framewidth` / `frameheight` = the quad's own target size.
+- `GlowCopyAdd` = THE MAP'S lighting "Bloom" value (CWldTerrainRes::GetBloom 0x8a6bf0, field +0x31c, read from the
+  .scmap lighting block right after the specular colour, 0x8a1e51; default 0.08; 0.0 with no map). Seton's has
+  0.03625 (render's scmap.cpp already reads it as `l.bloom`).
+- `MinimumGlow`, `glowMinimum`, `glowMultiplier` are never set by the exe: the .fx defaults apply (0.02 in
+  frame.fx; 0.01 and 2.0 in mesh.fx).
+- FAF's options: "Bloom Render" runs `ren_bloom <v>`; "Bloom Intensity" (slider 10-17, default 15) runs
+  `ren_BloomBlurKernelScale v/10`.
+
+**The passes** (CBloomRenderer 0x7f4d00..0x7f544a). One per head, run once per frame AFTER all world views and the
+cartographic view and RIGHT BEFORE the UI (0x7f9845): the 2D interface, strategic icons, order lines and life bars
+never bloom. Two render textures A and B, half the head's size (width >> 1, height >> 1), A8R8G8B8 (8 bits: every
+pass clamps to [0, 1] and quantises). In order, full-target quads, no clears:
+1. StretchRect back buffer -> B, linear (a 2:1 downsample; with MSAA the filter is the driver's, not traced).
+2. Viewport (0, 0, w/2, h/2). A <- TCopyGlowingStuff(B).
+3. ren_BloomBlurCount times: B <- TBlurHorizontal(A); A <- TBlurVertical(B).
+4. Viewport restored, target = back buffer; TFrameAdd(A), bilinear, One/One with colour write 0x07 (the frame's
+   alpha is left as it was).
+Quads are pre-transformed with corners at -0.5 .. size-0.5, so copy and blur sample texel centres; the 7 taps sit
+on whole half-resolution texels (sigma 2 texels = 4 full pixels a pass); the weights sum to 0.998975, so each blur
+pass gains 0.998975 x BlurScale, about 5.04 in all at the defaults, clamped after every pass. Math: copy
+a = saturate((frame.a - MinimumGlow) * GlowCopyScale + GlowCopyAdd), out = rgb * a; blur x BlurScale; add
+frame.rgb += A.rgb. No sRGB, no separate alpha blend (both off in PipelineStateD3D9::InitState).
+
+**The switch.** DoBloom runs only if ren_Oblivion == 0, ren_Bloom != 0 and ren_ShowNormals == 0 (0x7f9808..
+0x7f9821): ren_bloom 0 skips all of it (targets stay allocated; the scene still writes alpha, which the water
+shader reads for its refraction mask).
+
+**The frame's alpha before the copy.** The frame starts cleared to 0x00000000. Before every technique the exe sets
+a base colour-write mask, overridden by a pass's own state: terrain RGB, meshes RGBA, effects RGB, beams RGBA,
+refracting effects RGB, water RGBA, UI RGB. World order: sky, terrain + decals, range rings, meshes, underwater
+effects, meshes, water mask, water, boundary, selection brackets, meshes, effects with beams, meshes, fog of war,
+refracting effects, silhouettes. What each leaves in alpha:
+- Sky: atmosphere and clouds RGB only; sky decals alpha = decalGlowMultiplier x texel.a.
+- Terrain (the map's technique, RGBA): TTerrain 0.01 + specular x SpecularColor.w (exactly 0.01 on Seton's);
+  TTerrainXP 0.01 in FAF (0 in Steam's file); FAF's Terrain000..301 / TTerrainXPExt 0.01; TTerrainGlow
+  glow x mask.y + 0.01; low fidelity RGB only (alpha stays 0).
+- Decals: TDecalGlowMask 0.01 where opaque; TDecals / TDecalsXP / splats / skirt RGB only; TDecalsGlow (if
+  ren_glowingDecals; One/One, alpha only) alpha += albedo.a x mask.r x 0.25 x DecalAlpha.
+- Range rings (RangeBurn, One/Zero): the ring colour's alpha (FAF: 0x00 normal, 0x08 selected, 0x10 hover).
+- Meshes (no blend, RGBA): FAF high fidelity PBR_UEF 0.8 spec.b + 0.01; PBR_Aeon spec.b + 0.01 + 0.13 spec.a;
+  PBR_Cybran min(sqrt(max(spec.b - 0.04, 0)) + 0.01, 0.3); PBR_Seraphim 0.4 sat(spec.b - 0.1) + team glow +
+  0.1 whiteness + 0.01. Medium (and Steam) NormalMapped / Insect / Aeon / Metal: spec.b + 0.01. Low fidelity,
+  NormalMappedAlpha (trees), VertexNormal, Flat, Clutter, Explosion, Cloud, the build's first pass: RGB only.
+  NormalMappedGlow spec.b + 0.01; wreckage / NormalMappedTerrain 0.01; Effect (TMeshAdd) (1 - albedo.a) x fade.
+  Shields, nuke / quantum effects, build overlays: alpha-blended into alpha (src^2 + dst(1 - src)).
+- Water, high fidelity only (graphics_Fidelity >= 2): TWaterLayAlphaMask and TShoreline set alpha := 0 under the
+  water plane; the surface itself RGB only. Lower fidelity: no mask, water RGB only.
+- Particles: TRamp* and TPolyTrail RGB only. TBeam_*: _ADD dst.a += src.a, _ALPHABLEND src^2 + dst(1 - src),
+  _PREMODALPHA src + dst(1 - src), alpha = tex.a x vertex alpha. TLight_*: RGBA, alpha = tex0.a x tex1.a
+  (blend _ALPHABLEND, inferred).
+- Fog of war, boundary, silhouettes, selection brackets: RGB only.
+On Seton's (Bloom 0.03625, copy scale 2) the glow weight is a' = sat(2a - 0.00375): sky and masked water 0, terrain
+about 0.016 (0.020 if 0.01 is stored as 3/255, inferred), glowing UEF parts about 1.6 spec.b + 0.016.
+
+Not settled: the StretchRect filter with MSAA, the 8-bit rounding of 0.01, the light particles' blend mode, the
+viewport of the final add after the cartographic view (full screen in normal play, not traced).
+
 ## ui 27: the reclaim cursor without the sim's Lua per prop — done
 
 `BlueprintInfo::reclaimable`, `sizeX`, `sizeZ` (props): in RECLAIMABLE, and the blueprint's SizeX / SizeZ (1 when
