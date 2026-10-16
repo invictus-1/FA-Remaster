@@ -1943,6 +1943,37 @@ int ChangeBuildCount(lua_State* L, bool more) {
 int l_IncreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, true); }
 int l_DecreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, false); }
 
+// RenderOverlayEconomy(on) (FA exe 0x847d30): the session's switch for the economy overlay (drawn
+// by the world view, DrawEconomyOverlay).
+int l_RenderOverlayEconomy(lua_State* L) {
+  UserState::From(L)->economyOverlay = lua_toboolean(L, 1) != 0;
+  return 0;
+}
+
+// DeleteCommand(id) (FA exe 0x843fa0): one less of the order with that id (FAF's command graph
+// would pass it when a waypoint is dragged away; its call is commented out there), the same message
+// as DecreaseBuildCountInQueue (15, a count of 1): at 0 the simulation takes the order from every
+// unit that holds it. The original sends it only for an id its command manager knows (the orders it
+// has seen; no check of whose they are, R: the simulation checks); here: an order in the queue of
+// one of the player's units, as the last beat left it.
+int l_DeleteCommand(lua_State* L) {
+  const uint32_t id = static_cast<uint32_t>(static_cast<int64_t>(luaL_checknumber(L, 1)));
+  Sim* sim = TheSim(L);
+  if (!sim) return 0;
+  for (const auto& [unitId, u] : Store(L).units) {
+    if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
+    UnitStateView st;
+    if (!StateOf(L, u.get(), &st)) continue;
+    for (const std::vector<CommandView>* queue : {&st.queue, &st.factoryQueue})
+      for (const CommandView& c : *queue)
+        if (c.id == id) {
+          Writer(L).DecreaseCommandCount(id, 1);
+          return 0;
+        }
+  }
+  return 0;
+}
+
 // After a beat: tell the game script when the shown factory's queue is not what it was.
 void ReportQueueChange(lua_State* L) {
   UnitStore& store = Store(L);
@@ -2053,6 +2084,24 @@ int SelectionPriorityOf(lua_State* L, const UserUnit* u) {
 // taken (a box drawn over tanks, engineers and buildings selects the tanks; over engineers, the
 // commander and buildings: the engineers and the commander), as players know it from the
 // original. INFERRED: the original's code for it is not read; the numbers are the blueprints'.
+// (The original, CWldSession::DrawEconomyOverlay 0x858d80: the focus army's units in the camera's
+// view, E = (energyProduced - energyRequested) * 10 and M the same for mass, a unit left out when
+// both are 0. Ours are a second already: produced and consumptionPerSecond, as GetEconData gives
+// them. INFERRED, not built: its distance cutoff per unit.)
+void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out) {
+  UserState* user = UserState::From(L);
+  const int focus = user->economyCopied ? user->focusArmyCopy : -1;
+  if (focus < 0) return;
+  for (const auto& [id, u] : Store(L).units) {
+    if (u->gone || u->view.dead || u->view.army != focus + 1) continue;
+    UnitStateView st;
+    if (!StateOf(L, u.get(), &st)) continue;
+    const float energy = st.produced[0] - st.consumptionPerSecond[0], mass = st.produced[1] - st.consumptionPerSecond[1];
+    if (energy == 0 && mass == 0) continue;
+    out->push_back({{u->view.position[0], u->view.position[1], u->view.position[2]}, energy, mass});
+  }
+}
+
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority) {
   Sim* sim = TheSim(L);
   if (!sim) return;
@@ -2519,6 +2568,8 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "ClearCurrentFactoryForQueueDisplay", l_ClearCurrentFactoryForQueueDisplay);
   SetGlobal(L, "IncreaseBuildCountInQueue", l_IncreaseBuildCountInQueue);
   SetGlobal(L, "DecreaseBuildCountInQueue", l_DecreaseBuildCountInQueue);
+  SetGlobal(L, "DeleteCommand", l_DeleteCommand);
+  SetGlobal(L, "RenderOverlayEconomy", l_RenderOverlayEconomy);
 }
 
 // In front of the engine's category functions: call this once those are registered.

@@ -120,6 +120,10 @@ class UserState {
   bool lifeBarsPutAway = false;
   // The console's UI_ForceLifbarsOnEnemy (the game's option "Always Show Enemy Lifebars").
   bool lifeBarsOnEnemies = false;
+  // RenderOverlayEconomy(bool) (FA exe 0x847d30: the session's +0x4e8; FAF's multifunction panel's
+  // "economy" button): each of the player's units on screen shows what it makes or uses
+  // (worldview.cpp, DrawEconomyOverlay).
+  bool economyOverlay = false;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -458,6 +462,14 @@ void UserDecalsForWorld(lua_State* L, std::vector<WorldDecal>* out);
 // The place on the ground under a point of the screen, by the main world view (worldview.cpp);
 // false without one.
 bool ScreenToWorld(lua_State* L, float x, float y, float out[3]);
+// The economy overlay's numbers (RenderOverlayEconomy): each living unit of the player's that makes
+// or uses something, where it stands and its energy and mass a second, made less what it asks for
+// (user_units.cpp).
+struct EconomyMark {
+  float position[3];
+  float energy, mass;
+};
+void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).

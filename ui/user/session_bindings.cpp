@@ -172,6 +172,15 @@ int l_GetFocusArmy(lua_State* L) {
   return 1;
 }
 
+// IsObserver() (FA exe 0x843150): true when there is no focus army (a replay or an observer looking
+// at every army); as GetFocusArmy, from the beat's copy.
+int l_IsObserver(lua_State* L) {
+  UserState* user = UserState::From(L);
+  const int a = user->economyCopied ? user->focusArmyCopy : TheSim(L)->focusArmy;
+  lua_pushboolean(L, a < 0);
+  return 1;
+}
+
 // SessionGetScenarioInfo(): the scenario table the session was launched with; the same table on
 // every call.
 int l_SessionGetScenarioInfo(lua_State* L) {
@@ -552,8 +561,9 @@ void RegisterSessionBindings(lua_State* L) {
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
   SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
   for (const char* name : {"WorldIsLoading", "SessionIsMultiplayer",
-                           "SessionIsBeingRecorded", "SessionIsObservingAllowed", "IsObserver"})
+                           "SessionIsBeingRecorded", "SessionIsObservingAllowed"})
     SetGlobal(L, name, l_False);
+  SetGlobal(L, "IsObserver", l_IsObserver);
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSimTicksPerSecond", l_GetSimTicksPerSecond);
