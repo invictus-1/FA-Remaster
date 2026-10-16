@@ -86,8 +86,9 @@ cbuffer MeshKind : register(b3) {
                 // w: 1 = the map's border (ModelLod::border)
   float4 kind3; // x: how much it sways in the wind (0: not at all); y: 1 / its height in model units;
                 // z: the model's lowest point and w: 1 / its whole height, in model units (for building)
-  float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool); y, z, w: a shield's tint (a nuke's shell:
-                // how often its texture repeats, how fast it slides, from what age it fades)
+  float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool) (a nuke's ball of fire: 1 = the remastered
+                // look's, from the visuals track's textures); y, z, w: a shield's tint (a nuke's shell: how
+                // often its texture repeats, how fast it slides, from what age it fades)
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there
 };
 Texture2D albedoMap : register(t0);
@@ -303,6 +304,24 @@ float4 Shade(VOut i, bool front) {
       float4 shell = albedoMap.Sample(samplerAniso, i.uv.xy * kind4.y + float2(0, age * kind4.z));
       fire = shell.rgb;
       alpha = shell.a * normalsMap.Sample(samplerAniso, i.uv.xy).g * saturate(1 - (age - kind4.w) * 0.025);
+    } else if (kind4.x > 0.5) {
+      // the remastered look's (visuals, section 25): the visuals track's picture of fire as light of its
+      // own, not greyed by the noise; its second texture's three noises (red, green, blue) at the
+      // original's sizes and creeping at the original's speeds bend where the picture is read, so it
+      // churns as the original does. The picture's alpha and the original's fade from 50 seconds and
+      // cut make its ragged rim behave the same.
+      float creep = age * 0.018;
+      float4 fine = normalsMap.Sample(samplerAniso, i.uv.xy * 6 + float2(0, creep * 1.25));
+      float4 middle = normalsMap.Sample(samplerAniso, i.uv.xy * 4 + float2(0, creep * 1.25));
+      float4 wide = normalsMap.Sample(samplerAniso, i.uv.xy * 0.25 + float2(0, creep * 0.1));
+      float2 bend = (float2(middle.g, fine.b) - 0.5) * 0.05 + (float2(wide.r, wide.b) - 0.5) * 0.15;
+      float4 picture = albedoMap.Sample(samplerAniso, i.uv.xy + bend + float2(0, creep * 0.1));
+      fire = picture.rgb;
+      alpha = picture.a * saturate(1 - (age - 50) * 0.015);
+      clip(alpha - 15.0 / 255);
+      fire = saturate(fire);
+      // (bright enough that its hottest parts glow past what the screen shows: the picture's last pass blooms them)
+      return float4(look > 0.5 ? pow(fire, 2.2) * 4 : fire, alpha);
     } else {
       // churning fire: the fire's picture mixed half and half with its second texture's noise at
       // three sizes, which creeps along the ball; holes where the fine noise is thin; after 20
@@ -947,6 +966,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
     if (lod->nuke) {
+      kind[12] = lod->remasteredEffect ? 1.0f : 0.0f;  // (the remastered look's ball of fire)
       kind[13] = lod->nukeShell.x;
       kind[14] = lod->nukeShell.y;
       kind[15] = lod->nukeShell.z;

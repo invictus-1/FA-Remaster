@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "bp_reader.h"
+#include "effect_files.h"
 #include "core/vfs.h"
 
 namespace render {
@@ -485,11 +486,18 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     }
     // a texture that is not there is simply not used (many props have no normal or specular
     // texture); one a blueprint file names itself and that is missing gets reported
-    auto texture = [&](const std::string& name, bool named, gfx::Texture fallback) {
+    auto texture = [&](std::string name, bool named, gfx::Texture fallback, bool* remastered = nullptr) {
+      // (an effect's mesh, as a nuke's ball of fire: in the remastered look the visuals track's
+      // texture of that path where it has made one, effect_files.h)
+      if (!original && moho::Vfs::Normalize(name).compare(0, 9, "/effects/") == 0) {
+        const std::string ours = EffectFile(*vfs_, name, true);
+        if (remastered) *remastered = ours != name;
+        name = ours;
+      }
       if (name.empty() || (!(named && !merged) && !vfs_->Exists(name))) return fallback;
       return textures_->Get(name, fallback);
     };
-    lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White());
+    lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White(), &lod.remasteredEffect);
     lod.normals = texture(s.normals, s.normalsNamed, textures_->FlatNormal());
     lod.specular = texture(s.specular, s.specularNamed, gfx::Texture{});  // (none: black, or see plainMaterial below)
     lod.secondary = texture(s.secondary, s.secondaryNamed, textures_->White());

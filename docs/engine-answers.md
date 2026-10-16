@@ -3,6 +3,21 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 24: the crash in a game against the stock AI — fixed (engine f1e7f57)
+
+A bug in our Lua VM, not in the AI code nor the interface host. `luaV_execute` set a frame's `pc` pointer
+only at `callentry`; Lua 5.0.2 sets it again at `retentry` (the fix for 5.0's "pc address is invalidated
+when a coroutine is suspended"). A coroutine resumed after `WaitSeconds` that returns into a caller left
+mid-call kept a pointer to a dead C stack slot, read only by error messages and tracebacks. The stock AI's
+pool thread (`platoon.lua:1555`, `GetLocationCoords` nil after its commander dies) then read
+`lineinfo[garbage]`: about one run in three faulted, the others logged `platoon.lua:0` or `-1`. The classic
+AI functions (d7e3624) only exposed it; 83b2250 passing was luck (address-space layout).
+
+New: `src/core/crash.h` `InstallCrashHandler()` logs the exception, the faulting offset, the address, the
+tick and the faulting thread's frames as image offsets (`llvm-symbolizer --obj=<exe> --relative-address`),
+flushes the log and passes the exception on (the exit code is unchanged). The interface host calls it
+after `LogOpenFile` (two lines in `ui/app/main.cpp`, the interface chat's file).
+
 ## ui 23: a replay of a game played here keeps its fixes — done
 
 New in `src/sim/session.h`: `int SessionDescription::fixes`.
@@ -1596,8 +1611,8 @@ stubs (39 of `CAiBrain`'s: threat map, `BuildPlatoon`, `DecideWhatToBuild`, atta
 ai_brain.cpp, ai_build.cpp; engine d7e3624, 64a3518, e78131a). A rush AI in a 6000-tick test game now
 builds factories, mass extractors (and upgrades them), power and engineers, forms 19 platoons and sends
 tanks to attack. Not yet checked against the original game (an oracle run with the classic AI would need a
-probe of FindPlaceToBuild / BuildStructure / DecideWhatToBuild). OPEN: the interface chat's request 24, a
-crash in a game against the classic AI (being found).
+probe of FindPlaceToBuild / BuildStructure / DecideWhatToBuild). The interface chat's request 24 (a crash in
+a game against the classic AI) was a Lua VM bug the new AI code exposed; fixed (see ui 24 above).
 
 ## render 5: standing request to merge `render` into `main` — accepted
 

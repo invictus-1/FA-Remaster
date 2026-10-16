@@ -84,6 +84,10 @@
 //           x,z,height to --fx-to x,z[,height] (else across where the camera looks, away from it), with the
 //           trails and the hit its script class gives it; --fx-hit land|unit|water|underwater|prop|shield|air|none
 // --fx-compare  the remastered effects on the left, the original's on the right (--fx-spacing apart, 8)
+// --fx-entity <effect entity>  an effect entity (UEFNukeEffectController01, or its blueprint's path) made at
+//           --fx-at as a nuke's impact makes it, its own scripts run (fx_entities.h), every --fx-repeat seconds
+//           (25 unless given); --fx-seed n: where its Random starts (1). A --fx-shot whose impact makes one
+//           (a nuke) makes it where it lands.
 //           (with --frames n --shots k --screenshot <name>.png: a numbered picture every k frames)
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
@@ -190,7 +194,7 @@ struct Options {
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
   FxStandSetup fx;                      // --fx, --fx-shot and their places
-  bool fxAt = false, fxFrom = false, fxTo = false;
+  bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = false;                 // --prepass
   bool vulkan = false;                  // --vulkan
@@ -355,7 +359,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-shot") o->fx.shot = v;
     else if (a == "--fx-hit") o->fx.hit = v;
-    else if (a == "--fx-repeat") o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
+    else if (a == "--fx-repeat") {
+      o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
+      o->fxRepeat = true;
+    } else if (a == "--fx-entity") o->fx.entity = v;
+    else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
     else if (a == "--fx-spacing") o->fx.spacing = static_cast<float>(atof(v));
     else if (a == "--fx-at" || a == "--fx-from" || a == "--fx-to") {  // x,z[,height above the ground]
       float x = 0, z = 0, h = 0;
@@ -436,7 +444,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -976,10 +984,12 @@ int main(int argc, char** argv) {
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
-  if (!opt.fx.fx.empty() || !opt.fx.shot.empty()) {
+  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty()) {
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
+    // (an effect entity's play is long: a nuke's lasts some twenty seconds)
+    if (!opt.fxRepeat && (!opt.fx.entity.empty() || opt.fx.shot.find("Nuke") != std::string::npos)) opt.fx.repeat = 25;
     if (!opt.hasCam) {  // close to it, a little from above
-      camera.distance = opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long)
+      camera.distance = !opt.fx.entity.empty() ? 160.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
       camera.pitch = 0.55f;
     }
     {  // (a shot not placed: across the spot, away from the camera)

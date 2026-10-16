@@ -95,6 +95,9 @@ struct ModelLod {
   // (nukeShell: how often the texture repeats, how fast it slides, from what age it fades).
   int nuke = 0;
   Vec3 nukeShell{1, 0, 0};
+  // Its albedo is the visuals track's (an effect's mesh in the remastered look, effect_files.h): the
+  // remastered look's own way of drawing it where it has one (the UEF's ball of fire: section 25).
+  bool remasteredEffect = false;
   // Three more of the game's looks that are not lit by the scene: 1 "Flat" (the first game's
   // "TMeshNoLighting": some missiles): its texture's own colours, cut by its alpha; 2
   // "UEFQuantumGate": a see-through field, its texture sliding with a finer copy taken away from

@@ -88,6 +88,7 @@ struct FrameProjectile {
   float size[3] = {1, 1, 1};
   float growth[3] = {0, 0, 0};
   float age = 0;  // seconds since it was first seen (what fades with time goes by it)
+  bool original = false;  // drawn in the original effects' look whatever the world's (the effects stand's side by side)
 };
 
 // Something a script made that has a mesh and is neither a unit, a projectile nor a prop: a shield's
@@ -144,6 +145,7 @@ struct FrameEffectEvent {
   bool seen = true;               // Create: the army the picture is for sees that place
   std::vector<float> numbers;
   std::string text, text2;
+  bool original = false;  // Create: made in the original effects' look whatever the world's (the effects stand's side by side)
 };
 
 // How a blueprint looks, as the simulation has it after the game's scripts and the mods changed it

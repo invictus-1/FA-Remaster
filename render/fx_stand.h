@@ -11,9 +11,11 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "fx_entities.h"
 #include "linalg.h"
 
 namespace moho {
@@ -32,13 +34,18 @@ struct FxStandSetup {
   float repeat = 2;          // seconds from one start to the next
   bool compare = false;      // remastered and original side by side
   float spacing = 8;         // how far apart the two are then
+  // an effect entity (its id, "UEFNukeEffectController01", or its blueprint's path), made at `at` as a
+  // nuke's impact makes its controller, its own scripts run (fx_entities.h)
+  std::string entity;
+  uint32_t seed = 1;         // where the entities' Random starts
 };
 
 class FxStand {
  public:
   // Reads what it is to play. False with the reason when there is nothing.
   bool Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error);
-  // Each frame after World::Begin: starts, moves and ends what it plays. `right`: the camera's right
+  // Each frame after World::Begin: starts, moves and ends what it plays (effect entities: handed to
+  // the world as a game's projectiles and effects, World::AddFrame and Effects). `right`: the camera's right
   // (the two sides are laid out along it); `ground`: the ground's height at a place.
   void Update(World& world, double now, Vec3 right, const std::function<float(float, float)>& ground);
   // What it read, for the log.
@@ -60,6 +67,9 @@ class FxStand {
   std::string projectile_;  // its blueprint's path
   float speed_ = 30;
   std::vector<std::string> polyTrails_, fxTrails_, impact_;
+  std::string entity_;            // the effect entity's blueprint: --fx-entity, or what the shot's impact makes
+  std::unique_ptr<FxEntities> entities_;
+  std::vector<FrameEffectEvent> events_;
   std::vector<Side> sides_;
   double started_ = -1e9;
 };
