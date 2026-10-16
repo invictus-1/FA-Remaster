@@ -3,6 +3,53 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 25: the heights FlattenMapRect set, for the drawn ground — done
+
+`TerrainMap::HeightChange { int x0, z0, x1, z1; }` (grid vertices, inclusive, clamped to the map) and
+`const std::vector<HeightChange>& heightChanges() const`: every rectangle whose heights were set since the map was
+loaded, in order, appended by `l_FlattenMapRect` after its loop (the only place the simulation sets heights). Read
+it between beats; read the heights with `HeightAt`. `changes()` (ui 25) counts the vertices written.
+
+## visuals 29: UEF units moving (wakes, contrails and exhaust, kickup dust)
+
+Read from our recordings (Seton's; world (x, z); compass heading, 0 = +z, 90 = +x; speed in ogrids per second;
+h above terrain or water). Matching the original over every tick: Naval, Subs, Experimental2, AIR, LAND,
+Transports, the eight-army game; the Skirmish through about 900.
+
+- **Ships under way (all surfaced), Naval:** Neptune XES0307 `14` 166-466 at 4.2, heading 109, (190, 355) ->
+  (311, 313) dead straight, and back 727-831 heading 239; Neptune `13` 421-540 heading 178 and 635-859 heading
+  112, (213, 256) -> (301, 220); Summit UES0302 `11` 218-512 at 2.7, (121, 307) -> (154, 233), and `12` 218-453,
+  (175, 349) -> (223, 307); Valiant UES0201 `a` 239-320 at 5.5, (162, 327) -> (152, 283), and `9` 215-249 /
+  341-378; Governor UES0202 `c` 207-304 at 4.5, (166, 328) -> (138, 294); Cooper XES0102 `5` / `6` 189-220 at
+  6.0; shield boat XES0205 `8` 257-363 at 5.0, (162, 338) -> (130, 295). Experimental2: Atlantis UES0401 `1`
+  surfaced 199-332 at 3.3, heading 102, (327, 344) -> (370, 335). (Submerged, so likely no surface wake: the Subs
+  replay's four UES0203 at 6.0, e.g. `4` 293-460, (234, 382) -> (331, 356).)
+- **Planes at speed.** Best: Subs, five torpedo bombers UEA0204 (`9`, `a`-`d`) together over water at 14.4-15.0,
+  1016-1157 heading ~280, (537-553, 133-139) -> (368-394, 163-179), h 7-13; level stretches `9` 1220-1293 heading
+  73, h 10-12, and `a` about 1440-1511 heading 113-123, h 12-13. AIR (a dogfight, so short straights): bomber
+  UEA0103 `5` 320-401 at 9.7, heading 232, (690, 405) -> (628, 357), h 13-14, and 445-529 heading 78; `6` 495-571
+  heading 334; strategic bombers UEA0304 `100018` / `100019` 147-176 at 15.9, side by side heading north, h 18;
+  Janus DEA0202 `10000c` 153-235 at 9.8, heading 53, (645, 324) -> (709, 372), h 16-20, and `d` 375-401 at 13.3;
+  Interceptor UEA0102 `3` 160-180 at 16.7, h 17; ASF UEA0303 `12` 203-215 at 20.7, h 10, and `100010` 200-226 at
+  20-22, h 16-18 (ASFs turn hard: straights of 10-16 ticks). Many AIR planes are shot down at 250-290 (a height
+  falling to 0 at a run's end is the crash).
+- **Land units driving (all on Vegetation03 / 04, which makes dust; no recorded unit drives on Dirt02, whose
+  patches lie south of the UEF base around x 625-715, z 250-386).** The eight-army game: Striker UEL0201 `900034`
+  44-346 east along z 720, (220, 720) -> (320, 720) at 3.3; Strikers `900036`-`900038` as a column 44-310 along
+  z 815; Titan UEL0303 `90002e` 43-235, (250, 800) -> (320, 801) at 3.7. LAND: Pillar UEL0202 `a` 1450-1588,
+  (301, 703) -> (338, 687); `b` 1145-1306; Titan `4` 1492-1637, (297, 691) -> (332, 669); Striker `5` 859-989.
+  Transports: six Strikers 1463-1557 to about (680, 318); six Pillars `16`-`1b` 565-628. The UEF Demolisher is
+  UEL0304 (DAL0310 is not UEF): it appears only in LAND (`13`, `14`, alive 1041-1098) and barely moves.
+
+## ui 26: command and toggle caps in UnitView — done (engine e7b8ff8)
+
+`UnitView::commandCaps` and `toggleCaps` (RULEUCC_ / RULEUTC_ bits): the unit's own when a script changed them
+(Unit:AddCommandCap, AddToggleCap ...), else its blueprint's. Each unit blueprint's caps are read once when the
+blueprints are copied into the sim (`BlueprintInfo::commandCaps` / `toggleCaps`), so filling the view runs no sim
+Lua; `UnitStateOf` takes the same values the same way. The same numbers the sim's own `LiveCommandCaps` /
+`UnitToggleCaps` give. Also in e7b8ff8: a second game in the same process now plays exactly as in a fresh
+process (`moho64 --twice` checks it), so relaunched games may join determinism checks again.
+
 ## ui 25: a copy of the terrain heights kept between beats — done
 
 `src/sim/terrain.h`:

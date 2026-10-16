@@ -30,6 +30,25 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
+## 25. Which ground FlattenMapRect changed, for the picture (2026-10-15, wanted soon: Chris saw it)
+
+**Who asks:** the renderer, after Chris's picture of a Cybran land factory whose floor the hillside came up
+through ("its glitching into the ground").
+
+**Why:** a structure's scripts flatten the ground under it (`FlattenMapRect`, src/sim/entities.cpp). The
+simulation's heights change and the building stands on them, but the picture keeps the map's heights as
+loaded, so on a slope the drawn ground cuts through the structure. The original draws the flattened ground.
+
+**What (the smallest form):** a list on the TerrainMap (or the Sim) of every rectangle of grid vertices whose
+heights were set since the map was loaded, in order, appended where `FlattenMapRect` sets them (and wherever
+else heights are set, if anywhere):
+`struct HeightChange { int x0, z0, x1, z1; };  const std::vector<HeightChange>& heightChanges() const;`
+(inclusive, clamped to the map as the loop is). The renderer's frame builder (`render/sim_frames.cpp`) keeps
+how many it has taken, reads the new rectangles' heights with `HeightAt` at each beat it builds, and the
+picture's ground, its height texture and the culling bounds follow. No change to what the simulation does.
+
+**Blocking:** the fix of Chris's picture; nothing else.
+
 ## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking)
 
 **Who asks:** Chris, through the renderer: "for the large ship sinking and walker we will have to ask

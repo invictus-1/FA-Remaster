@@ -211,6 +211,7 @@ int l_FlattenMapRect(lua_State* L) {
   float h = static_cast<float>(luaL_checknumber(L, 5));
   for (int j = z; j <= std::min(z + sz, m->height()); ++j)
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  m->NoteHeightChange(x, z, x + sx, z + sz);  // (for the drawn ground: render request 25)
   AirTerrainChanged(m, x, z, x + sx, z + sz);
   // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
   // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground

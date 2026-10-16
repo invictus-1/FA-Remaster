@@ -45,6 +45,13 @@ class TerrainMap {
   const uint16_t* heightData() const { return heights_.data(); }
   float heightScale() const { return heightScale_; }
   uint64_t changes() const { return changes_; }
+  // Every rectangle of grid vertices whose heights were set since the map was loaded, in order (render request 25:
+  // the drawn ground follows FlattenMapRect). Inclusive, clamped to the map; read between beats.
+  struct HeightChange {
+    int x0, z0, x1, z1;
+  };
+  const std::vector<HeightChange>& heightChanges() const { return heightChanges_; }
+  void NoteHeightChange(int x0, int z0, int x1, int z1);  // (FlattenMapRect, after its SetHeightAt loop)
 
   bool hasWater = false;
   float waterElevation = 0, waterElevationDeep = 0, waterElevationAbyss = 0;
@@ -57,6 +64,7 @@ class TerrainMap {
   std::vector<uint16_t> heights_;  // (width+1) * (height+1)
   std::vector<uint8_t> types_;     // width * height
   uint64_t changes_ = 0;           // SetHeightAt calls
+  std::vector<HeightChange> heightChanges_;
 };
 
 }  // namespace moho

@@ -145,6 +145,9 @@ class MeshRenderer {
   struct Group {
     std::vector<Entry> entries;
     std::vector<Cull> culls;  // one for each of entries
+    // the box round all of their bounding spheres: a pass that does not see it passes the group over
+    // whole (what each of them would have been tested for one by one)
+    Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   };
   std::vector<Group> groups_;
   std::vector<uint32_t> groupsListed_;

@@ -384,12 +384,15 @@ static void Arith (lua_State *L, StkId ra,
 
 /*
 ** GPG bitwise operators (& | << >> and `^' as xor). Operands must be numbers
-** (no string coercion); each is rounded to the nearest integer (x87 fistp,
-** round-half-even), the operation is done on 32 bits and the result is read
-** back as an UNSIGNED 32-bit integer.
+** (no string coercion); each is TRUNCATED toward zero: luaV_execute 0x929c60 sets the x87 rounding
+** control to chop before each fistp (fnstcw; or 0xc00; fldcw: & 0x92a84a, | 0x92a9ce, << 0x92ab35,
+** >> 0x92ac9c, ^ 0x92ae03), keeps the low 32 bits of the 64-bit integer, and reads the 32-bit result
+** back as UNSIGNED (fild dword, + 2^32 when negative, 0x92a89b). Seen (Skirmish): FAF's NavUtils reverses
+** a path with `for k = 1, (0.5 * head) ^ 0`; rounding 3.5 to 4 swapped the middle pair back, so M28's
+** naval travel distances (water zone 15 to 14: original 141.8, ours 153.9) and its zone order differed.
 */
 static unsigned int gpg_toint (lua_Number n) {
-  return cast(unsigned int, cast(long long, nearbyint(cast(double, n))));
+  return cast(unsigned int, cast(long long, cast(double, n)));
 }
 
 static void Bitwise (lua_State *L, StkId ra,
