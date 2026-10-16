@@ -795,6 +795,54 @@ SetFocusArmy. Built on it: the user binding SetFocusArmy with the checks, the ch
 CopyFromSimulation and in GameSession::NoteBeatHere (the picture's focus). Tests: replay_play.lua
 (army 1, then -1), game.lua (refused in a game without cheats).
 
+### 30. GetMovieDuration in the core bindings (the campaign's dialogue needs it in the sim)
+From the interface chat, 2026-10-16, not blocking yet (the campaign comes next on my side). Read by a
+helper: GetMovieDuration(localFileName) (wrapper 0x8753a0 -> 0x875420 -> 0x874d30) is in the CORE
+binding table (0xf59680), so both the sim and the user state have it. FAF's ScenarioFramework.lua
+657-704 (Dialogue) calls it in the sim: `GetMovieDuration('/movies/'..vid) == 0` swaps in AllyCom.sfd;
+missiontext.lua (user side) waits that long when a movie fails to load. It returns frames / fps in
+seconds from the file's header (CRI's mwPlyGetHdrInf: frames at its +0x14, fps at +0x10 * 0.001), 0
+when the movie manager is missing ("Movie component not initialized.") or the file is not there.
+In the .sfd itself (checked on Brackman.sfd, FMV_menu.sfd, FMV_loading02.sfd): the first MPEG
+private-stream-2 packet (00 00 01 BF, its data after the 2-byte length) holds "SofdecStream"; at data
++0xaa the duration in ms (u32 LE: 5005, 65700, 7000) and at +0xae the frame count (150, 1971, 210); the
+fps is the MPEG-1 sequence header's frame rate code (Brackman 29.97, the rest 30). Could
+src/script/core_bindings.cpp give GetMovieDuration (frames / fps, 0 when the file is missing), as the
+original? The interface's Movie control reads the same header for GetNumFrames.
+Also for the campaign, so you know: the sim's dialogue waits for the interface to send
+`SimCallback OnMovieFinished(path)` (FAF SimCallbacks.lua:209) after each talking head; a run
+without the interface moves on only if the replay holds that callback.
+
+### 31. The campaign: a session from the single-player launch table, and what an operation's scripts need
+From the interface chat, 2026-10-16. Chris's call: the campaign next ("the biggest pain first"), started the
+ORIGINAL's way: Campaign button -> operation select -> briefing -> Launch (FAF had switched that launch off;
+our own small hook turns it back on and keeps the progress). The interface will call your side through
+LaunchSinglePlayerSession (the original's 0x88d3c0: WLD_SetupSessionInfo 0x88cbc0, WLD_BeginSession
+0x88d060). Survey by a helper (`...\scratchpad\helper_campaign\` in my session folder has its lists):
+1. A session from FAF's single-player table (SinglePlayerLaunch.lua:70-127 SetupCampaignSession): playerName,
+   createReplay = false, scenarioMods, no RandomSeed (the original then takes a random one), scenarioInfo =
+   the loaded _scenario.lua table itself (with .file, .Options = {FogOfWar='explored', Difficulty=n (a
+   number), DoNotShareUnitCap, Timeouts=-1, GameSpeed='normal', FACampaignFaction=...}, .campaignInfo,
+   .tutorial: the sim reads them, ScenarioFramework.lua:111), teamInfo[i] = one per army of the scenario's
+   FFA team ('Player', 'Seraphim', 'Order', 'UEF', 'Civilians'; entry 1 human with the chosen faction, the
+   others Human=false, Faction=1; no OwnerID). Unlike a lobby's table it has no Victory, UnitCap,
+   CheatsEnabled. Could src/sim/session.h give something like SessionFromSinglePlayerInfo(table) beside
+   SessionFromGameConfig, keeping the scenario table as given? (I will add Options.ScenarioFile =
+   scenarioInfo.file before handing it over: FAF's ScenarioFramework.EndOperation (line 73) gsubs it and
+   the table has none.)
+2. The operation's start: the map script's OnPopulate (InitializeScenarioArmies: the _save.lua armies and
+   units, per difficulty) and OnStart, as a campaign map runs them.
+3. Sim functions the operations call that are stubs or missing (helper's static scan; expect more once one
+   runs): SetPlayableRect (ScenarioFramework.lua:1258), SetIgnorePlayableRect (X1CA_001_script.lua:209),
+   SetArmyFactionIndex (ScenarioUtilities.lua:750: else the AI armies keep teamInfo's Faction 1),
+   SetArmyColorIndex, SetArmyAIPersonality (761/766), FlushIntelInRect, Entity:GetCollisionExtents
+   (objectiveArrow.lua:31), the CAiPersonality getters campaign-ai.lua:293-296 uses; GetMovieDuration (30).
+The playable area (SetPlayableRect) then reaches the interface as Sync.CameraRequests
+CAMERA_SYNC_PLAYABLE_RECT (usercamera.lua:107 -> the user binding SyncPlayableRect, mine). A test path
+once 1 exists: the command line `/map X1CA_001 /diff 2 /faction 1` (SinglePlayerLaunch.StartCommandLineSession).
+Not blocking for my next steps (the movie playback, the camera's cinematic moves, the front end's hook),
+but the operations cannot start without 1 and 2.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -1594,6 +1642,27 @@ the picture, remembered buildings' and the minimap's; models keep theirs; an unk
 empty: the army colours back). SetFocusArmy during a game is fine (0: no fog from the next beat; a new
 army starts its explored ground and remembered buildings afresh). Wired: TeamColorMode in
 session_bindings.cpp (IconColorsForWorld), handed over in GameSession's SetScene when it changes.
+
+### 27. The campaign: a playable area that grows, and the cinematics' switches
+From the interface chat, 2026-10-16, not blocking yet. Chris's call: the campaign next, the original's way
+(engine request 31 starts the operations). Read by a helper:
+- The playable area: an operation opens on part of the map and grows it as it goes
+  (ScenarioFramework.SetPlayableArea -> the sim's SetPlayableRect and Sync.CameraRequests ->
+  the user binding SyncPlayableRect(rect), mine; the original's CWldSession::SyncPlayableRect 0x896960
+  sets the terrain's playable rect (CWldTerrainRes::SetPlayableMapRect, read by ren_PlayableBoundary)
+  and marks the entities outside it). Could the picture take a playable rectangle that changes during a
+  game, for example `SetPlayableRect(x0, z0, x1, z1)` (whole map until called), so the ground outside
+  it is drawn as now beyond the map's edge (your "beyond" shading takes the map's size today: view.h
+  80-83, world.h 238-245), and the minimap shows only the playable part (I reset its camera to the
+  rect as the original does)? What the original does with units outside (hidden or dimmed) is not read
+  yet; tell me if you know.
+- The cinematics (NIS mode, gamemain.lua 963-965) and the score screen set console variables that do
+  nothing here yet: UI_NisRenderIcons (false: no strategic icons during a cinematic), ren_SelectBoxes
+  (false: no selection brackets), ren_Oblivion (true: no world drawn behind the score screen). Could
+  the picture take three switches for these (icons on/off, selection marks on/off, the world on/off)?
+- Please check that the operations' own world objects are drawn: the objective arrows (script entities
+  with /meshes/game/arrow_mesh, SetDrawScale, attached and bouncing by SetParentOffset;
+  objectiveArrow.lua) and the objective areas the sim lays as decals (CreateDecal).
 
 
 ## To the visuals track
