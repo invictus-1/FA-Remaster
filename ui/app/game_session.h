@@ -160,6 +160,10 @@ class GameSession {
   float TerrainHeight(float x, float z) const;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
+  // For measurements (--fast-forward): the beats run as fast as they go, up to 50 a frame, until
+  // this beat; then real time again.
+  uint32_t fastForwardTo = 0;
+  bool CatchingUp() const;
 
   uint32_t tick() const;
   double PictureTick() const;

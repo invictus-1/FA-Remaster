@@ -79,6 +79,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   const int warmUp = maxFrames >= 600 ? 300 : 0;
   int statsFrom = 0;
   int frames = 0;
+  int steadyFrames = 0;  // frames since the host stopped running ahead (--fast-forward)
   while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     auto now = Clock::now();
     double dt = std::chrono::duration<double>(now - last).count();
@@ -105,7 +106,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
     drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
     ++frames;
-    if (warmUp && frames == warmUp) {
+    if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
+    else ++steadyFrames;
+    if (warmUp && steadyFrames == warmUp) {
       start = Clock::now();
       drawSeconds = presentSeconds = frameSeconds = renderSeconds = hostSeconds = 0;
       timesBefore = Times();

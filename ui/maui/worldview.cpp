@@ -1051,8 +1051,8 @@ class WorldView : public Control {
       if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
       // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
       // with more room than a right click gets (the player has said what is meant). With nothing
-      // there the order still goes out with the place, as the original sends it (the simulation
-      // ends it at once when the place is in sight).
+      // there the order still goes out with the place, as the original sends it; the simulation
+      // makes no task of it (IssueReclaimTask 0x61ef60 needs a live entity: engine main 1dded52).
       if (order == "Reclaim" && !miniMap && IssueReclaimAtPlace(L, world, std::max(1.0f, MapUnitsOf(L, 14)), !e.shift)) return true;
       return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
     }

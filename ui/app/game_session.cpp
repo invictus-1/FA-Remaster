@@ -714,10 +714,16 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   return true;
 }
 
+bool GameSession::CatchingUp() const { return sim_ && sim_->tick() < fastForwardTo; }
+
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
-  due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
-  if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
+  if (CatchingUp()) {  // (--fast-forward, for measurements: up to 50 beats a frame until that beat)
+    due_ = std::min<uint32_t>(fastForwardTo - sim_->tick(), 50) * 0.1 + 0.01;
+  } else {
+    due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
+    if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
+  }
   while (due_ >= 0.1) {
     due_ -= 0.1;
     if (play_) {  // a replay: its own orders, beat by beat; the player's only pause and resume it
