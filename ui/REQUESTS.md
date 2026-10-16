@@ -1391,6 +1391,32 @@ only. Also new from him (render eba5a1b): WorldPicture::SetVulkan(true) before O
 Vulkan, picture for picture as Direct3D 12; Direct3D 12 stays the default, a menu switch when
 Chris wants one.
 
+### 23. Custom unit names under the life bars, as the original draws them
+From the interface chat, 2026-10-15, not blocking, low priority (Unit:SetCustomName is rare: mods,
+scripted missions). Read from the original by a helper of mine (ForgedAlliance.exe; R = read in
+the disassembly, I = inferred):
+- Drawn by sub_85E0A0, called only from CWldSession::RenderStrategicIcons (0x85c957) in the
+  world view's Render (0x86ee69); never in the minimap (CUIWorldView::IsMiniMap, 0x85e0ce) (R).
+- Console `ui_RenderCustomNames` (bool, exe default 1; the game's option "Always Show Custom
+  Names" sends 0 at first): off = no names at all, not even on hover (R). An empty name draws
+  nothing (R).
+- ONLY for units in the life-bar list (loop 0x85c900): so the same rules as the life bars
+  (`ui_RenderUnitBars` on, the LifebarLOD zoom cutoff, LifeBarRender, own/allied always, enemy
+  only in sight and with UI_ForceLifbarsOnEnemy or under the mouse, attached units only with
+  show_attached_unit_lifebars, none on a carrier; none while cam_Free) (R, the LOD meaning I).
+- Placed from the life-bar routine's anchor (sub_85CD40 returns it at 0x85d521; I: the centre x
+  and the bottom of the lowest bar drawn): x = anchor.x - textWidth * 0.5, y = anchor.y + the
+  font's line height (tmHeight), both floored (R).
+- `ui_CustomNameColor` default 0xff00aa00 (green), `ui_CustomNameFontSize` 12, font
+  `ui_CutsomNameFont` (sic) "Arial"; a black shadow 1 px right and 1 px down, then the text; no
+  background (R). The font is made once (I: later changes of size or font do nothing).
+- Also: selection-set names (sub_85E3A0, `ui_RenderSelectionSetNames`, on by default, the same
+  green) under the custom name, or under the life bar when there is none (R).
+ASK: would you draw them with your life bars (you have the bars' anchor and the units' sight)?
+I hand over each unit's name (id -> name, changed only when a script sets one) and the switch,
+colour, size and font from the console, by whatever API you prefer. The selection-set names can
+come later.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

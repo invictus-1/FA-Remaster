@@ -205,6 +205,8 @@ class GameSession {
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
   // so the next beat is there when the picture's moment reaches it (the picture never waits).
   double lead_ = 0;
+  double leadBeats_ = 0;         // the beats' own share of it (the longest lately, fading)
+  double lastFrameSeconds_ = 0;  // the last frame's real time (Advance's `seconds`)
   void StartBeatOnThread();
   void FinishBeat();
   void DeliverBeatSync();

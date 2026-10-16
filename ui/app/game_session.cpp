@@ -807,6 +807,7 @@ bool GameSession::CatchingUp() const { return sim_ && !BeatRunning() && sim_->ti
 
 void GameSession::AdvanceClock(double seconds) {
   due_ = std::min(1.0, due_ + seconds * std::pow(10.0, pace.rate / 10.0));  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
+  lastFrameSeconds_ = seconds;
 }
 
 void GameSession::WaitForBeat() {
@@ -907,8 +908,16 @@ void GameSession::FinishBeat() {
   ++times.beats;
   // The next beat starts this much early: the longest of the last beats, with some room (beats
   // vary; the old estimate fades slowly), at most most of a beat.
-  const double took = (workerSimSeconds_ + workerPictureSeconds_) * std::pow(10.0, pace.rate / 10.0);
-  lead_ = std::min(0.08, std::max(took * 1.3, lead_ * 0.9));
+  const double speed = std::pow(10.0, pace.rate / 10.0);
+  const double took = (workerSimSeconds_ + workerPictureSeconds_) * speed;
+  leadBeats_ = std::max(took * 1.3, leadBeats_ * 0.9);
+  // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
+  lead_ = std::min(0.08, leadBeats_ + lastFrameSeconds_ * speed);
+  static const bool beatLog = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
+  if (beatLog)
+    Logf(LogLevel::Info, "moho64ui: beat %u on its thread: %.1f ms (sim %.1f, picture %.1f); next starts %.1f ms early; held so far %d",
+         sim_->tick(), (workerSimSeconds_ + workerPictureSeconds_) * 1000.0, workerSimSeconds_ * 1000.0,
+         workerPictureSeconds_ * 1000.0, lead_ / speed * 1000.0, times.heldPictures);
   NoteBeatHere();
   DeliverBeatSync();
 }
