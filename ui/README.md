@@ -464,7 +464,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `ui_CustomNameColor` (0xff00aa00), `ui_CustomNameFontSize` (12) and `ui_CutsomNameFont` (sic,
   "Arial"). The renderer gives the bars of the frame about to be shown
   (`WorldPicture::LifeBarAnchors`), so names and bars are of one moment. Inferred: that the
-  original's y is the text's top. Not yet: the selection-set names under them.
+  original's y is the text's top. Below, a unit's selection sets (control groups, "1 3 ": byte
+  order, a space after each; sub_85E3A0), centred a line below the point the name's routine gives
+  back (the name's left edge: the original's own quirk) or below the bars without a name;
+  `ui_RenderSelectionSetNames` ON as in the exe, `ui_SelectionSetNamesColor` (0xff00aa00).
 - Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
