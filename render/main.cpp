@@ -72,7 +72,7 @@
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
-// --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12: being built, step by step
+// --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
 // --prepass  the models' depth is laid first (MeshRenderer::depthPrepass; off by default), to measure it
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
@@ -532,6 +532,7 @@ int main(int argc, char** argv) {
     cam.pitch = 0.9f;
     auto shoot = [&](const char* what, const std::string& map) {
       WorldPicture p;
+      p.SetVulkan(opt.vulkan);
       p.UseWindow(window->Handle());
       std::string why;
       if (!p.Open(&vfs, map, &why)) {
@@ -576,6 +577,7 @@ int main(int argc, char** argv) {
     setup.enhancement = opt.enhancement;
     setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
     live.SetFocusArmy(opt.focus);
+    picture.SetVulkan(opt.vulkan);
     picture.SetFocusArmy(opt.focus);
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
