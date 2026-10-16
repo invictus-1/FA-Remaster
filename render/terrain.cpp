@@ -98,14 +98,19 @@ float4 Ground(VOut i) {
   float4 rawHigh = maskHigh.Sample(samplerLinearClamp, uv) * xp;
   float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
 
-  #define ALBEDO(n) albedoMaps[n].Sample(samplerAniso, xz * albedoTile[n].x)
-  #define NORMAL(n) (normalMaps[n].Sample(samplerAniso, xz * normalTile[n].x) * 2 - 1)
+  // (read with the place's own steps, so that a layer can be skipped where it is not there at all:
+  // inside such a branch the sampler cannot work the steps out itself)
+  float2 stepX = ddx(xz), stepY = ddy(xz);
+  #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
+  #define NORMAL(n) (normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x) * 2 - 1)
+  // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a
+  // map's layers each cover a part of it only (most pixels need two or three of the ten)
+  #define OVER(value, read, share) [branch] if ((share) > 0) value = lerp(value, read, share)
   // A remastered map's layers (modern look): where a layer has its third map, it does not fade
   // evenly into what lies under it: its high places come through first (how much of it shows is
   // its mask pushed by its height), and it brings its own roughness and crease shading.
   // `matter`: x creases' shading, y roughness, z how much of the pixel is such a layer's at all.
   float3 matter = 0;
-  float2 stepX = ddx(xz), stepY = ddy(xz);  // (taken here: inside a branch the sampler cannot work them out)
   [branch] if (look > 0.5 && albedoTile[0].y > 0.5) {
     float3 m = materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[0].x, 0), stepX * albedoTile[0].x, stepY * albedoTile[0].x).rgb;
     matter = float3(m.r, m.g, 1);
@@ -128,7 +133,7 @@ float4 Ground(VOut i) {
   RICH(7, high.z, rawHigh.z)
   RICH(8, high.w, rawHigh.w)
   float4 albedo = ALBEDO(0);
-  albedo = lerp(albedo, ALBEDO(1), low.x);
+  OVER(albedo, ALBEDO(1), low.x);
   float4 second = ALBEDO(2);
   float3 glowing = 0;
   if (params.z > 0.5) {
@@ -143,24 +148,24 @@ float4 Ground(VOut i) {
     second.a = 0;
   }
   albedo = lerp(albedo, second, low.y);
-  albedo = lerp(albedo, ALBEDO(3), low.z);
-  albedo = lerp(albedo, ALBEDO(4), low.w);
-  albedo = lerp(albedo, ALBEDO(5), high.x);
-  albedo = lerp(albedo, ALBEDO(6), high.y);
-  albedo = lerp(albedo, ALBEDO(7), high.z);
-  albedo = lerp(albedo, ALBEDO(8), high.w);
+  OVER(albedo, ALBEDO(3), low.z);
+  OVER(albedo, ALBEDO(4), low.w);
+  OVER(albedo, ALBEDO(5), high.x);
+  OVER(albedo, ALBEDO(6), high.y);
+  OVER(albedo, ALBEDO(7), high.z);
+  OVER(albedo, ALBEDO(8), high.w);
   float4 upper = ALBEDO(9);
   albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
 
   float4 n = NORMAL(0);
-  n = lerp(n, NORMAL(1), rawLow.x);
-  n = lerp(n, NORMAL(2), rawLow.y);
-  n = lerp(n, NORMAL(3), rawLow.z);
-  n = lerp(n, NORMAL(4), rawLow.w);
-  n = lerp(n, NORMAL(5), rawHigh.x);
-  n = lerp(n, NORMAL(6), rawHigh.y);
-  n = lerp(n, NORMAL(7), rawHigh.z);
-  n = lerp(n, NORMAL(8), rawHigh.w);
+  OVER(n, NORMAL(1), rawLow.x);
+  OVER(n, NORMAL(2), rawLow.y);
+  OVER(n, NORMAL(3), rawLow.z);
+  OVER(n, NORMAL(4), rawLow.w);
+  OVER(n, NORMAL(5), rawHigh.x);
+  OVER(n, NORMAL(6), rawHigh.y);
+  OVER(n, NORMAL(7), rawHigh.z);
+  OVER(n, NORMAL(8), rawHigh.w);
   n.xyz = normalize(n.xyz);
   // the layers' normal, y up
   float3 detail = float3(n.x, sqrt(saturate(1 - dot(n.xy, n.xy))), n.y);

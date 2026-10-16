@@ -142,6 +142,11 @@ class ModelCache {
   const Model* Unit(const std::string& blueprintId, bool original = false);
   // Where that unit's blueprint file is: the game's own in /units, a mod's in its folder under /mods.
   const std::string& UnitBlueprintPath(const std::string& blueprintId);
+  // Reads ahead, on the worker threads, the files of these units' models that are not made yet (their
+  // meshes and textures, the remastered ones too), so that making them after takes no reading.
+  void Prefetch(const std::vector<std::string>& unitIds);
+  // The same for blueprint files (a map's props: "/env/evergreen/props/rocks/rock01_prop.bp").
+  void PrefetchBlueprints(const std::vector<std::string>& blueprintPaths);
   // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
   bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp"),
@@ -177,6 +182,8 @@ class ModelCache {
     std::vector<LodSource> lods;
   };
   const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction);
+  // A blueprint file's levels: their file names, and the model's scale. False when it has none to draw.
+  bool ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error);
   void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
              const std::string& faction = std::string());
   std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path
@@ -185,6 +192,10 @@ class ModelCache {
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
   std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
+  // every mod's unit blueprint file by its name ("<id>_unit.bp"), the first in path order: one search of
+  // /mods when the first unit that is not the game's own is asked for (instead of one search each)
+  std::unordered_map<std::string, std::string> modUnits_;
+  bool modUnitsListed_ = false;
   std::unordered_map<const Model*, std::unique_ptr<Model>> wrecks_[2];  // by the model it is of: [1] with its own scale
 };
 

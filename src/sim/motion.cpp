@@ -563,7 +563,17 @@ void SnapUnit(const Sim& csim, Unit* u) {
   if (!map || !u->motion.bp) return;
   const MotionBlueprint& b = *u->motion.bp;
   // SnapToGround 0x6c1610 tilts the transform as it is (CalcMoveCommon set the facing when the unit moved)
-  if (b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub) {
+  // CUnitMotion::MotionTick 0x6b9f77..0x6b9fe5 picks the calculation by the LAYER (a hover aside): Land and Seabed
+  // take CalcMoveLand 0x6c3180 (SnapToGround), every other layer CalcMoveWater 0x6c3480, whose only snap is
+  // SnapToWater 0x6c1cb0 (0x6c3564), whatever the motion type. So an AmphibiousFloating unit (a Cybran destroyer) in
+  // the Water layer sits at the water's height + its depth (not nearer than 0.25 to the bottom under its centre),
+  // levelled by its roll; it does not ride the surface under its four corners. Seen (Naval 843): a Salem let go by
+  // its factory beside a beach, one corner over land 0.145 above the sea: the original stays level at 17.5, ours
+  // lifted it by a quarter of that and tilted it for two beats.
+  const bool waterCalc = b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub ||
+                         (b.motionType == kMotionAmphibiousFloating && !u->motion.snapTerrain && u->layer != "Land" &&
+                          u->layer != "Seabed");
+  if (waterCalc) {
     // SnapToWater 0x6c1cb0: at water + depth, but never closer than 0.25 to the bottom; a submerged unit stays
     // under the surface and its depth follows the bottom
     UnitMotion& m = u->motion;

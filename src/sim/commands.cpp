@@ -557,6 +557,18 @@ void ArrivalStep(Sim& sim, Unit* u) {
   // (queue+0x1c is 0 then, and its table 0x618998 says "abort" for 0): an aircraft at the end of a Move order is
   // stopped at the point one second ahead (CAiNavigatorAir::AbortMove 0x5a4f00), not held at its goal cell
   if (keep->type == CommandType::Move && u->motion.air) AirAbort(sim, u);
+  // A land navigator's AbortMove 0x5a3750 is SetSpeedThroughGoal(0) (vt+0x18), MakeIdle (vt+0x4c 0x5a3e00:
+  // SetWaypoints(0, 0) 0x5d29c0) and event 1 (the move task has already unlinked itself, 0x61885f). The navigator's
+  // own end of the path (Execute 0x5a43dd: Stop, then MakeIdle) came first, in the army stage, and the steering of
+  // the same beat may have made a new batch since: SetWaypoints(0, 0) then finds a spline (+0x80) and turns it into
+  // a brake (CAiPathSpline::Update mode 3, 0x5d2b63), predicts collisions with it and hands out its first point. A
+  // unit that stands makes a brake of one point, which is used up the next beat: Stop, no point, and the hull is
+  // free to turn. Seen (Naval 605/606): battlecruiser 0x21 gives up its Move (stuck, 0x5aebb9) while a destroyer
+  // passing it keeps putting a collision record on it; the navigator's Stop re-predicts, the record is resolved in
+  // the steering stage into a seven-point hard brake (mode 4). The original stood on that beat and made its
+  // broadside turn (AttackAngle 60) at 606: the move task's abort had cut the hard brake down to a one-point brake.
+  // Ours ended the order without the abort, kept the hard brake and turned at 611.
+  else if (keep->type == CommandType::Move && u->motion.nav) MotionStop(u);
   if (u->commands.empty()) return;
   StartHead(sim, u);
 }
