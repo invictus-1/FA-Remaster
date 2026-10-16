@@ -146,6 +146,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   zoom), Render Sky (the sky lights the scene). The interface tab's "Scale strategic icons" (1 / 1.5 /
   2; drawn at the larger of it and the renderer's scale for the screen's height) and "Always Show
   Strategic Icons" (at every distance, close up too) go to the renderer's StrategicIcons.
+  The display mode, "Primary Adapter" (`SC_PrimaryAdapter`, FA exe 0x8d34d0; `DisplayMode`): the
+  list is made at the start as the original's (0x8d21e0): "Windowed" and the screen's own mode
+  ("3840x2160(240)": a full screen is always the screen's size without a frame; fewer pixels come
+  from Upscaling), or only "Command Line Override" when the command line chose the mode
+  (`--fullscreen`, or `--size` with `--window`: all of the lab's launchers). Without those, the
+  player's option decides at the start (a profile that never chose: full screen), and a choice
+  applied in the menu switches at once: a window comes back at its last size (kept in the
+  preferences as `Windows.Main.Previous.width` / `height`, the original's keys; 1024x768 at first).
+  The lobby's "Windowed mode" checkbox works through the same command. "Secondary Adapter" lists
+  only "Disabled".
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
   "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is

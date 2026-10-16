@@ -132,6 +132,9 @@ class UserState {
   lua_State* L() const;
   UiManager& ui() { return *ui_; }
   const Config& config() const { return config_; }
+  // The head's size, also before the main script makes the root frames (the display mode the
+  // player's option chose at the start).
+  void SetHeadSize(int width, int height);
   // The running simulation, once no beat runs on its own thread (it waits for one that does; the
   // engine's rule: nothing of this state may look at the simulation while it ticks). Every look
   // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).
@@ -235,6 +238,22 @@ struct CursorLock {
   bool on = false;
 };
 CursorLock& LockCursor();
+// The display mode, the game's Options, Video tab, "Primary Adapter" (console SC_PrimaryAdapter,
+// FA exe ResolutionCommands::SC_PrimaryAdapter 0x8d34d0): "windowed" (a window of the size kept in
+// the preferences as Windows.Main.Previous.width / height, the exe's 1024x768 when there is none),
+// a full screen "width,height,rate", or "overridden" (the command line chose the mode: nothing to
+// do). A full screen here is always the screen's own size, without a frame; fewer pixels come from
+// Upscaling. The window's loop takes the request (run_window.cpp). `overridden`: --fullscreen or
+// --size chose the mode at the start, and the menu then offers only "Command Line Override", as
+// the original does with its command-line switches (StartupHelpers::SetupPrimaryAdapterSettings,
+// FA exe 0x8d21e0).
+struct DisplayMode {
+  enum Request { kNone, kWindowed, kFullScreen };
+  Request request = kNone;
+  int windowedWidth = 1024, windowedHeight = 768;
+  bool overridden = false;
+};
+DisplayMode& Display();
 // The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
 // 2026-10-15: "The new looks will go into options menu for each player"). The options send them
 // as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,

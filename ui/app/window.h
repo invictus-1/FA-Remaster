@@ -34,6 +34,12 @@ class Window {  // (the host's one window)
   void Show();
   // The main screen's size in pixels; false when there is no window system.
   static bool ScreenSize(int* width, int* height);
+  // Change the mode while open: `full` fills the screen the window is on, without a frame;
+  // otherwise a framed window whose inside is width x height, back where it last was as a window
+  // (centred on the screen the first time). The new size reaches the `resized` callback.
+  void SetMode(bool full, int width, int height);
+  // The inside's size now.
+  void ClientSize(int* width, int* height) const;
   // How many times a second the main screen shows a new picture (its refresh rate); 60 when it
   // cannot be told.
   static int RefreshRate();
@@ -74,6 +80,8 @@ class Window {  // (the host's one window)
   bool holding_ = false;
   int holdX_ = 0, holdY_ = 0;      // where the pointer is held, in the window
   float heldX_ = 0, heldY_ = 0;    // where the mouse's moves have taken its place since
+  bool windowedKnown_ = false;     // where the window last was as a window (SetMode)
+  int windowedX_ = 0, windowedY_ = 0;
 
  public:
   bool fullScreen = false;

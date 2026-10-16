@@ -1601,6 +1601,10 @@ CursorLock& LockCursor() {
   static CursorLock lock;
   return lock;
 }
+DisplayMode& Display() {
+  static DisplayMode mode;
+  return mode;
+}
 FrameTimes& Times() {
   static FrameTimes times;
   return times;

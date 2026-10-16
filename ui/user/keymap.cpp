@@ -368,6 +368,14 @@ int l_LooksForTests(lua_State* L) {
     lua_pushboolean(L, switchValues[i]);
     lua_rawset(L, -3);
   }
+  const DisplayMode& display = Display();  // displayRequest: 0 none, 1 windowed, 2 full screen
+  const char* modes[3] = {"displayRequest", "windowedWidth", "windowedHeight"};
+  const int modeValues[3] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight};
+  for (int i = 0; i < 3; ++i) {
+    lua_pushstring(L, modes[i]);
+    lua_pushnumber(L, modeValues[i]);
+    lua_rawset(L, -3);
+  }
   return 1;
 }
 int l_KeyMapAction(lua_State* L) {
@@ -541,6 +549,17 @@ void CallScript(lua_State* L, const char* module, const char* function, const st
       LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
   }
   lua_settop(L, top);
+}
+
+// GetPreference(key) as a whole number ("a.b.c" goes into tables), or `fallback`.
+int PreferenceNumber(lua_State* L, const char* key, int fallback) {
+  int top = lua_gettop(L);
+  int number = fallback;
+  lua_getglobal(L, "GetPreference");
+  lua_pushstring(L, key);
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_isnumber(L, -1)) number = static_cast<int>(lua_tonumber(L, -1));
+  lua_settop(L, top);
+  return number;
 }
 }  // namespace
 
@@ -761,6 +780,22 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       LockCursor().on = !value.empty() && value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0;
       return;
     }
+    if (key == "SC_PRIMARYADAPTER") {  // windowed | width,height,rate | overridden (DisplayMode)
+      const std::string mode = Upper(value.substr(0, value.find_last_not_of(" \t") + 1));
+      if (mode.empty() || mode == "OVERRIDDEN") return;
+      DisplayMode& display = Display();
+      if (mode == "WINDOWED") {
+        // the window's size the last time it had one (the exe's: its preferences
+        // Windows.Main.Previous.width / height, read at 0x8d35e2)
+        display.windowedWidth = std::max(320, PreferenceNumber(L, "Windows.Main.Previous.width", display.windowedWidth));
+        display.windowedHeight = std::max(240, PreferenceNumber(L, "Windows.Main.Previous.height", display.windowedHeight));
+        display.request = DisplayMode::kWindowed;
+      } else {
+        display.request = DisplayMode::kFullScreen;
+      }
+      return;
+    }
+    if (key == "SC_SECONDARYADAPTER") return;  // (a second screen for a second head: none here)
   }
   if (Upper(name) == "UI_SELECTBYCATEGORY") {
     SelectByCategoryCommand(L, rest);

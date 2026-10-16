@@ -143,6 +143,22 @@ check("Bloom Intensity 10 is a glow of 1.0", math.abs(moho64ui_Looks().bloomInte
 video.bloom_intensity.set('bloom_intensity', 15, false)
 check("the presets run without a missing option", pcall(video.fidelity_presets.update, nil, 3), true)
 
+-- The display mode: "Windowed" and the screen's own mode, listed at the start (no window here, so
+-- the command line has not chosen); the choice is a request the window's loop takes
+local adapter = video.primary_adapter and video.primary_adapter.custom and video.primary_adapter.custom.states or {}
+check("the display modes are Windowed and the screen's own", table.getn(adapter) == 2 and adapter[1].key == 'windowed'
+    and string.find(adapter[2].key or '', '^%d+,%d+,%d+$') ~= nil, true)
+check("and a profile that never chose takes the screen's own", video.primary_adapter.default, adapter[2] and adapter[2].key)
+local second = video.secondary_adapter and video.secondary_adapter.custom and video.secondary_adapter.custom.states or {}
+check("no second screen to choose", table.getn(second) == 1 and second[1].key == 'disabled', true)
+ConExecute("SC_PrimaryAdapter windowed")
+check("Windowed asks the window to leave a full screen", moho64ui_Looks().displayRequest, 1)
+check("at the size it had as a window (1024x768 when none is kept)", moho64ui_Looks().windowedWidth .. "x" .. moho64ui_Looks().windowedHeight, "1024x768")
+ConExecute("SC_PrimaryAdapter " .. (adapter[2] and adapter[2].key or "1,1,1"))
+check("a mode asks for a full screen", moho64ui_Looks().displayRequest, 2)
+ConExecute("SC_PrimaryAdapter overridden")
+check("and Command Line Override asks nothing new", moho64ui_Looks().displayRequest, 2)
+
 -- The camera's options and the strategic icons (other tabs of the menu): each does what it says
 local all = {}
 for _, section in import('/lua/options/options.lua').options do

@@ -5,6 +5,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
+#include <algorithm>
 #include <mmsystem.h>
 
 #include "user/keymap.h"
@@ -249,6 +250,44 @@ int Window::RefreshRate() {
   return 60;
 }
 
+void Window::SetMode(bool full, int width, int height) {
+  if (!hwnd_) return;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  if (full == fullScreen && full) return;
+  MONITORINFO screen{};
+  screen.cbSize = sizeof screen;
+  GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &screen);
+  if (full) {
+    RECT now;
+    GetWindowRect(hwnd, &now);
+    windowedX_ = now.left, windowedY_ = now.top, windowedKnown_ = true;
+    fullScreen = true;
+    SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    const RECT& r = screen.rcMonitor;
+    SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    KeepMouseInside(lockMouse && GetForegroundWindow() == hwnd);
+    return;
+  }
+  if (fullScreen) ClipCursor(nullptr);
+  fullScreen = false;
+  SetWindowLongPtrW(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+  RECT rc{0, 0, width, height};
+  AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+  const RECT& work = screen.rcWork;
+  const int w = rc.right - rc.left, h = rc.bottom - rc.top;
+  int x = windowedKnown_ ? windowedX_ : static_cast<int>(work.left) + (static_cast<int>(work.right - work.left) - w) / 2;
+  int y = windowedKnown_ ? windowedY_ : static_cast<int>(work.top) + (static_cast<int>(work.bottom - work.top) - h) / 2;
+  x = std::max(static_cast<int>(work.left), std::min(x, static_cast<int>(work.right) - w));  // (kept on the screen)
+  y = std::max(static_cast<int>(work.top), std::min(y, static_cast<int>(work.bottom) - h));
+  SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+}
+
+void Window::ClientSize(int* width, int* height) const {
+  RECT rc{};
+  if (hwnd_) GetClientRect(static_cast<HWND>(hwnd_), &rc);
+  *width = rc.right - rc.left, *height = rc.bottom - rc.top;
+}
+
 void Window::LockMouse(bool lock) {
   if (lock == lockMouse) return;
   lockMouse = lock;
@@ -337,6 +376,8 @@ bool Window::ScreenSize(int*, int*) { return false; }
 int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}
 void Window::LockMouse(bool lock) { lockMouse = lock; }
+void Window::SetMode(bool full, int, int) { fullScreen = full; }
+void Window::ClientSize(int* width, int* height) const { *width = *height = 0; }
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }

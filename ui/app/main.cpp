@@ -75,6 +75,7 @@ std::string windowCapture;
 int capturedFrames = 0, menuFrames = 0;
 bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
+bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
 // --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
 // 0: the hour stands still> / --weather <kind> (changing, cold, dry, none, clear, cloudy, overcast,
@@ -223,7 +224,7 @@ int main(int argc, char** argv) {
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
     else if (a == "--no-sound") noSound = true;
-    else if (a == "--fullscreen") fullScreen = windowed = true;
+    else if (a == "--fullscreen") fullScreen = windowed = modeGiven = true;
     else if (a == "--backdrop") wantBackdrop = 1;
     else if (a == "--no-backdrop") wantBackdrop = 0;
     else if (a == "--day-weather") sky.startHour = 9;
@@ -239,6 +240,7 @@ int main(int argc, char** argv) {
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
     else if (a == "--size") {
+      modeGiven = true;
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
       if (x != std::string::npos) {
@@ -359,6 +361,46 @@ int main(int argc, char** argv) {
   // for every change between front end and game, FA exe 0x885de0).
   auto front = std::make_unique<ui::UserState>(&vfs, cfg);
   bool ok = front->Boot();
+  // The display mode (the Options menu's "Primary Adapter", DisplayMode). The original fills the
+  // menu's list at the start (StartupHelpers::SetupPrimaryAdapterSettings, FA exe 0x8d21e0):
+  // "Windowed" and the screen's modes, or only "Command Line Override" when its command line chose
+  // the mode. Here --fullscreen, or --size with --window, chose it; otherwise the player's option
+  // does, as the original's device takes it at the start (CScApp::CreateDevice 0x8d0370). A full
+  // screen is the screen's own size, so the list has that one mode (the original's text,
+  // "2560x1440(240)"). The second screen's list: "Disabled" only.
+  ui::Display().overridden = windowed && modeGiven;
+  if (ok) {
+    int screenW = 1920, screenH = 1080;
+    ui::Window::ScreenSize(&screenW, &screenH);
+    const int rate = ui::Window::RefreshRate();
+    const std::string native = std::to_string(screenW) + "," + std::to_string(screenH) + "," + std::to_string(rate);
+    const std::string nativeText = std::to_string(screenW) + "x" + std::to_string(screenH) + "(" + std::to_string(rate) + ")";
+    std::string lists = "local logic = import('/lua/options/optionslogic.lua') ";
+    lists += ui::Display().overridden
+                 ? "logic.SetCustomData('primary_adapter', {states = {{text = '<LOC _Command_Line_Override>', key = 'overridden'}}}, 'overridden') "
+                 : "logic.SetCustomData('primary_adapter', {states = {{text = '<LOC OPTIONS_0070>Windowed', key = 'windowed'}, {text = '" +
+                       nativeText + "', key = '" + native + "'}}}, '" + native + "') ";
+    lists += "logic.SetCustomData('secondary_adapter', {states = {{text = '<LOC _Disabled>', key = 'disabled'}}}, 'disabled')";
+    if (!front->RunString(lists, "=(display modes at start-up)")) Logf(LogLevel::Warning, "moho64ui: the display modes could not be listed");
+    // A live window the command line left free: the player's choice (a profile that never chose
+    // has the screen's own mode, the list's default: a full screen).
+    if (windowed && !modeGiven) {
+      front->RunString("local o = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {} "
+                       "ConExecute('SC_PrimaryAdapter ' .. tostring(o.primary_adapter or '" + native + "'))",
+                       "=(display mode at start-up)");
+      ui::DisplayMode& display = ui::Display();
+      fullScreen = display.request != ui::DisplayMode::kWindowed;
+      if (fullScreen) {
+        width = screenW, height = screenH;
+      } else {
+        width = (std::min)(display.windowedWidth, screenW), height = (std::min)(display.windowedHeight, screenH);
+      }
+      display.request = ui::DisplayMode::kNone;
+      front->SetHeadSize(width, height);
+      cfg.width = width, cfg.height = height;
+      Logf(LogLevel::Info, "moho64ui: display mode at the start (the player's option): %s %dx%d", fullScreen ? "full screen" : "a window of", width, height);
+    }
+  }
   // The player's options take effect at the start, as in the original (its app start-up runs
   // /lua/options/optionslogic.lua's Apply: StartupHelpers::OPTIONS_Apply, FA exe 0x8c6cf0, called
   // at 0x8cf81f): every option's `set` with its saved value (sound volumes, the camera's shake,

@@ -116,6 +116,11 @@ bool UserState::RunString(const std::string& code, const std::string& chunkName)
 
 // The original's interface manager (FA exe 0x84cc50): the global __EngineStats, a root frame per
 // head, then the main script.
+void UserState::SetHeadSize(int width, int height) {
+  config_.width = width, config_.height = height;
+  ui_->Resize(width, height);
+}
+
 bool UserState::StartMainScript() {
   lua_State* L = state_->L();
   // __EngineStats: the original keeps its statistics tree here; ours is the empty tree (a name

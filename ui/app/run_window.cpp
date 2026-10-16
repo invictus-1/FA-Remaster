@@ -200,7 +200,30 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       last = now;
       double uiDt = std::chrono::duration<double>(now - uiLast).count();  // (since the interface's last step)
       uiLast = now;
-      current().ui().edgeScroll = fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
+      // The player's display mode from the Options menu (DisplayMode): a full screen keeps the
+      // window's size as a window in the preferences, as the original keeps it
+      // (Windows.Main.Previous.width / height), for the way back.
+      DisplayMode& display = Display();
+      if (display.request != DisplayMode::kNone) {
+        const bool toFull = display.request == DisplayMode::kFullScreen;
+        display.request = DisplayMode::kNone;
+        if (toFull && !window.fullScreen) {
+          int w = 0, h = 0;
+          window.ClientSize(&w, &h);
+          if (w > 0 && h > 0) {
+            UserState& user = current();
+            const std::string keep = "SetPreference('Windows.Main.Previous.width', " + std::to_string(w) +
+                                     ") SetPreference('Windows.Main.Previous.height', " + std::to_string(h) + ") SavePreferences()";
+            user.RunString(keep, "=(the window's size)");
+          }
+          Logf(LogLevel::Info, "moho64ui: display mode: full screen");
+          window.SetMode(true, 0, 0);
+        } else if (!toFull && window.fullScreen) {  // (a window already: it stays as it is)
+          Logf(LogLevel::Info, "moho64ui: display mode: a window of %dx%d", display.windowedWidth, display.windowedHeight);
+          window.SetMode(false, display.windowedWidth, display.windowedHeight);
+        }
+      }
+      current().ui().edgeScroll = window.fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
       window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
       current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
       frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
