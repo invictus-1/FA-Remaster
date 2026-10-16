@@ -2838,6 +2838,8 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   lua_State* L = sim.L();
   if (t.ended) return;
   t.ended = true;
+  // (whether the task's walking child, a CUnitMoveTask, is running: only its dtor 0x618700 aborts the move, below)
+  const bool walking = t.moving;
   if (t.sub) {  // a mobile build's site-clearing reclaim is popped first
     EndPropReclaim(sim, L, u, *t.sub);
     t.sub = nullptr;
@@ -2889,8 +2891,12 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   if (t.type == CommandType::BuildMobile) {
     // CUnitMobileBuildTask dtor (0x5f6ac0): OnStopBuild(true) - the structure is left as it is -
     // then the builder's OnFailedToBuild when the task did not finish (also before it started).
+    if (Alive(u)) SetArmAimTarget(sim, u, Vec3{});
+    // 0x5f6b66..0x5f6b99: before OnStopBuild the structure the task made (its weak pointer +0xb8) loses NoReclaim
+    // (state 40, the high dword's bit 8), finished or not. (Seen: Economy beat 2555, SACU 0x25 ordered to guard
+    // from building 0x31 at 70 %: the half-built structure is reclaimable again in the original, not in ours.)
+    if (Unit* w = FindUnitAny(sim, t.targetId)) w->unitStates.erase("NoReclaim");
     if (Alive(u)) {
-      SetArmAimTarget(sim, u, Vec3{});
       if (t.started) StopBuild(sim, L, u, t, true);
       if (!t.completed) sim.CallMethod(L, u, "OnFailedToBuild", 0);
     }
@@ -2968,7 +2974,11 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       u->unitStates.erase("AssistingCommander");
     }
     u->workProgress = 0;
-    StopMovingIfTask(u, t);
+    // Only a walking child's dtor aborts the move (0x618884); with none running the navigator keeps what it has. (Seen:
+    // Economy 3027-3029, the commander building in a pocket between storages; engineer 0x3's next site covers it, and
+    // SIM_TryToBuild sends it a goal at 3027 while it still builds. Its own build ends at 3029 and the original walks
+    // off to that goal from that beat; ours aborted the move with the finished task.)
+    if (walking) StopMovingIfTask(u, t);
   }
   if (!t.child && (t.type == CommandType::BuildAssist || t.type == CommandType::AssistCommander) && u->guardedId)
     SetGuardedUnit(sim, u, nullptr);
