@@ -268,6 +268,10 @@ class World {
   DebugDraw draw;
   AmbientOcclusion ao;
   Post post;
+  // The glow round what is brighter than the screen can show, in the modern look (the game's Bloom
+  // Render and Bloom Intensity): off, or this strong (1.5, the game's default, is the modern look's own).
+  bool bloom = true;
+  float bloomIntensity = 1.5f;
   Upscaler upscaler;
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
