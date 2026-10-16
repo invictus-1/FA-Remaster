@@ -175,6 +175,50 @@ int l_GetFocusArmy(lua_State* L) {
   return 1;
 }
 
+// SetFocusArmy(n) (FA exe 0x842ee0; the replay's army list, NoteGameOver's -1, the score screen):
+// look through army n (1-based) or, with -1, at every army. Checked as the original's
+// (CWldSession::RequestFocusArmy 0x8965e0, ValidateFocusArmyRequest 0x896670): allowed with no
+// command source of one's own (a replay's viewer), with cheats on, for one's own army, or once the
+// game is over; else only where observing is allowed and the player's source belongs to no army at
+// all (FAF's exe makes the original's "no army still in the game" that): never in our games, where
+// it always belongs to the player's army. A request the checks refuse is dropped quietly. The
+// engine applies it at its next Sync (Sim::RequestFocusArmy, engine request 29); this state takes
+// the change from that beat's copy (CopyFromSimulation).
+int l_SetFocusArmy(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "SetFocusArmy", 1, lua_gettop(L));
+  const int n = static_cast<int>(luaL_checknumber(L, 1));
+  UserState* user = UserState::From(L);
+  Sim* sim = TheSim(L);
+  if (!sim) return luaL_error(L, "No session started.");
+  const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
+  if (n != -1 && (n < 1 || n > armies))
+    return luaL_error(L, "Invalid army index of %d; must be between 1 and %d inclusive.", n, armies);
+  const int wanted = n == -1 ? -1 : n - 1;
+  const bool replay = user->economyCopied ? user->isReplayCopy : sim->isReplay;
+  bool cheats = false;
+  {
+    int top = lua_gettop(L);
+    lua_getglobal(L, "SessionGetScenarioInfo");
+    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "Options");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "CheatsEnabled");
+        lua_gettable(L, -2);
+        cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
+      }
+    }
+    lua_settop(L, top);
+  }
+  const GamePace* pace = user->config().pace;
+  const bool over = (pace && pace->ended) || sim->endGame;
+  const int own = user->config().ownArmy;
+  const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
+  if (!allowed) return 0;
+  sim->RequestFocusArmy(wanted);
+  return 0;
+}
+
 // IsObserver() (FA exe 0x843150): true when there is no focus army (a replay or an observer looking
 // at every army); as GetFocusArmy, from the beat's copy.
 int l_IsObserver(lua_State* L) {
@@ -524,7 +568,15 @@ void UserState::CopyFromSimulation() {
   if (!sim) return;
   EconomyTotals e = EconomyTotalsOf(*sim, sim->focusArmy + 1);
   std::memcpy(economyCopy, &e, sizeof e);
+  // A new focus army (SetFocusArmy, applied by the engine at this beat's Sync): the selection is
+  // emptied, as the original's CWldSession::DoBeat does (0x8945b9 .. 0x894663); GetFocusArmy,
+  // IsObserver and what goes by the focus army read the copy from here on.
+  const bool focusChanged = economyCopied && focusArmyCopy != sim->focusArmy;
   focusArmyCopy = sim->focusArmy;
+  if (focusChanged) {
+    Logf(LogLevel::Info, "moho64ui: the focus army is now %d (0: none)", focusArmyCopy + 1);
+    SelectUnitsById(state_->L(), {}, false);
+  }
   tickCopy = sim->tick();
   isReplayCopy = sim->isReplay;
   armiesCopy = ArmyViews(*sim);
@@ -641,6 +693,7 @@ void RegisterSessionBindings(lua_State* L) {
     SetGlobal(L, name, l_False);
   SetGlobal(L, "IsObserver", l_IsObserver);
   SetGlobal(L, "TeamColorMode", l_TeamColorMode);
+  SetGlobal(L, "SetFocusArmy", l_SetFocusArmy);
   // moho64ui_IconColors() -> the icons' colours by army as handed over now (empty: the armies'
   // own); the host's own function for tests.
   lua_register(L, "moho64ui_IconColors", [](lua_State* L) -> int {

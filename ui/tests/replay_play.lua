@@ -49,5 +49,23 @@ ForkThread(function()
     -- the game's start (/lua/ui/game/gamemain.lua, OnFirstUpdate) ran to its end: the score panel
     -- was made (it stopped before, at the commander it looks for)
     check("the score panel is made", import('/lua/ui/game/score.lua').savedParent ~= false, true)
+    -- the replay's army list: look through army 1, then at every army again (applied at a beat)
+    check("watching every army: an observer", IsObserver(), true)
+    check("an army that is not there is refused", pcall(SetFocusArmy, 9), false)
+    SetFocusArmy(1)
+    local waited = 0
+    while GetFocusArmy() ~= 1 and waited < 3 do
+        WaitSeconds(0.1)
+        waited = waited + 0.1
+    end
+    check("SetFocusArmy(1): the replay is seen through army 1", GetFocusArmy(), 1)
+    check("and the viewer is no observer then", IsObserver(), false)
+    SetFocusArmy(-1)
+    waited = 0
+    while GetFocusArmy() ~= -1 and waited < 3 do
+        WaitSeconds(0.1)
+        waited = waited + 0.1
+    end
+    check("SetFocusArmy(-1): every army again", GetFocusArmy(), -1)
     LOG("TEST done: " .. failed .. " failed")
 end)

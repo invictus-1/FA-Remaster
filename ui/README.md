@@ -584,7 +584,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   second on a small plate (econoverlayparams.lua's look; the plate's layout is inferred, the unit's
   place is the last beat's). `DeleteCommand(id)` (0x843fa0): one less of an order the player's
   units hold (message 15, as DecreaseBuildCountInQueue). `IsObserver()` (0x843150): true with no
-  focus army. The colour names scripts may use are now the original's 141 (FA exe 0xdff690), not 17.
+  focus army. The colour names scripts may use are now the original's 141 (FA exe 0xdff690, the
+  engine's src/script/color_names.inc), looked up before hex as its parser (0x4b2b90); an unknown
+  one gives white and a line in the log, where the original raises "Unknown color".
+- `SetFocusArmy(n)` (0x842ee0; the replay's army list, NoteGameOver's -1): checked as the original's
+  (ValidateFocusArmyRequest 0x896670, with FAF's stricter rule): free in a replay, with cheats, for
+  one's own army or once the game is over; else refused. The engine applies it at its next Sync
+  (Sim::RequestFocusArmy, engine request 29: the sim's focus first, then the scripts'
+  NoteFocusArmyChanged); the interface takes it from that beat's copy: the selection emptied,
+  GetFocusArmy / IsObserver, the picture's focus (its fog; none for an observer) and allies.
+  Checked in a replay with the world's picture: army 1, then every army again.
 - A factory's rally point: an order given in the world with a factory selected goes into the
   factory's rally queue (`CommandWriter::IssueFactoryCommand`), so what it builds walks there.
   (Inferred: that this holds for buildings in category FACTORY and for every order but a

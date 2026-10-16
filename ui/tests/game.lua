@@ -789,6 +789,9 @@ local function run()
     -- the player is no observer; team colours for the strategic icons (FAF's list wins, the
     -- original's own rule colours the rest); the economy overlay's numbers; an order deleted by id
     check("IsObserver: a player with an army is none", IsObserver(), false)
+    SetFocusArmy(2)  -- (refused: a player in a game without cheats looks through no other army)
+    WaitSeconds(0.5)
+    check("SetFocusArmy to another army is refused in a game", GetFocusArmy(), 1)
     check("team colours are off at first", table.getn(moho64ui_IconColors()), 0)
     TeamColorMode("ff112233,ff445566")
     TeamColorMode(true)

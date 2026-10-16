@@ -452,6 +452,7 @@ int main(int argc, char** argv) {
     gameCfg.groundHeight = [&session](float x, float z) { return session.TerrainHeight(x, z); };
     gameCfg.beatRunning = [&session]() { return session.BeatRunning(); };
     gameCfg.commandSource = session.commandSource();
+    gameCfg.ownArmy = session.OwnArmy();
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);

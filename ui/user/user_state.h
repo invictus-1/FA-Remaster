@@ -73,6 +73,8 @@ class UserState {
     std::function<bool()> beatRunning;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
+    // The army that source belongs to, 0-based (-1: none, a replay's viewer): SetFocusArmy's checks.
+    int ownArmy = -1;
     // Where a session's world views get the world's picture from; nullptr: there is none.
     WorldSource* world = nullptr;
     // The running game's pace (the host's); nullptr: there is no game.

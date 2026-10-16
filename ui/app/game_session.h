@@ -159,6 +159,8 @@ class GameSession {
   // The command source the player speaks for, and the ground's height at a place of the map (from
   // a copy taken after each beat: the interface may ask while a beat runs).
   int commandSource() const { return commandSource_; }
+  // The army the player's command source belongs to, 0-based; -1 in a replay (its viewer has none).
+  int OwnArmy() const;
   float TerrainHeight(float x, float z) const;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
@@ -250,6 +252,7 @@ class GameSession {
   struct MenuPicture;
   std::unique_ptr<MenuPicture> menuPicture_;
   int commandSource_ = 0;
+  int pictureFocus_ = -2;    // the focus army the picture was last given (0-based; -2: none yet)
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
   std::unique_ptr<ScriptState> rules_;
   std::unique_ptr<SimBlueprints> interfaceBlueprints_;

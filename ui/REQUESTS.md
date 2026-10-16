@@ -789,6 +789,11 @@ validation (ValidateFocusArmyRequest's rules: no command source / cheats / own a
 else AllowObservers or a replay, and FAF's stricter "no army of yours at all") and applies the change
 on its side when the sync shows the new focus (selection cleared, GetFocusArmy / IsObserver, the
 picture's SetFocusArmy and allies).
+DONE (engine 9c70dd1, `docs/engine-answers.md` "ui 29"): `Sim::RequestFocusArmy(index0)` (atomic; applied
+at the next Sync, the focus set FIRST and then NoteFocusArmyChanged, read at 0x7474ef), the sim-side
+SetFocusArmy. Built on it: the user binding SetFocusArmy with the checks, the change taken at
+CopyFromSimulation and in GameSession::NoteBeatHere (the picture's focus). Tests: replay_play.lua
+(army 1, then -1), game.lua (refused in a game without cheats).
 
 ## To the renderer track
 

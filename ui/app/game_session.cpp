@@ -764,6 +764,7 @@ void GameSession::OpenPicture() {
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);
+      pictureFocus_ = sim_->focusArmy;
       // The map's edge, one of the two looks (the renderer's answer to ui request 20: all three
       // switches set, as their defaults are neither look).
       if (render::World* w = pic->picture.world()) {
@@ -1011,6 +1012,10 @@ void GameSession::NoteBeat() {
   NoteBeatHere();
 }
 
+// (Asked when a game's interface starts, before any change of the focus army: then the focus is
+// the player's own army.)
+int GameSession::OwnArmy() const { return sim_ && !sim_->isReplay ? sim_->focusArmy : -1; }
+
 void GameSession::NotePictureBeat() {
   g_crashTick = sim_->tick();  // (a crash's line in the log names the beat: src/core/crash.h)
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -1021,6 +1026,15 @@ void GameSession::NotePictureBeat() {
 void GameSession::NoteBeatHere() {
   CopyHeights();
   CopyAllies();
+#ifdef MOHO64UI_WORLD_PICTURE
+  // A new focus army (SetFocusArmy; the engine applies it at a beat's Sync): the picture looks
+  // through it from now on (its fog, its remembered buildings; 0: an observer's, no fog); the
+  // allies above follow it already.
+  if (picture_ && sim_ && pictureFocus_ != sim_->focusArmy) {
+    pictureFocus_ = sim_->focusArmy;
+    picture_->picture.SetFocusArmy(pictureFocus_ + 1);
+  }
+#endif
   if (sim_ && sim_->L()) Times().simLuaKB = static_cast<double>(lua_getgccount(sim_->L()));
   const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
