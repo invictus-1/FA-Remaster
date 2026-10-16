@@ -732,6 +732,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     }
     meshes.Add(model, at, p.color);
   }
+  // the interface's pictures on the ground, for this frame
+  for (const UserDecal& d : userDecals) {
+    if (d.texture.empty() || d.sizeX <= 0 || d.sizeZ <= 0) continue;
+    const gfx::Texture t = textures.Get(d.texture, gfx::Texture{});
+    if (!t) continue;
+    const float y = haveMap_ ? GroundHeight(Clamp(d.x, 0, static_cast<float>(map.width)), Clamp(d.z, 0, static_cast<float>(map.height))) : 0;
+    decals.AddMark(t, {d.x, y, d.z}, d.sizeX, d.sizeZ, 0);
+  }
   // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
   auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
   const Vec3 lift{0, 0.15f, 0};

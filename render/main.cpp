@@ -1344,6 +1344,11 @@ int main(int argc, char** argv) {
           WorldPicture::Line line{{spot.x, spot.y, spot.z}, {camera.target.x, camera.target.y, camera.target.z}, 0xff40ff40u};
           WorldPicture::Ring ring{{camera.target.x, camera.target.y, camera.target.z}, 6, 0xffff4040u};
           picture.SetShapes({line}, {ring});
+          // and the interface's pictures on the ground: a nuke's outer ring round the camera's target, a
+          // weapon's splash ring at the ghost's spot
+          WorldPicture::UserDecal outer{"/textures/ui/common/game/AreaTargetDecal/nuke_icon_outer.dds", camera.target.x, camera.target.z, 40, 40};
+          WorldPicture::UserDecal splash{"/textures/ui/common/game/AreaTargetDecal/weapon_icon_small.dds", spot.x, spot.z, 10, 10};
+          picture.SetUserDecals({outer, splash});
         }
       }
       // where the interface would write the units' custom names: asked first, for the frame then drawn
