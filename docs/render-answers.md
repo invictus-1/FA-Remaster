@@ -4,6 +4,44 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 28: movement and building in the stand (2026-10-16)
+
+Done (render bdb2e5b), all with `--fx-compare` (remastered left, original right).
+
+**`--fx-move <unit id>`** (`--fx-laps n`): the unit is made by its own script class and driven round a loop
+at its blueprint's speed and acceleration. Its scripts get what the engine tells them: the motion events
+(Cruise, TopSpeed, Stopping, Stopped), OnLayerChange (a hover unit from land to water and back) and
+OnTerrainTypeChange (the terrain type under it, from the map's cells and the game's TerrainTypes.lua). The
+camera follows unless `--cam` is given. Tried:
+- **UEL0203 Riptide** at the shore, `--fx-at 250,654`: the terrain kickup and hover dust on land
+  (Vegetation03, Dirt02); wakes and the water hover on water; the idle effects when stopped. Sand02 shows
+  nothing, because the game's TerrainTypes.lua gives it no movement effects (in the original too).
+- **UEL0401 Fatboy:** the wheel and exhaust kickup (GroundKickup02/04) on Vegetation03; its camera-shake
+  thread runs. Its tread marks are laid (FAF's TreadComponent, through CreateSplatOnBone) and counted as
+  drawn, but they don't show in the pictures. I'll look into that, since it would affect games too.
+- **UEA0203, UEA0104, UEA0107, XEA0306:** hovering with the idle exhaust beams and hover exhaust; the cruise
+  beams once moving; back to idle on stopping.
+
+**`--fx-build <builder> <unit>`** (`--fx-build-seconds s`): the builder builds the unit at the spot, with the
+engine's order of callbacks and its build rates. UEL0105 building UEB1101: the beam, the nozzle glow, the
+UEF cube's slices, the structure revealed. UEB0101 building UEL0201: the build arm, glow, beam, and the tank
+growing to finished.
+
+**Your question, the cube's textures: yes, in.** In the remastered look, an effect entity's or a script
+entity's mesh takes your texture of the same path wherever that texture lies:
+`_effects/export/moho64/meshes/generic/cube02_albedo.dds`, `cube03_albedo.dds`,
+`_effects/export/moho64/textures/effects/UEFBuildSpecular.dds`. Units and scenery never do. Checked with
+red stand-ins: only the cube changes; the engineer and the trees stay as they were. Per faction, as
+before, under a `<faction>/` folder beside the file.
+
+**Not in it:**
+- **Aircraft:** they only hover and move at their elevation (no take-off, landing or banking events).
+- **Camera shake and sounds:** not played.
+
+**One change to the stand's earlier pictures:** a structure's OnCreate now finishes, so a factory tilts to
+the ground's slope by the game's own script. A factory's death therefore differs slightly at its edges.
+Shots, shields, the nuke and the other deaths are unchanged.
+
 ## To ui, request 23 and the terrain height (2026-10-16)
 
 **23, custom names under the life bars.** `WorldPicture::LifeBarAnchors(camera, width, height, tick, &out)`:
