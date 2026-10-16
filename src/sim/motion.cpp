@@ -835,7 +835,7 @@ float TurnSpeedLimit(const MotionBlueprint& b, float maxF, float turnRadius, flo
                      float dx, float dz, float speedFrac) {
   if (b.rotateOnSpot && b.rotateOnSpotThreshold > speedFrac) {
     float n = 1.0f / std::sqrt(dx * dx + dz * dz);
-    float dot = fz * dz * n + fx * dx * n;
+    float dot = fz * (dz * n) + fx * (dx * n);  // (0x6997bf: the direction is scaled first)
     return dot < 0.9800000190734863f ? 0.0f : maxF;
   }
   float cross = fz * dx - fx * dz;
@@ -944,7 +944,6 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
     dotFG = g.dot0;
     g.first = false;
   }
-  float limit = dist > 0 ? TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, g.fx, g.fz, dx, dz, speedFrac0) : P.maxF;
   // The turn starts from a NORMALISED copy of the facing: TurnInfo 0x6990e0 keeps one in its result (out+0x28,
   // normalised by 0x6999f0: times 1 / length) and Generate hands that copy to the limited turn (0x5b386c). The
   // turned vector itself goes into the point. So the facing is brought back to length 1 once per step; without
@@ -960,6 +959,9 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
       nfx = nfz = 0.0f;
     }
   }
+  // TurnSpeedLimit 0x699760 reads the same normalised copy (K+0x28 / +0x2c), not the facing as the last step left
+  // it (after a brake that is the hull's 3-D forward, shortened by its pitch)
+  float limit = dist > 0 ? TurnSpeedLimit(b, P.maxF, P.turnRadius, P.turnRate, nfx, nfz, dx, dz, speedFrac0) : P.maxF;
   // (the limited turn 0x6992c0 is handed TurnInfo's difference vector as it is, target - place, not a unit
   // vector: when the turn ends inside the step the facing becomes that vector times |facing| / |vector|, and
   // with a unit vector in its place the last digit of a ship's heading on a straight run differed)
@@ -1257,6 +1259,14 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   g.bz = m.bz;
   for (int n = 0; n < 400; ++n) {
     m.genLast = PointOf(g);
+    // The continuation's start (spline+0x258) is F itself, neither projected nor renormalised: Generate hands it to
+    // SteeringParams 0x6990e0, whose 0x6999f0 normalises its (x, -z) ONCE, by times 1 / length. Ours started from
+    // F.xz / |F.xz| (a division) and StepMove normalised that again: one float step beside it. (Seen: LAND, a Titan's
+    // first step after a stop at 1472 looked one step aside, so its quaternion was one ulp off; the original's,
+    // brought back to unit length at 1473, moved by one ulp, and the walk animation, which advances while the hull
+    // "turns", took one more step at 1474: its gun's aim then differed and it fired a shot the original did not.)
+    m.genLast.fx = F.x;
+    m.genLast.fz = F.z;
     bool stop = false;
     float vl2 = g.vel.x * g.vel.x + g.vel.z * g.vel.z;
     if (vl2 > 0) {
