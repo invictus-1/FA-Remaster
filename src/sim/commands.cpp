@@ -216,8 +216,13 @@ void PatrolSearchBox(Sim& sim, Unit* u, PatrolData& p) {
   p.box.along = len * 0.5f + r;
 }
 
-float UnitTopSpeed(const Unit* u) {  // u+0x594
+// u+0x594 as Unit::UpdateInfoCache last wrote it: for an aircraft Air.MaxAirspeed x the speed multiplier, not the
+// blueprint's Physics.MaxSpeed. Seen: Skirmish 1930, army 7's UEF interceptor 0x700013 (MaxAirspeed 15, Physics.MaxSpeed
+// 0.5) on patrol: at its 4th patrol TaskTick the original finds it within ceil(15) cells of the patrol point
+// (AtPatrolGoal 0x61b610) and ends the leg; ours measured 1 cell and sent it round the point again.
+float UnitTopSpeed(const Unit* u) {
   const UnitMotion& m = u->motion;
+  if (m.maxSpeedU594 > 0) return m.maxSpeedU594;
   if (m.speedCap > 0) return m.speedCap;
   return m.bp ? m.bp->maxSpeed * m.speedMult : 0;
 }
@@ -911,6 +916,15 @@ bool FactoryCommand(CommandType t) {
          t == CommandType::Ferry;
 }
 
+// ProcessUnitCommand (ValidateIssue) 0x6ef9e0, before its type switch: a unit being built (vt+0x34, 0x6efabe) takes
+// an order only when it is in category FACTORY (0x6efac9 -> FAF's hook 0x128dae5, IsInCategory 0x67b050) or in the
+// category named at 0x12931fc, "CQUEMOV" (the hook's second pass, 0x128daec); any other is refused (0x6eface). Seen:
+// Skirmish 2109, M28 gives army 1's land unit 0x100036, begun by its factory this beat, an IssueMove: the original's
+// queue stays empty while it is built (2 commands when it stands, at 2140); ours took the Move and had 3.
+bool RefusesOrderWhileBuilt(Sim& sim, const Unit* u) {
+  return u->beingBuilt && !BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, u->blueprint, "CQUEMOV");
+}
+
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type) {
   static const long dbgIssue = getenv("MOHO64_DEBUG_ISSUE") ? atol(getenv("MOHO64_DEBUG_ISSUE")) : -1;
   if (dbgIssue >= 0)
@@ -934,6 +948,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     // FilterByCommandCap 0x6eecf0 drops immobile factories (their orders go to the rally queue only
     // through IssueFactoryRallyPoint / IssueFactoryCommand, factory_handoff.md 3.2)
     if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
+    if (RefusesOrderWhileBuilt(*sim, u)) continue;
     u->commands.push_back(c);
     c->units.insert(u);
     AirSpeedThroughEvent(*sim, u);  // queue event 0
@@ -1123,6 +1138,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
   for (Unit* u : units) {
     // ProcessUnitCommand 0x6ef9e0 (outline only, command_stream.md 5.2): dead units refuse
     if (!IsAlive(u)) continue;
+    if (RefusesOrderWhileBuilt(sim, u)) continue;  // (the being-built rule, above)
     if (sameOrderAgain(u)) continue;
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
@@ -1220,15 +1236,41 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // 0x20001e hovering over its pickup point (m28orders.lua 1166) before its IssueTransportUnload: the original's
 // target is the point a second ahead on the Land layer, at elevation 4 (TransportHoverHeight); ours stopped it
 // after the load had ended, on the Air layer at elevation 8.
+// Nor is a land unit with an empty queue and no goal for its navigator: there is no task to tear down, so nothing
+// aborts its move (no AbortMove, no new brake spline for its steering, SetWaypoints(0, 0) 0x5d29c0). Seen: Skirmish
+// 1650, the Aeon ACU 0x300000 coasting to a stop after its reclaim target went (its Reclaim popped this beat); M28
+// re-issues a Reclaim (IssueClearCommands + IssueReclaim, m28engineer.lua 6504). The original's brake goes on
+// through 1650 and is made again by the new task at 1651; ours made one at 1650 too (one beat of less braking).
+// The same for an aircraft that is no pod (this takes in the rule above for a STOPPED one, which was too narrow).
+// Seen: Skirmish 1695, army 2's UEF transport 0x20001e, its unload done at 1694 (the unload's last step aims it at
+// its own place on the Air layer, CUnitUnloadUnits state 3, not a Stop), is cleared and given a Move by M28
+// (m28air.lua 11948): the original's target stays its place of 1693; ours was stopped one second ahead.
+// An empty queue tears nothing down even while the navigator has a goal that no command gave (SIM_TryToBuild
+// 0x62dd40 sends a standing unit away with the navigator's SetGoal, no command, no task). Seen: Skirmish 1809, army
+// 0's engineer 0x29, moved aside for a structure at 1806 (goal (674.5, 340.5)), is cleared and given a BuildMobile
+// by M28 (m28engineer.lua 10713): the original goes on toward that goal until the build's walk at 1810; ours
+// stopped it.
+// Nor is a transport whose load waits for its cargo with no landing move of its own running: the load's dtor 0x624cc0
+// does nothing to the transport's motion (transport_tasks.md 3.4). Seen: Skirmish 1755, army 5's transport 0x50001b,
+// landed at its pickup point (its landing move ended and aborted at 1743), is cleared by M28 before its unload
+// (m28orders.lua 1166): the original stays on the ground (layer Land, target where the abort left it) until the
+// unload's own AbortMove at 1756; ours was stopped again, now not loading: the Air layer, and it took off.
 void IssueClearCommandsTo(Sim& sim, Unit* u) {
   const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
+  const bool idle = !u->isPod && u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
-  const bool standing = !u->isPod && u->commands.empty() && u->motion.air && u->motion.air->stopped && !u->motion.hasGoal;
   const bool undispatched = !u->isPod && u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
+  const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
+  // CUnitMoveTask's dtor clears state Moving (0x6187bd) BEFORE its AbortMove, as in the stream's clear above: the
+  // abort's CheckCollisions sees this unit standing ("a standing unit has priority over a mover"). Seen: Skirmish
+  // 1890, M28 clears army 6's engineer 0x60001b walking beside the engineer 0x600024 (IssueClearCommands +
+  // IssueReclaim): the original puts the record on 0x600024, which side-steps at 1891 while 0x60001b brakes hard;
+  // ours, still Moving at the abort, lost the right of way and 0x600024 braked.
+  if (moveAsleep) SetMoving(u, false);
   if (loadMove) MotionStop(u);  // (the child move first)
   ForgetUnitCommands(u);
-  if (!stopped && !standing && !undispatched && !loadMove) MotionStop(u);
+  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits) MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
   AttackerStop(sim, u);
@@ -1280,6 +1322,29 @@ std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u) {
 namespace {
 
 // Issue<Type>(units, position or entity target)
+// ValidateIssue 0x6ef9e0, the Reclaim case (0x6f059c; the type switch 0x6efdc2, index type - 2): may unit u take a
+// Reclaim of entity t? u: not carried unless a POD (GetTransportedBy 0x5e3c30), in category RECLAIM. t: none or
+// destroy-queued passes; one with a blueprint must be RECLAIMABLE and not on the Air layer (t+0x118 == 0x10); its unit
+// (a blip's creator, 0x579670) must be reclaimable by its attributes (GetAttributes()+0x68, which Unit:SetReclaimable
+// 0x6c9460 writes). Seen: Skirmish 1812, M28 gives army 6's engineer 0x600008 a Reclaim of army 1's engineer 0x100002,
+// which a transport is carrying (Air layer): the original keeps the engineer's queue empty, ours took the order.
+static bool ReclaimOrderValid(lua_State* L, const Unit* u, Entity* t) {
+  Sim& sim = *S(L);
+  if (u->transportedBy && !BpInCategory(sim, u->blueprint, "POD")) return false;
+  if (!BpInCategory(sim, u->blueprint, "RECLAIM")) return false;
+  if (!t || t->destroyQueued) return true;
+  if (t->blueprint && !BpInCategory(sim, t->blueprint, "RECLAIMABLE")) return false;
+  Entity* e = t;
+  if (e->kind == Entity::Kind::Blip) e = static_cast<ReconBlip*>(e)->source;
+  if (!e || e->kind != Entity::Kind::Unit) return true;
+  if (static_cast<const Unit*>(e)->layer == "Air") return false;
+  if (!e->HasLuaObject()) return true;
+  PushObjectValue(L, e, "Reclaimable");  // (Unit:SetReclaimable's value; true until a script says otherwise)
+  const bool ok = lua_isnil(L, -1) || lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  return ok;
+}
+
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
   // SCR_GetTarget 0x6eef60 converts the target first: an entity target picks a target point (one draw,
@@ -1287,6 +1352,9 @@ int l_IssueTarget(lua_State* L) {
   Entity* te = ToObject<Entity>(L, 2);
   TargetPointDraw(*S(L), te);
   auto units = UnitsArg(L, 1);
+  if (T == CommandType::Reclaim)
+    units.erase(std::remove_if(units.begin(), units.end(), [&](Unit* u) { return !ReclaimOrderValid(L, u, te); }),
+                units.end());
   constexpr bool kForm = T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
                          T == CommandType::FormAggressiveMove;
   int formIndex = -1;
@@ -1707,12 +1775,24 @@ static bool AirNavStatus2(const Unit* u) {
   const AirMotion& a = *u->motion.air;
   return a.steering || a.pending;
 }
+// A unit with a land navigator (the Unit ctor 0x6a5d9b: MotionType 1 and 3..8; Air (2) gets the air one, 0 none).
+// Seen (watch log "wn" lines): an idle land navigator answers its last target cell, (0.5, h, 0.5) before its first
+// goal; ours answered the unit's position. M28 reads it (IssueTrackedMove re-aims a moving unit with SetGoal when
+// GetCurrentTargetPos is within 3 of its last order).
+static bool LandNavigated(const Unit* u) {
+  const MotionBlueprint* b = u->motion.bp;
+  return b && !u->motion.air && b->motionType >= 1 && b->motionType <= 8 && b->motionType != kMotionAir;
+}
 int l_nav_GetGoalPos(lua_State* L) {
   Unit* u = N(L)->unit;
   Vec3 g;
   if (u->motion.air) {
     const AirMotion& a = *u->motion.air;
     PushVector(L, !AirNavStatus2(u) ? u->position : a.pending ? a.pendingGoal : a.goal);
+    return 1;
+  }
+  if (LandNavigated(u)) {  // CAiNavigatorLand::GetGoalPos 0x5a3d80: status 0 -> the unit's position, else the goal cell
+    PushVector(L, LandNavGoal(u, &g) ? g : u->position);
     return 1;
   }
   if (u->motion.navDriven && LandNavGoal(u, &g)) PushVector(L, g);
@@ -1727,7 +1807,7 @@ int l_nav_GetCurrentTargetPos(lua_State* L) {
     PushVector(L, m.air->pending ? m.air->pendingGoal : m.air->curTarget);
     return 1;
   }
-  if (m.navDriven) PushVector(L, LandNavTarget(u, &t) ? t : u->position);
+  if (LandNavigated(u) || m.navDriven) PushVector(L, LandNavTarget(u, &t) ? t : u->position);
   else PushVector(L, m.hasGoal && m.pathIndex < m.path.size() ? m.path[m.pathIndex] : u->position);
   return 1;
 }

@@ -496,10 +496,7 @@ bool SquadFitsAt(Sim& sim, const Squad* s, const Vec3& pos) {
     if (!g) continue;
     unsigned caps = g->Caps(cx, cz);
     if (u->layer == "Water") caps &= ~static_cast<unsigned>(kLayerSub);
-    if (g->Blocked(cx, cz)) {
-      if (!(fp.flags & 1)) caps &= ~static_cast<unsigned>(kLayerLand | kLayerSeabed);
-      caps &= ~static_cast<unsigned>(kLayerWater);
-    }
+    caps = FitsCaps(static_cast<uint8_t>(caps), (fp.flags & 1) != 0, g->BlockedLand(cx, cz), g->BlockedWater(cx, cz));
     if (!(caps & static_cast<unsigned>(need))) return false;
   }
   return true;
