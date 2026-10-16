@@ -34,6 +34,9 @@ struct BlueprintInfo {
   mutable bool hasFootprint = false;
   mutable NamedFootprint footprint;
   mutable NamedFootprint altFootprint;  // the AltFootprint likewise (bp+0x300; the main one when there is none)
+  // Units: General.CommandCaps / ToggleCaps as masks, read once by CopyToSim, for views read outside the beat
+  // (UnitView, UnitStateView: no sim Lua there). The sim's own reads go through its Lua as before.
+  uint32_t commandCaps = 0, toggleCaps = 0;
 };
 
 

@@ -210,6 +210,11 @@ void MotorsAdvanceCoords(Sim& sim) {
   g_moved.clear();
 }
 
+void MotorsForget(const Sim&) {
+  g_motors.clear();
+  g_moved.clear();
+}
+
 void RegisterMotorBindings(lua_State* L) {
   SetMethod(L, "Entity", "FallDown", l_FallDown);
   SetMethod(L, "Entity", "SinkAway", l_SinkAway);

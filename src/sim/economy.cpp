@@ -11,6 +11,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/units.h"
 
 namespace moho {
@@ -262,7 +263,7 @@ void EconomyEventTick(Sim& sim, lua_State* L, EconomyEvent* ev) {
 // ---- blueprint values ------------------------------------------------------------------------
 
 const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
-  static std::map<const BlueprintInfo*, UnitBpData> cache;
+  static SimCache<std::map<const BlueprintInfo*, UnitBpData>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   UnitBpData d;

@@ -19,6 +19,7 @@
 #include "sim/entity_grid.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/skeleton.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -145,7 +146,7 @@ struct TransportBp {
   float mass = 0;  // AverageDensity*SizeZ*SizeY*SizeX (pickup order)
 };
 const TransportBp& GetTransportBp(lua_State* L, const BlueprintInfo& bp) {
-  static std::unordered_map<const BlueprintInfo*, TransportBp> cache;
+  static SimCache<std::unordered_map<const BlueprintInfo*, TransportBp>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   TransportBp b;
@@ -776,10 +777,7 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
 
 // ---------------------------------------------------------------------------------------------
 
-uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
-  static std::unordered_map<const BlueprintInfo*, uint32_t> cache;
-  auto it = cache.find(&bp);
-  if (it != cache.end()) return it->second;
+uint32_t CommandCapsOfValue(lua_State* L, int idx) {
   static const char* const names[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard",
                                       "RULEUCC_Patrol", "RULEUCC_RetaliateToggle", "RULEUCC_Repair",
                                       "RULEUCC_Capture", "RULEUCC_Transport", "RULEUCC_CallTransport",
@@ -788,6 +786,34 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
                                       "RULEUCC_Pause", "RULEUCC_Overcharge", "RULEUCC_Dive", "RULEUCC_Reclaim",
                                       "RULEUCC_SpecialAction", "RULEUCC_Dock", "RULEUCC_Script"};
   constexpr int kNames = static_cast<int>(sizeof(names) / sizeof(names[0]));
+  if (idx < 0) idx = lua_gettop(L) + idx + 1;
+  uint32_t v = 0;
+  if (lua_isnumber(L, idx)) {
+    v = static_cast<uint32_t>(lua_tonumber(L, idx));
+  } else if (lua_isstring(L, idx)) {
+    std::string s = lua_tostring(L, idx);
+    bool found = false;
+    for (int i = 0; i < kNames; ++i)
+      if (s == names[i]) {
+        v = 1u << i;
+        found = true;
+      }
+    if (!found) v = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 10));
+  } else if (lua_istable(L, idx)) {
+    for (int i = 0; i < kNames; ++i) {
+      lua_pushstring(L, names[i]);
+      lua_rawget(L, idx);
+      if (lua_toboolean(L, -1)) v |= 1u << i;
+      lua_pop(L, 1);
+    }
+  }
+  return v;
+}
+
+uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
+  static SimCache<std::unordered_map<const BlueprintInfo*, uint32_t>> cache;
+  auto it = cache.find(&bp);
+  if (it != cache.end()) return it->second;
   uint32_t v = 0;
   int top = lua_gettop(L);
   Sim::From(L)->blueprints().PushTable(L, bp);
@@ -797,25 +823,7 @@ uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
     if (lua_istable(L, -1)) {
       lua_pushstring(L, "CommandCaps");
       lua_rawget(L, -2);
-      if (lua_isnumber(L, -1)) {
-        v = static_cast<uint32_t>(lua_tonumber(L, -1));
-      } else if (lua_isstring(L, -1)) {
-        std::string s = lua_tostring(L, -1);
-        bool found = false;
-        for (int i = 0; i < kNames; ++i)
-          if (s == names[i]) {
-            v = 1u << i;
-            found = true;
-          }
-        if (!found) v = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 10));
-      } else if (lua_istable(L, -1)) {
-        for (int i = 0; i < kNames; ++i) {
-          lua_pushstring(L, names[i]);
-          lua_rawget(L, -2);
-          if (lua_toboolean(L, -1)) v |= 1u << i;
-          lua_pop(L, 1);
-        }
-      }
+      v = CommandCapsOfValue(L, -1);
     }
   }
   lua_settop(L, top);

@@ -4,6 +4,7 @@
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
+//          [--twice]
 #include <chrono>
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
@@ -53,6 +54,7 @@ struct Options {
   int ticks = 0;        // --ticks N: run the sim this many ticks after start-up
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
+  bool twice = false;   // --twice: play the session a second time in the same process (RunTimes)
 };
 
 // Compile every .lua file the game can see; report failures.
@@ -561,6 +563,29 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   return ok ? 0 : 1;
 }
 
+// RunSession, and with --twice a second time after the first Sim is gone, as the interface's Relaunch does: the
+// second game must play exactly as the first (no state of the first sim may reach it). It records beside the first
+// record (MOHO64_RECORD + ".2"); both records must be the same bytes.
+int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids,
+             const SessionDescription& session, const std::string* stream) {
+  int rc = 0;
+  for (int run = 0; run < (o.twice ? 2 : 1); ++run) {  // (one call site: the record's call chains stay the same)
+    if (run == 1) {
+      if (const char* rec = getenv("MOHO64_RECORD"); rec && *rec) {
+        const std::string second = std::string(rec) + ".2";
+#ifdef _WIN32
+        _putenv_s("MOHO64_RECORD", second.c_str());
+#else
+        setenv("MOHO64_RECORD", second.c_str(), 1);
+#endif
+      }
+      Logf(LogLevel::Info, "moho64: --twice: the second run");
+    }
+    rc |= RunSession(o, vfs, hookDirs, uids, session, stream);
+  }
+  return rc;
+}
+
 int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
   auto data = hostfs::ReadFile(o.replay);
   if (!data) {
@@ -576,7 +601,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   SessionDescription session;
   session.header = *header;
   session.replay = true;
-  return RunSession(o, vfs, hookDirs, uids, session, &*data);
+  return RunTimes(o, vfs, hookDirs, uids, session, &*data);
 }
 
 // --session <file>: the game configuration a lobby hands over at Launch (`GameConfig = { ... }`), started the
@@ -628,9 +653,9 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
       return 1;
     }
     Logf(LogLevel::Info, "moho64: playing the command stream %s (%zu bytes)", o.stream.c_str(), bytes->size());
-    return RunSession(o, vfs, hookDirs, uids, session, &*bytes);
+    return RunTimes(o, vfs, hookDirs, uids, session, &*bytes);
   }
-  return RunSession(o, vfs, hookDirs, uids, session, nullptr);
+  return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
 }
 
 }  // namespace
@@ -670,6 +695,7 @@ int main(int argc, char** argv) {
     else if (a == "--ticks") o.ticks = std::atoi(next().c_str());
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
+    else if (a == "--twice") o.twice = true;
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
       return 2;

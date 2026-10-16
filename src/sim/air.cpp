@@ -26,6 +26,7 @@
 #include "sim/combat.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 
@@ -318,7 +319,7 @@ struct Tiers {
   std::vector<std::vector<uint32_t>> hi;  // max sample of each tier cell
 };
 std::map<const TerrainMap*, Tiers>& TierCache() {
-  static std::map<const TerrainMap*, Tiers> c;
+  static SimCache<std::map<const TerrainMap*, Tiers>> c;  // (the map is the sim's, and changes as it is flattened)
   return c;
 }
 int BitLen(unsigned v) {
@@ -1820,7 +1821,7 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
 // --------------------------------------------------------------------------------------------
 
 const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp) {
-  static std::unordered_map<const BlueprintInfo*, AirBp> cache;
+  static SimCache<std::unordered_map<const BlueprintInfo*, AirBp>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   AirBp b;
@@ -2319,7 +2320,7 @@ struct PlatformBp {
   float mult = 1, repair = 20, energy = 2, mass = 0.5f;
 };
 const PlatformBp& GetPlatformBp(Sim& sim, const BlueprintInfo& bp) {
-  static std::map<const BlueprintInfo*, PlatformBp> cache;
+  static SimCache<std::map<const BlueprintInfo*, PlatformBp>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   PlatformBp r;

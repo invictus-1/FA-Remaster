@@ -19,6 +19,7 @@
 #include "sim/landnav.h"
 #include "sim/motion.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -772,7 +773,7 @@ std::shared_ptr<Formation> NewFormation(Sim& sim, const std::vector<Unit*>& unit
 
 // AI.GuardFormationName (ubp+0x470, default "GuardFormation")
 const std::string& GuardFormationName(Sim& sim, const Unit* g) {
-  static std::map<const BlueprintInfo*, std::string> cache;
+  static SimCache<std::map<const BlueprintInfo*, std::string>> cache;
   auto it = cache.find(g->blueprint);
   if (it != cache.end()) return it->second;
   std::string name = "GuardFormation";

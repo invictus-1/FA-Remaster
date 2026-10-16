@@ -34,6 +34,7 @@
 #include "sim/entity_grid.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -112,7 +113,7 @@ struct ProjBp {
   float uniformScale = 1, meshScaleRange = 0, meshScaleVel = 0, meshScaleVelRange = 0;  // Display (bp+0x1b4..)
 };
 const ProjBp& GetProjBp(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
-  static std::map<const BlueprintInfo*, ProjBp> cache;
+  static SimCache<std::map<const BlueprintInfo*, ProjBp>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   ProjBp d;

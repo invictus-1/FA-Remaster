@@ -53,6 +53,17 @@ EconomyTotals EconomyTotalsOf(const Sim& sim, int army) {
   return t;
 }
 
+// The unit's caps without the sim's Lua (ui request 26): its own when a script changed them (u+0x488 / +0x48c),
+// else its blueprint's as CopyToSim read them; the same numbers LiveCommandCaps / UnitToggleCaps give.
+static uint32_t ViewCommandCaps(const Unit* u) {
+  if (u->commandCaps >= 0) return static_cast<uint32_t>(u->commandCaps);
+  return u->blueprint ? u->blueprint->commandCaps : 0;
+}
+static uint32_t ViewToggleCaps(const Unit* u) {
+  if (u->toggleCaps >= 0) return static_cast<uint32_t>(u->toggleCaps);
+  return u->blueprint ? u->blueprint->toggleCaps : 0;
+}
+
 void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
   out->clear();
   out->reserve(sim.units().size());
@@ -86,6 +97,8 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.paused = u->paused;
     v.queueLength = static_cast<int>(u->commands.size());
     v.headCommand = u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type);
+    v.commandCaps = ViewCommandCaps(u);
+    v.toggleCaps = ViewToggleCaps(u);
     v.mesh = u->mesh;
     out->push_back(std::move(v));
   }
@@ -346,8 +359,8 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
   v.autoMode = u->autoMode;
   v.autoSurfaceMode = u->autoSurfaceMode;
   lua_State* L = sim.L();
-  v.commandCaps = LiveCommandCaps(L, u);
-  v.toggleCaps = UnitToggleCaps(sim, u);
+  v.commandCaps = ViewCommandCaps(u);
+  v.toggleCaps = ViewToggleCaps(u);
   // the ratio the shield's script gives the unit (Unit:SetShieldRatio; kept on the unit by that call). This read
   // the scripts' stored value under the wrong key until 2026-10-13 and so was always 0.
   v.shieldRatio = u->shieldRatio;
