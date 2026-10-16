@@ -391,6 +391,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       lastSync = std::move(b);
     }
   };
+  // The setup's own Sync (the original's beat 0, made by Start), taken before the first beat as a host does.
+  if (ok) {
+    takeSync();
+    if (o.view) Logf(LogLevel::Info, "view: the setup's sync: %zu table(s), %zu bytes", syncBeats, syncBytes);
+  }
   while (ok && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
       if (!stream.ApplyUntilAdvance(sim)) {

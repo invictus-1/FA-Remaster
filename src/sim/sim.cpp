@@ -1069,6 +1069,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   lap("map props");
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
+  SetupSync();  // the original's "beat 0" Sync, before any beat
   return true;
 }
 
@@ -1559,7 +1560,8 @@ bool Sim::OkayToMessWith(const Army* a) const {
 // and how many pauses that source has left, the focus army's statistics), the table is handed over as bytes, and
 // the scripts' ResetSyncTable() empties it for the next beat. (Not built: Sync.Cheaters, the sources that used a
 // cheat this beat, and the statistics' Children: only the debug window /lua/debug/ArmyStats.lua reads them.)
-void Sim::SyncStep() {
+// keep: the bytes go to pendingSync_ for TakeSync (collectSync for a beat, always for the setup's Sync).
+void Sim::SyncStep(bool keep) {
   lua_State* L = state_->L();
   const int top = lua_gettop(L);
   lua_pushstring(L, "Sync");
@@ -1583,7 +1585,7 @@ void Sim::SyncStep() {
       lua_rawset(L, -3);
       lua_rawset(L, sync);
     }
-    if (collectSync) {
+    if (keep) {
       pendingSync_.emplace_back();
       SerializeLua(L, sync, &pendingSync_.back());
     }
@@ -1633,6 +1635,27 @@ std::vector<std::string> Sim::TakeSync() {
   return out;
 }
 
+// The setup's own Sync, the original's "beat 0" (ui REQUESTS 33). The sim thread, CSimDriver::ThreadCreateSim
+// 0x73d260, makes the sim (0x73d4a0: FAF 0x129142c -> Sim::Create 0x7433b0; simInit.lua, SetupSession, the armies,
+// BeginSession with the map's OnPopulate and OnStart) and then, before its beat loop and before any command, runs
+// one whole Sync: FinalizeSyncDispatchLocked at 0x73d68d (0x73dad0 -> Sim::Sync 0x7474b0). Its packet carries beat
+// number 0 (+0 from sim+0x8f8, 0x74760a), the focus (+4, 0x74762c) and game tick 0 (+8 from sim+0x900, 0x747616: no
+// beat has run), every army's constant data (only in this first Sync: the flag sim+0xa6c, 0x747788..0x747815) and
+// variable data, the entities and commands the setup made, and the script Sync table with what the setup wrote
+// (LuaObject::ToByteStream 0x747e95, then SCR_LuaDoString "ResetSyncTable()" 0x747eae); then sim+0x8f8 becomes 1
+// (0x748318), the beat number beat 1 runs with, and sim+0x8dd takes sim+0x8dc. The user side runs it as its beat 0:
+// CWldSession::DoInitializing 0x88c3f0 -> DoBeat 0x88c507 (the scripts' OnSync), before the game's screen is made.
+// Of what this Sync does, the simulation reads back only a focus the setup's scripts changed (FAF's sim
+// SetFocusArmy in simInit.lua's MergeArmyPair: NoteFocusArmyChanged runs here, before beat 1, as in the original)
+// and the id quarantine's turn (EntityDb::Purge 0x747af9), which changes no id's wait: no id is released before
+// the first beat, and a released id waits the same number of turns whatever the ring's start.
+void Sim::SetupSync() {
+  ApplyFocusArmy();
+  UpdateIdPools();
+  SyncStep(true);  // kept whatever collectSync says (sim.h, TakeSync)
+  frozen = endGame;
+}
+
 void Sim::PausedBeat() {
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
@@ -1640,7 +1663,7 @@ void Sim::PausedBeat() {
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
-  SyncStep();
+  SyncStep(collectSync);
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
 }
 
@@ -1980,7 +2003,7 @@ void Sim::Tick() {
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
-  SyncStep();
+  SyncStep(collectSync);
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   g_prof.Lap(11);

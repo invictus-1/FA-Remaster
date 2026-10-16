@@ -125,6 +125,15 @@ class Sim {
   // game: set collectSync before the beats and take the list after every Tick / PausedBeat (each entry is one
   // beat; the host makes it the user state's Sync and calls OnSync()). With or without a host the table is
   // emptied after every beat (the scripts' ResetSyncTable), as the original does.
+  // The setup's own Sync comes first and apart (ui REQUESTS 33): Start ends with the original's "beat 0" Sync
+  // (Sim::SetupSync; CSimDriver::ThreadCreateSim at 0x73d68d), so TakeSync right after Start returns ONE table: what
+  // the setup's scripts wrote (simInit.lua's BeginSession with the map's OnPopulate and OnStart: Sync.CampaignMode,
+  // Sync.NewPlayableArea, Sync.StartPositions, Sync.Restrictions ...), made at tick() 0 with focusArmy as it reads
+  // after Start; beat 1's TakeSync then returns only beat 1's own. The original's interface runs it as its beat 0,
+  // BEFORE the game's screen exists (CWldSession::DoInitializing 0x88c3f0 -> DoBeat 0x88c507, then
+  // StopLoadingDialog 0x88c577 and CreateGameInterface 0x88c5cd; beat 1's and on come after). That one table is
+  // kept whatever collectSync says, so a host that sets collectSync only after Start still gets it, first, at its
+  // first TakeSync (followed by the beats' tables, oldest first); a host that never calls TakeSync keeps it unread.
   bool collectSync = false;
   std::vector<std::string> TakeSync();
   // Changing the army the session looks through during a game (the replay's army list, an observer's choice,
@@ -142,12 +151,13 @@ class Sim {
   //   holds Sync.FocusArmyChanged = {new = , old = }, Sync.UnitData of the new army's units, Sync.ReleaseIds of
   //   the old army's, the enhancements again (SyncUnitEnhancements), a ping flush; score.lua sends Sync.Score by
   //   the sim's GetFocusArmy from then on. Asking twice before the Sync: the last one counts; asking back for the
-  //   army in focus before the Sync: nothing happens. (Before the first beat: applied with beat 1's Sync, into
-  //   which ours folds the original's initial "beat 0" Sync.)
+  //   army in focus before the Sync: nothing happens. (Asked after Start and before the first beat: applied with
+  //   beat 1's Sync; Start's own "beat 0" Sync has already been made.)
   // - The sim's own scripts change it the same way, with FAF's sim global SetFocusArmy(index0) (simInit.lua's
-  //   MergeArmyPair): applied at the end of the beat that called it.
-  // - Read focusArmy after each Tick / PausedBeat, with that beat's TakeSync (not while a beat runs on another
-  //   thread: its Sync writes it): it is the focus that beat's Sync was made with (the original's sync packet +4,
+  //   MergeArmyPair): applied at the end of the beat that called it; called during the setup (BeginSession):
+  //   applied by the setup's own Sync at the end of Start, before beat 1, as by the original's beat 0.
+  // - Read focusArmy after Start and after each Tick / PausedBeat, with that Sync's TakeSync (not while a beat runs
+  //   on another thread: its Sync writes it): it is the focus that Sync was made with (the original's sync packet +4,
   //   0x74762c), and the scripts' GetFocusArmy answers it + 1. When it differs from the host's own, the host does
   //   its part as CWldSession::DoBeat 0x894530 does (its GetFocusArmy / IsObserver, the selection cleared, the
   //   sounds' army, the picture's focus and allies). The command source never changes with it.
@@ -405,9 +415,10 @@ class Sim {
   std::map<uint32_t, Entity*> entities_;
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
-  void SyncStep();  // the script part of Sim::Sync
+  void SyncStep(bool keep);  // the script part of Sim::Sync; keep: its bytes go to pendingSync_
   std::atomic<int> requestedFocus_{-1};  // the pending focus army (SimDriver+0xb0); Start sets it to focusArmy
   void ApplyFocusArmy();  // the start of Sim::Sync: a pending focus army takes effect
+  void SetupSync();  // the end of Start: the setup's own Sync, the original's "beat 0" (always kept)
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;
