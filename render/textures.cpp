@@ -9,6 +9,7 @@
 
 #include "core/vfs.h"
 #include "dds.h"
+#include "jobs.h"
 #include "linalg.h"
 
 namespace render {
@@ -263,13 +264,40 @@ gfx::Texture TextureCache::SkyCube(const std::string& path) {
   return result;
 }
 
+void TextureCache::Fetch(const std::vector<std::string>& paths) {
+  std::vector<std::string> wanted;
+  for (const std::string& path : paths) {
+    std::string key = moho::Vfs::Normalize(path);
+    if (key.empty() || cache_.count(key) || fetched_.count(key) || std::find(wanted.begin(), wanted.end(), key) != wanted.end()) continue;
+    wanted.push_back(std::move(key));
+  }
+  if (wanted.empty()) return;
+  // (the engine's file layer opens a file of its own for each read: reads may run side by side)
+  std::vector<std::optional<std::string>> read(wanted.size());
+  Jobs::Shared().Run(static_cast<int>(wanted.size()), [&](int i) {
+    const std::string& key = wanted[static_cast<size_t>(i)];
+    if (vfs_->Exists(key)) read[static_cast<size_t>(i)] = vfs_->ReadFile(key);
+  });
+  for (size_t i = 0; i < wanted.size(); ++i)
+    if (read[i]) fetched_.emplace(std::move(wanted[i]), std::move(*read[i]));
+}
+
+std::optional<std::string> TextureCache::ReadFile(const std::string& path) {
+  const std::string key = moho::Vfs::Normalize(path);
+  auto it = fetched_.find(key);
+  if (it == fetched_.end()) return vfs_->ReadFile(key);
+  std::optional<std::string> out(std::move(it->second));
+  fetched_.erase(it);
+  return out;
+}
+
 gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   if (path.empty()) return fallback;
   std::string key = moho::Vfs::Normalize(path);
   auto it = cache_.find(key);
   if (it != cache_.end()) return it->second ? it->second : fallback;
   gfx::Texture t;
-  if (auto file = vfs_->ReadFile(key)) t = Make(*file, key.c_str(), detail);
+  if (auto file = ReadFile(key)) t = Make(*file, key.c_str(), detail);
   else fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
   cache_.emplace(std::move(key), t);
   return t ? t : fallback;
