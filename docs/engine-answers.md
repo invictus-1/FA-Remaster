@@ -3,6 +3,14 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 28: layer, attached and attachedCount in UnitView — done
+
+`UnitView::layer` (the original's ELayer bits: 1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air, 32 Orbit; 0 none),
+`attached` (the unit hangs on a parent: docked, loaded, stored; the original's SSTIUnitVariableData+0xa) and
+`attachedCount` (the entities attached to it now: units by AttachTo / AttachBoneTo, and script entities and shields
+on it; the original's children list, SSTIEntityVariableData+0x68). Read only, no sim Lua. Noted for the specs:
+Transport.DockingSlots has a reader on the user side (bp+0x418 at 0x840e33). Gate: all 13 unchanged.
+
 ## render 28: the original look's bloom, read in the exe
 
 Read in the FAF build of ForgedAlliance.exe and in the shaders (FAF's effects.nx2; its frame.fx, particle.fx and

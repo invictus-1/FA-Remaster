@@ -72,9 +72,34 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
   for (const ShieldEntity* s : sim.shields)
     if (!s->destroyQueued && s->attachParent) shielded.push_back(s->attachParent);
   std::sort(shielded.begin(), shielded.end());
+  // (what hangs on whom: units on their parent, script entities and shields on theirs)
+  std::vector<uint32_t> parents;
+  for (const Unit* u : sim.units())
+    if (!u->destroyQueued && u->parentId) parents.push_back(u->parentId);
+  for (const Entity* e : sim.scriptEntities)
+    if (!e->destroyQueued && e->attachParent) parents.push_back(e->attachParent);
+  for (const ShieldEntity* s : sim.shields)
+    if (!s->destroyQueued && s->attachParent) parents.push_back(s->attachParent);
+  std::sort(parents.begin(), parents.end());
+  auto layerBits = [](const std::string& l) {
+    if (l == "Land") return 1;
+    if (l == "Seabed") return 2;
+    if (l == "Sub") return 4;
+    if (l == "Water") return 8;
+    if (l == "Air") return 16;
+    if (l == "Orbit") return 32;
+    return 0;
+  };
   for (const Unit* u : sim.units()) {
     if (u->destroyQueued) continue;
     UnitView v;
+    v.layer = layerBits(u->layer);
+    v.attached = u->parentId != 0;
+    {
+      const uint32_t me = EntityRef(u);
+      auto r = std::equal_range(parents.begin(), parents.end(), me);
+      v.attachedCount = static_cast<int>(r.second - r.first);
+    }
     v.hasShield = std::binary_search(shielded.begin(), shielded.end(), EntityRef(u));
     v.shieldRatio = u->shieldRatio;
     v.id = u->id;
