@@ -55,6 +55,13 @@ struct UnitView {
   // what it can do this beat: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since); the
   // same numbers as UnitStateView's
   uint32_t commandCaps = 0, toggleCaps = 0;
+  // ui request 28. layer: the original's ELayer bits (1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air, 32 Orbit; 0 none);
+  // attached: it hangs on a parent (docked, loaded, stored: the original's "parent weak ptr != null",
+  // SSTIUnitVariableData+0xa); attachedCount: the entities attached to it now (units by AttachTo / AttachBoneTo,
+  // and script entities such as a shield on it: the original's children, SSTIEntityVariableData+0x68).
+  int layer = 0;
+  bool attached = false;
+  int attachedCount = 0;
   // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own
   std::string mesh;
   // A shield: hasShield while a shield entity hangs on the unit (a generator's bubble, a personal shield; the
