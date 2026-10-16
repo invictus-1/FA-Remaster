@@ -249,7 +249,9 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     if (!view.BoxVisible(d.centre - r, d.centre + r)) continue;
     if (now < d.born) continue;  // (a light whose beat the picture has not reached)
     float alpha = 1;
-    if (d.seconds > 0) alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / 5.0f, 0, 1);
+    // (it fades out over its last five seconds, a short-lived one over the second half of its time: a
+    // tank's tread marks last a second, a walker's footprints four; how the original fades them is a GUESS)
+    if (d.seconds > 0) alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
     // it comes in over the last fifth of its distance (the original's DecalAlpha; how wide its fade is, is a GUESS)
     if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
     Instance n{};
