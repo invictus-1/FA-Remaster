@@ -740,6 +740,28 @@ did for the caps at CopyToSim), so the walk touches no Lua? I now keep the answe
 the selection and the beat stay the same, which takes most calls away, but a moving mouse over a
 forest still pays it each frame.
 
+### 28. Three facts per unit in UnitView: its layer, attached to a parent, how many are attached to it
+From the interface chat, 2026-10-16, not blocking. Three interface functions the game's scripts call
+read these from the original's per-beat unit data (R = read in the exe by me or a helper):
+- `GetIsSubmerged(units)` (0x8bafe0; orders.lua's dive button and its mixed-selection rule): each
+  user unit's layer (UserUnit+0xf0 = SSTIEntityVariableData+0xa0, ELayer): 4 (Sub) -> -1, else 1;
+  units that differ, or none, -> 0. Today it is a stub (the dive button never shows "submerged").
+- `IssueDockCommand(clear)` (0x840a70; the Dock order button and FAF's dock-damaged hotkey): it
+  shares the selected aircraft among the player's own AIRSTAGINGPLATFORMs and sends Dock (39) with
+  the platform as the target, which your transport.cpp already handles. A platform counts when its
+  layer is not Seabed (2) or Sub (4), it is not attached to a parent (UserUnit+0x1a2 =
+  SSTIUnitVariableData+0xa, written by Unit::MotionTick 0x6a90fd as "parent weak ptr != null"), its
+  queue is empty, and it has free slots: StorageSlots > 0 ? StorageSlots - (entities attached to it:
+  UserUnit+0xb8 vector, SSTIEntityVariableData+0x68, from Entity+0x180's children) : DockingSlots.
+- Select-by-category's "idle" test (0x8664c6) reads the same +0x1a2 byte: I mapped it to beingBuilt,
+  which is wrong (a docked or loaded unit is not idle there).
+Could UnitView (the per-beat list) carry: `int layer` (your kLayer bits: 1 Land, 2 Seabed, 4 Sub,
+8 Water, 16 Air; or the name as Unit::layer has it), `bool attached` (it has a parent: docked,
+loaded, stored), and `int attachedCount` (entities attached to it now)? With them I build
+GetIsSubmerged and IssueDockCommand as the original's and fix the idle test. (Note for your docs: a
+helper saw that engine-ref/specs/air_staging.md 0.3 and transport_core.md say Transport.DockingSlots
+has no engine reader; the user side reads it here, bp+0x418 at 0x840e33.)
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
