@@ -27,6 +27,15 @@ ForkThread(function()
     SimCallback({Func = 'ToggleSelfDestruct', Args = {owner = GetFocusArmy(), noDelay = true}}, true)
     WaitSeconds(2)
     check("the commander is gone", cdr:IsDead(), true)
+    -- (The victory script counts a commander until it is destroyed, the end of its death, not
+    -- from its death: FAF's AbstractVictoryCondition uses IsDestroyed on purpose, and
+    -- brain:GetListOfUnits gives the dead too, as the original's; engine f438fc7. So the defeat
+    -- comes some seconds after the death.)
+    local waitedForIt = 0
+    while not announced and waitedForIt < 10 do
+        WaitSeconds(0.5)
+        waitedForIt = waitedForIt + 0.5
+    end
     check("the game's script announces the defeat", announced, LOC("<LOC GAMERESULT_0001>You have been defeated!"))
     local waited = 0
     while not SessionIsGameOver() and waited < 15 do
