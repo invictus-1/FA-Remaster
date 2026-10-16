@@ -2,6 +2,7 @@
 // functions every state has (the original's "core" binding set: logging, doscript, disk access,
 // string/vector helpers, blueprint registration).
 #pragma once
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,6 +15,10 @@ class Vfs;
 
 // A Vector ({x, y, z} with the vector metatable): core_bindings.cpp.
 void PushVector(lua_State* L, float x, float y, float z);
+
+// The colour parser (func_ParseColor 0x4b2b90): one of the colour table's names (case does not matter), else six or
+// eight hex digits (six: alpha 0xff). False for anything else. core_bindings.cpp.
+bool DecodeColor(const char* text, uint32_t* argb);
 
 class ScriptState {
  public:

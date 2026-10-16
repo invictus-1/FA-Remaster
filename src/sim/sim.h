@@ -78,6 +78,12 @@ class Army {
   float unitCap = 1000;
   float unitCost = 0;  // sum of the live units' General.CapCost (GetArmyUnitCostTotal)
   bool ignoreUnitCap = false;
+  // SetIgnorePlayableRect (CArmyImpl+0x178, SSTIArmyVariableData+0xf8, 0 from its ctor 0x6fd475): the army's units
+  // move, build, path and see on the whole map instead of the playable rect (Sim::UseWholeMap).
+  bool ignorePlayableRect = false;
+  // CArmyImpl+0x158: "Human" for a human army, else the options' AIPersonality (the ctor, 0x6fe953 / 0x6fe99d);
+  // SetArmyAIPersonality replaces it with a non-empty name. Nothing in the simulation reads it back.
+  std::string personality;
   std::vector<int> sources;  // command sources allowed to command this army (army+0x130, replay header)
   std::vector<int> alliance;  // per army index: 0 enemy, 1 neutral, 2 ally
   std::vector<Unit*> units;   // the army's live units, by entity id
@@ -166,6 +172,16 @@ class Sim {
   const SimBlueprints& blueprints() const { return bps_; }
   const TerrainMap* map() const { return map_.get(); }
   TerrainMap* mutableMap() { return map_.get(); }
+  // The playable rect (STIMap +0x08..+0x14: x0, z0, x1, z1, ints). The STIMap ctor 0x5779c0 makes it the whole map,
+  // (0, 0, width, height); the scripts' SetPlayableRect changes it (STIMap::SetPlayableMapRect 0x577df0). A campaign
+  // operation keeps the player inside part of the map; skirmish maps leave it whole.
+  int playableRect[4] = {0, 0, 0, 0};
+  // STIMap::IsWithin 0x62ca60: (x, z) with a margin m inside the playable rect (none of x0 > x - m, z0 > z - m,
+  // x + m > x1, z + m > z1, compared as floats), or with wholeMap inside the map itself (x - m and z - m not below 0,
+  // x + m < width, z + m < height: strictly).
+  bool IsWithin(float x, float z, float m, bool wholeMap) const;
+  // CArmyImpl::UseWholeMap (army vt+0xb8, 0x6fded0): the army's SetIgnorePlayableRect flag; false without an army.
+  static bool UseWholeMap(const Army* a) { return a && a->ignorePlayableRect; }
   // The sim stream (Sim+0x904, CMersenneTwister; engine-ref sim_random.md): MT19937 seeded once with the
   // session seed. Every engine and sim-Lua draw comes from it, in the original's order.
   uint32_t NextUInt32() {

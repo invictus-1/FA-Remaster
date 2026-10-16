@@ -725,7 +725,9 @@ int Resolve(Sim& sim, Unit* Y) {
     s = RotY(a, vXn);
   }
   Vec3 T = Add(B, Scale(s, clr));
-  // FindFreeSpot 0x62b200 gates the side-step (outline): the footprint must fit there
+  // FindFreeSpot 0x62b200 gates the side-step (outline): the point inside the playable rect (0x59778e passes size
+  // 1, whole map 0: STIMap::IsWithin margin 1, whatever the army), and the footprint must fit there
+  if (sim.map() && !sim.IsWithin(T.x, T.z, 1.0f, false)) return 0;
   const PathGrid* g = UnitFootprintGrid(sim, Y);
   if (g) {
     int cx, cz;

@@ -449,10 +449,11 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
   return !blocked;
 }
 
-bool IsWithinMap(Sim& sim, float x, float z, float size) {
-  const TerrainMap* map = sim.map();
-  if (!map) return true;
-  return x - size >= 0 && z - size >= 0 && x + size <= map->width() && z + size <= map->height();
+// STIMap::IsWithin as FindSlotFor 0x59aa20 asks it (0x59ab70 / 0x59ad48): the point (x, 0, z), margin = the
+// footprint's larger side, the unit's army's whole-map flag (vt+0xb8 at 0x59aaea)
+bool IsWithinMap(Sim& sim, const Unit* u, float x, float z, float size) {
+  if (!sim.map()) return true;
+  return sim.IsWithin(x, z, size, Sim::UseWholeMap(u->army));
 }
 
 // vt+0x68 IsFree
@@ -481,9 +482,9 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
     if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot)
       Logf(LogLevel::Info, "formspot %u unit %u at %.3f %.3f cell (%d,%d): fits %d can move %d within %d free %d (%zu reserved)",
            sim.tick(), u->id, x, z, cx, cz, LandCellFits(sim, u, cx, cz) ? 1 : 0, CanMoveAt(sim, u, cx, cz) ? 1 : 0,
-           IsWithinMap(sim, x, z, static_cast<float>(size)) ? 1 : 0, IsFree(F, x, z, size, layer) ? 1 : 0,
+           IsWithinMap(sim, u, x, z, static_cast<float>(size)) ? 1 : 0, IsFree(F, x, z, size, layer) ? 1 : 0,
            F.reservations.size());
-    return LandCellFits(sim, u, cx, cz) && CanMoveAt(sim, u, cx, cz) && IsWithinMap(sim, x, z, static_cast<float>(size)) &&
+    return LandCellFits(sim, u, cx, cz) && CanMoveAt(sim, u, cx, cz) && IsWithinMap(sim, u, x, z, static_cast<float>(size)) &&
            IsFree(F, x, z, size, layer);
   };
   float x = *px, z = *pz;

@@ -157,10 +157,10 @@ bool FlagOn(const Entity* e, int type) {
 
 // ReconCanDetect 0x5c18f0 + GetReconFlags 0x5c9600 + ApplyReconCounters 0x5cb460 (mask 0xF)
 uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
-  const TerrainMap* m = sim.map();
-  if (m && (p.x < 0 || p.z < 0 || p.x > m->width() || p.z > m->height())) return 0;
   const auto& armies = sim.armies();
   const Army* us = armies[static_cast<size_t>(a)].get();
+  // 0x5c18fd: nothing outside the playable rect (margin 0; the whole map if our army may use it, vt+0xb8)
+  if (sim.map() && !sim.IsWithin(p.x, p.z, 0.0f, Sim::UseWholeMap(us))) return 0;
   if (e->army && combat::Relation(e->army, us) == 2) return 0xF;
   bool under = Underwater(e);
   const ArmyIntel& db = g_armies[static_cast<size_t>(a)];
@@ -337,12 +337,12 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
   const bool ally = b->army && combat::Relation(b->army, us) == 2;
   if (!(flags & 4) && !ally) {
-    const TerrainMap* m = sim.map();
+    // 0x5c1ec3: STIMap::IsWithin(the blip's position, margin = the footprint's larger side, our army's flag)
     float margin = 0;
     if (b->blueprint && b->blueprint->hasFootprint)
       margin = static_cast<float>(std::max(b->blueprint->footprint.sizeX, b->blueprint->footprint.sizeZ));
     const Vec3& p = b->position;
-    if (m && !(p.x >= margin && p.z >= margin && p.x <= m->width() - margin && p.z <= m->height() - margin)) flags |= 0x20;
+    if (sim.map() && !sim.IsWithin(p.x, p.z, margin, Sim::UseWholeMap(us))) flags |= 0x20;
   } else {
     flags |= 0x20;
   }
@@ -639,6 +639,60 @@ void AdvanceIntelCoords(Sim& sim) {
 
 namespace {
 
+// CAiReconDBImpl::ReconFlushBlipsInRect 0x5c05a0 for army a: the blips whose position lies inside the rect, edges
+// included (none of x0 > x, x > x1, z0 > z, z > z1 with the ints as floats), are deleted as DeleteBlip 0x5c21f0
+// deletes them (CheckIntelEvents to nothing, the entry cleared, ReconBlip::DestroyIfUnused): first the orphans
+// (db+0x24: a structure's blip remembered after its unit died, MaybeDead), then the map's entries whose source still
+// exists (blip+0x270; one whose unit is gone and not yet looked at by this army's recon tick is skipped). The army
+// sees what is still there again at its next recon tick (new blips, OnDetectedBy).
+void FlushBlipsInRect(Sim& sim, lua_State* L, int a, const int r[4]) {
+  auto inRect = [&](const Vec3& p) {
+    return !(static_cast<float>(r[0]) > p.x) && !(p.x > static_cast<float>(r[2])) &&
+           !(static_cast<float>(r[1]) > p.z) && !(p.z > static_cast<float>(r[3]));
+  };
+  const std::vector<Unit*> gone = g_goneUnits;
+  for (Unit* u : gone) {
+    if ((u->recon[a] & (kReconInUse | 0x40)) != (kReconInUse | 0x40)) continue;
+    ReconBlip* b = u->blip;
+    if (!inRect(b ? b->position : u->position)) continue;
+    DeleteEntry(sim, L, a, u);
+    if (b) DestroyIfUnused(sim, b);
+  }
+  const Army* us = sim.armies()[static_cast<size_t>(a)].get();
+  for (const auto& army : sim.armies()) {
+    if (army.get() == us) continue;
+    const std::vector<Unit*> list = army->units;
+    for (Unit* u : list) {
+      if ((u->recon[a] & kReconInUse) && u->blip && inRect(u->blip->position)) {
+        ReconBlip* b = u->blip;
+        DeleteEntry(sim, L, a, u);
+        DestroyIfUnused(sim, b);
+      }
+      const std::vector<ReconBlip*> fakes = u->fakeBlips;
+      for (ReconBlip* f : fakes)
+        if ((f->rflags[a] & kReconInUse) && inRect(f->position)) DropFake(sim, L, a, f);
+    }
+  }
+}
+
+// FlushIntelInRect(minX, minZ, maxX, maxZ) 0x75ca50: four integers (truncated), then every army's recon database
+// in army order (sim+0x910, army vt+0x20 GetReconDB, its vt+0x54) flushes the rect
+int l_FlushIntelInRect(lua_State* L) {
+  if (lua_gettop(L) != 4)
+    luaL_error(L, "%s\n  expected %d args, but got %d", "FlushIntelInRect( minX, minZ, maxX, maxZ )", 4, lua_gettop(L));
+  int v[5] = {0, 0, 0, 0, 0};
+  for (int i = 4; i >= 1; --i) {  // (read 4, 3, 2, 1)
+    if (lua_type(L, i) != LUA_TNUMBER) luaL_typerror(L, i, "integer");
+    const double d = lua_tonumber(L, i);
+    v[i] = d > -2147483649.0 && d < 2147483648.0 ? static_cast<int>(d) : static_cast<int>(0x80000000u);
+  }
+  const int r[4] = {v[1], v[2], v[3], v[4]};
+  Sim& sim = *S(L);
+  if (g_armies.size() != sim.armies().size()) return 0;
+  for (size_t a = 0; a < sim.armies().size() && a < 16; ++a) FlushBlipsInRect(sim, L, static_cast<int>(a), r);
+  return 0;
+}
+
 int TypeArg(lua_State* L, int idx) {
   const char* s = luaL_checkstring(L, idx);
   int t = IntelType(s);
@@ -804,6 +858,7 @@ void RegisterIntelBindings(lua_State* L) {
   SetMethod(L, "ReconBlip", "GetSource", l_blip_GetSource);
   SetMethod(L, "ReconBlip", "GetBlueprint", l_blip_GetBlueprint);
   SetGlobal(L, "IsBlip", l_IsBlip);
+  SetGlobal(L, "FlushIntelInRect", l_FlushIntelInRect);
 }
 
 }  // namespace moho

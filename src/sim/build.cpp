@@ -1794,10 +1794,12 @@ void Follow(Sim& sim, Unit* U, GuardData& g) {
   bool forced = false;
   if (!(U->motion.bp->motionType == kMotionAir && Cat(sim, U, "EXPERIMENTAL"))) {
     if (!PrepareMoveFor(sim, U, &ref, excl)) {
-      const TerrainMap* m = sim.map();
-      float w = m ? static_cast<float>(m->width()) : ref.x, h = m ? static_cast<float>(m->height()) : ref.z;
-      ref.x = std::min(std::max(ref.x, 0.0f), w);
-      ref.z = std::min(std::max(ref.z, 0.0f), h);
+      // 0x613f68: into the playable rect (whatever the army's flag), max(x0, x) then min(x1, that)
+      const int* r = sim.playableRect;
+      float v = ref.x > static_cast<float>(r[0]) ? ref.x : static_cast<float>(r[0]);
+      ref.x = static_cast<float>(r[2]) > v ? v : static_cast<float>(r[2]);
+      v = ref.z > static_cast<float>(r[1]) ? ref.z : static_cast<float>(r[1]);
+      ref.z = static_cast<float>(r[3]) > v ? v : static_cast<float>(r[3]);
       forced = true;
     }
   }
@@ -1938,6 +1940,8 @@ Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
   float bestD2 = std::numeric_limits<float>::infinity();
   for (Unit* u : sim.units()) {
     if (!Alive(u) || u == U || !u->blueprint) continue;
+    // 0x61368d: inside the playable rect with a margin of 1 (the whole map if the guard's army may use it)
+    if (!sim.IsWithin(u->position.x, u->position.z, 1.0f, Sim::UseWholeMap(U->army))) continue;
     float rad = static_cast<float>(std::max(Fp(u).sizeX, Fp(u).sizeZ)) * 0.5f;
     float ex = u->position.x - g.pos.x, ey = u->position.y - g.pos.y, ez = u->position.z - g.pos.z;
     if (std::sqrt(ex * ex + ey * ey + ez * ez) > r + rad) continue;  // (collision primitive vs sphere)
@@ -2034,6 +2038,9 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     Unit* R = tg;
     switch (t.state) {
       case 0: {
+        // 0x5f949c: a repairer whose army keeps to the playable rect waits (TaskTick returns 1) while its target
+        // stands outside it (STIMap::IsWithin, margin 0)
+        if (!Sim::UseWholeMap(u->army) && !sim.IsWithin(tg->position.x, tg->position.z, 0.0f, false)) return kTaskRunning;
         if (t.assist) {
           if (Unit* f = FactoryOf(sim, tg)) {
             R = f;

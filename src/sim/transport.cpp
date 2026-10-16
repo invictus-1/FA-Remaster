@@ -2436,7 +2436,8 @@ bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     if (!e || e->kind != Entity::Kind::Unit) continue;
     Unit* c = static_cast<Unit*>(e);
     if (c->dead || c == u) continue;
-    // (not built: STIMap::IsWithin, the playable-area test)
+    // 0x61dbfc: inside the playable rect with a margin of 1 (the whole map if the pod's army may use it)
+    if (!sim.IsWithin(c->position.x, c->position.z, 1.0f, Sim::UseWholeMap(u->army))) continue;
     if (c->position.x != c->lastPosition.x || c->position.y != c->lastPosition.y || c->position.z != c->lastPosition.z)
       continue;  // it moved
     if (c->army != u->army && !(c->army && u->army && combat::IsAlly(u->army, c->army))) continue;
@@ -3404,6 +3405,8 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
     float dx = plane->position.x - P->position.x, dz = plane->position.z - P->position.z;
     double d = std::sqrt(static_cast<double>(dx) * dx + static_cast<double>(dz) * dz);
     if (d > BpNum(L, *P->blueprint, "AI", "StagingPlatformScanRadius", 300.0f)) continue;
+    // 0x62f29d Entity::IsInBounds: the platform inside the playable rect with a margin of 1 (the plane's army's flag)
+    if (!sim.IsWithin(P->position.x, P->position.z, 1.0f, Sim::UseWholeMap(plane->army))) continue;
     if (!P->commands.empty()) continue;  // IsIdle
     if (P->layer == "Seabed" || P->layer == "Sub") continue;
     bool ok = !InCat(sim, P, "CARRIER") ? HasSpaceFor(sim, *P->transport, *plane->blueprint) : HasAvailableStorage(*P->transport);

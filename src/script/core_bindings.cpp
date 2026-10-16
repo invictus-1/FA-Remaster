@@ -1,5 +1,6 @@
 // Engine functions present in every Lua state (the original's "core" set). Behaviour follows
 // the original engine; see docs/lua-dialect.md and the binding list for the reference names.
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -666,6 +667,44 @@ int l_EnumColorNames(lua_State* L) {
   }
   return 1;
 }
+
+}  // namespace
+
+// func_ParseColor 0x4b2b90: the names first (the table lower-cased into a map once, the text lower-cased), then the
+// text's length must be 6 or 8 and every character a hex digit (0-9, a-f, A-F), shifted in; six get alpha 0xff
+// (0x4b2d03).
+bool DecodeColor(const char* text, uint32_t* argb) {
+  if (!text) return false;
+  for (const ColorName& c : kColorNames) {
+    const char* a = c.name;
+    const char* b = text;
+    while (*a && *b && std::tolower(static_cast<unsigned char>(*a)) == std::tolower(static_cast<unsigned char>(*b))) {
+      ++a;
+      ++b;
+    }
+    if (!*a && !*b) {
+      *argb = c.argb;
+      return true;
+    }
+  }
+  const size_t n = std::strlen(text);
+  if (n != 6 && n != 8) return false;
+  uint32_t v = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const char ch = text[i];
+    int d;
+    if (ch >= '0' && ch <= '9') d = ch - '0';
+    else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+    else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+    else return false;
+    v = (v << 4) | static_cast<uint32_t>(d);
+  }
+  if (n == 6) v |= 0xff000000u;
+  *argb = v;
+  return true;
+}
+
+namespace {
 
 // IsDestroyed(obj) (FA exe 0x4c7b10): true unless obj (or its _c_object) is the handle of a live
 // engine object. Nil, plain tables and other values count as destroyed.

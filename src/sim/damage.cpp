@@ -286,8 +286,10 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   int ok = CallMethodBool(sim, L, u, "CheckCanBeKilled", 1);
   if (ok != 1) {
     if (!BpInCategory(sim, u->blueprint, "COMMAND")) return;
-    const TerrainMap* m = sim.map();
-    if (!m || (u->position.x >= 0 && u->position.z >= 0 && u->position.x <= m->width() && u->position.z <= m->height()))
+    // 0x6a811c: a commander that may not be killed dies anyway outside the playable rect (edges included)
+    const int* r = sim.playableRect;
+    if (!sim.map() || (!(static_cast<float>(r[0]) > u->position.x) && !(static_cast<float>(r[1]) > u->position.z) &&
+                       !(u->position.x > static_cast<float>(r[2])) && !(u->position.z > static_cast<float>(r[3]))))
       return;
   }
   u->unitStates.insert("NoCost");

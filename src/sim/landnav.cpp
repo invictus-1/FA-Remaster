@@ -224,6 +224,7 @@ HPathTables& Tables(Sim& sim) {
   if (!m) {
     const TerrainMap* map = sim.map();
     m = std::make_unique<HPathTables>(&sim.navigation(), map ? map->width() : 0, map ? map->height() : 0);
+    m->playRect = sim.playableRect;
     m->CreateMaps(sim.blueprints().Footprints());
   }
   return *m;
@@ -265,9 +266,11 @@ void QueueSearch(Sim& sim, Unit* u, LandNav& n) {
   t.startStandable = Fits(sim, u, c);
   const TerrainMap* map = sim.map();
   int w = map ? map->width() : 0, h = map ? map->height() : 0;
+  // 0x5aa348: +0x74 the army's whole-map flag (vt+0xb8); +0x75 the unit's position with a margin of the footprint
+  // size inside the playable rect (the search keeps a unit that starts outside it free to leave)
+  t.useWholeMap = Sim::UseWholeMap(u->army);
   float m = static_cast<float>(t.S);
-  t.insidePlayable = u->position.x - m >= 0 && u->position.z - m >= 0 && u->position.x + m <= w &&
-                     u->position.z + m <= h;
+  t.insidePlayable = map && sim.IsWithin(u->position.x, u->position.z, m, false);
   if (t.mode != 0) {
     t.boxes.push_back({std::max(0, c.x - 8), std::max(0, c.z - 8), std::min(w - 2, c.x + 8), std::min(h - 2, c.z + 8)});
     while (t.boxes.size() > 3) t.boxes.pop_front();
@@ -640,8 +643,8 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   if (dd > 0) {
     probe = {n.cur.x + static_cast<int>((s.x - n.cur.x) * step / dd), n.cur.z + static_cast<int>((s.z - n.cur.z) * step / dd)};
   }
-  const TerrainMap* map = sim.map();
-  bool within = !map || (p.x - 1.0f >= 0 && p.z - 1.0f >= 0 && p.x + 1.0f <= map->width() && p.z + 1.0f <= map->height());
+  // 0x5ae8a5: the followed point with a margin of 1 inside the playable rect (the whole map: the army's flag)
+  bool within = !sim.map() || sim.IsWithin(p.x, p.z, 1.0f, Sim::UseWholeMap(u->army));
   if (Reach(sim, u, n.cur, probe) && UnitClearTo(sim, u, n, probe) && within) {
     n.advanceDist = 0.5f * dd;
     n.target = s;
@@ -841,13 +844,16 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
 
 // The rings of the free-spot search 0x62b200 around a cell that does not fit: square rings stepping by the
 // footprint size, up to 900 candidates. true: *gc is the first cell where the unit fits; false: *gc unchanged.
-static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc) {
+static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc, bool wholeMap) {
   int step = std::max(SX(u), SZ(u));
   int tested = 0;
   bool found = false;
   const TerrainMap* map = sim.map();
   float W = map ? static_cast<float>(map->width()) : 1e9f, H = map ? static_cast<float>(map->height()) : 1e9f;
   Vec3 base = WorldOf(sim, u, *gc);
+  // FindFreeSpot 0x62b200 tests the point it was given (not each candidate) with STIMap::IsWithin, margin = the
+  // size, CAiNavigatorLand::SetGoal's flag the army's (0x5a4012): outside, no candidate is taken (0x62b4f7)
+  if (map && !sim.IsWithin(base.x, base.z, static_cast<float>(step), wholeMap)) return false;
   for (int r = 1; !found; ++r) {
     for (int i = -r; i <= r && !found; ++i) {
       int jStep = (i == -r || i == r) ? 1 : 2 * r;
@@ -869,10 +875,11 @@ static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc) {
   return found;
 }
 
-// FindFreeSpot 0x62b200 for a point: where the unit's footprint fits, at the point or on the rings around it.
+// FindFreeSpot 0x62b200 for a point: where the unit's footprint fits, at the point or on the rings around it (the
+// teleport's: the whole map, 0x60ad60 pushes 1).
 bool LandFreeSpot(Sim& sim, const Unit* u, Vec3* pos) {
   PathCell c = CellOf(u, pos->x, pos->z);
-  if (!Fits(sim, u, c) && !FreeSpotRings(sim, u, &c)) return false;
+  if (!Fits(sim, u, c) && !FreeSpotRings(sim, u, &c, true)) return false;
   *pos = WorldOf(sim, u, c);
   return true;
 }
@@ -900,7 +907,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
     return;
   }
   // the free-spot spiral: the cell itself, then square rings stepping by the footprint size
-  if (single && !Fits(sim, u, gc)) FreeSpotRings(sim, u, &gc);
+  if (single && !Fits(sim, u, gc)) FreeSpotRings(sim, u, &gc, Sim::UseWholeMap(u->army));
   if (single && same && n.goal[0] == gc.x && n.goal[1] == gc.z) {  // (0x5a4056: the spot found is the one it has)
     n.speedThroughGoal = speedThrough;
     return;

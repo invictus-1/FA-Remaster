@@ -36,7 +36,29 @@ struct SessionDescription {
   // the players may change the speed. The simulation does not use either.
   int gameSpeed = 0;
   bool adjustableSpeed = false;
+  // The single-player table's createReplay (the session info +0x24, WLD_SetupSessionInfo 0x88cfc6): whether the
+  // host records the game. A lobby's game is always recorded. The simulation does not use it.
+  bool createReplay = true;
 };
+
+// What LaunchSinglePlayerSession (FA exe 0x88d3c0) knows besides the script's table.
+struct SinglePlayerParams {
+  // The seed when the table has no RandomSeed: the original then takes the low 32 bits of the system timer's
+  // cycle count (WLD_SetupSessionInfo 0x88ce62).
+  uint32_t seed = 0;
+  // Cheats: the preference debug.enable_debug_facilities (USER_DebugFacilitiesEnabled 0x8cae20 -> launch info
+  // +0x88, 0x88cc36), not a game option.
+  bool cheats = false;
+};
+
+// Build the session from the single-player launch table at stack index `info`, the way LaunchSinglePlayerSession
+// does (WLD_SetupSessionInfo 0x88cbc0 and 0x88bbb0): what FAF's SinglePlayerLaunch.lua makes (playerName,
+// createReplay, scenarioInfo, teamInfo, scenarioMods, RandomSeed). Unlike a lobby's launch nothing is added or
+// looked up: the scenario info is scenarioInfo as given (with its Options, campaignInfo, tutorial, file), the mods
+// are scenarioMods, the armies are teamInfo's tables in table order. One command source (playerName, pauses not
+// limited) commands every army; the focus army is the first. On failure returns false and sets *error.
+bool SessionFromSinglePlayerInfo(lua_State* L, int info, const SinglePlayerParams& params, SessionDescription* out,
+                                 std::string* error);
 
 // Build the session from the game configuration table at stack index `config` (GameOptions, PlayerOptions,
 // Observers, GameMods). The scenario file is run in `L` (it needs the core functions, `doscript` above all) and

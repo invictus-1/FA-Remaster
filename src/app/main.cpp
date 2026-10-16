@@ -55,6 +55,12 @@ struct Options {
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
   bool twice = false;   // --twice: play the session a second time in the same process (RunTimes)
+  // /map <name or scenario path> [/diff N] [/faction N]: a campaign operation started as the original's command
+  // line starts it (FAF SinglePlayerLaunch.StartCommandLineSession -> SetupCampaignSession ->
+  // LaunchSinglePlayerSession); --seed N stands in for the original's timer seed
+  std::string spMap;
+  int spDiff = 2;
+  int spFaction = 1;
 };
 
 // Compile every .lua file the game can see; report failures.
@@ -669,6 +675,98 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
   return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
 }
 
+// /map: the table FAF's SinglePlayerLaunch.lua builds for a campaign scenario (StartCommandLineSession 365-393 and
+// SetupCampaignSession 70-127; the lobby's GetDefaultPlayerOptions per army, lobbycomm.lua 35), here without the
+// interface's preferences: the player is 'Player', the factions are the stock four. The interface adds
+// Options.ScenarioFile (ui/REQUESTS.md engine 31), and so does this. Without --mods the operation has no mods (a
+// campaign takes only FAF's campaign mod, mods.lua GetCampaignMods).
+const char kCampaignTable[] = R"lua(
+return function(mapName, difficulty, faction, haveMods)
+  if not string.find(mapName, '/') and not string.find(mapName, '\\') then
+    local files = DiskFindFiles('/maps', mapName .. '_scenario.lua')
+    if not files[1] then error('Could not find scenario file for map name "' .. mapName .. '"') end
+    mapName = files[1]
+  end
+  -- maputil.lua LoadScenario 259-282 (with LoadScenarioInfoFile, -OptionsFile, -StringsFile)
+  local function load(path)
+    if not DiskGetFileInfo(path) then return nil end
+    local data = {}
+    doscript('/lua/dataInit.lua', data)
+    doscript(path, data)
+    return data
+  end
+  local data = load(mapName)
+  local scenario = data and (data.version == 1 and data or data.ScenarioInfo)
+  if not scenario then error('Unable to load map ' .. mapName) end
+  local stem = string.gsub(mapName, '[^_]*$', '')
+  local ok, options = pcall(load, stem .. 'options.lua')
+  if ok and options and options.options then scenario.options = options.options end
+  local ok2, strings = pcall(load, stem .. 'strings.lua')
+  if ok2 and strings and strings.BriefingData then scenario.hasBriefing = true end
+  scenario.file = mapName
+  if scenario.type ~= 'campaign' then error(mapName .. ' is no campaign scenario') end
+  local factionKeys = {'uef', 'aeon', 'cybran', 'seraphim'}
+  local sessionInfo = {playerName = 'Player', createReplay = false, scenarioInfo = scenario, teamInfo = {}}
+  for index, name in scenario.Configurations.standard.teams[1].armies do
+    local o = {Team = 1, PlayerColor = 1, ArmyColor = 1, StartSpot = 1, Ready = false,
+               Faction = table.getn(factionKeys) + 1, PlayerName = sessionInfo.playerName, AIPersonality = '',
+               Human = true, Civilian = false}
+    if index == 1 then
+      o.PlayerName = sessionInfo.playerName
+      o.Faction = faction
+    else
+      o.PlayerName = name
+      o.Human = false
+      o.Faction = 1
+    end
+    o.ArmyName = name
+    sessionInfo.teamInfo[index] = o
+  end
+  scenario.Options = {FogOfWar = 'explored', Difficulty = difficulty, DoNotShareUnitCap = true, Timeouts = -1,
+                      GameSpeed = 'normal', FACampaignFaction = factionKeys[faction], ScenarioFile = scenario.file}
+  if not haveMods then sessionInfo.scenarioMods = {} end
+  return sessionInfo
+end
+)lua";
+
+int RunSinglePlayer(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
+                    std::vector<std::string> uids) {
+  SessionDescription session;
+  {
+    ScriptState st(ScriptState::Kind::User, &vfs);
+    st.SetHookDirs(hookDirs);
+    lua_State* L = st.L();
+    const int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    bool ok = luaL_loadbuffer(L, kCampaignTable, sizeof kCampaignTable - 1, "=campaign table") == 0 &&
+              lua_pcall(L, 0, 1, top + 1) == 0;
+    if (ok) {
+      lua_pushstring(L, o.spMap.c_str());
+      lua_pushnumber(L, o.spDiff);
+      lua_pushnumber(L, o.spFaction);
+      lua_pushboolean(L, !o.modsFile.empty());
+      ok = lua_pcall(L, 4, 1, top + 1) == 0;
+    }
+    if (!ok) {
+      Logf(LogLevel::Error, "moho64: /map %s: %s", o.spMap.c_str(), lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+      return 1;
+    }
+    SinglePlayerParams params;
+    params.seed = o.hasSeed ? o.seed
+                            : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    std::string err;
+    if (!SessionFromSinglePlayerInfo(L, -1, params, &session, &err)) {
+      Logf(LogLevel::Error, "moho64: launch failed: %s", err.c_str());
+      return 1;
+    }
+    if (o.modsFile.empty()) uids.clear();  // (the scenario's mods: none)
+  }
+  const ReplayHeader& h = session.header;
+  Logf(LogLevel::Info, "moho64: single-player session %s: %zu armies, focus army %d, seed %u, difficulty %d, faction %d",
+       h.map.c_str(), h.armies.size(), session.focusArmy + 1, h.seed, o.spDiff, o.spFaction);
+  return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -707,6 +805,9 @@ int main(int argc, char** argv) {
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else if (a == "--twice") o.twice = true;
+    else if (a == "/map") o.spMap = next();
+    else if (a == "/diff") o.spDiff = std::atoi(next().c_str());
+    else if (a == "/faction") o.spFaction = std::atoi(next().c_str());
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
       return 2;
@@ -747,5 +848,6 @@ int main(int argc, char** argv) {
   if (o.rules) rc |= RunRules(vfs, hookDirs, uids);
   if (!o.replay.empty()) rc |= RunSim(o, vfs, hookDirs, uids);
   if (!o.session.empty()) rc |= RunGameConfig(o, vfs, hookDirs, uids);
+  if (!o.spMap.empty()) rc |= RunSinglePlayer(o, vfs, hookDirs, uids);
   return rc;
 }

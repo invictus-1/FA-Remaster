@@ -1275,10 +1275,12 @@ bool TargetExempt(Sim& sim, const Unit* u, const Entity* e) {
   return false;
 }
 
+// FindBestEnemy 0x5d7cf6: the candidate inside the playable rect, edges included (no margin, no army flag)
 bool InMap(Sim& sim, Vec3 p) {
-  const TerrainMap* m = sim.map();
-  if (!m) return true;
-  return p.x >= 0 && p.z >= 0 && p.x <= m->width() && p.z <= m->height();
+  if (!sim.map()) return true;
+  const int* r = sim.playableRect;
+  return !(static_cast<float>(r[0]) > p.x) && !(static_cast<float>(r[1]) > p.z) && !(p.x > static_cast<float>(r[2])) &&
+         !(p.z > static_cast<float>(r[3]));
 }
 
 // CAiAttackerImpl::FindBestEnemy 0x5d7a10
@@ -2426,8 +2428,10 @@ struct AttackData {
 namespace {
 
 bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
-// !Unit::WontFitAt 0x62aa90: the unit's footprint fits at world position p
+// !Unit::WontFitAt 0x62aa90: the point inside the playable rect (STIMap::IsWithin, margin 0, the unit's army's
+// whole-map flag, 0x62aad4), and the unit's footprint fits at world position p
 bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
+  if (sim.map() && !sim.IsWithin(p.x, p.z, 0.0f, Sim::UseWholeMap(u->army))) return false;
   const PathGrid* g = UnitFootprintGrid(sim, u);  // (Entity::GetFootprint 0x62aaa0)
   if (!g) return true;
   int cx, cz;

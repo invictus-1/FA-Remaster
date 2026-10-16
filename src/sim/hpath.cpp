@@ -484,10 +484,14 @@ bool HPathTables::CanTraverse(const Search& s, const PathCell& n) const {
   return true;
 }
 
-// EdgeAllowed 0x5aa680: inside the playable rect with a margin of the footprint size
+// EdgeAllowed (CAiPathFinder::IsInBounds 0x5aa680): with neither the army's whole-map flag (+0x74) nor a start
+// outside the playable rect (+0x75), the cell with a margin of the footprint size inside the rect (as floats there;
+// the ints compare the same)
 bool HPathTables::EdgeAllowed(const PathTraveler& t, const PathCell& n) const {
   if (t.useWholeMap || !t.insidePlayable) return true;
-  return n.x - t.S >= 0 && n.z - t.S >= 0 && n.x + t.S <= w_ && n.z + t.S <= h_;
+  const int r[4] = {playRect ? playRect[0] : 0, playRect ? playRect[1] : 0, playRect ? playRect[2] : w_,
+                    playRect ? playRect[3] : h_};
+  return n.x - t.S >= r[0] && n.z - t.S >= r[1] && n.x + t.S <= r[2] && n.z + t.S <= r[3];
 }
 
 float HPathTables::Heuristic(const PathTraveler& t, const PathCell& c) const {

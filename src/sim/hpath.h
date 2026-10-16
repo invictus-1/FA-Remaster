@@ -69,6 +69,9 @@ struct PathTraveler {
 class HPathTables {
  public:
   explicit HPathTables(Navigation* nav, int mapW, int mapH) : nav_(nav), w_(mapW), h_(mapH) {}
+  // The sim's playable rect (Sim::playableRect, x0 z0 x1 z1), read live by EdgeAllowed as IsInBounds 0x5aa680 reads
+  // the STIMap's; null = the whole map.
+  const int* playRect = nullptr;
   // PathTables ctor 0x76b8c0: one cluster map per named footprint, in the footprint list's order.
   void CreateMaps(const std::vector<NamedFootprint>& named);
   // Structures changed occupancy in cells [x0, x1) x [z0, z1): dirty the clusters around.

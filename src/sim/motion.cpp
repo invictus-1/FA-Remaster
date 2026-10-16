@@ -829,9 +829,8 @@ void UpdateBody(UnitMotion& m) {
 // Can the unit's footprint stand at world position (x, z)? (Unit::WontFitAt 0x62aa90, negated:
 // inside the map, terrain and structures at the footprint-origin cell; Entity::GetFootprint 0x62aaa0)
 bool StandableAt(Sim& sim, const Unit* u, float x, float z) {
-  const TerrainMap* map = sim.map();
-  if (map && (x < 0 || z < 0 || x > static_cast<float>(map->width()) || z > static_cast<float>(map->height())))
-    return false;
+  // STIMap::IsWithin (0x62aad4): margin 0, the unit's army's whole-map flag
+  if (sim.map() && !sim.IsWithin(x, z, 0.0f, Sim::UseWholeMap(u->army))) return false;
   const PathGrid* g = UnitFootprintGrid(sim, u);
   if (!g) return true;
   int cx, cz;
