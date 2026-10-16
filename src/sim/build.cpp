@@ -2890,6 +2890,13 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       if (t.started) StopBuild(sim, L, u, t, true);
       if (!t.completed) sim.CallMethod(L, u, "OnFailedToBuild", 0);
     }
+    // 0x5f6bd3..0x5f6bd6: then Unit::FreeOgridRect 0x6ab760 on the builder, whatever the state: the cell its walk to
+    // the site reserved (state 0, ReserveOgridRect) is given back when the task ends before it got there. Seen
+    // (Skirmish 812): Aeon engineer 0x600006 reserved (913, 88) beside a structure at 792, M28 gave it a Move at 801;
+    // the original's engineers that came later took that cell (0x600008 at 802, so 0x600002 the next free one,
+    // (914, 88), at 812: its first waypoint is then its goal and does not drive through); ours kept the cell
+    // reserved and sent both elsewhere.
+    GroundFreeRect(sim, u);
   } else if (t.type == CommandType::BuildFactory) {
     // CFactoryBuildTask dtor (0x5fa010): OnStopBuild(true) when done, else OnStopBuild(false)
     // (a cancelled product gets OnFailedToBeBuilt; the factory script destroys it)
