@@ -103,6 +103,13 @@ check("and more than 4 with 4", moho64ui_Looks().sceneSamples, 4)
 video.shadow_quality.set('shadow_quality', 3, false)
 video.level_of_detail.set('level_of_detail', 2, false)
 video.fidelity.set('fidelity', 2, false)
+-- The graphics API: Direct3D 12 unless chosen (Chris's choice), or Vulkan
+check("the Video tab has Graphics API, Direct3D 12 unless chosen", video.remaster_graphics_api and video.remaster_graphics_api.default, 'd3d12')
+check("the pictures are drawn with Direct3D 12 at the start", moho64ui_Looks().vulkan, false)
+video.remaster_graphics_api.set('remaster_graphics_api', 'vulkan', false)
+check("Vulkan chosen: the next picture is drawn with Vulkan", moho64ui_Looks().vulkan, true)
+video.remaster_graphics_api.set('remaster_graphics_api', 'd3d12', false)
+check("and back", moho64ui_Looks().vulkan, false)
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
 check("the Video tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
 check("the window keeps to the screen's rate at the start", moho64ui_Looks().verticalSync, true)

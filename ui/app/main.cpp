@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
 #ifdef MOHO64UI_WORLD_PICTURE
     render::gSceneSamples = ui::Looks().sceneSamples;
 #endif
-    if (backdrop) backdrop->Begin();
+    if (backdrop) backdrop->Begin(ui::Looks().vulkan);
   };
   // The front end's state. A new one is made when a game is left (the original makes a new state
   // for every change between front end and game, FA exe 0x885de0).

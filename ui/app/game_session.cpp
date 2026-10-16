@@ -573,6 +573,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
   if (!picture_) {  // no game: the menu's picture, the interface alone over black
     if (!menuPicture_) {
       auto menu = std::make_unique<MenuPicture>();
+      menu->picture.SetVulkan(Looks().vulkan);
       menu->picture.UseWindow(window);
       std::string error;
       if (!menu->picture.Open(vfs_, "", &error)) {
@@ -641,6 +642,7 @@ void GameSession::OpenPicture() {
       if (releaseWorlds) releaseWorlds();
       render::gSceneSamples = Looks().sceneSamples;
     }
+    pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {

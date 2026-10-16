@@ -327,9 +327,9 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[4] = {"remasteredEffects", "tracers", "richGround", "snowTracks"};
-  const bool values[4] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks};
-  for (int i = 0; i < 4; ++i) {
+  const char* names[5] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan"};
+  const bool values[5] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan};
+  for (int i = 0; i < 5; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -628,6 +628,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "SC_CAMERASCALELOD") {
       const double lod = std::atof(value.c_str());
       if (!value.empty()) looks.meshDetail = lod < 0.5 ? 0.5f : lod < 1.5 ? 0.75f : 1.0f;
+      return;
+    }
+    if (key == "REMASTER_GRAPHICS_API") {  // d3d12 | vulkan
+      if (!value.empty()) looks.vulkan = Upper(value) == "VULKAN";
       return;
     }
     if (key == "REMASTER_UPSCALE") {

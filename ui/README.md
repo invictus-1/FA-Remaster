@@ -101,7 +101,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   scene's samples, from the next picture made; `GetAntiAliasingOptions` gives 2 and 4), Level Of
   Detail (model detail 0.5 / 0.75 / 1), and Fidelity Presets sets them together as in the
   original. A player who has never chosen starts at the highest (the hook raises these items'
-  defaults); `LookSettings` keeps them, the picture follows.
+  defaults); `LookSettings` keeps them, the picture follows. "Graphics API" in the same tab
+  (`remaster_graphics_api`, Chris, 2026-10-15): Direct3D 12 by default, or Vulkan
+  (WorldPicture::SetVulkan before Open; the game's picture, the menu's and its background), from
+  the next map loaded.
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
   "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is
