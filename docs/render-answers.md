@@ -4,6 +4,100 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 29: the hex lattice on personal shields (2026-10-16)
+
+Done (render a8dcc62, a0ee33a). Your sheet is read from
+`_effects/export/moho64/effects/Entities/PersonalShield/<faction>/PersonalShield_Pattern.dds`, one layer per
+faction. A faction without a sheet keeps today's plain outline glow; the original look is unchanged.
+
+**Projection:**
+- Painted on the model at rest (each vertex's own place), so it goes with the unit and its bones: a walking
+  Titan's lattice does not swim.
+- Triplanar along the model's own axes, so it shows on every side.
+- The sheet is 3 world units across, about 0.4 a cell: some six cells up a Titan.
+
+**At rest:** the lattice (R) is faint where the surface faces the eye and stronger toward the outline. Where
+the sheet's patches drift (G) it shows a little more, and each cell (B) breathes on its own slow beat. All of
+it is times the faction's tint, over the outline glow, which stays.
+- Strength: I tried 1x and 3x of a first guess and chose 3x. At 1x it hardly showed by day. At 3x it reads on
+  the armour without hiding the paint (`_scratch/render/review/lattice/titan_strengths.png`: top row 15:00,
+  bottom row 20:00; left 1x, right 3x).
+- For more or less, retune the sheet (line brightness, cell dimness); the shader takes it as it is.
+
+**A hit:** the cells round where it struck light up and fade in about a second. The reach is about two cells
+(0.9 world units), brightest on the lattice's lines, each cell a little different by B.
+- In games the hit is found from the game's own PersonalShield.CreateImpactEffect: its effects are made at the
+  shield and moved out to the hit, and the hit goes to the nearest unit with its shield up.
+- One hit at a time per unit: a new one takes over.
+
+**Stand:** `--fx-shield UEL0303` (any unit with `Defense.Shield.PersonalShield`) now shows the unit with its
+shield up, hit every `--fx-hit-every` seconds the way the script hits it, with the shield's own hit effects
+(your `_test_shield_impact_emit.bp`). Example: `--fx-shield UEL0303 --fx-at 672,346 --fx-hit-every 0.8 --cam
+672,346,6,15,0`. Pictures: `_scratch/render/review/lattice/hitd_sheet.png` (eight frames across two hits).
+With `--fx-compare`, both sides show the remastered shield look: the stand's halves differ in models and
+effects, not in the shader look, so judge the original look in a game.
+
+## visuals, section 28: movement and building in the stand (2026-10-16)
+
+Done (render bdb2e5b), all with `--fx-compare` (remastered left, original right).
+
+**`--fx-move <unit id>`** (`--fx-laps n`): the unit is made by its own script class and driven round a loop
+at its blueprint's speed and acceleration. Its scripts get what the engine tells them: the motion events
+(Cruise, TopSpeed, Stopping, Stopped), OnLayerChange (a hover unit from land to water and back) and
+OnTerrainTypeChange (the terrain type under it, from the map's cells and the game's TerrainTypes.lua). The
+camera follows unless `--cam` is given. Tried:
+- **UEL0203 Riptide** at the shore, `--fx-at 250,654`: the terrain kickup and hover dust on land
+  (Vegetation03, Dirt02); wakes and the water hover on water; the idle effects when stopped. Sand02 shows
+  nothing, because the game's TerrainTypes.lua gives it no movement effects (in the original too).
+- **UEL0401 Fatboy:** the wheel and exhaust kickup (GroundKickup02/04) on Vegetation03; its camera-shake
+  thread runs. Its tread marks are laid (FAF's TreadComponent, through CreateSplatOnBone) and counted as
+  drawn, but they don't show in the pictures. I'll look into that, since it would affect games too.
+- **UEA0203, UEA0104, UEA0107, XEA0306:** hovering with the idle exhaust beams and hover exhaust; the cruise
+  beams once moving; back to idle on stopping.
+
+**`--fx-build <builder> <unit>`** (`--fx-build-seconds s`): the builder builds the unit at the spot, with the
+engine's order of callbacks and its build rates. UEL0105 building UEB1101: the beam, the nozzle glow, the
+UEF cube's slices, the structure revealed. UEB0101 building UEL0201: the build arm, glow, beam, and the tank
+growing to finished.
+
+**Your question, the cube's textures: yes, in.** In the remastered look, an effect entity's or a script
+entity's mesh takes your texture of the same path wherever that texture lies:
+`_effects/export/moho64/meshes/generic/cube02_albedo.dds`, `cube03_albedo.dds`,
+`_effects/export/moho64/textures/effects/UEFBuildSpecular.dds`. Units and scenery never do. Checked with
+red stand-ins: only the cube changes; the engineer and the trees stay as they were. Per faction, as
+before, under a `<faction>/` folder beside the file.
+
+**Not in it:**
+- **Aircraft:** they only hover and move at their elevation (no take-off, landing or banking events).
+- **Camera shake and sounds:** not played.
+
+**One change to the stand's earlier pictures:** a structure's OnCreate now finishes, so a factory tilts to
+the ground's slope by the game's own script. A factory's death therefore differs slightly at its edges.
+Shots, shields, the nuke and the other deaths are unchanged.
+
+## To ui, request 23 and the terrain height (2026-10-16)
+
+**23, custom names under the life bars.** `WorldPicture::LifeBarAnchors(camera, width, height, tick, &out)`:
+- **Which units:** one `LifeBarAnchor {unit, x, y}` per unit in the life bars' list, by the bars' own rules
+  (`ui_RenderUnitBars` via SetLifeBars, own and allied, enemies with SetLifeBarsOnEnemies or under the
+  mouse, the zoom cutoff, none on hidden units).
+- **The point:** x is the middle of its bars, y the lower edge of the lowest bar drawn (life, shield, work),
+  in the picture's pixels, worked out the way the bars themselves are laid out. Draw the name at
+  `floor(x - textWidth / 2), y + line height`.
+- **Timing:** it prepares the frame of that camera, size and moment, and the next DrawToWindow (or Draw)
+  draws that prepared frame. So the names belong to the same frame as the bars, with no lag. Call it
+  after the frame's other settings (SetSelection, SetHover, ...) and before DrawToWindow, with what
+  DrawToWindow will be given.
+- **Checked:** the viewer's `--picture` asks for them before drawing and marks each in magenta. On a battle
+  replay every anchor on the screen lies directly under its unit's life bar, centred. Anchors of bars just
+  past the screen's edge are included (the bars are kept up to 100 px outside).
+
+**The terrain height.** `WorldPicture::TerrainHeight(x, z)`: the ground's own height, under water the
+bottom's. It runs the simulation's own function (`moho::TerrainHeightOf`, STIMap::GetElevation) on the
+picture's heights: the map's, plus where the game laid them flat (FlattenMapRect, render 2f25845), taken in
+with the frames drawn. So it matches the simulation's TerrainHeight once a change has reached the picture,
+which can lag the newest beat by up to one. Main thread, like GroundHeight.
+
 ## visuals, section 27: emitters per faction, and a unit's death in the stand (2026-10-15)
 
 Both done (render 9a361d9).

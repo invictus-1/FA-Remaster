@@ -215,10 +215,11 @@ bool GridFindsInBox(Sim& sim, const Entity* e, float x0, float z0, float x1, flo
 }
 
 void GridAdvanceCoords(Sim& sim) {
-  // UpdateCollision runs here only for entities whose transform changed (the beat's list of moved coords). A unit
-  // that has stood where it was made since - a parked aircraft, set down by a script - keeps the cells of its
-  // PLAIN box; the skirt-wide box comes with its first move. (Seen: one blast over four parked aircraft; the order
-  // it kills them in, and so the order of their explosions' random draws, is the order of their cells.)
+  // UpdateCollision runs here only for entities whose transform changed (AdvanceCoords 0x678f10 compares the
+  // previous and the new transform, 0x67904b). A unit gets its skirt-wide cells in its constructor (Sim::CreateUnit);
+  // one that a script put back on its plain box (RevertCollisionShape: an aircraft that landed, AirUnit.lua) keeps
+  // the plain cells until it moves. (Seen: one blast over four parked aircraft; the order it kills them in, and so
+  // the order of their explosions' random draws, is the order of their cells.)
   for (Unit* u : sim.units()) {
     if (u->destroyQueued) continue;
     if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&

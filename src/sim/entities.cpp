@@ -947,15 +947,22 @@ int l_brain_GetArmyStartPos(lua_State* L) {
   lua_pushnumber(L, a->startZ);
   return 2;
 }
-// GetListOfUnits(category, needToBeIdle, requireBuilt)
+// GetListOfUnits(category, needToBeIdle[, requireBuilt]) (0x5878f0): 3 or 4 arguments; requireBuilt is TRUE when
+// left out (0x5879d0). Each unit of the army in the category, except IsDead (vt+0x28) and DestroyQueued (vt+0x2c);
+// requireBuilt drops IsBeingBuilt (vt+0x34) ones; needToBeIdle keeps only Unit::IsIdleState 0x6a7d60 ones (no head
+// command in the queue, unit+0x4b4).
 int l_brain_GetListOfUnits(lua_State* L) {
   AiBrain* b = B(L);
   const uint64_t* cat = ToCategory(L, 2);
+  const bool idle = lua_toboolean(L, 3) != 0;
+  const bool built = lua_gettop(L) < 4 || lua_toboolean(L, 4) != 0;
   lua_newtable(L);
   int n = 0;
   if (!b->army) return 1;
   for (Unit* u : b->army->units) {
     if (u->dead || u->destroyQueued) continue;
+    if (built && u->beingBuilt) continue;
+    if (idle && !u->commands.empty()) continue;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       continue;
     PushObject(L, u);
@@ -963,9 +970,26 @@ int l_brain_GetListOfUnits(lua_State* L) {
   }
   return 1;
 }
+// GetCurrentUnits(category) (0x587760): not a list. It sums the army stat "Units_Active" (CArmyStats::GetStat
+// 0x70b860) over the blueprints in the category (CArmyStatItem::SumCategory 0x70b580), truncated (cvttss2si). That
+// stat counts a unit from its completion: the Unit ctor adds 1 for its blueprint when it is made complete (params
+// +0x30, 0x6a6450; a construction adds to "Units_BeingBuilt" instead, 0x6a6741), Unit::Materialize 0x6a9f40 moves
+// it over when its build reaches 1 (0x6aa0dd), and ~Unit 0x6a6bf0 takes it off (0x6a6e13): a dead unit counts
+// until it is destroyed. Only blueprints with CapCost (bp+0x1f8) > 0 are counted (0x6a6621, 0x6aa0e5, 0x6a6e06).
+// Seen: Skirmish 1119, Gibson's new air factory: M28 counts its air subteam's transports with GetCurrentUnits;
+// Chloe's transport 0x600018 is at 14 % in its factory, the original counts 0 and builds a transport.
 int l_brain_GetCurrentUnits(lua_State* L) {
-  l_brain_GetListOfUnits(L);
-  lua_pushnumber(L, luaL_getn(L, -1));
+  AiBrain* b = B(L);
+  const uint64_t* cat = ToCategory(L, 2);
+  int n = 0;
+  if (b->army)
+    for (Unit* u : b->army->units) {
+      if (u->beingBuilt || !(u->capCost > 0.0f)) continue;
+      if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
+        continue;
+      ++n;
+    }
+  lua_pushnumber(L, n);
   return 1;
 }
 
@@ -1409,6 +1433,18 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     }
     u->lastPosition = u->position;
   }
+  // The entity grid takes the unit by its box WIDENED to its skirt from the start. The Entity ctor (0x677c90 ->
+  // StandardInit 0x678370 -> RevertCollisionShape 0x67ae70) makes the primitive and registers its plain box at the
+  // entity's initial transform, the origin (SSTIEntityVariableData 0x558760). The Unit ctor then sets the pending
+  // transform to the unit's own (0x6a5bf9..0x6a5c51) and calls AdvanceCoords 0x678f10 twice (0x6a5c59, 0x6a5c5f):
+  // the first sees the transform change (origin -> here, 0x67904b memcmp) and calls vt+0x84, Unit::UpdateCollision
+  // 0x6ab520 (0xe2a5ec + 0x84 = 0xe2a670), the skirt-wide box. So a structure that never moves is in the cells of
+  // its skirt: GetUnitsInRect around a build site next to a finished mex returns the mex. (Only a later shape change
+  // from Lua, e.g. AirUnit's RevertCollisionShape when it lands, puts a unit back on its plain box until it moves.)
+  // Seen: Skirmish 969, M28's IsEngineerAvailable finds a finished mex in GetUnitsInRect of engineer 0x11's pgen
+  // site (676.99, 349.99; the mex 0x3 at 680.5 has a 2.5-wide skirt, x from 679.25: cell 169) and makes it
+  // available: one Lua Random more (m28factory.lua:273), and at 979 the two engineers stop to build closer.
+  GridUpdate(*this, u, true);
   // the constructor gives both poses the unit's transform (0x6a5c74, 0x6a5c82)
   u->poseBasePos = u->prevPoseBasePos = u->position;
   u->poseBaseOri = u->prevPoseBaseOri = u->orientation;

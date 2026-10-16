@@ -419,6 +419,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   camera = cam;
   time_ = time;
   clock_ = clock;
+  barAnchors.clear();
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
   // screen - icons, bars, the points the interface asks about - at the screen's own)
   screenWidth_ = width;
@@ -907,6 +908,27 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (!fresh.empty()) models.Prefetch(fresh);
   }
   CpuTimes::Part("units listed");
+  {  // hits on personal shields: each the nearest unit with its shield up that the hit lies at (its
+     // place on the model at rest, where the shield's lattice is painted), for the lattice to light there
+    std::vector<Vec3> hits;
+    effects.TakeHits(&hits);
+    for (const Vec3& hit : hits) {
+      const FrameUnit* best = nullptr;
+      float nearest = 1e30f;
+      for (const FrameUnit& u : frame.units) {
+        if (u.dead || !u.mesh || u.mesh >= frame.blueprints->size() || !u.Seen()) continue;
+        std::string set = (*frame.blueprints)[u.mesh];
+        for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (set.find("shield") == std::string::npos) continue;
+        const float d = Length(hit - Vec3{u.position[0], u.position[1], u.position[2]});
+        if (d < nearest) nearest = d, best = &u;
+      }
+      if (!best || nearest > 12) continue;  // (a bubble's hit, or one far from any)
+      const Quat turn{best->orientation[0], best->orientation[1], best->orientation[2], best->orientation[3]};
+      shieldHits_[best->id] = {Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_};
+    }
+    for (auto it = shieldHits_.begin(); it != shieldHits_.end();) it = clock_ - it->second.clock > 1.5 || clock_ < it->second.clock ? shieldHits_.erase(it) : std::next(it);
+  }
   ++frameStamp_;
   rememberedGone.clear();
   dyingDrawn = 0;
@@ -1032,9 +1054,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
         // (the life bar, under it the shield's where the unit has one up, under that its work)
         const bool shield = life && (u.hasShield || u.shieldRatio > 0);  // (down: an empty bar)
+        const size_t before = icons.BarCount();
         if (life) icons.AddBar(at, u.health / u.maxHealth, wide, 0, 0, thick);
         if (shield) icons.AddBar(at, u.shieldRatio, wide, 2, thick, thick);
         if (work) icons.AddBar(at, u.workProgress, wide, 1, (life ? thick : 0) + (shield ? thick : 0), thick);
+        // (a unit in the life bars' list: where its name would go)
+        float ax = 0, ay = 0;
+        if (life && icons.BarsAnchor(before, &ax, &ay)) barAnchors.push_back({u.id, ax, ay});
       }
       if (workBars && own && u.paused) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
@@ -1067,7 +1093,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         shielded = set.find("shield") != std::string::npos;
       }
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, shielded ? 3.0f : fractionComplete, asRemembered ? nullptr : &pose);
+      // (a shield's last hit, within the second it shows: its age rides on what is built, 3 and a
+      // little more, and where it struck on the place a ghost's tint has, which a shielded unit has not)
+      float built = shielded ? 3.0f : fractionComplete;
+      const Vec3* hitAt = nullptr;
+      if (shielded) {
+        auto hit = shieldHits_.find(u.id);
+        const double age = hit == shieldHits_.end() ? 2 : clock_ - hit->second.clock;
+        if (age >= 0 && age < 1) {
+          built = 3.001f + 0.9f * static_cast<float>(age);
+          hitAt = &hit->second.at;
+        }
+      }
+      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
@@ -1151,7 +1189,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     const bool original = effectsLook == EffectsLook::Original || p.original;
     const Model* model = Known(p.original ? originalShotModels_ : shotModels_, p.blueprint, frame.blueprints->size(), [&]() -> const Model* {
-      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original);
+      // (an effect entity - the UEF's build cube, a nuke's fireball - may take the visuals track's
+      // textures of any path; a weapon's shot under /projectiles/ only its /effects/ ones)
+      const bool effect = moho::Vfs::Normalize(blueprint).compare(0, 9, "/effects/") == 0;
+      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original, std::string(), effect);
     });
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
@@ -1212,11 +1253,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     const Model* model = nullptr;
     if (!faction.empty()) {
-      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction);
+      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction, true);
     } else {
       model = Known(original ? originalEntityModels_ : entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
         if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
-        return models.Blueprint(mesh + ".bp", original);
+        return models.Blueprint(mesh + ".bp", original, std::string(), true);
       });
     }
     if (!model || !model->ok) continue;

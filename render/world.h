@@ -92,6 +92,14 @@ class World {
   // near enough to be seen as models. Off unless switched on (Chris: off by default; the original's
   // way of reading a unit's life is the panel at the bottom left).
   bool lifeBars = false;
+  // Of the frame last begun: every unit with a life bar, and the point under its bars (life, shield,
+  // work): the middle of their width and the lower edge of the lowest, in screen pixels as the icons
+  // are drawn. Where the original puts a unit's custom name (WorldPicture::LifeBarAnchors).
+  struct BarAnchor {
+    uint32_t unit;
+    float x, y;
+  };
+  std::vector<BarAnchor> barAnchors;
   // The game's effects as the original has them, or remastered (the visuals track's files where it
   // has made some, effect_files.h): a player's choice, remastered at first (Chris, 2026-10-15).
   enum class EffectsLook { Original, Remastered };
@@ -325,6 +333,12 @@ class World {
   void ListProp(PlacedProp* prop, uint32_t key, bool made);
   void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
+  // the last hit on each unit's personal shield: where, on the model at rest (world units), and when
+  struct ShieldHit {
+    Vec3 at;
+    double clock = 0;
+  };
+  std::unordered_map<uint32_t, ShieldHit> shieldHits_;
   const Model* PropModel(const std::string& blueprint, const std::string& mesh);
   void ApplyPropEvent(const FramePropEvent& event);
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet

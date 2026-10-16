@@ -43,6 +43,19 @@ function import(name)
   doscript(key, m)
   return m
 end
+-- the engine's vectors (Vector, Vector2: one metatable, its x y z w the entries 1 to 4), on which the
+-- game's utils.lua puts its arithmetic as it loads
+__fxVectorMeta = {}
+__fxVectorMeta.__index = function(v, k)
+  if k == 'x' then return rawget(v, 1) elseif k == 'y' then return rawget(v, 2) elseif k == 'z' then return rawget(v, 3)
+  elseif k == 'w' then return rawget(v, 4) end
+end
+__fxVectorMeta.__newindex = function(v, k, x)
+  if k == 'x' then rawset(v, 1, x) elseif k == 'y' then rawset(v, 2, x) elseif k == 'z' then rawset(v, 3, x)
+  elseif k == 'w' then rawset(v, 4, x) else rawset(v, k, x) end
+end
+function Vector(x, y, z) return setmetatable({x or 0, y or 0, z or 0}, __fxVectorMeta) end
+function Vector2(x, y) return setmetatable({x or 0, y or 0}, __fxVectorMeta) end
 pcall(doscript, '/lua/system/utils.lua')  -- (first: class.lua takes table.empty from it as it loads)
 pcall(doscript, '/lua/system/class.lua')
 )lua";
@@ -208,8 +221,9 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     impactMesh_ = shield["ImpactMesh"].StringOr(std::string());
     shieldSize_ = static_cast<float>(shield["ShieldSize"].NumberOr(0));
     shieldOffset_ = static_cast<float>(shield["ShieldVerticalOffset"].NumberOr(0));
-    if (shieldMesh_.empty() || shieldSize_ <= 0) {
-      *error = id + " has no shield of that kind (Defense.Shield.Mesh and ShieldSize)";
+    personalShield_ = shield["PersonalShield"].kind == BpValue::Bool && shield["PersonalShield"].boolean;
+    if ((shieldMesh_.empty() && !personalShield_) || shieldSize_ <= 0) {
+      *error = id + " has no shield of that kind (Defense.Shield.Mesh or PersonalShield, and ShieldSize)";
       return false;
     }
     const std::string template_ = shield["ImpactEffects"].StringOr(std::string());
@@ -228,7 +242,54 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
     setup_.death = id;
   }
-  if (!entity_.empty() || !shieldUnit_.empty() || !setup_.death.empty()) {
+  // a unit on the move, a build: their blueprints must be there; what the stand needs of them
+  auto unitBlueprint = [&](std::string* id, BpValue* bp) {
+    for (char& ch : *id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string path = "/units/" + *id + "/" + *id + "_unit.bp";
+    auto text = vfs->ReadFile(moho::Vfs::Normalize(path));
+    if (!text || !ReadBlueprintFile(*text, bp)) {
+      *error = "no unit blueprint " + path;
+      return false;
+    }
+    return true;
+  };
+  auto size = [](const BpValue& bp) {
+    return static_cast<float>(std::max(bp["SizeX"].NumberOr(1), bp["SizeZ"].NumberOr(1)));
+  };
+  if (!setup.move.empty()) {
+    BpValue bp;
+    if (!unitBlueprint(&setup_.move, &bp)) return false;
+    // the loop by the unit's speed: some two and a half seconds of straight each way at its top
+    // speed, turns of a third of a second's way in radius, both within reason
+    const bool air = bp["Physics"]["MotionType"].StringOr(std::string()).find("Air") != std::string::npos;
+    const float speed = static_cast<float>(air ? bp["Air"]["MaxAirspeed"].NumberOr(10) : bp["Physics"]["MaxSpeed"].NumberOr(2));
+    loopHalf_ = std::clamp(speed * 1.25f, 6.0f, 25.0f);
+    loopRadius_ = std::clamp(speed * 0.35f, 2.0f + size(bp) * 0.5f, 8.0f);
+    if (!setup.spacingGiven) setup_.spacing = 2 * loopRadius_ + size(bp) + 3;
+    if (!setup.repeatGiven) {
+      const float lap = 4 * loopHalf_ + 6.2832f * loopRadius_;
+      setup_.repeat = 1.5f + static_cast<float>(std::max(1, setup.laps)) * lap / std::max(speed, 0.5f) + 5;
+    }
+    extent_ = (setup.compare ? setup_.spacing : 0) + size(bp) + 3;
+  }
+  if (!setup.build.empty()) {
+    BpValue builder, built;
+    if (!unitBlueprint(&setup_.build, &builder) || !unitBlueprint(&setup_.buildUnit, &built)) return false;
+    // a factory builds where it stands; anything else goes to where it builds
+    bool factory = false;
+    for (const BpValue& cat : builder["Categories"].items)
+      if (cat.StringOr(std::string()) == "FACTORY") factory = true;
+    factory = factory && builder["Physics"]["MotionType"].StringOr("RULEUMT_None") == "RULEUMT_None";
+    buildOrder_ = factory ? "FactoryBuild" : "MobileBuild";
+    if (!setup.spacingGiven) setup_.spacing = std::max(size(builder), size(built)) + (factory ? 4.0f : size(builder) + 6.0f);
+    if (!setup.repeatGiven) {
+      const float rate = static_cast<float>(builder["Economy"]["BuildRate"].NumberOr(1));
+      const float time = static_cast<float>(built["Economy"]["BuildTime"].NumberOr(1));
+      setup_.repeat = (setup.buildSeconds > 0 ? setup.buildSeconds : time / std::max(rate, 0.001f)) + 8;
+    }
+    extent_ = (setup.compare ? setup_.spacing : 0) + std::max(size(builder), size(built)) + (factory ? 2.0f : setup_.spacing * 0.5f + 2);
+  }
+  if (!entity_.empty() || !shieldUnit_.empty() || !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty()) {
     entities_ = std::make_unique<FxEntities>();
     if (!entities_->Init(vfs, setup.seed, error)) return false;
     if (!setup.faction.empty()) entities_->SetFaction(setup.faction);
@@ -237,7 +298,8 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
       return false;
     }
   }
-  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty()) {
+  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty() && setup_.move.empty() &&
+      setup_.build.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -247,6 +309,20 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     sides_[0].remastered = true;
     sides_[1].remastered = false;
   }
+  return true;
+}
+
+bool FxStand::Focus(Vec3* at) const {
+  if (setup_.move.empty() || !entities_) return false;
+  Vec3 sum{0, 0, 0};
+  int n = 0;
+  for (const FxEntities::Body& b : entities_->Bodies())
+    if (!b.wreck) {
+      sum = sum + b.position;
+      ++n;
+    }
+  if (n == 0) return false;
+  *at = sum * (1.0f / static_cast<float>(n));
   return true;
 }
 
@@ -278,12 +354,25 @@ std::string FxStand::Describe() const {
     snprintf(b, sizeof b, " killed %g s into each play (overkill %g)", setup_.killAt, setup_.overkill);
     s += "; " + setup_.death + b;
   }
+  if (!setup_.move.empty()) {
+    char b[160];
+    snprintf(b, sizeof b, " round a loop %.0f long with turns %.0f across, %d time%s each play of %.0f s", 2 * loopHalf_, 2 * loopRadius_,
+             std::max(1, setup_.laps), setup_.laps > 1 ? "s" : "", setup_.repeat);
+    s += "; " + setup_.move + b;
+  }
+  if (!setup_.build.empty()) {
+    char b[96];
+    snprintf(b, sizeof b, " (%s), each play of %.0f s", buildOrder_.c_str(), setup_.repeat);
+    s += "; " + setup_.build + " building " + setup_.buildUnit + b;
+  }
   if (!setup_.faction.empty()) s += "; as " + setup_.faction + "'s";
   return s.empty() ? s : s.substr(2);
 }
 
-void FxStand::SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel) {
+void FxStand::SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel,
+                        std::function<int(float, float)> terrainType) {
   terrain_ = std::move(terrain);
+  terrainType_ = std::move(terrainType);
   water_ = water;
   waterLevel_ = waterLevel;
 }
@@ -302,11 +391,12 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   right = Length(right) > 1e-4f ? Normalize(right) : Vec3{1, 0, 0};
   auto place = [&](Vec3 p, const Side& side) { return Vec3{p.x + side.shift.x, ground(p.x + side.shift.x, p.z + side.shift.z) + p.y, p.z + side.shift.z}; };
   const bool again = now - started_ >= setup_.repeat || now < started_;
-  if (entities_ && !setup_.death.empty() && !unitsReady_ && !unitsFailed_) {  // (once: the dying units' world)
+  const bool units = !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty();
+  if (entities_ && units && !unitsReady_ && !unitsFailed_) {  // (once: the units' world)
     World* w = &world;
     std::string why;
     unitsReady_ = entities_->InitUnits(terrain_ ? terrain_ : ground, water_, waterLevel_,
-                                       [w](const std::string& id) { return w->models.Unit(id); }, &why);
+                                       [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_);
     if (!unitsReady_) {
       unitsFailed_ = true;
       fprintf(stderr, "render: --fx-death: %s\n", why.c_str());
@@ -331,8 +421,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       if (entities_ && !shieldUnit_.empty()) {  // the shield up (its hits follow, below)
         const Vec3 base = place(setup_.at, side);
         const float size = shieldSize_;
-        entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
-                             sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
+        if (!personalShield_)  // (a personal shield is the unit's own look: below)
+          entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
+                               sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
+        side.lastHit = -10;
         side.nextHit = now + 0.3;
         side.rng = std::max<uint32_t>(setup_.seed, 1);  // (the same hits on both sides)
       }
@@ -342,16 +434,57 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
                               static_cast<int>(k)))
           fprintf(stderr, "render: --fx-entity: %s\n", why.c_str());
       }
-      if (entities_ && unitsReady_) {  // the unit to die, as the game makes one
+      // (toward the camera, square to the two sides: an aircraft that dies flies in so; a loop's long
+      // sides run so, keeping the two sides' loops side by side)
+      const Vec3 forward = Normalize(Vec3{-right.z, 0, right.x});
+      const Vec3 at{setup_.at.x + side.shift.x, 0, setup_.at.z + side.shift.z};
+      FxEntities::UnitPlace how;
+      how.forward = forward;
+      how.original = sides_.size() == 2 ? !side.remastered : !lookRemastered;
+      how.side = static_cast<int>(k);
+      if (entities_ && unitsReady_ && !setup_.death.empty()) {  // the unit to die, as the game makes one
         std::string why;
-        // (an aircraft flies toward the camera, square to the two sides, so that they stay side by
-        // side; it comes down at the spot)
-        const Vec3 forward = Normalize(Vec3{-right.z, 0, right.x});
-        const Vec3 at{setup_.at.x + side.shift.x, 0, setup_.at.z + side.shift.z};
-        side.unit = entities_->AddUnit(setup_.death, at, forward, sides_.size() == 2 ? !side.remastered : !lookRemastered, static_cast<int>(k),
-                                       setup_.killAt, &why);
+        how.flyIn = true;  // (it comes down at the spot)
+        how.fallAfter = setup_.killAt;
+        side.unit = entities_->AddUnit(setup_.death, at, how, &why);
         side.killed = false;
         if (!side.unit) fprintf(stderr, "render: --fx-death: %s\n", why.c_str());
+      }
+      if (entities_ && unitsReady_ && !setup_.move.empty()) {  // the unit to drive round its loop
+        std::string why;
+        // the loop: from its near end's right (the camera's side) round its near end, up its left side
+        // away from the camera, round its far end, back down its right side; the unit made where it
+        // begins, facing along it
+        const Vec3 across = Normalize(Vec3{right.x, 0, right.z});
+        std::vector<Vec3> loop;
+        const int steps = 12;
+        for (int end = 0; end < 2; ++end) {
+          const float s = end == 0 ? 1.0f : -1.0f;  // (the near end, then the far one)
+          const Vec3 centre = at + forward * (s * loopHalf_);
+          for (int i = 0; i <= steps; ++i) {
+            const float a = 3.14159265f * static_cast<float>(i) / static_cast<float>(steps);
+            const Vec3 p = centre + across * (s * loopRadius_ * std::cos(a)) + forward * (s * loopRadius_ * std::sin(a));
+            loop.push_back({p.x, 0, p.z});
+          }
+        }
+        how.forward = Normalize(loop[1] - loop[0]);
+        side.unit = entities_->AddUnit(setup_.move, loop[0], how, &why);
+        if (!side.unit) fprintf(stderr, "render: --fx-move: %s\n", why.c_str());
+        if (side.unit) entities_->Drive(side.unit, loop, now + 1.5, setup_.laps);
+      }
+      if (entities_ && unitsReady_ && !setup_.build.empty()) {  // the builder, and what it builds
+        std::string why;
+        // (a factory at the spot builds there; an engineer stands off it, facing it)
+        const bool factory = buildOrder_ == "FactoryBuild";
+        const Vec3 builderAt = factory ? at : at - forward * (setup_.spacing * 0.5f);
+        side.unit = entities_->AddUnit(setup_.build, builderAt, how, &why);
+        if (!side.unit) fprintf(stderr, "render: --fx-build: %s\n", why.c_str());
+        if (side.unit) {
+          how.builder = side.unit;
+          side.built = entities_->AddUnit(setup_.buildUnit, at, how, &why);
+          if (!side.built) fprintf(stderr, "render: --fx-build: %s\n", why.c_str());
+          else entities_->Build(side.unit, side.built, buildOrder_, setup_.buildSeconds);
+        }
       }
       if (!projectile_.empty()) {
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
@@ -365,7 +498,21 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       const bool original = sides_.size() == 2 ? !side.remastered : !lookRemastered;
       const Vec3 base = place(setup_.at, side);
       const Model* unit = world.models.Unit(shieldUnit_, original);
-      if (unit && unit->ok) world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f});
+      if (unit && unit->ok) {
+        // (a personal shield: the unit with its shield up, and its last hit for a second, as World draws a
+        // game's: the hit's age on what is built, 3 and a little more, where it struck on the tint)
+        float built = 1;
+        const Vec3* hitAt = nullptr;
+        if (personalShield_) {
+          built = 3;
+          const double age = now - side.lastHit;
+          if (age >= 0 && age < 1) {
+            built = 3.001f + 0.9f * static_cast<float>(age);
+            hitAt = &side.hitPoint;
+          }
+        }
+        world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f}, built, nullptr, hitAt);
+      }
       if (entities_ && now >= side.nextHit && side.nextHit > 0) {
         side.nextHit = now + setup_.hitEvery;
         // a direction above the ground (each side draws the same ones)
@@ -377,11 +524,20 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         const Vec3 dir = Normalize(Vec3{std::sin(heading) * std::cos(rise), std::sin(rise), std::cos(heading) * std::cos(rise)});
         const Vec3 centre = base + Vec3{0, shieldOffset_, 0};
         // as the game's shield script: the flash at the shield's centre, sized as the shield, turned
-        // toward the hit, for two seconds; its effects made on it and moved out to the hit
-        const uint32_t flash = entities_->AddEntity(impactMesh_, centre, Facing(dir), {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
+        // toward the hit, for two seconds; its effects made on it and moved out to the hit. A personal
+        // shield's (PersonalShield.CreateImpactEffect): no flash, an entity without a mesh at the
+        // shield, its effects moved out as far as the hit lies; on the unit itself, about its middle
+        const float reach = personalShield_ ? shieldSize_ * 0.35f : shieldSize_ * 0.5f;
+        const Vec3 from = personalShield_ ? base + Vec3{0, shieldOffset_ + shieldSize_ * 0.35f, 0} : centre;
+        const uint32_t flash = entities_->AddEntity(personalShield_ ? std::string() : impactMesh_, from, Facing(dir),
+                                                    {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
         for (const std::string& e : impactEffects_) {
           const uint32_t fx = entities_->AddEmitter("CreateEmitterAtBone", flash, EmitterPath(e), setup_.faction.empty() ? UnitFaction(shieldUnit_) : setup_.faction);
-          entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, shieldSize_ * 0.5f});
+          entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, reach});
+        }
+        if (personalShield_) {
+          side.lastHit = now;
+          side.hitPoint = from + dir * reach - base;  // (the unit is not turned: its own frame is the world's)
         }
       }
     }
@@ -421,7 +577,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   world.particles.remastered = world.ribbons.remastered = lookRemastered;
   // the unit's death, `killAt` into the play (the same moment on both sides)
   for (Side& side : sides_)
-    if (entities_ && side.unit && !side.killed && now - started_ >= setup_.killAt) {
+    if (entities_ && !setup_.death.empty() && side.unit && !side.killed && now - started_ >= setup_.killAt) {
       side.killed = true;
       entities_->Kill(side.unit, setup_.overkill);
     }
@@ -447,7 +603,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       Pose pose;
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();
-      world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, 1, &pose);
+      world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, b.built, &pose);
     }
   }
 }

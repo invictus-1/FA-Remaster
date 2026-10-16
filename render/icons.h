@@ -77,6 +77,11 @@ class StrategicIcons {
   // `kind` 1: the bar of a unit's work instead (a build, an upgrade, an enhancement: how far it
   // is), filled in orange; 2: the bar of its shield (how much of it is left), filled in pale blue.
   void AddBar(Vec3 position, float fraction, float widthPixels, int kind = 0, float drop = 0, float thick = 4);
+  // How many bars have been added this frame; and the point under those added since `from` (a count
+  // before them): the middle of their width and the lower edge of the lowest, in pixels, as Draw lays
+  // them out. False when none of them was added (off the screen).
+  size_t BarCount() const { return bars_.size(); }
+  bool BarsAnchor(size_t from, float* x, float* y) const;
   // A mark over a place in the world, whatever the distance and whether the symbols are shown or
   // not: the game's pause picture over a paused unit. `icon` from MarkIcon; `lift`: screen pixels
   // above the place.
