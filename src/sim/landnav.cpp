@@ -1034,17 +1034,20 @@ void LandNavBackground(Sim& sim) {
   if (prof) g_navProf.bg += NowS() - t0;
 }
 
+// (both answers are COORDS_ToWorldPos 0x50b0f0 of a cell: its footprint centre at the height of the ground there,
+// or of the water above it unless the footprint may stand on the seabed: CAiPathNavigator::GetTargetPos 0x5ad9a9,
+// CAiNavigatorLand::GetGoalPos 0x5a3dec. Ours answered height 0; the oracle's "wn" lines show the ground's.)
 bool LandNavTarget(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
   if (!n || !n->hasTarget) return false;  // (the last target stays readable after the move ended)
-  *out = {n->target.x + SX(u) * 0.5f, 0, n->target.z + SZ(u) * 0.5f};
-  if (n->following && n->target == n->followCell) *out = {n->followPos.x, 0, n->followPos.z};
+  *out = WorldOf(*Sim::From(u->luaState()), u, n->target);
+  if (n->following && n->target == n->followCell) *out = {n->followPos.x, out->y, n->followPos.z};
   return true;
 }
 bool LandNavGoal(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
   if (!n || !n->active) return false;
-  *out = {n->goal[0] + SX(u) * 0.5f, 0, n->goal[1] + SZ(u) * 0.5f};
+  *out = WorldOf(*Sim::From(u->luaState()), u, PathCell{n->goal[0], n->goal[1]});
   return true;
 }
 int LandNavStatus(const Unit* u) {

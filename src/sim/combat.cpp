@@ -2463,6 +2463,13 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
       d->trackMobile = e->kind == Entity::Kind::Unit && BpInCategory(sim, e->blueprint, "MOBILE");
   if (TaskHasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);  // UpdatePos
   if (IsZeroV(d->lastPos)) d->lastPos = u->position;
+  // 0x5f2c22..0x5f2c72: a unit standing unpacked (Immobile) whose blueprint has AI.NeedUnpack (bp+0x48c) and that
+  // has an attacker is told SetDesiredTarget(none) (attacker vt+0x20 with an empty CAiTarget): every weapon drops
+  // what it holds and packs up, and the task's own target is taken up later. (Seen: LAND, a heavy artillery
+  // (url0304) unpacking for a target of its own was given a patrol's attack child at 1638; the original's MainGun
+  // went to WeaponPackingState in that beat and the unit could move again at 1644, ours kept its target and stood
+  // unpacked until the child's first run six beats later.)
+  if (u->unitStates.count("Immobile") && CB(u).needUnpack && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
   if (CanFlyU(u)) d->firstUpdate = false;
 }
 
