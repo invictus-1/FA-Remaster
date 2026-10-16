@@ -156,7 +156,8 @@ class GameSession {
   // Ends the other worlds alive (the menu's background), asked before the scene's samples change
   // for a new picture: they must not change while a world lives (render/world.h).
   std::function<void()> releaseWorlds;
-  // The command source the player speaks for, and the ground's height at a place of the map.
+  // The command source the player speaks for, and the ground's height at a place of the map (from
+  // a copy taken after each beat: the interface may ask while a beat runs).
   int commandSource() const { return commandSource_; }
   float TerrainHeight(float x, float z) const;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
@@ -208,6 +209,13 @@ class GameSession {
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
   // so the next beat is there when the picture's moment reaches it (the picture never waits).
   double lead_ = 0;
+  std::vector<uint16_t> heights_;  // the ground's heights as of the last beat (TerrainHeight)
+  int heightsW_ = 0, heightsH_ = 0;
+  float heightsScale_ = 0;
+  uint64_t heightsChanges_ = ~0ull;
+  void CopyHeights();
+  std::vector<int> allies_;  // the focus army's allies as of the last beat (the picture's)
+  void CopyAllies();
   double leadBeats_ = 0;         // the beats' own share of it (the longest lately, fading)
   double lastFrameSeconds_ = 0;  // the last frame's real time (Advance's `seconds`)
   void StartBeatOnThread();

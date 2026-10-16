@@ -134,6 +134,14 @@ class WorldSource {
   virtual bool GroundAt(float x, float y, float world[3]) = 0;
   virtual uint32_t UnitAt(float x, float y) = 0;
   virtual void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) = 0;
+  // The life bars of the frame about to be shown (after Draw): for each unit with bars, the middle
+  // of its bars and their lower edge, in the picture's pixels (where the original puts a unit's
+  // custom name). Empty when not known.
+  struct BarAnchor {
+    uint32_t unit;
+    float x, y;
+  };
+  virtual void LifeBarAnchors(std::vector<BarAnchor>* out) { out->clear(); }
 };
 
 }  // namespace moho::ui

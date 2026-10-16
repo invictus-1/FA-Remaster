@@ -162,33 +162,41 @@ namespace {
 struct BindingCost {
   long long calls = 0;
   double seconds = 0;
+  const char* name = "";  // (its key in BindingCosts: the map's keys stay where they are)
 };
+const char* g_bindingNow = "";  // the engine function running now (for UserState::LiveSim's log)
 std::map<std::string, BindingCost>& BindingCosts() {
   static std::map<std::string, BindingCost> costs;  // (a map: the records stay where they are)
   return costs;
 }
-bool Profiling() {
-  static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr;
+bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited)
+  static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr || std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
   return on;
 }
 int TimedBinding(lua_State* L) {
   auto f = reinterpret_cast<lua_CFunction>(lua_touserdata(L, lua_upvalueindex(1)));
   auto* cost = static_cast<BindingCost*>(lua_touserdata(L, lua_upvalueindex(2)));
+  const char* outer = g_bindingNow;
+  g_bindingNow = cost->name;
   const auto t0 = std::chrono::steady_clock::now();
   const int results = f(L);  // (an error leaves the call uncounted)
   cost->seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   ++cost->calls;
+  g_bindingNow = outer;
   return results;
 }
 void PushBinding(lua_State* L, const std::string& name, lua_CFunction f) {
   if (!Profiling()) return lua_pushcfunction(L, f);
+  auto& entry = *BindingCosts().try_emplace(name).first;
+  entry.second.name = entry.first.c_str();
   lua_pushlightuserdata(L, reinterpret_cast<void*>(f));
-  lua_pushlightuserdata(L, &BindingCosts()[name]);
+  lua_pushlightuserdata(L, &entry.second);
   lua_pushcclosure(L, TimedBinding, 2);
 }
 }  // namespace
 
 bool BindingProfileOn() { return Profiling(); }
+const char* CurrentBindingName() { return g_bindingNow; }
 void AddProfileCost(const char* part, double seconds) {
   if (!Profiling()) return;
   BindingCost& cost = BindingCosts()[part];

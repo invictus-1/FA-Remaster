@@ -23,6 +23,8 @@ void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFuncti
 // function's work counted under its own name ("(GetRightMouseButtonOrder: UnitUnder)").
 bool BindingProfileOn();
 void AddProfileCost(const char* part, double seconds);
+// The engine function a script is in now ("" when none, or the profile is off).
+const char* CurrentBindingName();
 
 // Push moho.<name> for an engine class ("CMauiBitmap" -> moho.bitmap_methods).
 void PushUserClassTable(lua_State* L, const char* cppClass);

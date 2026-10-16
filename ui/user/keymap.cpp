@@ -593,6 +593,28 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  {  // the custom names' four (CustomNameStyle; a value left out leaves it, the switch toggles)
+    const std::string key = Upper(name);
+    const size_t at = rest.find_first_not_of(" \t");
+    const std::string value = at == std::string::npos ? std::string() : rest.substr(at, rest.find_last_not_of(" \t") - at + 1);
+    CustomNameStyle& names = CustomNames();
+    if (key == "UI_RENDERCUSTOMNAMES") {
+      names.on = value.empty() ? !names.on : (value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0);
+      return;
+    }
+    if (key == "UI_CUSTOMNAMECOLOR") {  // (as hex, "ff00aa00", or a number)
+      if (!value.empty()) names.color = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, value.size() == 8 ? 16 : 0));
+      return;
+    }
+    if (key == "UI_CUSTOMNAMEFONTSIZE") {
+      if (!value.empty()) names.size = std::max(4, std::atoi(value.c_str()));
+      return;
+    }
+    if (key == "UI_CUTSOMNAMEFONT") {  // (the exe's own spelling)
+      if (!value.empty()) names.font = value;
+      return;
+    }
+  }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");
     bool& on = UserState::From(L)->lifeBarsOnEnemies;

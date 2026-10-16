@@ -53,7 +53,20 @@ struct GameSession::Picture : WorldSource {
   int cameraW = 0, cameraH = 0;
   bool vsync = true;
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
+  // The moment the frame shows, once fixed this frame by LifeBarAnchors (PresentToWindow takes
+  // the same, so the bars it draws are those the anchors were of).
+  double moment = 0;
+  bool momentFixed = false;
   bool DrawsToWindow() const override { return direct; }
+  void LifeBarAnchors(std::vector<BarAnchor>* out) override {
+    out->clear();
+    if (!direct || cameraW <= 0 || !session) return;
+    moment = session->PictureTick(), momentFixed = true;
+    std::vector<render::WorldPicture::LifeBarAnchor> anchors;
+    picture.LifeBarAnchors(camera, cameraW, cameraH, moment, &anchors);
+    out->reserve(anchors.size());
+    for (const auto& a : anchors) out->push_back({a.unit, a.x, a.y});
+  }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
     render::Camera cam;
@@ -161,15 +174,7 @@ struct GameSession::Picture : WorldSource {
     }
     lookNow = looks;
     lookApplied = true;
-    if (session && session->sim_) {
-      const int focus = session->sim_->focusArmy + 1;
-      std::vector<int> allies;
-      for (const ArmyView& a : ArmyViews(*session->sim_))
-        if (focus >= 1 && a.index >= 1 && a.index != focus && focus <= static_cast<int>(a.alliance.size()) &&
-            a.alliance[static_cast<size_t>(focus - 1)] == 2)
-          allies.push_back(a.index);
-      picture.SetAllies(allies);
-    }
+    if (session && session->sim_) picture.SetAllies(session->allies_);  // (as of the last beat: SetScene may come while one runs)
   }
   const uint32_t* DrawMinimap(int width, int height) override {
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
@@ -569,6 +574,9 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", secs(t0, t1), secs(t1, t2));
   sim_ = std::move(sim);
+  heightsChanges_ = ~0ull;
+  CopyHeights();
+  CopyAllies();
   pendingSync_ = sim_->TakeSync();
   if (session.focusArmy >= 0 && session.focusArmy < static_cast<int>(h.armies.size())) commandSource_ = h.armies[session.focusArmy].source;
   modUids_ = uids;
@@ -687,7 +695,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   std::vector<uint8_t> rgba;
   if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
-  const double moment = PictureTick();
+  const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
+  pic.momentFixed = false;
   if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, moment);
   FrameTimes& times = Times();
   // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
@@ -715,6 +724,7 @@ void GameSession::CaptureWindow(const std::string& path) {
 void GameSession::OpenPictureIfDue() {
   if (!pictureDue_ || !window || !sim_) return;
   pictureDue_ = false;
+  WaitForWorker();  // (GameStarted reads the simulation)
   OpenPicture();
 }
 
@@ -965,6 +975,8 @@ void GameSession::NotePictureBeat() {
 }
 
 void GameSession::NoteBeatHere() {
+  CopyHeights();
+  CopyAllies();
   const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
@@ -1062,7 +1074,34 @@ void GameSession::RunFirstBeat() {
 }
 
 float GameSession::TerrainHeight(float x, float z) const {
-  return sim_ && sim_->map() ? sim_->map()->TerrainHeight(x, z) : 0.0f;
+  if (heights_.empty()) return 0.0f;
+  return TerrainHeightOf(heights_.data(), heightsW_, heightsH_, heightsScale_, x, z);
+}
+
+// The ground's heights copied from the simulation's map when they changed (a building flattens
+// ground; the engine's change counter): only between beats, never while one runs.
+// The focus army's allies (the picture's life bars and colours), worked out after each beat.
+void GameSession::CopyAllies() {
+  allies_.clear();
+  if (!sim_) return;
+  const int focus = sim_->focusArmy + 1;
+  for (const ArmyView& a : ArmyViews(*sim_))
+    if (focus >= 1 && a.index >= 1 && a.index != focus && focus <= static_cast<int>(a.alliance.size()) &&
+        a.alliance[static_cast<size_t>(focus - 1)] == 2)
+      allies_.push_back(a.index);
+}
+
+void GameSession::CopyHeights() {
+  const TerrainMap* map = sim_ ? sim_->map() : nullptr;
+  if (!map) {
+    heights_.clear();
+    return;
+  }
+  if (map->changes() == heightsChanges_ && !heights_.empty()) return;
+  heightsW_ = map->width(), heightsH_ = map->height(), heightsScale_ = map->heightScale();
+  const uint16_t* raw = map->heightData();
+  heights_.assign(raw, raw + static_cast<size_t>(heightsW_ + 1) * static_cast<size_t>(heightsH_ + 1));
+  heightsChanges_ = map->changes();
 }
 
 uint32_t GameSession::tick() const { return sim_ ? sim_->tick() : 0; }

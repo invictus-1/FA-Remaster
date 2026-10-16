@@ -440,6 +440,74 @@ Entity::~Entity() {
   if (positionRef != LUA_NOREF && positionState) luaL_unref(positionState, LUA_REGISTRYINDEX, positionRef);
 }
 
+// CTextureScroller::Tick 0x777730 (switch on the type, 0x777746; type 0 and anything above 3 do nothing).
+void TextureScrollerTick(Entity* e, const Vec3& cp, const Quat& cq, const Vec3& pp, const Quat& pq) {
+  TextureScroller* s = e->scroller.get();
+  if (!s) return;
+  switch (s->type) {
+    case TextureScroller::kPingPong: {  // 0x77774d
+      // per offset: count down; at 0 flip between ping and pong and hold the new value floor(seconds x 10) beats
+      // (x 10.0f 0xdff31c, then frndint corrected down: 0x777791..0x7777a4)
+      bool flipped = false;
+      for (int i = 0; i < 2; ++i) {
+        if (--s->beatsLeft[i] > 0) continue;
+        s->ping[i] = !s->ping[i];
+        flipped = true;
+        const float beats = (s->ping[i] ? s->f[2 * i] : s->f[2 * i + 1]) * 10.0f;
+        s->beatsLeft[i] = static_cast<int32_t>(std::floor(beats));
+      }
+      if (!flipped) return;
+      // either flipped: both offsets jump to their values, before = after (no blending, 0x77781c..0x777834)
+      const float a = s->ping[0] ? s->f[4] : s->f[6];
+      const float b = s->ping[1] ? s->f[5] : s->f[7];
+      e->scrollPrev[0] = e->scroll[0] = a;
+      e->scrollPrev[1] = e->scroll[1] = b;
+      return;
+    }
+    case TextureScroller::kManual:  // 0x777844: a constant amount per beat
+      e->scrollPrev[0] = e->scroll[0];
+      e->scrollPrev[1] = e->scroll[1];
+      e->scroll[0] = e->scroll[0] + s->f[0];
+      e->scroll[1] = s->f[1] + e->scroll[1];
+      return;
+    case TextureScroller::kThread: {  // 0x77788d: treads
+      // The entity's committed transform (+0x9c: quaternion w, x, y, z, then the position +0xac) against the one
+      // before it (+0xb8, +0xc8): nothing at all when the position did not change (0x4f0a50, a 12-byte memcmp),
+      // so neither offset is touched while a unit stands, nor while it turns without its position changing.
+      if (std::memcmp(&cp, &pp, sizeof(Vec3)) == 0) return;
+      // Each transform's x axis (the quaternion's matrix, first column) and the point sideDist out along it on
+      // either side: how far each point moved along the mean of the two transforms' z axes (forward), times
+      // scrollMult, is added to its offset. Offset 0 is the +x side's, offset 1 the -x side's. In the exe's
+      // order of operations (0x7778cb..0x777d00).
+      const float two = 2.0f, sd = s->sideDist;
+      const float bXx = 1.0f - (pq.z * pq.z + pq.y * pq.y) * two;
+      const float bXy = (pq.z * pq.w + pq.y * pq.x) * two;
+      const float bXz = (pq.z * pq.x - pq.y * pq.w) * two;
+      const float aXx = 1.0f - (cq.z * cq.z + cq.y * cq.y) * two;
+      const float aXy = (cq.y * cq.x + cq.z * cq.w) * two;
+      const float aXz = (cq.z * cq.x - cq.y * cq.w) * two;
+      const float dpx = (cp.x + aXx * sd) - (pp.x + bXx * sd);
+      const float dpy = (cp.y + aXy * sd) - (pp.y + bXy * sd);
+      const float dpz = (cp.z + aXz * sd) - (pp.z + bXz * sd);
+      const float dmx = (cp.x - aXx * sd) - (pp.x - bXx * sd);
+      const float dmy = (cp.y - aXy * sd) - (pp.y - bXy * sd);
+      const float dmz = (cp.z - aXz * sd) - (pp.z - bXz * sd);
+      const float zx = ((cq.y * cq.w + cq.z * cq.x) * two + (pq.y * pq.w + pq.z * pq.x) * two) * 0.5f;
+      const float zy = ((cq.z * cq.y - cq.x * cq.w) * two + (pq.z * pq.y - pq.w * pq.x) * two) * 0.5f;
+      const float zz = ((1.0f - (cq.x * cq.x + cq.y * cq.y) * two) + (1.0f - (pq.x * pq.x + pq.y * pq.y) * two)) * 0.5f;
+      const float up = ((zz * dpz + zy * dpy) + zx * dpx) * s->scrollMult;
+      const float um = ((zx * dmx + zz * dmz) + zy * dmy) * s->scrollMult;
+      e->scrollPrev[0] = e->scroll[0];
+      e->scrollPrev[1] = e->scroll[1];
+      e->scroll[0] = e->scroll[0] + up;
+      e->scroll[1] = e->scroll[1] + um;
+      return;
+    }
+    default:
+      return;
+  }
+}
+
 namespace {
 
 Entity* E(lua_State* L) { return CheckObject<Entity>(L, 1); }
@@ -690,6 +758,82 @@ int l_SetVizTo(lua_State* L) {
   const char* s = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
   e->viz[Which] = !strcmp(s, "Always") ? 1 : !strcmp(s, "Never") ? 2 : !strcmp(s, "Intel") ? 3 : 0;
   return 0;
+}
+// ---- texture scrollers (entity.h TextureScroller) ---------------------------------------------
+// Entity:AddThreadScroller(sideDist, scrollMult) 0x6912e0, AddPingPongScroller(ping1, pingSpeed1, pong1,
+// pongSpeed1, ping2, pingSpeed2, pong2, pongSpeed2) 0x691500, AddManualScroller(scrollSpeed1, scrollSpeed2)
+// 0x6910b0, RemoveScroller() 0x6918c0. Each tests its count of arguments first ("%s\n  expected %d args, but got
+// %d", 0xe0a220, with its usage line, 0xe28990 / 0xe289d8 / 0xe28944 / 0xe28a54), then the entity, then each
+// number in order (lua_type must be number: TypeError "number", 0xe09a50), makes the entity's scroller if it
+// has none (0x691436: new 0x3c bytes, 0x676ba0) and hands it the setup (SetScroller 0x777690). Each returns 1
+// result (the last argument). FAF calls AddThreadScroller / RemoveScroller from TreadComponent
+// (defaultcomponents.lua, when a unit with Display.MovementEffects.Land.Treads.ScrollTreads starts / stops
+// moving) and AddPingPongScroller from AirUnit (Display.PingPongScroller).
+void ScrollerArgs(lua_State* L, const char* usage, int n) {
+  const int got = lua_gettop(L);
+  if (got != n) luaL_error(L, "%s\n  expected %d args, but got %d", usage, n, got);
+}
+float ScrollerNum(lua_State* L, int idx) {
+  if (lua_type(L, idx) != LUA_TNUMBER) luaL_typerror(L, idx, "number");
+  return static_cast<float>(lua_tonumber(L, idx));
+}
+// CTextureScroller::SetScroller 0x777690: the setup (type, the eight numbers, sideDist, scrollMult) is copied
+// over the old one. RemoveScroller's (type 0) puts the offsets back where they were before the last step
+// (+0x100 := +0xf8, +0x104 := +0xfc); a ping-pong's two states are zeroed (it flips at its first step). The
+// offsets themselves are kept: a new thread scroller goes on from where the last one left them.
+void SetScroller(Entity* e, const TextureScroller& s) {
+  if (!e->scroller) e->scroller = std::make_unique<TextureScroller>();
+  TextureScroller& t = *e->scroller;
+  t.type = s.type;
+  for (int i = 0; i < 8; ++i) t.f[i] = s.f[i];
+  t.sideDist = s.sideDist;
+  t.scrollMult = s.scrollMult;
+  if (t.type == TextureScroller::kNone) {
+    e->scroll[0] = e->scrollPrev[0];
+    e->scroll[1] = e->scrollPrev[1];
+  } else if (t.type == TextureScroller::kPingPong) {
+    t.ping[0] = t.ping[1] = false;
+    t.beatsLeft[0] = t.beatsLeft[1] = 0;
+  }
+}
+int l_AddThreadScroller(lua_State* L) {
+  ScrollerArgs(L, "Entity:AddThreadScroller(sideDist, scrollMult)", 3);
+  Entity* e = E(L);
+  TextureScroller s;
+  s.type = TextureScroller::kThread;
+  s.sideDist = ScrollerNum(L, 2);
+  s.scrollMult = ScrollerNum(L, 3);
+  SetScroller(e, s);
+  return 1;
+}
+int l_AddPingPongScroller(lua_State* L) {
+  ScrollerArgs(L,
+               "Entity:AddPingPongScroller(ping1, pingSpeed1, pong1, pongSpeed1, ping2, pingSpeed2, pong2, "
+               "pongSpeed2)",
+               9);
+  Entity* e = E(L);
+  TextureScroller s;
+  s.type = TextureScroller::kPingPong;
+  // (the arguments' places in the setup, 0x691606..0x6917cd)
+  static const int kSlot[8] = {4, 0, 6, 1, 5, 2, 7, 3};
+  for (int i = 0; i < 8; ++i) s.f[kSlot[i]] = ScrollerNum(L, 2 + i);
+  SetScroller(e, s);
+  return 1;
+}
+int l_AddManualScroller(lua_State* L) {
+  ScrollerArgs(L, "Entity:AddManualScroller(scrollSpeed1, scrollSpeed2)", 3);
+  Entity* e = E(L);
+  TextureScroller s;
+  s.type = TextureScroller::kManual;
+  s.f[0] = ScrollerNum(L, 2);
+  s.f[1] = ScrollerNum(L, 3);
+  SetScroller(e, s);
+  return 1;
+}
+int l_RemoveScroller(lua_State* L) {
+  ScrollerArgs(L, "Entity:RemoveScroller()", 1);
+  SetScroller(E(L), TextureScroller{});
+  return 1;
 }
 // ---- bones ------------------------------------------------------------------------------------
 // Bone 0 is the root; an entity without a mesh has just that one. -1 means the entity itself.
@@ -1104,6 +1248,10 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "Entity", "SetVizToAllies", l_SetVizTo<1>);
   SetMethod(L, "Entity", "SetVizToEnemies", l_SetVizTo<2>);
   SetMethod(L, "Entity", "SetVizToNeutrals", l_SetVizTo<3>);
+  SetMethod(L, "Entity", "AddThreadScroller", l_AddThreadScroller);
+  SetMethod(L, "Entity", "AddPingPongScroller", l_AddPingPongScroller);
+  SetMethod(L, "Entity", "AddManualScroller", l_AddManualScroller);
+  SetMethod(L, "Entity", "RemoveScroller", l_RemoveScroller);
   SetMethod(L, "Entity", "GetBoneCount", l_GetBoneCount);
   SetMethod(L, "Entity", "CreatePropAtBone", l_CreatePropAtBone);
   SetMethod(L, "Entity", "IsValidBone", l_IsValidBone);

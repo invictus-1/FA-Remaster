@@ -396,6 +396,7 @@ int main(int argc, char** argv) {
   ui::UserState* shown = front.get();
   auto startGameInterface = [&]() {
     if (game || !session.running()) return;
+    session.WaitForWorker();  // (no Lua state is made while a beat runs: the engine's rule)
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
     // (A new state is made for the size the head has NOW: the window may have been resized.)
     cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
@@ -406,6 +407,8 @@ int main(int argc, char** argv) {
     gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
     gameCfg.liveSim = session.sim();
     gameCfg.waitForBeat = [&session]() { session.WaitForWorker(); };
+    gameCfg.groundHeight = [&session](float x, float z) { return session.TerrainHeight(x, z); };
+    gameCfg.beatRunning = [&session]() { return session.BeatRunning(); };
     gameCfg.commandSource = session.commandSource();
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;
@@ -437,6 +440,7 @@ int main(int argc, char** argv) {
   auto leaveOrRestart = [&]() {
     int request = ui::TakeSessionRequest();
     if (!request || !session.running()) return;
+    session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
     cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now)
     shown = front.get();
     game.reset();
@@ -486,7 +490,12 @@ int main(int argc, char** argv) {
       // The game's beats on a thread of their own, the window showing the world meanwhile
       // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
       session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;
-      hooks.busy = [&]() { return session.BeatRunning(); };
+      // The interface, input and camera run during a beat too (the original's way: its interface
+      // reads copies, not the running simulation): what asks the simulation every frame answers
+      // from copies taken between beats, the rest waits for the beat (UserState::LiveSim;
+      // MOHO64UI_BEAT_LOG=1 names each wait). MOHO64UI_SHOW_ONLY_DURING_BEATS=1: frames during a
+      // beat only show the picture, as before.
+      if (std::getenv("MOHO64UI_SHOW_ONLY_DURING_BEATS") != nullptr) hooks.busy = [&]() { return session.BeatRunning(); };
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
@@ -494,11 +503,13 @@ int main(int argc, char** argv) {
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();
                            listen();
-                           if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           if (!game) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
                            startGameInterface();
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
-                             if (game && ++capturedFrames == 300) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
+                             // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given)
+                             static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
+                             if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                            }
                            // LAST: a beat it starts on its own thread runs beside nothing more of

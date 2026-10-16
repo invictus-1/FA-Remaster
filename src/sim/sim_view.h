@@ -64,6 +64,33 @@ struct UnitView {
   // progress while it comes up, 0 when it is down or switched off. So hasShield with 0 is a shield that is down.
   bool hasShield = false;
   float shieldRatio = 0;
+  // The texture scroll of its mesh (a tank's treads; AirUnit's ping-pong): the original's two offsets as the
+  // simulation left them this beat (entity+0x100 / +0x104 -> scroll) and before this beat's step (+0xf8 / +0xfc
+  // -> scrollPrev). Unwrapped (they grow without bound while a tank drives; the texture wraps them). The
+  // original draws, per frame (0x7e8276, the D3D9 instance packer 0x945334):
+  //   f = the frame's fraction of the way from the last beat to this one, 0..1 (the global 0x10a6410, which
+  //       MeshInstance::UpdateInterpolatedFields 0x7dec95 also blends the unit's transform by)
+  //   material.z = scrollPrev[0] + (scroll[0] - scrollPrev[0]) * f
+  //   material.w = scrollPrev[1] + (scroll[1] - scrollPrev[1]) * f
+  //   anim.w     = 255 when the drawn LOD's mesh blueprint has Scrolling = true (DisplayLod::scrolling), else 0
+  // and mesh.fx's ComputeScrolledTexcoord adds material.z to texcoord0.x and .z of the vertices with
+  // texcoord0.y > 0.95, material.w to those with 0.90 < texcoord0.y <= 0.95. Use scrollPrev as given, NOT last
+  // beat's scroll: a ping-pong sets both to its new value (a jump, no blend), RemoveScroller puts scroll back to
+  // scrollPrev, and a standing tank's step changes neither (so a scroller still on while it stands blends the
+  // same last step again every beat, as the original does).
+  // How the simulation moves them (CTextureScroller::Tick 0x777730, once a beat at the start of the unit's turn,
+  // from its committed transform C = (q, p) and the one before it P; entity.h TextureScroller):
+  //   AddThreadScroller(sideDist, mult) (FAF: 1, Treads.ScrollMultiplier or 0.2): if p_C == p_P (bitwise) no
+  //     change; else X = each transform's local +x axis in the world, Z = (Z_C + Z_P) * 0.5 (local +z, forward),
+  //     scrollPrev = scroll, scroll[0] += dot(Z, (p_C + X_C sd) - (p_P + X_P sd)) * mult (the +x side's point),
+  //     scroll[1] += dot(Z, (p_C - X_C sd) - (p_P - X_P sd)) * mult (the -x side's): forward motion of each tread,
+  //     with the turn's part opposite on the two sides. Positive when driving forward.
+  //   AddManualScroller(a, b): scrollPrev = scroll; scroll += (a, b) every beat.
+  //   AddPingPongScroller(...): both jump between their ping and pong values at the blueprint's timing.
+  //   RemoveScroller(): scroll = scrollPrev, and no more steps.
+  // All 0 for a unit that never had a scroller.
+  float scrollPrev[2] = {0, 0};
+  float scroll[2] = {0, 0};
 };
 
 // An entity a script made that is neither unit, projectile nor prop (a shield bubble, a build frame, the pieces
@@ -334,6 +361,9 @@ uint32_t SessionSeed(const Sim& sim);
 struct DisplayLod {
   std::string mesh, albedo, normals, specular, secondary, lookup, shader;  // the game's virtual paths; "" = not set
   float cutoff = 0;                                                        // LODCutoff (0: not set)
+  // Scrolling (RMeshBlueprintLOD+0xc8 -> MeshLOD+0xac, MeshLOD::Load 0x7dd025 -> the batch +0x3c, 0x7e712b): the
+  // mesh's texture scrolls by the unit's UnitView::scroll; it is the instance's anim.w (255) in mesh.fx
+  bool scrolling = false;
 };
 struct BlueprintDisplay {
   std::string id;          // as UnitView::blueprint and ProjectileView::blueprint name it (a prop: its .bp path)

@@ -16,6 +16,7 @@
 
 #include "core/log.h"
 #include "maui/control.h"
+#include "maui/font.h"
 #include "maui/input.h"
 #include "maui/world_source.h"
 #include "script/script_handle.h"
@@ -430,6 +431,8 @@ class WorldView : public Control {
   bool miniMap = false;
   bool cartographic = false, resources = false, inputLocked = false, globalCameraCommands = false, highlight = true;
   bool customRender = false;  // the script wants to draw into the world each frame (see SetCustomRender)
+  std::string rightOrder;     // GetRightMouseButtonOrder's last answer (given while a beat runs)
+  bool rightOrderKnown = false;
 
   // The picture of the world this view shows (the main view only: the renderer has one picture,
   // and a minimap would need a second), as it was last asked for.
@@ -470,12 +473,27 @@ class WorldView : public Control {
     int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
     if (w <= 0 || h <= 0) return false;
     WorldCamera cam = CameraFor(L);
-    Sim* sim = user->LiveSim("the picture's camera");
-    if (sim && sim->map()) cam.target[1] = sim->map()->TerrainHeight(cam.target[0], cam.target[2]);
+    if (user->config().groundHeight) cam.target[1] = user->config().groundHeight(cam.target[0], cam.target[2]);
+    // The simulation itself only for building sites (outlines, the ghost under the mouse): it waits
+    // for a beat running on its thread, so only then (UserState::LiveSim).
+    const bool hasSim = user->HasSim();
+    Sim* simNow = nullptr;
+    auto sim = [&]() -> Sim& {
+      if (!simNow) simNow = user->LiveSim("the picture's scene: building sites");
+      return *simNow;
+    };
     bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
+    // While a beat runs on its own thread the picture keeps the scene it last had (the selection's
+    // marks and order lines, the rings, the mark under the mouse: at most a beat old, and they
+    // would ask the simulation); only the camera is new.
+    if (sceneMade_ && user->config().beatRunning && user->config().beatRunning()) {
+      pixels_ = source->Draw(cam, w, h);
+      pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
+      return pixels_ != nullptr;
+    }
     // (Its parts are timed under their own names in the binding profile.)
     const bool timed = BindingProfileOn();
     auto t = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -496,8 +514,8 @@ class WorldView : public Control {
     waypoints_.clear();
     SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued, &waypoints_);
     lap("(the picture's scene: the selection)");
-    if (sim) {
-      for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff10d010u, &scene.lines);
+    if (hasSim && !queued.empty()) {
+      for (const WorldGhost& site : queued) SiteOutline(L, sim(), site, 0xff10d010u, &scene.lines);
     }
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
@@ -513,7 +531,7 @@ class WorldView : public Control {
     std::string mode, name;
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();
-    const bool building = sim && (mode == "build" || mode == "buildanchored") && !name.empty();
+    const bool building = hasSim && (mode == "build" || mode == "buildanchored") && !name.empty();
     // While a building is being placed every building that stands shows the outline of the
     // ground it takes, so that the new one can be set against it: the original's
     // DrawAllUnitSkirts (0x85ad80: a rectangle of the blueprint's skirt in 0xc00080ff round each
@@ -530,20 +548,20 @@ class WorldView : public Control {
     if (building) {
       std::vector<WorldGhost> standing;
       StructuresForWorld(L, cam.target, std::max(100.0f, cam.distance * 2.0f), &standing);
-      for (const WorldGhost& g : standing) SiteOutline(L, *sim, g, 0xc00080ffu, &scene.lines);
+      for (const WorldGhost& g : standing) SiteOutline(L, sim(), g, 0xc00080ffu, &scene.lines);
       // and round the buildings ordered and not begun, the guide's green (the original draws
       // its green over the blue for a building that is still someone's order)
-      for (const WorldGhost& g : ordered) SiteOutline(L, *sim, g, 0xff10d010u, &scene.lines);
+      for (const WorldGhost& g : ordered) SiteOutline(L, sim(), g, 0xff10d010u, &scene.lines);
     }
     if (building && pixels_ && HitTest(ui.mouseX, ui.mouseY)) {
       float at[3];
       WorldGhost ghost;
       if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
-          BuildRow(L, *sim, name, buildFrom_, at, &scene.ghosts, buildShift_);
+          BuildRow(L, sim(), name, buildFrom_, at, &scene.ghosts, buildShift_);
         } else if (ActiveBuildTemplate(L)) {  // a template: all its buildings round the mouse
-          BuildRow(L, *sim, name, at, at, &scene.ghosts, KeyIsDown(L, kKeyShift));
-        } else if (BuildSiteOf(*sim, name, at, ghost.position, &ghost.free)) {
+          BuildRow(L, sim(), name, at, at, &scene.ghosts, KeyIsDown(L, kKeyShift));
+        } else if (BuildSiteOf(sim(), name, at, ghost.position, &ghost.free)) {
           if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, KeyIsDown(L, kKeyShift))) ghost.free = false;
           ghost.blueprint = name;
           scene.ghosts.push_back(ghost);
@@ -554,7 +572,7 @@ class WorldView : public Control {
     const bool placing = !scene.ghosts.empty();
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
-    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, *sim, g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
+    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, sim(), g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
     scene.ghosts.insert(scene.ghosts.end(), ordered.begin(), ordered.end());
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
@@ -578,7 +596,31 @@ class WorldView : public Control {
     pixels_ = source->Draw(cam, w, h);
     lap("(the picture's scene: Draw)");
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
+    sceneMade_ = true;
     return pixels_ != nullptr;
+  }
+  bool sceneMade_ = false;  // a scene has been given to the picture (EnsurePicture)
+
+  // The names players give their units, under their life bars as the original draws them (FA exe
+  // sub_85E0A0, only for units in the life bars' list, never in the minimap; read by a helper,
+  // REQUESTS 23): centred, floor(x - width / 2), a line's height below the bars' lower edge
+  // (INFERRED: that this y is the text's top; the exe's font routine 0x426470 is not read), a black
+  // shadow one pixel right and down, then the text in its colour. The picture gives the bars of
+  // the frame about to be shown (WorldPicture::LifeBarAnchors), so the names are of that moment.
+  void DrawCustomNames(lua_State* L, DrawTarget& target, const Rect& r) {
+    const CustomNameStyle& style = CustomNames();
+    if (!style.on || miniMap || !AnyCustomNames(L)) return;  // (else nothing is asked of the picture)
+    std::vector<WorldSource::BarAnchor> anchors;
+    UserState::From(L)->config().world->LifeBarAnchors(&anchors);
+    const FontMetrics m = GetFontMetrics(style.font, style.size);
+    for (const WorldSource::BarAnchor& a : anchors) {
+      const std::string* name = CustomNameOf(L, a.unit);
+      if (!name) continue;
+      const float w = StringAdvance(style.font, style.size, *name);
+      const float x = r.x0 + std::floor(a.x - w * 0.5f), top = r.y0 + std::floor(a.y + m.height);
+      DrawString(target, style.font, style.size, *name, x + 1, top + 1 + m.ascent, 0xff000000u);
+      DrawString(target, style.font, style.size, *name, x, top + m.ascent, style.color);
+    }
   }
 
   // The game script's command mode (the original asks it the same way: commandmode.GetCommandMode(),
@@ -636,6 +678,7 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
       target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    DrawCustomNames(L, target, r);
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
     if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {
@@ -746,8 +789,8 @@ class WorldView : public Control {
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
-    Sim* sim = UserState::From(L)->LiveSim("unproject");
-    world[1] = sim && sim->map() ? sim->map()->TerrainHeight(world[0], world[2]) : 0.0f;
+    const auto& ground = UserState::From(L)->config().groundHeight;  // (the copy after each beat: no waiting)
+    world[1] = ground ? ground(world[0], world[2]) : 0.0f;
   }
 
   // Selecting with the mouse (first version): a left press starts it; let go on the spot, the unit
@@ -1174,7 +1217,15 @@ int l_ViewNothing(lua_State* L) {
 // RULEUCC name; nil for none), FA exe 0x871d40. The script picks the cursor by it.
 int l_ViewRightMouseButtonOrder(lua_State* L) {
   WorldView* v = View(L);
-  UiManager& ui = UserState::From(L)->ui();
+  UserState* user = UserState::From(L);
+  UiManager& ui = user->ui();
+  // (Asked by the cursor's script every frame; while a beat runs on its own thread the answer
+  // from before it, not a wait for it: the cursor may change up to a beat late.)
+  if (user->config().beatRunning && user->config().beatRunning() && v->rightOrderKnown) {
+    if (v->rightOrder.empty()) lua_pushnil(L);
+    else lua_pushstring(L, v->rightOrder.c_str());
+    return 1;
+  }
   std::string mode, name, order;
   v->CommandMode(L, &mode, &name);  // none while the script is in a command mode, as the original
   if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) {
@@ -1202,6 +1253,7 @@ int l_ViewRightMouseButtonOrder(lua_State* L) {
       lap("(GetRightMouseButtonOrder: something to reclaim there)");
     }
   }
+  v->rightOrder = order, v->rightOrderKnown = true;
   if (order.empty()) lua_pushnil(L);
   else lua_pushstring(L, order.c_str());
   return 1;
@@ -1413,9 +1465,9 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
   if (it == user->cameras.end()) return false;
   const Camera* c = static_cast<const Camera*>(it->second.get());
   if (!c->placed) return false;
-  Sim* sim = user->LiveSim("the sound listener");
+  const auto& ground = user->config().groundHeight;  // (the copy after each beat: no waiting)
   focus[0] = c->focus[0], focus[2] = c->focus[2];
-  focus[1] = sim && sim->map() ? sim->map()->TerrainHeight(focus[0], focus[2]) : c->focus[1];
+  focus[1] = ground ? ground(focus[0], focus[2]) : c->focus[1];
   // (The eye by the picture's source's rule: back from the focus by heading and pitch.)
   float turn = c->heading - kPi, pitch = PitchOf(c), distance = EyeDistance(c);
   float sh = std::sin(turn), ch = std::cos(turn), sp = std::sin(pitch), cp = std::cos(pitch);
@@ -1523,6 +1575,10 @@ void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
 LookSettings& Looks() {
   static LookSettings looks;
   return looks;
+}
+CustomNameStyle& CustomNames() {
+  static CustomNameStyle style;
+  return style;
 }
 FramePacing& Pacing() {
   static FramePacing pacing;

@@ -344,6 +344,9 @@ void SetObjectValue(lua_State* L, ScriptObject* obj, const char* key, int valueI
 void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // nil if unset
 
 void RegisterEntityBindings(lua_State* L);
+// The entity's texture scroller's step (entity.h TextureScroller; CTextureScroller::Tick 0x777730), first thing in
+// its own turn: cur / prev are its committed transform and the one before it (entity+0x9c / +0xb8).
+void TextureScrollerTick(Entity* e, const Vec3& curPos, const Quat& curOri, const Vec3& prevPos, const Quat& prevOri);
 void RegisterEffectBindings(lua_State* L);
 void ReleaseEffectObjects();
 // A script played a sound once on e (the sound object at stack index arg): listed for the host while

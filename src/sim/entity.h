@@ -30,6 +30,26 @@ struct CollisionShape {
   float radius = 0;
 };
 
+// An entity's texture scroller (CTextureScroller, 0x3c bytes at entity+0x1f0, made by the first of
+// Entity:AddThreadScroller / AddPingPongScroller / AddManualScroller / RemoveScroller, ctor 0x676ba0). Every
+// one of those calls hands CTextureScroller::SetScroller 0x777690 a whole SScroller (type, eight numbers,
+// sideDist, scrollMult: 0x2c bytes copied over the old one); the other numbers of a call are 0, and its sideDist
+// and scrollMult 1 unless it is AddThreadScroller. It is stepped by CTextureScroller::Tick 0x777730 at the very
+// start of the entity's own turn (Entity::TaskTick 0x679c51) and only moves the entity's two texture offsets,
+// Entity::scroll below, which nothing in the simulation reads (entities.cpp, TextureScrollerTick).
+struct TextureScroller {
+  enum Type : uint8_t { kNone = 0, kPingPong = 1, kManual = 2, kThread = 3 };
+  uint8_t type = kNone;  // +0x04
+  // +0x08..+0x24. PingPong: [0] Ping1Speed, [1] Pong1Speed, [2] Ping2Speed, [3] Pong2Speed (seconds a value is
+  // held), [4] Ping1, [5] Ping2, [6] Pong1, [7] Pong2 (the values). Manual: [0], [1] added per beat. Thread: unused.
+  float f[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  float sideDist = 1, scrollMult = 1;  // +0x28, +0x2c (Thread)
+  // PingPong's state per offset (+0x30 bytes, +0x34 ints): which value it holds (true: the ping) and the beats
+  // left until it flips. Zeroed by SetScroller for a PingPong only.
+  bool ping[2] = {false, false};
+  int32_t beatsLeft[2] = {0, 0};
+};
+
 class Entity : public ScriptObject {
  public:
   Entity() { typeBits |= kTypeEntity; }
@@ -52,6 +72,14 @@ class Entity : public ScriptObject {
   std::string mesh;
   float drawScale = 1;
   uint8_t viz[4] = {0, 0, 0, 0};
+  // The texture scroller (nullptr until a script asks for one) and the two texture offsets it moves, as the
+  // original keeps them in the entity's synced data (SSTIEntityVariableData +0x80..+0x8c = entity+0xf8..+0x104,
+  // all 0 at creation, 0x558865): scrollPrev = the offsets before this beat's step (+0xf8, +0xfc), scroll = after
+  // it (+0x100, +0x104). The original's mesh renderer draws prev + (cur - prev) x the frame's fraction between
+  // two beats (0x7e8276) into the instance's material.z (offset 0) and material.w (offset 1). Only for a host.
+  std::unique_ptr<TextureScroller> scroller;
+  float scrollPrev[2] = {0, 0};
+  float scroll[2] = {0, 0};
   // Unit:HideBone / ShowBone: per bone of the skeleton, 1 = hidden (empty: none ever hidden). Also only for a host.
   std::vector<uint8_t> hiddenBones;
   const Skeleton* skeleton = nullptr;  // bones of the mesh (nullptr: no mesh; only bone 0, the entity itself)

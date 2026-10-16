@@ -80,11 +80,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `MOHO64UI_FULL_REDRAW=1` the old way, `MOHO64UI_DIRTY_CHECK=1` compares every frame with a
   full redraw. In the window the game's beats run on a thread of their own (the simulation's
   tick and the picture's copy of it, as the renderer's viewer does), started early by about as
-  long as the last beat took, while the window keeps showing the world; the interface, input,
-  orders, sounds and sync wait for the beat (`GameSession::BeatRunning`).
-  `MOHO64UI_BEATS_HERE=1`: the beats on the main thread, as before. Measured in the renderer's
-  eight-army M28 game at beat 6000 (1600x900): the interface's drawing 8.18 -> 0.48 ms a frame;
-  the slowest 1% of frames 54 -> 8.8 ms, the longest 86 -> 10.3 ms, none over 20 ms (50 before).
+  long as the last beat took, while the interface, input and camera go on as in any frame (the
+  original's way: its interface reads copies, not the running simulation). Every look of the
+  interface at the simulation goes through `UserState::LiveSim`, which waits for a running beat
+  (the engine's rule); what is asked every frame answers from copies taken between beats instead
+  (the ground's heights, the economy, focus army, tick, armies, a unit's state until the next
+  sync, the hover info, the cursor's order, the picture's scene), so in busy games almost nothing
+  waits (`MOHO64UI_BEAT_LOG=1` names each wait and the engine function it came from). Orders,
+  sounds and sync come after the beat. `MOHO64UI_SHOW_ONLY_DURING_BEATS=1`: frames during a beat
+  only show the picture; `MOHO64UI_BEATS_HERE=1`: the beats on the main thread, as at first.
+  Measured in the renderer's eight-army M28 game at beat 6000 (1600x900): the interface's drawing
+  8.18 -> 0.48 ms a frame; frame to frame 4.17 / 4.25 / 5.05 / 5.88 ms (middle / 95% / 99% /
+  longest; with the beats on the main thread 5.4 / 33 / 54 / 86 ms).
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).
@@ -450,6 +457,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`moho64ui_unit_bars`); a script's `UI_RenderUnitBars false` puts the bars away (a cinematic)
   and `true` gives back what the player chose. (For a day the bars were off at first, by a
   choice that Chris took back on 2026-10-13.)
+- Custom unit names (Unit:SetCustomName) under the life bars, as the original draws them (FA exe
+  sub_85E0A0, read by a helper; REQUESTS 23): only for units with bars, never in the minimap,
+  centred a line below the bars with a black shadow one pixel right and down; the console's
+  `ui_RenderCustomNames` (the game's option "Always Show Custom Names", off at first),
+  `ui_CustomNameColor` (0xff00aa00), `ui_CustomNameFontSize` (12) and `ui_CutsomNameFont` (sic,
+  "Arial"). The renderer gives the bars of the frame about to be shown
+  (`WorldPicture::LifeBarAnchors`), so names and bars are of one moment. Inferred: that the
+  original's y is the text's top. Not yet: the selection-set names under them.
 - Not real yet: the other console commands, movies, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
