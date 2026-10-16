@@ -76,6 +76,7 @@
 // --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
+// --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
@@ -213,6 +214,7 @@ struct Options {
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
+  bool groundChanges = true;            // --no-ground-changes
   bool vulkan = false;                  // --vulkan
   bool fxc = false;                     // --fxc
   bool shaderCache = true;              // --no-shader-cache
@@ -309,6 +311,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
+    else if (a == "--no-ground-changes") o->groundChanges = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
@@ -1503,6 +1506,11 @@ int main(int argc, char** argv) {
         live.TakePropEvents(&changed);
         if (!changed.empty()) world.AddPropEvents(changed);
       }
+      {  // how the simulation changed the ground (laid flat under a structure)
+        std::vector<FrameGroundChange> ground;
+        live.TakeGroundChanges(&ground);
+        if (!ground.empty() && opt.groundChanges) world.ChangeGround(ground);
+      }
       CpuTimes::Part("effects");
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
@@ -1692,7 +1700,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - (haveLive ? countedFrom : start)).count();
       const int timed = haveLive ? std::max(1, frameCount - 1) : frameCount;
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
-      if (haveMap) printf("; ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
+      if (haveMap) printf("; ground: %d patches, %d triangles, %d changes by the game", terrain->drawnPatches, terrain->drawnTriangles, world.groundChanges);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (iconsOn) printf("; %d icons", icons.drawn);
       if (particles.liveParticles || particles.liveEmitters)

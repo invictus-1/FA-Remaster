@@ -200,8 +200,8 @@ class Device {
   virtual Texture CreateTexture(const TextureDesc& desc) = 0;
   // Replaces a rectangle of a texture's first level with `data` (rows `pitch` bytes apart), within a
   // frame (between BeginFrame and EndFrame), before a draw reads it. An uncompressed texture of one
-  // level and one layer (RGBA8, BGRA8, ...). For what changes every frame (an interface drawn on the
-  // processor).
+  // level and one layer (RGBA8, BGRA8, R16, ...). For what changes every frame (an interface drawn on
+  // the processor), and the ground's heights where the simulation changes them.
   virtual void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) = 0;
   virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;

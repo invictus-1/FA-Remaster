@@ -105,6 +105,14 @@ struct FrameEntity {
   bool original = false;       // drawn in the original effects' look whatever the world's (the effects stand's side by side)
 };
 
+// The ground's heights as the simulation changed them (FlattenMapRect: the ground under a structure
+// laid flat): the map's grid points [x0, x1] x [z0, z1], their heights in world units, row by row from
+// z0.
+struct FrameGroundChange {
+  int x0 = 0, z0 = 0, x1 = -1, z1 = -1;
+  std::vector<float> heights;
+};
+
 // How the scenery changed in a beat (the engine's PropEvent): a prop made after the start (wreckage),
 // one whose mesh or place changed (a burnt tree, a tree knocked over), one that is gone. A prop of
 // the map is named by its index in the map file's list of props.

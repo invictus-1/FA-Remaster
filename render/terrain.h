@@ -38,6 +38,9 @@ class Terrain {
   bool Load(const MapData* map, std::string* error);
   // Into the scene, or (`shadowPass`) into a shadow map, where only depth is written.
   void Draw(const View& view, bool shadowPass = false);
+  // The map's heights of the grid points [x0, x1] x [z0, z1] have changed (the simulation laid the
+  // ground under a structure flat): drawn so from now on. Within a frame.
+  void HeightsChanged(int x0, int z0, int x1, int z1);
 
   // On-screen size, in pixels, that one quad of the mesh should have: smaller means more triangles.
   float quadPixels = 6;

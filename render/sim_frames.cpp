@@ -8,6 +8,7 @@
 #include "core/vfs.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
+#include "sim/terrain.h"
 
 namespace render {
 namespace {
@@ -405,9 +406,27 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(b.end, v.end, sizeof b.end);
     beat.beams.push_back(b);
   }
+  // how the simulation changed the ground since the last beat (FlattenMapRect under a structure):
+  // each rectangle's heights as they are now
+  std::vector<FrameGroundChange> ground;
+  if (const moho::TerrainMap* map = sim.map()) {
+    const std::vector<moho::TerrainMap::HeightChange>& changes = map->heightChanges();
+    if (groundSeen_ > changes.size()) groundSeen_ = 0;  // (another game's map)
+    for (; groundSeen_ < changes.size(); ++groundSeen_) {
+      const moho::TerrainMap::HeightChange& c = changes[groundSeen_];
+      if (c.x0 > c.x1 || c.z0 > c.z1) continue;
+      FrameGroundChange g;
+      g.x0 = c.x0, g.z0 = c.z0, g.x1 = c.x1, g.z1 = c.z1;
+      g.heights.reserve(static_cast<size_t>(c.x1 - c.x0 + 1) * static_cast<size_t>(c.z1 - c.z0 + 1));
+      for (int z = c.z0; z <= c.z1; ++z)
+        for (int x = c.x0; x <= c.x1; ++x) g.heights.push_back(map->HeightAt(x, z));
+      ground.push_back(std::move(g));
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   for (std::string& n : fresh) names_.push_back(std::move(n));
   for (FrameEffectEvent& f : events) effectEvents_.push_back(std::move(f));
+  for (FrameGroundChange& g : ground) groundChanges_.push_back(std::move(g));
   // (a change of a prop that has one waiting, not yet taken, takes its place: a fallen tree sinks a
   // little every beat, and whoever draws only now and then needs where it is, not where it was)
   for (FramePropEvent& f : propEvents) {
@@ -486,6 +505,12 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
         break;
       }
   return true;
+}
+
+void SimFrames::TakeGroundChanges(std::vector<FrameGroundChange>* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  out->swap(groundChanges_);
 }
 
 void SimFrames::TakePropEvents(std::vector<FramePropEvent>* out) {

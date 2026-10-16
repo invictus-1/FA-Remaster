@@ -53,6 +53,8 @@ class SimFrames {
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   // How the scenery changed in the beats since the last call, in order (each says its beat).
   void TakePropEvents(std::vector<FramePropEvent>* out);
+  // How the simulation changed the ground's heights in the beats since the last call, in order.
+  void TakeGroundChanges(std::vector<FrameGroundChange>* out);
   // How the blueprints look, once: the list is handed over and this object's is emptied.
   void TakeLooks(std::vector<BlueprintLook>* out);
   // Each army's colour, by army index from 0; empty until ReadArmies.
@@ -89,6 +91,8 @@ class SimFrames {
   uint32_t sightBeat_ = 0;
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   std::vector<FramePropEvent> propEvents_;      // not yet taken
+  std::vector<FrameGroundChange> groundChanges_;  // not yet taken
+  size_t groundSeen_ = 0;  // how many of the map's height changes have been read (the simulation's thread only)
   std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
   std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;  // projectiles: the beat each was first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
