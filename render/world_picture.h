@@ -122,6 +122,10 @@ class WorldPicture {
   // to it: 1 off (as at first), 1/1.3 "Ultra Quality", 1/1.5 "Quality", 1/1.7 "Balanced", 1/2
   // "Performance". Icons, bars and the interface stay sharp. A player's option, for slower cards.
   void SetUpscale(float share);
+  // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
+  // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
+  // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).
+  void SetTextureDetail(int drop);
   // The thin bar of a unit's work (a build, an upgrade, a commander's enhancement: how far it is)
   // under where its life bar is, and the game's pause mark over a unit the player has paused. For
   // the units of the army the picture is for (SetFocusArmy; every army's when it is for none).

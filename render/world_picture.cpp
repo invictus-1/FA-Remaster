@@ -53,6 +53,7 @@ struct WorldPicture::Impl {
   bool remasteredEffects = true;       // SetRemasteredEffects
   float effectsQuality = 1;            // SetEffectsQuality
   float upscale = 1;                   // SetUpscale
+  int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -135,6 +136,7 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.hostWindow && mapPath.empty()) return true;
   m.world = std::make_unique<World>(m.device.get(), vfs);
+  m.world->textures.detail = m.textureDetail;
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
   return true;
@@ -368,6 +370,8 @@ void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on
 void WorldPicture::SetEffectsQuality(float share) { impl_->effectsQuality = share; }
 
 void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
+
+void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;

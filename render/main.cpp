@@ -77,6 +77,9 @@
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
+// --shadow-size <texels>  the sun's shadow maps' width and height (2048; 4096 sharper, 1024 and 512 cheaper)
+// --texture-detail 0|1|2  textures larger than 256 without their largest size (1) or two (2): for cards
+//           with less memory (0: all, as at first)
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
 //           x,z[,height] (else where the camera looks) every --fx-repeat seconds (2)
@@ -206,6 +209,8 @@ struct Options {
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
+  int shadowSize = 2048;                // --shadow-size
+  int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -354,6 +359,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
+    else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
     else if (a == "--fsr") {  // FSR 1's modes, or the share itself
       const std::string m = v;
       o->upscale = m == "off" ? 1.0f : m == "ultra" ? 1 / 1.3f : m == "quality" ? 1 / 1.5f : m == "balanced" ? 1 / 1.7f
@@ -627,6 +634,7 @@ int main(int argc, char** argv) {
     wo.decalTurn = opt.decalTurn;
     wo.decalRange = opt.decalRange;
     wo.verbose = opt.debug;
+    world.textures.detail = opt.textureDetail;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;
@@ -641,6 +649,7 @@ int main(int argc, char** argv) {
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.effectsQuality = opt.effectsQuality;
   world.upscale = opt.upscale;
+  world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
@@ -1637,6 +1646,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
+      printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);

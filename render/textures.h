@@ -31,12 +31,22 @@ class TextureCache {
   // and `present[i]` false. Nothing found: no texture.
   gfx::Texture Layers(const std::vector<std::string>& paths, std::vector<bool>* present);
 
+  // The texture detail setting: how many of the largest sizes to leave out of each texture loaded by
+  // path (Get, Layers) that is larger than 256 and has the smaller sizes in its file: 0 all (as at
+  // first), 1 half the width and height (a quarter of the memory), 2 a quarter. For cards with less
+  // memory. Textures already loaded keep theirs: set it before a map is opened. Map data (FromDds),
+  // cube maps and arrays of layers given whole stay whole.
+  int detail = 0;
+  // What the textures made here take on the graphics card, in bytes (all their sizes).
+  size_t bytes = 0;
+
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)
   gfx::Texture FlatNormal() const { return flatNormal_; }  // (0.5, 0.5, 1, 0.5): a normal pointing straight out
   gfx::Texture GreyCube() const { return greyCube_; }      // a cube map of one colour, for a missing sky
 
  private:
+  gfx::Texture Make(std::string_view file, const char* what, int drop);
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   std::unordered_map<std::string, gfx::Texture> cache_;

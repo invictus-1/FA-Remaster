@@ -184,6 +184,8 @@ class World {
   // The lamps' shadows (lights.h): what stands in a headlight's beam shadows the ground and the
   // units behind it. `lampShadowsDrawn`: how many lamps had a shadow map in the last frame.
   bool lampShadows = true;
+  // The sun's shadow maps' size in texels (2048 at first; 4096 sharper, 1024 and 512 for slower cards).
+  int shadowSize = kShadowMapSize;
   // The icons on mass and hydrocarbon deposits from far up, where the marks on the ground are no
   // longer drawn (the original's "resource icons", its pictures). `depositIconFrom`: at how many
   // times a mark's own cutoff distance its icon is fully there (it comes in from 0.8 of that).

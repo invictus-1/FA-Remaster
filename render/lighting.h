@@ -38,7 +38,9 @@ float SunShadow(float3 world, float3 normal) {
     float3 s = mul(shadowMatrix[i], float4(p, 1)).xyz;
     if (all(s.xy > 0.02) && all(s.xy < 0.98) && s.z > 0 && s.z < 1) {
       float lit = 0;
-      float step = 1.0 / 2048.0;
+      uint mapWidth, mapHeight, mapLayers;  // (the maps' size is a setting)
+      shadowMaps.GetDimensions(mapWidth, mapHeight, mapLayers);
+      float step = 1.0 / float(mapWidth);
       for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
           lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + float2(x, y) * step, i), s.z);
