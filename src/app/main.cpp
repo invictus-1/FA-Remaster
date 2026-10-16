@@ -683,8 +683,11 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
 // /map: the table FAF's SinglePlayerLaunch.lua builds for a campaign scenario (StartCommandLineSession 365-393 and
 // SetupCampaignSession 70-127; the lobby's GetDefaultPlayerOptions per army, lobbycomm.lua 35), here without the
 // interface's preferences: the player is 'Player', the factions are the stock four. The interface adds
-// Options.ScenarioFile (ui/REQUESTS.md engine 31), and so does this. Without --mods the operation has no mods (a
-// campaign takes only FAF's campaign mod, mods.lua GetCampaignMods).
+// Options.ScenarioFile (ui/REQUESTS.md engine 31), and so does this. Without --mods the operation has the mods
+// SetupCampaignSession gives it (line 124, mods.lua GetCampaignMods 718-726): the stock game's campaign mod
+// "Supreme Commander Campaign Branch" (uid 6AAFE20A-..., mods.scd /mods/CampaignBranch, which FAF's init file
+// mounts) when it is there, and no other; the table returns their uids after the session info. (Until
+// 2026-10-16 this launch had none, so its blueprints were not the interface host's or the original's.)
 const char kCampaignTable[] = R"lua(
 return function(mapName, difficulty, faction, haveMods)
   if not string.find(mapName, '/') and not string.find(mapName, '\\') then
@@ -729,8 +732,21 @@ return function(mapName, difficulty, faction, haveMods)
   end
   scenario.Options = {FogOfWar = 'explored', Difficulty = difficulty, DoNotShareUnitCap = true, Timeouts = -1,
                       GameSpeed = 'normal', FACampaignFaction = factionKeys[faction], ScenarioFile = scenario.file}
-  if not haveMods then sessionInfo.scenarioMods = {} end
-  return sessionInfo
+  -- mods.lua GetCampaignMods: GetGameMods{['6AAFE20A-E851-11DB-B8BE-ECC755D89593'] = true}, the installed mods
+  -- (AllMods: every /mods/*/mod_info.lua) of that uid that are not ui_only
+  local mods = {}
+  if not haveMods then
+    for _, file in DiskFindFiles('/mods', 'mod_info.lua') do
+      local info = {}
+      if pcall(doscript, file, info) and info.uid == '6AAFE20A-E851-11DB-B8BE-ECC755D89593' and not info.ui_only then
+        table.insert(mods, info.uid)
+        break
+      end
+    end
+    -- none: an empty list; else (as with --mods) the engine makes the session's __active_mods from the uids
+    if not mods[1] then sessionInfo.scenarioMods = {} end
+  end
+  return sessionInfo, mods
 end
 )lua";
 
@@ -750,12 +766,24 @@ int RunSinglePlayer(const Options& o, Vfs& vfs, const std::vector<std::string>& 
       lua_pushnumber(L, o.spDiff);
       lua_pushnumber(L, o.spFaction);
       lua_pushboolean(L, !o.modsFile.empty());
-      ok = lua_pcall(L, 4, 1, top + 1) == 0;
+      ok = lua_pcall(L, 4, 2, top + 1) == 0;
     }
     if (!ok) {
       Logf(LogLevel::Error, "moho64: /map %s: %s", o.spMap.c_str(), lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
       return 1;
     }
+    if (o.modsFile.empty()) {  // the campaign's mods (GetCampaignMods), as the table found them
+      uids.clear();
+      for (int i = 1; lua_istable(L, -1); ++i) {
+        lua_rawgeti(L, -1, i);
+        const bool more = lua_isstring(L, -1) != 0;
+        if (more) uids.push_back(lua_tostring(L, -1));
+        lua_pop(L, 1);
+        if (!more) break;
+      }
+      for (const std::string& uid : uids) Logf(LogLevel::Info, "moho64: the campaign's mod %s", uid.c_str());
+    }
+    lua_pop(L, 1);
     SinglePlayerParams params;
     params.seed = o.hasSeed ? o.seed
                             : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -764,7 +792,6 @@ int RunSinglePlayer(const Options& o, Vfs& vfs, const std::vector<std::string>& 
       Logf(LogLevel::Error, "moho64: launch failed: %s", err.c_str());
       return 1;
     }
-    if (o.modsFile.empty()) uids.clear();  // (the scenario's mods: none)
   }
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64: single-player session %s: %zu armies, focus army %d, seed %u, difficulty %d, faction %d",

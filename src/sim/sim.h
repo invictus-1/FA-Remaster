@@ -362,7 +362,8 @@ class Sim {
   // (docs/deviations.md lists each one). On in a new game, off while a replay is played back, so that a
   // recording of the original still plays as the original did; on again for the replay of a game this engine
   // played with them (its mark: replay.h ScenarioMarksFixes). MOHO64_FIXES=0 / 1 overrides. Those made in the
-  // game's Lua are the hook files of the repository's data/fixes/hook, given to the sim state only with `fixes`.
+  // game's Lua are the hook files of the repository's data/fixes/hook, given to the sim state only with `fixes`
+  // (and to the rules state, loaded again, in a game with a mod a blueprint fix is for: RulesFixesWanted).
   bool fixes = false;
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
@@ -474,6 +475,10 @@ class Sim {
 
   bool CallGlobal(const char* fn, int nargs);  // args pushed; logs errors
   void SetModsGlobal(ScriptState& st);
+  // The rules state (LoadRules), with the engine's script fixes joined when withFixes (Start(SessionDescription)
+  // loads them again so when RulesFixesWanted: a fix in the blueprints is for one of the game's mods).
+  bool LoadRulesState(bool withFixes);
+  bool RulesFixesWanted() const;
   bool CreateArmies(const ReplayHeader& replay);
   void CreateMapProps();
 };

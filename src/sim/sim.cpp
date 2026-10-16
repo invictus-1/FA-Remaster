@@ -947,12 +947,28 @@ Army* Sim::GetArmy(lua_State* L, int idx) {
   return nullptr;
 }
 
-bool Sim::LoadRules() {
+bool Sim::LoadRules() { return LoadRulesState(false); }
+
+bool Sim::LoadRulesState(bool withFixes) {
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
   rules_->SetHookDirs(hookDirs_);
+  if (withFixes) rules_->SetExtraHooks(FixesHooks());
   SimBlueprints::StartRecording(*rules_);
   SetModsGlobal(*rules_);
   return rules_->DoScript("/lua/ruleinit.lua");
+}
+
+namespace {
+// The stock game's campaign mod, "Supreme Commander Campaign Branch" (mods.scd, /mods/CampaignBranch): FAF's
+// SinglePlayerLaunch.lua starts a campaign operation with it (SetupCampaignSession line 124, mods.lua
+// GetCampaignMods). The engine's fix to its blueprints is made in the rules state (docs/deviations.md 4).
+constexpr char kCampaignBranchUid[] = "6aafe20a-e851-11db-b8be-ecc755d89593";
+}  // namespace
+
+bool Sim::RulesFixesWanted() const {
+  for (const std::string& uid : modUids_)
+    if (hostfs::ToLower(uid) == kCampaignBranchUid) return true;
+  return false;
 }
 
 bool Sim::RunString(const std::string& code, const std::string& chunkName) {
@@ -1130,6 +1146,15 @@ bool Sim::Start(const SessionDescription& session) {
   // scenario): it plays back with them, as it was played. The original's replays have no mark and keep them off.
   if (session.fixes < 0 && session.replay && ScenarioMarksFixes(session.header.scenario)) fixes = true;
   if (const char* f = getenv("MOHO64_FIXES")) fixes = f[0] == '1';
+  // A fix made in the blueprints needs the rules state: the hosts load the rules (LoadRules) before the session
+  // says whether the fixes are on, so the rules are the original's. With the fixes, and only in a game that has
+  // what such a fix is for (today the stock campaign mod's blueprints, deviations.md 4), they are loaded again,
+  // now with the fix files joined as in the sim state. Nothing else changes: a game without that mod, and every
+  // playback of the original's replays, keeps the rules as LoadRules made them.
+  if (fixes && rules_ && RulesFixesWanted()) {
+    Logf(LogLevel::Info, "moho64: the rules are loaded again with the engine's script fixes (the stock campaign mod)");
+    if (!LoadRulesState(true)) return false;
+  }
   return Start(session.header);
 }
 

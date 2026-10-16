@@ -26,6 +26,10 @@ way, from `Sim::Start`: the folder is found beside the program (`data/fixes`) or
 repository's, from `build-zig\`, `build-ui\` or `build-render\`); `MOHO64_FIXES_DIR` names another. The
 log says `the engine's script fixes are on: N hook files from ...`, and warns when the folder is missing.
 They are written for the FAF build the lab plays (3839); check them again when FAF changes.
+A fix in the blueprints (4 below) needs the rules state, which the hosts load (`Sim::LoadRules`) before the
+session says whether the fixes are on: with the fixes, and only in a game with the mod such a fix is for,
+`Sim::Start` loads the rules once more with the same hook files joined (`Sim::RulesFixesWanted`; the log
+says `the rules are loaded again with the engine's script fixes`, about one second).
 
 ## Departures (on with `Sim::fixes`)
 
@@ -98,6 +102,49 @@ They are written for the FAF build the lab plays (3839); check them again when F
   "fewer than 55" do not, "any unit" fires, "no unit" does not, a named one gets the TriggerManager and its
   name. With only the names given and FAF's comparison left, "at least 1055" fires and "fewer than 1055"
   does not. Without the fixes, `FindUnitInArea` errors as above.
+
+### 4. The stock campaign mod's weapons (2026-10-16)
+
+- **What is broken:** a campaign operation started the way FAF's `SinglePlayerLaunch.lua` starts it
+  (`/map X1CA_00n`: `StartCommandLineSession` 365-393, `SetupCampaignSession` line 124, `mods.lua`
+  `GetCampaignMods` 718-726) runs with the stock game's mod "Supreme Commander Campaign Branch" (uid
+  `6AAFE20A-E851-11DB-B8BE-ECC755D89593`, `mods.scd` `/mods/CampaignBranch/all_units.bp`, which FAF's init
+  file mounts): GPG's balance for the campaigns, one `Merge = true` blueprint per unit with the stock game's
+  2007 Weapon lists. FAF's `Blueprints.lua` (`StoreBlueprint` 449-452, `BlueprintMerged`) merges them by
+  position, and FAF's lists have weapons the stock ones had not (each commander's `AutoOverCharge`, third;
+  dummy weapons first; the transports' `GuidanceSystem`; ...): from there on each FAF weapon takes the label
+  and the values of another. 37 unit blueprints: the four commanders, the Seraphim support commander and
+  its six presets, the T1 mobile and T2 mobile anti-air of the four factions, the T1 transports, the T3
+  bombers, two T3 air-superiority fighters, the Aeon T3 anti-air gunship, the Cybran cruiser and carrier,
+  Atlantis, the Loyalist, the Monkeylord, the Othuum and the Seraphim sniper bot (e.g. the UEF commander:
+  `TacMissile` on the auto-overcharge weapon, two `DeathWeapon`s, the one in fifth place switched on by the
+  nuke enhancement; the Cybran commander's gun on the dummy weapon). The scripts then stop where they ask
+  for a weapon by a label that is gone: `acuunit.lua:153` (`ResetRightArm`, each time a commander puts its
+  build arm away), `ual0001_script.lua:276` (the Aeon commander's range upgrade), `xsl0301_script.lua:53`
+  (each Seraphim support commander made). The original does the same: it is the game's Lua, the FAF exe has
+  no hand in it (`SetAutoOvercharge` and `NeedsUpgrade` are not in the exe at all; `ChangeMaxRadius` is its
+  binding 0x6d9c80 and works: the nil is the missing weapon). A lobby game, FAF's co-op included, takes only
+  the mods chosen there, and this one is not selectable, so FAF players do not meet it.
+- **What we do:** `data/fixes/hook/lua/system/Blueprints.lua` merges that mod's weapons by label instead, as
+  FAF's own `MergeWeaponByLabel` does: each of the mod's weapons into FAF's weapon of the same label; one
+  FAF's unit no longer has is left out (8: `url0303` EMP, `urs0202` and `urs0303` Zapper, `url0402`
+  DeathWeapon, `uea0303` RightBeam, `ura0303` Missiles2, and two labels GPG's file has twice, `ues0401`
+  MissileRack03 and `xaa0305` AAGun01); FAF's weapons the mod does not name keep FAF's values. The rest of the
+  mod (economy, defence, intel, physics, and each weapon's values) merges as before. The fix is in the rules
+  state, so `Sim::Start` loads the rules again for a game with that mod (above). The log says `moho64 fix:
+  the stock campaign mod's weapons merged by label in 31 units (8 of its weapons left out)` (31 blueprints
+  of the mod, 37 with the support commander's presets made from one of them).
+- **Why it is safe, what it changes:** every unit keeps FAF's weapon list, labels and order (each of the
+  675 unit blueprints of a game without the mod has the same weapon labels; the mod adds 5 spawn dummies of
+  its own), with GPG's campaign values on the weapons the two have in common, as GPG meant the mod. Only a
+  game with that mod changes, hence the replay mark. The interface host's own copy of the blueprints (its
+  interface state) is not the simulation's and still has the merge by position.
+- **Tested:** X1CA_002..006 headless (`/map X1CA_00n /diff 2 /faction 1 --seed 1234`, the stand-in test
+  file, 2000 ticks), which since 2026-10-16 takes the campaign's mods as `SetupCampaignSession` does: with
+  the other fixes and not this one `acuunit.lua:153` (003: 6 times, 004: once), `ual0001_script.lua:276`
+  (003) and `xsl0301_script.lua:53` (006), as the interface host logged them; with it none, and no other
+  script error, in 2000 ticks and in 9000 (002 and 006 end before, at 3464 and 7094, when the commander
+  nobody plays is killed). The 13 replays play as before (the fix is off in a replay of the original).
 
 ## Looked broken, left alone
 

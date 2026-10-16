@@ -3256,12 +3256,14 @@ int l_w_ChangeMaxHeightDiff(lua_State* L) {
   W(L)->ovMaxHeightDiff = static_cast<float>(luaL_checknumber(L, 2));
   return 0;
 }
+// UnitWeapon:ChangeMaxRadius(value) 0x6d9c80 (bound at 0x6d9c20): weapon+0x64 = value, +0x6c = value^2, and the
+// unit's byte +0x68e = 1 (the mark many interface-visible changes set: SetFocusEntity, SetCreator, the silo
+// counts). The unit's blip cache (GetBlipsInRange 0x6ad060: its tick at unit+0x668) is not touched.
 int l_w_ChangeMaxRadius(lua_State* L) {
   UnitWeapon* w = W(L);
   float v = static_cast<float>(luaL_checknumber(L, 2));
   w->ovMaxRadius = v;
   w->maxR2 = v * v;
-  w->unit->blipCacheValid = false;
   return 0;
 }
 int l_w_ChangeMinRadius(lua_State* L) {
