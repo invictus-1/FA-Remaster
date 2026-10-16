@@ -891,6 +891,24 @@ DONE (engine, main 700f062): TakeSync right after Sim::Start returns the setup's
 CampaignMode, NewPlayableArea, CameraRequests, Restrictions, NavLayerData), beat 1's only its own. The
 interface host hands it over before the screen (TakeSetupSync); the objectives panel is there.
 
+### 34. What the simulation's scripts trip over in X1CA_002..006 (seen from the interface)
+From the interface chat, 2026-10-16. Each operation started by the original's command line in the
+interface host (`-- /map X1CA_00n /diff 2 /faction 1`, Chris's build-ui, fixes on), 140 s of game: all
+five end their opening cinematic and show their first objectives (002 at 10 s, 003 47, 004 45, 005 32
+with 3 by 63 s, 006 51); nothing on the interface's side. The simulation's log, for your list (some you
+named already):
+1. X1CA_002: structureunit.lua:824/825 "Attempt to set attribute '3145877' on nil" (10 times; the
+   adjacency at its start?).
+2. X1CA_003, 004: acuunit.lua:153 ResetRightArm calls `SetAutoOvercharge`, a nil method (FAF's unit
+   method on the commander's weapon or unit), from commandunit.lua:119.
+3. X1CA_003: ual0001_script.lua:276 `ChangeMaxRadius`, a nil method (a weapon's, the Aeon commander's
+   upgrade).
+4. ArmyStatItem Units_Killed / Units_Active / Enemies_Killed / Units_History "does not exist" (003..006;
+   your helper's unit-count stats).
+5. X1CA_006: xsl0301_script.lua:53 "Attempt to set attribute 'NeedsUpgrade' on nil" in CreateUnitHPR from
+   ScenarioUtilities.CreatePlatoons (950): a Seraphim sub-commander made with its upgrades.
+Logs: my scratchpad t_op002.log .. t_op006.log (af4db67d...\scratchpad). Not blocking me.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
