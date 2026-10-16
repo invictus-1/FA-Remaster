@@ -600,11 +600,14 @@ void SnapUnit(const Sim& csim, Unit* u) {
   }
   if (b.motionType == kMotionAir) return;
   bool hover = b.motionType == kMotionHover;
-  // (a floating type rides the surface; but where SnapToGround is asked for the ground of a layer blend's end, and
-  // while such a unit is in the Land layer, it stands on the bottom itself: the Cybran destroyer comes ashore at
-  // 17.17 under a sea of 17.5, wading)
-  bool floating = b.motionType == kMotionAmphibiousFloating && !u->motion.snapTerrain &&
-                  !(b.layerTransitionDuration != 0.0f && u->layer == "Land");
+  // Only MotionType 7 (Hover) takes the surface (0x6c180b: [bp+0x290] == 7 -> 0x62b160, the higher of ground and
+  // water); every other type takes the ground (0x6c18e7 -> STIMap::GetElevation 0x44fb90, plus the platform), an
+  // AmphibiousFloating one too: in the Land or Seabed layer it stands on the bottom, under the sea where the bottom is
+  // below it (the Cybran destroyer comes ashore at 17.17 under a sea of 17.5, wading). Seen: Skirmish 1306-1313, UEF
+  // engineer 0x400013 (uel0105, AmphibiousFloating) driving into the sea still in the Land layer: the original goes
+  // down with the bottom to 17.37 and keeps its tilt, ours stopped at the sea's 17.5 and levelled out; both are on
+  // the water at 1314, when the layer turns.
+  const bool floating = false;
   float hx = b.sizeX * 0.5f, hz = b.sizeZ * 0.5f;
   const Vec3 offs[4] = {{hx, 0, hz}, {-hx, 0, hz}, {-hx, 0, -hz}, {hx, 0, -hz}};
   Vec3 c[4];

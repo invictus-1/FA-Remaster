@@ -219,8 +219,10 @@ float ObbSphereDepth(const Obb& A, const Vec3& c, float r) {
 }
 
 struct Hit {
-  Unit* u;
+  Unit* u;       // a unit's hit, or null for a prop's
   float depth;
+  Entity* prop = nullptr;
+  Vec3 n{};      // (props: the contact normal handed to OnCollision)
 };
 
 // Sim::DoCollisionsFor 0x597cd0
@@ -241,8 +243,24 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
   if (self->unitStates.count("Teleporting") && self->lastMoveTick == sim.tick() && self->lastPosTick)
     prev = Add(self->prevLastPosition, self->motion.lastMove);
   static const long dbg = getenv("MOHO64_DEBUG_PUSH") ? atol(getenv("MOHO64_DEBUG_PUSH")) : -1;
+  static const bool dbgProp = getenv("MOHO64_DEBUG_PROPHIT") != nullptr;
+  lua_State* L = sim.L();
   for (const Hit& h : hits) {
+    if (h.prop && dbgProp)
+      Logf(LogLevel::Info, "prophit %u unit %u prop %u %s at %.3f %.3f n %.4f %.4f %.4f d %.4f", sim.tick(), self->id, h.prop->id,
+           h.prop->blueprint ? h.prop->blueprint->id.c_str() : "?", h.prop->position.x, h.prop->position.z, h.n.x, h.n.y,
+           h.n.z, h.depth);
     if (h.depth < 0.001f) continue;
+    if (h.prop) {  // 0x597d8b: a prop (Entity vt slot 5) gets RunScript_OnCollision 0x598660, then is no unit
+      if (!h.prop->HasLuaObject() || !self->HasLuaObject()) continue;
+      PushObject(L, self);
+      lua_pushnumber(L, h.n.x);
+      lua_pushnumber(L, h.n.y);
+      lua_pushnumber(L, h.n.z);
+      lua_pushnumber(L, h.depth);
+      sim.CallMethod(L, h.prop, "OnCollision", 5);
+      continue;
+    }
     Unit* o = h.u;
     if (UnitIgnores(self, o, 2)) continue;
     if (AirCat(o)) continue;
@@ -338,13 +356,9 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
   return true;
 }
 
-// The prop part of ProcessSurfaceCollisionFromLastMove / DoCollisionsFor: props in the cells under the unit box's
-// AABB (grid order), AABB pre-test, BoxBox; depth >= 0.001 calls prop:OnCollision(unit, nx, ny, nz, depth).
-void PropCollisions(Sim& sim, Unit* u, const Obb& box) {
-  if (u->destroyQueued || u->dead) return;
-  if (u->motion.bp && u->motion.bp->naval < 0)
-    u->motion.bp->naval = BpInCategory(sim, u->blueprint, "NAVAL") ? 1 : 0;
-  if (u->motion.bp && u->motion.bp->naval == 1) return;
+// The unit box's AABB as COGrid::CollectEntitiesInBox 0x721dc0 takes it (0x4fe2d0: the eight corners; 0xa3ae40: the
+// centre and half size of their bounds; then centre -/+ half size).
+void BoxAabb(const Obb& box, Vec3* mnOut, Vec3* mxOut) {
   Vec3 mn{1e30f, 1e30f, 1e30f}, mx{-1e30f, -1e30f, -1e30f};
   for (int i = 0; i < 8; ++i) {
     float sx = (i & 1) ? 1.f : -1.f, sy = (i & 2) ? 1.f : -1.f, sz = (i & 4) ? 1.f : -1.f;
@@ -354,47 +368,26 @@ void PropCollisions(Sim& sim, Unit* u, const Obb& box) {
   }
   Vec3 c{(mx.x + mn.x) * 0.5f, (mx.y + mn.y) * 0.5f, (mx.z + mn.z) * 0.5f};
   Vec3 e{(mx.x - mn.x) * 0.5f, (mx.y - mn.y) * 0.5f, (mx.z - mn.z) * 0.5f};
-  mn = Sub(c, e);
-  mx = Add(c, e);
-  std::vector<Entity*> cand;
-  sim.entityGrid().GatherBox(mn.x, mn.z, mx.x, mx.z, 2, &cand);
-  struct PropHit {
-    Entity* e;
-    Vec3 n;
-    float d;
-  };
-  std::vector<PropHit> hits;
-  for (Entity* p : cand) {
-    WorldShape s;
-    if (!GetWorldShape(p, &s) || s.type != ShapeType::Box) continue;  // (sphere props: not handled)
-    Vec3 pmn, pmx;
-    ShapeBounds(s, &pmn, &pmx);
-    if (mn.x > pmx.x || pmn.x > mx.x || mn.y > pmx.y || pmn.y > mx.y || mn.z > pmx.z || pmn.z > mx.z) continue;
-    Obb a;
-    a.c = s.c;
-    a.ax[0] = s.ax[0];
-    a.ax[1] = s.ax[1];
-    a.ax[2] = s.ax[2];
-    a.h = s.half;
-    Vec3 n;
-    float d = 0;
-    if (!BoxBoxSat(a, box, &n, &d)) continue;
-    hits.push_back({p, n, d});
-  }
-  lua_State* L = sim.L();
-  for (const PropHit& h : hits) {
-    if (getenv("MOHO64_DEBUG_PROPHIT"))
-      Logf(LogLevel::Info, "prophit %u unit %u prop %.3f %.3f n %.4f %.4f %.4f d %.4f", sim.tick(), u->id, h.e->position.x,
-           h.e->position.z, h.n.x, h.n.y, h.n.z, h.d);
-    if (0.001f > h.d) continue;
-    if (!h.e->HasLuaObject() || !u->HasLuaObject()) continue;
-    PushObject(L, u);
-    lua_pushnumber(L, h.n.x);
-    lua_pushnumber(L, h.n.y);
-    lua_pushnumber(L, h.n.z);
-    lua_pushnumber(L, h.d);
-    sim.CallMethod(L, h.e, "OnCollision", 5);
-  }
+  *mnOut = Sub(c, e);
+  *mxOut = Add(c, e);
+}
+
+// A prop in CollectEntitiesInBox: the AABB pre-test against the box's AABB (touching passes), then the primitive's
+// CollideBox (a Box prop: BoxBox 0x474830, the normal pointing from the unit toward the prop).
+bool PropHitTest(Entity* p, const Obb& box, const Vec3& mn, const Vec3& mx, Vec3* n, float* d) {
+  WorldShape s;
+  if (!GetWorldShape(p, &s) || s.type != ShapeType::Box) return false;  // (sphere props: not handled)
+  Vec3 pmn, pmx;
+  ShapeBounds(s, &pmn, &pmx);
+  if (mn.x > pmx.x || pmn.x > mx.x || mn.y > pmx.y || pmn.y > mx.y || mn.z > pmx.z || pmn.z > mx.z) return false;
+  Obb a;
+  a.c = s.c;
+  a.ax[0] = s.ax[0];
+  a.ax[1] = s.ax[1];
+  a.ax[2] = s.ax[2];
+  a.h = s.half;
+  *d = 0;
+  return BoxBoxSat(a, box, n, d);
 }
 }  // namespace
 
@@ -412,8 +405,11 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   box.ax[1] = Up(u->orientation);
   box.ax[2] = Forward(u->orientation);
   box.h = {b.sizeX * 0.5f, b.sizeY, b.sizeZ * 0.5f};
-  // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also hits props: prop:OnCollision (prop_collision.md)
-  if (b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u) PropCollisions(sim, u, box);
+  // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also collects props, in the same list as the units
+  // (mask 0x300, prop_collision.md 1.3): DoCollisionsFor goes through it in the grid's order, a prop's hit calls
+  // prop:OnCollision there, and a mate under the same order ends the list, the props after it included (1.4).
+  // (Read, not seen: no gate replay changes with it.)
+  const bool withProps = b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u;
   std::vector<Hit> hits;
   // COGrid::CollectEntitiesInBox 0x721dc0: the units registered in the entity-grid cells under the box, in the
   // grid's order (rows, columns, the most recently registered first: rect_queries.md 2.4). The order decides who
@@ -427,7 +423,13 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
     }
   }
   std::vector<Entity*> cand;
-  sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
+  Vec3 amn, amx;
+  if (withProps) {
+    BoxAabb(box, &amn, &amx);
+    sim.entityGrid().GatherBox(amn.x, amn.z, amx.x, amx.z, 3, &cand);
+  } else {
+    sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
+  }
   auto visit = [&](Unit* e) {
     if (e == u) return;
     WorldShape s;
@@ -467,8 +469,16 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
            static_cast<int>(s.type), s.c.x, s.c.y, s.c.z, s.ax[2].x, s.ax[2].z, s.half.x, s.half.y, s.half.z, s.r, depth);
     if (depth > 0) hits.push_back({e, depth});
   };
-  for (Entity* e : cand)
-    if (e && e->kind == Entity::Kind::Unit) visit(static_cast<Unit*>(e));
+  for (Entity* e : cand) {
+    if (!e) continue;
+    if (e->kind == Entity::Kind::Unit) {
+      visit(static_cast<Unit*>(e));
+    } else if (withProps) {
+      Vec3 n;
+      float d = 0;
+      if (PropHitTest(e, box, amn, amx, &n, &d)) hits.push_back({nullptr, d, e, n});
+    }
+  }
   if (!hits.empty()) DoCollisionsFor(sim, u, hits);
 }
 

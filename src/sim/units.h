@@ -247,6 +247,8 @@ class Prop : public Entity {
   // OccupancyCaps of its blueprint (bp+0xd8 / +0xd9 / +0xda).
   bool occupies = false;
   uint8_t occSizeX = 0, occSizeZ = 0, occCaps = 0;
+  // Its blueprint's Economy.ReclaimMassMax / ReclaimEnergyMax (bp+0x1a4 / +0x1a8), as Prop::Prop reads them.
+  float bpReclaimMass = 0, bpReclaimEnergy = 0;
 };
 
 class ShieldEntity : public Entity {
