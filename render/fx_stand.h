@@ -14,6 +14,15 @@
 // wreck of /lua/defaultexplosions.lua and /lua/wreckage.lua), run on the stand's stand-ins of the
 // engine (fx_entities.h); the stand draws the unit, posed as its scripts pose it, until it is gone,
 // then its wreck.
+//
+// A unit on the move (`move`): made as for a death, then driven round a loop at its blueprint's speed
+// (a long narrow one, its long sides away from the camera: on the two sides of a side by side the two
+// loops lie side by side over the same ground), setting off a second and a half into the play and
+// stopping where it began; an aircraft hovers at its elevation first. Its movement effects are the
+// ones its scripts make as the engine's motion events reach them (fx_entities.h). A build (`build`
+// builds `buildUnit`): a factory builds the unit at the spot (on its build bone), an engineer builds
+// it at the spot from beside it, its build effects as the game's scripts make them; the unit drawn as
+// far built as it is.
 #pragma once
 
 #include <functional>
@@ -56,20 +65,37 @@ struct FxStandSetup {
   // whose faction's effects play in the remastered look ("uef", "aeon", "cybran", "seraphim"); "": as
   // what they are made on is (a shot: its own, by its id; an effect at a spot: none)
   std::string faction;
+  // a unit (its id) driven round a loop at `at`, `laps` times each play
+  std::string move;
+  int laps = 1;
+  // a builder (its id) building a unit (its id) at `at`; `buildSeconds`: how long the build takes
+  // (0: the game's own time)
+  std::string build, buildUnit;
+  float buildSeconds = 0;
+  // whether --fx-repeat and --fx-spacing were given (else a move's and a build's are worked out)
+  bool repeatGiven = false, spacingGiven = false;
 };
 
 class FxStand {
  public:
   // Reads what it is to play. False with the reason when there is nothing.
   bool Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error);
-  // The map under a unit's death: the ground's height (under water the bottom's) and the water.
-  void SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel);
+  // The map under a unit's death, move or build: the ground's height (under water the bottom's), the
+  // water, and the map's terrain type code at a place.
+  void SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel,
+                 std::function<int(float, float)> terrainType = nullptr);
   // Each frame after World::Begin: starts, moves and ends what it plays (effect entities: handed to
   // the world as a game's projectiles and effects, World::AddFrame and Effects). `right`: the camera's right
   // (the two sides are laid out along it); `ground`: the ground's height at a place.
   void Update(World& world, double now, Vec3 right, const std::function<float(float, float)>& ground);
   // What it read, for the log.
   std::string Describe() const;
+  // How far across what it plays reaches, both sides together, for the camera to frame it (0: it says
+  // nothing): --fx-build's builder and unit; --fx-move's units, which the camera follows (Focus).
+  float Extent() const { return extent_; }
+  // Where the driven units are (--fx-move: between the two sides'), for the camera to follow; false
+  // when there are none.
+  bool Focus(Vec3* at) const;
 
  private:
   struct Side {
@@ -81,8 +107,9 @@ class FxStand {
     bool flying = false;
     double nextHit = 0;  // --fx-shield
     uint32_t rng = 1;
-    uint32_t unit = 0;   // --fx-death: the unit, and whether it is dead yet
+    uint32_t unit = 0;   // --fx-death: the unit, and whether it is dead yet; --fx-move, --fx-build: the unit
     bool killed = false;
+    uint32_t built = 0;  // --fx-build: the unit being built
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;
@@ -97,8 +124,13 @@ class FxStand {
   std::vector<std::string> impactEffects_;
   float shieldSize_ = 0, shieldOffset_ = 0;
   std::string shotFaction_;  // whose the shot's effects are
-  // --fx-death: the map under it, and whether its world is set up
+  // --fx-move: the loop (half its straight's length, its turns' radius); --fx-build: the order
+  float loopHalf_ = 8, loopRadius_ = 3;
+  std::string buildOrder_;
+  float extent_ = 0;
+  // --fx-death, --fx-move, --fx-build: the map under it, and whether its world is set up
   std::function<float(float, float)> terrain_;
+  std::function<int(float, float)> terrainType_;
   bool water_ = false, unitsReady_ = false, unitsFailed_ = false;
   float waterLevel_ = 0;
   std::unique_ptr<FxEntities> entities_;

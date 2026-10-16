@@ -20,6 +20,15 @@
 // for here: a dead aircraft falls (its speed, the simulation's gravity, a tumble) and calls the
 // unit's OnImpact where it meets the ground or the water; what the scripts make falls as its blueprint
 // says (Physics.UseGravity) and calls its OnImpact where it meets the ground or the water.
+//
+// A unit on the move (Drive): driven round a loop at its blueprint's speed, the engine's motion stood
+// in for - its scripts told what the engine tells them (OnMotionHorzEventChange as it sets off, reaches
+// its top speed, slows and stops; OnLayerChange where a hover unit goes from land onto water;
+// OnTerrainTypeChange where the map's terrain type under it changes, GetTerrainType answering from the
+// map's own terrain types and the game's /lua/TerrainTypes.lua), so that they make their movement
+// effects as in a game. A build (Build): a unit made as begun by a builder, its fraction complete
+// growing as the engine's build tasks make it grow, the builder's and the unit's build callbacks
+// called as the engine calls them (OnStartBuild, OnBuildProgress, OnStopBeingBuilt, OnStopBuild).
 #pragma once
 
 #include <functional>
@@ -61,13 +70,34 @@ class FxEntities {
   // The dying units' world (the stand's --fx-death): the game's unit classes and what they stand on.
   // `terrain`: the ground's height (under water the bottom's); `water`: the map has water at
   // `waterLevel`; `unitModel`: a unit's model by its blueprint id (its bones and scale).
+  // `terrainType`: the map's terrain type code at a place (-1: none).
   bool InitUnits(std::function<float(float, float)> terrain, bool water, float waterLevel,
-                 std::function<const Model*(const std::string&)> unitModel, std::string* error);
+                 std::function<const Model*(const std::string&)> unitModel, std::string* error,
+                 std::function<int(float, float)> terrainType = nullptr);
+  // How a unit is made: facing `forward`, in the look and with the Random of its side; an aircraft
+  // either flying in level at its speed so that if it dies `fallAfter` seconds from now it comes down
+  // at the spot (`flyIn`), or hovering at its elevation over it; begun by `builder` (its fraction
+  // complete from 0: OnStartBeingBuilt) or finished (OnStopBeingBuilt).
+  struct UnitPlace {
+    Vec3 forward{0, 0, 1};
+    bool original = false;
+    int side = 0;
+    bool flyIn = false;
+    float fallAfter = 0;
+    uint32_t builder = 0;
+  };
   // A unit of that blueprint id ("uel0201") made at `at` as the game makes one (its script's class:
-  // OnPreCreate, OnCreate, OnStopBeingBuilt), facing `forward`: on the ground, on the water (a ship),
-  // or flying level at its blueprint's elevation and speed (an aircraft: if it dies `fallAfter`
-  // seconds from now, it comes down at `at`). 0 when it cannot be made (the reason in `error`).
-  uint32_t AddUnit(const std::string& id, Vec3 at, Vec3 forward, bool original, int side, float fallAfter, std::string* error);
+  // OnPreCreate, OnLayerChange, OnCreate, then OnStopBeingBuilt or OnStartBeingBuilt): on the ground,
+  // on the water (a ship, a hover unit there), or in the air. 0 when it cannot be made (the reason in
+  // `error`).
+  uint32_t AddUnit(const std::string& id, Vec3 at, const UnitPlace& how, std::string* error);
+  // The builder builds the unit (made begun by it): its OnStartBuild(unit, order) now ("MobileBuild",
+  // "FactoryBuild"), then the build as the engine carries it out, in `seconds` (0: the game's own time,
+  // BuildTime / BuildRate).
+  void Build(uint32_t builder, uint32_t unit, const std::string& order, float seconds);
+  // Drives a unit round `loop` (points on the ground, closed) `laps` times, setting off at `start`
+  // (seconds, on Advance's clock) and stopping at the loop's start.
+  void Drive(uint32_t unit, const std::vector<Vec3>& loop, double start, int laps);
   // Kills it as the game does: its script's OnKilled(nil, "Normal", overkill).
   void Kill(uint32_t unit, float overkill);
 
@@ -88,6 +118,7 @@ class FxEntities {
     Vec3 position;
     Quat turn;
     float scale = 1;      // of the drawing: the unit's model's, or what the script sized the wreck to
+    float built = 1;      // its fraction complete
     std::vector<FrameBone> bones;
   };
   const std::vector<Body>& Bodies() const;

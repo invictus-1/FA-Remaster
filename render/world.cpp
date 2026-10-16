@@ -1156,7 +1156,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     const bool original = effectsLook == EffectsLook::Original || p.original;
     const Model* model = Known(p.original ? originalShotModels_ : shotModels_, p.blueprint, frame.blueprints->size(), [&]() -> const Model* {
-      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original);
+      // (an effect entity - the UEF's build cube, a nuke's fireball - may take the visuals track's
+      // textures of any path; a weapon's shot under /projectiles/ only its /effects/ ones)
+      const bool effect = moho::Vfs::Normalize(blueprint).compare(0, 9, "/effects/") == 0;
+      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original, std::string(), effect);
     });
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
@@ -1217,11 +1220,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     const Model* model = nullptr;
     if (!faction.empty()) {
-      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction);
+      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction, true);
     } else {
       model = Known(original ? originalEntityModels_ : entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
         if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
-        return models.Blueprint(mesh + ".bp", original);
+        return models.Blueprint(mesh + ".bp", original, std::string(), true);
       });
     }
     if (!model || !model->ok) continue;

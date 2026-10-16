@@ -222,13 +222,14 @@ bool ModelCache::Remastered(const std::string& blueprintId) const {
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
 }
 
-const Model* ModelCache::FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction) {
-  const std::string name = "display:" + key + (faction.empty() ? std::string() : "#" + faction);
+const Model* ModelCache::FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction,
+                                     bool effect) {
+  const std::string name = "display:" + key + (faction.empty() ? std::string() : "#" + faction) + (effect ? "#effect" : "");
   auto it = models_.find(name);
   if (it != models_.end()) return it->second.get();
   Model* m = models_.emplace(name, std::make_unique<Model>()).first->second.get();
   m->scale = entry.scale > 0 ? entry.scale : 1;
-  Build(m, key, base, entry.lods, false, true, faction);
+  Build(m, key, base, entry.lods, false, true, faction, effect);
   return m;
 }
 
@@ -269,7 +270,7 @@ const Model* ModelCache::Wreck(const Model* of, bool ownScale) {
   return kept.emplace(of, std::move(wreck)).first->second.get();
 }
 
-const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction) {
+const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction, bool effect) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
   const size_t slash = path.rfind('/');
@@ -279,9 +280,9 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   base = under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
   if (!original) {
     auto listed = display_.find(path);
-    if (listed != display_.end()) return FromDisplay(path, base, listed->second, faction);
+    if (listed != display_.end()) return FromDisplay(path, base, listed->second, faction, effect);
   }
-  const std::string key = original ? path + "#original" : faction.empty() ? path : path + "#" + faction;
+  const std::string key = original ? path + "#original" : (faction.empty() ? path : path + "#" + faction) + (effect ? "#effect" : "");
   auto it = models_.find(key);
   if (it != models_.end()) return it->second.get();
   Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
@@ -297,7 +298,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
       if (named.size() < 3 || named.compare(named.size() - 3, 3, ".bp") != 0) named += ".bp";
       if (named != path && vfs_->Exists(named)) {
         const float scale = m->scale;
-        const Model* of = Blueprint(named, original, faction);
+        const Model* of = Blueprint(named, original, faction, effect);
         if (of->ok) {
           *m = *of;  // (the same buffers and textures)
           m->scale = scale;
@@ -306,7 +307,7 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     }
     return m;
   }
-  Build(m, path, base, sources, original, false, faction);
+  Build(m, path, base, sources, original, false, faction, effect);
   return m;
 }
 
@@ -383,7 +384,7 @@ void ModelCache::Prefetch(const std::vector<std::string>& unitIds) {
     if (vfs_->Exists(preview + id + "_lod0.scm")) {
       for (int i = 0; i < 8 && vfs_->Exists(preview + id + "_lod" + std::to_string(i) + ".scm"); ++i)
         files.push_back(preview + id + "_lod" + std::to_string(i) + ".scm");
-      for (const std::string folder : {preview, preview + "textures/"})
+      for (const std::string& folder : {preview, preview + "textures/"})
         for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back(folder + id + "_lab_" + kind + ".dds");
     } else {
       for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back("/mods/labvisuals/textures/" + id + "/" + id + "_lab_" + kind + ".dds");
@@ -422,7 +423,7 @@ void ModelCache::PrefetchBlueprints(const std::vector<std::string>& blueprintPat
 // Loads a model's levels from their file names. `merged`: the names come from the simulation's merged
 // blueprints (mods' changes are in them already; every texture has a name, there or not).
 void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
-                       const std::string& faction) {
+                       const std::string& faction, bool effect) {
   // A remastered model being tried out (the viewer's --preview): its folder, mounted at
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
@@ -593,8 +594,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     // texture); one a blueprint file names itself and that is missing gets reported
     auto texture = [&](std::string name, bool named, gfx::Texture fallback, bool* remastered = nullptr) {
       // (an effect's mesh, as a nuke's ball of fire: in the remastered look the visuals track's
-      // texture of that path where it has made one, effect_files.h)
-      if (!original && moho::Vfs::Normalize(name).compare(0, 9, "/effects/") == 0) {
+      // texture of that path where it has made one, effect_files.h; for an effect entity's or a script
+      // entity's mesh wherever its texture is, as the build cube's /meshes/generic/cube02_albedo.dds)
+      if (!original && !name.empty() && (effect || moho::Vfs::Normalize(name).compare(0, 9, "/effects/") == 0)) {
         // (and first, with a faction, the visuals track's one for that faction: "<folder>/<faction>/<file>")
         std::string ours;
         if (!faction.empty()) {
