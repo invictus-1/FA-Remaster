@@ -72,7 +72,11 @@ Sim* UserState::LiveSim(const char* where) {
       const auto t0 = std::chrono::steady_clock::now();
       config_.waitForBeat();
       const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-      if (waited > 0.0005) Logf(LogLevel::Info, "moho64ui: waited %.1f ms for the beat at %s", waited * 1000.0, *where ? where : "(a script's call)");
+      if (waited > 0.0005) {
+        const char* in = CurrentBindingName();
+        Logf(LogLevel::Info, "moho64ui: waited %.1f ms for the beat at %s%s%s", waited * 1000.0, *where ? where : "a script's call",
+             *in ? " in " : "", in);
+      }
     } else {
       config_.waitForBeat();
     }
@@ -147,6 +151,7 @@ void UserState::GameLoaded() {
   // (Inferred: that the root frames are cleared here.)
   for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
   RefreshUserUnits(state_->L());
+  CopyFromSimulation();
   lua_pushboolean(state_->L(), 0);  // not a replay
   CallProvider("CreateGameInterface", 1);
   gameInterface = true;

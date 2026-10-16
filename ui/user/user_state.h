@@ -15,6 +15,7 @@
 
 #include "script/lua.hpp"
 #include "script/script_handle.h"
+#include "sim/sim_view.h"
 
 namespace moho {
 class Sim;
@@ -63,6 +64,12 @@ class UserState {
     Sim* liveSim = nullptr;
     // Waits until no beat runs on the beats' thread (the host's; unset: they never do).
     std::function<void()> waitForBeat;
+    // The ground's height at a place of the map from the host's copy taken after each beat (asked
+    // every frame: it does not wait for a beat); unset: none.
+    std::function<float(float x, float z)> groundHeight;
+    // Whether a beat runs on its own thread now (the host's; unset: never). What asks the
+    // simulation every frame for something that can be a beat old answers from before it then.
+    std::function<bool()> beatRunning;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
@@ -130,6 +137,17 @@ class UserState {
   // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).
   Sim* LiveSim(const char* where = "");
   bool HasSim() const { return config_.liveSim != nullptr; }
+  // What the scripts ask of the simulation every frame, copied when a beat's sync comes (the
+  // simulation is idle then), so that asking never waits for a beat: the focus army's economy
+  // (EconomyTotals of sim/sim_view.h, its twelve numbers in order). session_bindings.cpp.
+  float economyCopy[12] = {};
+  std::string focusNickname;  // the focus army's player name (GetSessionClients)
+  int focusArmyCopy = -1;     // the simulation's focusArmy, 0-based (GetFocusArmy)
+  uint32_t tickCopy = 0;      // its tick (GameTick, GameTime, GetGameTimeSeconds, GetGameTime)
+  bool isReplayCopy = false;  // SessionIsReplay
+  std::vector<ArmyView> armiesCopy;  // ArmyViews (GetArmiesTable)
+  bool economyCopied = false;  // (these copies are there: one beat's sync came)
+  void CopyFromSimulation();
   double now() const { return now_; }      // seconds since the state was created
   uint32_t frame() const { return frame_; }
   const std::string& uiState() const { return uiState_; }  // GetCurrentUIState(): none, splash, frontend, game

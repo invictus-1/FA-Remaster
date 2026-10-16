@@ -49,6 +49,10 @@ struct UnitStore : UserState::Extra {
   std::map<uint32_t, std::unique_ptr<UserUnit>> units;
   std::vector<UserUnit*> selection;
   std::vector<UserUnit*> capsOwn;  // (RightClickOrder's list of the selection's own units, kept for its room)
+  // GetRolloverInfo's last answer (a registry reference, LUA_NOREF for none) and for which unit.
+  int rolloverRef = LUA_NOREF;
+  uint32_t rolloverId = 0;
+  bool rolloverKnown = false;
   // CanReclaimAtPlace's last question and answer (see there).
   uint32_t reclaimTick = 0xffffffffu;
   std::vector<UserUnit*> reclaimFor;
@@ -1702,7 +1706,29 @@ void PushRollover(lua_State* L, UserUnit* u, bool withFocus) {
     }
   }
 }
+int RolloverInfoNow(lua_State* L);
+// GetRolloverInfo(): asked by the hover panel every frame; while a beat runs on its own thread,
+// the answer from before it when the mouse is on the same unit (no wait for the beat).
 int l_GetRolloverInfo(lua_State* L) {
+  UserState* user = UserState::From(L);
+  UnitStore& store = Store(L);
+  const uint32_t under = UnitUnderMouse(L);
+  if (user->config().beatRunning && user->config().beatRunning() && store.rolloverKnown && store.rolloverId == under) {
+    if (store.rolloverRef == LUA_NOREF) return 0;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, store.rolloverRef);
+    return 1;
+  }
+  const int results = RolloverInfoNow(L);
+  if (store.rolloverRef != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, store.rolloverRef);
+  store.rolloverRef = LUA_NOREF;
+  if (results > 0) {
+    lua_pushvalue(L, -1);
+    store.rolloverRef = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+  store.rolloverId = under, store.rolloverKnown = true;
+  return results;
+}
+int RolloverInfoNow(lua_State* L) {
   UnitStore& store = Store(L);
   auto it = store.units.find(UnitUnderMouse(L));
   if (it == store.units.end() || it->second->gone || it->second->view.dead) return 0;

@@ -6,6 +6,7 @@
 // names the simulation. Without one (the front end's state) the functions here are not registered
 // and the front end's answers stay (no session, tick 0).
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -75,13 +76,19 @@ int l_False(lua_State* L) {
   return 1;
 }
 
+// The simulation's tick as the interface knows it: the copy of the last beat's sync once there is
+// one (asked every frame, also while a beat runs on its own thread), else asked now.
+uint32_t TickNow(lua_State* L) {
+  UserState* user = UserState::From(L);
+  return user->economyCopied ? user->tickCopy : TheSim(L)->tick();
+}
 int l_GameTick(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()));
+  lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)));
   return 1;
 }
 // GetGameTimeSeconds(): the game's time; ten ticks are a second.
 int l_GetGameTimeSeconds(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()) * 0.1f);
+  lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)) * 0.1f);
   return 1;
 }
 int l_Zero(lua_State* L) {
@@ -149,7 +156,8 @@ int l_GetSimTicksPerSecond(lua_State* L) {
 }
 // SessionIsReplay(): whether the game being shown is a replay played back (the simulation's own flag).
 int l_SessionIsReplay(lua_State* L) {
-  lua_pushboolean(L, TheSim(L)->isReplay);
+  UserState* user = UserState::From(L);
+  lua_pushboolean(L, user->economyCopied ? user->isReplayCopy : TheSim(L)->isReplay);
   return 1;
 }
 int l_SessionIsPaused(lua_State* L) {
@@ -158,7 +166,8 @@ int l_SessionIsPaused(lua_State* L) {
 }
 // GetFocusArmy(): the army the player looks through, counted from 1; -1 for an observer.
 int l_GetFocusArmy(lua_State* L) {
-  int a = TheSim(L)->focusArmy;
+  UserState* user = UserState::From(L);
+  int a = user->economyCopied ? user->focusArmyCopy : TheSim(L)->focusArmy;  // (the beat's copy, once there is one)
   lua_pushnumber(L, a < 0 ? -1 : a + 1);
   return 1;
 }
@@ -222,11 +231,14 @@ void ArmyColors(lua_State* L, const ArmyView& a, std::string* color, std::string
 // game's scripts read them; an army's colours are the lobby's choices looked up in the game's colour
 // lists. (Inferred: which list `color` and which `iconColor` takes.)
 int l_GetArmiesTable(lua_State* L) {
-  Sim* sim = TheSim(L);
-  std::vector<ArmyView> armies = ArmyViews(*sim);
+  UserState* user = UserState::From(L);
+  const bool copied = user->economyCopied;  // (the beat's copies, once there are: no waiting for a beat)
+  Sim* sim = copied ? nullptr : TheSim(L);
+  const std::vector<ArmyView> armies = copied ? user->armiesCopy : ArmyViews(*sim);
+  const int focus = copied ? user->focusArmyCopy : sim->focusArmy;
   lua_newtable(L);
   SetField(L, "numArmies", static_cast<lua_Number>(armies.size()));
-  SetField(L, "focusArmy", static_cast<lua_Number>(sim->focusArmy < 0 ? -1 : sim->focusArmy + 1));
+  SetField(L, "focusArmy", static_cast<lua_Number>(focus < 0 ? -1 : focus + 1));
   lua_pushstring(L, "armiesTable");
   lua_newtable(L);
   for (const ArmyView& a : armies) {
@@ -258,8 +270,16 @@ int l_GetArmiesTable(lua_State* L) {
 // GetEconomyTotals(): the focus army's economy, each entry a table with ENERGY and MASS. The rates
 // are per tick, as the engine keeps them.
 int l_GetEconomyTotals(lua_State* L) {
-  Sim* sim = TheSim(L);
-  EconomyTotals e = EconomyTotalsOf(*sim, sim->focusArmy + 1);
+  // (The copy of the last beat's sync: the economy panel asks every frame, also while a beat runs.)
+  UserState* user = UserState::From(L);
+  EconomyTotals e;
+  static_assert(sizeof(EconomyTotals) == sizeof user->economyCopy, "EconomyTotals: twelve floats");
+  if (user->economyCopied) {
+    std::memcpy(&e, user->economyCopy, sizeof e);
+  } else {
+    Sim* sim = TheSim(L);
+    e = EconomyTotalsOf(*sim, sim->focusArmy + 1);
+  }
   auto pair = [&](const char* key, const float v[2]) {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -285,11 +305,11 @@ std::string TimeText(double seconds) {
   return buf;
 }
 int l_GameTime(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(TheSim(L)->tick()) * 0.1f);
+  lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)) * 0.1f);
   return 1;
 }
 int l_GetGameTime(lua_State* L) {
-  lua_pushstring(L, TimeText(TheSim(L)->tick() * 0.1).c_str());
+  lua_pushstring(L, TimeText(TickNow(L) * 0.1).c_str());
   return 1;
 }
 // FormatTime(seconds): hours, minutes and seconds as "HH:MM:SS". (Inferred form.)
@@ -329,10 +349,13 @@ int l_IsEnemy(lua_State* L) {
 
 // GetSessionClients(): the one local player. (Field names as the scripts read them.)
 int l_GetSessionClients(lua_State* L) {
-  Sim* sim = TheSim(L);
-  std::string name;
-  for (const ArmyView& a : ArmyViews(*sim))
-    if (a.index == sim->focusArmy + 1) name = a.nickname;
+  UserState* user = UserState::From(L);
+  std::string name = user->focusNickname;  // (the beat's copy; before the first: asked now)
+  if (!user->economyCopied) {
+    Sim* sim = TheSim(L);
+    for (const ArmyView& a : ArmyViews(*sim))
+      if (a.index == sim->focusArmy + 1) name = a.nickname;
+  }
   lua_newtable(L);
   lua_newtable(L);
   SetField(L, "name", name);
@@ -396,14 +419,14 @@ int l_SessionSendChatMessage(lua_State* L) {
 
 // The chat messages sent since the last frame reach the game's script (see above).
 void DeliverChat(lua_State* L) {
-  Sim* sim = UserState::From(L)->LiveSim("chat");
   const int top = lua_gettop(L);
   lua_pushstring(L, "moho64ui_chat");
   lua_rawget(L, LUA_REGISTRYINDEX);
-  if (!lua_istable(L, -1) || luaL_getn(L, -1) == 0 || !sim) {
+  if (!lua_istable(L, -1) || luaL_getn(L, -1) == 0 || !UserState::From(L)->HasSim()) {
     lua_settop(L, top);
     return;
   }
+  Sim* sim = UserState::From(L)->LiveSim("chat");  // (only when there is chat: it may wait for a beat)
   const int list = lua_gettop(L);
   lua_pushstring(L, "moho64ui_chat");  // (a fresh list: a handler may send again)
   lua_pushnil(L);
@@ -454,9 +477,25 @@ void UserState::CallProvider(const char* fn, int nargs) {
 // After a beat (the original's hand-over, as /lua/UserSync.lua expects it): the table the
 // simulation's scripts filled becomes the global Sync, the one before it PreviousSync, and
 // OnSync() runs.
+void UserState::CopyFromSimulation() {
+  Sim* sim = LiveSim("the beat's copies");  // (between beats: no wait)
+  if (!sim) return;
+  EconomyTotals e = EconomyTotalsOf(*sim, sim->focusArmy + 1);
+  std::memcpy(economyCopy, &e, sizeof e);
+  focusArmyCopy = sim->focusArmy;
+  tickCopy = sim->tick();
+  isReplayCopy = sim->isReplay;
+  armiesCopy = ArmyViews(*sim);
+  focusNickname.clear();
+  for (const ArmyView& a : armiesCopy)
+    if (a.index == sim->focusArmy + 1) focusNickname = a.nickname;
+  economyCopied = true;
+}
+
 void UserState::DeliverSync(const std::string& blob) {
   lua_State* L = state_->L();
   RefreshUserUnits(L);
+  CopyFromSimulation();
   int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
   lua_getglobal(L, "Sync");
