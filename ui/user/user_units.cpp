@@ -391,11 +391,15 @@ void FocusUnits(lua_State* L, const char* category, Test test, std::vector<UserU
   for (auto& [id, u] : Store(L).units)
     if (!u->gone && !u->view.dead && u->view.army == army && InCategory(L, u.get(), category) && test(*u)) out->push_back(u.get());
 }
-// GetArmyAvatars(): the focus army's commanders
+// GetArmyAvatars(): the focus army's commanders, nil when it has none; nothing at all without a
+// focus army (a replay, an observer): FA exe 0x8bccb0 returns no value then, and pushes nil
+// (0x8bce0d) for an empty list. (/lua/ui/game/gamemain.lua's OnFirstUpdate tests the result
+// before taking avatars[1]: with an empty table the replay's start stopped there.)
 int l_GetArmyAvatars(lua_State* L) {
+  if (TheSim(L)->focusArmy < 0) return 0;
   std::vector<UserUnit*> list;
   FocusUnits(L, "COMMAND", [](const UserUnit&) { return true; }, &list);
-  PushUnitList(L, list, false);
+  PushUnitList(L, list, true);
   return 1;
 }
 // GetIdleEngineers() / GetIdleFactories(): the focus army's finished engineers / factories with

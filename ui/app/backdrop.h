@@ -29,11 +29,15 @@ namespace moho::ui {
 
 class Backdrop : public BackdropSource {
  public:
-  // `map`: the map file in the game's file system ("/maps/SCMP_009/SCMP_009.scmap").
+  // `map`: the map file in the game's file system ("/maps/SCMP_009/SCMP_009.scmap"). The map is
+  // read only after Begin(): its thread builds the renderer's pipelines for render::gSceneSamples,
+  // which must not change while a world is alive (render/world.h), so the caller sets it first.
   Backdrop(const Vfs* vfs, std::string map);
   ~Backdrop() override;
+  void Begin() { begun_ = true; }
   const uint32_t* Latest(int width, int height) override;
-  // End it and give the graphics device back (a game is starting: it has its own picture).
+  // End it and give the graphics device back (a game is starting: it has its own picture; or the
+  // scene's samples change). Again: nothing.
   void Stop();
   // Wait until pictures of the size last asked for are there and have come in fully (for a
   // screenshot); false after `seconds` without that.
@@ -45,6 +49,7 @@ class Backdrop : public BackdropSource {
   std::string map_;
   std::thread thread_;
   std::atomic<bool> running_{true};
+  std::atomic<bool> begun_{false};
   std::mutex mutex_;
   int wantW_ = 0, wantH_ = 0;      // the size asked for
   std::chrono::steady_clock::time_point asked_{};  // when it was last asked for

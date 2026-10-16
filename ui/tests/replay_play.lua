@@ -33,6 +33,8 @@ end
 ForkThread(function()
     check("the game is a replay", SessionIsReplay(), true)
     check("the player watches: no army", GetFocusArmy(), -1)
+    local function count(...) return arg.n end
+    check("without an army GetArmyAvatars gives nothing (as the original)", count(GetArmyAvatars()), 0)
     local cdr = GetUnitById("0")
     check("the player's commander is there", cdr ~= nil, true)
     if not cdr then
@@ -44,5 +46,8 @@ ForkThread(function()
     local p = cdr:GetPosition()
     check("and walks as he walked in the game", math.abs(p[1] - start[1]) + math.abs(p[3] - start[3]) > 10, true)
     check("the replay's time runs", GetGameTimeSeconds() >= 20, true)
+    -- the game's start (/lua/ui/game/gamemain.lua, OnFirstUpdate) ran to its end: the score panel
+    -- was made (it stopped before, at the commander it looks for)
+    check("the score panel is made", import('/lua/ui/game/score.lua').savedParent ~= false, true)
     LOG("TEST done: " .. failed .. " failed")
 end)
