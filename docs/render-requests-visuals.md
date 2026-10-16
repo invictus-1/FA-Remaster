@@ -117,8 +117,7 @@ the explosion stays as it is.
 ## 2. Lights lists and one mesh, from Chris's games at night (2026-10-13, not blocking)
 
 **Who asks:** Chris, through the interface and the renderer (his words and pictures:
-`ui/REQUESTS.md` "To the renderer 10" and "11"; the pictures are in the lab under
-`_scratch\ui\chris_20261013\`). The renderer draws each of these as its `<ID>_lights.bp` says (checked
+`ui/REQUESTS.md` "To the renderer 10" and "11"; the pictures are in the lab). The renderer draws each of these as its `<ID>_lights.bp` says (checked
 lamp by lamp in the viewer: `moho64view --remasters <work> --map ... --time-of-day 23 --place <id>
 --pitch 75 --heading 0`, and `MOHO64_DEBUG_LAMPS=1` prints every beam's direction beside the way the
 unit faces). So these are the lists', not the drawing's:

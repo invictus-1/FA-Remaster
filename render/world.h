@@ -122,6 +122,8 @@ class World {
   void Begin(const Camera& camera, int width, int height, float time, double clock);
   // A game's units (as models, with their strategic icons), projectiles and beams.
   void AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors);
+  // Whose a shield's mesh is ("uef", "aeon", "cybran", "seraphim"; "" not known).
+  static std::string MeshFaction(const std::string& mesh);
   // How the scenery changed (SimFrames::TakePropEvents): each takes hold when the frame begun has
   // reached its beat. Wreckage appears, a burnt tree turns black, a fallen one lies, what is
   // reclaimed goes.
@@ -329,6 +331,9 @@ class World {
   };
   std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
   std::vector<KnownModel> originalShotModels_;  // (shots a frame wants in the original look whatever the world's)
+  std::vector<KnownModel> originalEntityModels_;  // (the same for script entities)
+  EffectsLook entitiesLook_ = EffectsLook::Remastered;  // (the look entityModels_ were looked up in)
+  std::vector<std::pair<Vec3, std::string>> bubbles_;  // this frame's shield bubbles: their centres and factions
   EffectsLook shotsLook_ = EffectsLook::Remastered;  // (the look shotModels_ were looked up in)
   template <typename LookUp>
   const Model* Known(std::vector<KnownModel>& list, uint32_t index, size_t count, LookUp lookUp) {

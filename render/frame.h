@@ -102,6 +102,7 @@ struct FrameEntity {
   float scale[3] = {1, 1, 1};  // the engine's scale x draw scale (a shield's size is its draw scale)
   bool shield = false;
   bool seen = true;            // by the army the picture is for (its place's answer)
+  bool original = false;       // drawn in the original effects' look whatever the world's (the effects stand's side by side)
 };
 
 // How the scenery changed in a beat (the engine's PropEvent): a prop made after the start (wreckage),

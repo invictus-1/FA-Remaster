@@ -190,15 +190,42 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
   }
   if (!setup.entity.empty()) entity_ = EntityPath(setup.entity);
-  if (!entity_.empty()) {
+  if (!setup.shield.empty()) {  // a unit's shield: what its blueprint says of it
+    std::string id = setup.shield;
+    for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string path = "/units/" + id + "/" + id + "_unit.bp";
+    auto text = vfs->ReadFile(moho::Vfs::Normalize(path));
+    BpValue bp;
+    if (!text || !ReadBlueprintFile(*text, &bp)) {
+      *error = "no unit blueprint " + path;
+      return false;
+    }
+    const BpValue& shield = bp["Defense"]["Shield"];
+    shieldUnit_ = id;
+    shieldMesh_ = shield["Mesh"].StringOr(std::string());
+    impactMesh_ = shield["ImpactMesh"].StringOr(std::string());
+    shieldSize_ = static_cast<float>(shield["ShieldSize"].NumberOr(0));
+    shieldOffset_ = static_cast<float>(shield["ShieldVerticalOffset"].NumberOr(0));
+    if (shieldMesh_.empty() || shieldSize_ <= 0) {
+      *error = id + " has no shield of that kind (Defense.Shield.Mesh and ShieldSize)";
+      return false;
+    }
+    const std::string template_ = shield["ImpactEffects"].StringOr(std::string());
+    if (!template_.empty()) {
+      const std::string code = "local t = import('/lua/effecttemplates.lua')[ [[" + template_ + "]] ]\n"
+                               "if type(t) == 'table' and t ~= __fxStub then for _, v in ipairs(t) do table.insert(__fxOut, v) end end\n";
+      if (!RunScript(vfs, code, &impactEffects_, error)) return false;
+    }
+  }
+  if (!entity_.empty() || !shieldUnit_.empty()) {
     entities_ = std::make_unique<FxEntities>();
     if (!entities_->Init(vfs, setup.seed, error)) return false;
-    if (!vfs->ReadFile(moho::Vfs::Normalize(entity_))) {
+    if (!entity_.empty() && !vfs->ReadFile(moho::Vfs::Normalize(entity_))) {
       *error = "no effect entity blueprint " + entity_;
       return false;
     }
   }
-  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty()) {
+  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -228,6 +255,12 @@ std::string FxStand::Describe() const {
   list("riding on it", fxTrails_);
   list("hit", impact_);
   if (!entity_.empty()) s += "; effect entity " + entity_ + (projectile_.empty() ? "" : " where it lands");
+  if (!shieldUnit_.empty()) {
+    char b[96];
+    snprintf(b, sizeof b, " (size %g, %g up)", shieldSize_, shieldOffset_);
+    s += "; " + shieldUnit_ + "'s shield " + shieldMesh_ + b + ", hit with " + (impactMesh_.empty() ? std::string("no flash") : impactMesh_);
+    list("and", impactEffects_);
+  }
   return s.empty() ? s : s.substr(2);
 }
 
@@ -261,7 +294,15 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         const Vec3 at = place(setup_.at, side);
         for (const std::string& e : fxEmitters_) side.emitters.push_back(world.particles.Start(e, at, Quat{}, 1));
       }
-      if (entities_ && projectile_.empty()) {
+      if (entities_ && !shieldUnit_.empty()) {  // the shield up (its hits follow, below)
+        const Vec3 base = place(setup_.at, side);
+        const float size = shieldSize_;
+        entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
+                             sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
+        side.nextHit = now + 0.3;
+        side.rng = std::max<uint32_t>(setup_.seed, 1);  // (the same hits on both sides)
+      }
+      if (entities_ && projectile_.empty() && !entity_.empty()) {
         std::string why;
         if (!entities_->Spawn(entity_, place(setup_.at, side), sides_.size() == 2 ? !side.remastered : !lookRemastered, &why))
           fprintf(stderr, "render: --fx-entity: %s\n", why.c_str());
@@ -272,6 +313,30 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         side.trails.clear();
         side.carried.clear();
         Fire(world, side, now, place(setup_.from, side));
+      }
+    }
+    if (!shieldUnit_.empty()) {  // the unit under its shield, and the shield hit now and then
+      const bool original = sides_.size() == 2 ? !side.remastered : !lookRemastered;
+      const Vec3 base = place(setup_.at, side);
+      const Model* unit = world.models.Unit(shieldUnit_, original);
+      if (unit && unit->ok) world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f});
+      if (entities_ && now >= side.nextHit && side.nextHit > 0) {
+        side.nextHit = now + setup_.hitEvery;
+        // a direction above the ground (each side draws the same ones)
+        auto next = [&]() {
+          side.rng = static_cast<uint32_t>((static_cast<uint64_t>(side.rng) * 48271u) % 2147483647u);
+          return static_cast<float>(side.rng) / 2147483647.0f;
+        };
+        const float heading = next() * 6.2831853f, rise = 0.25f + next() * 0.9f;
+        const Vec3 dir = Normalize(Vec3{std::sin(heading) * std::cos(rise), std::sin(rise), std::cos(heading) * std::cos(rise)});
+        const Vec3 centre = base + Vec3{0, shieldOffset_, 0};
+        // as the game's shield script: the flash at the shield's centre, sized as the shield, turned
+        // toward the hit, for two seconds; its effects made on it and moved out to the hit
+        const uint32_t flash = entities_->AddEntity(impactMesh_, centre, Facing(dir), {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
+        for (const std::string& e : impactEffects_) {
+          const uint32_t fx = entities_->AddEmitter("CreateEmitterAtBone", flash, EmitterPath(e));
+          entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, shieldSize_ * 0.5f});
+        }
       }
     }
     if (!projectile_.empty() && side.flying) {  // the shot on its way: its mesh, its trails, and its hit where it lands
