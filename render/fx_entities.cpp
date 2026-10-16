@@ -248,6 +248,10 @@ struct Ent {
   uint32_t id = 0;
   uint32_t blueprint = 0;  // index into Impl::blueprints: its path, or "" (no mesh)
   bool mesh = false;
+  // (one the stand makes itself: a script entity's mesh blueprint, its size, a shield's bubble)
+  uint32_t entityMesh = 0;
+  Vec3 scale{1, 1, 1};
+  bool shield = false;
   Vec3 position, velocity, direction{0, 0, 1};
   float acceleration = 0, maxSpeed = 0;
   Vec3 ballistic;
@@ -615,7 +619,12 @@ void FxEntities::Advance(double now) {
     } else {
       FrameEntity f;
       f.id = e.id;
-      f.mesh = 0;  // ("": nothing drawn)
+      f.mesh = e.entityMesh;  // (0, "": nothing drawn)
+      f.scale[0] = e.scale.x;
+      f.scale[1] = e.scale.y;
+      f.scale[2] = e.scale.z;
+      f.shield = e.shield;
+      f.original = e.original;
       f.position[0] = e.position.x;
       f.position[1] = e.position.y;
       f.position[2] = e.position.z;
@@ -629,6 +638,48 @@ void FxEntities::Advance(double now) {
 }
 
 const Frame& FxEntities::Current() const { return impl_->frame; }
+
+uint32_t FxEntities::AddEntity(const std::string& mesh, Vec3 at, const Quat& turn, Vec3 scale, bool shield, bool original, float seconds) {
+  Impl& m = *impl_;
+  Ent e;
+  e.id = m.nextEntity++;
+  e.entityMesh = mesh.empty() ? 0 : m.BlueprintIndex(mesh);
+  e.position = at;
+  e.turn = turn;
+  e.align = false;
+  e.velocity = {};
+  e.scale = scale;
+  e.shield = shield;
+  e.original = original;
+  e.born = m.now;
+  e.lifetime = seconds;
+  m.ents.push_back(e);
+  return e.id;
+}
+
+uint32_t FxEntities::AddEmitter(const std::string& how, uint32_t entity, const std::string& blueprint) {
+  Impl& m = *impl_;
+  FrameEffectEvent ev = m.Event(FrameEffectEvent::Create, how);
+  ev.id = m.nextEffect++;
+  ev.blueprint = blueprint;
+  if (const Ent* e = m.Find(entity)) {
+    ev.entity = e->id;
+    ev.position[0] = e->position.x;
+    ev.position[1] = e->position.y;
+    ev.position[2] = e->position.z;
+    ev.original = e->original;
+  }
+  m.events.push_back(ev);
+  return ev.id;
+}
+
+void FxEntities::CallEmitter(uint32_t effect, const std::string& name, const std::vector<float>& numbers) {
+  Impl& m = *impl_;
+  FrameEffectEvent ev = m.Event(FrameEffectEvent::Call, name);
+  ev.id = effect;
+  ev.numbers = numbers;
+  m.events.push_back(ev);
+}
 
 void FxEntities::TakeEvents(std::vector<FrameEffectEvent>* out) {
   out->insert(out->end(), impl_->events.begin(), impl_->events.end());

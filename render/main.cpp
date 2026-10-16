@@ -77,6 +77,9 @@
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
+// --shadow-size <texels>  the sun's shadow maps' width and height (2048; 4096 sharper, 1024 and 512 cheaper)
+// --texture-detail 0|1|2  textures larger than 256 without their largest size (1) or two (2): for cards
+//           with less memory (0: all, as at first)
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
 //           x,z[,height] (else where the camera looks) every --fx-repeat seconds (2)
@@ -88,6 +91,9 @@
 //           --fx-at as a nuke's impact makes it, its own scripts run (fx_entities.h), every --fx-repeat seconds
 //           (25 unless given); --fx-seed n: where its Random starts (1). A --fx-shot whose impact makes one
 //           (a nuke) makes it where it lands.
+// --fx-shield <unit>  that unit (UEB4301) at --fx-at with its shield up, hit from random directions above the
+//           ground every --fx-hit-every seconds (0.8) with its own flash and hit effects, as the game's shield
+//           script makes them; made again every --fx-repeat seconds (20 unless given)
 //           (with --frames n --shots k --screenshot <name>.png: a numbered picture every k frames)
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
@@ -203,6 +209,8 @@ struct Options {
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
+  int shadowSize = 2048;                // --shadow-size
+  int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   std::string inspect;                  // --inspect
@@ -351,6 +359,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
+    else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
     else if (a == "--fsr") {  // FSR 1's modes, or the share itself
       const std::string m = v;
       o->upscale = m == "off" ? 1.0f : m == "ultra" ? 1 / 1.3f : m == "quality" ? 1 / 1.5f : m == "balanced" ? 1 / 1.7f
@@ -363,6 +373,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
       o->fxRepeat = true;
     } else if (a == "--fx-entity") o->fx.entity = v;
+    else if (a == "--fx-shield") o->fx.shield = v;
+    else if (a == "--fx-hit-every") o->fx.hitEvery = std::max(0.05f, static_cast<float>(atof(v)));
     else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
     else if (a == "--fx-spacing") o->fx.spacing = static_cast<float>(atof(v));
     else if (a == "--fx-at" || a == "--fx-from" || a == "--fx-to") {  // x,z[,height above the ground]
@@ -444,7 +456,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -622,6 +634,7 @@ int main(int argc, char** argv) {
     wo.decalTurn = opt.decalTurn;
     wo.decalRange = opt.decalRange;
     wo.verbose = opt.debug;
+    world.textures.detail = opt.textureDetail;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;
@@ -636,6 +649,7 @@ int main(int argc, char** argv) {
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.effectsQuality = opt.effectsQuality;
   world.upscale = opt.upscale;
+  world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
@@ -984,12 +998,13 @@ int main(int argc, char** argv) {
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
-  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty()) {
+  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty()) {
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
+    if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
     // (an effect entity's play is long: a nuke's lasts some twenty seconds)
     if (!opt.fxRepeat && (!opt.fx.entity.empty() || opt.fx.shot.find("Nuke") != std::string::npos)) opt.fx.repeat = 25;
     if (!opt.hasCam) {  // close to it, a little from above
-      camera.distance = !opt.fx.entity.empty() ? 160.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
+      camera.distance = !opt.fx.entity.empty() ? 160.0f : !opt.fx.shield.empty() ? 90.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
       camera.pitch = 0.55f;
     }
     {  // (a shot not placed: across the spot, away from the camera)
@@ -1631,6 +1646,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
+      printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);

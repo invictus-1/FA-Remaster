@@ -445,14 +445,22 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
   if (n.state == 3) {
     u->unitStates.erase("PathFinding");
     n.path = std::move(got);
+    // The unit state ProblemGettingToGoal (bit 24) is set here, in the beat the search is delivered (0x5af211 for
+    // an empty path, 0x5af2bf for a path that ends outside the goal), not by the next beat's Execute; an empty path
+    // of a Patrolling unit (IsUnitState(12), 0x5af224) also sets NeedToTerminateTask (bit 25, 0x5af238). (Seen:
+    // LAND 1650, a Spearhead (xel0306) on a patrol whose search toward (310.5, 753.5) ended short at 1650: the
+    // original's unit record has ProblemGettingToGoal in that beat, ours one beat later.)
     if (n.path.empty()) {
       n.state = 1;
       n.problem = true;
+      u->unitStates.insert("ProblemGettingToGoal");
+      if (u->unitStates.count("Patrolling")) u->unitStates.insert("NeedToTerminateTask");
       return;
     }
     const PathCell& last = n.path.back();
     if (!InGoal(n, last)) {
       n.problem = true;
+      u->unitStates.insert("ProblemGettingToGoal");
       // the goal centre is appended when the footprint fits there (OnEvent 0x5aeeb0, pathfinding.md 4.4)
       PathCell c{(n.goal[0] + n.goal[2]) / 2, (n.goal[1] + n.goal[3]) / 2};
       if (Fits(sim, u, c)) n.path.push_back(c);

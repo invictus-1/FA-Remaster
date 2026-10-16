@@ -191,6 +191,8 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
   unitModels_.clear();
   shotModels_.clear();
   entityModels_.clear();
+  originalShotModels_.clear();
+  originalEntityModels_.clear();
   int units = 0;
   for (const BlueprintLook& look : looks) {
     models.SetLook(look);
@@ -559,7 +561,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     lightDirection = skyLight.direction;
   }
   CpuTimes::Part("sun shadows placed");
-  if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
+  if (haveMap_ && shadowsOn) {
+    if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
+    shadows.Place(camera, lightDirection, &view);
+  }
   CpuTimes::Part("tracks, icons, deposits begun");
 
   // the tracks in lying snow: read by the ground while snow lies
@@ -840,6 +845,25 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
   ++propsChanged;
 }
 
+// Whose a shield's mesh is: "uef", "aeon", "cybran", "seraphim", or "" (by the dome's folder, or the unit
+// whose own it is: a commander's personal shield)
+std::string World::MeshFaction(const std::string& mesh) {
+  const std::string m = moho::Vfs::Normalize(mesh);
+  const size_t units = m.find("/units/");
+  if (units != std::string::npos && m.size() >= units + 9) {
+    const std::string p = m.substr(units + 7, 2);
+    if (p == "ue" || p == "xe") return "uef";
+    if (p == "ua" || p == "xa") return "aeon";
+    if (p == "ur" || p == "xr") return "cybran";
+    if (p == "xs" || p == "us") return "seraphim";
+  }
+  if (m.find("aeonshield") != std::string::npos) return "aeon";
+  if (m.find("cybranshield") != std::string::npos) return "cybran";
+  if (m.find("seraphimshield") != std::string::npos) return "seraphim";
+  if (m.find("/shield01/") != std::string::npos) return "uef";
+  return std::string();
+}
+
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   CpuTimes::Part("units listed");
@@ -1113,14 +1137,48 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
   }
   // what scripts made that has a mesh: shields' bubbles and the like, each its mesh blueprint's model
+  // (in the effects' look: the remastered one reads the visuals track's textures. A shield's bubble and
+  // the flash where it is hit read those of the shield's faction first: the flash's mesh is shared by
+  // three factions. The faction is the bubble's, and a flash is made at its bubble's centre.)
   impactBornNext_.clear();
+  if (entitiesLook_ != effectsLook) {
+    entityModels_.clear();
+    entitiesLook_ = effectsLook;
+  }
+  bubbles_.clear();
+  if (effectsLook == EffectsLook::Remastered)
+    for (const FrameEntity& f : frame.entities)
+      if (f.shield && !f.original && f.mesh < frame.blueprints->size()) {
+        std::string faction = MeshFaction((*frame.blueprints)[f.mesh]);
+        if (!faction.empty()) bubbles_.push_back({{f.position[0], f.position[1], f.position[2]}, std::move(faction)});
+      }
   for (const FrameEntity& f : frame.entities) {
     if (!f.seen || f.mesh >= frame.blueprints->size()) continue;
     const std::string& mesh = (*frame.blueprints)[f.mesh];
-    const Model* model = Known(entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
-      if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
-      return models.Blueprint(mesh + ".bp");
-    });
+    const bool original = effectsLook == EffectsLook::Original || f.original;
+    std::string faction;
+    if (!original && !bubbles_.empty()) {
+      if (f.shield) {
+        faction = MeshFaction(mesh);
+      } else if (moho::Vfs::Normalize(mesh).find("shieldsection") != std::string::npos) {
+        const Vec3 at{f.position[0], f.position[1], f.position[2]};
+        float best = 1.0f;  // (made at its bubble's centre)
+        for (const auto& b : bubbles_)
+          if (Length(b.first - at) < best) {
+            best = Length(b.first - at);
+            faction = b.second;
+          }
+      }
+    }
+    const Model* model = nullptr;
+    if (!faction.empty()) {
+      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction);
+    } else {
+      model = Known(original ? originalEntityModels_ : entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
+        if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
+        return models.Blueprint(mesh + ".bp", original);
+      });
+    }
     if (!model || !model->ok) continue;
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)

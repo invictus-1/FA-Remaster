@@ -251,6 +251,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   u->unitStates.insert("Patrolling");
   PatrolSearchBox(sim, u, *t->pdata);
   AirSpeedThroughEvent(sim, u);  // the patrol task ctor
+  AttackerUnpackStop(sim, u);    // ctor 0x61b009..0x61b067: standing unpacked with AI.NeedUnpack: SetDesiredTarget(none)
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -416,17 +417,34 @@ void StartHead(Sim& sim, Unit* u) {
       default:
         break;
     }
-    if (IsPatrolType(c.type) && u->motion.bp && u->motion.bp->mobile() && !u->immobile) {
+    // (no Immobile test anywhere in DispatchTask 0x608ef0: a unit standing unpacked (Unit:SetImmobile) is given its
+    // move or patrol task as any other; the task's ctor packs it up (AttackerUnpackStop) and the steering holds
+    // still while the state lasts. Seen: LAND 1679, two heavy artillery (url0304) unpacked and firing were given a
+    // player's Move: the original's navigators took the goal at 1680 and the units drove off; ours dropped the
+    // order ("not carried out ... immobile").)
+    if (IsPatrolType(c.type) && u->motion.bp && u->motion.bp->mobile()) {
       u->task = StartPatrolTask(sim, u, c);
       u->headState = kRunning;
       return;
+    }
+    // DispatchTask's Reclaim case (0x609894: IssueReclaimTask 0x61ef60(parent, &cmd+0x11c)) makes the task only for
+    // a live entity: the order's CAiTarget weak entity (+4, 0x61ef7e..0x61ef8c) null -> parent+0x2c = 2 (0x61efdc)
+    // and no task, so the dispatcher pops the order in the same beat. That is every order that names a place
+    // (DecodeFromSSTITarget 0x5e2620: type 2 = {2, no entity, place}) and every entity order whose entity was gone
+    // when the command was made (type 1: looked up by id, null if gone). Seen (Skirmish 681): the player's Reclaim
+    // at 680 names tree group 0x2ff004d0, which broke up at 679 (TreeGroup.OnCollision -> Breakup -> Destroy); the
+    // original's queue is empty at 681 and the unit just brakes; ours sent it to the old approach fallback below
+    // (Moving, a path search) until the player's next Reclaim at 683.
+    if (c.type == CommandType::Reclaim && !(c.targetId && sim.FindEntity(c.targetId))) {
+      PopHead(u);
+      continue;
     }
     if (BuildTask* bt = StartBuildTask(sim, u, c)) {
       u->task = bt;
       u->headState = kRunning;
       return;
     }
-    bool mobile = u->motion.bp && u->motion.bp->mobile() && !u->immobile;
+    bool mobile = u->motion.bp && u->motion.bp->mobile();
     if ((MoveLike(c.type) || ApproachLike(c.type)) && mobile) {
       SetMoving(u, true);
       bool driving = u->motion.hasGoal || (u->motion.vel.x * u->motion.vel.x + u->motion.vel.z * u->motion.vel.z) > 1e-6f;
@@ -434,6 +452,9 @@ void StartHead(Sim& sim, Unit* u) {
       u->motion.failed = false;
       (void)driving;
       RunPathSearch(sim, u, true);  // land units queue their search in the navigator
+      // NewMoveTask 0x6190a0 sets the navigator's goal first, then the ctor (CUnitMoveTask 0x618638, the
+      // form-and-move task's 0x619401) packs up a unit standing unpacked with AI.NeedUnpack
+      if (MoveLike(c.type)) AttackerUnpackStop(sim, u);
       if (MoveLike(c.type)) AirSpeedThroughEvent(sim, u);  // the move task ctor
       return;
     }
@@ -472,6 +493,22 @@ void StartHead(Sim& sim, Unit* u) {
 // drone's own place, ours (the navigator's AbortMove after the teardown) was the point a second ahead.
 static bool HeadTaskStopsMotion(const Unit* u) {
   return u->isPod && u->task && u->task->type == CommandType::AssistCommander;
+}
+
+// The unit's command thread sleeps on its navigator: a dispatched Move task, or a task's walking child (the
+// CUnitMoveTask a repair, reclaim, capture ... task pushes on the thread: its ctor 0x6180e0 suspends the thread until
+// the navigator's event, item 111). Clearing the queue destroys the command, which wakes the thread, and a woken
+// thread is linked in at the command stage's new end (beat_order.md 2.6). Seen (Skirmish 809): M28 re-issues the
+// commander's Repair (IssueClearCommands + IssueRepair, m28orders.lua:791) at 716 while its walking child is under
+// way; the original's commander then works on the structure after both engineers every beat (the structure's
+// fraction, summed in that order, matches the original's to the bit from 742; ours added the commander's share
+// between the two and differed in the last bits), so an engineer finishes it at 809, not the commander, and M28's
+// OnConstructed (first finisher only) gives the commander no new order.
+static bool ThreadAsleepOnMove(const Unit* u) {
+  if (u->commands.empty() || u->headState == kNotStarted) return false;
+  if (u->commands.front()->type == CommandType::Move) return true;
+  const BuildTask* t = u->task;
+  return t && (t->moving || (t->sub && t->sub->moving)) && u->motion.hasGoal;
 }
 
 void ForgetUnitCommands(Unit* u) {
@@ -944,6 +981,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // idle ones are dispatched first, whatever their ids. Seen: 28 ships ordered to one place, each reserving
       // its spot at dispatch (formation AdjustPosition); the ones already moving came last and had to give way.
       const bool moveAsleep = hadCommands && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+      const bool asleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
       u->clearKeepsMove = keep;
       const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
       ForgetUnitCommands(u);
@@ -955,7 +993,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep) SetMoving(u, false);
       if (!keep && hadCommands && !stopped) MotionStop(u);
-      if (moveAsleep) sim.ResumeCommandThread(u);
+      if (asleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
       at = -1;
     }
@@ -979,8 +1017,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 }
 
 void IssueClearCommandsTo(Sim& sim, Unit* u) {
-  const bool moveAsleep =
-      !u->commands.empty() && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+  const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
   const bool stopped = HeadTaskStopsMotion(u);
   ForgetUnitCommands(u);
   if (!stopped) MotionStop(u);

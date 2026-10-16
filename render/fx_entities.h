@@ -34,6 +34,13 @@ class FxEntities {
   // thread itself. `original`: what it and what it makes show in the original look (the stand's
   // side by side).
   bool Spawn(const std::string& blueprint, Vec3 at, bool original, std::string* error);
+  // What the stand makes itself, as the game's scripts would (a shield and its hits): an entity drawn
+  // with a mesh blueprint ("/effects/entities/shield01/shield01_mesh"), placed, turned and sized, gone
+  // after `seconds` (0: at Clear); `shield`: a shield's bubble. Then emitters made on it ("CreateEmitterAtBone",
+  // "CreateEmitterOnEntity", ...) and calls on them ("OffsetEmitter", ...). At the time of the last Advance.
+  uint32_t AddEntity(const std::string& mesh, Vec3 at, const Quat& turn, Vec3 scale, bool shield, bool original, float seconds);
+  uint32_t AddEmitter(const std::string& how, uint32_t entity, const std::string& blueprint);
+  void CallEmitter(uint32_t effect, const std::string& name, const std::vector<float>& numbers);
   // Ends all that plays: the entities go, their threads stop. What they left (decals, light) runs out.
   void Clear();
   // Moves time on to `now` (seconds): the threads run tick by tick (tick n at n / 10 seconds), the

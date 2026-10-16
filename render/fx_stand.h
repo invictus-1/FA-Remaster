@@ -38,6 +38,11 @@ struct FxStandSetup {
   // nuke's impact makes its controller, its own scripts run (fx_entities.h)
   std::string entity;
   uint32_t seed = 1;         // where the entities' Random starts
+  // a unit (its id, "UEB4301") with its shield up at `at` (its blueprint's Defense.Shield), hit from
+  // random directions above the ground every `hitEvery` seconds with its own hit effects (ImpactMesh,
+  // ImpactEffects), as the game's shield script makes them
+  std::string shield;
+  float hitEvery = 0.8f;
 };
 
 class FxStand {
@@ -59,6 +64,8 @@ class FxStand {
     std::vector<uint32_t> carried;   // emitters riding on the shot
     std::vector<uint32_t> trails;
     bool flying = false;
+    double nextHit = 0;  // --fx-shield
+    uint32_t rng = 1;
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;
@@ -68,6 +75,10 @@ class FxStand {
   float speed_ = 30;
   std::vector<std::string> polyTrails_, fxTrails_, impact_;
   std::string entity_;            // the effect entity's blueprint: --fx-entity, or what the shot's impact makes
+  // --fx-shield: the unit's, and what its blueprint says of its shield
+  std::string shieldUnit_, shieldMesh_, impactMesh_;
+  std::vector<std::string> impactEffects_;
+  float shieldSize_ = 0, shieldOffset_ = 0;
   std::unique_ptr<FxEntities> entities_;
   std::vector<FrameEffectEvent> events_;
   std::vector<Side> sides_;

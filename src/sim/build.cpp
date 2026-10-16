@@ -42,7 +42,6 @@
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "sim/formation.h"
-#include "sim/intel.h"
 #include "sim/transport.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
@@ -1268,19 +1267,10 @@ int TickAssistLegacy(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 // resource fraction) and yields that share of its value to the army's income and reclaim stat;
 // a unit loses that share of its maximum health. At nothing left the target's OnReclaimed runs.
 int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
-  if (!t.goalId) {
-    // CUnitReclaimTask::Execute 0x61f02e, a task made without an entity (the order named only a place: something
-    // the player's army no longer saw, or a click on bare ground): every beat it asks the army's recon data
-    // whether the place is in sight (recon vt+0x10 with the place and 8 = vision). In sight: there is nothing
-    // there to reclaim, the task ends as failed (OnStopReclaim first if it had started, which it cannot have
-    // here). Not in sight: the unit goes there. (Read as far as the test; the walk is the plain move of the
-    // states below with the place for a target.)
-    const int a = u->army ? u->army->index - 1 : -1;
-    if (a < 0 || (ReconAtPoint(sim, a, t.site, 0) & 8u)) return kTaskFailed;
-    if (!CanMove(u) || u->motion.failed || u->motion.arrived) return kTaskFailed;
-    if (!u->motion.hasGoal) MoveToward(sim, u, t.site);
-    return kTaskRunning;
-  }
+  // (CUnitReclaimTask::Execute 0x61f02e has a first case for a task "created without an entity" (task+0x4c, the
+  // place at +0x50: the place in the army's sight -> result 2, else on to the body). It is never reached: the ctor
+  // 0x61eb60 sets +0x4c only for a null entity (0x61ecf2..0x61ed0a), and its one caller, IssueReclaimTask 0x61ef60
+  // (0x61efc0), makes the task only for a live one. An order without an entity ends in the dispatcher (StartHead).)
   // The original's task, state by state (above). (MOHO64_OLD_RECLAIM=1: the shorter form this had before, kept
   // for comparing the two on a replay.)
   static const bool oldForm = getenv("MOHO64_OLD_RECLAIM") != nullptr;
@@ -2507,6 +2497,7 @@ BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   if (G && (G->beingBuilt || G->unitStates.count("Upgrading")) && !Cat(sim, G, "FACTORY") && !Cat(sim, G, "SHIELD") &&
       !Cat(sim, G, "SILO") && !Mobile(G))
     g.endWhenIdle = true;
+  AttackerUnpackStop(sim, u);  // 0x6115a0..: standing unpacked with AI.NeedUnpack: SetDesiredTarget(none)
   t->state = 3;
   if (!(g.ferryFactory || Cat(sim, u, "NOFORMATION"))) {
     if (Cat(sim, u, "FACTORY") && !Mobile(u)) {
@@ -2729,14 +2720,12 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       return StartOverchargeTask(sim, u, c);
     case CommandType::Reclaim:
       if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
-      // (an order that names a place and no entity: the task is made all the same, "created without an entity",
-      // task+0x4c, with the place at +0x50; see TickReclaim)
-      if (!c.targetId && !c.hasPos) return nullptr;
+      // (an order without a live entity, a place included, makes no task: IssueReclaimTask 0x61ef60; the
+      // dispatcher pops it before this, StartHead)
+      if (!c.targetId || !sim.FindEntity(c.targetId)) return nullptr;
       t->order = "Reclaim";
       t->goalId = c.targetId;
-      if (!c.targetId) t->site = c.pos;
-      if (c.targetId && sim.FindEntity(c.targetId))
-        ReclaimTaskAbortMove(u);  // (the reclaim task's ctor: DispatchTask 0x60989c -> IssueReclaimTask 0x61ef60)
+      ReclaimTaskAbortMove(u);  // (the reclaim task's ctor: DispatchTask 0x60989c -> IssueReclaimTask 0x61ef60)
       break;
     case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus
       if (!c.targetId) return nullptr;

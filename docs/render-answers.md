@@ -4,6 +4,82 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui (offered, 2026-10-15): two more settings for slower cards, measured
+
+Chris chose these as the next renderer work ("the boring stuff"). Both default to what was there before;
+render 7b1bf25.
+- **Shadow size**: `world()->shadowSize`, the sun's shadow maps' width and height in texels. 2048 as
+  before; any size from 512 to 4096, applied from the next frame (no reload).
+- **Texture detail**: `WorldPicture::SetTextureDetail(n)` BEFORE `Open` (like `gSceneSamples`). 0 all sizes
+  (as before); 1 leaves out each texture's largest size (half the width and height); 2 the two largest.
+  Only textures larger than 256 whose file has the smaller sizes; map data, cube maps and small textures
+  stay whole. It applies to what the next Open loads.
+
+Measured on the RTX 4090: rebuilt Seton's, an M28 game at tick 3000, by day, 2560x1440, no vsync, 150
+frames (graphics card ms a frame; runs differ by about 0.15 ms):
+
+| Setting | Card | Sun shadows | Texture memory | Looks (close-ups in the lab) |
+|---|---|---|---|---|
+| Today: shadows 2048, texture detail 0 | 4.06 | 0.40 | 1291 MB | |
+| Shadows 4096 | 4.62 | 0.62 | | edges crisp; 2048 is nearly as sharp |
+| Shadows 1024 | 3.84 | 0.30 | | edges visibly softer |
+| Shadows 512 | 3.76 | 0.28 | | blurred; too soft for a preset |
+| Texture detail 1 | 3.92 | | 461 MB | hardly seen at a close zoom |
+| Texture detail 2 | 4.08 | | 255 MB | panel detail a little soft up close |
+
+So texture detail saves memory, not time, on a fast card: worth it on cards with little memory (4 GB),
+not needed on a 3060 (12 GB) or 8 GB cards: a late 8-army game on the rebuilt map takes 1.3 GB of
+textures at full detail. For the same reason textures are not unloaded during a game; everything is let
+go when a game's picture is closed.
+
+Suggested mapping to the game's own Video items (the mapping is yours and Chris's):
+- Shadow Fidelity: Off as now (`shadowsOn` false); Low 1024; Medium 2048; High 4096 with lamp shadows
+  (as now). High costs about 0.2 ms more than today on the 4090.
+- Texture Detail (the game's own item, if your Video tab has it): High 0, Medium 1, Low 2, set before the
+  game's picture opens.
+
+## visuals, section 26: shield domes per faction (2026-10-15)
+
+Done (render 5c2c310), with one correction first. `ShieldSection01` is not the dome: it is the FLASH
+where a shield is hit (Defense.Shield.ImpactMesh), a patch of a sphere turned toward the hit. The dome
+is Defense.Shield.Mesh, and every faction has its own: from the game's unit blueprints,
+- `Shield01_mesh` (shader ShieldUEF; Shield01_Albedo, Shield01_Specular, Shield01_Secondary): UEF only:
+  UEB4202 UEB4301 UEL0001 UEL0301 UEL0307 UEL0401 XEA0306 XES0205;
+- AeonShield01 (UAB4202 UAB4301 UAL0303 UAL0307), CybranShield01 (URB4202/4204-4207), SeraphimShield01
+  (XSB4202 XSB4301 XSL0307), CzarShield (UAA0310).
+- The flash `ShieldSection01_mesh` (ShieldSection01_Albedo, and ShieldSection01_Normals read as its second
+  map): UEF, Aeon and Seraphim, the 15 units above but the Cybran's, which use ShieldSection01b.
+So the UEF dome can take your textures at the game's own path
+(`effects/Entities/Shield01/Shield01_Albedo.dds` ...), touching no other faction. For the shared flash,
+the remastered look now reads the shield's faction's first:
+`_effects/export/moho64/effects/Entities/ShieldSection01/uef/ShieldSection01_Albedo.dds` and
+`.../uef/ShieldSection01_Normals.dds` (later `aeon/`, `seraphim/`; the Cybran's ShieldSection01b the same
+way under `cybran/`), else your file at the folder itself, else the game's. The same faction folder
+works for a dome too, though the dome needs none. The faction is the bubble's (by its dome mesh, or for a
+personal shield the unit whose mesh it is), and the game makes each flash at its bubble's centre, which is
+how the renderer finds whose a flash is. Checked with a stand-in green texture of mine under `uef/`: the
+remastered side's flashes took it, the original side's kept the game's.
+
+Seeing it: `--fx-shield UEB4301 --fx-at x,z` shows the unit with its shield up, hit from random
+directions above the ground every `--fx-hit-every` seconds (0.8) with its own flash and its
+ImpactEffects (UEB4301's UEFShieldHit01 is a single `_test_shield_impact` emitter), as the game's shield
+script makes them: the flash for two seconds, the hit's emitters moved out to the hit. `--fx-compare`
+puts remastered left, original right, both hit in the same places (`--fx-spacing 70` for this size).
+`--fx-seed` changes the hits. Made again every `--fx-repeat` seconds (20). Example:
+`moho64view --init offline/bin/init_lab.lua --remasters visuals/work --map /maps/SCMP_009/SCMP_009.scmap
+--time-of-day 19 --fx-shield UEB4301 --fx-at 672,346 --fx-compare --fx-spacing 70`.
+Fixed on the way, also for games: an emitter made at an entity and then offset (the hit's emitters)
+stayed at the entity's centre, inside the dome; it is now moved out when the offset comes.
+
+The numbers the renderer uses today, and could read per faction (one small table beside your textures,
+say `<folder>/<faction>/shield_look.bp`; tell me which you want and I'll read them):
+- Bubble: tint (UEF 0.25 0.5 1.0; Aeon 0.35 1.0 0.75; Cybran 1.0 0.2 0.12; Seraphim 0.95 0.85 0.55); rim
+  sharpness 2.5 (a power of how edge-on it is seen) and rim brightness 2.0; the pattern (the albedo's red
+  x green at sizes 3 and 7, drifting 0.01, 0.03 and -0.02, -0.013 a second) at brightness 1.2 over a base
+  of 0.8; see-through 0.05 + 0.45 x rim + 0.18 x pattern; at night less of all of it.
+- Flash: colour 0, 0, 0.5 plus the second map's red; brightness 4 in the modern look; the ring (albedo
+  green) sliding outward at the original's speeds; it fades from 2 seconds at 0.2 a second.
+
 ## visuals, section 25: a remastered look for the UEF's ball of fire (2026-10-15)
 
 Done, waiting for your two files. In the remastered look, when your
@@ -155,8 +231,8 @@ look only (the original's emitters have none and draw as before); rename any you
 - **Quality levels**: one setting for the whole game (World::effectsQuality, a player option through the
   interface; `--effects-quality 0.5` in the viewer) scales how many particles every emitter throws;
   `KeepAtLowQuality = true` keeps an emitter's in full (a flash's few, a shell's own glow).
-Seen at night with your Gauss hit: it lights the ground around it and fades
-(`_scratch/render/review/fx/hitnight_sheet.jpg`, remastered left, original right).
+Seen at night with your Gauss hit: it lights the ground around it and fades (a sheet in the lab,
+remastered left, original right).
 
 ## ui, to the renderer 21: life bars over own and allied units only (2026-10-15)
 
@@ -275,8 +351,7 @@ rule for explosions and scorch marks, which is right for those), so only the dep
 the first beat were known. A deposit's mark belongs to the map: it is made whatever the army sees,
 on the ground and as an icon. Seen as one army of the eight at 7 seconds, fog of war on, from the
 whole map's height at his picture's size: all 108 mass and 8 hydrocarbon deposits, on both sides
-and the islands (`_scratch\render\review\spots\whole_focus8.png` in the lab, beside his
-`original_mass_and_hydro_spots_fully_zoomed_out.webp`).
+and the islands (a picture in the lab, beside his of the original fully zoomed out).
 
 Nothing for your host to do beyond the rebuild.
 
@@ -352,8 +427,7 @@ strip's middle and how wide the strip is there, both of which do run evenly, and
 
 Seen in the viewer from straight above, in fog (where shafts are plain) and in clear air: both
 shafts run from the eyes straight ahead along the middle of the broad light
-(`_scratch\render\review\eyebeam\fixed_three.png` in the lab: before in fog, after in fog, after in
-clear air). Every unit's head-lamp shafts were drawn this way, so engineers' and tanks' are
+(pictures in the lab: before in fog, after in fog, after in clear air). Every unit's head-lamp shafts were drawn this way, so engineers' and tanks' are
 straightened by the same change; lightning bolts are strips of one width and were not affected.
 
 He had found the beams fine in between: from a low camera the strip is seen along its length and

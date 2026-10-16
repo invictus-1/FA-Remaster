@@ -276,6 +276,10 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t);
 void ClearEngagement(Sim& sim, Unit* u);
 // CAiAttackerImpl::Stop 0x5d56f0: the unit's desired target is cleared (SetDesiredTarget(none)).
 void AttackerStop(Sim& sim, Unit* u);
+// The unpack test of the task ctors (move 0x618638, form-and-move 0x619401, patrol 0x61b009, guard, attack
+// 0x5f2c22) and of the attack task's Update 0x5f303e and back-off 0x5f38b8: a unit standing unpacked (IsUnitState(Immobile))
+// whose blueprint has AI.NeedUnpack (bp+0x48c) and that has an attacker gets SetDesiredTarget(none) (vt+0x20).
+void AttackerUnpackStop(Sim& sim, Unit* u);
 
 // UnitWeapon::CanAttackTarget 0x6d5720.
 bool WeaponCanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t);

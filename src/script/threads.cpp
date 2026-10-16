@@ -14,7 +14,9 @@ namespace moho {
 namespace {
 
 const char kSchedKey = 0;
-std::string g_threadError;  // traceback captured when a coroutine fails
+// traceback captured when a coroutine fails; one per OS thread, since the sim's and the interface's schedulers
+// may run on different threads (an interface host may tick the sim on a worker)
+thread_local std::string g_threadError;
 
 // Build "message\nstack traceback:\n\t..." from the failing coroutine before it unwinds.
 void OnResumeError(lua_State* co, int) {
