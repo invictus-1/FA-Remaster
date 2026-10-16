@@ -1262,6 +1262,13 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   const bool undispatched = !u->isPod && u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
   const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
+  // Nor is a guard that steers itself (its follow goal handed to the navigator directly, no move task): its dtor
+  // 0x611850 aborts the move only when the unit moved this beat (unit+0xb4 != +0xd0; EndGuard does that). Seen:
+  // Skirmish 2047, army 2's engineer 0x20000a, its guard following toward (863.5, 433.5) since 2046 and not moved yet,
+  // is cleared by M28: the original's navigator goes on (target (847.5, 424.5) at 2048) until the Guard M28 gives it
+  // at 2050; ours stopped it. (Land units only: a guarding aircraft that flies has moved every beat, and its abort is
+  // still made here. Seen: bench 251, aircraft guarding cleared in flight are stopped in the original.)
+  const bool guardSelf = !u->motion.air && !u->commands.empty() && u->headState == kRunning && GuardSteersItself(u);
   // CUnitMoveTask's dtor clears state Moving (0x6187bd) BEFORE its AbortMove, as in the stream's clear above: the
   // abort's CheckCollisions sees this unit standing ("a standing unit has priority over a mover"). Seen: Skirmish
   // 1890, M28 clears army 6's engineer 0x60001b walking beside the engineer 0x600024 (IssueClearCommands +
@@ -1270,7 +1277,7 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   if (moveAsleep) SetMoving(u, false);
   if (loadMove) MotionStop(u);  // (the child move first)
   ForgetUnitCommands(u);
-  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits) MotionStop(u);
+  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf) MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
   AttackerStop(sim, u);
