@@ -1409,6 +1409,18 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     }
     u->lastPosition = u->position;
   }
+  // The entity grid takes the unit by its box WIDENED to its skirt from the start. The Entity ctor (0x677c90 ->
+  // StandardInit 0x678370 -> RevertCollisionShape 0x67ae70) makes the primitive and registers its plain box at the
+  // entity's initial transform, the origin (SSTIEntityVariableData 0x558760). The Unit ctor then sets the pending
+  // transform to the unit's own (0x6a5bf9..0x6a5c51) and calls AdvanceCoords 0x678f10 twice (0x6a5c59, 0x6a5c5f):
+  // the first sees the transform change (origin -> here, 0x67904b memcmp) and calls vt+0x84, Unit::UpdateCollision
+  // 0x6ab520 (0xe2a5ec + 0x84 = 0xe2a670), the skirt-wide box. So a structure that never moves is in the cells of
+  // its skirt: GetUnitsInRect around a build site next to a finished mex returns the mex. (Only a later shape change
+  // from Lua, e.g. AirUnit's RevertCollisionShape when it lands, puts a unit back on its plain box until it moves.)
+  // Seen: Skirmish 969, M28's IsEngineerAvailable finds a finished mex in GetUnitsInRect of engineer 0x11's pgen
+  // site (676.99, 349.99; the mex 0x3 at 680.5 has a 2.5-wide skirt, x from 679.25: cell 169) and makes it
+  // available: one Lua Random more (m28factory.lua:273), and at 979 the two engineers stop to build closer.
+  GridUpdate(*this, u, true);
   // the constructor gives both poses the unit's transform (0x6a5c74, 0x6a5c82)
   u->poseBasePos = u->prevPoseBasePos = u->position;
   u->poseBaseOri = u->prevPoseBaseOri = u->orientation;

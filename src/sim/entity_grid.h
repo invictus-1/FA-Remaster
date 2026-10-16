@@ -43,16 +43,16 @@ class EntityGrid {
 
 // Entity::UpdateCollision / UpdateRect: the entity's cell span from its collision primitive (none: no
 // cell). widened: a unit's box half-extents in X and Z become half max(Size, |SkirtOffset| + SkirtSize)
-// (Unit::UpdateCollision); else the plain primitive (shape changes from Lua, creation).
+// (Unit::UpdateCollision, also in the Unit constructor); else the plain primitive (shape changes from Lua).
 void GridUpdate(Sim& sim, Entity* e, bool widened);
 void GridRemove(Sim& sim, Entity* e);
 // Step 13 of the beat (Entity::AdvanceCoords): every unit's widened span, and the span of everything in the third
 // list, in the order they were made (the order their turns set their transforms in).
 void GridAdvanceCoords(Sim& sim);
 // Whether a grid query of the box [mn, mx] finds the entity: the cells it is registered in (its span as the grid
-// has it: skirt-wide for a unit that moved since it was made, and as of the last AdvanceCoords) against the
-// box's cells (func_AABoxToRect 0x4fcbe0). GatherUnmarkedUnitsInBox 0x721c00 and CollectEntitiesInBox 0x721dc0
-// see only these before any box is compared.
+// has it: skirt-wide for a unit unless a script set its shape since it last moved, as of the last AdvanceCoords)
+// against the box's cells (func_AABoxToRect 0x4fcbe0). GatherUnmarkedUnitsInBox 0x721c00 and CollectEntitiesInBox
+// 0x721dc0 see only these before any box is compared.
 bool GridFindsInBox(Sim& sim, const Entity* e, float x0, float z0, float x1, float z1);
 
 }  // namespace moho
