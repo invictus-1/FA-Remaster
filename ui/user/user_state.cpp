@@ -158,10 +158,19 @@ void UserState::GameLoaded() {
   ++syncCount;
   RefreshUserUnits(state_->L());
   CopyFromSimulation();
-  lua_pushboolean(state_->L(), 0);  // not a replay
+  // CreateGameInterface(isReplay): a replay's screen has no orders panel (FAF's gamemain.lua 286).
+  lua_State* L = state_->L();
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "SessionIsReplay");
+  const bool replay = lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_toboolean(L, -1);
+  lua_settop(L, top);
+  // The original's order (DoInitializing 0x88c3f0, after the setup's beat): StopLoadingDialog
+  // (0x88c577: FAF lays its fading "IN TRANSIT" cover over the screen), then CreateGameInterface
+  // (0x88c5cd), then OnStart; the game's beats run after that.
+  CallProvider("StopLoadingDialog");
+  lua_pushboolean(L, replay ? 1 : 0);
   CallProvider("CreateGameInterface", 1);
   gameInterface = true;
-  CallProvider("StopLoadingDialog");
 }
 
 bool UserState::StartFrontEnd() {

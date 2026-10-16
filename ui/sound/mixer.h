@@ -57,6 +57,7 @@ class Mixer {
   // A voice's place among the listener's ears: a factor for the left and one for the right, on
   // top of its own loudness (a sound of the world, as the listener moves; 1 and 1 at first).
   void Place(int voice, float left, float right);
+  bool PlaceOf(int voice, float* left, float* right);  // (false: no such voice)
   // How many voices of a category sound or wait, and the oldest of them (0: none).
   int CountOf(int category, int* oldest);
 

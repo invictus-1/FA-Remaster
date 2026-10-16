@@ -91,6 +91,16 @@ void Mixer::Place(int voice, float left, float right) {
     if (v.id == voice) v.left = left, v.right = right;
 }
 
+bool Mixer::PlaceOf(int voice, float* left, float* right) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const Voice& v : voices_)
+    if (v.id == voice) {
+      *left = v.left, *right = v.right;
+      return true;
+    }
+  return false;
+}
+
 bool Mixer::Alive(int voice) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (const Voice& v : voices_)

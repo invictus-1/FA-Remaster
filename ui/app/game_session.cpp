@@ -329,6 +329,32 @@ std::string ProfileName(lua_State* L) {
   return name;
 }
 // (UTF-8 text and paths both ways; std::filesystem's own u8 forms are char8_t under C++20)
+// The session's mods from a list of mod tables (GameMods, scenarioMods) at `list`: their uids, in order.
+std::vector<std::string> ModUids(lua_State* L, int list) {
+  std::vector<std::string> uids;
+  for (int i = 1; lua_istable(L, list); ++i) {
+    lua_rawgeti(L, list, i);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      break;
+    }
+    lua_getfield(L, -1, "uid");
+    if (lua_isstring(L, -1)) uids.push_back(lua_tostring(L, -1));
+    lua_pop(L, 2);
+  }
+  return uids;
+}
+// Whether the player has the debug facilities on (the preference debug.enable_debug_facilities:
+// the original's USER_DebugFacilitiesEnabled 0x8cae20, which gives a single-player session its cheats).
+bool DebugFacilities(lua_State* L) {
+  const int top = lua_gettop(L);
+  bool on = false;
+  lua_getglobal(L, "GetPreference");
+  lua_pushstring(L, "debug.enable_debug_facilities");
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0) on = lua_toboolean(L, -1) != 0;
+  lua_settop(L, top);
+  return on;
+}
 std::filesystem::path PathOf(const std::string& utf8) { return std::filesystem::path(std::u8string(utf8.begin(), utf8.end())); }
 std::string TextOf(const std::filesystem::path& p) {
   const std::u8string s = p.u8string();
@@ -356,18 +382,8 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   if (!SessionFromGameConfig(L, config, params, &session, why)) return false;
 
   // The session's mods are the configuration's GameMods, by uid, in order.
-  std::vector<std::string> uids;
   lua_getfield(L, config, "GameMods");
-  for (int i = 1; lua_istable(L, -1); ++i) {
-    lua_rawgeti(L, -1, i);
-    if (!lua_istable(L, -1)) {
-      lua_pop(L, 1);
-      break;
-    }
-    lua_getfield(L, -1, "uid");
-    if (lua_isstring(L, -1)) uids.push_back(lua_tostring(L, -1));
-    lua_pop(L, 2);
-  }
+  const std::vector<std::string> uids = ModUids(L, lua_gettop(L));
   lua_pop(L, 1);
 
   // The day and the weather: the game's options where it has them (the lobby's Remaster...
@@ -381,6 +397,42 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   playData_.clear();
   play_.reset();
   if (!StartSession(session, uids, why)) return false;
+  last_ = std::make_unique<SessionDescription>(session);
+  lastUids_ = uids;
+  lastWasReplay_ = false;
+  return true;
+}
+
+
+bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
+  if (info < 0) info = lua_gettop(L) + info + 1;
+  if (sim_) {
+    *why = "Can't launch a session while one is already launching or running.";  // (the original's words, 0xe4a3c8)
+    return false;
+  }
+  SessionDescription session;
+  SinglePlayerParams params;
+  params.seed = seedGiven ? seed : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  params.cheats = DebugFacilities(L);
+  if (!SessionFromSinglePlayerInfo(L, info, params, &session, why)) return false;
+  lua_getfield(L, info, "scenarioMods");
+  const std::vector<std::string> uids = ModUids(L, lua_gettop(L));
+  lua_pop(L, 1);
+  skyNow_ = sky;
+  seed_ = session.header.seed;
+  lua_getfield(L, info, "scenarioInfo");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "Options");
+    if (lua_istable(L, -1)) ReadLookOptions(L, lua_gettop(L));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  profile_ = ProfileName(L);
+  playData_.clear();
+  play_.reset();
+  if (!StartSession(session, uids, why)) return false;
+  Logf(LogLevel::Info, "moho64ui: a single-player session: %s, %zu armies%s", session.header.map.c_str(), session.header.armies.size(),
+       params.cheats ? ", cheats on (the debug facilities)" : "");
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = false;
@@ -476,7 +528,8 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
 // Replay dialog lists it and the original game could open it too.
 void GameSession::StartReplayFile(const SessionDescription& session) {
   if (replay_) std::fclose(replay_), replay_ = nullptr;
-  if (session.replay || userDir.empty() || profile_.empty()) return;
+  if (!session.createReplay && !session.replay) currentReplay.clear();  // (a campaign's operation: none, as the original)
+  if (session.replay || !session.createReplay || userDir.empty() || profile_.empty()) return;
   std::error_code ec;
   const std::filesystem::path folder = PathOf(userDir) / "replays" / PathOf(profile_);
   std::filesystem::create_directories(folder, ec);
@@ -559,6 +612,7 @@ void GameSession::End() {
   interfaceBlueprints_.reset();
   rules_.reset();
   pendingSync_.clear();
+  setupSync_.clear();
   foreignLoops_.clear();
   heardLoops_.clear();
   due_ = 0;
@@ -611,7 +665,8 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
   heightsChanges_ = ~0ull;
   CopyHeights();
   CopyAllies();
-  pendingSync_ = sim_->TakeSync();
+  setupSync_ = sim_->TakeSync();
+  pendingSync_.clear();
   if (session.focusArmy >= 0 && session.focusArmy < static_cast<int>(h.armies.size())) commandSource_ = h.armies[session.focusArmy].source;
   modUids_ = uids;
   sessionMods_ = h.mods;

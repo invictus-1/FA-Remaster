@@ -87,6 +87,9 @@ struct Curve {
 // The curves by their offset in the file (sounds name them so).
 bool ParseCurves(const uint8_t* data, size_t size, std::map<uint32_t, Curve>* out);
 
+// The global settings' variables by name, each with the value it starts at ("DuckLength": 0.5).
+bool ParseVariables(const uint8_t* data, size_t size, std::map<std::string, float>* out);
+
 // The files' volume byte in decibels (0 = -96, 180 = 0, 255 = +6). A curve fitted to the sound
 // tool's own table, as other readers of these files use it.
 float VolumeByteToDecibels(uint8_t b);

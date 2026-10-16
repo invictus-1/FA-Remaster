@@ -361,9 +361,10 @@ int l_LooksForTests(lua_State* L) {
     lua_pushnumber(L, numberValues[i]);
     lua_rawset(L, -3);
   }
-  const char* switches[5] = {"iconsAlways", "bloom", "edgePans", "arrowsPan", "lockCursor"};
-  const bool switchValues[5] = {looks.iconsAlways, looks.bloom, keys.edgePans, keys.arrowsPan, LockCursor().on};
-  for (int i = 0; i < 5; ++i) {
+  const char* switches[8] = {"iconsAlways", "bloom", "edgePans", "arrowsPan", "lockCursor", "strategicIcons", "selectionMarks", "worldShown"};
+  const bool switchValues[8] = {looks.iconsAlways, looks.bloom, keys.edgePans, keys.arrowsPan, LockCursor().on,
+                                looks.strategicIcons, looks.selectionMarks, looks.worldShown};
+  for (int i = 0; i < 8; ++i) {
     lua_pushstring(L, switches[i]);
     lua_pushboolean(L, switchValues[i]);
     lua_rawset(L, -3);

@@ -34,10 +34,25 @@ class SoundSystem {
   // Play a cue; 0 when there is no such cue (logged once per cue). With `prepareOnly` the sound
   // waits for Start. The number stands for the cue's playing: Stop and Playing take it.
   int Play(const std::string& bank, const std::string& cue, bool prepareOnly = false);
+  // A voice that ducks the other sounds while it plays (PlayVoice with its second argument).
+  // As the original's sound manager (FA exe, CUserSoundManager): the game ramps one variable of
+  // its sound settings, "Duck", from 0 to 1 over "DuckLength" seconds (0.5 in SupCom.xgs) when
+  // the first ducking voice starts, and back to 0 over the same time when the last one ends. The
+  // cut itself is the settings' curve by "Duck" (down to 10 dB less), which the sound banks give
+  // nearly every sound of the world and a few ambient loops; music, voices and the interface's
+  // sounds have none and so are not ducked.
+  void Duck(int handle);
+  // Every frame, with the real seconds since the last one (menus too; the game's pause does not
+  // hold it): the duck's ramp moves on, and ducking voices that have ended let go of it.
+  void Update(float seconds);
+  float duck() const { return duck_; }
   void Start(int handle);
   void Stop(int handle, bool immediate);
   void StopAll();
   bool Playing(int handle);
+  // Where a playing cue's first voice is set among the ears (its loudness by its curves and the
+  // duck, on top of its own); false when it plays no more. (For tests.)
+  bool Placement(int handle, float* left, float* right);
 
   // A category's volume as the player sets it (1: as the game's files have it); false when there
   // is no category of that name. Pausing holds every sound of the category and of those inside.
@@ -110,6 +125,8 @@ class SoundSystem {
   void UpdateWorld();
   bool MayStartLoop(const float position[3]) const;
   float ByCamera(const std::vector<uint32_t>& curves) const;
+  void ApplyGains();
+  void PopDuck(bool all);
   int CategoryOfCue(const std::string& bank, const std::string& cue);
   bool IsHumCategory(int category) const;
   int CategoryByName(const std::string& name) const;
@@ -126,10 +143,15 @@ class SoundSystem {
   std::map<int, std::vector<int>> handles_;  // a playing cue's voices
   std::map<uint32_t, Curve> curves_;         // the global settings' curves, by offset
   std::map<int, Placed> placed_;             // the world's playing sounds, by handle
-  std::map<int, std::vector<uint32_t>> byCamera_;  // sounds not placed that follow the camera's distance: their curves
+  std::map<int, std::vector<uint32_t>> byCamera_;  // sounds not placed that follow the camera's distance or the duck: those curves
   std::map<uint32_t, Loop> loops_;           // the entities' running sounds
   float eye_[3] = {0, 0, 0}, focus_[3] = {0, 0, 0}, right_[3] = {1, 0, 0}, zoom_ = 100;
   bool listening_ = false;  // SetListener was called: before that nothing of the world is heard
+  // The duck (see Duck): its value now (0..1), its ramp (0 still, 1 going down, 2 coming back),
+  // the seconds into the ramp, the ramp's length, how many ducking voices hold it, and those voices.
+  float duck_ = 0, duckTime_ = 0, duckLength_ = 0.5f;
+  int duckState_ = 0, duckCount_ = 0;
+  std::vector<int> ducking_;
   int worldPlayed_ = 0;
   std::map<std::string, bool> complained_;
   Mixer mixer_;

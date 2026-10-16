@@ -281,9 +281,41 @@ int l_LaunchGame(lua_State* L) {
   return 0;  // `lobby` may be gone here
 }
 
+// LaunchSinglePlayerSession(sessionInfo) (FA exe 0x88d3c0): a single-player session, an operation
+// of the campaign, from the table FAF's SinglePlayerLaunch.lua makes (playerName, createReplay,
+// scenarioInfo, teamInfo, scenarioMods, RandomSeed). The scenario's file goes into its Options as
+// ScenarioFile, where the engine reads it (FAF's ScenarioFramework.EndOperation needs it too; the
+// table has none). Nothing is returned; a session that cannot start is a script error, as in the
+// original (the briefing's pcall shows it: "Error loading map"). The front end then closes, as
+// after a lobby's launch.
+int l_LaunchSinglePlayerSession(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_settop(L, 1);
+  const auto& launch = UserState::From(L)->config().launchSinglePlayer;
+  if (!launch) return luaL_error(L, "LaunchSinglePlayerSession: this host cannot start a session");
+  lua_getfield(L, 1, "scenarioInfo");
+  if (lua_istable(L, 2)) {
+    lua_getfield(L, 2, "Options");
+    lua_getfield(L, 2, "file");
+    if (lua_istable(L, 3) && lua_isstring(L, 4)) {
+      lua_pushstring(L, "ScenarioFile");
+      lua_pushvalue(L, 4);
+      lua_rawset(L, 3);
+    }
+  }
+  lua_settop(L, 1);
+  std::string why;
+  if (!launch(L, 1, &why)) {
+    Logf(LogLevel::Warning, "moho64ui: LaunchSinglePlayerSession: %s", why.c_str());
+    return luaL_error(L, "%s", why.c_str());
+  }
+  return 0;
+}
+
 }  // namespace
 
 void RegisterLobbyBindings(lua_State* L) {
+  SetGlobal(L, "LaunchSinglePlayerSession", l_LaunchSinglePlayerSession);
   const char* cls = "CLobby";
   SetGlobal(L, "InternalCreateLobby", l_InternalCreateLobby);
   SetMethod(L, cls, "HostGame", l_HostGame);

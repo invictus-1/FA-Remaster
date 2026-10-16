@@ -33,6 +33,10 @@ SoundSystem::SoundSystem(const Vfs* vfs) : vfs_(vfs) {
     if (!ParseGlobalSettings(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &categories_))
       Logf(LogLevel::Warning, "moho64ui: sound: /sounds/supcom.xgs is not read (another layout)");
     ParseCurves(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &curves_);
+    std::map<std::string, float> variables;
+    ParseVariables(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &variables);
+    auto length = variables.find("DuckLength");
+    duckLength_ = length != variables.end() && variables.count("Duck") ? length->second : 0;  // (0: no duck, as the original without them)
   } else {
     Logf(LogLevel::Info, "moho64ui: sound: no /sounds/supcom.xgs: no sound categories");
   }
@@ -219,13 +223,14 @@ float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float positi
   }
   float e[3] = {focus_[0] - eye_[0], focus_[1] - eye_[1], focus_[2] - eye_[2]};
   float eyeDistance = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
-  float decibels = 0;
+  float decibels = 0, ducked = 0;
   for (uint32_t offset : curves) {
     auto it = curves_.find(offset);
     if (it == curves_.end() || it->second.parameter != 0) continue;
     if (it->second.variable == "Distance") decibels += it->second.At(distance);
     else if (it->second.variable == "Angle") decibels += it->second.At(angle);
     else if (it->second.variable == "CameraDistance") decibels += it->second.At(eyeDistance);
+    else if (it->second.variable == "Duck") ducked += it->second.At(duck_);
   }
   // Between the ears by where it is on screen: at the screen's edge about two thirds to one side. (Ours.)
   // The two ears SHARE the sound: one in the middle has half in each, as a sound placed in the
@@ -236,7 +241,7 @@ float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float positi
   // "cut it in half and I think we got the og sound".
   float side = ((position[0] - focus_[0]) * right_[0] + (position[2] - focus_[2]) * right_[2]) / std::max(1.0f, zoom_ * 0.5f);
   side = std::max(-1.0f, std::min(1.0f, side));
-  float gain = Linear(decibels);
+  float gain = Linear(decibels + ducked);  // (the duck makes it softer; whether it is heard at all goes by the rest)
   *left = gain * 0.5f * (1.0f - side * 0.65f);
   *right = gain * 0.5f * (1.0f + side * 0.65f);
   return decibels;
@@ -326,12 +331,15 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
          prepareOnly ? " (prepared)" : "");
   // A sound that is not placed in the world but follows the camera's distance (the game's
   // curve by "CameraDistance": the planet's rumble that the game starts with, full from far up
-  // and 20 dB less from near) is kept, to be set again as the camera moves.
+  // and 20 dB less from near) or the duck (the menu's ambient loop) is kept, to be set again as
+  // the camera moves and the duck goes.
   if (!position) {
     std::vector<uint32_t> byCamera;
     for (uint32_t offset : sound.curves) {
       auto curve = curves_.find(offset);
-      if (curve != curves_.end() && curve->second.parameter == 0 && curve->second.variable == "CameraDistance") byCamera.push_back(offset);
+      if (curve != curves_.end() && curve->second.parameter == 0 &&
+          (curve->second.variable == "CameraDistance" || curve->second.variable == "Duck"))
+        byCamera.push_back(offset);
     }
     if (!byCamera.empty()) {
       byCamera_[handle] = byCamera;
@@ -412,11 +420,9 @@ void SoundSystem::StopWorld() {
   listening_ = false;
 }
 
-// Every playing sound of the world gets its loudness and its side again; a running sound that has
-// come into hearing starts, one that has gone out of it ends.
-// What the game's curves by "CameraDistance" give now (decibels). The variable is the camera's
-// distance to the place it looks at (0x8ac226); before a game's camera has said where it is, the
-// value the game's settings file starts it with (576.76: about -12 dB by the one curve there is).
+// What the game's curves by "CameraDistance" and "Duck" give now (decibels). The camera's
+// distance is to the place it looks at (0x8ac226); before a game's camera has said where it is,
+// the value the game's settings file starts it with (576.76: about -12 dB by the one curve there is).
 float SoundSystem::ByCamera(const std::vector<uint32_t>& curves) const {
   float distance = 576.76f;
   if (listening_) {
@@ -426,12 +432,14 @@ float SoundSystem::ByCamera(const std::vector<uint32_t>& curves) const {
   float decibels = 0;
   for (uint32_t offset : curves) {
     auto it = curves_.find(offset);
-    if (it != curves_.end()) decibels += it->second.At(distance);
+    if (it != curves_.end()) decibels += it->second.At(it->second.variable == "Duck" ? duck_ : distance);
   }
   return decibels;
 }
 
-void SoundSystem::UpdateWorld() {
+// Every playing sound that follows the camera or the duck, and every playing sound of the world,
+// gets its loudness (and its side) again.
+void SoundSystem::ApplyGains() {
   for (auto it = byCamera_.begin(); it != byCamera_.end();) {
     auto voices = handles_.find(it->first);
     bool alive = false;
@@ -448,16 +456,21 @@ void SoundSystem::UpdateWorld() {
     auto voices = handles_.find(it->first);
     bool alive = false;
     float left = 1, right = 1;
-    float decibels = Heard(it->second.curves, it->second.position, &left, &right);
+    Heard(it->second.curves, it->second.position, &left, &right);
     if (voices != handles_.end())
       for (int v : voices->second) {
         if (!mixer_.Alive(v)) continue;
         alive = true;
         mixer_.Place(v, left, right);
       }
-    (void)decibels;
     it = alive ? std::next(it) : placed_.erase(it);
   }
+}
+
+// The sounds' loudness again (ApplyGains); then a running sound of the world that has come into
+// hearing starts, one that has gone out of it ends.
+void SoundSystem::UpdateWorld() {
+  ApplyGains();
   for (auto& entry : loops_) {
     Loop& loop = entry.second;
     auto placed = placed_.find(loop.handle);
@@ -512,19 +525,77 @@ void SoundSystem::Start(int handle) {
   for (int v : it->second) mixer_.Start(v);
 }
 
+// Stopped at once, a ducking voice lets go of the duck at once (FA exe 0x8ab471: only one that
+// ducked); stopped softly, when its sound has ended (Update).
 void SoundSystem::Stop(int handle, bool immediate) {
   auto it = handles_.find(handle);
   if (it == handles_.end()) return;
   for (int v : it->second) mixer_.Stop(v, immediate);
+  auto ducking = std::find(ducking_.begin(), ducking_.end(), handle);
+  if (immediate && ducking != ducking_.end()) ducking_.erase(ducking), PopDuck(false);
 }
 
-void SoundSystem::StopAll() { mixer_.StopAll(); }
+// Everything stops, and the duck is gone at once (the original's StopAllSounds, 0x8ab624).
+void SoundSystem::StopAll() {
+  mixer_.StopAll();
+  ducking_.clear();
+  PopDuck(true);
+}
+
+void SoundSystem::Duck(int handle) {
+  if (!handle) return;
+  if (duckCount_ == 0 && duckLength_ > 0) duckState_ = 1, duckTime_ = 0;  // (PushDuck, 0x8ab020: the next frame moves it)
+  ++duckCount_;
+  ducking_.push_back(handle);
+}
+
+// One ducking voice less (PopDuck, 0x8ab070): with the last one the duck comes back over its
+// length. `all`: none at once, the duck gone (the original's StopAllSounds and SetVolume).
+void SoundSystem::PopDuck(bool all) {
+  if (all) {
+    duckCount_ = 0, duckState_ = 0;
+    if (duck_ != 0) duck_ = 0, ApplyGains();
+    return;
+  }
+  if (duckCount_ == 0) return;
+  if (--duckCount_ == 0 && duckLength_ > 0) duckState_ = 2, duckTime_ = 0;
+}
+
+// As the original's frame (CUserSoundManager::UpdateDuck 0x8ab670, then its loop over the
+// scripts' sounds): the ramp first, straight in time; then the ducking voices that have ended let
+// go, so the duck comes back from the next frame. A push while it comes back starts it down again
+// from nothing, and a pop while it goes down starts it back from full: so the original.
+void SoundSystem::Update(float seconds) {
+  if (duckState_ != 0) {
+    duckTime_ = std::min(duckTime_ + std::max(0.0f, seconds), duckLength_);
+    const float v = duckTime_ / duckLength_;
+    duck_ = duckState_ == 2 ? 1 - v : v;
+    if (duckTime_ >= duckLength_) duckState_ = 0;
+    ApplyGains();
+  }
+  for (auto it = ducking_.begin(); it != ducking_.end();) {
+    if (Playing(*it)) {
+      ++it;
+      continue;
+    }
+    it = ducking_.erase(it);
+    PopDuck(false);
+  }
+}
 
 bool SoundSystem::Playing(int handle) {
   auto it = handles_.find(handle);
   if (it == handles_.end()) return false;
   for (int v : it->second)
     if (mixer_.Alive(v)) return true;
+  return false;
+}
+
+bool SoundSystem::Placement(int handle, float* left, float* right) {
+  auto it = handles_.find(handle);
+  if (it == handles_.end()) return false;
+  for (int v : it->second)
+    if (mixer_.PlaceOf(v, left, right)) return true;
   return false;
 }
 
@@ -551,7 +622,10 @@ void SoundSystem::UpdateCategories() {
   mixer_.SetCategories(gains, paused);
 }
 
+// (As the original, 0x8aaf60: setting a category's volume ends the duck at once, even for a
+// category that is not there; the voices that ducked then let go of nothing.)
 bool SoundSystem::SetVolume(const std::string& category, float volume) {
+  PopDuck(true);
   int c = CategoryByName(category);
   if (c < 0) return false;
   userVolume_[static_cast<size_t>(c)] = std::max(0.0f, volume);

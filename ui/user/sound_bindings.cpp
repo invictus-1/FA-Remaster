@@ -4,8 +4,8 @@
 //
 // From the original (FA exe): PlaySound(sndParams, prepareOnly) 0x8ad180 takes the parameters
 // object Sound{} made and gives a handle or nil (CUserSoundManager::ScriptPlaySound 0x8ab2b0).
-// How its sound manager limits, fades and ducks is not read; what is here follows the sound
-// files' own settings.
+// How its sound manager limits and fades is not read; what is here follows the sound files' own
+// settings. How it ducks the other sounds under a voice is read (sound/sound_system.h, at Duck).
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -66,10 +66,11 @@ int ToHandle(lua_State* L, int idx) {
   return box ? *box : 0;
 }
 
-int Play(lua_State* L, bool prepareOnly) {
+int Play(lua_State* L, bool prepareOnly, bool duck = false) {
   std::string bank, cue;
   sound::SoundSystem* s = System(L);
   int handle = s && ReadParams(L, 1, &bank, &cue) ? s->Play(bank, cue, prepareOnly) : 0;
+  if (handle && duck) s->Duck(handle);
   if (handle) PushHandle(L, handle);
   else lua_pushnil(L);
   return 1;
@@ -77,12 +78,15 @@ int Play(lua_State* L, bool prepareOnly) {
 
 // handle = PlaySound(sndParams, prepareOnly)
 int l_PlaySound(lua_State* L) { return Play(L, lua_toboolean(L, 2) != 0); }
-// PlayVoice(params, duck [, prepareOnly]) (FA exe 0x8ade00: one to three arguments),
-// PlayTutorialVO(params): a voice is a cue like any other, its bank among the voices of the
-// language; with prepareOnly it waits for StartSound, as a movie's voice does (/lua/maui/movie.lua
-// prepares it at Set and starts it with Play). (Ducking the other sounds under it is not built: the
-// original's CUserSoundManager::PushDuck 0x8ab020 ramps a global variable of its XACT project.)
-int l_PlayVoice(lua_State* L) { return Play(L, lua_toboolean(L, 3) != 0); }
+// PlayVoice(params, duck [, prepareOnly]) (FA exe 0x8ade00: one to three arguments): a voice is a
+// cue like any other, its bank among the voices of the language; with prepareOnly it waits for
+// StartSound, as a movie's voice does (/lua/maui/movie.lua prepares it at Set and starts it with
+// Play). With `duck` the other sounds go softer while it plays (PushDuck, 0x8adef0), from the
+// call on, prepared or not, as the original.
+int l_PlayVoice(lua_State* L) { return Play(L, lua_toboolean(L, 3) != 0, lua_toboolean(L, 2) != 0); }
+// PlayTutorialVO(params [, prepareOnly]) (0x8adc90): its second argument is prepareOnly, and it
+// never ducks.
+int l_PlayTutorialVO(lua_State* L) { return Play(L, lua_toboolean(L, 2) != 0); }
 
 int l_SoundIsPrepared(lua_State* L) {
   ToHandle(L, 1);
@@ -140,7 +144,7 @@ int l_HasLocalizedVO(lua_State* L) {
 int l_Nothing(lua_State*) { return 0; }
 
 // moho64ui_SoundInfo() -> {played = cues played so far, wave = the last one's wave ("Interface#11"),
-// world = how many of them were sounds of the world}
+// world = how many of them were sounds of the world, duck = the duck now (0..1)}
 int l_SoundInfo(lua_State* L) {
   sound::SoundSystem* s = System(L);
   lua_newtable(L);
@@ -153,6 +157,9 @@ int l_SoundInfo(lua_State* L) {
   lua_pushstring(L, "world");
   lua_pushnumber(L, s ? s->worldPlayed() : 0);
   lua_rawset(L, -3);
+  lua_pushstring(L, "duck");
+  lua_pushnumber(L, s ? s->duck() : 0);
+  lua_rawset(L, -3);
   return 1;
 }
 // moho64ui_SoundListener(eyeX, eyeY, eyeZ, focusX, focusY, focusZ, zoom): where the world's sounds
@@ -162,6 +169,16 @@ int l_SoundListener(lua_State* L) {
   for (int i = 0; i < 3; ++i) eye[i] = static_cast<float>(luaL_checknumber(L, 1 + i)), focus[i] = static_cast<float>(luaL_checknumber(L, 4 + i));
   if (sound::SoundSystem* s = System(L)) s->SetListener(eye, focus, right, static_cast<float>(luaL_checknumber(L, 7)));
   return 0;
+}
+// moho64ui_SoundPlace(handle) -> left, right: how a playing sound is set among the ears, on top
+// of its own loudness (its curves, the duck); nil when it plays no more
+int l_SoundPlace(lua_State* L) {
+  float left = 0, right = 0;
+  sound::SoundSystem* s = System(L);
+  if (!s || !s->Placement(ToHandle(L, 1), &left, &right)) return 0;
+  lua_pushnumber(L, left);
+  lua_pushnumber(L, right);
+  return 2;
 }
 // moho64ui_SoundVoices() -> a text: one line for every voice that plays or waits
 int l_SoundVoices(lua_State* L) {
@@ -207,7 +224,7 @@ void RegisterSoundBindings(lua_State* L) {
   lua_pop(L, 1);
   SetGlobal(L, "PlaySound", l_PlaySound);
   SetGlobal(L, "PlayVoice", l_PlayVoice);
-  SetGlobal(L, "PlayTutorialVO", l_PlayVoice);
+  SetGlobal(L, "PlayTutorialVO", l_PlayTutorialVO);
   SetGlobal(L, "SoundIsPrepared", l_SoundIsPrepared);
   SetGlobal(L, "StartSound", l_StartSound);
   SetGlobal(L, "StopSound", l_StopSound);
@@ -224,6 +241,7 @@ void RegisterSoundBindings(lua_State* L) {
   lua_register(L, "moho64ui_SoundListener", l_SoundListener);
   lua_register(L, "moho64ui_SoundAt", l_SoundAt);
   lua_register(L, "moho64ui_SoundVoices", l_SoundVoices);
+  lua_register(L, "moho64ui_SoundPlace", l_SoundPlace);
   lua_register(L, "moho64ui_SoundMix", l_SoundMix);
 }
 
