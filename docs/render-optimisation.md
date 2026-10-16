@@ -145,6 +145,22 @@ Measured on this PC (Ryzen 9 9950X3D, RTX 4090), eight-army M28 game ten minutes
 - **Direct3D 12's shaders compiled by DXC** where it is beside the program (docs/render-vulkan.md): a
   first start without the shader cache 20-26 s -> 9-11 s; with the cache the same. The card's frame
   0-3 % lower (lowest frames, five scenes). Viewer `--fxc`: the old compiler.
+- **At scale (2026-10-16, main b4ab4c4; the viewer's `--crowd UEL0201=n`: a block of tanks at rest, the
+  whole map in view from 700-900 up, 1440p):**
+
+  | Tanks | Processor, whole frame | of it: drawing recorded | Card, lowest frame |
+  |---|---|---|---|
+  | 4,000 | 3.5 ms | 0.7 ms | 1.7 ms |
+  | 16,000 | 4.0 ms | 1.4 ms | 2.6 ms |
+  | 64,000 | 9.1 ms | 4.0 ms | 6.4 ms |
+
+  - **The biggest parts at 64,000:** strategic icons and bars 1.4 ms, the models' tests 1.1, sorting 0.5, handing
+    over 0.7. The rest is the viewer's own way of listing a crowd, not a game's frame.
+  - **On the card:** 68,000 models and 40 million triangles at that height; units and scenery take 4.8 of the
+    6.4 ms.
+  - **Verdict:** inside 60 fps for the renderer at the engine's B4 scale. The simulation will be the limit there
+    long before. Tanks that move and pose cost more (bones, effects), which shows in B3-B5 once the engine has
+    them.
 - **How the card is measured now:** other programs on the card (other chats' replays and tests) raise the
   average of a run by up to 2-3 times. `--timings` also reports each stage's middle and lowest frame, and
   the A/B script waits for an idle card before each run; the lowest frame is what a change is judged by.
