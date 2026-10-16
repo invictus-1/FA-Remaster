@@ -728,27 +728,60 @@ void MeshRenderer::Begin() {
   entries_.clear();
   culls_.clear();
   groupsListed_.clear();
-  rows_.clear();
+  rowsOut_ = nullptr;
   prepared_ = false;
 }
 
 void MeshRenderer::Prepare(const std::vector<const View*>& views) {
   const auto t0 = std::chrono::steady_clock::now();
-  for (size_t i = 0; i < culls_.size(); ++i) {
-    const Cull& c = culls_[i];
-    if (!(c.flags & kPosed)) continue;
-    Entry& e = entries_[i];
-    const Vec3 r{c.radius, c.radius, c.radius};
-    bool seen = views.empty();
-    for (const View* view : views)
-      if (view->BoxVisible(e.centre - r, e.centre + r)) {
-        seen = true;
-        break;
+  const char* outer = CpuTimes::Current();
+  CpuTimes::Part("bones: posed models listed");
+  // which posed models some pass sees (a test per view for each: on several threads at once)
+  posedSeen_.resize(culls_.size());
+  constexpr size_t kTestPiece = 2048;
+  Jobs::Shared().Run(static_cast<int>((culls_.size() + kTestPiece - 1) / kTestPiece), [&](int k) {
+    const size_t from = static_cast<size_t>(k) * kTestPiece, to = std::min(from + kTestPiece, culls_.size());
+    for (size_t i = from; i < to; ++i) {
+      const Cull& c = culls_[i];
+      bool seen = false;
+      if (c.flags & kPosed) {
+        const Vec3 at = entries_[i].centre, r{c.radius, c.radius, c.radius};
+        seen = views.empty();
+        for (const View* view : views)
+          if (view->BoxVisible(at - r, at + r)) {
+            seen = true;
+            break;
+          }
       }
-    if (seen) BuildRows(&e);
+      posedSeen_[i] = seen ? 1 : 0;
+    }
+  });
+  // each its own stretch of the rows, given in order
+  size_t floats = 0;
+  for (size_t i = 0; i < culls_.size(); ++i) {
+    if (!posedSeen_[i]) continue;
+    Entry& e = entries_[i];
+    e.rows = static_cast<int>(floats / 4);
+    floats += e.model->bones.size() * 12;
+    rowsToBuild_.push_back(&e);
   }
-  if (rows_.empty()) rows_.assign(4, 0.0f);  // the shaders' buffer is never left unset
-  device_->UpdateBuffer(boneBuffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
+  // the bones' matrices, written straight into the frame's copy of the buffer: many models, each into
+  // its own stretch, so on several threads at once
+  CpuTimes::Part("bones: matrices made");
+  rowsOut_ = floats ? static_cast<float*>(device_->WriteBuffer(boneBuffer_, static_cast<uint32_t>(floats * sizeof(float)))) : nullptr;
+  if (rowsOut_) {
+    constexpr size_t kPerPiece = 256;
+    Jobs::Shared().Run(static_cast<int>((rowsToBuild_.size() + kPerPiece - 1) / kPerPiece), [&](int k) {
+      const size_t from = static_cast<size_t>(k) * kPerPiece, to = std::min(from + kPerPiece, rowsToBuild_.size());
+      for (size_t j = from; j < to; ++j) BuildRows(rowsToBuild_[j]);
+    });
+  } else {
+    for (Entry* e : rowsToBuild_) e->rows = -1;  // (no room this frame: drawn at rest)
+    const float none[4] = {0, 0, 0, 0};  // (the shaders' buffer is never left unset)
+    device_->UpdateBuffer(boneBuffer_, none, sizeof none);
+  }
+  rowsToBuild_.clear();
+  CpuTimes::Part(outer);
   prepared_ = true;
   const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
   prepareMs = prepareMs == 0 ? ms : prepareMs * 0.95f + ms * 0.05f;
@@ -760,9 +793,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
 void MeshRenderer::BuildRows(Entry* entry) {
   const std::vector<ModelBone>& bones = entry->model->bones;
   const Pose& pose = entry->pose;
-  entry->rows = static_cast<int>(rows_.size() / 4);
-  rows_.resize(rows_.size() + bones.size() * 12);
-  float* out = rows_.data() + static_cast<size_t>(entry->rows) * 4;
+  float* out = rowsOut_ + static_cast<size_t>(entry->rows) * 4;
   const float toModel = 1.0f / entry->model->scale;  // poses are in world units
   size_t ia = 0, ib = 0;
   for (size_t i = 0; i < bones.size(); ++i, out += 12) {

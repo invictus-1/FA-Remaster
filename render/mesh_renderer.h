@@ -131,7 +131,7 @@ class MeshRenderer {
     float bones;  // Instance::bones.x for this pass
     bool near;    // large on screen (depthPrepass: only these have their depth laid first)
   };
-  void BuildRows(Entry* entry);
+  void BuildRows(Entry* entry);  // into its stretch of rows_, from entry->rows on (Prepare gives it)
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
@@ -178,8 +178,11 @@ class MeshRenderer {
   std::vector<Instance> batch_;
   // Bones: for every posed model a pass has seen, three rows of four numbers per bone: the matrix
   // that takes a vertex of the model at rest to where the bone has carried it (in the model's own
-  // space). rows_ holds them for the frame, in one buffer all passes read.
-  std::vector<float> rows_;
+  // space). They are written straight into the frame's copy of one buffer all passes read (rowsOut_,
+  // Prepare's), each model's from its Entry::rows on.
+  float* rowsOut_ = nullptr;
+  std::vector<uint8_t> posedSeen_;   // Prepare's: for each of culls_, 1 when it is posed and some pass sees it
+  std::vector<Entry*> rowsToBuild_;  // Prepare's: those models, in the order of their rows
   bool prepared_ = false;
 };
 
