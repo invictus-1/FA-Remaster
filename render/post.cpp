@@ -25,6 +25,9 @@ VOut VS(uint id : SV_VertexID) {
   return o;
 }
 
+// (the picture as it is, for the water to see through with one sample a pixel)
+float4 Copy(VOut i) : SV_Target { return scene.Load(int3(i.position.xy, 0)); }
+
 float4 PS(VOut i) : SV_Target {
   float3 c = scene.SampleLevel(samplerPointClamp, i.uv, 0).rgb;
   if (look > 0.5) {
@@ -106,6 +109,13 @@ bool Post::Init(std::string* error) {
   pd.depthTarget = false;
   toTarget_ = device_->CreatePipeline(pd, error);
   if (!toTarget_) return false;
+  pd.name = "picture copied";
+  pd.pixelEntry = "Copy";
+  pd.colorFormat = kSceneFormat;
+  copy_ = device_->CreatePipeline(pd, error);
+  if (!copy_) return false;
+  pd.pixelEntry = "PS";
+  pd.colorFormat = gfx::Format::RGBA8;
   pd.depthTarget = true;
   std::string glow = std::string(kViewShaderBlock) + kGlowShader;
   pd.name = "glow, smaller";
@@ -148,7 +158,7 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
     td.format = kSceneFormat;
     std::memcpy(td.clearValue, clearColor, sizeof td.clearValue);
     color_ = device_->CreateTarget(td);  // the picture as the last pass reads it
-    if (gSceneSamples > 1) behind_ = device_->CreateTarget(td);  // a copy taken on the way (CopyBehind)
+    behind_ = device_->CreateTarget(td);  // a copy taken on the way (CopyBehind)
     {  // the glow's smaller pictures: a half, a quarter, ... of the picture
       gfx::TargetDesc small = td;
       for (int i = 0; i < kGlowSteps; ++i) {
@@ -183,8 +193,21 @@ void Post::ContinueScene() {
 }
 
 bool Post::CopyBehind() {
-  if (!drawn_ || !behind_) return false;
-  device_->Resolve(drawn_, behind_);
+  if (!behind_) return false;
+  if (drawn_) {
+    device_->Resolve(drawn_, behind_);
+    return true;
+  }
+  // (one sample a pixel: nothing to resolve, the picture copied by drawing it)
+  if (!copy_) return false;
+  gfx::PassDesc pass;
+  pass.color = behind_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  device_->SetPipeline(copy_);
+  device_->SetTexture(0, color_);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
   return true;
 }
 

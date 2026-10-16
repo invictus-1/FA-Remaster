@@ -58,6 +58,8 @@ class WorldPicture {
   // read back and the window is not to be drawn into by the host otherwise. Draw is then not to be
   // used; DrawMinimap still is (its ground is drawn without being shown).
   void UseWindow(void* hwnd);
+  // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
+  void SetVulkan(bool on);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels
   // (the window's size), each 0xAARRGGBB with the colour already multiplied by its alpha (alpha 0:
   // the world shows through), `pitch` pixels from one row to the next. (x, y, w, h) is the part that

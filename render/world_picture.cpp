@@ -34,6 +34,7 @@ struct WorldPicture::Impl {
   const uint32_t* layerPixels = nullptr;
   int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
   bool vsync = true;
+  bool vulkan = false;                 // SetVulkan
   std::vector<uint8_t>* checkCapture = nullptr;  // CaptureNextWindowFrame
   std::unique_ptr<World> world;
   SimFrames frames;
@@ -64,12 +65,15 @@ struct WorldPicture::Impl {
 };
 
 WorldPicture::WorldPicture() : impl_(std::make_unique<Impl>()) {}
+
+void WorldPicture::SetVulkan(bool on) { impl_->vulkan = on; }
 WorldPicture::~WorldPicture() = default;
 
 bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error) {
   Impl& m = *impl_;
   m.vfs = vfs;
   gfx::DeviceDesc dd;
+  dd.backend = m.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
   dd.width = 640;
   dd.height = 360;
   dd.vsync = false;

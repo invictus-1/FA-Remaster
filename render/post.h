@@ -42,6 +42,7 @@ class Post {
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_, toTarget_;  // the last pass into the window, or (before FSR) into ldr_
+  gfx::Pipeline copy_;  // the picture copied into behind_ (one sample a pixel)
   gfx::Texture ldr_;  // the picture as a screen shows it, at the scene's size (before FSR)
   gfx::Texture color_, depth_, drawn_, behind_;
   static constexpr int kGlowSteps = 5;

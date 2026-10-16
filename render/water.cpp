@@ -121,7 +121,13 @@ Texture2D waterMap : register(t0);
 Texture2D waves[4] : register(t1);
 TextureCube sky : register(t5);
 Texture2D behind : register(t6);
+#if SAMPLES > 1
 Texture2DMS<float> sceneDepth : register(t7);
+#define SCENE_DEPTH(at, s) sceneDepth.Load(at, s)
+#else
+Texture2D<float> sceneDepth : register(t7);  // (one sample a pixel: an ordinary depth target)
+#define SCENE_DEPTH(at, s) sceneDepth.Load(int3(at, 0))
+#endif
 
 static const float kRise = 0.07;  // how far the swell carries the water above and below its level
 
@@ -188,7 +194,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   coverage = 0;
   float depthBehind = 1;
   for (int s = 0; s < SAMPLES; ++s) {
-    float d = sceneDepth.Load(pixel, s);
+    float d = SCENE_DEPTH(pixel, s);
     if (d <= i.position.z) {
       coverage |= 1u << s;
       depthBehind = min(depthBehind, d);
@@ -273,7 +279,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   }
   float2 uv = i.position.xy * viewport.zw;
   float2 bent = uv + N.xz * (0.035 * saturate(deep * 1.5) / (1 + distance * 0.02));
-  float depthBent = sceneDepth.Load(int2(bent * viewport.xy), 0);
+  float depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
   if (depthBent > i.position.z || any(bent < 0) || any(bent > 1)) {
     bent = uv;
     depthBent = depthBehind;
@@ -333,7 +339,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       if (c.w <= 0) break;
       float2 at = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
       if (any(at < 0) || any(at > 1)) break;
-      float there = sceneDepth.Load(int2(at * viewport.xy), 0);
+      float there = SCENE_DEPTH(int2(at * viewport.xy), 0);
       float here = c.z / c.w;
       if (there > here) {  // the picture has something nearer than this place on the way: it is what is mirrored
         float gap = cameraBack.w / here - cameraBack.w / there;
@@ -394,8 +400,8 @@ bool Water::Load(const MapData* map, std::string* error) {
     bd.size = sizeof corners;
     bd.data = corners;
     vertices_ = device_->CreateBuffer(bd);
-    // the modern look's water: only with several samples a pixel (it reads the scene's depth so)
-    if (gSceneSamples > 1) {
+    // the modern look's water (it reads the scene's depth: several samples a pixel, or one)
+    {
       std::string modern = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + kModernShader;
       pd.name = "water, modern";
       pd.vertexSource = pd.pixelSource = modern;

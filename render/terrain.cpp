@@ -254,8 +254,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   const int w = map->width, h = map->height;
 
   if (!pipeline_) {
-    // (with several samples a pixel the modern look has its own water: water.cpp)
-    std::string source = std::string(gSceneSamples > 1 ? "#define MODERN_WATER 1\n" : "") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" + kViewShaderBlock + kLightingShaderBlock + kShader;
+    // (the modern look has its own water: water.cpp)
+    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" + kViewShaderBlock + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
