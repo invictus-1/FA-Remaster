@@ -4,6 +4,34 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui: the numbers for the stats overlay (2026-10-16, performance-lessons 5.5)
+
+`const WorldPicture::Stats& WorldPicture::LastStats() const`: filled after every DrawToWindow (and Draw).
+No switch is needed: the card's timestamps are taken every frame anyway, at no measurable cost.
+- **The processor, ms:**
+  - `waitMs`: waiting for the card to have a frame free (high when the card is the limit, or with vsync).
+  - `prepareMs`: making the frame ready (beats blended, units, effects and scenery listed).
+  - `drawMs`: drawing it (the passes handed to the card).
+  - `endMs`: ending it (your layer laid over it, shown; with vsync on, the wait for the screen is in here).
+- **The card:** `gpuMs` is the newest frame it has finished, whole. `gpuStages` holds `{name, ms}` in their
+  order: snow tracks, sun shadows, ground, units and scenery, water, effects, finishing, and so on. The names
+  are string literals that live for the program.
+- **Counts:**
+  - `drawCalls`: the last frame's draw calls.
+  - `models`: drawn in the scene (units, scenery, effects' meshes).
+  - `triangles`, `shadowTriangles`, `groundTriangles`: the scene's models, all shadow maps together, and the
+    ground.
+  - `particles`, `emitters`: live now.
+- **Memory:**
+  - `textureBytes`: all the textures made.
+  - `cardBytes`: the card's memory this program uses. On Direct3D 12 that is what Windows counts for the
+    process; on Vulkan, the memory blocks taken (256 MB steps). 0 when not known.
+- `width`, `height`: of the picture.
+
+Your host's own numbers (frame-to-frame time and percentiles, simulation ms per beat, the picture's Beat ms,
+the interface's script and draw ms, process RAM, Lua memory) go beside these. The viewer's `--picture` prints
+the struct once, as a check.
+
 ## visuals, section 29: the hex lattice on personal shields (2026-10-16)
 
 Done (render a8dcc62, a0ee33a). Your sheet is read from

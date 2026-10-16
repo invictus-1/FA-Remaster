@@ -89,7 +89,7 @@ void Lights::Begin(double now) {
 }
 
 void Lights::Add(Vec3 position, float radius, Vec3 color) {
-  if (radius > 0) lights_.push_back(Light{position, radius, color, 1, {}, -2});
+  if (radius > 0) lights_.push_back(Light{position, radius, color, 1, {}, -2, {}});
 }
 
 Vec3 Lights::RampGlow(const std::string& ramp) {
@@ -102,7 +102,7 @@ Vec3 Lights::RampGlow(const std::string& ramp) {
 
 void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier) {
   if (radius <= 0) return;
-  Light light{position, radius, color, 1, {}, -2};
+  Light light{position, radius, color, 1, {}, -2, {}};
   light.glow = glow;
   if (carrier) {
     light.carrier = *carrier;
@@ -152,7 +152,7 @@ void Lights::Build(View* view) {
     const float t = static_cast<float>((now_ - f.born) / static_cast<double>(f.seconds)) * static_cast<float>(ramp.size() - 1);
     const size_t i = std::min(static_cast<size_t>(t), ramp.size() - 1), j = std::min(i + 1, ramp.size() - 1);
     const Vec3 color = Lerp(ramp[i], ramp[j], t - static_cast<float>(i)) * (strength * night);
-    if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, f.size * reach, color, 1, {}, -2});
+    if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, f.size * reach, color, 1, {}, -2, {}});
   }
   count = static_cast<int>(lights_.size());
   ViewConstants& c = view->constants;

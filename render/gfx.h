@@ -239,6 +239,14 @@ class Device {
   // The stages of the newest frame the card has finished, in milliseconds, in their order (a stage
   // marked more than once in a frame is added up). Empty until a frame with marks has finished.
   virtual void TakeTimes(std::vector<std::pair<const char*, double>>* out) = 0;
+  // The card's memory this program uses, in bytes (Direct3D 12: as the system counts it; Vulkan: the
+  // blocks it has taken of the card's own memory); 0 when not known.
+  virtual uint64_t MemoryInUse() = 0;
+  // The draw calls of the last frame ended (EndFrame).
+  int DrawCallsLastFrame() const { return drawsLast_; }
+
+ protected:
+  int draws_ = 0, drawsLast_ = 0;  // (each backend counts its draws, and turns them over at EndFrame)
 };
 
 }  // namespace render::gfx

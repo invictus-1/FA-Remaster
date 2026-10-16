@@ -253,6 +253,7 @@ class D3D12Device final : public Device {
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
   void Mark(const char* name) override;
+  uint64_t MemoryInUse() override;
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
 
   void BeginFrame(const float clearColor[4]) override;
@@ -319,6 +320,7 @@ class D3D12Device final : public Device {
   std::string shaderCache_;  // the folder compiled shaders are kept in (empty: none)
 
   Com<IDXGIFactory4> factory_;
+  Com<IDXGIAdapter3> adapter3_;  // (what the system counts of the card's memory this program uses)
   Com<ID3D12Device> device_;
   Com<ID3D12InfoQueue> infoQueue_;
   Com<ID3D12CommandQueue> queue_;
@@ -435,6 +437,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   }
   hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device_.Put()));
   if (FAILED(hr)) return fail("D3D12CreateDevice", hr);
+  if (adapter) adapter->QueryInterface(IID_PPV_ARGS(adapter3_.Put()));
   if (factoryFlags & DXGI_CREATE_FACTORY_DEBUG) device_->QueryInterface(IID_PPV_ARGS(infoQueue_.Put()));
   if (adapter) {
     DXGI_ADAPTER_DESC1 d;
@@ -1504,11 +1507,13 @@ void D3D12Device::SetShaderBuffer(Buffer buffer, int slot) {
 }
 
 void D3D12Device::Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) {
+  ++draws_;
   BindTextures();
   list_->DrawInstanced(vertexCount, instances, firstVertex, 0);
 }
 
 void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) {
+  ++draws_;
   BindTextures();
   list_->DrawIndexedInstanced(indexCount, instances, firstIndex, baseVertex, 0);
 }
@@ -1547,6 +1552,8 @@ void D3D12Device::UpdateTexture(Texture texture, int x, int y, int width, int he
 }
 
 void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
+  drawsLast_ = draws_;
+  draws_ = 0;
   FrameSlot& f = frames_[cur_];
   ReleasePassTargets();
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
@@ -1635,6 +1642,12 @@ void D3D12Device::Mark(const char* name) {
 }
 
 void D3D12Device::TakeTimes(std::vector<std::pair<const char*, double>>* out) { *out = lastTimes_; }
+
+uint64_t D3D12Device::MemoryInUse() {
+  DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
+  if (!adapter3_ || FAILED(adapter3_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) return 0;
+  return info.CurrentUsage;
+}
 
 }  // namespace
 

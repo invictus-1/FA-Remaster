@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include <chrono>
 #include <cmath>
 
 #include "core/vfs.h"
@@ -62,6 +63,7 @@ struct WorldPicture::Impl {
   std::vector<uint32_t> pixels;
   double lastTick = 0;
   bool prepared = false;  // LifeBarAnchors has begun the frame the next RenderWorld draws
+  WorldPicture::Stats stats;  // LastStats
   // the minimap: the ground as drawn once, the camera it was drawn with, and the picture handed out
   std::vector<uint32_t> mapGround, mapPixels;
   float mapHour = -100, mapWeather = -100;  // the light the ground was drawn in
@@ -157,7 +159,9 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     return m.pixels;
   }
   RenderWorld(camera, width, height, tick);
+  const auto ending = std::chrono::steady_clock::now();
   m.device->EndFrame(&m.capture);
+  TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
 
   // red, green, blue, alpha bytes -> 0xAARRGGBB
   m.pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
@@ -256,8 +260,10 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     m.device->Draw(3);
   }
   m.layerPixels = nullptr;
+  const auto ending = std::chrono::steady_clock::now();
   m.device->EndFrame(m.checkCapture, true);
   m.checkCapture = nullptr;
+  if (m.world) TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
 }
 
 void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
@@ -279,11 +285,44 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
   Impl& m = *impl_;
   if (!m.prepared) PrepareWorld(camera, width, height, tick);
   m.prepared = false;
+  const auto t0 = std::chrono::steady_clock::now();
   m.world->Render();
+  m.stats.drawMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+const WorldPicture::Stats& WorldPicture::LastStats() const { return impl_->stats; }
+
+// (after a frame has ended: what it held, and the card's times of the newest it has finished)
+void WorldPicture::TakeStats(float endMs) {
+  Impl& m = *impl_;
+  Stats& s = m.stats;
+  s.endMs = endMs;
+  s.drawCalls = m.device->DrawCallsLastFrame();
+  s.width = m.device->Width();
+  s.height = m.device->Height();
+  std::vector<std::pair<const char*, double>> stages;
+  m.device->TakeTimes(&stages);
+  s.gpuStages.clear();
+  s.gpuMs = 0;
+  for (const auto& st : stages) {
+    s.gpuStages.push_back({st.first, static_cast<float>(st.second)});
+    s.gpuMs += static_cast<float>(st.second);
+  }
+  if (m.world) {
+    s.models = m.world->meshes.drawnInstances;
+    s.triangles = m.world->meshes.drawnTriangles;
+    s.shadowTriangles = m.world->meshes.shadowTriangles;
+    s.groundTriangles = m.world->terrain.drawnTriangles;
+    s.particles = m.world->particles.liveParticles;
+    s.emitters = m.world->particles.liveEmitters;
+    s.textureBytes = static_cast<long long>(m.world->textures.bytes);
+  }
+  s.cardBytes = static_cast<long long>(m.device->MemoryInUse());
 }
 
 void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
+  const auto t0 = std::chrono::steady_clock::now();
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
@@ -322,7 +361,10 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   m.lastTick = shown;
 
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+  const auto t1 = std::chrono::steady_clock::now();
   m.device->BeginFrame(clear);
+  const auto t2 = std::chrono::steady_clock::now();
+  m.stats.waitMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
   m.world->Begin(camera, width, height, static_cast<float>(shown * 0.1), shown * 0.1);
   if (playing) {
     m.frames.TakeEffectEvents(&m.events);
@@ -340,6 +382,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
     m.world->effects.Update(shown, m.frame);
     m.world->AddFrame(m.frame, m.armyColors);
   }
+  m.stats.prepareMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count() - m.stats.waitMs;
 }
 
 void WorldPicture::SetSelection(const std::vector<uint32_t>& ids) {

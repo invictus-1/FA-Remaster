@@ -1382,6 +1382,13 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 30; ++i) picture.Draw(camera, w, h, playTick + 1);
         printf("render: --picture: %.2f ms a call\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30);
       }
+      {  // what the overlay of numbers would show of it, after those calls (WorldPicture::LastStats)
+        const WorldPicture::Stats& s = picture.LastStats();
+        printf("render: --picture: stats: processor %.2f ms waiting, %.2f making ready, %.2f drawing, %.2f ending; card %.2f ms in %zu stages; "
+               "%d draw calls, %d models, %lld + %lld shadow + %lld ground triangles, %d particles of %d emitters, textures %lld MB, card memory %lld MB\n",
+               s.waitMs, s.prepareMs, s.drawMs, s.endMs, s.gpuMs, s.gpuStages.size(), s.drawCalls, s.models, s.triangles, s.shadowTriangles,
+               s.groundTriangles, s.particles, s.emitters, s.textureBytes >> 20, s.cardBytes >> 20);
+      }
       {  // the minimap, in the map's proportion
         float mw, mh;
         picture.MapSize(&mw, &mh);
