@@ -547,6 +547,30 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end()), v.end());
   }
+  // Props: RECLAIMABLE and SizeX / SizeZ for views read outside the beat (ui request 27: the reclaim cursor). Read
+  // after every blueprint is in, so the key strings already exist in the sim state and reading makes no new Lua
+  // value (the collector's timing stays as it was).
+  {
+    auto rc = categories_.find("RECLAIMABLE");
+    for (BlueprintInfo& bp : all_) {
+      if (bp.kind != BpKind::Prop) continue;
+      bp.reclaimable = rc != categories_.end() && bp.entityIndex >= 0 &&
+                       std::binary_search(rc->second.begin(), rc->second.end(), bp.entityIndex);
+      lua_rawgeti(sim, LUA_REGISTRYINDEX, bp.ref);
+      if (lua_istable(sim, -1)) {
+        const int t = lua_gettop(sim);
+        lua_pushstring(sim, "SizeX");
+        lua_rawget(sim, t);
+        bp.sizeX = lua_type(sim, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(sim, -1)) : 1.0f;
+        lua_pop(sim, 1);
+        lua_pushstring(sim, "SizeZ");
+        lua_rawget(sim, t);
+        bp.sizeZ = lua_type(sim, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(sim, -1)) : 1.0f;
+        lua_pop(sim, 1);
+      }
+      lua_pop(sim, 1);
+    }
+  }
   if (duplicates) Logf(LogLevel::Debug, "moho64: %d blueprints registered again under the same id", duplicates);
   if (cp.dropped) Logf(LogLevel::Debug, "moho64: %d non-data blueprint values not copied to the sim", cp.dropped);
   Logf(LogLevel::Debug, "moho64: sim blueprints: %zu (%d entity), %zu categories", all_.size(), EntityCount(),
