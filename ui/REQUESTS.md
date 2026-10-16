@@ -740,6 +740,53 @@ did for the caps at CopyToSim), so the walk touches no Lua? I now keep the answe
 the selection and the beat stay the same, which takes most calls away, but a moving mouse over a
 forest still pays it each frame.
 
+### 28. Three facts per unit in UnitView: its layer, attached to a parent, how many are attached to it
+From the interface chat, 2026-10-16, not blocking. Three interface functions the game's scripts call
+read these from the original's per-beat unit data (R = read in the exe by me or a helper):
+- `GetIsSubmerged(units)` (0x8bafe0; orders.lua's dive button and its mixed-selection rule): each
+  user unit's layer (UserUnit+0xf0 = SSTIEntityVariableData+0xa0, ELayer): 4 (Sub) -> -1, else 1;
+  units that differ, or none, -> 0. Today it is a stub (the dive button never shows "submerged").
+- `IssueDockCommand(clear)` (0x840a70; the Dock order button and FAF's dock-damaged hotkey): it
+  shares the selected aircraft among the player's own AIRSTAGINGPLATFORMs and sends Dock (39) with
+  the platform as the target, which your transport.cpp already handles. A platform counts when its
+  layer is not Seabed (2) or Sub (4), it is not attached to a parent (UserUnit+0x1a2 =
+  SSTIUnitVariableData+0xa, written by Unit::MotionTick 0x6a90fd as "parent weak ptr != null"), its
+  queue is empty, and it has free slots: StorageSlots > 0 ? StorageSlots - (entities attached to it:
+  UserUnit+0xb8 vector, SSTIEntityVariableData+0x68, from Entity+0x180's children) : DockingSlots.
+- Select-by-category's "idle" test (0x8664c6) reads the same +0x1a2 byte: I mapped it to beingBuilt,
+  which is wrong (a docked or loaded unit is not idle there).
+Could UnitView (the per-beat list) carry: `int layer` (your kLayer bits: 1 Land, 2 Seabed, 4 Sub,
+8 Water, 16 Air; or the name as Unit::layer has it), `bool attached` (it has a parent: docked,
+loaded, stored), and `int attachedCount` (entities attached to it now)? With them I build
+GetIsSubmerged and IssueDockCommand as the original's and fix the idle test. (Note for your docs: a
+helper saw that engine-ref/specs/air_staging.md 0.3 and transport_core.md say Transport.DockingSlots
+has no engine reader; the user side reads it here, bp+0x418 at 0x840e33.)
+
+### 29. Changing the focus army during a game (SetFocusArmy: a replay's army list, observers)
+From the interface chat, 2026-10-16, not blocking. The replay's army combo box (replay.lua:60),
+NoteGameOver (uimain.lua:181: SetFocusArmy(-1)), the score screen and FAF's simInit.lua:536 (armies
+merged) change the army the player looks through. Read by a helper (R = read in the exe):
+- The user binding SetFocusArmy(n) (0x842ee0, 1-based or -1) checks and asks
+  CWldSession::RequestFocusArmy (0x8965e0) -> ValidateFocusArmyRequest (0x896670) ->
+  SimDriver::SetArmyIndex (0x73b1b0): a PENDING focus in the next SSyncFilter (driver+0xb0).
+- At the next sync (FinalizeSyncDispatchLocked 0x73dad0 -> Sim::Sync 0x7474b0): if the focus
+  changed, the sim's Lua global `NoteFocusArmyChanged(new, old)` (1-based or -1; errors logged as
+  "NoteFocusArmyChanged() puked"), then the focus goes into the sync (sync+4). FAF's SimSync.lua
+  NoteFocusArmyChanged re-sends Sync.UnitData for the new army, sets Sync.ReleaseIds for the old,
+  SyncUnitEnhancements(), Sync.FocusArmyChanged = {new, old}; score.lua filters Sync.Score by the
+  sim's GetFocusArmy (observers and replays get all).
+- The user side takes it from the sync (CWldSession::DoBeat 0x894530: +0x488, the sound's army, the
+  selection cleared). The command source never changes.
+- FAF's exe adds a SIM-side global SetFocusArmy(idx0) (0x128ce81, no checks, writes the pending
+  focus; simInit.lua:536).
+Could the engine take a requested focus (for example `Sim::RequestFocusArmy(int index0 or -1)`,
+applied at the next beat as above: NoteFocusArmyChanged, then Sim::focusArmy, before the beat's Sync
+table is handed over), and give the sim's Lua the FAF SetFocusArmy(idx0)? The host keeps the
+validation (ValidateFocusArmyRequest's rules: no command source / cheats / own army / game over,
+else AllowObservers or a replay, and FAF's stricter "no army of yours at all") and applies the change
+on its side when the sync shows the new focus (selection cleared, GetFocusArmy / IsObserver, the
+picture's SetFocusArmy and allies).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -1518,6 +1565,23 @@ DONE (render 6cbf20a, `docs/render-answers.md`): `WorldPicture::SetUserDecals(st
 units and trees; the list stands until the next call; on water on the bottom, tinted. The host's side
 is built (world_meshes.cpp: the UserDecal objects, WorldScene::decals) and hands them over in
 GameSession's SetScene (main 8e8c31a has his side).
+
+### 26. Team colours for the strategic icons (TeamColorMode), and a focus army that changes
+From the interface chat, 2026-10-16, not blocking. Two things, both read in the exe by a helper:
+- FAF's multifunction panel has a "team colour" button (not in replays): TeamColorMode(true) colours
+  the STRATEGIC ICONS only (meshes keep their army colours) by how each army stands to the player:
+  FAF passes its own per-army list "aarrggbb,aarrggbb,..." (index = army, 0-based; the player's
+  colour, allies', enemies', neutral); the original's own rule (now replaced in FAF's exe) was
+  GameColors.TeamColorMode Self / Ally / Enemy / Neutral. Only RenderUnitIcon (0x85d9a0) reads the
+  switch, so the minimap's icons too; an unidentified blip stays UnidentifiedColor (grey); with no
+  focus army (an observer) the army colours stay. Could the picture take an override of the icons'
+  colours per army, for example `SetIconColors(std::vector<uint32_t> argbByArmy)` (empty: back to the
+  army colours)? I keep the switch and the list and hand you the resolved colours.
+- SetFocusArmy (engine request 29, a replay's army list): the host will call your
+  WorldPicture::SetFocusArmy again during a game (army 1-based, 0 = an observer). Is that fine, and
+  does 0 show no fog of war, as the original skips ren_FogOfWar with no focus army? (Your header says
+  the "seen" memory restarts when an army becomes the focus.)
+
 
 ## To the visuals track
 
