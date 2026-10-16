@@ -79,13 +79,15 @@ when a frame fills one, the read-back in cached memory (reading 15 MB from uncac
 - `render/third_party/dxc`: `dxcapi.h`, `dxcerrors.h` from Microsoft's DirectX Shader Compiler (University
   of Illinois/NCSA licence, LICENSE-LLVM.txt), kept for reference: `gfx_vulkan_dxc.cpp` declares the few
   calls it uses itself, so that no Windows headers are needed elsewhere. The compiler itself
-  (`dxcompiler.dll`) is not in the repository: the Windows build of it comes under Microsoft's licence
-  "solely for use on Windows", fine for Vulkan and Direct3D 12 on Windows; the Linux and macOS builds
-  would ship DXC's LLVM-licensed library (`libdxcompiler.so` / `.dylib`). The viewer finds it beside
-  itself. Whether a release of the game may ship Microsoft's build is Chris's decision: the licence lets
-  "distributable code" be shipped with an application, on the condition that players agree to terms
-  that protect Microsoft at least as much and that the publisher indemnifies Microsoft; the download
-  names no list of what is distributable.
+  (`dxcompiler.dll`) is not in the repository; the viewer finds it beside itself. Its licence: DXC is
+  under the University of Illinois/NCSA (LLVM) licence (the repository's README). The Windows release
+  zip (v1.9.2609) carries three licence files, LICENCE-MIT, LICENSE-LLVM and LICENSE-MS (Microsoft's
+  terms: "solely for use on Windows", distributable code with conditions), without saying which file
+  each covers; NuGet's Microsoft.Direct3D.DXC gives MIT for `d3d12shader.h` and LLVM for all the
+  others, so `dxcompiler.dll` reads as LLVM-licensed, and LICENSE-MS most likely as `dxil.dll`'s,
+  which is not needed. The Linux and macOS builds are DXC's LLVM-licensed library
+  (`libdxcompiler.so` / `.dylib`). Chris, 2026-10-15: a release may ship `dxcompiler.dll` beside the
+  program (decided on the stricter reading); its licence files go with it.
 - Direct3D 12 compiles with DXC too (DXIL, shader model 6.0) where `dxcompiler.dll` is beside the
   program, and with Direct3D's own compiler (FXC, part of Windows) where it is not, or where DXC fails
   on a shader (the viewer's `--fxc`: FXC always). DXC of 2026-09-29 signs its shaders itself;

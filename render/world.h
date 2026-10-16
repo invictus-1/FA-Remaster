@@ -128,7 +128,11 @@ class World {
   // reached its beat. Wreckage appears, a burnt tree turns black, a fallen one lies, what is
   // reclaimed goes.
   void AddPropEvents(const std::vector<FramePropEvent>& events);
+  // How the simulation changed the ground's heights (SimFrames::TakeGroundChanges): drawn so at once.
+  // Within a frame (the ground's height texture is written).
+  void ChangeGround(const std::vector<FrameGroundChange>& changes);
   int propsChanged = 0, propsGone = 0;  // since the map was opened
+  int groundChanges = 0;                // the simulation's changes of the ground's heights taken in (ChangeGround)
   int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
   int MadeProps() const { return static_cast<int>(madeProps_.size()); }  // props made in the game that stand now
   // Where wreckage lies now (at most `most` places): for looking at it in the viewer.

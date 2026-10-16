@@ -799,6 +799,38 @@ void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {
   prop->cell = -1;
 }
 
+void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
+  // (the game's scripts lay a structure's ground flat a grid point at a time: the changes near each
+  // other are sent to the ground in one rectangle, a few rectangles a frame instead of hundreds)
+  struct Rect {
+    int x0, z0, x1, z1;
+  };
+  std::vector<Rect> dirty;
+  constexpr int kNear = 8;  // grid points apart that still join one rectangle
+  for (const FrameGroundChange& c : changes) {
+    // (the map's grid points, as the simulation keeps them: whole steps of the height scale)
+    const int x0 = std::max(c.x0, 0), z0 = std::max(c.z0, 0), x1 = std::min(c.x1, map.width), z1 = std::min(c.z1, map.height);
+    const int across = c.x1 - c.x0 + 1;
+    if (x0 > x1 || z0 > z1 || across <= 0 || c.heights.size() < static_cast<size_t>(across) * static_cast<size_t>(c.z1 - c.z0 + 1)) continue;
+    for (int z = z0; z <= z1; ++z)
+      for (int x = x0; x <= x1; ++x) {
+        const float h = c.heights[static_cast<size_t>(z - c.z0) * static_cast<size_t>(across) + static_cast<size_t>(x - c.x0)];
+        map.heights[static_cast<size_t>(z) * static_cast<size_t>(map.width + 1) + static_cast<size_t>(x)] =
+            static_cast<uint16_t>(std::clamp(h / map.heightScale, 0.0f, 65535.0f));
+      }
+    bool joined = false;
+    for (Rect& d : dirty)
+      if (x0 <= d.x1 + kNear && x1 >= d.x0 - kNear && z0 <= d.z1 + kNear && z1 >= d.z0 - kNear) {
+        d = {std::min(d.x0, x0), std::min(d.z0, z0), std::max(d.x1, x1), std::max(d.z1, z1)};
+        joined = true;
+        break;
+      }
+    if (!joined) dirty.push_back({x0, z0, x1, z1});
+    ++groundChanges;
+  }
+  for (const Rect& d : dirty) terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
+}
+
 void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
   for (const FramePropEvent& e : events) propEvents_.push_back(e);
 }
