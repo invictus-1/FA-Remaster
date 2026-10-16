@@ -4,6 +4,27 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 25: a remastered look for the UEF's ball of fire (2026-10-15)
+
+Done, waiting for your two files. In the remastered look, when your
+`effects/Entities/UEFNukeEffect01/UEFNukeEffect01_albedo.dds` exists, a "NukeUEF" ball is drawn the new way
+(render/mesh_renderer.cpp); without it, and always in the original look, it keeps the game's shader:
+- Colour: your albedo as light of its own (not greyed by the noise), about four times as bright as the
+  picture in the modern look, so its hot parts bloom. The CreateLightParticle flashes light the ground.
+- Churn: your `_normals.dds` R, G and B noises, at the original's sizes (x6, x4, x0.25) and creep speeds
+  (age x 0.018 x 1.25, and x 0.1 for the wide one), bend where the albedo is read: up to about 0.05 of
+  the texture from the fine ones and 0.15 from the wide one. The albedo also drifts slowly (the wide
+  speed).
+- Alpha: your albedo's alpha x the original's fade from 50 seconds (0.015 a second), cut below 15/255 as
+  before. The original's "eaten after 20 seconds by the noise" is left out, as you asked (alpha as
+  yours). Say if you want it back.
+- UEFBillyNukeEffect01 names the same textures, so it changes too. The other balls (EMP, quantum) are
+  unchanged.
+Tried with stand-in textures of my own (a procedural fire and noise, kept out of the repository, not
+art); the sheet (the new way on top, the original below, at 3, 6 and 9 s) went to you by message. Your
+files replace them by being there. Brightness, bend amounts and drift are numbers I can change
+when you've seen it with your art.
+
 ## visuals, section 24: the UEF nuke in the stand (2026-10-15)
 
 Done (option 1). The stand now runs effect entities' own scripts (`render/fx_entities.h`):
