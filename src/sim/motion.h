@@ -255,6 +255,10 @@ const Vec3& UnitVelocity(const Unit* u);
 void SteeringClearWaypoints(Sim& sim, Unit* u);
 // CAiSteeringImpl::CheckCollisions 0x5d3740 for one unit (sim/steering.cpp).
 void SteeringCheckCollisions(Sim& sim, Unit* u);
+// The navigator stage of this army is running (its army index, 1-based; 0: none). The original runs each army's
+// navigators and then its steering (brain+0xa8, brain+0xac, beat_order.md): a collision record a navigator's
+// steering Stop writes is looked at in this beat by a unit of this army or a later one, in the next by an earlier.
+void SteeringNavStageArmy(int army);
 // Navigator interface (sim/landnav.cpp): a move starts (no waypoint yet: it coasts), the steering
 // gets a waypoint (through: drive through it, else brake to it), the move ended.
 void MotionNavBegin(Unit* u);

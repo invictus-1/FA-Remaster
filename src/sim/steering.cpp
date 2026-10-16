@@ -532,6 +532,7 @@ bool Approaching(const Unit* A, const Unit* B, const Vec3& pA, const Vec3& vA, c
 }
 
 bool g_inSteeringStage = false;  // SteeringTickAll is running (see UnitMotion::colLateTick)
+int g_navStageArmy = 0;          // the army whose navigators run (SteeringNavStageArmy), 0 outside that stage
 
 // Predict 0x597800: X has the right of way, Y yields; the record goes to Y.
 void Predict(Sim& sim, Unit* X, Unit* Y) {
@@ -571,7 +572,10 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
         my.colPos = pX;
         my.colUnit = EntityRef(X);
         my.colTick = now + static_cast<uint32_t>(k);
-        my.colLateTick = g_inSteeringStage ? 0xffffffffu : now;
+        // (written in the navigator stage: the original's steering of Y's army runs after it in this beat unless
+        // Y's army comes before the navigator's)
+        const int ya = Y->army ? Y->army->index : 0;
+        my.colLateTick = g_inSteeringStage || (g_navStageArmy > 0 && ya >= g_navStageArmy) ? 0xffffffffu : now;
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
           Logf(LogLevel::Info, "col %u predict Y %u (point %zu of %zu, made %llu) X %u (point %zu of %zu, made %llu) at +%zu", now,
@@ -754,8 +758,13 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     // cell it stands in; measured against its waypoint of before, it took a continuing spline and rolled on.)
     const bool driving = Driving(u) && m.steerValid;
     if (!driving || AtPosition(u, m.steerTarget)) {  // arrived at this waypoint
+      // Stop(0) (vt+0x2c, 0x5d2dbf -> 0x5d35e0), as in the pushed branch: the batch still has its last point
+      // (idx < points.size, 0x5d360e), so Stop re-predicts with the spline gone (CheckCollisions, 0x5d3666), as
+      // the navigator's Stop does when a path ends (MotionNavDone). (Read in the exe; no replay seen to need it.)
+      const bool unused = m.splineIdx < m.spline.size();
       SteeringStop(m);
       if (driving && !m.newSegment) m.hasWaypoint = false;
+      if (unused) CheckCollisions(sim, u);
       return;
     }
     UpdatePath(sim, u, m.steerTarget, false, GetVal(m));
@@ -841,6 +850,8 @@ void SteeringTick(Sim& sim, Unit* u) {
 void SteeringCheckCollisions(Sim& sim, Unit* u) {
   if (HasSteering(u)) CheckCollisions(sim, u);
 }
+
+void SteeringNavStageArmy(int army) { g_navStageArmy = army; }
 
 void SteeringTickAll(Sim& sim) {
   const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xac: creation order inside each army)

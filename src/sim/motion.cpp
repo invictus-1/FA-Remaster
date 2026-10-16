@@ -712,7 +712,17 @@ void MotionNavDone(Unit* u, bool succeeded) {
   m.steerValid = false;
   m.navDriven = false;
   m.path.clear();
+  // CAiNavigatorLand::Execute 0x5a43dd: a finished path (state <= 1) first calls the steering's Stop(0) (vt+0x2c,
+  // 0x5d35e0), then MakeIdle (0x5a43fb). Stop re-predicts with the spline gone (CheckCollisions, 0x5d3666) when the
+  // deleted batch still had points to hand out (idx < points.size, 0x5d360e): a ship that reaches its goal cell
+  // while its brake batch runs puts the records on the movers around it. Seen: Naval 545, the battleship 0x13
+  // reaches its goal with 5 of its 10 points left; the Salem 0x44 braking behind it gets the record, clears it in
+  // the same beat (not approaching: case 0), and that case's CheckCollisions puts the cruiser 0x3d's record on it;
+  // at 546 it side-steps (twice the acceleration and the turn), and 0x3d brakes again (type 5) and stands until
+  // 553. Ours made no prediction there: 0x44 stood until 549, 0x3d until 551.
+  const bool unused = m.hasSpline && m.splineIdx < m.spline.size();
   SteeringStop(m);
+  if (unused) SteeringCheckCollisions(*Sim::From(u->luaState()), u);
   if (succeeded) m.arrived = true;
   else m.failed = true;
   Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
