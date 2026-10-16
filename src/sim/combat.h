@@ -261,6 +261,7 @@ Unit* GuardBestEnemy(Sim& sim, Unit* u);
 // The patrol's search box (an OBB in xz: centre, unit direction along the leg, half extents across / along).
 struct PatrolBox {
   float cx = 0, cz = 0, dx = 0, dz = 1, side = 0, along = 0;
+  float cy = 0;  // the centre's height (S.y; the box is 200 high)
 };
 // CUnitPatrolTask::FindTarget 0x61b710: the primary weapon's best enemy among the cached blips that touch the
 // box, within GuardScanRadius.

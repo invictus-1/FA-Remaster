@@ -338,8 +338,14 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
   if (dbg)
     Logf(LogLevel::Info, "prop %s %08x %s caps %d rect (%d,%d)-(%d,%d)", occupy ? "occupy" : "release", p->id,
          p->blueprint ? p->blueprint->id.c_str() : "?", p->occCaps, x0, z0, x0 + sx, z0 + sz);
-  // NOT PORTED: the layer bits. Seton's Clutch has 14 such props (fieldstone rocks, OccupancyCaps 3: land layer, so
-  // no land footprint without IgnoreStructures fits on them in the original); ours does not block them.
+  // The layer bits: a prop with OccupancyCaps & 7 (land) or & 8 (water) blocks its rect as a structure does.
+  // Seton's Clutch has 14 such props (fieldstone rocks, OccupancyCaps 3). Seen: Skirmish 1263, engineer 0x300015
+  // walking to reclaim a rock at (152.2, 558.3): the original's path does not cross the rock at (153.9, 567.6)
+  // (cells 152..154 x 565..569), its first target stops at (156, 568); ours went through it to (154, 566).
+  if (p->occCaps & 15) {
+    if (occupy) sim.navigation().AddStructure(EntityRef(p), x0, z0, x0 + sx, z0 + sz);
+    else sim.navigation().RemoveStructure(EntityRef(p));
+  }
   LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
 }
 
@@ -3546,6 +3552,16 @@ int l_SetParentOffset(lua_State* L) {
 void SetAttachedState(Unit* u) {
   if (u->motion.bp && u->motion.bp->mobile()) u->unitStates.insert("Attached");
 }
+// Unit::AttachTo 0x6ab410 (the attach of AttachBoneTo / AttachTo from Lua): after Entity::AttachTo, a mobile unit's
+// motion hears of it (CUnitMotion::NotifyAttached 0x6b94a0, 0x6ab43a: motion state Attached, horizontal event
+// Stopped, vertical event Bottom, each with its script callback when it changes), and only then does the unit take
+// state Attached (0x6ab445). For an aircraft that is AirNotifyAttached; so one its factory lets go is at the Bottom
+// and climbs away MovingUp (CalcAirMotion: MovingUp while the vertical event is Bottom), its event Up the beat after.
+// Seen: Skirmish 1349-1350, Chloe's Aeon transport 0x600018: MovingUp and vertical event 1, then 2 in the original;
+// ours kept the event Top from the unit's creation (0, no state).
+void NotifyAttached(Sim& sim, Unit* u) {
+  if (u->motion.air) AirNotifyAttached(sim, u);
+}
 // entity:AttachBoneTo(selfBone, parent, parentBone)
 int l_AttachBoneTo(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
@@ -3555,6 +3571,7 @@ int l_AttachBoneTo(lua_State* L) {
   u->parentId = EntityRef(parent);
   u->ownBone = BoneIndex(L, u, 2);
   u->parentBone = BoneIndex(L, parent, 4);
+  NotifyAttached(*S(L), u);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
   {
@@ -3583,6 +3600,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   // carrier's attach bone, which is where its model's root bone is.
   u->ownBone = 0;
   u->parentBone = BoneIndex(L, parent, 3);
+  NotifyAttached(*S(L), u);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
   u->position = EntityBonePosition(parent, u->parentBone);
@@ -3591,6 +3609,22 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
 }
 void Detach(Sim& sim, Unit* u) {
   if (!u->parentId) return;
+  // CUnitMotion::NotifyDetached 0x6b9570 (EAX = the parent): the motion's target becomes the unit's position less
+  // the PARENT's local Z axis (from its quaternion +0x9c..+0xa8: Z = (2(wy + zx), 2(zy - wx), 1 - 2(yy + xx)), in
+  // that order of operations), no direction, layer 0 (CUnitMotion::SetTarget 0x6b85e0 at 0x6b9654). For an aircraft
+  // that is its air target: the one beat until its first order's goal comes it climbs toward a point one unit in
+  // front of the factory's back (MovingUp). Seen: Skirmish 1349, Chloe's Aeon transport 0x600018 let go by its air
+  // factory (FactoryUnit.lua DetachFrom(true)): the original's target (909.5339, 27.4956, 80.5623) and MovingUp,
+  // ours kept the cell it was made on, (909.5, 26.7148, 81.5); its Move's goal came at 1350 in both.
+  if (u->motion.air) {
+    if (const Entity* P = sim.FindEntity(u->parentId)) {
+      const Quat& q = P->orientation;
+      const float zx = (q.w * q.y + q.z * q.x) * 2.0f;
+      const float zy = (q.z * q.y - q.w * q.x) * 2.0f;
+      const float zz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+      AirSetTargetNow(sim, u, Vec3{u->position.x - zx, u->position.y - zy, u->position.z - zz}, 0);
+    }
+  }
   u->parentId = 0;
   u->unitStates.erase("Attached");
   u->motion.needSnap = true;

@@ -2099,6 +2099,7 @@ void TakePendingGoal(Sim& sim, Unit* u) {
   AirMotion& a = A(u);
   a.pending = false;
   a.goal = a.pendingGoal;
+  a.curTarget = a.goal;
   a.steering = true;
   SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
   a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
@@ -2192,9 +2193,13 @@ void AirMotionTick(Sim& sim, Unit* u) {
     Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
     if (f && L && L != u) {
       bool good = L->motion.air ? A(L).steering : LandNavStatus(L) == 2;
-      if (good) SetTarget(sim, u, u->formSlot, Vec3{}, 0);
+      if (good) {
+        a.curTarget = u->formSlot;
+        SetTarget(sim, u, u->formSlot, Vec3{}, 0);
+      }
     } else {
       a.inFormation = false;
+      a.curTarget = a.goal;
       SetTarget(sim, u, a.goal, Vec3{}, 0);
     }
   }
@@ -2257,44 +2262,6 @@ void AirMotionTick(Sim& sim, Unit* u) {
   m.lastMove = {(u->position.x - start.x) * a.lastScale, (u->position.y - start.y) * a.lastScale,
                 (u->position.z - start.z) * a.lastScale};
   if (!move) m.lastMove = {};
-  // CAiNavigatorAir::Execute: arrival (AtTarget + goal cell)
-  if (a.steering && !a.pending) {
-    float dx = a.target.x - u->position.x, dz = a.target.z - u->position.z;
-    float d = std::sqrt(dx * dx + dz * dz);
-    float r = 0.25f;
-    if (a.fullSpeed) {
-      float v = a.bp->maxAirspeed * m.speedMult;
-      r = a.bp->winged ? std::max(0.25f, v) : std::max(0.25f, 0.25f * v);
-    }
-    bool layerOk = a.landLayer == 0 || LayerBits(u->layer) == a.landLayer;
-    bool at = layerOk && (d <= r || a.vertEvent == 4 || (a.vertEvent == 1 && a.landHeight != kInf));
-    if (at && a.inFormation) {  // a follower only arrives when its slot (the motion target) is in the goal cell
-      const AirBp& ab = *a.bp;
-      auto cell = [&](float v, int s) { return static_cast<int>(std::nearbyint(v - s * 0.5f)); };
-      at = cell(a.target.x, ab.footprintX) == cell(a.goal.x, ab.footprintX) &&
-           cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
-    }
-    if (at && a.destEntity) {
-      // a destination entity: no arrival, the navigator takes its target from the entity again (next beat, above)
-      const Entity* de = sim.FindEntity(a.destEntity);
-      if (de && !de->destroyQueued) {
-        a.reaimAtDest = true;
-        at = false;
-      }
-    }
-    if (at) {
-      a.steering = false;
-      m.hasGoal = false;
-      m.arrived = true;
-      sim.ResumeCommandThread(u);  // Succeeded wakes the move task (re-linked at the stage's new end)
-      // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
-      static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
-      if (dbgArrive)
-        Logf(LogLevel::Info, "airarrive %u unit %#x d %.4f r %.4f vert %d landLayer %d layer %s queue %zu head %d task %d",
-             sim.tick(), u->id, d, r, a.vertEvent, a.landLayer, u->layer.c_str(), u->commands.size(),
-             u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type), u->task ? 1 : 0);
-    }
-  }
 }
 
 namespace {
@@ -2431,6 +2398,57 @@ void AirParentGone(Sim& sim, Unit* u) {
   SetMotionState(sim, u, A(u).bp->canFly ? 0 : 2);
   SetLayerBits(sim, u, kAir);
   u->motion.lastMove = {};
+}
+
+// CAiNavigatorAir::Execute 0x5a50d0, the arrival (AtTarget + goal cell): it runs in the navigators' stage of each army
+// (CArmyImpl::OnTick, brain+0xa8, beat_order.md 1.1), at the BEAT'S START, with the position the last motion left; so
+// the Succeeded that wakes the move task re-links the command thread in the navigators' order of that beat (land and
+// air navigators of an army together, by creation), not in the motion stage of the beat before. Seen: Skirmish 1383,
+// Chloe's transport 0x600018 reaches its pickup point (its landing move ends) in the same beat as its cargo 0x600017
+// ends its walk to the transport: the original's cargo thread still comes first in 1383, finds the transport not yet
+// at its pickup (TransportAtPickupPosition comes in the transport's turn) and starts its beam-up in 1384; ours had
+// re-linked the transport in the motion of 1382, so the transport went first and the cargo beamed up in 1383.
+void AirNavArrival(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  if (!m.air) return;
+  AirMotion& a = A(u);
+  if (a.steering && !a.pending) {
+    float dx = a.target.x - u->position.x, dz = a.target.z - u->position.z;
+    float d = std::sqrt(dx * dx + dz * dz);
+    float r = 0.25f;
+    if (a.fullSpeed) {
+      float v = a.bp->maxAirspeed * m.speedMult;
+      r = a.bp->winged ? std::max(0.25f, v) : std::max(0.25f, 0.25f * v);
+    }
+    bool layerOk = a.landLayer == 0 || LayerBits(u->layer) == a.landLayer;
+    bool at = layerOk && (d <= r || a.vertEvent == 4 || (a.vertEvent == 1 && a.landHeight != kInf));
+    if (at && a.inFormation) {  // a follower only arrives when its slot (the motion target) is in the goal cell
+      const AirBp& ab = *a.bp;
+      auto cell = [&](float v, int s) { return static_cast<int>(std::nearbyint(v - s * 0.5f)); };
+      at = cell(a.target.x, ab.footprintX) == cell(a.goal.x, ab.footprintX) &&
+           cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
+    }
+    if (at && a.destEntity) {
+      // a destination entity: no arrival, the navigator takes its target from the entity again (next beat, above)
+      const Entity* de = sim.FindEntity(a.destEntity);
+      if (de && !de->destroyQueued) {
+        a.reaimAtDest = true;
+        at = false;
+      }
+    }
+    if (at) {
+      a.steering = false;
+      m.hasGoal = false;
+      m.arrived = true;
+      sim.ResumeCommandThread(u);  // Succeeded wakes the move task (re-linked at the stage's new end)
+      // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
+      static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
+      if (dbgArrive)
+        Logf(LogLevel::Info, "airarrive %u unit %#x d %.4f r %.4f vert %d landLayer %d layer %s queue %zu head %d task %d",
+             sim.tick(), u->id, d, r, a.vertEvent, a.landLayer, u->layer.c_str(), u->commands.size(),
+             u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type), u->task ? 1 : 0);
+    }
+  }
 }
 
 namespace {

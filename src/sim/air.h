@@ -114,7 +114,8 @@ struct AirMotion {
   Vec3 pendingGoal;
   int pendingLayer = 0;   // the goal's layer (0: Air; 1: a landing move)
   Vec3 pendingFacing;     // SetFacing while a goal is pending
-  Vec3 goal;
+  Vec3 goal;              // navigator +0x7c
+  Vec3 curTarget;         // navigator +0x70: what SetGoal or the formation update last handed to the motion (0 at first)
 };
 
 const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp);
@@ -158,6 +159,8 @@ bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]);
 bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
+// CAiNavigatorAir::Execute's arrival test, in the navigators' stage of the beat (sim/landnav.cpp LandNavTickAll).
+void AirNavArrival(Sim& sim, Unit* u);
 // CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
 void AirStopHere(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).

@@ -1874,6 +1874,8 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
     };
     const float mass = static_cast<float>(num("Economy", "ReclaimMassMax"));
     const float energy = static_cast<float>(num("Economy", "ReclaimEnergyMax"));
+    p->bpReclaimMass = mass;
+    p->bpReclaimEnergy = energy;
     if (mass > 0 || energy > 0) {
       p->occupies = true;
       p->occSizeX = static_cast<uint8_t>(static_cast<int>(num("Footprint", "SizeX")));

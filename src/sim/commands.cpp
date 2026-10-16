@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <map>
 
 #include "core/dmath.h"
@@ -16,10 +18,13 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/collision.h"
+#include "sim/economy.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/replay.h"
 #include "sim/sim.h"
+#include "sim/terrain.h"
 #include "sim/transport.h"
 #include "sim/units.h"
 
@@ -165,6 +170,11 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
 
 }  // namespace
 
+namespace combat {
+bool IsAlly(const Army* a, const Army* b);
+bool IsEnemy(const Army* a, const Army* b);
+}  // namespace combat
+
 // ---- CUnitPatrolTask: Patrol 16, FormPatrol 18, AggressiveMove 35, FormAggressiveMove 36 ----------------
 // (engine-ref attack_move.md 2). Runs every 6 ticks; finds enemies in a box along its leg and pushes an
 // attack child; otherwise (re-)issues the navigator goal; ends when the unit is within ceil(speed) cells of
@@ -175,6 +185,7 @@ struct PatrolData {
   PatrolBox box;
   BuildTask* child = nullptr;
   uint32_t childFrom = 0;
+  std::vector<uint32_t> tried;  // +0xc8: what the reclaim helper sent the unit to reclaim (never again)
 };
 
 namespace {
@@ -198,6 +209,7 @@ void PatrolSearchBox(Sim& sim, Unit* u, PatrolData& p) {
   float r = GuardScanRadiusOf(u);
   p.box.cx = (E.x + S.x) * 0.5f;
   p.box.cz = (E.z + S.z) * 0.5f;
+  p.box.cy = (S.y * 2.0f) * 0.5f;
   p.box.dx = len < 0.001f ? 0.0f : dx / len;
   p.box.dz = len < 0.001f ? 1.0f : dz / len;
   p.box.side = r;
@@ -228,6 +240,96 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
   int cx = static_cast<int>(std::nearbyint(u->position.x - f.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(u->position.z - f.sizeZ * 0.5f));
   return x0 <= cx && cx <= x1 && z0 <= cz && cz <= z1;
+}
+
+// CUnitPatrolTask::EvaluatePatrolReclaimAttack 0x61b9c0 (read 2026-10-16): what a PATROLHELPER on patrol stops for.
+// Nothing for an ACU / SACU on AggressiveMove (the aggressive byte +0x82 is read only here). The candidates are the
+// units and props whose primitive meets the patrol's search box (COGrid::CollectEntitiesInBox 0x721dc0, mask 0x300:
+// the box's cells, the entity's AABB, then the primitive against the box), in the grid's order:
+// - a unit: not dead, not U, standing still (its position the same as last beat's: memcmp 0x61bd4b), not on the Air
+//   layer (unit+0x120 == 0x10); an enemy (IArmy::GetAllianceWith 0x579430 == 2) in RECLAIMABLE, weight 0.5; an ally
+//   or U's own (== 1) only when both resources are stored above 3/4 of their room (army economy +0x18 / +0x1c
+//   against 0.75 x the int64 storage +0x40 / +0x48, energy then mass), below 0.9 of its health and not
+//   BeingReclaimed (unit state 15), weight 2.0; a neutral (0) never;
+// - a prop: U in RECLAIM, the prop in RECLAIMABLE; with one resource stored above 3/4 it must give the other
+//   (blueprint ReclaimEnergyMax bp+0x1a8 / ReclaimMassMax bp+0x1a4 > 0); and not one this patrol already sent the
+//   unit to reclaim (the set +0xc8, 0x61c540); weight 1.
+// Each must stand within the map with a margin of 1 (STIMap::IsWithin 0x62ca60; the army's whole-map flag, vt+0xb8,
+// not kept: false) and, while the no-rush timer (army+0x1cc) runs, within its circle (not modelled: no replay has
+// no-rush). The least weight x 3D distance squared from U wins (strictly less, from +inf 0x10b19a4).
+// Seen: Skirmish 1268, engineer 0x700007 on AggressiveMove reclaims a prop 1 cell away first (its navigator idle
+// until the reclaim child moves it at 1274); ours walked off toward the goal.
+Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
+  if (!BpInCategory(sim, u->blueprint, "PATROLHELPER")) return nullptr;
+  if (p.aggressive && (BpInCategory(sim, u->blueprint, "COMMAND") || BpInCategory(sim, u->blueprint, "SACU_BEHAVIOR")))
+    return nullptr;
+  if (!u->army) return nullptr;
+  const ArmyEconomy& eco = u->army->econ;
+  const bool energyHigh = eco.stored[kEnergy] > static_cast<float>(static_cast<double>(eco.maxStorage[kEnergy]) * 0.75);
+  const bool massHigh = eco.stored[kMass] > static_cast<float>(static_cast<double>(eco.maxStorage[kMass]) * 0.75);
+  // the search box (RecomputePatrolSearchBox 0x61b2f0): side = dir turned 90 degrees about +Y, up, dir
+  const PatrolBox& b = p.box;
+  const Vec3 centre{b.cx, b.cy, b.cz};
+  const Vec3 axes[3] = {{b.dz, 0.0f, -b.dx}, {0.0f, 1.0f, 0.0f}, {b.dx, 0.0f, b.dz}};
+  const float half[3] = {b.side, 100.0f, b.along};
+  const Vec3 ext{std::fabs(axes[0].x) * half[0] + std::fabs(axes[2].x) * half[2], half[1],
+                 std::fabs(axes[0].z) * half[0] + std::fabs(axes[2].z) * half[2]};
+  const Vec3 boxMn{centre.x - ext.x, centre.y - ext.y, centre.z - ext.z};
+  const Vec3 boxMx{centre.x + ext.x, centre.y + ext.y, centre.z + ext.z};
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(boxMn.x, boxMn.z, boxMx.x, boxMx.z, 3, &cand);
+  const TerrainMap* map = sim.map();
+  const float W = map ? static_cast<float>(map->width()) : 0.0f, H = map ? static_cast<float>(map->height()) : 0.0f;
+  Entity* best = nullptr;
+  float bestD = std::numeric_limits<float>::infinity();
+  for (Entity* e : cand) {
+    WorldShape ws;
+    if (!GetWorldShape(e, &ws)) continue;
+    Vec3 mn, mx;
+    ShapeBounds(ws, &mn, &mx);
+    if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z || mn.z > boxMx.z) continue;
+    if (!ShapeOverlapsOBox(ws, centre, axes, half)) continue;
+    float w = 1.0f;
+    if (e->kind == Entity::Kind::Unit) {
+      Unit* c = static_cast<Unit*>(e);
+      if (c->dead || c == u) continue;
+      if (std::memcmp(&c->position, &c->lastPosition, sizeof(Vec3)) != 0) continue;  // it moved
+      if (c->layer == "Air") continue;
+      const bool ally = c->army == u->army || combat::IsAlly(u->army, c->army);
+      if (ally) {
+        if (!(energyHigh && massHigh)) continue;
+        if (c->health >= c->maxHealth * 0.9f) continue;
+        if (c->unitStates.count("BeingReclaimed")) continue;
+        w = 2.0f;
+      } else if (c->army && combat::IsEnemy(u->army, c->army)) {
+        if (!BpInCategory(sim, c->blueprint, "RECLAIMABLE")) continue;
+        w = 0.5f;
+      } else {
+        continue;  // neutral
+      }
+    } else if (e->kind == Entity::Kind::Prop) {
+      const Prop* pr = static_cast<const Prop*>(e);
+      if (!BpInCategory(sim, u->blueprint, "RECLAIM")) continue;
+      if (!pr->blueprint || !pr->blueprint->reclaimable) continue;
+      if (energyHigh || massHigh) {
+        const bool wantE = !energyHigh && pr->bpReclaimEnergy > 0.0f;
+        const bool wantM = !massHigh && pr->bpReclaimMass > 0.0f;
+        if (!wantE && !wantM) continue;
+      }
+      if (std::find(p.tried.begin(), p.tried.end(), EntityRef(e)) != p.tried.end()) continue;
+    } else {
+      continue;
+    }
+    const Vec3& q = e->position;
+    if (0.0f > q.x - 1.0f || 0.0f > q.z - 1.0f || q.x + 1.0f > W || q.z + 1.0f > H) continue;  // IsWithin(1, false)
+    const float dx = u->position.x - q.x, dy = u->position.y - q.y, dz = u->position.z - q.z;
+    const float d = (dx * dx + dy * dy + dz * dz) * w;
+    if (bestD > d) {
+      bestD = d;
+      best = e;
+    }
+  }
+  return best;
 }
 
 void PatrolSetGoal(Sim& sim, Unit* u) {
@@ -280,6 +382,23 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
       t.waitUntil = next;
       return kTaskRunning;
     }
+  }
+  // (c) the reclaim / repair helper (0x61c268): an ally's unit is repaired (CUnitRepairTask::new 0x5f9e50), anything
+  // else reclaimed (IssueReclaimTask 0x61ef60), and the latter is kept in +0xc8 (0x5c3a90) so it is not picked again
+  if (Entity* r = PatrolReclaimTarget(sim, u, p)) {
+    Unit* ru = r->kind == Entity::Kind::Unit ? static_cast<Unit*>(r) : nullptr;
+    BuildTask* c = nullptr;
+    if (ru && (ru->army == u->army || combat::IsAlly(u->army, ru->army))) {
+      c = MakeRepairChild(sim, u, ru, false);
+    } else {
+      p.tried.push_back(EntityRef(r));
+      c = MakeReclaimChild(sim, u, r);
+    }
+    p.child = c;
+    p.childFrom = next;
+    p.goalIssued = false;
+    t.waitUntil = next;
+    return kTaskRunning;
   }
   // (d) move / arrival
   if (u->unitStates.count("NeedToTerminateTask")) return kTaskDone;
@@ -1080,11 +1199,21 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
   return c;
 }
 
+// IssueClearCommands 0x6f1950: ClearCommandQueue 0x6ee2d0 and the attacker's reset. The motion is stopped by the
+// teardown of the running command's task (a move task's destructor 0x618700 -> the navigator's AbortMove). Ours stops
+// every cleared unit here, which also stands in for task teardowns that end a command just before (bench 294: the
+// Cybran ACU's drones, pods whose assist ended, cleared by their IdleState, are stopped in the original); but an
+// aircraft that is no pod, with an empty queue and its motion already stopped (CUnitMotion::Stop 0x6b8460 ran:
+// motion+0x10), is not stopped again: nothing in it is torn down (inferred from the two seen cases). Seen: Skirmish 1395, M28 clears the idle Aeon transport 0x600018
+// (its first load done at 1394, its landing move aborted at 1383) before its next IssueTransportLoad: the original's
+// air target stays where that abort left it (907.168, 30.716, 70.798; target layer Land, elevation 4), ours was
+// stopped again one second ahead and took the Air layer.
 void IssueClearCommandsTo(Sim& sim, Unit* u) {
   const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
   const bool stopped = HeadTaskStopsMotion(u);
+  const bool standing = !u->isPod && u->commands.empty() && u->motion.air && u->motion.air->stopped && !u->motion.hasGoal;
   ForgetUnitCommands(u);
-  if (!stopped) MotionStop(u);
+  if (!stopped && !standing) MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
   AttackerStop(sim, u);
@@ -1550,9 +1679,27 @@ int l_nav_AbortMove(lua_State* L) {
   if (IsAlive(N(L)->unit)) MotionStop(N(L)->unit);
   return 0;
 }
+// CAiNavigatorAir (air_nav.md 4.1, 4.6): GetStatus 0x5a37a0 = nav+0x64 (2 from SetGoal / SetDestUnit until the
+// arrival or AbortMove: ours steering, or a SetGoal still pending for this beat's motion step, which the original
+// has already handed over); GetGoalPos 0x5a49f0 = status 2 ? goal (+0x7c) : the unit's position; GetCurrentTargetPos
+// 0x5a50b0 = curTarget (+0x70), which AbortMove, the arrival and SetDestUnit leave as it was (zero before the first
+// SetGoal). Ours answered the unit's own position for both while it flew. Seen: Skirmish 1405, M28's
+// IssueTrackedMove (m28orders.lua:265-272) re-aims a moving aircraft through navigator:SetGoal when GetCurrentTargetPos
+// lies within 3 of its last ordered point; with ours' answer it cleared the queue and issued a new Move instead, so
+// the UEF transport 0x400018 (uea0107) was stopped a second ahead at 1405 and got the new goal at 1406 (the original's
+// target is the new goal at 1405; the watch log's "wn" lines show curTarget and goal as above).
+static bool AirNavStatus2(const Unit* u) {
+  const AirMotion& a = *u->motion.air;
+  return a.steering || a.pending;
+}
 int l_nav_GetGoalPos(lua_State* L) {
   Unit* u = N(L)->unit;
   Vec3 g;
+  if (u->motion.air) {
+    const AirMotion& a = *u->motion.air;
+    PushVector(L, !AirNavStatus2(u) ? u->position : a.pending ? a.pendingGoal : a.goal);
+    return 1;
+  }
   if (u->motion.navDriven && LandNavGoal(u, &g)) PushVector(L, g);
   else PushVector(L, u->motion.hasGoal && !u->motion.path.empty() ? u->motion.path.back() : u->position);
   return 1;
@@ -1561,6 +1708,10 @@ int l_nav_GetCurrentTargetPos(lua_State* L) {
   Unit* u = N(L)->unit;
   const UnitMotion& m = u->motion;
   Vec3 t;
+  if (m.air) {
+    PushVector(L, m.air->pending ? m.air->pendingGoal : m.air->curTarget);
+    return 1;
+  }
   if (m.navDriven) PushVector(L, LandNavTarget(u, &t) ? t : u->position);
   else PushVector(L, m.hasGoal && m.pathIndex < m.path.size() ? m.path[m.pathIndex] : u->position);
   return 1;
@@ -1568,7 +1719,8 @@ int l_nav_GetCurrentTargetPos(lua_State* L) {
 int l_nav_GetStatus(lua_State* L) {
   Unit* u = N(L)->unit;
   int st = 0;  // Idle
-  if (u->motion.navDriven) st = LandNavStatus(u);
+  if (u->motion.air) st = AirNavStatus2(u) ? 2 : 0;
+  else if (u->motion.navDriven) st = LandNavStatus(u);
   else if (u->motion.hasGoal) st = S(L)->tick() < u->motion.driveTick ? 1 : 2;  // Thinking / Steering
   lua_pushnumber(L, st);
   return 1;
