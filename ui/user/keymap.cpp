@@ -322,8 +322,8 @@ int l_FlushEvents(lua_State*) { return 0; }
 
 // moho64ui_KeyMapAction(key): the console command bound to a key ("Ctrl-A"), or nil. The host's
 // own function for tests.
-// moho64ui_Looks() -> the program's own looks as they stand (LookSettings; the host's own
-// function for tests).
+// moho64ui_Looks() -> the program's own looks as they stand (LookSettings, FramePacing, and the
+// camera's CameraControls and CursorLock; the host's own function for tests).
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
@@ -353,6 +353,21 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "frameMs");
   lua_pushnumber(L, Pacing().frameMs);
   lua_rawset(L, -3);
+  const CameraControls& keys = CameraKeys();
+  const char* numbers[7] = {"iconScale", "bloomIntensity", "zoomAmount", "panSpeed", "panFast", "turnSpeed", "turnFast"};
+  const double numberValues[7] = {looks.iconScale, looks.bloomIntensity, keys.zoomAmount, keys.panSpeed, keys.panFast, keys.turnSpeed, keys.turnFast};
+  for (int i = 0; i < 7; ++i) {
+    lua_pushstring(L, numbers[i]);
+    lua_pushnumber(L, numberValues[i]);
+    lua_rawset(L, -3);
+  }
+  const char* switches[5] = {"iconsAlways", "bloom", "edgePans", "arrowsPan", "lockCursor"};
+  const bool switchValues[5] = {looks.iconsAlways, looks.bloom, keys.edgePans, keys.arrowsPan, LockCursor().on};
+  for (int i = 0; i < 5; ++i) {
+    lua_pushstring(L, switches[i]);
+    lua_pushboolean(L, switchValues[i]);
+    lua_rawset(L, -3);
+  }
   return 1;
 }
 int l_KeyMapAction(lua_State* L) {
@@ -678,6 +693,16 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "REMASTER_GRAPHICS_API") {  // d3d12 | vulkan
       if (!value.empty()) looks.vulkan = Upper(value) == "VULKAN";
+      return;
+    }
+    if (key == "UI_STRATEGICICONSCALE") {  // 1 / 1.5 / 2
+      if (!value.empty()) looks.iconScale = std::max(1.0f, std::min(4.0f, static_cast<float>(std::atof(value.c_str()))));
+      return;
+    }
+    if (key == "UI_ALWAYSRENDERSTRATEGICICONS") return void(looks.iconsAlways = value.empty() ? !looks.iconsAlways : on);
+    if (key == "REN_BLOOM") return void(looks.bloom = value.empty() ? !looks.bloom : on);
+    if (key == "REN_BLOOMBLURKERNELSCALE") {  // the game's Bloom Intensity / 10
+      if (!value.empty()) looks.bloomIntensity = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
       return;
     }
     if (key == "REMASTER_UPSCALE") {

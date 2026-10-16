@@ -171,6 +171,10 @@ struct GameSession::Picture : WorldSource {
       w->shadowSize = looks.shadows <= 1 ? 1024 : looks.shadows == 2 ? 2048 : 4096;  // (the renderer's offer)
       w->meshes.detail = looks.meshDetail;
       w->tracks.on = looks.snowTracks;
+      w->icons.playerScale = looks.iconScale;
+      w->icons.always = looks.iconsAlways;
+      w->bloom = looks.bloom;
+      w->bloomIntensity = looks.bloomIntensity;
     }
     lookNow = looks;
     lookApplied = true;

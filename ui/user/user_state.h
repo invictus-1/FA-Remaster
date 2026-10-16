@@ -264,6 +264,14 @@ struct LookSettings {
   // renderer's original look of lighting, sky, water, ground shading, unit shaders, glow and the
   // build look all together (World::look, the viewer's key L), at once; the other looks stay apart.
   bool originalLook = false;
+  // The strategic icons (the game's "Scale strategic icons", ui_StrategicIconScale 1 / 1.5 / 2, and
+  // "Always Show Strategic Icons", ui_AlwaysRenderStrategicIcons; the renderer's StrategicIcons
+  // playerScale and always), and the modern look's glow (Bloom Render, ren_bloom, and Bloom
+  // Intensity, ren_BloomBlurKernelScale 1.0..1.7; World::bloom, bloomIntensity). From the next frame.
+  float iconScale = 1.0f;
+  bool iconsAlways = false;
+  bool bloom = true;
+  float bloomIntensity = 1.5f;
 };
 LookSettings& Looks();
 // The names players give their units, as the original draws them under the life bars (its console

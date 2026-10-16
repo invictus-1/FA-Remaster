@@ -129,5 +129,53 @@ video.remaster_frame_rate.set('remaster_frame_rate', 'uncapped', false)
 check("uncapped has no shortest frame", moho64ui_Looks().frameMs, 0)
 video.remaster_frame_rate.set('remaster_frame_rate', 'vsync', false)
 check("and back to vertical sync", moho64ui_Looks().verticalSync, true)
+-- Options the remastered picture does its own way are not in the menu; the glow is on unless chosen
+for _, key in {'shadow_resolution', 'shadow_render_distance', 'render_skydome'} do
+    check("the Video tab leaves out " .. key, video[key], nil)
+end
+check("Bloom Render is on unless chosen", video.bloom_render and video.bloom_render.default, 1)
+video.bloom_render.set('bloom_render', 0, false)
+check("Bloom Render Off takes the glow away", moho64ui_Looks().bloom, false)
+video.bloom_render.set('bloom_render', 1, false)
+check("and On gives it back", moho64ui_Looks().bloom, true)
+video.bloom_intensity.set('bloom_intensity', 10, false)
+check("Bloom Intensity 10 is a glow of 1.0", math.abs(moho64ui_Looks().bloomIntensity - 1.0) < 0.001, true)
+video.bloom_intensity.set('bloom_intensity', 15, false)
+check("the presets run without a missing option", pcall(video.fidelity_presets.update, nil, 3), true)
+
+-- The camera's options and the strategic icons (other tabs of the menu): each does what it says
+local all = {}
+for _, section in import('/lua/options/options.lua').options do
+    for _, item in section.items or {} do
+        all[item.key] = item
+    end
+end
+local function option(key, value)
+    all[key].set(key, value, false)
+    return moho64ui_Looks()
+end
+check("Zoom Wheel Sensitivity 80 zooms 0.8 a notch", math.abs(option('wheel_sensitivity', 80).zoomAmount - 0.8) < 0.001, true)
+check("Pan Speed 200", option('keyboard_pan_speed', 200).panSpeed, 200)
+check("Accelerated Pan Speed Multiplier 6", option('keyboard_pan_accelerate_multiplier', 6).panFast, 6)
+check("Keyboard Rotation Speed 25", option('keyboard_rotate_speed', 25).turnSpeed, 25)
+check("Accelerated Keyboard Rotate Speed Multiplier 3", option('keyboard_rotate_accelerate_multiplier', 3).turnFast, 3)
+check("Screen Edge Pans Main View Off", option('screen_edge_pans_main_view', 0).edgePans, false)
+check("Arrow Keys Pan Main View Off", option('arrow_keys_pan_main_view', 0).arrowsPan, false)
+check("Lock Fullscreen Cursor To Window On", option('lock_fullscreen_cursor_to_window', 1).lockCursor, true)
+check("Scale strategic icons 200%", option('strat_icon_scale', 2.0).iconScale, 2)
+check("Always Show Strategic Icons On", option('strat_icons_always_on', 1).iconsAlways, true)
+option('wheel_sensitivity', 40)
+option('keyboard_pan_speed', 90)
+option('keyboard_pan_accelerate_multiplier', 4)
+option('keyboard_rotate_speed', 10)
+option('keyboard_rotate_accelerate_multiplier', 2)
+option('screen_edge_pans_main_view', 1)
+option('arrow_keys_pan_main_view', 1)
+option('lock_fullscreen_cursor_to_window', 0)
+option('strat_icon_scale', 1.0)
+local back = option('strat_icons_always_on', 0)
+check("and all back to the game's defaults", math.abs(back.zoomAmount - 0.4) < 0.001 and back.panSpeed == 90 and back.panFast == 4
+    and back.turnSpeed == 10 and back.turnFast == 2 and back.edgePans and back.arrowsPan and not back.lockCursor and back.iconScale == 1
+    and not back.iconsAlways, true)
 
 LOG("TEST done: " .. failed .. " failed")

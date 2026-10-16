@@ -1485,6 +1485,13 @@ own way:
 - Bloom Render (`bloom_render`, `ren_bloom 0|1`, default 0)
 - Bloom Intensity (`bloom_intensity`, `ren_BloomBlurKernelScale` = value / 10, 1.0..1.7, default 1.5)
 Chris's profile has sky on, shadows 2048 / 440, bloom on at 15.
+DONE (render 9537e8b, main d42a192; `docs/render-answers.md`): `icons.playerScale` (drawn at the larger
+of it and his scale from the height) and `icons.always`; `World::bloom` and `bloomIntensity` (1.5 is the
+modern look's glow). Wired in the host through LookSettings; Shadow Resolution, Shadow render distance
+and Render Sky are left out of the menu (his advice: Shadow Fidelity sets the size, the shadows cover
+every zoom, the sky lights the scene). Bloom Render is on unless chosen (his suggestion; the game's
+default is off), and the Fidelity Presets turn it on at High and Ultra (the game's turn it off at every
+level).
 
 ## To the visuals track
 

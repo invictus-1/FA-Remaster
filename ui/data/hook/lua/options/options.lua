@@ -149,8 +149,43 @@ end
 -- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The
 -- anti-aliasing choices are the renderer's (Off, 2, 4).
+-- Options the remastered picture does its own way are left out of the menu (the renderer's answer
+-- to ui request 24, 2026-10-16): Shadow Resolution (Shadow Fidelity sets the shadows' size),
+-- Shadow render distance (the shadows cover every zoom) and Render Sky (the sky lights the scene;
+-- without it the picture is wrong, not faster).
+local leftOut = { shadow_resolution = true, shadow_render_distance = true, render_skydome = true }
+for i = table.getn(options.video.items), 1, -1 do
+    if leftOut[options.video.items[i].key] then
+        table.remove(options.video.items, i)
+    end
+end
+
+-- The Fidelity Presets as the game's, but without Render Sky (left out above), and with Bloom
+-- Render on at High and Ultra: the glow belongs to the full modern look (the game's presets turn
+-- it off at every level).
+local function SetPreset(control, value)
+    local logic = import("/lua/options/optionslogic.lua")
+    local aa = GetAntiAliasingOptions()
+    local aaHigh, aaMedium = 0, 0
+    if table.getn(aa) > 0 then
+        aaHigh = aa[table.getn(aa)]
+        aaMedium = aa[math.ceil(table.getn(aa) / 2)]
+    end
+    local presets = {
+        [0] = { {'fidelity', 0}, {'shadow_quality', 0}, {'texture_level', 2}, {'antialiasing', 0}, {'level_of_detail', 0}, {'bloom_render', 0} },
+        [1] = { {'fidelity', 1}, {'shadow_quality', 1}, {'texture_level', 1}, {'antialiasing', 0}, {'level_of_detail', 1}, {'bloom_render', 0} },
+        [2] = { {'fidelity', 2}, {'shadow_quality', 2}, {'texture_level', 0}, {'antialiasing', aaMedium}, {'level_of_detail', 2}, {'bloom_render', 1} },
+        [3] = { {'fidelity', 2}, {'shadow_quality', 3}, {'texture_level', 0}, {'antialiasing', aaHigh}, {'level_of_detail', 2}, {'bloom_render', 1} },
+    }
+    for _, pair in presets[value] or {} do
+        logic.SetValue(pair[1], pair[2], true)
+    end
+end
+
 for _, item in options.video.items do
-    if item.key == 'fidelity' then item.default = 2
+    if item.key == 'fidelity_presets' then item.update = SetPreset
+    elseif item.key == 'bloom_render' then item.default = 1  -- (the game's: off; the renderer's look has it on)
+    elseif item.key == 'fidelity' then item.default = 2
     elseif item.key == 'shadow_quality' then item.default = 3
     elseif item.key == 'level_of_detail' then item.default = 2
     elseif item.key == 'texture_level' then item.default = 0  -- (High)

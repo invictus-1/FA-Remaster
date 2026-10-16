@@ -137,7 +137,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   tracers, day, weather, map edge and rich ground keep their own options. "Graphics API" in the same tab
   (`remaster_graphics_api`, Chris, 2026-10-15): Direct3D 12 by default, or Vulkan
   (WorldPicture::SetVulkan before Open; the game's picture, the menu's and its background), from
-  the next map loaded.
+  the next map loaded. Bloom Render and Bloom Intensity (`ren_bloom`, `ren_BloomBlurKernelScale`)
+  drive the modern look's glow (World::bloom, bloomIntensity; 15, the game's default, is the look's
+  own glow); Bloom Render is ON unless chosen (the renderer's advice; the game's default is off), and
+  the Fidelity Presets turn it on at High and Ultra (the game's own turn it off at every level).
+  Left out of the menu, as the remastered picture does them its own way (renderer, 2026-10-16):
+  Shadow Resolution (Shadow Fidelity sets the size), Shadow render distance (the shadows cover every
+  zoom), Render Sky (the sky lights the scene). The interface tab's "Scale strategic icons" (1 / 1.5 /
+  2; drawn at the larger of it and the renderer's scale for the screen's height) and "Always Show
+  Strategic Icons" (at every distance, close up too) go to the renderer's StrategicIcons.
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
   "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is
@@ -361,9 +369,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   middle button moves the view with the mouse (the ground stays under the pointer). While the
   camera is dragged or turned a live window holds the pointer as the original does: hidden and
   kept in place, the mouse's moves still counted, so a drag has no end at the screen's edge. With `--fullscreen` the window
-  fills the main screen without a frame and keeps the mouse inside while it is in front; the
-  mouse at the screen's edge then moves the view, as in the original. The profile's options
-  `arrow_keys_pan_main_view` and `screen_edge_pans_main_view` switch the two. The camera turns
+  fills the main screen without a frame; the mouse at the screen's edge then moves the view, as in
+  the original. The game's options set the camera through the console, as in the original
+  (`CameraControls`, defaults read in the exe): Zoom Wheel Sensitivity (`cam_ZoomAmount`, a notch's
+  step), Pan Speed and its Ctrl multiplier (`ui_KeyboardPanSpeed`, `..AccelerateMultiplier`),
+  Keyboard Rotation Speed and its multiplier (`ui_KeyboardRotateSpeed`, ...), Screen Edge Pans Main
+  View and Arrow Keys Pan Main View (`ui_ScreenEdgeScrollView`, `ui_ArrowKeysScrollView`), and Lock
+  Fullscreen Cursor To Window (`SC_ToggleCursorClip`, FA exe 0x8d41b0; off unless chosen, as the
+  original: the mouse may leave a full screen for a second screen). The camera turns
   as the original's: with Space held the mouse turns and leans it (from near only, a zoom under
   125; a full turn for a view's width) and it swings back to north up when Space is let go;
   Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
