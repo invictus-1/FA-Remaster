@@ -785,8 +785,11 @@ uint32_t MeshRenderer::AddGroup() {
 }
 
 void MeshRenderer::ClearGroup(uint32_t group) {
-  groups_[group].entries.clear();
-  groups_[group].culls.clear();
+  Group& g = groups_[group];
+  g.entries.clear();
+  g.culls.clear();
+  g.lo = {1e30f, 1e30f, 1e30f};
+  g.hi = {-1e30f, -1e30f, -1e30f};
 }
 
 void MeshRenderer::AddToGroup(uint32_t group, const Model* model, const Mat4& world) {
@@ -794,8 +797,11 @@ void MeshRenderer::AddToGroup(uint32_t group, const Model* model, const Mat4& wo
   Entry e = MakeEntry(model, world, {1, 1, 1}, 1, nullptr);
   e.scenery = true;
   e.flags |= kScenery;
-  groups_[group].entries.push_back(e);
-  groups_[group].culls.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
+  Group& g = groups_[group];
+  g.entries.push_back(e);
+  g.culls.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
+  g.lo = {std::min(g.lo.x, e.centre.x - e.radius), std::min(g.lo.y, e.centre.y - e.radius), std::min(g.lo.z, e.centre.z - e.radius)};
+  g.hi = {std::max(g.hi.x, e.centre.x + e.radius), std::max(g.hi.y, e.centre.y + e.radius), std::max(g.hi.z, e.centre.z + e.radius)};
 }
 
 void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowPass, bool glass, int part) {
@@ -824,7 +830,18 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at)});
   };
   if (part != 2)
-    for (uint32_t g : groupsListed_) cut(groups_[g].culls.data(), groups_[g].entries.data(), groups_[g].culls.size());
+    for (uint32_t g : groupsListed_) {
+      Group& group = groups_[g];
+      if (group.culls.empty()) continue;
+      // (a group this pass does not see is passed over whole: its box holds every member's sphere, so
+      // each member would fail the same test, Consider's, on its own)
+      if (!view.BoxVisible(group.lo, group.hi)) continue;
+      const Vec3 centre = (group.lo + group.hi) * 0.5f;
+      const float radius = Length(group.hi - group.lo) * 0.5f;
+      if (shadowPass && view.CoveredByNearer(centre, radius)) continue;
+      if (view.reach > 0 && Length(centre - view.reachFrom) - radius > view.reach) continue;
+      cut(group.culls.data(), group.entries.data(), group.culls.size());
+    }
   cut(culls_.data(), entries_.data(), culls_.size());
   if (pieceItems_.size() < pieces_.size()) pieceItems_.resize(pieces_.size());
   Jobs::Shared().Run(static_cast<int>(pieces_.size()), [&](int k) {
