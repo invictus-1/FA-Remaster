@@ -165,6 +165,16 @@ class GameSession {
   // this beat; then real time again.
   uint32_t fastForwardTo = 0;
   bool CatchingUp() const;
+  // Beats on a thread of their own (the window path): the simulation's tick and the picture's copy
+  // of it run there while the window keeps showing frames of the world. Everything else that
+  // touches the simulation (the interface's scripts and input, orders, sounds, sync) waits until
+  // it is done: while BeatRunning(), the window only shows frames.
+  bool beatsOnThread = false;
+  bool BeatRunning() const;
+  // While a beat runs there: the time that passes (the picture's moment moves on; no beat starts).
+  void AdvanceClock(double seconds);
+  // A beat still on its thread: wait for it and finish it (its sounds, its sync).
+  void WaitForBeat();
 
   uint32_t tick() const;
   double PictureTick() const;
@@ -183,8 +193,21 @@ class GameSession {
   };
   std::map<uint32_t, ForeignLoop> foreignLoops_;
   std::set<uint32_t> heardLoops_;
-  void NoteBeat();  // a beat has run: the picture hears of it
+  void NoteBeat();  // a beat has run: the picture hears of it, then the sounds and shakes
+  void NotePictureBeat();  // the picture's copy of the beat (on the beats' thread, or here)
+  void NoteBeatHere();     // the beat's sounds and camera shakes (always here, after the beat)
   void TimedTick();
+  class BeatWorker;
+  std::unique_ptr<BeatWorker> worker_;
+  bool beatToFinish_ = false;  // a beat ran on the worker: its sounds and sync are still to come
+  uint32_t beatFrom_ = 0;      // the tick the running beat started from
+  double workerSimSeconds_ = 0, workerPictureSeconds_ = 0;  // (written there; read here after it)
+  // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
+  // so the next beat is there when the picture's moment reaches it (the picture never waits).
+  double lead_ = 0;
+  void StartBeatOnThread();
+  void FinishBeat();
+  void DeliverBeatSync();
   // The game's replay file being written (LastGame), and a replay being played back: its bytes
   // and the stream over them. `profile_`: the player's profile name at the launch.
   std::FILE* replay_ = nullptr;

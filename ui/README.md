@@ -74,6 +74,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   1600x900 (15.4 the old way), 16.1 ms at 3840x2160 (43.1). `--gdi`: the old way (the world's
   picture read back, everything copied to the window). `--window-capture <prefix>`: what the
   window shows, read back, as `<prefix>_game.png` and, after a game is left, `<prefix>_menu.png`.
+  The interface is drawn only where it changed (`draw/recorder.h`: a frame's drawing is
+  recorded, compared with the last frame's, and only the 32-pixel tiles where it differs are
+  drawn again, as a full redraw would draw them; only that part goes to the renderer):
+  `MOHO64UI_FULL_REDRAW=1` the old way, `MOHO64UI_DIRTY_CHECK=1` compares every frame with a
+  full redraw. In the window the game's beats run on a thread of their own (the simulation's
+  tick and the picture's copy of it, as the renderer's viewer does), started early by about as
+  long as the last beat took, while the window keeps showing the world; the interface, input,
+  orders, sounds and sync wait for the beat (`GameSession::BeatRunning`).
+  `MOHO64UI_BEATS_HERE=1`: the beats on the main thread, as before. Measured in the renderer's
+  eight-army M28 game at beat 6000 (1600x900): the interface's drawing 8.18 -> 0.48 ms a frame;
+  the slowest 1% of frames 54 -> 8.8 ms, the longest 86 -> 10.3 ms, none over 20 ms (50 before).
+  `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
+  window's frame times count from there), and the log gives the frame-to-frame times (middle,
+  95%, 99%, longest).
 - `--screenshot file.png` draws the head once at the end and saves the picture.
 - The day and the weather of a game's picture (the renderer's; they are only seen) are GAME
   OPTIONS, chosen in the lobby with the game's other options: Time of Day (the map's own fixed

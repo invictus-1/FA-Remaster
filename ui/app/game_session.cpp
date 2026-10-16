@@ -1,10 +1,14 @@
 #include "app/game_session.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
+#include <mutex>
+#include <thread>
 
 #include "core/crash.h"
 #include "core/hostfs.h"
@@ -197,13 +201,75 @@ struct GameSession::Picture : WorldSource {
 #endif
 };
 
+// The beats' own thread: one job at a time (a beat), asked for and waited on from the main thread.
+class GameSession::BeatWorker {
+ public:
+  BeatWorker() : thread_([this] { Run(); }) {}
+  ~BeatWorker() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      quit_ = true;
+    }
+    wake_.notify_all();
+    thread_.join();
+  }
+  void Start(std::function<void()> job) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      job_ = std::move(job);
+      running_.store(true, std::memory_order_release);
+    }
+    wake_.notify_all();
+  }
+  bool Running() const { return running_.load(std::memory_order_acquire); }
+  void Wait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    done_.wait(lock, [&] { return !running_.load(std::memory_order_acquire); });
+  }
+
+ private:
+  void Run() {
+    for (;;) {
+      std::function<void()> job;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        wake_.wait(lock, [&] { return quit_ || job_; });
+        if (quit_) return;
+        job = std::move(job_);
+        job_ = nullptr;
+      }
+      job();
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        running_.store(false, std::memory_order_release);
+      }
+      done_.notify_all();
+    }
+  }
+  std::mutex mutex_;
+  std::condition_variable wake_, done_;
+  std::function<void()> job_;
+  std::atomic<bool> running_{false};
+  bool quit_ = false;
+  std::thread thread_;  // (last: it starts once the rest is made)
+};
+
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
-GameSession::~GameSession() = default;
+GameSession::~GameSession() {
+  if (worker_) worker_->Wait();
+}
 
 WorldSource* GameSession::world() const { return picture_.get(); }
 
-// The moment the picture shows: the simulation's tick and the part of the next beat that has passed.
-double GameSession::PictureTick() const { return sim_ ? static_cast<double>(sim_->tick()) + due_ / 0.1 : 0.0; }
+bool GameSession::BeatRunning() const { return worker_ && worker_->Running(); }
+
+// The moment the picture shows: the simulation's tick and the part of the next beat that has passed
+// (while a beat runs on its thread: the tick it will reach).
+double GameSession::PictureTick() const {
+  if (!sim_) return 0.0;
+  const double tick = BeatRunning() ? static_cast<double>(beatFrom_) + 1.0 : static_cast<double>(sim_->tick());
+  return tick + due_ / 0.1;
+}
 
 namespace {
 // The player's profile name (the game's own prefs.lua: GetCurrentProfile().Name), "" for none.
@@ -440,6 +506,8 @@ void GameSession::Record(const std::string& bytes) {
 }
 
 void GameSession::End() {
+  if (worker_) worker_->Wait();  // (a beat on its thread ends first; its sounds and sync are dropped)
+  beatToFinish_ = false;
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   play_.reset();
@@ -618,8 +686,14 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   std::vector<uint8_t> rgba;
   if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
-  if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, PictureTick());
+  const double moment = PictureTick();
+  if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, moment);
   FrameTimes& times = Times();
+  // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
+  if (sim_) {
+    const uint32_t newest = BeatRunning() ? beatFrom_ : sim_->tick();
+    if (moment - 1.0 > static_cast<double>(newest) + 1e-6) ++times.heldPictures;
+  }
   times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   ++times.worldDraws;
   if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
@@ -729,33 +803,55 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   return true;
 }
 
-bool GameSession::CatchingUp() const { return sim_ && sim_->tick() < fastForwardTo; }
+bool GameSession::CatchingUp() const { return sim_ && !BeatRunning() && sim_->tick() < fastForwardTo; }
+
+void GameSession::AdvanceClock(double seconds) {
+  due_ = std::min(1.0, due_ + seconds * std::pow(10.0, pace.rate / 10.0));  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
+}
+
+void GameSession::WaitForBeat() {
+  if (worker_) worker_->Wait();
+  if (beatToFinish_) FinishBeat();
+}
 
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
-  if (CatchingUp()) {  // (--fast-forward, for measurements: up to 50 beats a frame until that beat)
+  if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)
+    AdvanceClock(seconds);
+    return;
+  }
+  if (beatToFinish_) FinishBeat();
+  const bool catchingUp = CatchingUp();
+  if (catchingUp) {  // (--fast-forward, for measurements: up to 50 beats a frame until that beat)
     due_ = std::min<uint32_t>(fastForwardTo - sim_->tick(), 50) * 0.1 + 0.01;
   } else {
-    due_ += seconds * std::pow(10.0, pace.rate / 10.0);  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
-    if (due_ > 1.0) due_ = 1.0;  // after a long stall, catch up by at most a second of beats
+    AdvanceClock(seconds);  // (after a long stall, catch up by at most a second of beats)
   }
-  while (due_ >= 0.1) {
+  // On its own thread one beat runs at a time, and it starts early by about as long as the last
+  // took: it is done when the picture's moment reaches it (the moment may then lie a little
+  // before the beats run: due_ below 0).
+  const bool onThread = beatsOnThread && !catchingUp;
+  const double startAt = onThread ? 0.1 - lead_ : 0.1;
+  while (due_ >= startAt) {
     due_ -= 0.1;
     if (play_) {  // a replay: its own orders, beat by beat; the player's only pause and resume it
       if (takeOrders) ViewerControls(takeOrders());
       if (sim_->Paused()) {
         sim_->PausedBeat();
       } else if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
-        if (sim_->Paused()) sim_->PausedBeat();
-        else TimedTick();
+        if (sim_->Paused()) {
+          sim_->PausedBeat();
+        } else if (onThread) {
+          StartBeatOnThread();
+          return;
+        } else {
+          TimedTick();
+        }
       } else {
         continue;  // the replay is over: the game stands where it ended
       }
       NoteBeat();
-      for (std::string& sync : sim_->TakeSync()) {
-        if (onSync) onSync(sync);
-        else pendingSync_.push_back(std::move(sync));
-      }
+      DeliverBeatSync();
       continue;
     }
     if (takeOrders) {
@@ -763,17 +859,58 @@ void GameSession::Advance(double seconds) {
       Record(orders);
       if (!orders.empty() && !ApplyCommands(*sim_, orders)) Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
     }
-    if (sim_->Paused()) sim_->PausedBeat();
-    else {
+    if (sim_->Paused()) {
+      sim_->PausedBeat();
+    } else if (onThread) {
+      Record(CommandWriter::AdvanceMessage(1));
+      StartBeatOnThread();
+      return;
+    } else {
       TimedTick();
       Record(CommandWriter::AdvanceMessage(1));
     }
     NoteBeat();
-    for (std::string& sync : sim_->TakeSync()) {
-      if (onSync) onSync(sync);
-      else pendingSync_.push_back(std::move(sync));
-    }
+    DeliverBeatSync();
   }
+}
+
+void GameSession::DeliverBeatSync() {
+  for (std::string& sync : sim_->TakeSync()) {
+    if (onSync) onSync(sync);
+    else pendingSync_.push_back(std::move(sync));
+  }
+}
+
+// The tick and the picture's copy of it on the beats' thread (the renderer's viewer does the same:
+// render/live_sim.cpp); nothing here touches the simulation until FinishBeat.
+void GameSession::StartBeatOnThread() {
+  beatFrom_ = sim_->tick();
+  if (!worker_) worker_ = std::make_unique<BeatWorker>();
+  beatToFinish_ = true;
+  worker_->Start([this] {
+    using Clock = std::chrono::steady_clock;
+    const auto ts = Clock::now();
+    sim_->Tick();
+    const auto tp = Clock::now();
+    NotePictureBeat();
+    workerSimSeconds_ = std::chrono::duration<double>(tp - ts).count();
+    workerPictureSeconds_ = std::chrono::duration<double>(Clock::now() - tp).count();
+  });
+}
+
+// After a beat on the thread: its times, its sounds and shakes, and its sync for the interface.
+void GameSession::FinishBeat() {
+  beatToFinish_ = false;
+  FrameTimes& times = Times();
+  times.simBeats += workerSimSeconds_;
+  times.pictureBeats += workerPictureSeconds_;
+  ++times.beats;
+  // The next beat starts this much early: the longest of the last beats, with some room (beats
+  // vary; the old estimate fades slowly), at most most of a beat.
+  const double took = (workerSimSeconds_ + workerPictureSeconds_) * std::pow(10.0, pace.rate / 10.0);
+  lead_ = std::min(0.08, std::max(took * 1.3, lead_ * 0.9));
+  NoteBeatHere();
+  DeliverBeatSync();
 }
 
 // The player's orders while a replay plays: only his pause and resume count (the messages
@@ -800,12 +937,20 @@ void GameSession::TimedTick() {  // (a beat of the simulation, timed for the win
 }
 
 void GameSession::NoteBeat() {
+  const auto tp = std::chrono::steady_clock::now();
+  NotePictureBeat();
+  Times().pictureBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count();
+  NoteBeatHere();
+}
+
+void GameSession::NotePictureBeat() {
   g_crashTick = sim_->tick();  // (a crash's line in the log names the beat: src/core/crash.h)
 #ifdef MOHO64UI_WORLD_PICTURE
-  const auto tp = std::chrono::steady_clock::now();
-  if (picture_) picture_->picture.Beat(*sim_);
-  Times().pictureBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count();
+  if (picture_) picture_->picture.Beat(*sim_);  // (it takes the beat's effect events too)
 #endif
+}
+
+void GameSession::NoteBeatHere() {
   const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
@@ -889,6 +1034,7 @@ void GameSession::PlayBeatSounds() {
 }
 
 void GameSession::RunFirstBeat() {
+  if (worker_) worker_->Wait();
   if (!sim_ || sim_->tick() != 0) return;
   // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);

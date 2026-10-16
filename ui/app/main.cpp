@@ -482,12 +482,16 @@ int main(int argc, char** argv) {
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
+      // The game's beats on a thread of their own, the window showing the world meanwhile
+      // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
+      session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;
+      hooks.busy = [&]() { return session.BeatRunning(); };
+      hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();
-                           session.Advance(seconds);
                            listen();
                            if (!game) session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
@@ -496,8 +500,12 @@ int main(int argc, char** argv) {
                              if (game && ++capturedFrames == 300) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                            }
+                           // LAST: a beat it starts on its own thread runs beside nothing more of
+                           // this frame that touches the simulation (only the picture is shown).
+                           session.Advance(seconds);
                          },
                          fullScreen, hooks);
+    session.WaitForBeat();  // (a beat still on its thread at the end: done before anything looks at the game again)
     if (done < 0) ok = false;
   } else {
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
