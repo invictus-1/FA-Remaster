@@ -1462,6 +1462,30 @@ I hand over each unit's name (id -> name, changed only when a script sets one) a
 colour, size and font from the console, by whatever API you prefer. The selection-set names can
 come later.
 
+### 24. The game's strategic-icon options, and five graphics options that do nothing yet
+From the interface chat, 2026-10-16, not blocking. The game's Options menu sends console commands
+when a game starts and when the player applies; these reach the host and are dropped today (the
+host's log: "console command not built"). Two are the strategic icons, which you draw:
+- **Always Show Strategic Icons** (`strat_icons_always_on`, sends `ui_AlwaysRenderStrategicIcons
+  0|1`, default 0): on = the symbols at every distance, also close up over the models (no fade-in
+  by IconFadeInZoom).
+- **Scale strategic icons** (`strat_icon_scale`, sends `ui_StrategicIconScale 1|1.5|2`, default 1,
+  the menu says "150% (may cause distortions)"): the symbols drawn at that many screen pixels per
+  symbol pixel. Your StrategicIcons::scale 0 picks 1 up to 1440 lines and 2 at 2160; my
+  suggestion: max(the player's scale, yours), so "Off" keeps your choice and 200% at 1080p gives 2.
+Could you give me two fields (or a setter) for these, read at the frame's Begin? I keep the values
+in LookSettings and set them on the world as I do the shadows; they can change during a game.
+Five more come from FAF's Video tab and also do nothing now. Tell me which to wire (I pass the value
+through LookSettings) and which to hide from the menu because the remastered picture does it its
+own way:
+- Render Sky (`render_skydome`, `ren_Skydome 0|1`, default 1)
+- Shadow Resolution (`shadow_resolution`, `ren_ShadowSize 512..2048`, default 1024; we already map
+  Shadow Fidelity to your shadowSize, so this one overlaps)
+- Shadow render distance (`shadow_render_distance`, `ren_ShadowLOD 200..440`, default 260)
+- Bloom Render (`bloom_render`, `ren_bloom 0|1`, default 0)
+- Bloom Intensity (`bloom_intensity`, `ren_BloomBlurKernelScale` = value / 10, 1.0..1.7, default 1.5)
+Chris's profile has sky on, shadows 2048 / 440, bloom on at 15.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

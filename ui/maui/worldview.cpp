@@ -44,20 +44,23 @@ int l_SetInvertMidMouseButton(lua_State* L) {
 
 // The original's camera settings: the defaults of its console variables (FA exe 0xf57fc4 on):
 // cam_NearZoom, cam_NearFOV, cam_FarFOV, cam_NearPitch, cam_FarPitch (degrees), cam_ZoomAmount,
-// cam_ZoomSpeedSmall, cam_ZoomSpeedLarge.
+// cam_ZoomSpeedSmall, cam_ZoomSpeedLarge. (cam_ZoomAmount, the wheel's step, is the player's:
+// CameraKeys().)
 const float kNearZoom = 5.0f, kNearFov = 65.0f, kFarFov = 60.0f, kNearPitch = 40.0f, kFarPitch = 89.9f;
-const float kZoomAmount = 0.4f, kZoomSpeedSmall = 0.5f, kZoomSpeedLarge = 5.0f;
+const float kZoomSpeedSmall = 0.5f, kZoomSpeedLarge = 5.0f;
 const float kDegrees = 0.0174533f, kPi = 3.14159265f;
-// Moving the view with the arrow keys (the world view's frame function, FA exe 0x871140): 90 a
-// frame, four times that with Ctrl, in the units of the camera's pan (cam_PanSpeed 1: a view's
-// width of them moves the focus by the zoom). The original moves by frame, so its speed goes with
-// the frame rate; here it is by time, at what the original does at 60 frames a second.
-const float kKeyPan = 90.0f, kKeyPanFast = 4.0f, kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
+// Moving the view with the arrow keys (the world view's frame function, FA exe 0x871140):
+// ui_KeyboardPanSpeed a frame (90), ui_KeyboardPanAccelerateMultiplier times that with Ctrl (4),
+// in the units of the camera's pan (cam_PanSpeed 1: a view's width of them moves the focus by the
+// zoom). The original moves by frame, so its speed goes with the frame rate; here it is by time,
+// at what the original does at 60 frames a second.
+const float kPanSpeed = 1.0f, kPanFramesPerSecond = 60.0f;
 const int kKeyCtrl = 308, kKeyAlt = 309, kKeyLeft = 316, kKeyUp = 317, kKeyRight = 318, kKeyDown = 319;
-// Turning with the keys (the same frame function): Insert and Delete, 10 a frame, twice that with
-// Ctrl; with Space and the mouse only below a zoom of 125 (0xf57aa0).
+// Turning with the keys (the same frame function): Insert and Delete, ui_KeyboardRotateSpeed a
+// frame (10), ui_KeyboardRotateAccelerateMultiplier times that with Ctrl (2); with Space and the
+// mouse only below a zoom of 125 (0xf57aa0).
 const int kKeySpace = 32, kKeyInsert = 324, kKeyDelete = 127, kKeyShift = 306;
-const float kKeyTurn = 10.0f, kKeyTurnFast = 2.0f, kSpinBelowZoom = 125.0f;
+const float kSpinBelowZoom = 125.0f;
 
 // A camera looks at a place on the map (`focus`). Its `zoom` is how much of the world it shows
 // across the longer side of its view, in map units (so the nearest zoom, 5, shows a strip five
@@ -290,7 +293,7 @@ void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
 void ZoomByWheel(Camera* c, float notches, float x, float y) {
   c->anchorX = x, c->anchorY = y, c->anchored = true;
   c->moving = false;  // (ours: the player's hand ends a timed move)
-  c->targetZoom = ClampZoom(c, c->targetZoom * std::pow(2.0f, -kZoomAmount * notches));
+  c->targetZoom = ClampZoom(c, c->targetZoom * std::pow(2.0f, -CameraKeys().zoomAmount * notches));
 }
 
 // MoveTo(position, orientationHPR, zoom, seconds) / SnapTo(position, orientationHPR, zoom): the
@@ -1312,22 +1315,6 @@ WorldView* ViewOf(Control* c, const std::string& camera) {
   return nullptr;
 }
 
-// An option of the player's profile that is a switch (0 or 1, or "off" / "on"); `fallback` when
-// the profile does not have it.
-bool ProfileOption(lua_State* L, const char* key, bool fallback) {
-  int top = lua_gettop(L);
-  bool on = fallback;
-  lua_getglobal(L, "GetOptions");
-  lua_pushstring(L, key);
-  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0) {
-    if (lua_isnumber(L, -1)) on = lua_tonumber(L, -1) != 0;
-    else if (lua_isboolean(L, -1)) on = lua_toboolean(L, -1) != 0;
-    else if (lua_isstring(L, -1)) on = std::string(lua_tostring(L, -1)) != "off" && std::string(lua_tostring(L, -1)) != "Off";
-  }
-  lua_settop(L, top);
-  return on;
-}
-
 // One frame of a camera (FA exe 0x7a95f0). The zoom goes towards its target by its logarithm
 // (base 2): per second cam_ZoomSpeedSmall plus cam_ZoomSpeedLarge times what is left, so a long
 // way goes fast and the end is soft. Zooming in, the focus goes towards the ground under the
@@ -1372,19 +1359,20 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   // holds it still. (Of the original's frame function this much is built; not turning with
   // Insert and Delete or with Space and the mouse.)
   if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt)) {
-    float rate = kKeyPan * (KeyIsDown(L, kKeyCtrl) ? kKeyPanFast : 1.0f) * kPanFramesPerSecond * seconds;
+    const CameraControls& keys = CameraKeys();
+    float rate = keys.panSpeed * (KeyIsDown(L, kKeyCtrl) ? keys.panFast : 1.0f) * kPanFramesPerSecond * seconds;
     float dx = 0, dy = 0;
-    // The mouse at the screen's edge (the original: its switch 0xf57a8c, the option
-    // "screen_edge_pans_main_view", and only on a screen the game fills).
+    // The mouse at the screen's edge (the original: its switch ui_ScreenEdgeScrollView, which the
+    // option "screen_edge_pans_main_view" sets, and only on a screen the game fills).
     UiManager& ui = UserState::From(L)->ui();
-    if (ui.edgeScroll && !ui.holdPointer && ProfileOption(L, "screen_edge_pans_main_view", true)) {
+    if (ui.edgeScroll && !ui.holdPointer && keys.edgePans) {
       if (ui.mouseX <= 0) dx += rate;
       if (ui.mouseY <= 0) dy += rate;
       if (ui.mouseX >= static_cast<float>(ui.width() - 1)) dx -= rate;
       if (ui.mouseY >= static_cast<float>(ui.height() - 1)) dy -= rate;
     }
-    // The arrow keys (its switch 0xf57887, the option "arrow_keys_pan_main_view").
-    if (ProfileOption(L, "arrow_keys_pan_main_view", true)) {
+    // The arrow keys (its switch ui_ArrowKeysScrollView, the option "arrow_keys_pan_main_view").
+    if (keys.arrowsPan) {
       dx += (KeyIsDown(L, kKeyLeft) ? rate : 0) - (KeyIsDown(L, kKeyRight) ? rate : 0);
       dy += (KeyIsDown(L, kKeyUp) ? rate : 0) - (KeyIsDown(L, kKeyDown) ? rate : 0);
     }
@@ -1393,7 +1381,7 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);
     // Insert and Delete turn the camera; it stays turned (nothing swings it back but Space let go
     // or a reset, as in the original).
-    float turn = kKeyTurn * (KeyIsDown(L, kKeyCtrl) ? kKeyTurnFast : 1.0f) * kPanFramesPerSecond * seconds;
+    float turn = keys.turnSpeed * (KeyIsDown(L, kKeyCtrl) ? keys.turnFast : 1.0f) * kPanFramesPerSecond * seconds;
     if (KeyIsDown(L, kKeyInsert)) SpinCamera(c, turn, 0, r.x1 - r.x0);
     else if (KeyIsDown(L, kKeyDelete)) SpinCamera(c, -turn, 0, r.x1 - r.x0);
   }
@@ -1604,6 +1592,14 @@ StatsOverlay& Overlay() {
 FramePacing& Pacing() {
   static FramePacing pacing;
   return pacing;
+}
+CameraControls& CameraKeys() {
+  static CameraControls keys;
+  return keys;
+}
+CursorLock& LockCursor() {
+  static CursorLock lock;
+  return lock;
 }
 FrameTimes& Times() {
   static FrameTimes times;

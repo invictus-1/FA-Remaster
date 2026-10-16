@@ -113,8 +113,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_ERASEBKGND:
       return 1;  // every frame covers the whole window
-    case WM_ACTIVATE:  // in front: the mouse stays inside a window that fills the screen; behind: it is free
-      if (w->fullScreen) w->KeepMouseInside(LOWORD(wp) != WA_INACTIVE);
+    case WM_ACTIVATE:  // in front: the mouse stays inside a window that fills the screen (if the player locks it); behind: it is free
+      if (w->fullScreen) w->KeepMouseInside(LOWORD(wp) != WA_INACTIVE && w->lockMouse);
       break;
     case WM_SETCURSOR:
       if (LOWORD(lp) == HTCLIENT) {  // inside the window: the interface's pointer
@@ -249,6 +249,12 @@ int Window::RefreshRate() {
   return 60;
 }
 
+void Window::LockMouse(bool lock) {
+  if (lock == lockMouse) return;
+  lockMouse = lock;
+  if (fullScreen) KeepMouseInside(lock && hwnd_ && GetForegroundWindow() == static_cast<HWND>(hwnd_));
+}
+
 void Window::KeepMouseInside(bool keep) {
   if (!keep || !hwnd_) {
     ClipCursor(nullptr);
@@ -330,6 +336,7 @@ void Window::Show() {}
 bool Window::ScreenSize(int*, int*) { return false; }
 int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}
+void Window::LockMouse(bool lock) { lockMouse = lock; }
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }

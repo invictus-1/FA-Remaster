@@ -213,6 +213,28 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float minAtRadius, float seconds);
 // The console's cam_ShakeMult (the game's option "Shake intensity", 0 to 1): how much shake.
 void SetCameraShakeMult(float mult);
+// The camera's wheel and keys as the game's Options menu (Controls tab) sets them through the
+// console, defaults the original's (FA exe; the variables' addresses beside them): cam_ZoomAmount
+// (each wheel notch zooms by 2^-amount; "Zoom Wheel Sensitivity" / 100), ui_KeyboardPanSpeed
+// (0xf57aa4, 90 a frame) and ui_KeyboardPanAccelerateMultiplier (0xf57aa8, times 4 with Ctrl),
+// ui_KeyboardRotateSpeed (0xf57aac, 10) and ui_KeyboardRotateAccelerateMultiplier (0xf57ab0,
+// times 2), ui_ScreenEdgeScrollView (0xf57a8c, on) and ui_ArrowKeysScrollView (0xf57887, on).
+// One set for the whole program, as the console's are (worldview.cpp).
+struct CameraControls {
+  float zoomAmount = 0.4f;
+  float panSpeed = 90.0f, panFast = 4.0f;
+  float turnSpeed = 10.0f, turnFast = 2.0f;
+  bool edgePans = true, arrowsPan = true;
+};
+CameraControls& CameraKeys();
+// "Lock Fullscreen Cursor To Window" (the game's Options; console SC_ToggleCursorClip 0|1, FA exe
+// 0x8d41b0: 1 clips the cursor to a window that fills the screen, 0 lets it go): off at first, as
+// in the original, where the mouse may leave a full screen for a second screen. The window's loop
+// keeps to it (run_window.cpp).
+struct CursorLock {
+  bool on = false;
+};
+CursorLock& LockCursor();
 // The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
 // 2026-10-15: "The new looks will go into options menu for each player"). The options send them
 // as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,

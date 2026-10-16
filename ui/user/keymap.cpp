@@ -702,6 +702,41 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (rest.find_first_not_of(" \t") != std::string::npos) SetCameraShakeMult(static_cast<float>(std::atof(rest.c_str())));
     return;
   }
+  {  // the camera's wheel and keys (CameraControls; the Options menu's Controls tab) and the cursor's lock
+    const std::string key = Upper(name);
+    const size_t at = rest.find_first_not_of(" \t");
+    const std::string value = at == std::string::npos ? std::string() : rest.substr(at);
+    const float number = static_cast<float>(std::atof(value.c_str()));
+    // a switch: no value turns it over, as the console's switches do
+    auto turn = [&](bool& on) { on = value.empty() ? !on : (value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0 && Upper(value).rfind("OFF", 0) != 0); };
+    CameraControls& keys = CameraKeys();
+    if (key == "CAM_ZOOMAMOUNT") {
+      if (!value.empty()) keys.zoomAmount = std::max(0.01f, number);
+      return;
+    }
+    if (key == "UI_KEYBOARDPANSPEED") {
+      if (!value.empty()) keys.panSpeed = std::max(0.0f, number);
+      return;
+    }
+    if (key == "UI_KEYBOARDPANACCELERATEMULTIPLIER") {
+      if (!value.empty()) keys.panFast = std::max(0.0f, number);
+      return;
+    }
+    if (key == "UI_KEYBOARDROTATESPEED") {
+      if (!value.empty()) keys.turnSpeed = std::max(0.0f, number);
+      return;
+    }
+    if (key == "UI_KEYBOARDROTATEACCELERATEMULTIPLIER") {
+      if (!value.empty()) keys.turnFast = std::max(0.0f, number);
+      return;
+    }
+    if (key == "UI_SCREENEDGESCROLLVIEW") return turn(keys.edgePans);
+    if (key == "UI_ARROWKEYSSCROLLVIEW") return turn(keys.arrowsPan);
+    if (key == "SC_TOGGLECURSORCLIP") {  // (the exe's: "0" lets the cursor go, anything else holds it)
+      LockCursor().on = !value.empty() && value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0;
+      return;
+    }
+  }
   if (Upper(name) == "UI_SELECTBYCATEGORY") {
     SelectByCategoryCommand(L, rest);
     return;

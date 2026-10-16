@@ -200,7 +200,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       last = now;
       double uiDt = std::chrono::duration<double>(now - uiLast).count();  // (since the interface's last step)
       uiLast = now;
-      current().ui().edgeScroll = fullScreen;  // the mouse cannot leave: the screen's edge moves the view
+      current().ui().edgeScroll = fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
+      window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
       current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
       frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
       auto t0 = Clock::now();

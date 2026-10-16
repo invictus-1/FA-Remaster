@@ -77,6 +77,10 @@ class Window {  // (the host's one window)
 
  public:
   bool fullScreen = false;
+  // The player's "Lock Fullscreen Cursor To Window" (LockCursor): a full-screen window in front
+  // keeps the mouse inside. Set it with LockMouse.
+  bool lockMouse = false;
+  void LockMouse(bool lock);
   void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
 };
 
