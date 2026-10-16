@@ -7,6 +7,7 @@
 #include "core/vfs.h"
 #include "ground.h"
 #include "gfx.h"
+#include "sim/terrain.h"
 #include "sim_frames.h"
 #include "window.h"
 #include "world.h"
@@ -60,6 +61,7 @@ struct WorldPicture::Impl {
   std::vector<uint8_t> capture;
   std::vector<uint32_t> pixels;
   double lastTick = 0;
+  bool prepared = false;  // LifeBarAnchors has begun the frame the next RenderWorld draws
   // the minimap: the ground as drawn once, the camera it was drawn with, and the picture handed out
   std::vector<uint32_t> mapGround, mapPixels;
   float mapHour = -100, mapWeather = -100;  // the light the ground was drawn in
@@ -261,7 +263,26 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
 void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
 
 // The world as `camera` sees it into the device's frame (begun here, ended by the caller).
+void WorldPicture::LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out) {
+  Impl& m = *impl_;
+  out->clear();
+  if (!m.world || !m.device) return;
+  if (!m.prepared) {
+    PrepareWorld(camera, std::max(width, 16), std::max(height, 16), tick);
+    m.prepared = true;
+  }
+  out->reserve(m.world->barAnchors.size());
+  for (const World::BarAnchor& a : m.world->barAnchors) out->push_back({a.unit, a.x, a.y});
+}
+
 void WorldPicture::RenderWorld(const Camera& camera, int width, int height, double tick) {
+  Impl& m = *impl_;
+  if (!m.prepared) PrepareWorld(camera, width, height, tick);
+  m.prepared = false;
+  m.world->Render();
+}
+
+void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
   if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
@@ -319,7 +340,6 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
     m.world->effects.Update(shown, m.frame);
     m.world->AddFrame(m.frame, m.armyColors);
   }
-  m.world->Render();
 }
 
 void WorldPicture::SetSelection(const std::vector<uint32_t>& ids) {
@@ -600,6 +620,11 @@ void WorldPicture::UnitsIn(float x0, float y0, float x1, float y1, std::vector<u
   if (impl_->world) impl_->world->UnitsIn(x0, y0, x1, y1, out);
 }
 float WorldPicture::GroundHeight(float x, float z) const { return impl_->world ? impl_->world->GroundHeight(x, z) : 0; }
+float WorldPicture::TerrainHeight(float x, float z) const {
+  if (!impl_->world) return 0;
+  const MapData& m = impl_->world->map;
+  return moho::TerrainHeightOf(m.heights.data(), m.width, m.height, m.heightScale, x, z);
+}
 World* WorldPicture::world() { return impl_->world.get(); }
 
 }  // namespace render

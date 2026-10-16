@@ -43,7 +43,8 @@
 //           back once for the file
 // --picture <file.png>  with --sim or --session: checks the pixel interface for other hosts (world_picture.h):
 //           once the game is where --tick asks, the world is drawn through it into that file, its
-//           answers about the screen are printed, and the viewer ends
+//           answers about the screen are printed (and the life bars' anchors checked and marked in
+//           magenta, where custom names go), and the viewer ends
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -1293,6 +1294,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> ids;
         for (size_t i = 0; i < frame.units.size(); i += 3) ids.push_back(frame.units[i].id);
         picture.SetSelection(ids);
+        picture.SetLifeBars(true);  // (and their anchors, for the custom names)
         // and marks as under the mouse: the first three units not selected, one of each kind in turn
         if (!frame.units.empty()) {
           const size_t which = 1 + 3 * ((frameCount / 2) % 3);
@@ -1307,6 +1309,9 @@ int main(int argc, char** argv) {
           picture.SetShapes({line}, {ring});
         }
       }
+      // where the interface would write the units' custom names: asked first, for the frame then drawn
+      std::vector<WorldPicture::LifeBarAnchor> anchors;
+      picture.LifeBarAnchors(camera, w, h, playTick + 1, &anchors);
       const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, playTick + 1);
       std::vector<uint8_t> bytes(pixels.size() * 4);
       for (size_t i = 0; i < pixels.size(); ++i) {
@@ -1314,6 +1319,25 @@ int main(int argc, char** argv) {
         bytes[i * 4 + 1] = static_cast<uint8_t>(pixels[i] >> 8);
         bytes[i * 4 + 2] = static_cast<uint8_t>(pixels[i]);
         bytes[i * 4 + 3] = 255;
+      }
+      {  // (checked: the pixel just above each anchor is its lowest bar's; each marked with a magenta dot)
+        int under = 0;
+        for (const WorldPicture::LifeBarAnchor& a : anchors) {
+          const int x = static_cast<int>(a.x), y = static_cast<int>(a.y);
+          if (x < 0 || x >= w || y < 1 || y >= h) continue;
+          const uint32_t above = pixels[static_cast<size_t>(y - 1) * static_cast<size_t>(w) + static_cast<size_t>(x)];
+          const uint32_t r = (above >> 16) & 0xff, g = (above >> 8) & 0xff, b = above & 0xff;
+          // (a bar is black, or green, yellow, red, orange or pale blue: no grey ground)
+          if ((r < 24 && g < 24 && b < 24) || std::max({r, g, b}) - std::min({r, g, b}) > 120) ++under;
+          for (int dy = 0; dy < 3; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+              const int px = x + dx, py = y + dy;
+              if (px < 0 || px >= w || py >= h) continue;
+              uint8_t* p = bytes.data() + (static_cast<size_t>(py) * static_cast<size_t>(w) + static_cast<size_t>(px)) * 4;
+              p[0] = 255, p[1] = 0, p[2] = 255;
+            }
+        }
+        printf("render: --picture: %zu life bar anchors, %d of them just under a bar\n", anchors.size(), under);
       }
       printf("render: --picture: %dx%d %s\n", w, h, WritePng(opt.picture, bytes.data(), w, h) ? opt.picture.c_str() : "could not be written");
       {  // what a call costs, read-back included

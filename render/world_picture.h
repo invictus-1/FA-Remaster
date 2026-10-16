@@ -231,11 +231,28 @@ class WorldPicture {
 
   // The height of what one stands on at a place of the map (ground or water surface).
   float GroundHeight(float x, float z) const;
+  // The ground's own height at a place of the map, under water the bottom's: the simulation's
+  // TerrainHeight (its own function, on the same heights), as the picture has them, the map's and
+  // where the game has laid them flat (taken in with the frames drawn).
+  float TerrainHeight(float x, float z) const;
   // The world itself, for its settings (look, shadows, icons, ...). Null before Open.
   World* world();
 
+  // The life bars the next picture will have: for every unit with one, the middle of its bars (life,
+  // shield, work) and the lower edge of the lowest, in the picture's pixels: where the original puts
+  // a unit's custom name (centred on x, a line's height below y). It prepares the frame of that
+  // camera, size and moment, and the next DrawToWindow (or Draw) draws that prepared frame, so the
+  // anchors and the bars are of the same moment. Call it after the frame's other settings (selection,
+  // hover, ...), with what DrawToWindow will be given.
+  struct LifeBarAnchor {
+    uint32_t unit;  // entity id
+    float x, y;
+  };
+  void LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out);
+
  private:
   void RenderWorld(const Camera& camera, int width, int height, double tick);
+  void PrepareWorld(const Camera& camera, int width, int height, double tick);  // (RenderWorld up to the drawing)
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

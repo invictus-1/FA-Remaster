@@ -4,6 +4,29 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 23 and the terrain height (2026-10-16)
+
+**23, custom names under the life bars.** `WorldPicture::LifeBarAnchors(camera, width, height, tick, &out)`:
+- **Which units:** one `LifeBarAnchor {unit, x, y}` per unit in the life bars' list, by the bars' own rules
+  (`ui_RenderUnitBars` via SetLifeBars, own and allied, enemies with SetLifeBarsOnEnemies or under the
+  mouse, the zoom cutoff, none on hidden units).
+- **The point:** x is the middle of its bars, y the lower edge of the lowest bar drawn (life, shield, work),
+  in the picture's pixels, worked out the way the bars themselves are laid out. Draw the name at
+  `floor(x - textWidth / 2), y + line height`.
+- **Timing:** it prepares the frame of that camera, size and moment, and the next DrawToWindow (or Draw)
+  draws that prepared frame. So the names belong to the same frame as the bars, with no lag. Call it
+  after the frame's other settings (SetSelection, SetHover, ...) and before DrawToWindow, with what
+  DrawToWindow will be given.
+- **Checked:** the viewer's `--picture` asks for them before drawing and marks each in magenta. On a battle
+  replay every anchor on the screen lies directly under its unit's life bar, centred. Anchors of bars just
+  past the screen's edge are included (the bars are kept up to 100 px outside).
+
+**The terrain height.** `WorldPicture::TerrainHeight(x, z)`: the ground's own height, under water the
+bottom's. It runs the simulation's own function (`moho::TerrainHeightOf`, STIMap::GetElevation) on the
+picture's heights: the map's, plus where the game laid them flat (FlattenMapRect, render 2f25845), taken in
+with the frames drawn. So it matches the simulation's TerrainHeight once a change has reached the picture,
+which can lag the newest beat by up to one. Main thread, like GroundHeight.
+
 ## visuals, section 27: emitters per faction, and a unit's death in the stand (2026-10-15)
 
 Both done (render 9a361d9).

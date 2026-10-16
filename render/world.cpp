@@ -419,6 +419,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   camera = cam;
   time_ = time;
   clock_ = clock;
+  barAnchors.clear();
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
   // screen - icons, bars, the points the interface asks about - at the screen's own)
   screenWidth_ = width;
@@ -1032,9 +1033,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
         // (the life bar, under it the shield's where the unit has one up, under that its work)
         const bool shield = life && (u.hasShield || u.shieldRatio > 0);  // (down: an empty bar)
+        const size_t before = icons.BarCount();
         if (life) icons.AddBar(at, u.health / u.maxHealth, wide, 0, 0, thick);
         if (shield) icons.AddBar(at, u.shieldRatio, wide, 2, thick, thick);
         if (work) icons.AddBar(at, u.workProgress, wide, 1, (life ? thick : 0) + (shield ? thick : 0), thick);
+        // (a unit in the life bars' list: where its name would go)
+        float ax = 0, ay = 0;
+        if (life && icons.BarsAnchor(before, &ax, &ay)) barAnchors.push_back({u.id, ax, ay});
       }
       if (workBars && own && u.paused) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");

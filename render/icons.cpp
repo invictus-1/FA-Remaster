@@ -256,6 +256,19 @@ void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, in
   bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), kind, thick});
 }
 
+bool StrategicIcons::BarsAnchor(size_t from, float* x, float* y) const {
+  bool any = false;
+  for (size_t i = from; i < bars_.size(); ++i) {
+    const Bar& bar = bars_[i];
+    // (as Draw: the bar from floor(y), max(thick, 2) pixels high at this frame's scale)
+    const float bottom = std::floor(bar.y) + std::max(bar.thick, 2.0f) * pixel_;
+    *x = std::floor(bar.x);
+    *y = any ? std::max(*y, bottom) : bottom;
+    any = true;
+  }
+  return any;
+}
+
 void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
   if (icon < 0) return;
   const Mat4& m = view_.constants.viewProj;
