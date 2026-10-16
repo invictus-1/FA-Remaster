@@ -175,6 +175,13 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.uv = i.uv;
   o.color = n.color;
   o.tint = n.bones.yzw;
+  [branch] if (n.bones.y < -0.5) {
+    // a tank's treads, scrolled as it drives, as the original's ComputeScrolledTexcoord does it: the two
+    // strips at the foot of its texture, each by its tread's amount (bones.z, bones.w), across both sets
+    float scroll = i.uv.y > 0.95 ? n.bones.z : i.uv.y > 0.90 ? n.bones.w : 0;
+    o.uv.xz += scroll;
+    o.tint = 0;  // (no ghost's tint)
+  }
   return o;
 }
 
@@ -773,7 +780,8 @@ void MeshRenderer::BuildRows(Entry* entry) {
   }
 }
 
-MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint) const {
+MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint,
+                                            const float* treads) const {
   Entry e;
   e.model = model;
   // the model's bounding sphere in the world (the matrix is a rotation with one scale)
@@ -795,14 +803,20 @@ MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& worl
   e.instance.bones[1] = tint ? tint->x : 0;
   e.instance.bones[2] = tint ? tint->y : 0;
   e.instance.bones[3] = tint ? tint->z : 0;
+  if (treads) {  // (marked by y -1, which no tint has; the amounts kept small, the texture repeats)
+    e.instance.bones[1] = -1;
+    e.instance.bones[2] = treads[0] - std::floor(treads[0]);
+    e.instance.bones[3] = treads[1] - std::floor(treads[1]);
+  }
   e.sizeRadius = e.radius;
   for (const ModelLod& lod : model->lods) e.flags |= lod.glass ? kHasGlass : kHasSolid;
   return e;
 }
 
-void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint) {
+void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint,
+                       const float* treads) {
   if (!model || !model->ok) return;
-  Entry e = MakeEntry(model, world, teamColor, built, tint);
+  Entry e = MakeEntry(model, world, teamColor, built, tint, treads);
   e.scenery = addingScenery;
   if (addingScenery) e.flags |= kScenery;
   if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
