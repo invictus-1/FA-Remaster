@@ -113,8 +113,20 @@ std::string SystemFolder(const std::string& name) {
     WideCharToMultiByte(CP_UTF8, 0, buf, -1, out, sizeof out, nullptr, nullptr);
     return out;
   }
-#endif
   return "C:/Users/Player/" + name + "/";
+#else
+  // The same folders' places elsewhere: the documents in the home folder; the program data in the
+  // user's data folder (Linux: XDG_DATA_HOME, else ~/.local/share; Mac: ~/Library/Application Support).
+  const char* home = std::getenv("HOME");
+  const std::string h = home && *home ? home : ".";
+  if (name == "PERSONAL" || name == "COMMON_DOCUMENTS") return h + "/Documents/";
+#ifdef __APPLE__
+  return h + "/Library/Application Support/";
+#else
+  const char* data = std::getenv("XDG_DATA_HOME");
+  return (data && *data ? std::string(data) : h + "/.local/share") + "/";
+#endif
+#endif
 }
 
 int l_SHGetFolderPath(lua_State* L) {

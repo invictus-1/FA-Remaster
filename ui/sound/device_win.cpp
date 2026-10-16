@@ -3,7 +3,7 @@
 #include "core/log.h"
 #include "sound/mixer.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(MOHO64UI_SDL)
 #include <windows.h>
 
 #include <audioclient.h>
@@ -297,7 +297,7 @@ std::unique_ptr<OutputDevice> OpenOutputDevice(Mixer* mixer) {
 
 }  // namespace moho::ui::sound
 
-#else
+#elif !defined(MOHO64UI_SDL)  // (SDL's: device_sdl.cpp)
 
 namespace moho::ui::sound {
 std::unique_ptr<OutputDevice> OpenOutputDevice(Mixer*) { return nullptr; }

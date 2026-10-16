@@ -5,6 +5,18 @@
     py ui/build_ui.py                     -> build-ui/moho64ui.exe (Windows) or build-ui/moho64ui (Linux)
     py ui/build_ui.py --jobs 32
     py ui/build_ui.py --target x86_64-windows-gnu   (cross-build from Linux)
+    py ui/build_ui.py --define MOHO64UI_STB_FONTS --out <folder>   (a test build: the font files
+                                          drawn as on Linux and Mac, to compare with GDI's)
+
+Linux and Mac: the window, the keys, the mouse, the sound and the clipboard come from the system's
+SDL3 (`apt install libsdl3-dev`, `brew install sdl3`; its headers are in ui/third_party/SDL3), the
+text from the game's font files (stb_truetype). Built on that system it links to SDL3 (pkg-config
+sdl3, else -lSDL3; --sdl-lib <folder> names another). Cross-built from Windows (--target
+x86_64-linux-gnu, aarch64-macos) it is only compiled, as there is no SDL3 of that system to link
+to; --headless leaves SDL out and links (no window, no sound).
+    py ui/build_ui.py --sdl --sdl-lib <SDL3-devel-mingw>/x86_64-w64-mingw32/lib --out <folder>
+                                          (a Windows test build through SDL, as Linux and Mac run;
+                                          SDL3.dll is copied beside the program)
 
 The interface is built on its own: the engine's libraries (src/core, src/script, src/sim, the Lua
 dialect) are compiled from the same sources with the same flags as tools/build_zig.py, plus
@@ -29,10 +41,15 @@ def main():
     ap.add_argument("--no-debug", action="store_true", help="leave out -g")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-ui"))
+    ap.add_argument("--define", action="append", default=[], help="a preprocessor name for the interface's own files (test builds)")
+    ap.add_argument("--sdl", action="store_true", help="the window and sound through SDL3 on Windows too (a test build)")
+    ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
+    ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
     a = ap.parse_args()
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
+    sdl = (a.sdl or not windows) and not a.headless
     os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
     common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     lua_inc = ["-I", os.path.join(ROOT, "third_party", "lua")]
@@ -55,12 +72,17 @@ def main():
     # The movies' MPEG-1 pictures (ui/draw/movie.cpp): pl_mpeg, MIT, unchanged (ui/third_party/pl_mpeg).
     add(os.path.join(UI, "third_party", "pl_mpeg", "pl_mpeg.c"), std_c, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src"), "-I", UI, "-I", ROOT] + lua_inc + zlib_inc
-    # The world's picture comes from the renderer track's code (render/world_picture.h), which is
-    # Direct3D 12: built in on Windows, left out elsewhere (the world view is then empty).
-    if windows:
+    cxxflags += ["-D" + d for d in a.define]
+    if sdl:
+        cxxflags += ["-DMOHO64UI_SDL=1", "-I", os.path.join(UI, "third_party", "SDL3", "include")]
+    # The world's picture comes from the renderer track's code (render/world_picture.h): Direct3D 12
+    # on Windows, Vulkan elsewhere (into the SDL window's surface; written, untried there). Without
+    # SDL elsewhere (--headless) it is left out and the world view is empty. The renderer's own
+    # viewer program and its Win32 window are not part of this one.
+    if windows or sdl:
         cxxflags.append("-DMOHO64UI_WORLD_PICTURE=1")
         for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
-            if os.path.basename(f) != "main.cpp":
+            if os.path.basename(f) != "main.cpp" and (windows or os.path.basename(f) != "window_win32.cpp"):
                 add(f, ["-std=c++20", "-w", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc, True)
     for d in ("core", "script", "sim"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
@@ -85,12 +107,32 @@ def main():
     if failed:
         sys.exit(f"build_ui: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64ui.exe" if windows else "moho64ui")
+    if sdl and not windows and os.name == "nt" and not a.sdl_lib:
+        print("build_ui: compiled for " + str(target) + "; not linked (SDL3 is linked on that system itself)")
+        return
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
-    link += (["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-lole32", "-ld3d12", "-ldxgi", "-ld3dcompiler_47", "-static"]
-             if windows else ["-lm", "-lpthread"])
+    link += (["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-lole32", "-ld3d12", "-ldxgi", "-ld3dcompiler_47"]
+             if windows else ["-lm", "-lpthread", "-ldl"])
+    if sdl:
+        if a.sdl_lib and windows:  # (mingw's import library, by name: zig does not look for .dll.a)
+            link.append(os.path.join(a.sdl_lib, "libSDL3.dll.a"))
+        elif a.sdl_lib:
+            link += ["-L", a.sdl_lib, "-lSDL3"]
+        else:
+            try:
+                link += subprocess.run(["pkg-config", "--libs", "sdl3"], capture_output=True, text=True, check=True).stdout.split()
+            except (OSError, subprocess.CalledProcessError):
+                link += ["-lSDL3"]
+    if windows and not sdl:
+        link.append("-static")
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("build_ui: link failed\n" + r.stderr)
+    if windows and sdl and a.sdl_lib:  # (the test build's SDL3.dll beside it)
+        dll = os.path.join(a.sdl_lib, "..", "bin", "SDL3.dll")
+        if os.path.exists(dll):
+            import shutil
+            shutil.copy(dll, a.out)
     print("build_ui: built " + exe)
 
 

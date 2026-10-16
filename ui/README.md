@@ -63,6 +63,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--maps <folder>] [--remasters <folder>] [--own <folder>]
          [-- <the game's own arguments>]
 ```
+- Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
+  keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
+  `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own
+  .ttf files with stb_truetype by GDI's measuring rules (`maui/font.cpp`). Built and linked there by
+  `py ui/build_ui.py`; from Windows only compiled (`--target x86_64-linux-gnu`, `aarch64-macos`).
+  The world's picture there: the renderer's Vulkan on the SDL window's surface (UseHostSurface).
+  Tried on Windows through test builds
+  (`--define MOHO64UI_STB_FONTS`; `--sdl --sdl-lib <SDL3 mingw lib>`) and `tests/sdl_input.lua`;
+  the rest in `docs/ui-platforms.md`.
 - `--window` opens the interface live in a window and runs until it is closed (or for `--frames N`
   frames). Without it the host runs headless on its own clock. In the window the renderer shows
   the picture itself (its swap chain on the window, true vertical sync): the world is drawn on

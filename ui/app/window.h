@@ -1,6 +1,6 @@
-// A plain window for the interface host: it shows the software target's pixels and reports the
-// mouse. This is the simplest thing that opens; the renderer track's window and device take its
-// place later. Windows only for now.
+// The interface host's window: it shows the software target's pixels (or lets the renderer draw
+// into it) and reports the mouse and the keys. Win32 on Windows (window.cpp); SDL3 on Linux and
+// Mac, and on Windows in test builds (window_sdl.cpp, MOHO64UI_SDL).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -45,8 +45,14 @@ class Window {  // (the host's one window)
   static int RefreshRate();
   // The program's memory in use (its working set), in bytes; 0 when not known.
   static size_t ProcessMemory();
-  // The system's handle of the window (an HWND on Windows); nullptr before Create.
+  // The system's handle of the window: an HWND on Windows; elsewhere (SDL builds) the Window itself,
+  // whose Vulkan surface the renderer's picture asks for (render::WorldPicture::UseHostSurface);
+  // nullptr before Create.
   void* Handle() const { return hwnd_; }
+  // For the renderer's Vulkan picture (SDL builds other than Windows): the instance extensions the
+  // window needs, and its surface made on a Vulkan instance (a VkSurfaceKHR, 0 when it could not be).
+  std::vector<std::string> SurfaceExtensions() const;
+  uint64_t CreateSurface(void* vkInstance) const;
   // Handle the waiting window messages (the callbacks run from here). False once the window is closed.
   bool Pump();
   // Show the target's pixels.
@@ -82,6 +88,11 @@ class Window {  // (the host's one window)
   float heldX_ = 0, heldY_ = 0;    // where the mouse's moves have taken its place since
   bool windowedKnown_ = false;     // where the window last was as a window (SetMode)
   int windowedX_ = 0, windowedY_ = 0;
+  // (The SDL build's: its window, and the renderer and texture Present shows the pixels with.)
+  void* sdl_ = nullptr;
+  void* renderer_ = nullptr;
+  void* texture_ = nullptr;
+  int textureW_ = 0, textureH_ = 0;
 
  public:
   bool fullScreen = false;

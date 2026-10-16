@@ -262,6 +262,7 @@ void RegisterItemListBindings(lua_State* L);       // itemlist.cpp
 void RegisterEditBindings(lua_State* L);           // edit.cpp
 void RegisterSimpleControlBindings(lua_State* L);  // simple_controls.cpp: border, histogram, movie
 void RegisterInputBindings(lua_State* L);          // input.cpp: the host's input debugging functions
+void RegisterWindowTestBindings(lua_State* L);     // app/window_sdl.cpp: SDL's own events for tests (SDL builds; elsewhere none)
 void RegisterMapPreviewBindings(lua_State* L);     // mappreview.cpp
 void RegisterWorldViewBindings(lua_State* L);      // worldview.cpp: the world view control, cameras
 void AdvanceCameras(lua_State* L, float seconds);  // worldview.cpp: one frame of every camera (its zoom glides)

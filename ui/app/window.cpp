@@ -1,6 +1,8 @@
 #include "app/window.h"
 
-#ifdef _WIN32
+#include "script/lua.hpp"
+
+#if defined(_WIN32) && !defined(MOHO64UI_SDL)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -366,7 +368,7 @@ void Window::Present(const SoftwareTarget& target) {
 
 }  // namespace moho::ui
 
-#else  // no window system here yet
+#elif !defined(MOHO64UI_SDL)  // no window system here (SDL's: window_sdl.cpp)
 
 #include <cstdio>
 #ifdef __linux__
@@ -404,4 +406,12 @@ size_t Window::ProcessMemory() {
 }
 }  // namespace moho::ui
 
+#endif
+
+#ifndef MOHO64UI_SDL
+namespace moho::ui {
+void RegisterWindowTestBindings(lua_State*) {}  // (the SDL build's only: window_sdl.cpp)
+std::vector<std::string> Window::SurfaceExtensions() const { return {}; }  // (the renderer takes the HWND here)
+uint64_t Window::CreateSurface(void*) const { return 0; }
+}  // namespace moho::ui
 #endif

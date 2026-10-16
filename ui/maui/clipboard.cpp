@@ -1,6 +1,8 @@
 #include "maui/clipboard.h"
 
-#ifdef _WIN32
+#if defined(MOHO64UI_SDL)
+#include <SDL3/SDL.h>
+#elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -8,7 +10,20 @@
 
 namespace moho::ui {
 
-#ifdef _WIN32
+#if defined(MOHO64UI_SDL)
+
+// The system's clipboard through SDL (Linux, Mac; Windows test builds).
+void CopyToClipboard(const std::string& utf8) { SDL_SetClipboardText(utf8.c_str()); }
+std::string ClipboardText() {
+  std::string out;
+  if (char* text = SDL_GetClipboardText()) {
+    out = text;
+    SDL_free(text);
+  }
+  return out;
+}
+
+#elif defined(_WIN32)
 
 void CopyToClipboard(const std::string& utf8) {
   int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
@@ -39,7 +54,7 @@ std::string ClipboardText() {
   return out;
 }
 
-#else
+#else  // (no clipboard of the system's: one of its own)
 
 namespace {
 std::string g_text;

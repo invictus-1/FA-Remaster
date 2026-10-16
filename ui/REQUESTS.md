@@ -908,6 +908,18 @@ named already):
 5. X1CA_006: xsl0301_script.lua:53 "Attempt to set attribute 'NeedsUpgrade' on nil" in CreateUnitHPR from
    ScenarioUtilities.CreatePlatoons (950): a Seraphim sub-commander made with its upgrades.
 Logs: my scratchpad t_op002.log .. t_op006.log (af4db67d...\scratchpad). Not blocking me.
+DONE (engine, main 70b8836; "ui 34" in docs/engine-answers.md): the stock Campaign Branch mod's weapon
+lists merged by label behind Sim::fixes (fix 4); X1CA_002..006 run 9000 ticks without script errors.
+
+### 35. FixesHooks() for the interface's own blueprints
+From the interface chat, 2026-10-16, on your "Your side" note in ui 34. The interface state loads its
+own copy of the blueprints (GameSession::LoadInterfaceRules: a Rules ScriptState, SetHookDirs, then
+/lua/ruleinit.lua), so with fix 4 its commanders' weapon lists would differ from the sim's. I would join
+the same hooks when the session's sim has fixes on (`rules_->SetExtraHooks(FixesHooks())`), but
+FixesHooks() is in sim.cpp's anonymous namespace. Could src/sim/sim.h declare it (or give it as a Sim
+function)? Small, not blocking.
+DONE (engine, 4eb1231; answer ad441af): Sim::JoinFixesHooks(ScriptState&), RulesFixesWanted() public. Used in
+GameSession::LoadInterfaceRules when the session's sim has fixes on and wants them for the rules.
 
 ## To the renderer track
 
@@ -1751,6 +1763,23 @@ frame's moment at the first ask (UnitTransform or LifeBarAnchors) and DrawToWind
 camera's FollowedPlace asks it first, the beat's place otherwise.
 
 
+
+### 29. On Linux and Mac: how your Vulkan picture wants the window
+From the interface chat, 2026-10-16. Chris approved the Linux and Mac port ("download what you need").
+The interface host now has an SDL3 window there (`ui/app/window_sdl.cpp`; SDL 3.4.18's headers in
+`ui/third_party/SDL3`, the system's SDL3 linked), with its keys, mouse, sound and text; on Windows
+nothing changes (Win32, your Direct3D 12 picture as today). For the world's picture there, when your
+Vulkan path is ready: what should the host hand `WorldPicture`? My suggestion, which keeps SDL out of
+render/: the instance extensions the window needs (SDL_Vulkan_GetInstanceExtensions) and a function
+`createSurface(VkInstance) -> VkSurfaceKHR` (SDL_Vulkan_CreateSurface), plus the drawable size in
+pixels (SDL_GetWindowSizeInPixels) with a call when it changes; the interface layer as today
+(SetInterfaceLayer, premultiplied ARGB). Native handles instead (X11 Display and Window, Wayland
+display and surface, a CAMetalLayer) are possible too. Not blocking: until then the interface shows
+over black there.
+DONE (renderer, 2045b9e, merged in bf23c30; docs/render-answers.md "ui 29"): WorldPicture::UseHostSurface(instance
+extensions, createSurface(VkInstance) -> VkSurfaceKHR, width, height). Wired: the SDL window (SDL_WINDOW_VULKAN)
+gives SDL_Vulkan_GetInstanceExtensions and SDL_Vulkan_CreateSurface; the session calls it for the menu's and the
+game's picture outside Windows.
 
 ## To the visuals track
 

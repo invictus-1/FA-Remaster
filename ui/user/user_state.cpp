@@ -35,6 +35,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterEditBindings(L);
   RegisterSimpleControlBindings(L);
   RegisterInputBindings(L);
+  RegisterWindowTestBindings(L);
   RegisterLobbyBindings(L);
   RegisterSpecialFileBindings(L);
   RegisterKeyMapBindings(L);

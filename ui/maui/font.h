@@ -9,9 +9,13 @@
 // characters, without kerning. A character's picture is drawn with DrawText too, white on black,
 // and read back. The game's own fonts (/fonts/*.ttf) are added to the process at start (0x4305f0).
 //
-// On Windows we make the same calls, so measures and glyphs are the original's. On other hosts
-// there is no GDI: the measures there are rough proportions of the size and no text is drawn (a
-// placeholder until the font files are read directly).
+// On Windows we make the same calls, so measures and glyphs are the original's. Elsewhere (and on
+// Windows with MOHO64UI_STB_FONTS, to compare) the font files are read and drawn with stb_truetype
+// (ui/third_party/stb), with GDI's rules for the measures: the em `size` pixels high, ascent and
+// descent from the font's OS/2 table, advances rounded to whole pixels. Checked on Windows against
+// GDI: the front end's tests that measure text pass unchanged, and the main menu's text lies on
+// the same pixels, only its edges a little lighter. A family the game's files lack comes from the
+// system (fontconfig on Linux, the font folders on a Mac).
 #pragma once
 #include <cstdint>
 #include <string>

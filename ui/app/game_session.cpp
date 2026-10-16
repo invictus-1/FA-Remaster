@@ -1,5 +1,7 @@
 #include "app/game_session.h"
 
+#include "app/window.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -748,6 +750,23 @@ void SaveWindowCapture(const std::vector<uint8_t>& rgba, int w, int h, const std
 }  // namespace
 #endif
 
+#ifdef MOHO64UI_WORLD_PICTURE
+namespace {
+// The picture on the game's window: on Windows its HWND (UseWindow); elsewhere the SDL window's
+// Vulkan surface (UseHostSurface, the renderer's answer to ui request 29).
+void UseGameWindow(render::WorldPicture& picture, void* window) {
+#ifdef _WIN32
+  picture.UseWindow(window);
+#else
+  auto* w = static_cast<Window*>(window);
+  int width = 0, height = 0;
+  w->ClientSize(&width, &height);
+  picture.UseHostSurface(w->SurfaceExtensions(), [w](void* instance) { return w->CreateSurface(instance); }, width, height);
+#endif
+}
+}  // namespace
+#endif
+
 void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (!window) return;
@@ -755,7 +774,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     if (!menuPicture_) {
       auto menu = std::make_unique<MenuPicture>();
       menu->picture.SetVulkan(Looks().vulkan);
-      menu->picture.UseWindow(window);
+      UseGameWindow(menu->picture, window);
       std::string error;
       if (!menu->picture.Open(vfs_, "", &error)) {
         Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
@@ -833,7 +852,7 @@ void GameSession::OpenPicture() {
     }
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
-    if (window) pic->picture.UseWindow(window), pic->direct = true;
+    if (window) UseGameWindow(pic->picture, window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {
       pic->picture.GameStarted(*sim_);
@@ -889,6 +908,10 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   auto t0 = std::chrono::steady_clock::now();
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
   rules_->SetHookDirs(hookDirs_);
+  // The engine's script fixes for blueprints, as the simulation's own rules have them (a fix for one
+  // of the game's mods: the campaign mod's weapons merged by label, fix 4), so that the interface's
+  // copy matches the simulation's (ui REQUESTS 35). (The session has started: its fixes are final.)
+  if (sim_ && sim_->fixes && sim_->RulesFixesWanted()) Sim::JoinFixesHooks(*rules_);
   SimBlueprints::StartRecording(*rules_);
   lua_State* R = rules_->L();
   if (!sessionMods_.empty() && PushSerializedLua(R, sessionMods_) && lua_istable(R, -1)) lua_setglobal(R, "__active_mods");
