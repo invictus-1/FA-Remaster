@@ -1378,6 +1378,12 @@ I note it beside the option ("Off also uses the original water").
 Also for you to know: the host now changes gSceneSamples only while no world lives. The menu's
 background waits for it before it opens, and is ended before a game's picture opens with a
 different value. Post::BeginScene's re-read on a resize is then safe.
+DONE (render 0c5d78b, `docs/render-answers.md`; the engine merges it): with 1 sample the modern
+water reads the depth as a plain texture and copies the picture by drawing; the same as at 4
+samples but for the edges. Nothing changes in the host: Anti-Aliasing Off now means jagged edges
+only. Also new from him (render eba5a1b): WorldPicture::SetVulkan(true) before Open draws with
+Vulkan, picture for picture as Direct3D 12; Direct3D 12 stays the default, a menu switch when
+Chris wants one.
 
 ## To the visuals track
 
