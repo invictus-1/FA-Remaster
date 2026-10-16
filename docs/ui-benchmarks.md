@@ -17,6 +17,18 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-16: the cursor's order and the range rings with 2,000 selected (scenario S; 227b4ca, landed f4e220e)
+
+| Part (a call) | Before | After |
+|---|---|---|
+| CUIWorldView:GetRightMouseButtonOrder | 2.78 ms | 0.60 ms |
+| (its RightClickOrder: the selection's caps from UnitView, engine 26) | most of it | 0.006 ms |
+| (its reclaim test, engine 27 + the kept answer) | ~1 ms | 0.005 ms |
+| (the world picture's scene made for the frame: the range rings) | 0.85 ms | 0.40 ms |
+
+The rest of the cursor's cost was the world picture's scene being made for the frame (the first world query of a
+frame makes it): with 2,000 selected mostly their range rings, now worked out per blueprint, not per unit.
+
 ## 2026-10-15: engine functions with 2,000 selected (scenario S; before: 39df633 with the profiler, after: the commit that brings this table)
 
 | Engine function | Before (a call) | After (a call) |

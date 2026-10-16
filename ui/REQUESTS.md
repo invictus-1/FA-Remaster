@@ -711,6 +711,8 @@ when `changes()` moved (read only between beats, behind the waiting accessor) an
 TerrainHeight myself with the same bilinear rule (or a free function of yours over the raw data, so
 the rule stays one: e.g. `float TerrainHeightOf(const uint16_t*, int w, int h, float scale, float x,
 float z)`, which TerrainMap::TerrainHeight would call too).
+WITHDRAWN (2026-10-16): the renderer's WorldPicture::GroundHeight(x, z) follows FlattenMapRect now
+(render 8869b48, in main 67ed8c8) and lives on the main thread: the per-frame heights come from it.
 
 ### 26. A unit's command and toggle caps in UnitView (the per-beat copy)
 From the interface chat, 2026-10-15, not blocking; performance-lessons section 6 (large
