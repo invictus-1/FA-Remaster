@@ -200,6 +200,10 @@ class Device {
 
   virtual Buffer CreateBuffer(const BufferDesc& desc) = 0;
   virtual void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) = 0;  // dynamic buffers
+  // The same without a copy: room for `size` bytes of a dynamic buffer's contents for this frame, to be
+  // written (by any thread) before the draws that read it are handed to the card; null when there is no
+  // room. Within a frame only, as UpdateBuffer.
+  virtual void* WriteBuffer(Buffer buffer, uint32_t size) = 0;
   virtual Texture CreateTexture(const TextureDesc& desc) = 0;
   // Replaces a rectangle of a texture's first level with `data` (rows `pitch` bytes apart), within a
   // frame (between BeginFrame and EndFrame), before a draw reads it. An uncompressed texture of one

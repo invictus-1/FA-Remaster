@@ -423,6 +423,7 @@ class VulkanDevice final : public Device {
 
   Buffer CreateBuffer(const BufferDesc& desc) override;
   void UpdateBuffer(Buffer buffer, const void* data, uint32_t size) override;
+  void* WriteBuffer(Buffer buffer, uint32_t size) override;
   Texture CreateTexture(const TextureDesc& desc) override;
   void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) override;
   Texture CreateTarget(const TargetDesc& desc) override;
@@ -1310,15 +1311,19 @@ Buffer VulkanDevice::CreateBuffer(const BufferDesc& desc) {
 }
 
 void VulkanDevice::UpdateBuffer(Buffer buffer, const void* data, uint32_t size) {
+  if (void* to = WriteBuffer(buffer, size)) std::memcpy(to, data, size);
+}
+
+void* VulkanDevice::WriteBuffer(Buffer buffer, uint32_t size) {
   BufferRec* rec = Find(buffer);
-  if (!rec || !rec->dynamic || !inFrame_ || !size) return;
+  if (!rec || !rec->dynamic || !inFrame_ || !size) return nullptr;
   Span s = Allocate(size, 256);
-  if (!s.cpu) return;
-  std::memcpy(s.cpu, data, size);
+  if (!s.cpu) return nullptr;
   rec->buffer = s.buffer;
   rec->offset = s.offset;
   rec->size = size;
   rec->frame = frameNumber_;
+  return s.cpu;
 }
 
 Texture VulkanDevice::CreateTexture(const TextureDesc& desc) {
