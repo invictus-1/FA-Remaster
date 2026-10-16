@@ -141,8 +141,13 @@ def main():
         marks["econ.first_tick"] = e.get("first_tick")
         marks["air.first_tick"] = r_air.get("first_tick")
         marks["units.first_tick"] = u.get("first_tick")
-        if d.get("first_tick") is not None and d["first_tick"] > cutoff:
-            M["cutoff"] = cutoff = d["first_tick"]
+        # the new first differing draw's tick; when every common draw agrees, the last tick they reach (+1), so
+        # that a replay whose random stream matches to the end is gated pair by pair to the end too
+        new_cut = d.get("first_tick")
+        if new_cut is None and d.get("agree_through_tick") is not None:
+            new_cut = d["agree_through_tick"] + 1
+        if new_cut is not None and new_cut > cutoff:
+            M["cutoff"] = cutoff = new_cut
             # re-collect the pair lists under the new cutoff
             new_pairs = {k: sorted([t, i, f] for t, i, f in res.get("pairs", []) if t < cutoff)
                          for k, res in (("units.pairs", u), ("air.pairs", r_air))}
