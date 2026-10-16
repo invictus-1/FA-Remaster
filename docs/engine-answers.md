@@ -3,6 +3,14 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 35: the fix hooks for the interface's blueprint state — done (4eb1231)
+
+`static void Sim::JoinFixesHooks(ScriptState& st)` joins the engine's script fixes to any script state (it reads
+data/fixes/hook at each call, as the sim does), and `Sim::RulesFixesWanted()` is public. In
+`GameSession::LoadInterfaceRules`: `if (sim.fixes && sim.RulesFixesWanted()) Sim::JoinFixesHooks(*rules_);` before the
+Blueprints load gives your state the sim's blueprints. A function rather than the map, so sim.h needs no
+script_state.h. No change in the sim; gate unchanged.
+
 ## ui 34: the script errors in X1CA_002..006 — done (70b8836)
 
 None of the three was an engine gap. Your host starts an operation through FAF's `SinglePlayerLaunch.lua`, as the
