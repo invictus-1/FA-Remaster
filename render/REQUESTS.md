@@ -30,7 +30,7 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
-## 28. The original look's bloom: how the original makes it (2026-10-16, low priority, not blocking)
+## 28. The original look's bloom: how the original makes it (2026-10-16, low priority; DONE the same day: answered in docs/engine-answers.md "render 28", drawn by render ada0e82)
 
 **Who asks:** the renderer, for the original look. The game's Bloom Render / Bloom Intensity options are now
 wired (ui's renderer request 24): in the modern look they drive our own glow. The original look has no bloom at

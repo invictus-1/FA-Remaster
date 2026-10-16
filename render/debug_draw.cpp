@@ -45,6 +45,7 @@ bool DebugDraw::Init(std::string* error) {
   pd.stride = sizeof(Vertex);
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   solid_ = device_->CreatePipeline(pd, error);
   if (!solid_) return false;
   pd.name = "debug lines";

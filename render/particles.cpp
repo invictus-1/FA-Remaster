@@ -277,6 +277,7 @@ bool Particles::Init(std::string* error) {
   for (int i = 0; i < 4; ++i) {
     pd.name = kinds[i].name;
     pd.blend = kinds[i].blend;
+    pd.alphaWrite = false;  // (the original's particles leave the glow as it is)
     pipelines_[i] = device_->CreatePipeline(pd, error);
     if (!pipelines_[i]) return false;
   }
