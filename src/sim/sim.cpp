@@ -1172,23 +1172,47 @@ void Sim::CreateMapProps() {
       if (++missing <= 5) Logf(LogLevel::Debug, "moho64: map prop blueprint not found: %s", mp.blueprint.c_str());
       continue;
     }
-    // rotation rows are the prop's x, y, z axes -> quaternion
+    // CWldProps::Load 0x8918e0 (the sim's map props are made from its list, 0x7447cc): the nine floats as read are
+    // the rows A (the prop's x, y, z axes), turned into a quaternion by MatrixToQuat 0x4eb3f0 (0x891b2c) and then
+    // normalised (0x891b31..0x891be8: length of ((z^2 + y^2) + x^2) + w^2, fsqrt, above 1e-6 each part times
+    // 1.0f / length, else zero), in the exe's operations. A generic conversion gave other last bits, and a prop box
+    // tilted by them picks another SAT axis on a near tie (Skirmish 2158: tree group 804259698 against unit 0x21,
+    // face axis 0 against edge axis 11: the original's edge wins, no OnCollision; ours split the group 5 beats early).
     const float* m = mp.rotation;
-    float r00 = m[0], r01 = m[3], r02 = m[6], r10 = m[1], r11 = m[4], r12 = m[7], r20 = m[2], r21 = m[5], r22 = m[8];
-    Quat q;
-    float tr = r00 + r11 + r22;
-    if (tr > 0) {
-      float s = std::sqrt(tr + 1.0f) * 2;
-      q = {(r21 - r12) / s, (r02 - r20) / s, (r10 - r01) / s, 0.25f * s};
-    } else if (r00 > r11 && r00 > r22) {
-      float s = std::sqrt(1.0f + r00 - r11 - r22) * 2;
-      q = {0.25f * s, (r01 + r10) / s, (r02 + r20) / s, (r21 - r12) / s};
-    } else if (r11 > r22) {
-      float s = std::sqrt(1.0f + r11 - r00 - r22) * 2;
-      q = {(r01 + r10) / s, 0.25f * s, (r12 + r21) / s, (r02 - r20) / s};
-    } else {
-      float s = std::sqrt(1.0f + r22 - r00 - r11) * 2;
-      q = {(r02 + r20) / s, (r12 + r21) / s, 0.25f * s, (r10 - r01) / s};
+    const float A[3][3] = {{m[0], m[1], m[2]}, {m[3], m[4], m[5]}, {m[6], m[7], m[8]}};
+    float qw, qv[3];
+    {
+      const float tr = (A[0][0] + A[1][1]) + A[2][2];
+      if (tr > 0.0f) {
+        const double r = std::sqrt(static_cast<double>(tr + 1.0f));  // 0x40eaf0 (fsqrt)
+        const float rf = static_cast<float>(r);
+        qw = static_cast<float>(r * 0.5);
+        const float inv = 0.5f / rf;
+        qv[0] = (A[1][2] - A[2][1]) * inv;
+        qv[1] = (A[2][0] - A[0][2]) * inv;
+        qv[2] = (A[0][1] - A[1][0]) * inv;
+      } else {
+        static const int next[3] = {1, 2, 0};  // 0xf61f1c
+        int i = A[1][1] > A[0][0] ? 1 : 0;
+        if (A[2][2] > A[i][i]) i = 2;
+        const int j = next[i], k = next[j];
+        const double r = std::sqrt(static_cast<double>((A[i][i] - (A[k][k] + A[j][j])) + 1.0f));
+        const float rf = static_cast<float>(r);
+        qv[i] = static_cast<float>(r * 0.5);
+        const float inv = 0.5f / rf;
+        qw = (A[j][k] - A[k][j]) * inv;
+        qv[j] = (A[j][i] + A[i][j]) * inv;
+        qv[k] = (A[i][k] + A[k][i]) * inv;
+      }
+    }
+    Quat q{};
+    {
+      const float l2 = ((qv[2] * qv[2] + qv[1] * qv[1]) + qv[0] * qv[0]) + qw * qw;
+      const float len = static_cast<float>(std::sqrt(static_cast<double>(l2)));  // 0x452fc0 (fsqrt), fst
+      if (len > 9.99999997e-07f) {
+        const float inv = 1.0f / len;
+        q = {qv[0] * inv, qv[1] * inv, qv[2] * inv, qw * inv};
+      }
     }
     if (Prop* p = CreateProp(state_->L(), *bp, mp.position, q, mp.scale)) {
       // (for PropEvents: a host has this one from the map file, as the file has it)
@@ -1230,7 +1254,8 @@ void Sim::ProcessDestroyQueue() {
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
-    if (e->kind == Entity::Kind::Unit) GroundFreeRect(*this, static_cast<Unit*>(e));  // Unit::OnDestroy 0x6a89d2
+    // Unit::OnDestroy 0x6a8905: the o-grid reservation is freed only for a unit that occupies ground (unit+0x560)
+    if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->occupiesGround) GroundFreeRect(*this, static_cast<Unit*>(e));
     entities_.erase(e->handle);
     byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);
