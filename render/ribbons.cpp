@@ -132,8 +132,8 @@ bool Ribbons::Init(std::string* error) {
 // Blendmode adds, without Length is 10 long; a trail's TrailLength is how long a place stays, in
 // ticks; v runs along the band; a beam's RepeatRate and a trail's TextureRepeatRate are repeats of
 // the texture per world unit; UShift and VShift slide a beam's texture, per tick.
-bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* color) {
-  const Kind* kind = Blueprint(blueprint);
+bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* color, const std::string& faction) {
+  const Kind* kind = Blueprint(blueprint, faction);
   if (!kind->ok || kind->blend != 2) return false;
   rampPath->clear();
   if (kind->trail && kind->hot && tracers) {  // (a tracer glows warm, whatever its white ramp says)
@@ -145,12 +145,23 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
   return kind->trail ? !rampPath->empty() : true;
 }
 
-const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
-  const std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
+const Ribbons::Kind* Ribbons::Blueprint(const std::string& path, const std::string& faction) {
+  // (a faction's own blueprint where the visuals track has made one, as Particles::Blueprint)
+  std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
+  bool own = false;
+  if (remastered && !faction.empty()) {
+    const std::string asked = key + "|" + faction;
+    auto there = factionFiles_.find(asked);
+    if (there == factionFiles_.end()) there = factionFiles_.emplace(asked, vfs_->Exists(FactionEffectFile(path, faction))).first;
+    if (there->second) {
+      key = asked;
+      own = true;
+    }
+  }
   auto known = kinds_.find(key);
   if (known != kinds_.end()) return known->second.get();
   Kind* kind = kinds_.emplace(key, std::make_unique<Kind>()).first->second.get();
-  const std::string file = moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
+  const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
   BpValue v;
   if (!text || !ReadBlueprintFile(*text, &v)) {
@@ -197,15 +208,15 @@ const Ribbons::Kind* Ribbons::Blueprint(const std::string& path) {
   return kind;
 }
 
-bool Ribbons::Beam(const std::string& blueprint, Vec3 start, Vec3 end) {
-  const Kind* kind = Blueprint(blueprint);
+bool Ribbons::Beam(const std::string& blueprint, Vec3 start, Vec3 end, const std::string& faction) {
+  const Kind* kind = Blueprint(blueprint, faction);
   if (!kind->ok || kind->trail) return false;
   beams_.push_back({kind, start, end, {1, 1, 1}, kind->halfWidth});
   return true;
 }
 
-bool Ribbons::BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction) {
-  const Kind* kind = Blueprint(blueprint);
+bool Ribbons::BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction, const std::string& faction) {
+  const Kind* kind = Blueprint(blueprint, faction);
   if (!kind->ok || kind->trail) return false;
   beams_.push_back({kind, start, start + direction * kind->length, {1, 1, 1}, kind->halfWidth});
   return true;
@@ -225,8 +236,8 @@ void Ribbons::TextureBeam(const std::string& texture, Vec3 start, Vec3 end, floa
 
 void Ribbons::PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width) { beams_.push_back({&plain_, start, end, color, width * 0.5f}); }
 
-uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position) {
-  const Kind* kind = Blueprint(blueprint);
+uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position, const std::string& faction) {
+  const Kind* kind = Blueprint(blueprint, faction);
   if (!kind->ok || !kind->trail) return 0;
   Trail t;
   t.id = nextId_++;

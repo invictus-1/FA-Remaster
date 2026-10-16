@@ -12,6 +12,7 @@
 //  - Static buffers and textures are uploaded at creation through a separate command list, waiting for
 //    the GPU each time (load time only).
 #include "gfx.h"
+#include "gfx_vulkan_dxc.h"
 
 #if defined(_WIN32)  // (the whole file: Direct3D 12 is Windows' alone)
 
@@ -312,6 +313,7 @@ class D3D12Device final : public Device {
   HWND hwnd_ = nullptr;
   int width_ = 0, height_ = 0;
   bool vsync_ = true, tearing_ = false, inFrame_ = false;
+  bool dxil_ = false;  // shaders compiled by DXC (CreatePipeline)
   std::string adapterName_;
   std::string shaderCache_;  // the folder compiled shaders are kept in (empty: none)
 
@@ -440,6 +442,10 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     int n = WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof name, nullptr, nullptr);
     adapterName_ = n > 0 ? name : "";
   }
+  // (DXC's shaders are shader model 6.0: every card's Direct3D 12 driver of the last years takes it)
+  D3D12_FEATURE_DATA_SHADER_MODEL model = {D3D_SHADER_MODEL_6_0};
+  dxil_ = !desc.oldShaderCompiler && SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof model)) &&
+          model.HighestShaderModel >= D3D_SHADER_MODEL_6_0;
 
   D3D12_COMMAND_QUEUE_DESC qd = {};
   qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1125,9 +1131,39 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     return true;
   };
   Com<ID3DBlob> vs, ps;
-  if (!compile(desc.vertexSource, desc.vertexEntry, "vs_5_1", vs)) return {};
   const bool hasPixelShader = !desc.pixelSource.empty();
-  if (hasPixelShader && !compile(desc.pixelSource, desc.pixelEntry, "ps_5_1", ps)) return {};
+  // DXC's DXIL (shader model 6.0) where DXC is beside the program: it compiles the renderer's shaders in
+  // well under half the time Direct3D's own compiler (FXC) takes (a first start 20-26 s against 9-11),
+  // and the card runs them at least as fast. FXC for both of the pipeline's shaders where DXC cannot
+  // make one of them.
+  bool compiled = false;
+  if (dxil_) {
+    std::vector<uint8_t> v, p;
+    std::string why;
+    bool missing = false;
+    auto blob = [](const std::vector<uint8_t>& code, Com<ID3DBlob>& out) {
+      if (FAILED(D3DCreateBlob(code.size(), out.Put()))) return false;
+      std::memcpy(out->GetBufferPointer(), code.data(), code.size());
+      return true;
+    };
+    compiled = CompileDxil(std::string(desc.vertexSource), desc.vertexEntry, "vs", shaderCache_, &v, &why, &missing) &&
+               (!hasPixelShader || CompileDxil(std::string(desc.pixelSource), desc.pixelEntry, "ps", shaderCache_, &p, &why, &missing)) &&
+               blob(v, vs) && (!hasPixelShader || blob(p, ps));
+    if (!compiled) {
+      if (missing) {
+        fprintf(stderr, "render: Direct3D 12: %s; the shaders compiled by Direct3D's own compiler\n", why.c_str());
+        dxil_ = false;
+      } else {
+        fprintf(stderr, "render: Direct3D 12: %s: DXC: %s; Direct3D's own compiler instead\n", desc.name, why.c_str());
+      }
+      vs.Reset();
+      ps.Reset();
+    }
+  }
+  if (!compiled) {
+    if (!compile(desc.vertexSource, desc.vertexEntry, "vs_5_1", vs)) return {};
+    if (hasPixelShader && !compile(desc.pixelSource, desc.pixelEntry, "ps_5_1", ps)) return {};
+  }
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
   for (const VertexAttr& a : desc.attrs) {

@@ -1,7 +1,8 @@
 // HLSL to SPIR-V with Microsoft's DirectX Shader Compiler (DXC), loaded at run time, for the Vulkan
-// backend (gfx_vulkan.cpp). The few calls used are declared here rather than through dxcapi.h, so that no
-// Windows headers or compiler extensions are needed on any system (on Linux and macOS DXC's objects have a
-// virtual destructor in their base, which this file allows for).
+// backend (gfx_vulkan.cpp); and to DXIL for Direct3D 12 (gfx_d3d12.cpp). The few calls used are declared
+// here rather than through dxcapi.h, so that no Windows headers or compiler extensions are needed on any
+// system (on Linux and macOS DXC's objects have a virtual destructor in their base, which this file
+// allows for).
 #pragma once
 
 #include <cstdint>
@@ -32,5 +33,12 @@ struct SpirvShader {
 // under a hash of everything that goes into it. False with the compiler's messages in `error`.
 bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
                   std::string* error);
+
+// Compiles `source` at `entry` for `stage` ("vs" or "ps") into DXIL, shader model 6.0, for Direct3D 12,
+// signed (by DXC itself, or by an older DXC's dxil.dll beside the program). Kept in `cacheDir` as
+// CompileSpirv's. False with the compiler's messages in `error`; `missing` is set when that is because DXC
+// is not there or cannot sign.
+bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
+                 std::string* error, bool* missing);
 
 }  // namespace render::gfx

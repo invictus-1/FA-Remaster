@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+
+#include "effect_files.h"
 
 namespace render {
 namespace {
@@ -90,6 +93,61 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
     return true;
   }
   return false;
+}
+
+std::string Effects::FactionOf(const FrameEffectEvent& event, const Frame& frame) {
+  if (!event.faction.empty()) return event.faction;
+  if (!frame.blueprints) return std::string();
+  int army = event.army > 0 ? event.army - 1 : -1;  // (the script's army is counted from 1)
+  std::string own;
+  if (event.entity != kNone) {
+    auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), event.entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+    if (unit != frame.units.end() && unit->id == event.entity) {
+      if (unit->blueprint < frame.blueprints->size()) own = UnitFaction((*frame.blueprints)[unit->blueprint]);
+      if (army < 0) army = static_cast<int>(unit->Army());
+    } else if (auto shot = projectileAt_.find(event.entity); shot != projectileAt_.end()) {
+      const FrameProjectile& p = frame.projectiles[shot->second];
+      if (p.blueprint < frame.blueprints->size()) own = PathFaction((*frame.blueprints)[p.blueprint]);
+      if (army < 0 && p.army != 0xff) army = static_cast<int>(p.army);
+    } else if (auto made = entityAt_.find(event.entity); made != entityAt_.end()) {
+      const FrameEntity& f = frame.entities[made->second];
+      if (f.mesh < frame.blueprints->size()) own = MeshFaction((*frame.blueprints)[f.mesh]);
+      if (army < 0 && f.army != 0xff) army = static_cast<int>(f.army);
+    }
+  }
+  return own.empty() ? ArmyFaction(frame, army) : own;
+}
+
+const std::string& Effects::ArmyFaction(const Frame& frame, int army) {
+  static const std::string none;
+  if (army < 0) return none;
+  if (frame.tick != armyFactionsTick_) {
+    armyFactionsTick_ = frame.tick;
+    armyFactions_.clear();
+    // (counted: uef, aeon, cybran, seraphim, per army)
+    static const char* const kNames[4] = {"uef", "aeon", "cybran", "seraphim"};
+    std::vector<std::array<int, 4>> counts;
+    for (const FrameUnit& u : frame.units) {
+      if (u.blueprint >= frame.blueprints->size()) continue;
+      const std::string f = UnitFaction((*frame.blueprints)[u.blueprint]);
+      for (int k = 0; k < 4; ++k)
+        if (f == kNames[k]) {
+          if (counts.size() <= u.Army()) counts.resize(u.Army() + 1, {0, 0, 0, 0});
+          ++counts[u.Army()][static_cast<size_t>(k)];
+        }
+    }
+    armyFactions_.resize(counts.size());
+    for (size_t a = 0; a < counts.size(); ++a) {
+      int best = -1, most = 0;
+      for (int k = 0; k < 4; ++k)
+        if (counts[a][static_cast<size_t>(k)] > most) {
+          most = counts[a][static_cast<size_t>(k)];
+          best = k;
+        }
+      if (best >= 0) armyFactions_[a] = kNames[best];
+    }
+  }
+  return static_cast<size_t>(army) < armyFactions_.size() ? armyFactions_[static_cast<size_t>(army)] : none;
 }
 
 void Effects::End(uint32_t id) {
@@ -192,18 +250,23 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   e.hasEnd = event.hasPosition2;
   e.end = V(event.position2);
   e.blueprint = event.blueprint;
+  // (whose blueprint it plays: in the remastered look only, and only for what reads blueprints)
+  const bool readsBlueprint = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" ||
+                              f == "CreateEmitterAtEntity" || f == "CreateTrail" || f == "CreateBeamEmitter" ||
+                              f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity";
+  if (readsBlueprint && (particles_->remastered || ribbons_->remastered)) e.faction = FactionOf(event, frame);
   AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation);  // (the orientation, when the entity is still there)
   e.position = V(event.position);
   const double at = static_cast<double>(event.tick) * 0.1;
   if (f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity") {
     e.kind = Kind::Emitter;
     e.attached = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity";
-    e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached);
+    e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
     e.kind = Kind::Trail;
     e.attached = true;
-    e.handle = ribbons_->StartTrail(event.blueprint, e.position);
+    e.handle = ribbons_->StartTrail(event.blueprint, e.position, e.faction);
     if (!e.handle) return;
   } else if (f == "CreateBeamEmitter" || f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity") {
     e.kind = Kind::Beam;
@@ -342,7 +405,7 @@ void Effects::Update(double tick, const Frame& frame) {
             if (e.glows < 0 || e.glowTracers != ribbons_->tracers) {  // (once, and again when tracers are switched)
               std::string ramp;
               Vec3 own;
-              e.glows = ribbons_->Glows(e.blueprint, &ramp, &own) ? 1 : 0;
+              e.glows = ribbons_->Glows(e.blueprint, &ramp, &own, e.faction) ? 1 : 0;
               if (e.glows) e.glowColor = ramp.empty() ? own : lights_->RampGlow(ramp);  // (a tracer says its colour itself)
               e.glowTracers = ribbons_->tracers;
             }
@@ -377,18 +440,18 @@ void Effects::Update(double tick, const Frame& frame) {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});
           if (e.kind == Kind::Beam) {
-            ribbons_->BeamAlong(e.blueprint, e.position, forward);
+            ribbons_->BeamAlong(e.blueprint, e.position, forward, e.faction);
             break;
           }
           end = e.position + forward * e.length;
         }
-        if (e.kind == Kind::Beam) ribbons_->Beam(e.blueprint, e.position, end);
+        if (e.kind == Kind::Beam) ribbons_->Beam(e.blueprint, e.position, end, e.faction);
         else ribbons_->TextureBeam(e.blueprint, e.position, end, e.halfWidth);
         // a weapon's beam lights the ground it runs over and, more, what it hits
         if (e.kind == Kind::Beam && shotLight > 0 && beamAt_.count(e.entity)) {
           std::string unusedRamp;
           Vec3 color{1, 1, 1};
-          if (ribbons_->Glows(e.blueprint, &unusedRamp, &color)) {
+          if (ribbons_->Glows(e.blueprint, &unusedRamp, &color, e.faction)) {
             const Vec3 light = color * (1.4f * shotLight * lights_->night);
             const float length = Length(end - e.position);
             const int steps = std::min(static_cast<int>(length / 5), 8);

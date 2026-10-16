@@ -178,6 +178,9 @@ struct DeviceDesc {
   // shader whose source has not changed is read back instead). Empty: the user's local application
   // data, "FA Remastered\shaders"; "-": none kept.
   std::string shaderCache;
+  // Direct3D 12: the shaders compiled by Direct3D's own compiler (FXC, shader model 5.1) even where DXC
+  // (dxcompiler.dll) is beside the program
+  bool oldShaderCompiler = false;
 };
 
 class Device {
