@@ -549,7 +549,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   operations trip over (ScenarioInfo.HumanPlayers, ScenarioUtils' area triggers) are fixed in the
   engine's script fixes (engine requests 32, 33). X1CA_001 plays its whole start: the intro (camera
   moves and talking heads answered), the faction choice, the commander's gate-in, the first
-  mission's objectives. Tests `tests/campaign.lua` (launch to the first objectives, then the
+  mission's objectives; X1CA_002..006 by the command line and the tutorial (the menu's first-time
+  prompt, X1CA_TUT) also reach their first objectives. Tests `tests/campaign.lua` (launch to the first objectives, then the
   operation's end as the simulation hands it: noted in the profile, the next briefing waiting) and
   `tests/briefing.lua` (the operation briefing's own Launch button).
   Built with the renderer
