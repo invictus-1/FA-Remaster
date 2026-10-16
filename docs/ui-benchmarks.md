@@ -17,6 +17,12 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-16: scenario L at 2560x1440 (d1df774 era)
+
+Frame to frame 4.16 / 4.92 / 5.68 / 6.52 ms (middle / 95% / 99% / longest), none over 20 ms; the interface's
+scripts 0.25 ms, drawing 0.64 ms a frame; the world's picture 3.12 ms (with vertical sync's wait); a beat 14.4 ms of
+simulation, 2.9 ms of picture copy (on its own thread).
+
 ## 2026-10-16: the interface running during a beat (69c7623, landed 0de3111)
 
 Scenario L, `MOHO64UI_SHOW_ONLY_DURING_BEATS=1` (frames during a beat only show the picture) against the default

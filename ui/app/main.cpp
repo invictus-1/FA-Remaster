@@ -499,6 +499,7 @@ int main(int argc, char** argv) {
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
+    hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();
