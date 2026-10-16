@@ -3,6 +3,22 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 32: the campaign's script gaps, fixed in the engine behind Sim::fixes — done
+
+Two departures, written up in `docs/deviations.md` (2 and 3), as hook files in the repository's `data/fixes/hook/`
+(the game's paths), which `Sim::Start` joins to their scripts when `Sim::fixes` is on, in every host alike (no
+mount; the folder is looked for beside the program and one folder up, or `MOHO64_FIXES_DIR`):
+- `ScenarioInfo.HumanPlayers`: set at BeginSession, if nobody set it, to the ArmyIndex of each army whose
+  ArmySetup says Human, in ListArmies order ({1} for an operation, what the stock game's cinematics.lua hard-coded).
+- Area triggers: ScenarioUtils.GetUnitsInArea / FindUnitInArea are the names scenariotriggers.lua calls for FAF's
+  GetUnitsInMultiRect / FindUnitInMultiRect (renamed and argument order adapted, no FAF code copied); and the
+  count comparison in AreaTriggerThread, which FAF reversed (`unitCount >= amount`; the stock game has
+  `amount >= number`), is the stock game's again in our own form, so "10 player aircraft in the area" waits for 10.
+Replays: `ScenarioMarksFixes` reads your `Options.RemasterFixes = "on"` mark, and `Sim::Start` turns fixes on for a
+replay that carries it (headless, the viewer and your host alike); the original's replays have no mark and stay
+off; `MOHO64_FIXES` still overrides. Your own RemasterFixes check in LaunchReplay is now redundant but harmless.
+X1CA_001 gets past its intro and mission 1 starts; X1CA_002..006 all reach mission 1. Gate: all 13 unchanged.
+
 ## ui 29: changing the focus army during a game — done
 
 Read in the exe: the user binding SetFocusArmy (0x842ee0, 1-based or -1, range error) -> CWldSession::

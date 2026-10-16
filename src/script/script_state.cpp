@@ -107,6 +107,16 @@ int LoadScriptWithHooks(lua_State* L, const std::string& name) {
       parts.push_back(h);
     }
   }
+  // The engine's own script fixes, when the state has them (ScriptState::SetExtraHooks): after those folders.
+  const std::string* extra = nullptr;
+  if (!st->ExtraHooks().empty()) {
+    auto it = st->ExtraHooks().find(Vfs::Normalize(name));
+    if (it != st->ExtraHooks().end()) {
+      Logf(LogLevel::Info, "Hooked %s with %s", name.c_str(), it->second.where.c_str());
+      extra = &it->second.source;
+    }
+  }
+  const size_t extraAt = parts.size();
   // Each active mod's /hook folder, in __active_mods order.
   lua_pushstring(L, "__active_mods");
   lua_rawget(L, LUA_GLOBALSINDEX);
@@ -136,17 +146,22 @@ int LoadScriptWithHooks(lua_State* L, const std::string& name) {
   // The original concatenates the script and its hooks into one chunk, so hooks see the
   // script's file-level locals.
   std::string source;
-  for (const auto& p : parts) {
-    auto data = vfs->ReadFile(p);
+  // Parts are joined as they are; a newline is added only where a file lacks one (so line
+  // numbers in the hooked chunk match the original's).
+  auto join = [&](const std::string& data) {
+    source += data;
+    if (!data.empty() && data.back() != '\n') source += '\n';
+  };
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i == extraAt && extra) join(*extra);
+    auto data = vfs->ReadFile(parts[i]);
     if (!data) {
-      lua_pushfstring(L, "Unable to read file %s", p.c_str());
+      lua_pushfstring(L, "Unable to read file %s", parts[i].c_str());
       return LUA_ERRFILE;
     }
-    source += *data;
-    // Parts are joined as they are; a newline is added only where a file lacks one (so line
-    // numbers in the hooked chunk match the original's).
-    if (!data->empty() && data->back() != '\n') source += '\n';
+    join(*data);
   }
+  if (extraAt == parts.size() && extra) join(*extra);
   std::string chunk = vfs->ChunkName(name);
   return luaL_loadbuffer(L, source.data(), source.size(), chunk.c_str());
 }

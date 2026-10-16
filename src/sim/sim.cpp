@@ -18,9 +18,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
 
 #include "core/backtrace.h"
 #include "core/crash.h"
+#include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
@@ -765,6 +770,52 @@ void RegisterSimBindings(lua_State* L) {
   SetMethod(L, "CAiBrain", "IsDefeated", l_brain_IsDefeated);
 }
 
+// ---- the engine's script fixes ---------------------------------------------------------------
+
+namespace {
+// The fixes made in the game's Lua (docs/deviations.md): the .lua files of the repository's data/fixes/hook,
+// laid out like the game's own paths (data/fixes/hook/lua/simInit.lua hooks /lua/simInit.lua). The folder is
+// found beside the program (data/fixes) or one folder up (the repository's, from build-zig/, build-ui/ or the
+// viewer's build folder, all in the repository's root); MOHO64_FIXES_DIR names another. The files are read at
+// each start and given to the sim state alone (ScriptState::SetExtraHooks): one more hook folder after the init
+// file's (FAF's /schook) and before the mods' hooks, as the game takes a hook folder. Nothing is mounted: the
+// game's file system stays as the host made it (the interface host's is shared with its other threads).
+std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
+  std::map<std::string, ScriptState::ExtraHook> hooks;
+  std::string folder;
+  if (const char* d = getenv("MOHO64_FIXES_DIR"); d && *d) {
+    folder = d;
+  } else if (const std::string exe = hostfs::ProgramFolder(); !exe.empty()) {
+    for (const std::string& c : {exe + "/data/fixes", exe + "/../data/fixes"})
+      if (folder.empty() && hostfs::IsDirectory(c + "/hook")) folder = c;
+  }
+  const std::string root = folder.empty() ? std::string() : hostfs::Resolve(folder + "/hook");
+  if (root.empty() || !hostfs::IsDirectory(root)) {
+    Logf(LogLevel::Warning, "moho64: the engine's script fixes are on, but their folder (data/fixes/hook) is not beside the "
+                            "program or one folder up (MOHO64_FIXES_DIR names it): the game's scripts run unfixed");
+    return hooks;
+  }
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path base = fs::u8path(root);
+  for (auto it = fs::recursive_directory_iterator(base, ec); !ec && it != fs::recursive_directory_iterator();
+       it.increment(ec)) {
+    if (!it->is_regular_file(ec)) continue;
+    const std::u8string ext = it->path().extension().generic_u8string();
+    if (hostfs::ToLower(std::string(ext.begin(), ext.end())) != ".lua") continue;
+    const std::u8string rel = fs::relative(it->path(), base, ec).generic_u8string();
+    const std::u8string host = it->path().generic_u8string();
+    std::ifstream f(it->path(), std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    hooks[Vfs::Normalize("/" + std::string(rel.begin(), rel.end()))] =
+        ScriptState::ExtraHook{hostfs::DisplayPath(std::string(host.begin(), host.end())), std::move(text)};
+  }
+  Logf(LogLevel::Info, "moho64: the engine's script fixes are on: %zu hook files from %s", hooks.size(),
+       hostfs::DisplayPath(root).c_str());
+  return hooks;
+}
+}  // namespace
+
 // ---- Sim -----------------------------------------------------------------------------------
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
@@ -945,6 +996,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
   lua_State* L = state_->L();
   state_->SetHookDirs(hookDirs_);
+  if (fixes) state_->SetExtraHooks(FixesHooks());
   lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
@@ -1033,6 +1085,9 @@ bool Sim::Start(const SessionDescription& session) {
   focusArmy = session.focusArmy;
   isReplay = session.replay;
   fixes = session.fixes >= 0 ? session.fixes != 0 : !session.replay;
+  // The replay of a game this engine played with the fixes carries their mark (Options.RemasterFixes = "on" in its
+  // scenario): it plays back with them, as it was played. The original's replays have no mark and keep them off.
+  if (session.fixes < 0 && session.replay && ScenarioMarksFixes(session.header.scenario)) fixes = true;
   if (const char* f = getenv("MOHO64_FIXES")) fixes = f[0] == '1';
   return Start(session.header);
 }

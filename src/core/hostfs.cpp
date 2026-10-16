@@ -8,6 +8,18 @@
 #include <mutex>
 #include <unordered_map>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace moho::hostfs {
@@ -272,6 +284,28 @@ std::optional<std::string> ReadFile(std::string_view path) {
   while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n);
   std::fclose(f);
   return data;
+}
+
+std::string ProgramFolder() {
+  std::error_code ec;
+  fs::path exe;
+#if defined(_WIN32)
+  std::wstring buf(32768, L'\0');
+  const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+  if (n == 0 || n >= buf.size()) return {};
+  buf.resize(n);
+  exe = fs::path(buf);
+#elif defined(__APPLE__)
+  char buf[4096];
+  uint32_t size = sizeof buf;
+  if (_NSGetExecutablePath(buf, &size) != 0) return {};
+  exe = fs::weakly_canonical(fs::path(buf), ec);
+#else
+  exe = fs::read_symlink("/proc/self/exe", ec);
+#endif
+  if (ec || exe.empty()) return {};
+  const std::u8string dir = exe.parent_path().generic_u8string();
+  return std::string(dir.begin(), dir.end());
 }
 
 bool WriteFile(std::string_view path, std::string_view data) {

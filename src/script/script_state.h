@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,16 @@ class ScriptState {
   void SetHookDirs(std::vector<std::string> dirs) { hookDirs_ = std::move(dirs); }
   const std::vector<std::string>& HookDirs() const { return hookDirs_; }
 
+  // Hook files from outside the game's file system: the engine's own script fixes (Sim::fixes, docs/deviations.md),
+  // keyed by the normalized virtual path of the script they hook. Each is joined to its script after the hook
+  // folders' files and before the mods' hooks. `where` is the host file, for the log.
+  struct ExtraHook {
+    std::string where;
+    std::string source;
+  };
+  void SetExtraHooks(std::map<std::string, ExtraHook> hooks) { extraHooks_ = std::move(hooks); }
+  const std::map<std::string, ExtraHook>& ExtraHooks() const { return extraHooks_; }
+
   // doscript semantics (with hooks), run protected; errors are logged. Returns success.
   bool DoScript(const std::string& vpath);
   // Run a chunk of source, protected; errors are logged.
@@ -54,6 +65,7 @@ class ScriptState {
   Kind kind_;
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
+  std::map<std::string, ExtraHook> extraHooks_;
 };
 
 // Push the error message plus a traceback (used as the pcall error handler).

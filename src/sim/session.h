@@ -27,9 +27,9 @@ struct LaunchParams {
 struct SessionDescription {
   ReplayHeader header;  // streamOffset stays 0: there is no command stream
   bool replay = false;  // true when the header was read from a replay file (the simulation's SessionIsReplay)
-  // Sim::fixes (docs/deviations.md) for this session: -1 = by `replay` (off for a replay, on for a new game);
-  // 0 / 1 = as given. A replay of a game played with this engine sets 1 when the game was played with the fixes
-  // (the interface host marks such games in the scenario's Options: RemasterFixes = "on"). MOHO64_FIXES still wins.
+  // Sim::fixes (docs/deviations.md) for this session: -1 = by `replay` (off for a replay, on for a new game; a
+  // replay whose scenario carries the mark of a game played with the fixes, Options.RemasterFixes = "on", gets
+  // them too: Sim::Start reads it, replay.h ScenarioMarksFixes); 0 / 1 = as given. MOHO64_FIXES still wins.
   int fixes = -1;
   int focusArmy = -1;   // 0-based index into header.armies, -1 = none (launch info +0x68)
   // The GameSpeed option as the client manager gets it (0x53faf0): 'fast' -> 4, otherwise 0; 'adjustable' ->

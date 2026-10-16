@@ -54,6 +54,9 @@ bool WildcardMatch(std::string_view pattern, std::string_view name);
 std::optional<std::string> ReadFile(std::string_view path);
 bool WriteFile(std::string_view path, std::string_view data);
 
+// The folder of the running program (forward slashes, UTF-8), "" when the system does not say.
+std::string ProgramFolder();
+
 std::string ToLower(std::string_view s);
 
 }  // namespace moho::hostfs

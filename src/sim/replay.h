@@ -39,4 +39,10 @@ std::optional<ReplayHeader> ReadReplayHeader(const std::string& data, std::strin
 // 3 bool, 4 table start ... 5 table end). Returns false if the blob is malformed.
 bool PushSerializedLua(lua_State* L, const std::string& blob);
 
+// The mark a game played with this engine's script fixes (Sim::fixes, docs/deviations.md) leaves in its replay:
+// Options.RemasterFixes = "on" in the scenario info of the header (the interface host writes it,
+// GameSession::StartReplayFile; the original ignores option keys it does not know). True when `scenario` (as
+// the header holds it, serialized) carries it.
+bool ScenarioMarksFixes(const std::string& scenario);
+
 }  // namespace moho

@@ -91,6 +91,23 @@ bool PushSerializedLua(lua_State* L, const std::string& blob) {
   return true;
 }
 
+bool ScenarioMarksFixes(const std::string& scenario) {
+  lua_State* L = lua_open();
+  if (!L) return false;
+  bool marked = false;
+  if (PushSerializedLua(L, scenario) && lua_istable(L, -1)) {
+    lua_pushstring(L, "Options");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "RemasterFixes");
+      lua_rawget(L, -2);
+      marked = lua_type(L, -1) == LUA_TSTRING && !std::strcmp(lua_tostring(L, -1), "on");
+    }
+  }
+  lua_close(L);
+  return marked;
+}
+
 std::optional<ReplayHeader> ReadReplayHeader(const std::string& data, std::string* error) {
   Reader r{data};
   ReplayHeader h;
