@@ -2414,7 +2414,12 @@ void RefreshUserUnits(lua_State* L) {
 }
 
 void RegisterUserUnitBindings(lua_State* L) {
-  if (!TheSim(L)) return;
+  if (!UserState::From(L)->HasSim()) {
+    // (The front end has SelectUnits too, its script calls it while it sets up; with no game there
+    // is nothing to select, and it does nothing.)
+    SetGlobal(L, "SelectUnits", [](lua_State*) -> int { return 0; });
+    return;
+  }
   SetGlobal(L, "GetSelectedUnits", l_GetSelectedUnits);
   SetGlobal(L, "SelectUnits", l_SelectUnits);
   SetGlobal(L, "AddSelectUnits", l_AddSelectUnits);
