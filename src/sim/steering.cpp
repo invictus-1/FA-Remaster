@@ -300,11 +300,25 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
   auto cross = [](const Vec3& a, const Vec3& b) {
     return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
   };
+  // The radius is made on the x87 (0x47555e..0x475602): at precision control 24 every step keeps 24 significant
+  // bits, but the x87's exponent range keeps a tiny product whole where a float would round it to a denormal; only
+  // the fstp at the end makes a float of it. An axis whose components are denormals (the cross product of two
+  // nearly level up axes) is projected that way.
+  auto x24 = [](double v) {
+    if (v == 0.0) return 0.0;
+    int e;
+    const double m = std::frexp(v, &e);
+    return std::ldexp(static_cast<double>(static_cast<float>(m)), e);
+  };
+  auto xdot = [&](const Vec3& v, const Vec3& a) {  // (z + y) + x, each product and sum rounded as the x87 does
+    const double z = x24(static_cast<double>(v.z) * a.z), y = x24(static_cast<double>(v.y) * a.y);
+    return x24(x24(z + y) + x24(static_cast<double>(v.x) * a.x));
+  };
   auto project = [&](const Obb& o, const Vec3& a, float* lo, float* hi) {  // 0x475550
     float c = (o.c.y * a.y + o.c.z * a.z) + o.c.x * a.x;
-    // x87 at precision control 24: each op rounds to float
-    float rf = (std::fabs(dot(a, o.ax[2])) * o.h.z + std::fabs(dot(a, o.ax[1])) * o.h.y) +
-               std::fabs(dot(a, o.ax[0])) * o.h.x;
+    const double t2 = x24(std::fabs(xdot(o.ax[2], a)) * o.h.z), t1 = x24(std::fabs(xdot(o.ax[1], a)) * o.h.y);
+    const double t0 = x24(std::fabs(xdot(o.ax[0], a)) * o.h.x);
+    float rf = static_cast<float>(x24(x24(t2 + t1) + t0));
     *lo = c - rf;
     *hi = c + rf;
   };
@@ -402,9 +416,12 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   const MotionBlueprint& b = *m.bp;
   Obb box;
   box.c = u->position;
-  box.ax[0] = Right(u->orientation);
-  box.ax[1] = Up(u->orientation);
-  box.ax[2] = Forward(u->orientation);
+  // the box from the unit's transform, 0x672b50: its axes are VAxes3's rows (0x4ec590). Seen: Skirmish 2488, engineer
+  // 0x400033 standing level beside the scout 0x400039, its quaternion's z the smallest denormal; with VAxes3's axes
+  // the box test 0x474830 finds the two apart on the up x up axis (14), whose components are denormals, at 2488 and
+  // 2489 (no push, as the original's motion shows), and touching at 2485 and 2487 (the pushes it made). Our
+  // Right / Up / Forward gave that axis twice the denormal and the two always met.
+  BoxAxes(u->orientation, box.ax);
   box.h = {b.sizeX * 0.5f, b.sizeY, b.sizeZ * 0.5f};
   // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also collects props, in the same list as the units
   // (mask 0x300, prop_collision.md 1.3): DoCollisionsFor goes through it in the grid's order, a prop's hit calls

@@ -31,6 +31,9 @@ struct WorldShape {
   float r = 0; // sphere radius
 };
 
+// VAxes3::VAxes3(quat) 0x4ec590: the three axes of a rotation as the exe makes them for a box (the primitive's
+// SetTransform 0x4ff470, the unit's own box 0x672b50).
+void BoxAxes(const Quat& q, Vec3 ax[3]);
 // The entity's primitive in the world (false: it has none).
 bool GetWorldShape(const Entity* e, WorldShape* out);
 // Segment p0->p1 against the shape, as the original's primitives answer it (Wild Magic): the point where it

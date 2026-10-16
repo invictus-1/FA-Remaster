@@ -16,6 +16,19 @@ namespace moho {
 
 using namespace vm;
 
+// In the exe's order of operations: the doubled components first, then the products. On a unit standing level its
+// quaternion's x and z can be the smallest denormals, and there the order decides the axes' last bits: (2w) * z is
+// one step of 2^-149, 2 * (w * z) two. (Seen in the original's memory: engineer 0x400033's box primitive, Skirmish
+// 2485-2491, holds exactly these axes.)
+void BoxAxes(const Quat& q, Vec3 ax[3]) {
+  const float tw = q.w * 2.0f, tx = q.x * 2.0f, ty = q.y * 2.0f, tz = q.z * 2.0f;
+  const float yy = ty * q.y, zz = tz * q.z, xz = tz * q.x, xy = ty * q.x, xx = tx * q.x;
+  const float wx = tw * q.x, yz = tz * q.y, wy = tw * q.y, wz = tw * q.z;
+  ax[0] = {1.0f - (zz + yy), wz + xy, xz - wy};
+  ax[1] = {xy - wz, 1.0f - (zz + xx), yz + wx};
+  ax[2] = {wy + xz, yz - wx, 1.0f - (yy + xx)};
+}
+
 bool GetWorldShape(const Entity* e, WorldShape* out) {
   const CollisionShape& s = e->shape;
   if (s.type == ShapeType::None) return false;
@@ -24,9 +37,7 @@ bool GetWorldShape(const Entity* e, WorldShape* out) {
   const Quat& ori = e->shapeHeld ? e->shapeOri : e->orientation;
   out->c = Add(pos, Rotate(ori, s.center));
   if (s.type == ShapeType::Box) {
-    out->ax[0] = Rotate(ori, {1, 0, 0});
-    out->ax[1] = Rotate(ori, {0, 1, 0});
-    out->ax[2] = Rotate(ori, {0, 0, 1});
+    BoxAxes(ori, out->ax);  // (the box primitive's SetTransform 0x4ff470)
     out->half = s.half;
   } else {
     out->r = s.radius;
