@@ -4,6 +4,17 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 22 (2026-10-15): the modern water with Anti-Aliasing Off
+
+Done. The modern water now works with 1 sample a pixel too. It reads the scene's depth as an ordinary
+texture then, and `Post::CopyBehind` copies the picture by drawing it, since there is nothing to resolve.
+Anti-Aliasing Off now drops only the smooth edges: the water looks the same as at 4 samples except
+along edges (0.17 % of pixels differ by more than 32 on a coast close up). The terrain always takes the
+modern water's way in the modern look. Nothing to change on your side; `gSceneSamples` still has to be
+set before the first World, as you do now. Also new (render eba5a1b): `WorldPicture::SetVulkan(true)`
+before `Open` draws with Vulkan. Direct3D 12 stays the default; Vulkan is for trying until it is on
+the settings menu.
+
 ## To ui (offered, 2026-10-15): graphics settings for slower cards, measured
 
 All already in World (reach them through `WorldPicture::world()`), except FSR and effects which have
