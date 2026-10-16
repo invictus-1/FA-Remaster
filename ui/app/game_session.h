@@ -176,6 +176,9 @@ class GameSession {
   void AdvanceClock(double seconds);
   // A beat still on its thread: wait for it and finish it (its sounds, its sync).
   void WaitForBeat();
+  // The world picture's own numbers for the performance statistics (WorldPicture::LastStats: the
+  // frame last shown), as lines of text; none without a picture.
+  void StatsLines(std::vector<std::string>* lines) const;
   // Only wait for it (UserState::LiveSim): its sounds and sync come in the next Advance, so no
   // script runs inside a script that asked.
   void WaitForWorker();

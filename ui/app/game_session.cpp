@@ -830,6 +830,36 @@ void GameSession::WaitForWorker() {
   if (worker_) worker_->Wait();
 }
 
+void GameSession::StatsLines(std::vector<std::string>* lines) const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  const render::WorldPicture* picture = picture_ ? &picture_->picture : menuPicture_ ? &menuPicture_->picture : nullptr;
+  if (!picture) return;
+  const render::WorldPicture::Stats& s = picture->LastStats();
+  char buf[256];
+  std::snprintf(buf, sizeof buf, "world picture: wait %.2f   prepare %.2f   draw %.2f   end %.2f ms   card %.2f ms", s.waitMs, s.prepareMs,
+                s.drawMs, s.endMs, s.gpuMs);
+  lines->push_back(buf);
+  if (!s.gpuStages.empty()) {  // (the card's biggest stages)
+    auto stages = s.gpuStages;
+    std::stable_sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::string line = "card:";
+    for (size_t i = 0; i < stages.size() && i < 4; ++i) {
+      std::snprintf(buf, sizeof buf, "   %s %.2f", stages[i].first ? stages[i].first : "?", stages[i].second);
+      line += buf;
+    }
+    lines->push_back(line);
+  }
+  std::snprintf(buf, sizeof buf, "%d draw calls   %d models   triangles %.2fM + shadows %.2fM + ground %.2fM   particles %d (%d emitters)",
+                s.drawCalls, s.models, s.triangles / 1e6, s.shadowTriangles / 1e6, s.groundTriangles / 1e6, s.particles, s.emitters);
+  lines->push_back(buf);
+  std::snprintf(buf, sizeof buf, "textures %.0f MB   card memory %.0f MB   %dx%d", s.textureBytes / 1048576.0, s.cardBytes / 1048576.0,
+                s.width, s.height);
+  lines->push_back(buf);
+#else
+  (void)lines;
+#endif
+}
+
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
   if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)
