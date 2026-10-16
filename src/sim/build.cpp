@@ -233,6 +233,23 @@ bool AnyStructureSkirtOverlaps(Sim& sim, lua_State* L, const FRect& R) {
 bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
   lua_State* L = sim.L();
   const UnitBpData& d = GetUnitBpData(L, bp);
+  if (!d.structure) {
+    // A mobile blueprint (RUnitBlueprint::IsMobile 0x51e460: MotionType bp+0x290 != None): OCCUPY_Check 0x5652e0
+    // takes its mobile path (0x5652f9 -> 0x5652ff..0x565372), OCCUPY_MobileCheck 0x564ab0 at the footprint's origin
+    // cell (fistp(z - SizeZ/2), fistp(x - SizeX/2), kept as int16), and FootprintFitsStructure 0x720d90 then only
+    // clears Land+Seabed / Water where a structure holds the land / water grid over the footprint (0x720e58..
+    // 0x720eba; GetRectOr 0x8d8460). No BuildOnLayerCaps, flatness, deposit or skirt test on this path. Our
+    // occupancy grid does not tell land structures from water ones: a structure there clears both (as SquadFitsAt).
+    // Seen (Skirmish): M28AI asks brain:CanBuildStructureAt('mis0401', ...) (a Mitsurugi naval experimental it takes
+    // as its size-11 "building") on land; the original answers false, ours took the structure path and said true,
+    // so M28's buildable-location lists differed from 2.2 s on.
+    const NamedFootprint& fp = Footprint(bp);
+    const int oz = static_cast<int16_t>(RoundEven(z - fp.sizeZ * 0.5f));
+    const int ox = static_cast<int16_t>(RoundEven(x - fp.sizeX * 0.5f));
+    unsigned caps = sim.navigation().MobileCaps(fp, ox, oz);
+    if (caps && sim.navigation().AnyStructureIn(ox, oz, ox + fp.sizeX, oz + fp.sizeZ)) caps &= ~0xbu;
+    return caps != 0;
+  }
   if (!StructureLayers(sim, bp, d, x, z)) return false;
   const NamedFootprint& fp = Footprint(bp);
   int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
@@ -240,11 +257,44 @@ bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
   return !sim.navigation().AnyStructureIn(ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
 
+// CAiBrain::CanBuildStructureAt 0x57cbb0 after FootprintFitsStructure passed (0x57cda3..0x57cf9f): the candidates
+// are the units GatherUnmarkedUnitsInBox 0x721c00 finds in the new skirt's box (from the position as given; y
+// -1000..1000): those whose collision AABB (entity+0x240..+0x254) touches it, in grid cells it shares. Of them, the
+// ones alive (vt+0x28, +0x2c) and not mobile (vt+0x30) whose skirt (0x6a7600) strictly overlaps the new skirt
+// (0x416c90) forbid the spot. So a structure whose skirt reaches the new skirt but whose collision box does not is
+// not found. For a structure FootprintFitsStructure tested the skirts already (0x720770); for a mobile blueprint
+// this is the only skirt test. Seen (Skirmish, 5.3 s): xrl0403 next to a factory just started at (351.5, 681.5)
+// stays buildable at (343.99, 685.99) in the original (their skirts overlap, the factory's box is 0.5 away).
+bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, float z,
+                                const std::function<bool(const Unit*)>& skip) {
+  lua_State* L = sim.L();
+  const FRect R = SkirtRect(bp, GetUnitBpData(L, bp), x, z);
+  const Vec3 bmn{R.x0, -1000.0f, R.z0}, bmx{R.x1, 1000.0f, R.z1};
+  bool hit = false;
+  sim.ForUnitsInRect(R.x0 - 32, R.z0 - 32, R.x1 + 32, R.z1 + 32, [&](Unit* e) {
+    if (hit || !e->blueprint) return;
+    WorldShape s;
+    if (!GetWorldShape(e, &s)) return;
+    Vec3 mn, mx;
+    ShapeBounds(s, &mn, &mx);
+    if (bmn.x > mx.x || mn.x > bmx.x || bmn.y > mx.y || mn.y > bmx.y || bmn.z > mx.z || mn.z > bmx.z) return;
+    if (!GridCellsMeet(bmn, bmx, mn, mx)) return;
+    if (!Alive(e)) return;
+    if (skip && skip(e)) return;  // (relation != 3: the units of the given relation, 0x57cef3..0x57cf1d)
+    if (e->motion.bp && e->motion.bp->mobile()) return;
+    const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+    if (r.x1 > R.x0 && R.x1 > r.x0 && r.z1 > R.z0 && R.z1 > r.z0 && R.x1 > R.x0 && R.z0 < R.z1 && r.x1 > r.x0 && r.z0 < r.z1)
+      hit = true;
+  });
+  return hit;
+}
+
 // CAiBrain::CanBuildStructureAt 0x57cbb0 with relation 3: FootprintFitsStructure, then the skirt against the skirts
-// of the live structures once more (the same rule, so nothing new for ours). NOT MODELLED: the brain's own pending
-// structure plans (brain+0x98), which the original also keeps the new skirt off.
+// of the live structures once more (for a structure the same rule, so nothing new for ours). NOT MODELLED: the
+// brain's own pending structure plans (brain+0x98), which the original also keeps the new skirt off.
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z) {
-  return LocationIsFree(sim, bp, x, z);
+  if (!LocationIsFree(sim, bp, x, z)) return false;
+  return GetUnitBpData(sim.L(), bp).structure || !LiveStructureSkirtOverlaps(sim, bp, x, z);
 }
 
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {

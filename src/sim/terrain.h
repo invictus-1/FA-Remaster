@@ -9,6 +9,11 @@
 
 namespace moho {
 
+// Terrain elevation at a world position from a raw heightfield ((w + 1) * (h + 1) samples, w * h cells, each
+// sample * scale = height): the one bilinear rule, used by TerrainMap::TerrainHeight and by copies of the
+// heightfield the interface keeps between beats (ui request 25).
+float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, float z);
+
 class TerrainMap {
  public:
   struct MapProp {
@@ -34,6 +39,12 @@ class TerrainMap {
   float SurfaceHeight(float x, float z) const;
   uint8_t TerrainType(int x, int z) const;  // per game unit cell
   void SetTerrainType(int x, int z, uint8_t t);
+  // For a copy kept outside the beat (ui request 25): the raw heightfield ((width + 1) * (height + 1) samples),
+  // its scale, and a count of height writes so far (it changes when SetHeightAt runs, e.g. a building flattens
+  // the ground); read them only between beats.
+  const uint16_t* heightData() const { return heights_.data(); }
+  float heightScale() const { return heightScale_; }
+  uint64_t changes() const { return changes_; }
 
   bool hasWater = false;
   float waterElevation = 0, waterElevationDeep = 0, waterElevationAbyss = 0;
@@ -45,6 +56,7 @@ class TerrainMap {
   float heightScale_ = 1.0f / 128;
   std::vector<uint16_t> heights_;  // (width+1) * (height+1)
   std::vector<uint8_t> types_;     // width * height
+  uint64_t changes_ = 0;           // SetHeightAt calls
 };
 
 }  // namespace moho

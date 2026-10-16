@@ -174,20 +174,31 @@ void TerrainMap::SetHeightAt(int x, int z, float h) {
   if (x < 0 || z < 0 || x > width_ || z > height_) return;
   float v = std::clamp(h / heightScale_, 0.0f, 65535.0f);
   heights_[static_cast<size_t>(z) * (width_ + 1) + x] = static_cast<uint16_t>(static_cast<int>(v));
+  ++changes_;
 }
 
-float TerrainMap::TerrainHeight(float x, float z) const {
-  if (heights_.empty()) return 0;
+float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, float z) {
+  if (!raw) return 0;
+  auto at = [&](int ix, int iz) {  // TerrainMap::HeightAt
+    ix = std::clamp(ix, 0, w);
+    iz = std::clamp(iz, 0, h);
+    return raw[static_cast<size_t>(iz) * (w + 1) + ix] * scale;
+  };
   float fx = std::floor(x), fz = std::floor(z);
   int ix = static_cast<int>(fx), iz = static_cast<int>(fz);
   float tx = x - fx, tz = z - fz;
   // STIMap::GetElevation 0x44fb90: lerp along z first, then x; the x87 part runs with precision control
   // 24 bits on the sim thread, so every step rounds like a float op
-  float A = HeightAt(ix, iz), B = HeightAt(ix, iz + 1);
-  float C = HeightAt(ix + 1, iz), D = HeightAt(ix + 1, iz + 1);
+  float A = at(ix, iz), B = at(ix, iz + 1);
+  float C = at(ix + 1, iz), D = at(ix + 1, iz + 1);
   float a = A + (B - A) * tz;
   float b = C + (D - C) * tz;
   return a + (b - a) * tx;
+}
+
+float TerrainMap::TerrainHeight(float x, float z) const {
+  if (heights_.empty()) return 0;
+  return TerrainHeightOf(heights_.data(), width_, height_, heightScale_, x, z);
 }
 
 float TerrainMap::SurfaceHeight(float x, float z) const {

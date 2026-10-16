@@ -1,5 +1,6 @@
 // Building: structure placement and the tasks behind build-like commands (see build.cpp).
 #pragma once
+#include <functional>
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -70,6 +71,10 @@ struct BuildTask : public ScriptObject {
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);
 bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z);
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z);
+// CAiBrain::CanBuildStructureAt 0x57cbb0's skirt test after the location test passed (live, non-mobile units).
+// skip: units to leave out (relation 1/2: those of that relation; none for relation 3).
+bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, float z,
+                                const std::function<bool(const Unit*)>& skip = nullptr);
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp);
 void OccupyStructure(Sim& sim, Unit* u);
 void ReleaseStructure(Sim& sim, Unit* u);

@@ -423,6 +423,11 @@ bool AiBrainCanBuildStructureAt(Sim& sim, AiBrain* brain, const BlueprintInfo& b
   Army* army = brain ? brain->army : nullptr;
   // FootprintFitsStructure 0x720d90 (ours: LocationIsFree, structure_placement.md 4)
   bool ok = LocationIsFree(sim, bp, pos.x, pos.z);
+  // 0x57cda3..0x57cf9f run when it passed too; for a structure they find nothing new, for a mobile blueprint they
+  // are its only skirt test.
+  if (ok && !GetUnitBpData(sim.L(), bp).structure &&
+      LiveStructureSkirtOverlaps(sim, bp, pos.x, pos.z, [&](const Unit* u) { return alliance != 3 && AllianceOf(army, u->army) == alliance; }))
+    return false;
   if (!ok) {
     if (alliance == 3) return false;  // 0x57cc34
     // 0x57cc3d..0x57cd68: the structures around the point within the skirt's larger side: of the other side's
