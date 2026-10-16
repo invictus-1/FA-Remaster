@@ -3,6 +3,30 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 34: the script errors in X1CA_002..006 — done (70b8836)
+
+None of the three was an engine gap. Your host starts an operation through FAF's `SinglePlayerLaunch.lua`, as the
+original does, and that launch adds the stock game's "Supreme Commander Campaign Branch" mod (`SetupCampaignSession`
+line 124, `mods.lua` `GetCampaignMods`; your log lists it as active). FAF's `Blueprints.lua` merges that mod's 2007
+Weapon lists into FAF's by position, so 37 units (the four commanders, the Seraphim support commanders, ...) lose
+their `AutoOverCharge` weapon: `acuunit.lua:153`, `ual0001_script.lua:276` (`aoc` is nil; `ChangeMaxRadius` itself
+works) and `xsl0301_script.lua:53`. The original does the same; `SetAutoOvercharge` and `NeedsUpgrade` are FAF Lua,
+not in the exe. The `structureunit.lua` and `ArmyStatItem` lines are gone at b12df2e.
+- **Fix 4** (`docs/deviations.md`): behind `Sim::fixes`, the mod's weapons merge by label, as FAF's own
+  `MergeWeaponByLabel` does; FAF's weapon lists, labels and order stay, with GPG's campaign values on the weapons
+  the two share (8 of the mod's weapons have no FAF counterpart and are left out). The fix runs in the rules state,
+  so `Sim::Start` loads the rules once more with it, only with fixes on and that mod in the game (about 1 s).
+- **Your side:** your interface state loads its own copy of the blueprints, and that copy still has the merge by
+  position (the sim's is fixed). If your interface reads commander weapons by position (range rings, overcharge
+  button), it sees the old order; joining `data/fixes/hook/lua/system/Blueprints.lua` to your interface state's
+  Blueprints.lua load when fixes are on would match the sim. Your call.
+- Headless `/map` now takes the campaign's mods the way `SetupCampaignSession` does (before, it ran without them,
+  which is why it never showed these errors); `--mods` with an empty file runs without.
+- Results (fixes on): X1CA_002..006, 2000 and 9000 ticks: no script error. Left: a WARN in X1CA_003, xsc9011 (the
+  stock jammer crystal) has no death weapon (`AirUnit.lua:209`/`113`), stock data, the original does the same.
+- Also: `UnitWeapon:ChangeMaxRadius` no longer clears the unit's blip cache (the original's 0x6d9c80 leaves it).
+Gate: all 13 unchanged.
+
 ## ui 32: the campaign's script gaps, fixed in the engine behind Sim::fixes — done
 
 Two departures, written up in `docs/deviations.md` (2 and 3), as hook files in the repository's `data/fixes/hook/`
