@@ -392,7 +392,8 @@ bool Water::Load(const MapData* map, std::string* error) {
     pd.blend = gfx::Blend::Premultiplied;
     pd.colorFormat = kSceneFormat;
     pd.samples = gSceneSamples;
-    pipeline_ = device_->CreatePipeline(pd, error);
+    pd.alphaWrite = false;
+  pipeline_ = device_->CreatePipeline(pd, error);
     if (!pipeline_) return false;
     const float corners[12] = {0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1};
     gfx::BufferDesc bd;

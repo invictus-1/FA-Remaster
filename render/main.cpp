@@ -78,6 +78,7 @@
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
+// --no-bloom  no glow (World::bloom off: the modern look's glow and the original look's bloom, the game's Bloom Render)
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
@@ -225,6 +226,7 @@ struct Options {
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
   bool groundChanges = true;            // --no-ground-changes
+  bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
   bool fxc = false;                     // --fxc
   bool shaderCache = true;              // --no-shader-cache
@@ -322,6 +324,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-ground-changes") o->groundChanges = false;
+    else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
@@ -687,6 +690,7 @@ int main(int argc, char** argv) {
     wo.decalRange = opt.decalRange;
     wo.verbose = opt.debug;
     world.textures.detail = opt.textureDetail;
+    world.bloom = opt.bloom;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;

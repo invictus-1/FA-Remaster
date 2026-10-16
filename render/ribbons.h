@@ -118,7 +118,7 @@ class Ribbons {
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;
-  gfx::Pipeline pipelines_[4];
+  gfx::Pipeline pipelines_[4], trailPipelines_[4];
   gfx::Buffer buffer_;
   std::unordered_map<std::string, std::unique_ptr<Kind>> kinds_;
   std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file

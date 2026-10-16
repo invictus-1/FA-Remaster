@@ -430,7 +430,7 @@ float4 Shade(VOut i, bool front) {
     clip(solid);
     work *= falling.w > 0 ? falling.w : 1;  // (less to an eye opened for the night)
     // (a lattice's line: its own light and nothing else)
-    if (solid <= 0 && faction != 1 && faction != 3) return float4(look > 0.5 ? work * 2 : saturate(work), 1);
+    if (solid <= 0 && faction != 1 && faction != 3) return float4(look > 0.5 ? work * 2 : saturate(work), look > 0.5 ? 1 : 0.01);
     teamMask *= saturate((i.color.a - 0.9) * 10);
     if (faction == 3) albedo.a = teamMask;
     else spec.a = teamMask;
@@ -570,14 +570,17 @@ float4 Shade(VOut i, bool front) {
 
   if (kind2.w > 0.5) {  // the map's border as the original lights it: by the sun's angle, but not where it glows
     float shade = lerp(saturate(dot(sunDirection, N)), 1, spec.b);
-    return float4(shade * (albedo.rgb + albedo.a) + 0.02, 1);
+    return float4(shade * (albedo.rgb + albedo.a) + 0.02, 0);  // (no glow: the original's boundary writes none)
   }
+  // (the original look's glow, in the picture's alpha, for its bloom: what the original's unit shaders
+  // write, its specular's blue plus glowMinimum 0.01; wreckage and the like only the 0.01; render 28)
+  const float glowAlpha = kind4.x > 0.5 ? 0.01 : spec.b + 0.01;
   if (shielded) work += (faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0)) * (0.03 + 0.6 * pow(1 - saturate(dot(toCamera, N)), 3));
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
-  if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, albedo.a);  // the plain look ("VertexNormal")
+  if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, kind2.y > 0.5 ? albedo.a : 0.01);  // the plain look ("VertexNormal"; leaves: their coverage)
   float3 environment = environmentMap.SampleLevel(samplerLinear, reflect(-toCamera, N), 0).rgb;
   float highlight = saturate(dot(reflect(-sunDirection, N), toCamera));
-  if (kind4.x > 1.5) return float4(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), 1);  // liquid metal
+  if (kind4.x > 1.5) return float4(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), glowAlpha);  // liquid metal
   if (kind.z < 0.5 && faction == 3) {  // Seraphim
     float3 ambience = sunAmbience + (1 - sunAmbience) * shadowFill;
     // (how strongly it mirrors, by the angle it is seen at: the game's own ramp, in bands, where
@@ -585,14 +588,14 @@ float4 Shade(VOut i, bool front) {
     float mirrors = kind5.y > 0.5 ? seraphimFalloff.SampleLevel(samplerLinearClamp, float2(pow(1 - saturate(dot(toCamera, N)), 0.6), 0.5), 0).a : lerp(0.35, 1, edge);
     float3 seraphim = albedo.rgb * ambience + environment * spec.r * mirrors +
                       float3(0.5, 0.6, 0.7) * pow(highlight, 9) * spec.g + i.color.rgb * rim * albedo.a;
-    return float4(seraphim * built + work * (0.3 + edge), 1);
+    return float4(seraphim * built + work * (0.3 + edge), glowAlpha);
   }
   albedo.rgb = kind.z > 0.5 ? albedo.rgb * i.color.rgb : lerp(i.color.rgb, albedo.rgb, 1 - spec.a);
   if (kind.z < 0.5 && faction == 1) {  // Aeon
     float3 sun = sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
     float3 aeonLight = 0.6 * lightMultiplier * sun + (1 - sun) * shadowFill;
     float3 aeon = albedo.rgb * (2 * spec.b + aeonLight + spec.r * environment) + float3(0.8, 0.85, 1.1) * pow(highlight, 3) * spec.g;
-    return float4(lerp(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), aeon, solid), 1);
+    return float4(lerp(float3(0.55, 0.58, 0.62) * (0.4 + environment * 1.2 + pow(highlight, 12)), aeon, solid), glowAlpha);
   }
   if (kind.z < 0.5 && faction == 2) {  // Cybran
     float3 sun = 2 * sunColor * saturate(dot(sunDirection, N)) * shadow + sunAmbience;
@@ -602,11 +605,11 @@ float4 Shade(VOut i, bool front) {
     float3 gleam = kind5.x > 0.5 ? insectLookup.SampleLevel(samplerLinearClamp, float2(dot(reflect(-sunDirection, N), toCamera), dot(sunDirection, N)), 0).rgb
                                  : pow(highlight, 6);
     float3 sheen = (gleam * spec.g + 0.05 * spec.r * environment) * (1 - spec.a);
-    return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built + work, 1);
+    return float4((albedo.rgb * (2 * spec.b + cybranLight) + sheen) * built + work, glowAlpha);
   }
   float3 additive = float3(0.6, 0.8, 0.9) * highlight * highlight * spec.g;
   float3 color = albedo.rgb * (2 * spec.b + light + 2 * environment * spec.r) + additive;
-  return float4(color * built + work, 1);
+  return float4(color * built + work, glowAlpha);
 }
 
 // a ghost: its shape in one colour, the light and dark of the model kept
@@ -642,15 +645,18 @@ bool MeshRenderer::Init(std::string* error) {
   pd.stride = sizeof(ScmVertex);
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = true;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
   pd.name = "models, blended";
   pd.blend = gfx::Blend::Alpha;
+  pd.alphaWrite = false;
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
   pd.name = "models, see-through";
   pd.cull = gfx::Cull::None;  // (a bubble's far side shows through its near side)
   pd.depthWrite = false;
+  pd.alphaWrite = true;
   glass_ = device_->CreatePipeline(pd, error);
   if (!glass_) return false;
   pd.cull = gfx::Cull::Back;
@@ -669,6 +675,7 @@ bool MeshRenderer::Init(std::string* error) {
   pd.blend = gfx::Blend::Opaque;
   pd.cull = gfx::Cull::None;
   pd.alphaToCoverage = true;
+  pd.alphaWrite = false;
   leaves_ = device_->CreatePipeline(pd, error);
   if (!leaves_) return false;
   pd.name = "models, leaves' depth first";
@@ -689,11 +696,13 @@ bool MeshRenderer::Init(std::string* error) {
   pd.pixelEntry = "PS";
   pd.depthWrite = false;
   pd.name = "models, depth laid";
+  pd.alphaWrite = true;
   laid_ = device_->CreatePipeline(pd, error);
   if (!laid_) return false;
   pd.name = "models, leaves, depth laid";
   pd.cull = gfx::Cull::None;
   pd.alphaToCoverage = true;
+  pd.alphaWrite = false;
   laidLeaves_ = device_->CreatePipeline(pd, error);
   if (!laidLeaves_) return false;
   pd.alphaToCoverage = false;

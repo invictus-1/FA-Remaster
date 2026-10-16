@@ -58,6 +58,7 @@ bool PlacedMeshes::Init(std::string* error) {
   pd.blend = gfx::Blend::Alpha;
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   over_ = device_->CreatePipeline(pd, error);
   if (!over_) return false;
   pd.name = "placed meshes, hidden by what is in front";

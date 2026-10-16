@@ -152,6 +152,7 @@ bool Ranges::Init(std::string* error) {
   pd.name = "range outlines on the scene";
   pd.vertexSource = pd.pixelSource = laySource;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   lay_ = device_->CreatePipeline(pd, error);
   if (!lay_) return false;
   // a cube from -1 to 1, its faces wound counter-clockwise seen from outside (as decals.cpp has it)

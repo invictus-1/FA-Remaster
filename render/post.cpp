@@ -35,6 +35,9 @@ float4 PS(VOut i) : SV_Target {
     c *= modern.z;
     c = saturate((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14));
     c = pow(c, 1.0 / 2.2);
+  } else {
+    // (the original's bloom, where it is on: added, the colours clamped as its 8-bit picture clamps them)
+    c = saturate(c) + glowPicture.SampleLevel(samplerLinearClamp, i.uv, 0).rgb;
   }
   return float4(saturate(c), 1);
 }
@@ -94,6 +97,45 @@ float4 Up(VOut i) : SV_Target {
 }
 )hlsl";
 
+// The original look's bloom, as the original makes it (CBloomRenderer, read by the engine track, render
+// 28): the picture at half its size, what glows (the picture's alpha: what the surfaces wrote) copied
+// out, blurred along and across a number of times, and added to the picture. Targets of 8 bits, so
+// every step clamps, as the original's.
+const char kOriginalBloomShader[] = R"hlsl(
+Texture2D source : register(t0);
+cbuffer Bloom : register(b1) {
+  float4 bloom;  // copy: x GlowCopyScale, y GlowCopyAdd (the map's Bloom); blur: xy one texel of the picture read, the way it runs; z BlurScale
+};
+
+struct VOut {
+  float4 position : SV_Position;
+  float2 uv : TEXCOORD0;
+};
+
+VOut VS(uint id : SV_VertexID) {
+  VOut o;
+  o.uv = float2((id << 1) & 2, id & 2);
+  o.position = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}
+
+// (read at a half-size pixel's middle: the four pixels under it averaged, as the original's StretchRect;
+// then its CopyGlowingPS, MinimumGlow 0.02)
+float4 Copy(VOut i) : SV_Target {
+  float4 c = saturate(source.SampleLevel(samplerLinearClamp, i.uv, 0));
+  float a = saturate((c.a - 0.02) * bloom.x + bloom.y);
+  return float4(c.rgb * a, a * a);
+}
+
+// (the original's 7 taps on whole texels, times BlurScale)
+float4 Blur(VOut i) : SV_Target {
+  const float weight[7] = {0.102734, 0.120985, 0.176033, 0.199471, 0.176033, 0.120985, 0.102734};
+  float4 c = 0;
+  [unroll] for (int k = 0; k < 7; ++k) c += weight[k] * source.SampleLevel(samplerLinearClamp, i.uv + bloom.xy * (k - 3), 0);
+  return saturate(c * bloom.z);
+}
+)hlsl";
+
 }  // namespace
 
 bool Post::Init(std::string* error) {
@@ -130,6 +172,20 @@ bool Post::Init(std::string* error) {
   pd.blend = gfx::Blend::Additive;
   glowUp_ = device_->CreatePipeline(pd, error);
   if (!glowUp_) return false;
+  {  // the original look's bloom
+    std::string bloom = std::string(kViewShaderBlock) + kOriginalBloomShader;
+    pd.vertexSource = pd.pixelSource = bloom;
+    pd.blend = gfx::Blend::Opaque;
+    pd.colorFormat = gfx::Format::RGBA8;
+    pd.name = "original bloom, what glows";
+    pd.pixelEntry = "Copy";
+    bloomCopy_ = device_->CreatePipeline(pd, error);
+    if (!bloomCopy_) return false;
+    pd.name = "original bloom, blurred";
+    pd.pixelEntry = "Blur";
+    bloomBlur_ = device_->CreatePipeline(pd, error);
+    if (!bloomBlur_) return false;
+  }
   // a black picture for when there is no glow
   const uint8_t black[4] = {0, 0, 0, 255};
   gfx::TextureDesc td;
@@ -152,6 +208,10 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
       if (t) device_->Destroy(t);
       t = {};
     }
+    for (gfx::Texture& t : bloom_) {
+      if (t) device_->Destroy(t);
+      t = {};
+    }
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
@@ -169,6 +229,16 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
         glowWidth_[i] = small.width;
         glowHeight_[i] = small.height;
       }
+    }
+    {  // the original look's bloom: two pictures of 8 bits at half the size
+      gfx::TargetDesc half = td;
+      half.width = std::max(1, width / 2);
+      half.height = std::max(1, height / 2);
+      half.format = gfx::Format::RGBA8;
+      std::fill(half.clearValue, half.clearValue + 4, 0.0f);
+      for (gfx::Texture& t : bloom_) t = device_->CreateTarget(half);
+      bloomWidth_ = half.width;
+      bloomHeight_ = half.height;
     }
     td.samples = gSceneSamples;
     if (gSceneSamples > 1) drawn_ = device_->CreateTarget(td);  // what is drawn into, several samples a pixel
@@ -250,6 +320,28 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     }
     // (the first now holds all of them; the strength was taken at the first step)
   }
+  // the original look's bloom: what glows copied out at half the size, then blurred along and across
+  const bool blooming = view.constants.look < 0.5f && originalBloom.on && bloom_[0] && bloom_[1];
+  if (blooming) {
+    auto run = [&](gfx::Texture into, gfx::Pipeline pipeline, gfx::Texture from, const float c[4]) {
+      gfx::PassDesc step;
+      step.color = into;
+      device_->BeginPass(step);
+      device_->SetPipeline(pipeline);
+      device_->SetConstants(0, &view.constants, sizeof view.constants);
+      device_->SetConstants(1, c, 4 * sizeof(float));
+      device_->SetTexture(0, from);
+      device_->Draw(3);
+    };
+    const float copy[4] = {originalBloom.copyScale, originalBloom.copyAdd, 0, 0};
+    run(bloom_[0], bloomCopy_, color_, copy);
+    const float along[4] = {1.0f / static_cast<float>(bloomWidth_), 0, originalBloom.blurScale, 0};
+    const float across[4] = {0, 1.0f / static_cast<float>(bloomHeight_), originalBloom.blurScale, 0};
+    for (int k = 0; k < originalBloom.blurCount; ++k) {
+      run(bloom_[1], bloomBlur_, bloom_[0], along);
+      run(bloom_[0], bloomBlur_, bloom_[1], across);
+    }
+  }
   // drawn smaller than the screen: the picture as a screen shows it first, then FSR brings it up
   const bool scaled = upscaler && screenWidth > 0 && screenHeight > 0 && (screenWidth != width_ || screenHeight != height_);
   if (scaled && !ldr_) {
@@ -270,7 +362,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetTexture(0, color_);
-  device_->SetTexture(1, glowing ? glowSteps_[0] : black_);
+  device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
   device_->Draw(3);
   if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
 }

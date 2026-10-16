@@ -220,7 +220,12 @@ float4 Ground(VOut i) {
   float3 colorXp = lightXp * (albedo.rgb + specularXp);
   // (the glowing look: the original marks the pixel to be spread as glow; here it is added)
   float3 color = lerp(colorPlain, colorXp, xp) + glowing * 0.6;
-  return float4(lerp(color, ramp.rgb, ramp.a), 1);
+  // its glow, in the picture's alpha, for the original's bloom (render 28): TTerrain 0.01 plus its
+  // specular times SpecularColor.w, the XP look 0.01, the glowing look its glow; under the water none
+  // (the original's water lays alpha 0 under its plane)
+  float glowAlpha = 0.01 + lerp(pow(saturate(dot(sun - 2 * sunDotN * N, toPixel)), 80) * gloss * specularColor.w, 0, xp) +
+                    max(glowing.r, max(glowing.g, glowing.b));
+  return float4(lerp(color, ramp.rgb, ramp.a), ramp.a > 0.001 ? 0 : saturate(glowAlpha));
 }
 
 float4 PS(VOut i) : SV_Target {
