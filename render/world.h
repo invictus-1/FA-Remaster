@@ -328,6 +328,7 @@ class World {
     bool known = false;
   };
   std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
+  std::vector<KnownModel> originalShotModels_;  // (shots a frame wants in the original look whatever the world's)
   EffectsLook shotsLook_ = EffectsLook::Remastered;  // (the look shotModels_ were looked up in)
   template <typename LookUp>
   const Model* Known(std::vector<KnownModel>& list, uint32_t index, size_t count, LookUp lookUp) {
