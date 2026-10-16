@@ -26,7 +26,16 @@ ForkThread(function()
     check("WaitFor(camera) lets go when a 1.5 s move ends", took > 1.4 and took < 1.7, true)
     LOG("TEST note: the move took " .. string.format("%.2f", took) .. " s")
     local s = cam:SaveSettings()
-    check("the move ends at its place and zoom", near(s.Focus[1], to[1], 0.5) and near(s.Focus[3], to[3], 0.5) and near(s.Zoom, 60, 0.5), true)
+    -- (the place given, moved along the view onto the ground as the original's: the focus lies on
+    -- the line through it in the view's direction)
+    local dx, dy, dz = math.sin(s.Heading) * math.cos(s.Pitch), -math.sin(s.Pitch), math.cos(s.Heading) * math.cos(s.Pitch)
+    local vx, vy, vz = s.Focus[1] - to[1], s.Focus[2] - to[2], s.Focus[3] - to[3]
+    local along = vx * dx + vy * dy + vz * dz
+    local ox, oy, oz = vx - along * dx, vy - along * dy, vz - along * dz  -- (no ^: the game's Lua has it as a bitwise operator)
+    local off = math.sqrt(ox * ox + oy * oy + oz * oz)
+    LOG(string.format("TEST note: to %.2f %.2f %.2f, focus %.2f %.2f %.2f, heading %.3f pitch %.3f", to[1], to[2], to[3], s.Focus[1], s.Focus[2], s.Focus[3], s.Heading, s.Pitch))
+    LOG("TEST note: the place given moved " .. string.format("%.1f", along) .. " along the view onto the ground, off the line by " .. string.format("%.2f", off))
+    check("the move ends on its place, along the view onto the ground, at its zoom", off < 0.5 and near(s.Zoom, 60, 0.5), true)
     check("and keeps the script's pitch (the camera holds its turn)", near(s.Pitch, 0.6, 0.01), true)
     WaitSeconds(0.5)
     check("still held a while after", near(cam:SaveSettings().Pitch, 0.6, 0.01), true)

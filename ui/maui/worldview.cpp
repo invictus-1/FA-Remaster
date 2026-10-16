@@ -112,6 +112,10 @@ class Camera : public ScriptObject {
   std::vector<uint32_t> entities;
   size_t entityAt = 0;
   float pitchAdjust = 0, transition = 0;
+  // The focus a script gave with its own height (a cinematic's marker above or below the ground):
+  // it is moved along the view onto the ground every frame, as the original's ClampFocusPos
+  // (0x7a9470); the player's own focus is always on the ground below it.
+  bool focusFromScript = false;
   int EventState() const override { return signalled ? 1 : 0; }
   // The shake a blast gives the camera (the original's +0x428..+0x448, see ShakeCamera below):
   // where it is, how far it reaches, how hard at its middle and at its reach, how long it lasts
@@ -210,6 +214,7 @@ void Place(lua_State* L, Camera* c) {
   c->mode = 0;
   c->entities.clear();
   c->pitchAdjust = 0;
+  c->focusFromScript = false;
   c->toHeading = kPi, c->toPitch = kFarPitch * kDegrees;
 }
 
@@ -324,6 +329,7 @@ void StartTimed(Camera* c, float seconds) {
 // zoom is not brought into bounds. (The roll of a script's orientation is not used.)
 void TargetManual(Camera* c, const float focus[3], float heading, float pitch, float zoom, float seconds) {
   c->anchored = false;
+  c->focusFromScript = true;
   c->entities.clear();  // (following stops)
   StartTimed(c, seconds);
   for (int i = 0; i < 3; ++i) c->toFocus[i] = focus[i];
@@ -364,6 +370,7 @@ void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
 // Ours: the player's hand (pan, wheel) ends a timed move (the original lets it run on); waiting
 // scripts are let go.
 void EndTimedByHand(Camera* c) {
+  c->focusFromScript = false;
   if (c->moveSeconds > 0) c->signalled = true;
   c->moveSeconds = 0;
   if (c->mode != 0) c->mode = 0;  // (the original's pan: TargetNothing, following ends too)
@@ -1762,6 +1769,41 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     c->turned = true, c->turnedPitch = c->toPitch;
   } else if (c->mode == 2) {  // following units: on the unit every frame
     for (int i = 0; i < 3; ++i) c->focus[i] = c->toFocus[i];
+  }
+  // A script's focus onto the ground along the view (ClampFocusPos 0x7a9470: the line through the
+  // focus in the view's direction, met with the ground; forward only during a timed command).
+  // INFERRED: the terrain's height only (the original takes the water's surface where it is
+  // higher).
+  if (c->focusFromScript && UserState::From(L)->config().groundHeight) {
+    const auto& ground = UserState::From(L)->config().groundHeight;
+    const float pitch = PitchOf(c), d[3] = {std::sin(c->heading) * std::cos(pitch), -std::sin(pitch), std::cos(c->heading) * std::cos(pitch)};
+    auto above = [&](float t) { return c->focus[1] + d[1] * t - ground(c->focus[0] + d[0] * t, c->focus[2] + d[2] * t); };
+    const bool forwardOnly = c->moveSeconds > 0;
+    float best = 0;
+    bool found = std::fabs(above(0)) < 1e-3f;
+    for (float step = 1; !found && step <= 512; step += 1) {  // (the nearest crossing, a unit at a time, then halved)
+      for (float sign : {1.0f, -1.0f}) {
+        if (sign < 0 && forwardOnly) continue;
+        const float a = (step - 1) * sign, b = step * sign;
+        if ((above(a) > 0) == (above(b) > 0)) continue;
+        float lo = a, hi = b;
+        for (int i = 0; i < 20; ++i) {
+          const float mid = (lo + hi) * 0.5f;
+          if ((above(mid) > 0) == (above(lo) > 0)) lo = mid;
+          else hi = mid;
+        }
+        best = (lo + hi) * 0.5f, found = true;
+        break;
+      }
+    }
+    if (found) {
+      for (int i = 0; i < 3; ++i) c->focus[i] += d[i] * best;
+      c->focus[1] = ground(c->focus[0], c->focus[2]);
+    }
+  } else if (UserState::From(L)->config().groundHeight) {
+    // (the player's focus: on the ground below it, so GetFocusPosition tells its height as the
+    // original's, which keeps its focus on the surface)
+    c->focus[1] = UserState::From(L)->config().groundHeight(c->focus[0], c->focus[2]);
   }
   // (the zoom is brought into bounds only while the camera is not held in a turn: the original's)
   if (!c->turned) c->targetZoom = ClampZoom(c, c->targetZoom);
