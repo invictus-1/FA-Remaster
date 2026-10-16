@@ -1,6 +1,7 @@
 // Engine functions present in every Lua state (the original's "core" set). Behaviour follows
 // the original engine; see docs/lua-dialect.md and the binding list for the reference names.
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -448,8 +449,31 @@ int l_Sound(lua_State* L) {
   return 1;
 }
 
+// The original's colour table (FA exe 0xdff690), in its order: see color_names.inc.
+struct ColorName {
+  const char* name;
+  uint32_t argb;  // 0xAARRGGBB
+};
+constexpr ColorName kColorNames[] = {
+#include "script/color_names.inc"
+};
+static_assert(sizeof(kColorNames) / sizeof(kColorNames[0]) == 141);
+
+// EnumColorNames() (FA exe 0x4b2f60, core set: every state, also the rules and the session-load one): with any
+// argument the usual "expected 0 args" error (lua_gettop 0x90c590, LuaState::Error 0x90c1d0 with 0xe0a220 and the
+// binding's help); else a new table (0 array / 0 hash slots, 0x909940) that gets, for each entry of the colour
+// table until the null name, t[i] = name with i counted from 1 (LuaObject::SetString(int, const char*) 0x9084e0,
+// a number key and a string value). So {"AliceBlue", ..., "transparent"}, 141 strings; the colours are not in it.
 int l_EnumColorNames(lua_State* L) {
+  if (lua_gettop(L) != 0)
+    luaL_error(L, "%s\n  expected %d args, but got %d",
+               "table EnumColorNames() - returns a table containing strings of all the color names", 0, lua_gettop(L));
   lua_newtable(L);
+  int i = 1;
+  for (const ColorName& c : kColorNames) {
+    lua_pushstring(L, c.name);
+    lua_rawseti(L, -2, i++);
+  }
   return 1;
 }
 
