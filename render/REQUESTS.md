@@ -30,7 +30,12 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
-## 26. Units told their terrain type: OnTerrainTypeChange (2026-10-16, not blocking; touches the simulation)
+## 26. Units told their terrain type: OnTerrainTypeChange (2026-10-16, DONE the same day: main d243ce8, read from the exe, all 13 replays unchanged; tread marks are laid in games now)
+
+(The engine: fired from the unit's creation after OnLayerChange, on Warp, and in the motion tick when the terrain
+code under the footprint's origin cell changes; not for flyers, attached, ballistic, immobile or stunned units;
+the first call with old = nil. Left as no-ops: Entity:AddThreadScroller / RemoveScroller, the treads' texture
+scroll; a request for later if the renderer is to draw it.)
 
 **Who asks:** the renderer, after its helper looked into the Fatboy's tread marks.
 
