@@ -30,6 +30,32 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
+## 26. Units told their terrain type: OnTerrainTypeChange (2026-10-16, not blocking; touches the simulation)
+
+**Who asks:** the renderer, after its helper looked into the Fatboy's tread marks.
+
+**Found:**
+- **No tread marks in our games:** FAF's tread code (`TreadComponent.CreateMovementEffects`,
+  defaultcomponents.lua:445) lays marks only when `self.TerrainType.Treads` is set, and only
+  `Unit.OnTerrainTypeChange(self, new, old)` sets `self.TerrainType` (Unit.lua:3572, the only place in the
+  game's Lua). `src/` never calls OnTerrainTypeChange (grep), so TerrainType stays nil and no tread mark is
+  ever laid. (In a LAND replay: none in ticks 600-937 and 1500-1568; the one splat on a bone is a commander's
+  footprint.)
+- **Movement dust is affected too:** it never switches when a unit crosses onto another terrain type.
+- **The original has the callback:** the string `OnTerrainTypeChange` is in ForgedAlliance.exe at 0xa2a42c,
+  beside OnMotionHorzEventChange and OnMotionTurnEventChange. When it calls it is INFERRED: when the terrain
+  type under a unit changes, and very likely once when the unit first stands in the world (FAF relies on it
+  for every tank).
+
+**What:** the engine calls `unit:OnTerrainTypeChange(new, old)` (the TerrainTypes.lua entries the scripts
+expect) as the original does.
+
+**Caution:** it runs Lua the simulation has not run so far: effects, splats, and possibly draws from the
+random stream. So it is the engine's call, by the gate and the tick-matched replays. It may move them toward
+the original or away; I can't tell from here.
+
+**Blocking:** nothing. The renderer draws the marks as soon as the scripts lay them.
+
 ## 25. Which ground FlattenMapRect changed, for the picture (2026-10-15, wanted soon: Chris saw it)
 
 **Who asks:** the renderer, after Chris's picture of a Cybran land factory whose floor the hillside came up

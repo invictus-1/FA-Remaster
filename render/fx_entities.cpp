@@ -2041,6 +2041,11 @@ void FxEntities::Drive(uint32_t unit, const std::vector<Vec3>& loop, double star
   e->distance = e->speed = 0;
   e->horz = 3;
   e->driveDone = false;
+  // (its first tick on the move tells it the terrain type under it, as from none: the game's
+  // OnTerrainTypeChange is what sets the unit's TerrainType, and FAF's tread marks wait for that.
+  // The original engine has that callback - its name is in the game's executable; that it tells a
+  // unit its first terrain type so is INFERRED)
+  e->terrainCode = -2;
   // set on the loop's start, facing along it
   Vec3 at, way;
   m.OnLoop(*e, 0, &at, &way);
