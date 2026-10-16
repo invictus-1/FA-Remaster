@@ -673,6 +673,18 @@ Options, and a replay with the mark is launched with `fixes = 1` (without it: -1
 rule, so the original's recordings play as before). Checked: the kept test replay is played
 "with the engine's script fixes, as it was played" (the host's log line at the launch).
 
+### 24. A crash (segmentation fault) when the stock AI meets a big threat, since d7e3624
+From the interface chat, 2026-10-15. BLOCKING for Chris's games against the stock AI: his build
+stays on the one before d7e3624 until it is fixed. The ui suite's victory test crashes every
+time with main at 83b2250 and passes with main before d7e3624 (the classic AI's threat map and
+platoons). The same game without the threat (templates.lua, 6900 frames, same session and
+seed) runs fine. The test's trigger is twelve xel0305 made by the game's cheat callback beside
+the AI's commander. Repro from `fa-remaster-ui`, built from main at 83b2250 (`py ui/build_ui.py`):
+`build-ui/moho64ui.exe --init <LAB>/offline/bin/init_lab.lua --prefs <copy of _scratch/ui/menu.prefs> --stage setup --size 1920x1080 --quiet --session <LAB>/_scratch/ui/session_ai_cheats.lua --seed 7 --game-lua ui/tests/victory.lua --frames 2400 --log v.log`
+It exits with 139 (segmentation fault). The log stops in the Cybran AI's AIExecuteBuildStructure
+lines (its last ~900 lines; before d7e3624 the whole log was ~400 lines: the AI was quieter). I have
+no debugger here for a stack. Logs: `<my scratchpad>/v_merged.log` (crash), `v_before.log` (passes).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
