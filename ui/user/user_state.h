@@ -277,12 +277,20 @@ struct FramePacing {
   double frameMs = 8;         // otherwise the shortest frame; 0: as fast as it goes
 };
 FramePacing& Pacing();
+// The performance statistics drawn over the interface (docs/performance-lessons.md 5.5 and 6):
+// the console's remaster_stats [on|off] (no value: toggles), bound to a key by the program's own
+// key action "remaster_stats" (Ctrl-Alt-S at first). Drawn by the window's loop (run_window.cpp).
+struct StatsOverlay {
+  bool on = false;
+};
+StatsOverlay& Overlay();
 // Where a live window's frame time goes (for the log at the end of a window run): the world's
 // picture (WorldPicture::Draw: the renderer's frame and its read-back), in seconds and calls.
 struct FrameTimes {
   double worldDraw = 0;
   int worldDraws = 0;
   int heldPictures = 0;  // frames whose moment lay past the newest beat there was: the world stood still
+  double simLuaKB = 0;   // the simulation's Lua heap after the last beat (lua_getgccount; the stats overlay)
   // the game's beats: the simulation's own, the picture's per-beat update, the sounds
   double simBeats = 0, pictureBeats = 0, soundBeats = 0;
   int beats = 0;

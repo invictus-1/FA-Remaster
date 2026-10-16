@@ -593,6 +593,12 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  if (Upper(name) == "REMASTER_STATS") {  // the performance statistics over the interface (StatsOverlay)
+    const size_t a = rest.find_first_not_of(" \t");
+    bool& on = Overlay().on;
+    on = a == std::string::npos ? !on : !(rest[a] == '0' || Upper(rest.substr(a)).rfind("OFF", 0) == 0 || Upper(rest.substr(a)).rfind("FALSE", 0) == 0);
+    return;
+  }
   {  // the custom names' four (CustomNameStyle; a value left out leaves it, the switch toggles)
     const std::string key = Upper(name);
     const size_t at = rest.find_first_not_of(" \t");

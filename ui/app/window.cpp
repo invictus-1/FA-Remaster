@@ -227,6 +227,21 @@ bool Window::ScreenSize(int* width, int* height) {
   return *width > 0 && *height > 0;
 }
 
+size_t Window::ProcessMemory() {
+  // (K32GetProcessMemoryInfo, kernel32's own since Windows 7: no psapi to link.)
+  struct Counters {
+    DWORD cb;
+    DWORD pageFaultCount;
+    SIZE_T peakWorkingSetSize, workingSetSize, quotaPeakPagedPoolUsage, quotaPagedPoolUsage,
+        quotaPeakNonPagedPoolUsage, quotaNonPagedPoolUsage, pagefileUsage, peakPagefileUsage;
+  };
+  using Get = BOOL(WINAPI*)(HANDLE, Counters*, DWORD);
+  static const Get get = reinterpret_cast<Get>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "K32GetProcessMemoryInfo")));
+  Counters c{};
+  c.cb = sizeof c;
+  return get && get(GetCurrentProcess(), &c, sizeof c) ? static_cast<size_t>(c.workingSetSize) : 0;
+}
+
 int Window::RefreshRate() {
   DEVMODEW mode{};
   mode.dmSize = sizeof mode;

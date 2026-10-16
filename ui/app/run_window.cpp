@@ -11,10 +11,86 @@
 #include "draw/draw.h"
 #include "draw/recorder.h"
 #include "maui/input.h"
+#include "maui/font.h"
 #include "script/script_state.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
+namespace {
+
+// The performance statistics drawn over the interface (StatsOverlay, the console's remaster_stats):
+// the frames of the last second or so, the parts of a frame (smoothed), the beats of the last whole
+// second, the memory in use; and the world's picture's own lines (hooks.statsLines).
+class PerfStats {
+ public:
+  using Clock = std::chrono::steady_clock;
+  void NoteFrame(double frameMs) {
+    ring_[at_++ % kRing] = static_cast<float>(frameMs);
+    if (count_ < kRing) ++count_;
+  }
+  void NoteParts(double scriptMs, double drawMs, double hostMs, double showMs) {
+    auto smooth = [](double& v, double x) { v = v > 0 ? v * 0.95 + x * 0.05 : x; };
+    smooth(script_, scriptMs), smooth(draw_, drawMs), smooth(host_, hostMs), smooth(show_, showMs);
+  }
+  void Draw(SoftwareTarget& target, const WindowHooks& hooks, lua_State* interfaceL) {
+    const auto now = Clock::now();
+    if (now - second_ >= std::chrono::seconds(1)) {  // (the beats and the memory once a second)
+      const FrameTimes& t = Times();
+      beats_ = t.beats - before_.beats;
+      simMs_ = beats_ ? (t.simBeats - before_.simBeats) * 1000.0 / beats_ : 0;
+      pictureMs_ = beats_ ? (t.pictureBeats - before_.pictureBeats) * 1000.0 / beats_ : 0;
+      soundMs_ = beats_ ? (t.soundBeats - before_.soundBeats) * 1000.0 / beats_ : 0;
+      before_ = t, second_ = now;
+      memoryMB_ = static_cast<double>(Window::ProcessMemory()) / (1024.0 * 1024.0);
+    }
+    std::vector<float> sorted(ring_, ring_ + count_);
+    std::sort(sorted.begin(), sorted.end());
+    auto at = [&](double share) { return sorted.empty() ? 0.0f : sorted[std::min(sorted.size() - 1, static_cast<size_t>(share * sorted.size()))]; };
+    double mean = 0;
+    for (float ms : sorted) mean += ms;
+    mean = sorted.empty() ? 0 : mean / sorted.size();
+    char buf[256];
+    std::vector<std::string> lines;
+    std::snprintf(buf, sizeof buf, "frame %.2f ms (%.0f a second)   95%% %.2f   99%% %.2f   longest %.2f", at(0.5), mean > 0 ? 1000.0 / mean : 0.0,
+                  at(0.95), at(0.99), sorted.empty() ? 0.0f : sorted.back());
+    lines.push_back(buf);
+    std::snprintf(buf, sizeof buf, "interface: scripts %.2f   drawing %.2f   the host %.2f   showing %.2f ms", script_, draw_, host_, show_);
+    lines.push_back(buf);
+    if (beats_ > 0) {
+      std::snprintf(buf, sizeof buf, "beat: simulation %.1f   picture %.1f   sounds %.1f ms   (%d a second)", simMs_, pictureMs_, soundMs_, beats_);
+      lines.push_back(buf);
+    }
+    std::snprintf(buf, sizeof buf, "memory %.0f MB   Lua: interface %.1f MB, simulation %.1f MB", memoryMB_,
+                  interfaceL ? lua_getgccount(interfaceL) / 1024.0 : 0.0, Times().simLuaKB / 1024.0);
+    lines.push_back(buf);
+    if (hooks.statsLines) hooks.statsLines(&lines);
+    // A dark box at the left under the game's top panels, white text with a shadow.
+    const char* font = "Arial";
+    const int size = 12;
+    const FontMetrics m = GetFontMetrics(font, size);
+    float width = 0;
+    for (const std::string& s : lines) width = std::max(width, StringAdvance(font, size, s));
+    const float x = 10, y = 150, pad = 6, line = std::ceil(m.height) + 1;
+    target.FillRect({x - pad, y - pad, x + width + pad, y + line * static_cast<float>(lines.size()) + pad}, 0xb0000000u);
+    for (size_t i = 0; i < lines.size(); ++i) {
+      const float base = y + line * static_cast<float>(i) + m.ascent;
+      DrawString(target, font, size, lines[i], x + 1, base + 1, 0xff000000u);
+      DrawString(target, font, size, lines[i], x, base, 0xffe8e8e8u);
+    }
+  }
+
+ private:
+  static constexpr int kRing = 240;
+  float ring_[kRing] = {};
+  int at_ = 0, count_ = 0;
+  double script_ = 0, draw_ = 0, host_ = 0, show_ = 0;
+  Clock::time_point second_{};
+  FrameTimes before_;
+  int beats_ = 0;
+  double simMs_ = 0, pictureMs_ = 0, soundMs_ = 0, memoryMB_ = 0;
+};
+
+}  // namespace
 
 // Open a window on the interface and run until it is closed, or for maxFrames frames when that
 // is not 0. Each frame: input, one frame of the user state with the time that really passed, the
@@ -94,6 +170,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   std::vector<float> frameMs;  // each counted frame's time from the one before (for the stutter: the longest)
   auto lastShown = Clock::now();
   auto uiLast = last;  // the interface's last step (frames shown during a beat leave it out)
+  PerfStats stats;     // (shown when the console's remaster_stats is on)
   while ((maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     // While the game's beat runs on its own thread (game_session.h, BeatRunning), a frame only
     // shows the world, moving on between the beats, with the interface as it stands: no input, no
@@ -152,6 +229,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const auto te = Clock::now();
       target->ResetTouched();
       if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+      if (Overlay().on) stats.Draw(*target, hooks, user.L());
       changed = changed.Union(target->Touched());
       hostDrawn = target->Touched();  // (painted over by the interface again next frame)
       hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
@@ -163,6 +241,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       updatePointer(current());
       window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
       drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
+      auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count() * 1000.0; };
+      stats.NoteParts(ms(now, t0), ms(t0, te), ms(te, tp), ms(tp, Clock::now()));
       ++frames;
     }
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
@@ -177,7 +257,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     }
     {
       const auto shownAt = Clock::now();
-      if (frames > statsFrom) frameMs.push_back(static_cast<float>(std::chrono::duration<double>(shownAt - lastShown).count() * 1000.0));
+      const double ms = std::chrono::duration<double>(shownAt - lastShown).count() * 1000.0;
+      if (frames > statsFrom) frameMs.push_back(static_cast<float>(ms));
+      stats.NoteFrame(ms);
       lastShown = shownAt;
     }
     // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as

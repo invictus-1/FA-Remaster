@@ -1597,6 +1597,10 @@ CustomNameStyle& CustomNames() {
   static CustomNameStyle style;
   return style;
 }
+StatsOverlay& Overlay() {
+  static StatsOverlay overlay;
+  return overlay;
+}
 FramePacing& Pacing() {
   static FramePacing pacing;
   return pacing;

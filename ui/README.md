@@ -92,6 +92,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   Measured in the renderer's eight-army M28 game at beat 6000 (1600x900): the interface's drawing
   8.18 -> 0.48 ms a frame; frame to frame 4.17 / 4.25 / 5.05 / 5.88 ms (middle / 95% / 99% /
   longest; with the beats on the main thread 5.4 / 33 / 54 / 86 ms).
+  The performance statistics over the interface (docs/performance-lessons.md 5.5 and 6): the
+  console's `remaster_stats [on|off]`, the program's own key action "Show performance
+  statistics" (Ctrl-Alt-S at first; added to the game's key actions by `ui/data/hook/lua/keymap`):
+  frame times of the last second (middle, 95%, 99%, longest), the frame's parts (scripts,
+  drawing, the host, showing), the beats of the last second (simulation, picture, sounds), the
+  memory in use and both Lua heaps; the renderer's own numbers join when he gives them.
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).

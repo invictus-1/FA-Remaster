@@ -2,8 +2,11 @@
 // mouse. This is the simplest thing that opens; the renderer track's window and device take its
 // place later. Windows only for now.
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <vector>
 #include <map>
 #include <utility>
 
@@ -34,6 +37,8 @@ class Window {  // (the host's one window)
   // How many times a second the main screen shows a new picture (its refresh rate); 60 when it
   // cannot be told.
   static int RefreshRate();
+  // The program's memory in use (its working set), in bytes; 0 when not known.
+  static size_t ProcessMemory();
   // The system's handle of the window (an HWND on Windows); nullptr before Create.
   void* Handle() const { return hwnd_; }
   // Handle the waiting window messages (the callbacks run from here). False once the window is closed.
@@ -97,6 +102,8 @@ struct WindowHooks {
   // time that passed goes to `clock` (the picture's moment moves on; eachFrame gets only the rest).
   std::function<bool()> busy;
   std::function<void(double seconds)> clock;
+  // More lines for the performance statistics (the world's picture's own numbers); unset: none.
+  std::function<void(std::vector<std::string>* lines)> statsLines;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,

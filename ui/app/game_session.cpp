@@ -977,6 +977,7 @@ void GameSession::NotePictureBeat() {
 void GameSession::NoteBeatHere() {
   CopyHeights();
   CopyAllies();
+  if (sim_ && sim_->L()) Times().simLuaKB = static_cast<double>(lua_getgccount(sim_->L()));
   const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
