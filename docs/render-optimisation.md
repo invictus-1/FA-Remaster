@@ -161,6 +161,14 @@ Measured on this PC (Ryzen 9 9950X3D, RTX 4090), eight-army M28 game ten minutes
   - **Verdict:** inside 60 fps for the renderer at the engine's B4 scale. The simulation will be the limit there
     long before. Tanks that move and pose cost more (bones, effects), which shows in B3-B5 once the engine has
     them.
+- **Bones on several cores (2026-10-16):** the posed models' bone matrices are made on the worker
+  threads, and which posed models some pass sees is tested there too. The matrices are written straight
+  into the frame's copy of the bone buffer (`gfx::Device::WriteBuffer`, both backends), not into an array
+  that was then copied. Viewer `--crowd UEL0201=10000 --turn turret`, 1080p, processor:
+  - bones: 1.81 -> 0.46 ms (listing 0.24, matrices 0.22);
+  - whole frame: 5.03 -> 4.40 ms.
+
+  Pictures are pixel for pixel the same on Direct3D 12 and on Vulkan.
 - **How the card is measured now:** other programs on the card (other chats' replays and tests) raise the
   average of a run by up to 2-3 times. `--timings` also reports each stage's middle and lowest frame, and
   the A/B script waits for an idle card before each run; the lowest frame is what a change is judged by.
