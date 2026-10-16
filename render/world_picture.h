@@ -248,11 +248,31 @@ class WorldPicture {
     uint32_t unit;  // entity id
     float x, y;
   };
+
+  // What the last picture drawn cost and held, for a host's overlay of numbers (the interface's).
+  struct Stats {
+    // the processor, milliseconds: waiting for the card to have a frame free, making the frame
+    // ready (the beats blended, units, effects listed), drawing it (handing it to the card), and
+    // ending it (the interface laid over it, shown)
+    float waitMs = 0, prepareMs = 0, drawMs = 0, endMs = 0;
+    // the card, the newest frame it has finished: the whole of it and its stages in their order, ms
+    float gpuMs = 0;
+    std::vector<std::pair<const char*, float>> gpuStages;
+    int drawCalls = 0;
+    int models = 0;  // drawn in the scene (units, scenery, effects' meshes)
+    long long triangles = 0, shadowTriangles = 0, groundTriangles = 0;
+    int particles = 0, emitters = 0;
+    long long textureBytes = 0;  // the textures made (all their sizes)
+    long long cardBytes = 0;     // the card's memory this program uses (0: not known)
+    int width = 0, height = 0;
+  };
+  const Stats& LastStats() const;
   void LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out);
 
  private:
   void RenderWorld(const Camera& camera, int width, int height, double tick);
   void PrepareWorld(const Camera& camera, int width, int height, double tick);  // (RenderWorld up to the drawing)
+  void TakeStats(float endMs);  // (after a frame has ended)
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

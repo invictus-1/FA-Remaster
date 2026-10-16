@@ -287,6 +287,13 @@ class Memory {
       if (b.memory) vkFreeMemory(device_, b.memory, nullptr);
     blocks_.clear();
   }
+  // the blocks taken of the card's own memory, in bytes
+  uint64_t DeviceLocalBytes() const {
+    uint64_t sum = 0;
+    for (const Block& b : blocks_)
+      if (b.memory && (props_.memoryTypes[b.type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) sum += b.size;
+    return sum;
+  }
   uint32_t Type(uint32_t bits, VkMemoryPropertyFlags want) const {
     for (uint32_t i = 0; i < props_.memoryTypeCount; ++i)
       if ((bits & (1u << i)) && (props_.memoryTypes[i].propertyFlags & want) == want) return i;
@@ -436,6 +443,7 @@ class VulkanDevice final : public Device {
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   void Mark(const char* name) override;
+  uint64_t MemoryInUse() override { return memory_.DeviceLocalBytes(); }
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override { *out = lastTimes_; }
 
  private:
@@ -2165,11 +2173,13 @@ bool VulkanDevice::PrepareDraw() {
 
 void VulkanDevice::Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) {
   if (!PrepareDraw()) return;
+  ++draws_;
   vkCmdDraw(frames_[cur_].cmd, vertexCount, instances, firstVertex, 0);
 }
 
 void VulkanDevice::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) {
   if (!PrepareDraw()) return;
+  ++draws_;
   vkCmdDrawIndexed(frames_[cur_].cmd, indexCount, instances, firstIndex, baseVertex, 0);
 }
 
@@ -2182,6 +2192,8 @@ void VulkanDevice::Mark(const char* name) {
 
 void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   if (!inFrame_) return;
+  drawsLast_ = draws_;
+  draws_ = 0;
   Frame& f = frames_[cur_];
   EndRendering();
   ReleasePassTargets();
