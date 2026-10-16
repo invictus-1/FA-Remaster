@@ -1974,6 +1974,7 @@ void PoseAdvance(Unit* u) {
 }
 
 void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims);
+bool BuilderArmSlotStep(Sim& sim, Unit* u, BuilderArm* a);
 
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
@@ -2085,11 +2086,12 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
       if (s->alive) SliderStep(u, s);
       continue;
     }
-    if (e.kind == 4) {  // the arm's angles from this beat's MoveManipulator
+    if (e.kind == 4) {  // the arm's MoveManipulator in its slot (BuilderArmsTick read its aim direction)
       BuilderArm* a = static_cast<BuilderArm*>(e.p);
+      const bool stepped = a->alive && BuilderArmSlotStep(sim, u, a);
       const int call = a->trackCall;  // (its step's tracking callback, after the bones turned: see ArmStep)
       a->trackCall = 0;
-      if (a->alive && a->enabled) {
+      if (!stepped && a->alive && a->enabled) {  // (no step this beat: the last angles)
         PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
         PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
       }
@@ -3423,6 +3425,7 @@ void RegisterProjectileBindings(lua_State* L);
 
 // ---- rotators (CRotateManipulator) ------------------------------------------------------------
 
+
 // MoveManipulator 0x643860
 void RotatorStep(Unit* u, RotateManipulator* r) {
   if (!r->enabled || r->bone < 0 || !u->skeleton || r->bone >= u->skeleton->Count()) return;
@@ -3593,11 +3596,11 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
   if (static_cast<int>(u->poseQ.size()) != n) PoseReset(u);
   const auto& bones = u->skeleton->bones();
   int r = 0;
+  (void)bones;
   if (a->yawBone >= 0 && a->yawBone < n) {
-    // the yaw bone's frame this tick, before this manipulator's own rotation
-    u->poseQ[static_cast<size_t>(a->yawBone)] = bones[static_cast<size_t>(a->yawBone)].localRot;
-    if (a->pitchBone >= 0 && a->pitchBone < n)
-      u->poseQ[static_cast<size_t>(a->pitchBone)] = bones[static_cast<size_t>(a->pitchBone)].localRot;
+    // the yaw bone's frame this tick, before this manipulator's own rotation: the step runs in the arm's slot of
+    // the unit's manipulators (UnitAimTickManipulators), on this beat's pose as the lower-precedence ones (the walk
+    // animation) left it
     Vec3 p;
     Quat q;
     BoneWorld(u, a->yawBone, &p, &q);
@@ -3611,16 +3614,14 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
       }
     }
     r = ArmAxis(a, dir, local, true, a->hSlew * (slow ? 0.25f : 1.0f), q);
-    u->poseQ[static_cast<size_t>(a->yawBone)] =
-        ComposeQ(bones[static_cast<size_t>(a->yawBone)].localRot, AxisAngle({0, 1, 0}, a->heading));
+    PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));  // CAniPoseBone::Rotate 0x54bc00: local x q
   }
   if (a->pitchBone >= 0 && a->pitchBone < n) {
     Vec3 p;
     Quat q;
     BoneWorld(u, a->pitchBone, &p, &q);
     r |= ArmAxis(a, dir, local, false, a->pSlew * (slow ? 0.25f : 1.0f), q);
-    u->poseQ[static_cast<size_t>(a->pitchBone)] =
-        ComposeQ(bones[static_cast<size_t>(a->pitchBone)].localRot, AxisAngle({1, 0, 0}, -a->pitch));
+    PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
   }
   bool moving = (r & 2) != 0;
   // Step 0x6361a6 / 0x6361e5: the callbacks come from the arm's own MoveManipulator, which runs in its precedence
@@ -3637,26 +3638,32 @@ bool ArmStep(Sim& sim, BuilderArm* a, Vec3 dir, bool local, bool slow) {
 
 }  // namespace
 
+// MoveManipulator 0x636590, split in two. Here, while the pose is still last beat's (before UnitAimTick rebuilds it),
+// AimDir 0x6366f0 reads the aim bone from it; the step itself (Step 0x635fe0: the heading and pitch, the bones'
+// rotation, the on-target flag) runs in the arm's slot among the unit's manipulators (BuilderArmSlotStep), on this
+// beat's pose as the lower-precedence manipulators left it. (Seen: Economy 3562, SACU 0x26 still walking when it
+// starts to aim; its yaw bone Torso is moved by the walk animation, precedence 0. With the frame taken from the rest
+// pose ours' first heading target was -3.005 against the original's -2.950 (the 'R' records), the arm came on target
+// a beat later and the structure 0x4f was made at 3568 instead of 3567. Every arm start of a walking builder in that
+// replay differed by 4..8 degrees, every start of a standing one agreed.)
 void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorOri) {
+  (void)sim;
+  (void)priorPos;
+  (void)priorOri;
   auto& v = u->builderArms;
   v.erase(std::remove_if(v.begin(), v.end(), [](BuilderArm* a) { return !a->alive; }), v.end());
   if (v.empty() || !HasBuilderObject(u) || u->dead) return;
   for (size_t i = 0; i < v.size(); ++i) {
     BuilderArm* a = v[i];
     if (!a->enabled || !a->alive) continue;
+    a->stepPending = true;
     const Vec3 aim = u->armAim;
     if (aim.x == 0 && aim.y == 0 && aim.z == 0 && !std::signbit(aim.x) && !std::signbit(aim.y) &&
         !std::signbit(aim.z)) {  // (bitwise compare with the zero vector)
-      ArmStep(sim, a, {0, 0, 1}, true, true);
-      {
-        static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
-        if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady)
-          Logf(LogLevel::Info, "armdbg %u zero-target tick: on target 1 -> 0", sim.tick());
-      }
-      u->armReady = false;
-      a->onTarget = false;
+      a->stepZero = true;
       continue;
     }
+    a->stepZero = false;
     // AimDir 0x6366f0: from the aim bone in last beat's pose (actor+8: last beat's transform and rotations)
     Vec3 p;
     Quat q;
@@ -3671,16 +3678,35 @@ void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorO
     }
     Vec3 d = Sub(aim, p);
     float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
-    d = len > 0 ? Mul(d, 1.0f / len) : Vec3{};
-    bool on = ArmStep(sim, a, d, false, false);
+    a->stepDir = len > 0 ? Mul(d, 1.0f / len) : Vec3{};
+  }
+}
+
+// The arm's step in its slot (see BuilderArmsTick): false when BuilderArmsTick did not ask for one this beat (the
+// arm then only puts its last angles on the bones).
+bool BuilderArmSlotStep(Sim& sim, Unit* u, BuilderArm* a) {
+  if (!a->stepPending) return false;
+  a->stepPending = false;
+  if (a->stepZero) {
+    ArmStep(sim, a, {0, 0, 1}, true, true);
     {
       static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
-      if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady != on)
-        Logf(LogLevel::Info, "armdbg %u tracking tick: on target %d -> %d", sim.tick(), u->armReady ? 1 : 0, on ? 1 : 0);
+      if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady)
+        Logf(LogLevel::Info, "armdbg %u zero-target tick: on target 1 -> 0", sim.tick());
     }
-    a->onTarget = on;
-    u->armReady = on;
+    u->armReady = false;
+    a->onTarget = false;
+    return true;
   }
+  bool on = ArmStep(sim, a, a->stepDir, false, false);
+  {
+    static const long dbg = getenv("MOHO64_DEBUG_ARM") ? atol(getenv("MOHO64_DEBUG_ARM")) : -1;
+    if (dbg >= 0 && static_cast<long>(u->id) == dbg && u->armReady != on)
+      Logf(LogLevel::Info, "armdbg %u tracking tick: on target %d -> %d", sim.tick(), u->armReady ? 1 : 0, on ? 1 : 0);
+  }
+  a->onTarget = on;
+  u->armReady = on;
+  return true;
 }
 
 void SetArmAimTarget(Sim& sim, Unit* u, Vec3 p) {
