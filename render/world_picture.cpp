@@ -33,6 +33,9 @@ struct WorldPicture::Impl {
   // display, and its size
   int hostSystem = -1;
   void* hostDisplay = nullptr;
+  std::vector<std::string> hostExtensions;                 // UseHostSurface
+  std::function<uint64_t(void* instance)> hostSurface;
+  bool HostShows() const { return hostWindow || hostSurface; }  // (the picture is shown in the host's window)
   int hostWidth = 0, hostHeight = 0;
   std::unique_ptr<gfx::Device> device;
   // the host's interface over the world (SetInterfaceLayer)
@@ -91,9 +94,11 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   dd.width = 640;
   dd.height = 360;
   dd.vsync = false;
-  if (m.hostWindow) {  // (the host's window: the picture is shown there, at its size)
+  if (m.HostShows()) {  // (the host's window: the picture is shown there, at its size)
     dd.window = m.hostWindow;
     dd.display = m.hostDisplay;
+    dd.hostExtensions = m.hostExtensions;
+    dd.hostSurface = m.hostSurface;
     if (m.hostSystem >= 0) dd.windowSystem = static_cast<gfx::DeviceDesc::WindowSystem>(m.hostSystem);
 #if defined(_WIN32)
     RECT r{};
@@ -120,7 +125,7 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   }
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
-  if (m.hostWindow) {  // the interface laid over the world: its pixels as they are, over what is there
+  if (m.HostShows()) {  // the interface laid over the world: its pixels as they are, over what is there
     static const char kLayer[] = R"hlsl(
 Texture2D layer : register(t0);
 float4 VS(uint id : SV_VertexID) : SV_Position {
@@ -140,7 +145,7 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
     if (!m.layerPipeline) return false;
   }
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
-  if (m.hostWindow && mapPath.empty()) return true;
+  if (m.HostShows() && mapPath.empty()) return true;
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
@@ -175,6 +180,16 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
 
 void WorldPicture::UseWindow(void* hwnd) { impl_->hostWindow = hwnd; }
 
+void WorldPicture::UseHostSurface(std::vector<std::string> instanceExtensions, std::function<uint64_t(void* vkInstance)> createSurface, int width,
+                                  int height) {
+  impl_->hostExtensions = std::move(instanceExtensions);
+  impl_->hostSurface = std::move(createSurface);
+  impl_->hostSystem = static_cast<int>(gfx::DeviceDesc::WindowSystem::Host);
+  impl_->hostWidth = width;
+  impl_->hostHeight = height;
+  impl_->vulkan = true;
+}
+
 void WorldPicture::UseNativeWindow(int system, void* window, void* display, int width, int height) {
   impl_->hostWindow = window;
   impl_->hostSystem = system;
@@ -185,7 +200,7 @@ void WorldPicture::UseNativeWindow(int system, void* window, void* display, int 
 
 void WorldPicture::SetVsync(bool on) {
   impl_->vsync = on;
-  if (impl_->device && impl_->hostWindow) impl_->device->SetVsync(on);
+  if (impl_->device && impl_->HostShows()) impl_->device->SetVsync(on);
 }
 
 void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {
@@ -218,7 +233,7 @@ void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int heig
 
 void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
-  if (!m.device || !m.hostWindow) return;
+  if (!m.device || !m.HostShows()) return;
   width = std::max(width, 16);
   height = std::max(height, 16);
   if (m.world) {
@@ -603,7 +618,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
     w.Render();
-    m.device->EndFrame(&m.capture, !m.hostWindow);  // (in the host's window: read back, not shown)
+    m.device->EndFrame(&m.capture, !m.HostShows());  // (in the host's window: read back, not shown)
     w.iconsOn = icons;
     w.shadowsOn = shadows;
     w.sightShown = true;

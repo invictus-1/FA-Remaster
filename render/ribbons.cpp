@@ -138,14 +138,16 @@ bool Ribbons::Init(std::string* error) {
 // the texture per world unit; UShift and VShift slide a beam's texture, per tick.
 bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* color, const std::string& faction) {
   const Kind* kind = Blueprint(blueprint, faction);
-  if (!kind->ok || kind->blend != 2) return false;
+  // (what adds its light glows; so does a premultiplied beam, which covers what is behind it and adds its own
+  // light over it: a mod's beam made so that red over grass stays red keeps its light on the ground)
+  if (!kind->ok || (kind->blend != 2 && !(kind->blend == 3 && !kind->trail))) return false;
   rampPath->clear();
   if (kind->trail && kind->hot && tracers) {  // (a tracer glows warm, whatever its white ramp says)
     *color = Vec3{1.0f, 0.62f, 0.28f};
     return true;
   }
   if (kind->trail) *rampPath = kind->rampPath;
-  else *color = Vec3{kind->startColor[0], kind->startColor[1], kind->startColor[2]} * std::min(kind->startColor[3] * 4, 1.0f);
+  else *color = Vec3{kind->startColor[0], kind->startColor[1], kind->startColor[2]} * (kind->blend == 3 ? 1.0f : std::min(kind->startColor[3] * 4, 1.0f));  // (premultiplied: its colour is weighed already)
   return kind->trail ? !rampPath->empty() : true;
 }
 

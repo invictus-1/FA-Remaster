@@ -21,6 +21,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -164,7 +165,10 @@ struct DeviceDesc {
   // The window, as its system has it. Windows: its HWND in `window`. Elsewhere (Vulkan): Xlib, the
   // X11 Display* in `display` and the Window id in `window`; Wayland, the wl_display* in `display` and
   // the wl_surface* in `window`; Metal (macOS, through MoltenVK), the view's CAMetalLayer* in `window`.
-  enum class WindowSystem : uint8_t { Win32, Xlib, Wayland, Metal };
+  // Host (Vulkan, any system): the host makes the window's surface itself (SDL3's SDL_Vulkan_GetInstanceExtensions
+  // and SDL_Vulkan_CreateSurface): `hostExtensions` the instance extensions its window needs, `hostSurface` makes
+  // the surface for the VkInstance it is given and returns the VkSurfaceKHR (0: it could not); `window` unused.
+  enum class WindowSystem : uint8_t { Win32, Xlib, Wayland, Metal, Host };
 #if defined(_WIN32)
   WindowSystem windowSystem = WindowSystem::Win32;
 #elif defined(__APPLE__)
@@ -174,6 +178,8 @@ struct DeviceDesc {
 #endif
   void* window = nullptr;
   void* display = nullptr;
+  std::vector<std::string> hostExtensions;
+  std::function<uint64_t(void* instance)> hostSurface;
   int width = 0, height = 0;
   bool vsync = true;
   bool debug = false;      // the API's validation layer, when installed

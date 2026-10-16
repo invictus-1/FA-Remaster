@@ -28,7 +28,8 @@
 // as the engine makes them (FxEntities::InitWeapons), facing its target when it is an aircraft or one of its
 // weapons cannot turn all round (else square to the view, so that its turrets are seen turning); a second into each play its
 // weapons get the point `to` as their target and fire as the engine lets them, its manual-fire weapons are
-// fired by an order; two seconds before the play's end they lose the target again.
+// fired by an order; two seconds before the play's end they all lose the target again (one that unpacked to
+// fire packs up then).
 #pragma once
 
 #include <functional>
@@ -84,7 +85,8 @@ struct FxStandSetup {
   // weapons `fireWeapons` names (their blueprints' Label; none: every weapon that shoots at the ground and is
   // no death weapon) given the point as their target `fireAt` seconds into each play, and losing it again
   // `holdAt` seconds into it (0: two seconds before the play's end); the manual-fire weapons `manual` names
-  // fired at it once each play, `fireAt` seconds into it, as a player's order fires them. `toGiven`: `to` was
+  // fired at it once each play, `fireAt` seconds into it, as a player's order fires them, and losing it at
+  // `holdAt` as the others do (a gun that unpacked to fire packs up again then). `toGiven`: `to` was
   // given (else it is put in reach of the weapons: square to the way it was given, to the camera's right; with
   // `compare` that way)
   std::string fire;

@@ -4,6 +4,43 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, renderer request 29: what the Linux and macOS host hands the Vulkan picture (2026-10-16)
+
+Your suggestion, as you put it: `WorldPicture::UseHostSurface(std::vector<std::string> instanceExtensions,
+std::function<uint64_t(void* vkInstance)> createSurface, int width, int height)`, before Open, in place of
+UseWindow / UseNativeWindow. No SDL in render/.
+- **instanceExtensions:** what `SDL_Vulkan_GetInstanceExtensions` gives. Each is checked against what the system's
+  Vulkan offers; a missing one fails Open, naming it. Ones the picture asks for itself (VK_KHR_surface) are not
+  listed twice.
+- **createSurface:** called once, with the picture's VkInstance as a `void*`. Return the VkSurfaceKHR as 64 bits,
+  for example `VkSurfaceKHR s; SDL_Vulkan_CreateSurface(window, (VkInstance)instance, nullptr, &s); return (uint64_t)s;`,
+  and 0 if it failed. The picture destroys the surface with its instance.
+- **width, height:** the drawable's size in pixels at first (`SDL_GetWindowSizeInPixels`). Later sizes come with each
+  DrawToWindow, as on Windows (the swap chain follows them); no separate call is needed.
+- **Everything else as today:** SetInterfaceLayer and DrawToWindow. UseHostSurface implies Vulkan, so SetVulkan is
+  not needed.
+- **Built for Linux (x86_64) and macOS (arm64)** with the cross-compiler. Untried: there is no Linux or Mac here. The
+  native-handle way (UseNativeWindow: Xlib, Wayland, CAMetalLayer) stays too.
+
+## To visuals, section 33: a manual-fire beam that never shows; beams' ends; premultiplied beams' light (2026-10-16)
+
+- **The beam that never showed was the blueprint's, and the game does the same.** With `RackSalvoReloadTime = 0`
+  the sequence is:
+  - DefaultProjectileWeapon's firing state turns the beam on (PlayFxBeamStart) and then, with no reload time and a
+    charge time, goes straight to the idle state;
+  - DefaultBeamWeapon's idle state calls PlayFxBeamEnd at once, in the same tick, before any beam check: no
+    OnImpact, nothing drawn.
+  
+  The fix: `RackSalvoReloadTime` at least the beam's `BeamLifetime`. A manual-fire weapon keeps its target after
+  its shot; one that locks the unit's motion while unpacked packs up only when it loses it, so its script must
+  drop it (ResetTarget) to close.
+- **The stand:** at `--fx-hold-at` (two seconds before a play ends) manual-fire weapons lose their target too, as
+  at another order, so a scripted gun's closing is seen.
+- **A weapon beam's two ends now face along the beam,** from its start to its end, as the game's beam entity on
+  the muzzle does. Before, emitters on them pointed along world +z; this shows in games too.
+- **Premultiplied weapon beams (Blendmode 4) light the ground** in the modern look, as adding ones do, in their
+  colour. Of the game's own files only two non-weapon beams use it, so the game's weapons are unchanged.
+
 ## To visuals, sections 31 and 32: the stand fires a unit's weapons; a personal shield seen only where it is hit (2026-10-16)
 
 **31: `--fx-fire <unit> [weapon label ...]`** (a mod's unit too, with `--mods`). Options at the top of `render/main.cpp`.

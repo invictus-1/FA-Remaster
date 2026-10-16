@@ -428,7 +428,9 @@ function __fxOrder(id, x, y, z, labels, manual, stop)
     local key = string.lower(f.label)
     local line
     if stop then
-      if not bp.ManualFire then __fxSetTarget(w, nil) end
+      -- (a manual-fire weapon too: after its shot it holds its target until the unit is given another order, and
+      -- one that unpacked to fire packs up again only when it loses it - a scripted gun closes then)
+      __fxSetTarget(w, nil)
     elseif manualNamed[key] then
       __fxOrderFire(w, t)
       line = 'fired by an order'
