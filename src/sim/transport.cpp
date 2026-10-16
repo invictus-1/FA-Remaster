@@ -1033,7 +1033,7 @@ void AttachedUnitsTick(Sim& sim) {
     if (u->parentBone == -1 && pu->motion.bp) bp = Add(bp, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
     Vec3 np = bp;
     Quat nq = bq;
-    if (u->ownBone >= -1) AttachedTransform(u, bp, bq, &np, &nq);
+    AttachedTransform(u, bp, bq, &np, &nq);  // (any own bone: 0x67a020 normalises also for -2)
     u->position = np;
     u->orientation = nq;
     if (np.x != before.x || np.y != before.y || np.z != before.z) u->lastMoveTick = sim.tick();

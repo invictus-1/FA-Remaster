@@ -3437,7 +3437,7 @@ int l_AttachBoneTo(lua_State* L) {
     Vec3 np = bp;
     Quat nq = bq;
     // (the unit hangs by its own bone: see the attached branch of Sim::Tick's unit loop)
-    if (u->ownBone >= -1) AttachedTransform(u, bp, bq, &np, &nq);
+    AttachedTransform(u, bp, bq, &np, &nq);  // (any own bone: 0x67a020 normalises also for -2)
     u->position = np;
     u->orientation = nq;
   }
