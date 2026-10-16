@@ -123,7 +123,8 @@
 //           or as the words after the unit; none: every weapon that shoots at the ground and is no death weapon)
 //           get the point as their target, their turrets turn to it and they fire as their own scripts and the
 //           engine's fire clock let them (shots with their trails and hits, beams with their emitters);
-//           --fx-hold-at s (two seconds before the play's end) they lose it again; made again every --fx-repeat
+//           --fx-hold-at s (two seconds before the play's end) they, and the --fx-manual ones, lose it again (a gun
+//           that unpacked to fire packs up then, as when the unit is given another order); made again every --fx-repeat
 //           seconds (8 unless given). An aircraft hovers at its elevation. It faces the point when it is an
 //           aircraft or one of those weapons cannot turn all round, else its back is to the camera (side by side:
 //           its side), so that its turrets are seen turning.

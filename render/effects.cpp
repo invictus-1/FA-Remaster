@@ -89,7 +89,15 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
   if (beam != beamAt_.end()) {  // a weapon's beam: bone 0 is its start, 1 and 2 its end
     const FrameBeam& b = frame.beams[beam->second];
     *position = bone >= 1 ? V(b.end) : V(b.start);
+    // (both turned as the beam lies, its +z from its start to its end: the game's beam is an entity on the
+    // muzzle facing along it, so what its scripts make on its ends faces that way too)
+    const Vec3 along = V(b.end) - V(b.start);
     *orientation = Quat{};
+    if (Length(along) > 1e-4f) {
+      const Vec3 d = Normalize(along);
+      const float heading = std::atan2(d.x, d.z), pitch = -std::asin(std::clamp(d.y, -1.0f, 1.0f));
+      *orientation = Mul(Quat{0, std::sin(heading * 0.5f), 0, std::cos(heading * 0.5f)}, Quat{std::sin(pitch * 0.5f), 0, 0, std::cos(pitch * 0.5f)});
+    }
     return true;
   }
   return false;

@@ -22,6 +22,7 @@
 // a unit between two beats can only be known once the second one exists.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +64,13 @@ class WorldPicture {
   // (1 Xlib: `window` the X11 Window id, `display` the Display*; 2 Wayland: the wl_surface* and the
   // wl_display*; 3 Metal: a macOS view's CAMetalLayer*, no display), at `width` x `height` pixels.
   void UseNativeWindow(int system, void* window, void* display, int width, int height);
+  // The same where the host makes the window's Vulkan surface itself (SDL3 on Linux and macOS:
+  // SDL_Vulkan_GetInstanceExtensions, SDL_Vulkan_CreateSurface), before Open, in place of UseWindow and
+  // UseNativeWindow: the instance extensions its window needs, and a function that makes the window's surface
+  // for the VkInstance it is given (as a void*) and returns the VkSurfaceKHR as a 64-bit value (0: it could not).
+  // The picture draws with Vulkan then (SetVulkan is not needed). `width` x `height`: the drawable's size in
+  // pixels at first; later sizes come with each DrawToWindow, as with the other windows.
+  void UseHostSurface(std::vector<std::string> instanceExtensions, std::function<uint64_t(void* vkInstance)> createSurface, int width, int height);
   // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
   void SetVulkan(bool on);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels

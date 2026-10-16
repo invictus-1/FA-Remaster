@@ -104,7 +104,8 @@ class FxEntities {
   // get it as their target, as the engine's targeting hands them one (OnGotTarget, then they fire by
   // themselves); the manual-fire weapons named by `manual` are fired at it as a player's order fires them (a
   // Tactical or Nuke order: the engine's fire-at task; an OverCharge order: the attack task in overcharge mode).
-  // `stop`: the weapons lose their targets (OnLostTarget). Returns what it did, for the log.
+  // `stop`: the weapons lose their targets (OnLostTarget), the manual-fire ones too (as when the unit is given
+  // another order: one that unpacked to fire packs up again then). Returns what it did, for the log.
   std::string Order(uint32_t unit, Vec3 target, const std::vector<std::string>& labels, const std::vector<std::string>& manual,
                     bool stop = false);
   // A unit's blueprint file: the game's own in /units, a mod's in its folder under /mods ("": none).

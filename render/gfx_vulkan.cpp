@@ -707,6 +707,18 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
       return false;
     };
     const char* surface = nullptr;
+    if (desc.windowSystem == DeviceDesc::WindowSystem::Host) {  // (the host's own list; each once)
+      for (const std::string& name : desc.hostExtensions) {
+        if (!offered(name.c_str())) {
+          if (error) *error = "Vulkan: this system's Vulkan does not offer " + name + ", which the host's window needs";
+          return false;
+        }
+        bool listed = false;
+        for (const char* had : extensions) listed = listed || name == had;
+        if (!listed) extensions.push_back(name.c_str());
+      }
+      surface = VK_KHR_SURFACE_EXTENSION_NAME;  // (listed already)
+    }
     switch (desc.windowSystem) {
 #if defined(_WIN32)
       case DeviceDesc::WindowSystem::Win32: surface = VK_KHR_WIN32_SURFACE_EXTENSION_NAME; break;
@@ -721,7 +733,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
       if (error) *error = std::string("Vulkan: this system's Vulkan cannot show in such a window (") + (surface ? surface : "unknown window system") + ")";
       return false;
     }
-    extensions.push_back(surface);
+    if (desc.windowSystem != DeviceDesc::WindowSystem::Host) extensions.push_back(surface);
     if (offered(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
       extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
       portability = true;
@@ -755,6 +767,12 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   VK_SURFACE_FUNCTIONS(VK_LOAD)
 #undef VK_LOAD
 
+  if (desc.windowSystem == DeviceDesc::WindowSystem::Host) {  // (the host makes it: SDL3's SDL_Vulkan_CreateSurface)
+    const uint64_t made = desc.hostSurface ? desc.hostSurface(static_cast<void*>(instance_)) : 0;
+    static_assert(sizeof(VkSurfaceKHR) == sizeof(uint64_t), "a surface handle is 64 bits");
+    std::memcpy(&surface_, &made, sizeof surface_);
+    r = made ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+  } else {
 #if defined(_WIN32)
   VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
   sci.hinstance = GetModuleHandleW(nullptr);
@@ -779,6 +797,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     r = vkCreateMetalSurfaceEXT(instance_, &sci, nullptr, &surface_);
   }
 #endif
+  }
   if (r != VK_SUCCESS) return fail("the window's surface", r);
 
   // the card: a discrete one first, with a queue that draws and shows on the surface; Vulkan 1.3, or 1.2
