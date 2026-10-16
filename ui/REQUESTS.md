@@ -809,6 +809,10 @@ private-stream-2 packet (00 00 01 BF, its data after the 2-byte length) holds "S
 fps is the MPEG-1 sequence header's frame rate code (Brackman 29.97, the rest 30). Could
 src/script/core_bindings.cpp give GetMovieDuration (frames / fps, 0 when the file is missing), as the
 original? The interface's Movie control reads the same header for GetNumFrames.
+DONE (engine, main after 52e8ee9; "ui 30" in docs/engine-answers.md): GetMovieDuration in the core
+bindings (every state): the path through the VFS as given, frames from the Sofdec header (file 0x800 or
+0x1000, +0xc0), fps from the first MPEG-1 sequence header, (float)frames / (fps1000 * 0.001f); 0 with the
+original's warnings for a missing or invalid file. Matches a port of the exe on all 1004 movies.
 Also for the campaign, so you know: the sim's dialogue waits for the interface to send
 `SimCallback OnMovieFinished(path)` (FAF SimCallbacks.lua:209) after each talking head; a run
 without the interface moves on only if the replay holds that callback.

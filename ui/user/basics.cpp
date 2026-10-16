@@ -1,8 +1,10 @@
 // Small engine functions of the user state that need no control tree: time, the command line,
 // the interface state, front-end data, random numbers.
 #include <cctype>
+#include <map>
 #include <random>
 #include <string>
+#include <vector>
 
 #include "core/log.h"
 #include "user/bindings.h"
@@ -70,36 +72,78 @@ int l_DebugFacilitiesEnabled(lua_State* L) {
 }
 
 // SetFrontEndData(key, value) / GetFrontEndData(key): values the front end and a session's
-// interface hand each other (the original keeps them across its user states).
-const char* kFrontEndKey = "moho64ui.frontenddata";
-
-void PushFrontEndData(lua_State* L) {
-  lua_pushstring(L, kFrontEndKey);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  if (lua_istable(L, -1)) return;
-  lua_pop(L, 1);
-  lua_newtable(L);
-  lua_pushstring(L, kFrontEndKey);
-  lua_pushvalue(L, -2);
-  lua_rawset(L, LUA_REGISTRYINDEX);
+// interface hand each other (the next operation's briefing after a won operation, a replay's
+// name), kept across the user states as the original keeps them: a copy of plain values (nil,
+// booleans, numbers, strings, and tables of those; functions and engine objects are not kept),
+// made again in the state that asks. (Until 2026-10-16 they lived in one state's registry and were
+// lost when the game's state gave way to the front end's.)
+struct FrontEndValue {
+  int type = LUA_TNIL;
+  bool boolean = false;
+  lua_Number number = 0;
+  std::string text;
+  std::vector<std::pair<FrontEndValue, FrontEndValue>> table;
+};
+std::map<std::string, FrontEndValue>& FrontEndStore() {  // by the key as text (FAF's keys are strings)
+  static std::map<std::string, FrontEndValue> store;
+  return store;
+}
+FrontEndValue ReadFrontEndValue(lua_State* L, int idx, int depth) {
+  FrontEndValue v;
+  idx = idx < 0 ? lua_gettop(L) + idx + 1 : idx;
+  switch (lua_type(L, idx)) {
+    case LUA_TBOOLEAN: v.type = LUA_TBOOLEAN, v.boolean = lua_toboolean(L, idx) != 0; break;
+    case LUA_TNUMBER: v.type = LUA_TNUMBER, v.number = lua_tonumber(L, idx); break;
+    case LUA_TSTRING: v.type = LUA_TSTRING, v.text = lua_tostring(L, idx); break;
+    case LUA_TTABLE:
+      v.type = LUA_TTABLE;
+      if (depth > 16) break;
+      lua_pushnil(L);
+      while (lua_next(L, idx) != 0) {
+        FrontEndValue key = ReadFrontEndValue(L, -2, depth + 1), value = ReadFrontEndValue(L, -1, depth + 1);
+        if (key.type != LUA_TNIL && value.type != LUA_TNIL) v.table.emplace_back(std::move(key), std::move(value));
+        lua_pop(L, 1);
+      }
+      break;
+    default: break;  // (nil, functions, engine objects: nothing)
+  }
+  return v;
+}
+void PushFrontEndValue(lua_State* L, const FrontEndValue& v) {
+  switch (v.type) {
+    case LUA_TBOOLEAN: lua_pushboolean(L, v.boolean); break;
+    case LUA_TNUMBER: lua_pushnumber(L, v.number); break;
+    case LUA_TSTRING: lua_pushlstring(L, v.text.data(), v.text.size()); break;
+    case LUA_TTABLE:
+      lua_newtable(L);
+      for (const auto& [key, value] : v.table) {
+        PushFrontEndValue(L, key);
+        PushFrontEndValue(L, value);
+        lua_rawset(L, -3);
+      }
+      break;
+    default: lua_pushnil(L); break;
+  }
+}
+std::string FrontEndKey(lua_State* L, int idx) {
+  if (lua_type(L, idx) == LUA_TSTRING || lua_type(L, idx) == LUA_TNUMBER) return lua_tostring(L, idx);
+  return std::string();
 }
 
 int l_SetFrontEndData(lua_State* L) {
   luaL_checkany(L, 1);
   lua_settop(L, 2);
-  PushFrontEndData(L);
-  lua_pushvalue(L, 1);
-  lua_pushvalue(L, 2);
-  lua_rawset(L, -3);
+  const std::string key = FrontEndKey(L, 1);
+  if (lua_isnil(L, 2)) FrontEndStore().erase(key);
+  else FrontEndStore()[key] = ReadFrontEndValue(L, 2, 0);
   return 0;
 }
 
 int l_GetFrontEndData(lua_State* L) {
   luaL_checkany(L, 1);
-  lua_settop(L, 1);
-  PushFrontEndData(L);
-  lua_pushvalue(L, 1);
-  lua_rawget(L, -2);
+  auto it = FrontEndStore().find(FrontEndKey(L, 1));
+  if (it == FrontEndStore().end()) lua_pushnil(L);
+  else PushFrontEndValue(L, it->second);
   return 1;
 }
 

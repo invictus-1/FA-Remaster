@@ -114,6 +114,9 @@ class UserState {
   std::unique_ptr<Extra> ranges;  // the range rings' filters and switches (range_rings.cpp)
   std::unique_ptr<Extra> worldMeshes;  // the script's meshes in the world (world_meshes.cpp)
   std::map<std::string, std::unique_ptr<ScriptObject>> cameras;  // the cameras by name (maui/worldview.cpp)
+  // The playable rectangle, x0, z0, x1, z1 (SyncPlayableRect; x1 < 0: the whole map): the cameras
+  // keep to it (maui/worldview.cpp).
+  float playableRect[4] = {0, 0, -1, -1};
   std::vector<std::string> mapBorders;  // the mesh blueprints of the map's border (MapBorderAdd)
   // The life bars over units (the console command UI_RenderUnitBars, user/keymap.cpp): the
   // player's own switch (-1: not read from the preferences yet) and whether a script has them

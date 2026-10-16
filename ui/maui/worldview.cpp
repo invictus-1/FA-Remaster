@@ -74,6 +74,9 @@ class Camera : public ScriptObject {
   float maxZoomMult = 1.4f;       // the original's default (camera field +0x850)
   float heading = kPi;            // the original's: pi looks north (Reset, FA exe 0x7a80a0)
   float mapW = 512, mapH = 512;   // the map's size
+  // The playable rectangle (SyncPlayableRect: an operation opens on part of the map and grows it):
+  // x0, z0, x1, z1; x1 < 0: the whole map.
+  float play[4] = {0, 0, -1, -1};
   float aspect = 16.0f / 9.0f;    // width / height of the view that shows it
   float anchorX = 0, anchorY = 0; // the place on screen a zoom goes towards (the wheel's)
   bool anchored = false;
@@ -97,10 +100,17 @@ class Camera : public ScriptObject {
   float shakeOffset[3] = {0, 0, 0};
 };
 
-// The farthest zoom (FA exe 0x7a7310): the map takes 1 / maxZoomMult of what would just fill the
-// view. (The original takes the playable rectangle when the scenario sets one; here the whole map.)
+// The ground the camera may show: the playable rectangle once one is set, else the whole map.
+void PlayRect(const Camera* c, float* x0, float* z0, float* x1, float* z1) {
+  if (c->play[2] < 0) *x0 = 0, *z0 = 0, *x1 = c->mapW, *z1 = c->mapH;
+  else *x0 = c->play[0], *z0 = c->play[1], *x1 = c->play[2], *z1 = c->play[3];
+}
+// The farthest zoom (FA exe 0x7a7310): the playable ground takes 1 / maxZoomMult of what would just
+// fill the view.
 float MaxZoom(const Camera* c) {
-  return std::max((c->mapW - 1 + 5) * c->maxZoomMult, (c->mapH - 1 + 5) * c->maxZoomMult * c->aspect);
+  float x0, z0, x1, z1;
+  PlayRect(c, &x0, &z0, &x1, &z1);
+  return std::max((x1 - x0 - 1 + 5) * c->maxZoomMult, (z1 - z0 - 1 + 5) * c->maxZoomMult * c->aspect);
 }
 float ClampZoom(const Camera* c, float z) { return std::max(kNearZoom, std::min(z, MaxZoom(c))); }
 // Where the zoom is between nearest (0) and farthest (1), by its logarithm (FA exe 0x7a9550).
@@ -123,14 +133,16 @@ float FovYOf(const Camera* c) {
   float half = std::tan((kNearFov + ZoomBlend(c) * (kFarFov - kNearFov)) * kDegrees * 0.5f);
   return 2.0f * std::atan(c->aspect > 1 ? half / c->aspect : half);
 }
-// The focus stays on the map: at the farthest zoom in its middle, nearer up to its edges
-// (ClampTargetPos, FA exe 0x7a9320).
+// The focus stays on the playable ground: at the farthest zoom in its middle, nearer up to its
+// edges (ClampTargetPos, FA exe 0x7a9320).
 void ClampFocus(Camera* c) {
   float farthest = MaxZoom(c);
   float f = farthest > 0 ? std::max(0.0f, std::min(c->zoom, farthest)) / farthest : 1;
-  float mx = f * (c->mapW - 1) * 0.5f, mz = f * (c->mapH - 1) * 0.5f;
-  c->focus[0] = std::max(mx, std::min(c->focus[0], c->mapW - 1 - mx));
-  c->focus[2] = std::max(mz, std::min(c->focus[2], c->mapH - 1 - mz));
+  float x0, z0, x1, z1;
+  PlayRect(c, &x0, &z0, &x1, &z1);
+  float mx = f * (x1 - x0 - 1) * 0.5f, mz = f * (z1 - z0 - 1) * 0.5f;
+  c->focus[0] = std::max(x0 + mx, std::min(c->focus[0], x1 - 1 - mx));
+  c->focus[2] = std::max(z0 + mz, std::min(c->focus[2], z1 - 1 - mz));
 }
 
 // The map's size from the scenario the session runs (size = {width, height}); false without one.
@@ -162,8 +174,10 @@ void Place(lua_State* L, Camera* c) {
   // As the original's Reset (FA exe 0x7a80a0): over the map's middle, north up, as far out as it goes.
   c->placed = true;
   c->mapW = w, c->mapH = h;
-  c->focus[0] = (w - 1) * 0.5f;
-  c->focus[2] = (h - 1) * 0.5f;
+  float x0, z0, x1, z1;  // (over the playable ground's middle, once there is one)
+  PlayRect(c, &x0, &z0, &x1, &z1);
+  c->focus[0] = x0 + (x1 - x0 - 1) * 0.5f;
+  c->focus[2] = z0 + (z1 - z0 - 1) * 0.5f;
   c->heading = kPi;
   c->turned = c->swingBack = false;
   c->zoom = c->targetZoom = MaxZoom(c);
@@ -194,6 +208,7 @@ Camera* GetCameraObject(lua_State* L, const std::string& name) {
   if (it != user->cameras.end()) return static_cast<Camera*>(it->second.get());
   Camera* c = new Camera;
   c->name = name;
+  std::copy(user->playableRect, user->playableRect + 4, c->play);  // (the playable ground so far)
   user->cameras[name].reset(c);
   lua_newtable(L);
   lua_newtable(L);  // its metatable: methods come from the class table
@@ -329,6 +344,39 @@ int l_CamMoveToRegion(lua_State* L) {
     StartMove(c, focus, std::max(std::fabs(r[2] - r[0]), std::fabs(r[3] - r[1])) * 1.2f,
               lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0);
   }
+  return 0;
+}
+// SyncPlayableRect(rect) (FA exe 0x8be8d0 -> CWldSession::SyncPlayableRect 0x896960; the sim's
+// Sync.CameraRequests CAMERA_SYNC_PLAYABLE_RECT, usercamera.lua): the playable ground, {x0, y0, x1,
+// y1} in map units (y: the map's z); the cameras keep to it from now on (their farthest zoom and
+// where they may look), as the original's (it sets the terrain's playable rect, which they read).
+// The script resets the minimap's camera after. (The picture's side, the ground outside it drawn as
+// beyond the map's edge: renderer request 27.)
+int l_SyncPlayableRect(lua_State* L) {
+  if (!lua_istable(L, 1)) return 0;
+  float r[4] = {0, 0, -1, -1};
+  static const char* const kNames[4] = {"x0", "y0", "x1", "y1"};
+  for (int i = 0; i < 4; ++i) {
+    lua_pushstring(L, kNames[i]);
+    lua_gettable(L, 1);
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lua_rawgeti(L, 1, i + 1);
+    }
+    if (lua_isnumber(L, -1)) r[i] = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  if (r[2] <= r[0] || r[3] <= r[1]) return 0;
+  UserState* user = UserState::From(L);
+  std::copy(r, r + 4, user->playableRect);
+  for (auto& entry : user->cameras) {
+    Camera* c = static_cast<Camera*>(entry.second.get());
+    std::copy(r, r + 4, c->play);
+    c->targetZoom = ClampZoom(c, c->targetZoom);
+    c->zoom = ClampZoom(c, c->zoom);
+    ClampFocus(c);
+  }
+  Logf(LogLevel::Info, "moho64ui: the playable area is now %.0f, %.0f to %.0f, %.0f", r[0], r[1], r[2], r[3]);
   return 0;
 }
 int l_CamReset(lua_State* L) {
@@ -1791,6 +1839,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, cam, "SnapTo", l_CamMoveTo);
   SetMethod(L, cam, "MoveToRegion", l_CamMoveToRegion);
   SetMethod(L, cam, "Reset", l_CamReset);
+  SetGlobal(L, "SyncPlayableRect", l_SyncPlayableRect);
   SetMethod(L, cam, "GetFocusPosition", l_CamGetFocusPosition);
   SetMethod(L, cam, "GetZoom", l_CamGet<&Camera::zoom>);
   SetMethod(L, cam, "GetTargetZoom", l_CamGet<&Camera::targetZoom>);

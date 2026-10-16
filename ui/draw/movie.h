@@ -1,6 +1,7 @@
 // A movie of the game's: an .sfd file (CRI Sofdec: an MPEG program stream with MPEG-1 video). Its
 // pictures are decoded by pl_mpeg (ui/third_party/pl_mpeg, MIT, Dominic Szablewski); the movie's
-// clock is the caller's (Advance). The sound some movies carry (ADX) is not played yet.
+// clock is the caller's (Advance). The game's movies carry no sound (only an unused demo has ADX):
+// the scripts play sound cues beside them.
 #pragma once
 #include <string>
 
@@ -24,7 +25,7 @@ class MovieDecoder {
   int Height() const { return height_; }
   double FrameRate() const { return frameRate_; }
   double Duration() const { return duration_; }  // seconds, from the stream's time stamps
-  int Frames() const;                            // Duration * FrameRate, rounded
+  int Frames() const;  // the Sofdec header's count, else Duration * FrameRate rounded
   // Moves the movie on by `seconds`: the pictures due in that time are decoded, the last of them
   // is Picture(). True when it changed. At the end it stops on the last picture (Ended), or starts
   // again from the first with SetLoop.
@@ -39,6 +40,7 @@ class MovieDecoder {
   plm_t* plm_ = nullptr;
   int width_ = 0, height_ = 0;
   double frameRate_ = 0, duration_ = 0;
+  int frames_ = -1;  // the Sofdec header's count (-1: none)
   Image picture_;
 
 };

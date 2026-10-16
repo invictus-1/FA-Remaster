@@ -143,6 +143,14 @@ check("Bloom Intensity 10 is a glow of 1.0", math.abs(moho64ui_Looks().bloomInte
 video.bloom_intensity.set('bloom_intensity', 15, false)
 check("the presets run without a missing option", pcall(video.fidelity_presets.update, nil, 3), true)
 
+-- Front-end data: kept outside the Lua state (so the game's state can hand it to the front end's),
+-- a copy of plain values
+SetFrontEndData('moho64ui_test', {opID = 'X1CA_002', campaignID = 'uef', difficulty = 2, nested = {true}})
+local fed = GetFrontEndData('moho64ui_test')
+check("front-end data comes back as a copy", fed and (fed.opID .. " " .. fed.campaignID .. " " .. fed.difficulty .. " " .. tostring(fed.nested[1])), "X1CA_002 uef 2 true")
+SetFrontEndData('moho64ui_test', nil)
+check("and nil takes it away", GetFrontEndData('moho64ui_test'), nil)
+
 -- The display mode: "Windowed" and the screen's own mode, listed at the start (no window here, so
 -- the command line has not chosen); the choice is a request the window's loop takes
 local adapter = video.primary_adapter and video.primary_adapter.custom and video.primary_adapter.custom.states or {}

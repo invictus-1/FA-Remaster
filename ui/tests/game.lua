@@ -821,6 +821,19 @@ local function run()
         end
     end
 
+    -- the playable area (an operation's SetPlayableArea -> SyncPlayableRect): the camera keeps to it
+    local mapSize = SessionGetScenarioInfo().size
+    local wcam = GetCamera('WorldCamera')
+    local farWhole = wcam:GetMaxZoom()
+    SyncPlayableRect({x0 = 100, y0 = 100, x1 = 300, y1 = 300})
+    wcam:Reset()
+    local fp = wcam:GetFocusPosition()
+    check("SyncPlayableRect: Reset looks at its middle", math.abs(fp[1] - 199.5) < 0.6 and math.abs(fp[3] - 199.5) < 0.6, true)
+    check("and the farthest zoom shrinks with it", wcam:GetMaxZoom() < farWhole, true)
+    SyncPlayableRect({x0 = 0, y0 = 0, x1 = mapSize[1], y1 = mapSize[2]})
+    wcam:Reset()
+    check("the whole map again", math.abs(wcam:GetMaxZoom() - farWhole) < 0.01, true)
+
     -- the game's end: SessionEndGame is an order; one more beat runs (its scripts hand over the
     -- final score), then the simulation stands (last, since nothing moves any more)
     check("the game is not over", SessionIsGameOver(), false)

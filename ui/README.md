@@ -498,14 +498,35 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `ui_RenderSelectionSetNames` ON as in the exe, `ui_SelectionSetNamesColor` (0xff00aa00).
 - Movies (2026-10-16): the game's .sfd files (CRI Sofdec: an MPEG program stream with MPEG-1 video)
   play in the Movie control: pictures decoded by pl_mpeg (`ui/third_party/pl_mpeg`, MIT, Dominic
-  Szablewski; downloaded with Chris's OK), `ui/draw/movie.*` (MovieDecoder), moved on by the
-  interface's own clock and drawn scaled into the control; at the end OnFinished (unless it loops);
-  GetNumFrames from the stream's time stamps. A movie's sound comes from the game's sound banks,
-  started by the script beside it (/lua/maui/movie.lua: PlaySound / PlayVoice), not from the file.
-  Checked: a talking head (Brackman.sfd, 192x192, 30 fps, 4.9 s, OnFinished on time) and the
-  intro (1600x672): about 3 ms a picture. The main menu's film is still not decoded: the host's
-  moving map is shown there (Chris's new front-end background). Whole files are read into memory
-  (the intro 177 MB, the credits 220 MB): reading them in pieces comes later.
+  Szablewski; downloaded with Chris's OK), `ui/draw/movie.*` (MovieDecoder). As the original's
+  CMauiMovie (read by a helper; it used CRI's own player): InternalSet opens the movie paused on its
+  first picture (false for a missing or broken file, or with /nomovie); Play runs it by real time
+  (the interface's frame steps), Stop pauses where it is (OnStopped on the next step) and Play runs on
+  from there; at the end OnFinished, or a silent restart when it loops; Play without a movie calls
+  OnFinished on the next step. Drawn stretched over the control while it plays, in its alpha (a stopped
+  one keeps its paused picture, a finished one is not drawn). GetNumFrames from the Sofdec header
+  (its first private-stream-2 packet: the frames at +0xae). The game's movies carry no sound: the
+  scripts play cues beside them (/lua/maui/movie.lua: PlaySound / PlayVoice, prepared, then started
+  with Play). SetMovieVolume / GetMovieVolume only keep a number, as the original's. Not built: the
+  one alpha movie (FMV_loading02.sfd, its mask in the lower half; no script uses it), pausing while
+  the window is minimized. Checked: Brackman.sfd (192x192, 29.97 fps, 150 frames, OnFinished on
+  time; test `ui/tests/movie.lua`) and the intro (1600x672): about 3 ms a picture. The main menu's
+  film is still not decoded: the host's moving map is shown there (Chris's new front-end
+  background). Whole files are read into memory (the intro 177 MB, the credits 220 MB): reading them
+  in pieces comes later.
+- The campaign (2026-10-16, Chris: "the biggest pain first", played the ORIGINAL's way: Campaign ->
+  operation select -> briefing -> Launch). FAF switched that path off (it plays the campaign through its
+  co-op lobby); our own hooks (ui/data/hook/lua/ui/campaign/, deviations from FAF): the briefing's Launch
+  button works again; the briefing also opens when called the original's way (an operation's ID and
+  data: FAF's next-operation briefing and its first visit's film still call it so, which FAF's
+  CreateUI cannot take); an operation's end is noted in the profile's 'campaign' table as the
+  original noted it (the next operation unlocks) and, after a WON one only (the original also after a
+  lost one, though that operation stayed locked: our judgement), the next briefing opens back in
+  the menu. SetFrontEndData / GetFrontEndData now keep their values across the user states (a copy of
+  plain values; they were lost between the game and the menu). Waiting: the engine's side of
+  starting an operation (engine request 31: a session from the single-player table, the map
+  script's OnPopulate / OnStart, the sim functions the operations call; GetMovieDuration, 30) and
+  the renderer's playable area and cinematic switches (renderer request 27).
 - Not real yet: the other console commands, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
