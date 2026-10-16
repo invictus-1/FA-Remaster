@@ -419,7 +419,7 @@ void LoadKeyMappings(lua_State* L) {
 // shown by pressing the shift key", so the script's own comment; where the original calls it is
 // not read). FAF's reclaim labels and the pings in the world views hang on it.
 void CommandGraphShown(lua_State* L, bool show) {
-  if (!UserState::From(L)->config().sim) return;
+  if (!UserState::From(L)->HasSim()) return;
   const int top = lua_gettop(L);
   lua_getglobal(L, "import");
   lua_pushstring(L, "/lua/ui/game/commandgraph.lua");

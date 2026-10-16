@@ -175,6 +175,9 @@ class GameSession {
   void AdvanceClock(double seconds);
   // A beat still on its thread: wait for it and finish it (its sounds, its sync).
   void WaitForBeat();
+  // Only wait for it (UserState::LiveSim): its sounds and sync come in the next Advance, so no
+  // script runs inside a script that asked.
+  void WaitForWorker();
 
   uint32_t tick() const;
   double PictureTick() const;

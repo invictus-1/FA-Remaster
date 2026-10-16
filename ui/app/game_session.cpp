@@ -815,6 +815,10 @@ void GameSession::WaitForBeat() {
   if (beatToFinish_) FinishBeat();
 }
 
+void GameSession::WaitForWorker() {
+  if (worker_) worker_->Wait();
+}
+
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
   if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)

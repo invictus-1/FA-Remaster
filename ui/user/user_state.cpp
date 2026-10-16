@@ -1,5 +1,8 @@
 #include "user/user_state.h"
 
+#include <chrono>
+#include <cstdlib>
+
 #include "user/keymap.h"
 
 #include "core/log.h"
@@ -61,6 +64,21 @@ UserState::~UserState() {
 }
 
 lua_State* UserState::L() const { return state_->L(); }
+
+Sim* UserState::LiveSim(const char* where) {
+  if (config_.liveSim && config_.waitForBeat) {
+    static const bool count = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
+    if (count) {
+      const auto t0 = std::chrono::steady_clock::now();
+      config_.waitForBeat();
+      const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      if (waited > 0.0005) Logf(LogLevel::Info, "moho64ui: waited %.1f ms for the beat at %s", waited * 1000.0, *where ? where : "(a script's call)");
+    } else {
+      config_.waitForBeat();
+    }
+  }
+  return config_.liveSim;
+}
 
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }
 

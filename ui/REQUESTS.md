@@ -698,6 +698,31 @@ and tracebacks (the stock AI's platoon.lua:1555 error after its commander dies),
 about 1 run in 3. Checked here: victory 12 of 12 (three side by side), the whole suite green.
 The host installs his crash handler (d97c6c2). Chris's build is current again. Closed.
 
+### 25. TerrainMap: the raw heights and a change counter (for a per-beat copy)
+From the interface chat, 2026-10-15, not blocking (it gates dropping the "show-only" frames of
+the beat thread, your verdict's condition 1). The interface reads ground heights EVERY FRAME
+(worldview.cpp 472 EnsurePicture, 733 Unproject, 1386 CameraListener: the camera's target and the
+sound listener), and TerrainHeight is a real race with a beat that flattens ground. Waiting for
+the beat there every frame would bring the stutter back, so I want my own copy of the heights,
+refreshed after a beat only when they changed. Could TerrainMap (src/sim/terrain.h) give:
+`uint32_t changes() const` (counts SetHeightAt calls, or any height write), `const uint16_t*
+heightData() const` ((width+1) * (height+1), as heights_) and `float heightScale() const`? I copy
+when `changes()` moved (read only between beats, behind the waiting accessor) and answer
+TerrainHeight myself with the same bilinear rule (or a free function of yours over the raw data, so
+the rule stays one: e.g. `float TerrainHeightOf(const uint16_t*, int w, int h, float scale, float x,
+float z)`, which TerrainMap::TerrainHeight would call too).
+
+### 26. A unit's command and toggle caps in UnitView (the per-beat copy)
+From the interface chat, 2026-10-15, not blocking; performance-lessons section 6 (large
+selections). Measured with 2,000 tanks selected (the binding profile, MOHO64UI_BINDING_PROFILE):
+GetRightMouseButtonOrder takes 9.8 ms a call (900 calls in a minute and a half, from the cursor's
+script), because RightClickOrder asks UnitStateOf of EVERY selected unit only to OR their
+`commandCaps`; GetUnitCommandData (the panels, on a selection change) 23 ms a call the same way.
+UnitStateOf runs in the sim's lua_State, so it is also one of your verdict's "waits for the beat"
+readers. Could UnitView (src/sim/sim_view.h) carry `uint32_t commandCaps, toggleCaps` as
+UnitStateView has them, filled where the views are made each beat? Then the selection's caps are a
+loop over plain fields of the interface's own copies: no sim, no wait, no Lua.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

@@ -58,8 +58,11 @@ class UserState {
     // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
     // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
     std::string bootScript = "/lua/userInit.lua";
-    // The running simulation a session's state looks at; nullptr for the front end's state.
-    Sim* sim = nullptr;
+    // The running simulation a session's state looks at; nullptr for the front end's state. Read
+    // it through UserState::LiveSim (it waits for a beat running on its own thread), never here.
+    Sim* liveSim = nullptr;
+    // Waits until no beat runs on the beats' thread (the host's; unset: they never do).
+    std::function<void()> waitForBeat;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
     // Where a session's world views get the world's picture from; nullptr: there is none.
@@ -122,6 +125,11 @@ class UserState {
   lua_State* L() const;
   UiManager& ui() { return *ui_; }
   const Config& config() const { return config_; }
+  // The running simulation, once no beat runs on its own thread (it waits for one that does; the
+  // engine's rule: nothing of this state may look at the simulation while it ticks). Every look
+  // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).
+  Sim* LiveSim(const char* where = "");
+  bool HasSim() const { return config_.liveSim != nullptr; }
   double now() const { return now_; }      // seconds since the state was created
   uint32_t frame() const { return frame_; }
   const std::string& uiState() const { return uiState_; }  // GetCurrentUIState(): none, splash, frontend, game

@@ -321,7 +321,7 @@ bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::
 
 void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out) {
   UserState* user = UserState::From(L);
-  Sim* sim = user->config().sim;
+  Sim* sim = user->LiveSim("range rings");
   if (!sim || !user->ranges) return;
   RangeStore& store = static_cast<RangeStore&>(*user->ranges);
   if (store.filters.empty()) return;
@@ -381,7 +381,7 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
 }
 
 void RegisterRangeBindings(lua_State* L) {
-  if (!UserState::From(L)->config().sim) return;
+  if (!UserState::From(L)->HasSim()) return;
   SetGlobal(L, "SetOverlayFilter", l_SetOverlayFilter);
   SetGlobal(L, "SetOverlayFilters", l_SetOverlayFilters);
   lua_register(L, "moho64ui_RangeRings", l_RangeRings);

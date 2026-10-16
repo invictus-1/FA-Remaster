@@ -22,7 +22,7 @@
 namespace moho::ui {
 namespace {
 
-Sim* TheSim(lua_State* L) { return UserState::From(L)->config().sim; }
+Sim* TheSim(lua_State* L) { return UserState::From(L)->LiveSim(); }
 
 void SetField(lua_State* L, const char* key, lua_Number v) {
   lua_pushstring(L, key);
@@ -396,7 +396,7 @@ int l_SessionSendChatMessage(lua_State* L) {
 
 // The chat messages sent since the last frame reach the game's script (see above).
 void DeliverChat(lua_State* L) {
-  Sim* sim = UserState::From(L)->config().sim;
+  Sim* sim = UserState::From(L)->LiveSim("chat");
   const int top = lua_gettop(L);
   lua_pushstring(L, "moho64ui_chat");
   lua_rawget(L, LUA_REGISTRYINDEX);

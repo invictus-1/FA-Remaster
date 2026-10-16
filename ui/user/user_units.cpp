@@ -39,11 +39,20 @@ class UserUnit : public ScriptObject {
   bool gone = false;  // the simulation no longer has it
   std::string customName;
   std::vector<std::string> selectionSets;
+  // Its blueprint's record as last looked up, and for which blueprint (BlueprintOf): a category
+  // test over thousands of units looks each up once, not each time.
+  mutable const BlueprintInfo* bpInfo = nullptr;
+  mutable std::string bpInfoFor;
 };
 
 struct UnitStore : UserState::Extra {
   std::map<uint32_t, std::unique_ptr<UserUnit>> units;
   std::vector<UserUnit*> selection;
+  // RightClickOrder's work on the selection (its own units, their command caps together), kept
+  // while the selection and the beat are the same: it asks each unit's state of the simulation.
+  std::vector<UserUnit*> capsFor;
+  uint32_t capsTick = 0xffffffffu, capsUnion = 0;
+  std::vector<UserUnit*> capsOwn;
   bool reporting = false;  // inside OnSelectionChanged
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
@@ -74,7 +83,7 @@ UnitStore& Store(lua_State* L) {
   if (!user->units) user->units = std::make_unique<UnitStore>();
   return static_cast<UnitStore&>(*user->units);
 }
-Sim* TheSim(lua_State* L) { return UserState::From(L)->config().sim; }
+Sim* TheSim(lua_State* L) { return UserState::From(L)->LiveSim(); }
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out);  // further down: a unit's state from the simulation
 
 // The unit behind a script value; nullptr for anything else.
@@ -104,13 +113,22 @@ void PushBlueprint(lua_State* L, const std::string& id) {
   lua_remove(L, -2);
 }
 
+const BlueprintInfo* BlueprintOf(const SimBlueprints* bps, const UserUnit* u) {
+  if (u->bpInfo && u->bpInfoFor == u->view.blueprint) return u->bpInfo;
+  u->bpInfo = bps->Find(u->view.blueprint);
+  u->bpInfoFor = u->view.blueprint;
+  return u->bpInfo;
+}
+// Whether the unit's blueprint is in a category's list (its entity indexes, sorted).
+bool InCategoryList(const SimBlueprints* bps, const UserUnit* u, const std::vector<int>& list) {
+  const BlueprintInfo* bp = BlueprintOf(bps, u);
+  return bp && std::binary_search(list.begin(), list.end(), bp->entityIndex);
+}
 bool InCategory(lua_State* L, const UserUnit* u, const std::string& category) {
   SimBlueprints* bps = SimBlueprints::From(L);
   if (!bps) return false;
-  const BlueprintInfo* bp = bps->Find(u->view.blueprint);
   auto it = bps->Categories().find(category);
-  if (!bp || it == bps->Categories().end()) return false;
-  return std::binary_search(it->second.begin(), it->second.end(), bp->entityIndex);
+  return it != bps->Categories().end() && InCategoryList(bps, u, it->second);
 }
 
 // A list of units as scripts get it: an array, or nil for none.
@@ -388,8 +406,13 @@ int l_UISelectAndZoomTo(lua_State* L) {
 template <class Test>
 void FocusUnits(lua_State* L, const char* category, Test test, std::vector<UserUnit*>* out) {
   int army = TheSim(L)->focusArmy + 1;
+  const SimBlueprints* bps = SimBlueprints::From(L);
+  if (!bps) return;
+  auto cat = bps->Categories().find(category);  // (once, not for each unit)
+  if (cat == bps->Categories().end()) return;
   for (auto& [id, u] : Store(L).units)
-    if (!u->gone && !u->view.dead && u->view.army == army && InCategory(L, u.get(), category) && test(*u)) out->push_back(u.get());
+    if (!u->gone && !u->view.dead && u->view.army == army && InCategoryList(bps, u.get(), cat->second) && test(*u))
+      out->push_back(u.get());
 }
 // GetArmyAvatars(): the focus army's commanders, nil when it has none; nothing at all without a
 // focus army (a replay, an observer): FA exe 0x8bccb0 returns no value then, and pushes nil
@@ -1239,14 +1262,18 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
   if (!sim) return std::string();
   UnitStore& store = Store(L);
   int army = sim->focusArmy + 1;
-  uint32_t caps = 0;
-  std::vector<UserUnit*> own;
-  for (UserUnit* u : store.selection) {
-    if (u->gone || u->view.dead || u->view.army != army) continue;
-    UnitStateView state;
-    if (StateOf(L, u, &state)) caps |= state.commandCaps;
-    own.push_back(u);
+  if (store.capsTick != sim->tick() || store.capsFor != store.selection) {
+    store.capsTick = sim->tick(), store.capsFor = store.selection;
+    store.capsUnion = 0, store.capsOwn.clear();
+    for (UserUnit* u : store.selection) {
+      if (u->gone || u->view.dead || u->view.army != army) continue;
+      UnitStateView state;
+      if (StateOf(L, u, &state)) store.capsUnion |= state.commandCaps;
+      store.capsOwn.push_back(u);
+    }
   }
+  const uint32_t caps = store.capsUnion;
+  const std::vector<UserUnit*>& own = store.capsOwn;
   if (own.empty()) return std::string();
   const uint32_t kMove = 1, kAttack = 4, kGuard = 8, kRepair = 0x40, kReclaim = 0x100000;
   const std::string move = caps & kMove ? "RULEUCC_Move" : "";

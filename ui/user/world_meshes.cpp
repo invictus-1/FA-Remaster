@@ -312,7 +312,7 @@ void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out) {
 }
 
 void RegisterWorldMeshBindings(lua_State* L) {
-  if (!UserState::From(L)->config().sim) return;
+  if (!UserState::From(L)->HasSim()) return;
   SetGlobal(L, "InternalCreateWorldMesh", l_InternalCreateWorldMesh);
   SetGlobal(L, "AddCommandFeedbackBlip", l_AddCommandFeedbackBlip);
   const char* cls = "CUIWorldMesh";

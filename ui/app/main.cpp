@@ -404,7 +404,8 @@ int main(int argc, char** argv) {
     gameCfg.modUids = session.modUids();
     gameCfg.launchSession = nullptr;
     gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
-    gameCfg.sim = session.sim();
+    gameCfg.liveSim = session.sim();
+    gameCfg.waitForBeat = [&session]() { session.WaitForWorker(); };
     gameCfg.commandSource = session.commandSource();
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;

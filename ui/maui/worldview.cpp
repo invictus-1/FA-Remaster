@@ -469,7 +469,7 @@ class WorldView : public Control {
     int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
     if (w <= 0 || h <= 0) return false;
     WorldCamera cam = CameraFor(L);
-    Sim* sim = user->config().sim;
+    Sim* sim = user->LiveSim("the picture's camera");
     if (sim && sim->map()) cam.target[1] = sim->map()->TerrainHeight(cam.target[0], cam.target[2]);
     bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
@@ -730,7 +730,7 @@ class WorldView : public Control {
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
-    Sim* sim = UserState::From(L)->config().sim;
+    Sim* sim = UserState::From(L)->LiveSim("unproject");
     world[1] = sim && sim->map() ? sim->map()->TerrainHeight(world[0], world[2]) : 0.0f;
   }
 
@@ -870,7 +870,7 @@ class WorldView : public Control {
     }
     if (buildDrag_) {
       buildDrag_ = false;
-      Sim* sim = UserState::From(L)->config().sim;
+      Sim* sim = UserState::From(L)->LiveSim("a building placed");
       if (!sim) return;
       float to[3];
       Unproject(L, e.x, e.y, to);
@@ -1022,7 +1022,7 @@ class WorldView : public Control {
     CommandMode(L, &mode, &name);
     if (mode == "build" || mode == "buildanchored") {
       // (The order goes out when the button is let go: until then the mouse may draw a row.)
-      Sim* sim = UserState::From(L)->config().sim;
+      Sim* sim = UserState::From(L)->LiveSim("a building's press");
       bool free = true;
       if (!sim) return true;
       if (ActiveBuildTemplate(L)) {  // (a template goes by the cell under the mouse: TemplateSites)
@@ -1383,7 +1383,7 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
   if (it == user->cameras.end()) return false;
   const Camera* c = static_cast<const Camera*>(it->second.get());
   if (!c->placed) return false;
-  Sim* sim = user->config().sim;
+  Sim* sim = user->LiveSim("the sound listener");
   focus[0] = c->focus[0], focus[2] = c->focus[2];
   focus[1] = sim && sim->map() ? sim->map()->TerrainHeight(focus[0], focus[2]) : c->focus[1];
   // (The eye by the picture's source's rule: back from the focus by heading and pitch.)

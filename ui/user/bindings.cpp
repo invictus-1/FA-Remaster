@@ -1,9 +1,13 @@
 #include "user/bindings.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "core/log.h"
 
@@ -152,9 +156,41 @@ void RegisterUserClasses(lua_State* L) {
   }
 }
 
+namespace {
+// MOHO64UI_BINDING_PROFILE=1: every engine function the scripts call is timed (calls and time,
+// its own and what it calls back into), and the costliest are logged at the end.
+struct BindingCost {
+  long long calls = 0;
+  double seconds = 0;
+};
+std::map<std::string, BindingCost>& BindingCosts() {
+  static std::map<std::string, BindingCost> costs;  // (a map: the records stay where they are)
+  return costs;
+}
+bool Profiling() {
+  static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr;
+  return on;
+}
+int TimedBinding(lua_State* L) {
+  auto f = reinterpret_cast<lua_CFunction>(lua_touserdata(L, lua_upvalueindex(1)));
+  auto* cost = static_cast<BindingCost*>(lua_touserdata(L, lua_upvalueindex(2)));
+  const auto t0 = std::chrono::steady_clock::now();
+  const int results = f(L);  // (an error leaves the call uncounted)
+  cost->seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  ++cost->calls;
+  return results;
+}
+void PushBinding(lua_State* L, const std::string& name, lua_CFunction f) {
+  if (!Profiling()) return lua_pushcfunction(L, f);
+  lua_pushlightuserdata(L, reinterpret_cast<void*>(f));
+  lua_pushlightuserdata(L, &BindingCosts()[name]);
+  lua_pushcclosure(L, TimedBinding, 2);
+}
+}  // namespace
+
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
   lua_pushstring(L, name);
-  lua_pushcfunction(L, f);
+  PushBinding(L, name, f);
   lua_rawset(L, LUA_GLOBALSINDEX);
   Built().insert(name);
 }
@@ -162,7 +198,7 @@ void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
 void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFunction f) {
   PushUserClassTable(L, cppClass);
   lua_pushstring(L, name);
-  lua_pushcfunction(L, f);
+  PushBinding(L, Qualified(cppClass, name), f);
   lua_rawset(L, -3);
   lua_pop(L, 1);
   Built().insert(Qualified(cppClass, name));
@@ -170,6 +206,16 @@ void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFuncti
 
 void ReportStubCalls() {
   for (auto& [name, n] : StubCounts()) Logf(LogLevel::Debug, "moho64ui: stub calls %6d %s", n, name.c_str());
+  if (!Profiling()) return;
+  std::vector<std::pair<double, std::string>> rows;
+  for (const auto& [name, cost] : BindingCosts())
+    if (cost.calls) rows.emplace_back(cost.seconds, name);
+  std::sort(rows.rbegin(), rows.rend());
+  for (size_t i = 0; i < rows.size() && i < 30; ++i) {
+    const BindingCost& cost = BindingCosts()[rows[i].second];
+    Logf(LogLevel::Info, "moho64ui: engine function %-40s %9.1f ms in all, %8lld calls, %7.3f ms a call", rows[i].second.c_str(),
+         cost.seconds * 1000.0, cost.calls, cost.seconds * 1000.0 / static_cast<double>(cost.calls));
+  }
 }
 
 void ListBindings() {

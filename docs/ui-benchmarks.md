@@ -11,6 +11,30 @@ and seven M28 AIx armies on the rebuilt Seton's Clutch), `--seed 7 --fast-forwar
 Then 300 frames of warm-up and 600 counted frames. Script: the interface chat's scratchpad `late_measure.sh` /
 `late_next.sh <tick> <size> <tag> [env]`. The log lines are `moho64ui: window: ...` at the end of the run.
 
+**Scenario S (a big selection; a stand-in for the engine's B8 until it exists):** `_scratch/ui/session_ai_cheats.lua
+--seed 7`, a 1600x900 window, the script `_scratch/ui/scale_2000/scale.lua`: at 3 s the cheat callback makes 2,000
+uel0201 for the player beside the commander, all selected by category, 20 s steady, then a box selection by the mouse
+and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
+called (time and calls).
+
+## 2026-10-15: engine functions with 2,000 selected (scenario S; before: 39df633 with the profiler, after: the commit that brings this table)
+
+| Engine function | Before (a call) | After (a call) |
+|---|---|---|
+| CUIWorldView:GetRightMouseButtonOrder (the cursor's script) | 9.78 ms | 2.78 ms (the selection's caps kept for the beat) |
+| UISelectionByCategory (2,000 units) | 259.3 ms | 25.2 ms |
+| GetIdleFactories | 0.785 ms | 0.031 ms |
+| GetArmyAvatars | 0.515 ms | 0.075 ms |
+| GetIdleEngineers | 0.434 ms | 0.036 ms |
+
+The category tests looked up each unit's blueprint and the category by name for every unit; now a unit keeps its
+blueprint's record and a loop finds the category once. Still open: GetRightMouseButtonOrder asks every selected
+unit's state of the simulation once a beat (about 10 ms a beat with 2,000): the engine's request 26 (command caps in
+the per-beat UnitView) removes it. Order latency (scenario S): every one of the 2,000 had the move order at the
+first look, 0.1 s (two beats) after the click.
+Also seen: with 2,000 tanks the simulation takes 525-885 ms on one beat in every 10 to 60 (the engine's: parked for
+its benchmark phase; first suspect Lua 5.0's stop-the-world collector).
+
 ## 2026-10-15: the game's beats on their own thread (58e1c35, landed b12d8c7)
 
 Scenario L, `MOHO64UI_BEATS_HERE=1` (before) against the default (after), same build:
