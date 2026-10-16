@@ -7,7 +7,7 @@
 
 namespace render {
 
-inline constexpr int kShadowMapSize = 2048;  // lighting.h's shader steps by 1 / this
+inline constexpr int kShadowMapSize = 2048;  // as at first (Shadows::SetSize; lighting.h's shader reads the map's own size)
 
 class Shadows {
  public:
@@ -21,11 +21,17 @@ class Shadows {
   // measured from the camera, so that the shadow's shape is the shape of what is drawn.
   const View& CascadeView(int i) const { return cascadeViews_[i]; }
   gfx::Texture Map() const { return map_; }
+  // The maps' width and height in texels (2048 at first). Larger is sharper and costs more of the
+  // graphics card; a setting for slower cards (512 to 4096).
+  void SetSize(int size);
+  int Size() const { return size_; }
   // The pass to begin for a cascade.
   gfx::PassDesc Pass(int i) const;
 
  private:
+  gfx::Device* device_;
   gfx::Texture map_;
+  int size_ = 0;
   int count_ = 3;
   View cascadeViews_[kMaxCascades];
 };

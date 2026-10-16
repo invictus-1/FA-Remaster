@@ -24,6 +24,28 @@ gfx::Texture Solid(gfx::Device* device, uint8_t r, uint8_t g, uint8_t b, uint8_t
   return device->CreateTexture(d);
 }
 
+// Leaves out the `drop` largest sizes of a one-layer texture larger than 256 whose file has the
+// smaller ones (the texture detail setting): the image then starts at the next size down.
+void DropLargest(DdsImage* image, int drop) {
+  if (drop <= 0 || image->layers != 1 || image->cube) return;
+  const bool blocks = gfx::IsBlockCompressed(image->format);
+  const size_t unit = static_cast<size_t>(gfx::BytesPerPixelOrBlock(image->format));
+  if (!unit) return;
+  size_t skip = 0;
+  int k = 0;
+  while (k < drop && image->mips - k > 1 && std::max(image->width >> k, image->height >> k) > 256) {
+    const size_t w = static_cast<size_t>(std::max(1, image->width >> k)), h = static_cast<size_t>(std::max(1, image->height >> k));
+    skip += (blocks ? (w + 3) / 4 * ((h + 3) / 4) : w * h) * unit;
+    ++k;
+  }
+  if (!k || skip >= image->dataSize) return;
+  image->data += skip;
+  image->dataSize -= skip;
+  image->width = std::max(1, image->width >> k);
+  image->height = std::max(1, image->height >> k);
+  image->mips -= k;
+}
+
 }  // namespace
 
 TextureCache::TextureCache(gfx::Device* device, const moho::Vfs* vfs) : device_(device), vfs_(vfs) {
@@ -47,15 +69,19 @@ TextureCache::TextureCache(gfx::Device* device, const moho::Vfs* vfs) : device_(
   greyCube_ = device->CreateTexture(cube);
 }
 
-gfx::Texture TextureCache::FromDds(std::string_view file, const char* what) {
+gfx::Texture TextureCache::FromDds(std::string_view file, const char* what) { return Make(file, what, 0); }
+
+gfx::Texture TextureCache::Make(std::string_view file, const char* what, int drop) {
   DdsImage image;
   std::string error;
   if (!ParseDds(file, &image, &error)) {
     fprintf(stderr, "render: texture %s: %s\n", what, error.c_str());
     return {};
   }
+  DropLargest(&image, drop);
   gfx::Texture t = device_->CreateTexture(image.Desc());
   if (!t) fprintf(stderr, "render: texture %s: the device refused it\n", what);
+  else bytes += image.dataSize;
   return t;
 }
 
@@ -70,6 +96,7 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
     DdsImage image;
     std::string error;
     if (!file || !ParseDds(*file, &image, &error) || image.cube) continue;
+    DropLargest(&image, detail);
     if (!each) {
       first = image;
       each = image.dataSize;
@@ -91,6 +118,7 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
   td.format = first.format;
   td.data = all.data();
   td.dataSize = all.size();
+  bytes += all.size();
   return device_->CreateTexture(td);
 }
 
@@ -241,7 +269,7 @@ gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   auto it = cache_.find(key);
   if (it != cache_.end()) return it->second ? it->second : fallback;
   gfx::Texture t;
-  if (auto file = vfs_->ReadFile(key)) t = FromDds(*file, key.c_str());
+  if (auto file = vfs_->ReadFile(key)) t = Make(*file, key.c_str(), detail);
   else fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
   cache_.emplace(std::move(key), t);
   return t ? t : fallback;

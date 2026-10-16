@@ -561,7 +561,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     lightDirection = skyLight.direction;
   }
   CpuTimes::Part("sun shadows placed");
-  if (haveMap_ && shadowsOn) shadows.Place(camera, lightDirection, &view);
+  if (haveMap_ && shadowsOn) {
+    if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
+    shadows.Place(camera, lightDirection, &view);
+  }
   CpuTimes::Part("tracks, icons, deposits begun");
 
   // the tracks in lying snow: read by the ground while snow lies

@@ -5,12 +5,18 @@
 
 namespace render {
 
-Shadows::Shadows(gfx::Device* device) {
+Shadows::Shadows(gfx::Device* device) : device_(device) { SetSize(kShadowMapSize); }
+
+void Shadows::SetSize(int size) {
+  size = std::clamp(size, 256, 8192);
+  if (size == size_ && map_) return;
+  if (map_) device_->Destroy(map_);
   gfx::TargetDesc td;
-  td.width = td.height = kShadowMapSize;
+  td.width = td.height = size;
   td.layers = kMaxCascades;
   td.format = gfx::Format::D32;
-  map_ = device->CreateTarget(td);
+  map_ = device_->CreateTarget(td);
+  size_ = size;
 }
 
 gfx::PassDesc Shadows::Pass(int i) const {
@@ -36,7 +42,7 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
   for (int i = 0; i < count_; ++i, radius *= 3.2f) {
     Vec3 centre = camera.target + forward * (radius * 0.45f * tilt);
     // move the centre in whole texels only, so that shadow edges do not crawl when the camera moves
-    const float texel = 2 * radius / static_cast<float>(kShadowMapSize);
+    const float texel = 2 * radius / static_cast<float>(size_);
     float x = std::floor(Dot(centre, right) / texel) * texel, y = std::floor(Dot(centre, up) / texel) * texel;
     centre = right * x + up * y + L * Dot(centre, L);
 
@@ -62,8 +68,8 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
     nearerX = x;
     nearerY = y;
     nearerHalf = radius * 0.96f - 6 * texel;
-    cv.constants.viewport[0] = cv.constants.viewport[1] = static_cast<float>(kShadowMapSize);
-    cv.constants.viewport[2] = cv.constants.viewport[3] = 1.0f / static_cast<float>(kShadowMapSize);
+    cv.constants.viewport[0] = cv.constants.viewport[1] = static_cast<float>(size_);
+    cv.constants.viewport[2] = cv.constants.viewport[3] = 1.0f / static_cast<float>(size_);
 
     // from the projection's -1..1 (y up) to the map's 0..1 (y down)
     const Mat4 toMap = {{{0.5f, 0, 0, 0.5f}, {0, -0.5f, 0, 0.5f}, {0, 0, 1, 0}, {0, 0, 0, 1}}};
