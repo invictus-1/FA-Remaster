@@ -106,6 +106,15 @@
 //           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck)
 // --fx-faction uef|aeon|cybran|seraphim  the stand's effects are that faction's own in the remastered
 //           look (else the faction of what they are made on: a shot's by its id, a unit's)
+// --fx-move <unit>  that unit (UEL0203) made at --fx-at by its own script class and driven round a loop there
+//           at its blueprint's speed (--fx-laps n, 1), its movement effects as its scripts make them: over
+//           the map's own terrain types, from land onto water for a hover unit (put --fx-at on a shore
+//           with the land toward the camera: the loop begins at its end nearest the camera),
+//           an aircraft hovering at its elevation first; the play's length is worked out (else --fx-repeat);
+//           the camera follows it (unless --cam)
+// --fx-build <builder> <unit>  (or <builder>,<unit>) the builder building that unit at --fx-at as the game's
+//           scripts make it: a factory (UEB0101 UEL0201) on its build bone, an engineer (UEL0105 UEB1101) from
+//           beside it; --fx-build-seconds s: the build takes that long (else the game's own time)
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
@@ -390,16 +399,34 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-hit") o->fx.hit = v;
     else if (a == "--fx-repeat") {
       o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
-      o->fxRepeat = true;
+      o->fxRepeat = o->fx.repeatGiven = true;
     } else if (a == "--fx-entity") o->fx.entity = v;
     else if (a == "--fx-shield") o->fx.shield = v;
     else if (a == "--fx-death") o->fx.death = v;
     else if (a == "--fx-kill-at") o->fx.killAt = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-overkill") o->fx.overkill = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-faction") o->fx.faction = v;
+    else if (a == "--fx-move") o->fx.move = v;
+    else if (a == "--fx-laps") o->fx.laps = std::max(1, atoi(v));
+    else if (a == "--fx-build") {  // <builder> <unit>, or <builder>,<unit>
+      std::string both = v;
+      const size_t comma = both.find(',');
+      if (comma != std::string::npos) {
+        o->fx.build = both.substr(0, comma);
+        o->fx.buildUnit = both.substr(comma + 1);
+      } else {
+        const char* w = value();
+        if (!w) return false;
+        o->fx.build = both;
+        o->fx.buildUnit = w;
+      }
+    } else if (a == "--fx-build-seconds") o->fx.buildSeconds = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-hit-every") o->fx.hitEvery = std::max(0.05f, static_cast<float>(atof(v)));
     else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
-    else if (a == "--fx-spacing") o->fx.spacing = static_cast<float>(atof(v));
+    else if (a == "--fx-spacing") {
+      o->fx.spacing = static_cast<float>(atof(v));
+      o->fx.spacingGiven = true;
+    }
     else if (a == "--fx-at" || a == "--fx-from" || a == "--fx-to") {  // x,z[,height above the ground]
       float x = 0, z = 0, h = 0;
       if (sscanf(v, "%f,%f,%f", &x, &z, &h) < 2) return false;
@@ -479,7 +506,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -1023,14 +1050,15 @@ int main(int argc, char** argv) {
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
-  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty()) {
+  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||
+      !opt.fx.move.empty() || !opt.fx.build.empty()) {
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
     if (!opt.fxRepeat && !opt.fx.death.empty()) opt.fx.repeat = 12;  // (a death's smoke and debris, a ship's sinking, take their time)
     // (an effect entity's play is long: a nuke's lasts some twenty seconds)
     if (!opt.fxRepeat && (!opt.fx.entity.empty() || opt.fx.shot.find("Nuke") != std::string::npos)) opt.fx.repeat = 25;
     if (!opt.hasCam) {  // close to it, a little from above
-      camera.distance = !opt.fx.entity.empty() ? 160.0f : !opt.fx.shield.empty() ? 90.0f : !opt.fx.death.empty() ? 40.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
+      camera.distance = !opt.fx.entity.empty() ? 160.0f : !opt.fx.shield.empty() ? 90.0f : !opt.fx.death.empty() || !opt.fx.move.empty() ? 40.0f : !opt.fx.build.empty() ? 30.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
       camera.pitch = 0.55f;
     }
     {  // (a shot not placed: across the spot, away from the camera)
@@ -1043,13 +1071,22 @@ int main(int argc, char** argv) {
     }
     fxStand = std::make_unique<FxStand>();
     // (the map under a unit's death: the ground, and under water the bottom, and the water's level)
-    if (haveMap) fxStand->SetGround([&map](float x, float z) { return map.Height(x, z); }, map.water.present, map.water.elevation);
+    if (haveMap)
+      fxStand->SetGround([&map](float x, float z) { return map.Height(x, z); }, map.water.present, map.water.elevation,
+                         [&map](float x, float z) -> int {  // (the map's terrain type code of the cell)
+                           if (map.terrainTypes.empty() || map.width <= 0 || map.height <= 0) return -1;
+                           const int cx = std::clamp(static_cast<int>(x), 0, map.width - 1), cz = std::clamp(static_cast<int>(z), 0, map.height - 1);
+                           return map.terrainTypes[static_cast<size_t>(cz) * static_cast<size_t>(map.width) + static_cast<size_t>(cx)];
+                         });
     std::string fxError;
     if (fxStand->Init(&vfs, opt.fx, &fxError)) {
       printf("render: --fx: %s%s\n", fxStand->Describe().c_str(), opt.fx.compare ? "; remastered left, original right" : "");
       if (!opt.hasCam) {
         const Vec3 c = opt.fx.shot.empty() ? opt.fx.at : (opt.fx.from + opt.fx.to) * 0.5f;
         camera.target = {c.x, groundHeight(c.x, c.z) + 1, c.z};
+        // (a build: all of it in view; a move: the two sides' units, which the camera then follows;
+        // near enough to see their effects)
+        if (fxStand->Extent() > 0) camera.distance = std::max(12.0f, fxStand->Extent() * 0.6f / std::tan(camera.fovY * 0.5f));
       }
     } else {
       fprintf(stderr, "render: --fx: %s\n", fxError.c_str());
@@ -1402,6 +1439,10 @@ int main(int argc, char** argv) {
       float hours = (opt.timeOfDay >= 0 ? opt.timeOfDay : 12) + dayShift;
       if (opt.dayLength > 0) hours += time / opt.dayLength * 24;
       world.timeOfDay = dayOn ? std::fmod(hours, 24.0f) : -1;
+    }
+    {  // --fx-move: the camera follows the driven units (where the stand had them last frame)
+      Vec3 at;
+      if (fxStand && !opt.hasCam && fxStand->Focus(&at)) camera.target = at;
     }
     world.Begin(camera, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
 

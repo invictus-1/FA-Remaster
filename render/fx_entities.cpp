@@ -42,23 +42,26 @@ function Random(a, b)
   return math.floor(r * (Whole(b) + 1 - lo)) + lo
 end
 
--- vectors as the engine's: [1] [2] [3], also as x y z
-local VMeta = {}
-VMeta.__index = function(v, k)
-  if k == 'x' then return rawget(v, 1) elseif k == 'y' then return rawget(v, 2) elseif k == 'z' then return rawget(v, 3) end
-end
-VMeta.__newindex = function(v, k, x)
-  if k == 'x' then rawset(v, 1, x) elseif k == 'y' then rawset(v, 2, x) elseif k == 'z' then rawset(v, 3, x) else rawset(v, k, x) end
+-- vectors as the engine's: [1] [2] [3], also as x y z (the stand's import made them, and the game's
+-- utils.lua gave them its arithmetic; where it did not load, the plain sums)
+local VMeta = __fxVectorMeta or {}
+if not __fxVectorMeta then
+  VMeta.__index = function(v, k)
+    if k == 'x' then return rawget(v, 1) elseif k == 'y' then return rawget(v, 2) elseif k == 'z' then return rawget(v, 3) end
+  end
+  VMeta.__newindex = function(v, k, x)
+    if k == 'x' then rawset(v, 1, x) elseif k == 'y' then rawset(v, 2, x) elseif k == 'z' then rawset(v, 3, x) else rawset(v, k, x) end
+  end
 end
 function Vector(x, y, z) return setmetatable({x or 0, y or 0, z or 0}, VMeta) end
-VMeta.__add = function(a, b) return Vector(a[1] + b[1], a[2] + b[2], a[3] + b[3]) end
-VMeta.__sub = function(a, b) return Vector(a[1] - b[1], a[2] - b[2], a[3] - b[3]) end
-VMeta.__mul = function(a, b)
+VMeta.__add = VMeta.__add or function(a, b) return Vector(a[1] + b[1], a[2] + b[2], a[3] + b[3]) end
+VMeta.__sub = VMeta.__sub or function(a, b) return Vector(a[1] - b[1], a[2] - b[2], a[3] - b[3]) end
+VMeta.__mul = VMeta.__mul or function(a, b)
   if type(a) == 'number' then return Vector(a * b[1], a * b[2], a * b[3]) end
   if type(b) == 'number' then return Vector(b * a[1], b * a[2], b * a[3]) end
   return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 end
-VMeta.__unm = function(a) return Vector(-a[1], -a[2], -a[3]) end
+VMeta.__unm = VMeta.__unm or function(a) return Vector(-a[1], -a[2], -a[3]) end
 function VAdd(a, b) return Vector(a[1] + b[1], a[2] + b[2], a[3] + b[3]) end
 function VDiff(a, b) return Vector(a[1] - b[1], a[2] - b[2], a[3] - b[3]) end
 function VMult(a, s) return Vector(a[1] * s, a[2] * s, a[3] * s) end
@@ -67,7 +70,16 @@ function VDist2Sq(x1, z1, x2, z2) return (x1 - x2) * (x1 - x2) + (z1 - z2) * (z1
 function VDist2(x1, z1, x2, z2) return math.sqrt(VDist2Sq(x1, z1, x2, z2)) end
 function VDist3Sq(a, b) return (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]) + (a[3] - b[3]) * (a[3] - b[3]) end
 function VDist3(a, b) return math.sqrt(VDist3Sq(a, b)) end
-function OrientFromDir(v) local x, y, z, w = __fxOrientFromDir(v[1], v[2], v[3]) return {x, y, z, w} end
+function OrientFromDir(v) local x, y, z, w = __fxOrientFromDir(v[1], v[2], v[3]) return setmetatable({x, y, z, w}, VMeta) end
+-- the engine's EulerToQuaternion (src/script/core_bindings.cpp): qYaw(Y) * qPitch(X) * qRoll(Z)
+function EulerToQuaternion(roll, pitch, yaw)
+  roll, pitch, yaw = roll or 0, pitch or 0, yaw or 0
+  local cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+  local cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+  local cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+  return setmetatable({cy * sp * cr + sy * cp * sr, sy * cp * cr - cy * sp * sr, cy * cp * sr - sy * sp * cr,
+                       cy * cp * cr + sy * sp * sr}, VMeta)
+end
 
 -- threads (a thread is ended by KillThread or by its Destroy, as the game's are by their trash bags)
 local ThreadMeta = {__index = {Destroy = function(self) self.dead = true end}}
@@ -147,6 +159,17 @@ function CreateEmitterOnEntity(e, army, bp) return Emitter(__fxEmitter('CreateEm
 function CreateAttachedEmitter(e, bone, army, bp) return Emitter(__fxEmitter('CreateAttachedEmitter', Id(e), bp, bone, army)) end
 function CreateLightParticle(e, bone, army, size, life, texture, ramp) __fxLight(Id(e), size or 1, life or 1, texture or '', ramp or '', army, bone) end
 CreateLightParticleIntel = CreateLightParticle
+-- beams (on one thing along its bone, or between two), trails, marks under a bone
+function CreateBeamEmitterOnEntity(e, bone, army, bp) return Emitter(__fxEmitter('CreateBeamEmitterOnEntity', Id(e), bp, bone, army)) end
+function CreateBeamEmitter(bp, army) return Emitter(__fxEmitter('CreateBeamEmitter', 0, bp, nil, army)) end
+function AttachBeamEntityToEntity(e1, bone1, e2, bone2, army, bp) return Emitter(__fxBeam('AttachBeamEntityToEntity', Id(e1), bone1, Id(e2), bone2, army, bp)) end
+function CreateBeamEntityToEntity(e1, bone1, e2, bone2, army, bp) return Emitter(__fxBeam('CreateBeamEntityToEntity', Id(e1), bone1, Id(e2), bone2, army, bp)) end
+function AttachBeamToEntity(beam, e, bone, army) if type(beam) == 'table' then __fxAttachBeam(beam.__fx, Id(e), bone) end return beam end
+function CreateTrail(e, bone, army, bp) return Emitter(__fxEmitter('CreateTrail', Id(e), bp, bone, army)) end
+function CreateSplatOnBone(e, offset, bone, texture, sx, sz, lod, duration, army)
+  local o = type(offset) == 'table' and offset or {0, 0, 0}
+  __fxSplatOnBone(Id(e), bone, texture or '', o[1] or 0, o[2] or 0, o[3] or 0, sx or 1, sz or 1, lod or 100, duration or 0)
+end
 function CreateDecal(p, heading, t1, t2, kind, sx, sz, lod, duration, army)
   __fxDecal('CreateDecal', p[1], p[2], p[3], heading or 0, t1 or '', t2 or '', kind or 'Albedo', sx or 1, sz or 1, lod or 100, duration or 0)
 end
@@ -185,7 +208,7 @@ local methods = {
   GetBlueprint = function(self) return self.Blueprint end,
   GetArmy = function(self) return self.Army end,
   GetEntityId = function(self) return self.__id end,
-  GetOrientation = function(self) return {0, 0, 0, 1} end,
+  GetOrientation = function(self) return setmetatable({0, 0, 0, 1}, getmetatable(Vector())) end,
   GetVelocity = function(self) return __fxVelocityOf(self.__id) end,
   CreateProjectile = function(self, bp, ox, oy, oz, dx, dy, dz) return __fxCreate(bp, self, ox, oy, oz, dx, dy, dz) end,
   CreateProjectileAtBone = function(self, bp, bone) return __fxCreate(bp, self, 0, 0, 0, nil, nil, nil, bone) end,
@@ -219,6 +242,7 @@ for _, name in ipairs({'SetCollision', 'SetCollideSurface', 'SetCollideEntity', 
   methods[name] = quiet
 end
 __fxNullShell = Class(methods)
+__fxProjectileMethods = methods
 local trails = {}
 for k, v in pairs(methods) do trails[k] = v end
 trails.FxTrails = {}
@@ -332,13 +356,14 @@ for _, b in ipairs(__fxBindings) do
 end
 moho.IEffect = __fxEmitterMethods
 local Id = __fxIdOf
+local function IsQuiet(f) return f == quietSelf or f == quietNone end
 
 -- every entity (units, projectiles, props)
 local E = moho.entity_methods
 E.GetBlueprint = function(self) return rawget(self, '__bp') or self.Blueprint end
 E.GetPosition = function(self, bone) return Vector(__fxBonePos(self.__id, bone)) end
 E.GetPositionXYZ = function(self, bone) return __fxBonePos(self.__id, bone) end
-E.GetOrientation = function(self) local x, y, z, w = __fxTurn(self.__id) return {x, y, z, w} end
+E.GetOrientation = function(self) local x, y, z, w = __fxTurn(self.__id) return setmetatable({x, y, z, w}, getmetatable(Vector())) end
 E.GetHeading = function(self) return __fxHeading(self.__id) end
 E.GetBoneCount = function(self) return __fxBoneCount(self.__id) end
 E.GetBoneName = function(self, i) return __fxBoneName(self.__id, i) end
@@ -364,7 +389,13 @@ end
 E.ShowBone = function(self, bone, children) __fxShowBone(self.__id, bone, true, children and true or false) end
 E.HideBone = function(self, bone, children) __fxShowBone(self.__id, bone, false, children and true or false) end
 E.AttachBoneToEntityBone = function(self, bone, other) __fxCarry(self.__id, bone, Id(other)) end
-E.AttachBoneTo = function(self, bone, other) __fxCarry(self.__id, bone, Id(other)) end
+-- (bone -2: the entity itself goes with the other's bone - a unit on its factory's build bone; another
+-- bone of it: that bone, as debris carries a part off)
+E.AttachBoneTo = function(self, bone, other, otherBone)
+  if bone == -2 then __fxAttach(self.__id, Id(other), otherBone) else __fxCarry(self.__id, bone, Id(other)) end
+end
+E.AttachTo = function(self, other, otherBone) __fxAttach(self.__id, Id(other), otherBone) end
+E.DetachFrom = function(self) __fxAttach(self.__id, 0, -1) end
 E.CreateProjectile = function(self, bp, ox, oy, oz, dx, dy, dz) return __fxCreate(bp, self, ox, oy, oz, dx, dy, dz) end
 E.CreateProjectileAtBone = function(self, bp, bone) return __fxCreate(bp, self, 0, 0, 0, nil, nil, nil, bone) end
 E.SetMesh = function(self, mesh) __fxSetMesh(self.__id, mesh or '') return self end
@@ -373,7 +404,10 @@ E.SetScale = function(self, x, y, z) __fxScale(self.__id, x or 1, y or x or 1, z
 E.SetDrawScale = E.SetScale
 E.SetPosition = function(self, p) __fxWarp(self.__id, p[1], p[2], p[3]) return self end
 -- (a class has its bases' methods - entities', manipulators' - and the stand's own over the quiet ones)
-local function IsQuiet(f) return f == quietSelf or f == quietNone end
+-- (a projectile's: the stand's projectile, which some scripts take straight from here)
+for k, v in pairs(__fxProjectileMethods) do
+  if moho.projectile_methods[k] == nil or IsQuiet(moho.projectile_methods[k]) then moho.projectile_methods[k] = v end
+end
 for _, c in ipairs(__fxClassTables) do
   local base = c[3] and moho[luaName[c[3]]]
   if base then
@@ -385,11 +419,11 @@ for _, c in ipairs(__fxClassTables) do
 end
 local U = moho.unit_methods
 U.GetUnitId = function(self) return rawget(self, '__unitId') end
-U.GetFractionComplete = function() return 1 end
+U.GetFractionComplete = function(self) return __fxFraction(self.__id) end
 U.GetHealth = function(self) local d = self.Blueprint and self.Blueprint.Defense return d and d.MaxHealth or 1 end
 U.GetMaxHealth = U.GetHealth
 U.IsUnitState = function() return false end
-U.IsBeingBuilt = function() return false end
+U.IsBeingBuilt = function(self) return __fxFraction(self.__id) < 1 end
 U.GetCurrentLayer = function(self) return self.Layer end
 U.GetWeaponCount = function() return 0 end
 U.GetCargo = function() return {} end
@@ -462,8 +496,30 @@ function IsProp(e) return type(e) == 'table' and rawget(e, '__prop') == true end
 function IsProjectile(e) return IsEntity(e) and not e.IsUnit and not IsProp(e) end
 function GetTerrainHeight(x, z) return __fxTerrain(x, z) end
 function GetSurfaceHeight(x, z) return __fxSurface(x, z) end
-function GetTerrainTypeOffset() return 0 end
-function GetTerrainType() return {} end
+-- the map's terrain types (the game's /lua/TerrainTypes.lua, by the code of the map's cell; out of
+-- the map or a code it does not list: 'Default'), as the engine gives them
+local terrainTypes, defaultTerrainType
+function __fxTerrainTypeOf(code)
+  if not terrainTypes then
+    terrainTypes = {}
+    local env = setmetatable({}, {__index = _G})
+    local ok, why = pcall(doscript, '/lua/TerrainTypes.lua', env)
+    if not ok then print('fx stand: /lua/TerrainTypes.lua: ' .. tostring(why)) end
+    for _, t in ipairs(rawget(env, 'TerrainTypes') or {}) do
+      if type(t.TypeCode) == 'number' then terrainTypes[t.TypeCode] = t end
+      if t.Name == 'Default' then defaultTerrainType = t end
+    end
+  end
+  return terrainTypes[code] or defaultTerrainType or {}
+end
+function GetTerrainType(x, z) return __fxTerrainTypeOf(__fxTerrainCode(x or -1, z or -1)) end
+function GetTerrainTypeOffset(x, z) return GetTerrainType(x, z).HeightOffset or 0 end
+-- an entity made by a script (Entity(spec): a build beam's end, ...)
+function _c_CreateEntity(self, spec)
+  local id = __fxNewEntity()
+  rawset(self, '__id', id)
+  __fxObjects[id] = self
+end
 function Warp(e, p, q)
   __fxWarp(Id(e), p[1], p[2], p[3])
   if type(q) == 'table' then __fxOrient(Id(e), q[1], q[2], q[3], q[4]) end
@@ -569,9 +625,9 @@ function __fxUnitBlueprint(id, path)
   return got
 end
 
--- a unit made as the engine makes one: its script's class, OnPreCreate, OnCreate; in its layer;
--- built (OnStopBeingBuilt)
-function __fxMakeUnit(id, unitId, path, layer)
+-- a unit made as the engine makes one: its script's class, OnPreCreate, its layer (OnLayerChange),
+-- OnCreate; built (OnStopBeingBuilt), or begun by a builder (OnStartBeingBuilt)
+function __fxMakeUnit(id, unitId, path, layer, builder)
   local bp = __fxUnitBlueprint(unitId, path)
   if not bp then return false end
   -- (its script beside its blueprint, "<id>_script.lua", unless the blueprint names one)
@@ -588,11 +644,71 @@ function __fxMakeUnit(id, unitId, path, layer)
     local ok, why = pcall(f, u, unpack(arg))
     if not ok then print('fx stand: ' .. unitId .. ' ' .. name .. ': ' .. tostring(why)) end
   end
+  -- (in the engine's order: OnPreCreate, the layer, OnCreate, then finished or begun - being built
+  -- by a builder)
+  local builderObject = builder and __fxObjects[builder]
   try('OnPreCreate')
-  try('OnCreate')
+  try('OnLayerChange', layer, 'None')
   u.Layer = layer
-  try('OnStopBeingBuilt', nil, layer)
+  try('OnCreate')
+  if builderObject then try('OnStartBeingBuilt', builderObject, layer) else try('OnStopBeingBuilt', nil, layer) end
   return true
+end
+-- what the stand reads of a unit's blueprint (as the game's blueprint loading makes it)
+function __fxUnitInfo(id, path)
+  local bp = __fxUnitBlueprint(id, path)
+  if not bp then return nil end
+  local p, a = bp.Physics or {}, bp.Air or {}
+  local e = bp.Economy or {}
+  local beams = bp.Display and bp.Display.MovementEffects and bp.Display.MovementEffects.BeamExhaust
+  return tostring(p.MotionType or ''), p.Elevation or 0, p.MaxSpeed or 0, a.MaxAirspeed or 0, p.MaxAcceleration or 0,
+         e.BuildTime or 0, e.BuildRate or 0, beams and true or false
+end
+-- what the engine calls on a unit as it moves (OnMotionHorzEventChange, OnMotionVertEventChange,
+-- OnLayerChange), and the terrain it moves over changing (OnTerrainTypeChange, with the terrain types)
+function __fxEvent(id, name, new, old)
+  local u = __fxObjects[id]
+  if not u or type(u[name]) ~= 'function' then return end
+  local ok, why = pcall(u[name], u, new, old)
+  if not ok then print('fx stand: ' .. name .. ': ' .. tostring(why)) end
+end
+function __fxTerrainChange(id, new, old) __fxEvent(id, 'OnTerrainTypeChange', __fxTerrainTypeOf(new), __fxTerrainTypeOf(old)) end
+-- a build, as the engine's build tasks carry it out: the builder's OnStartBuild(unit, order); then
+-- a tick at a time the unit's fraction complete grows by 1 / (BuildTime / BuildRate) x 0.1 (or so
+-- that it takes `seconds`), OnBuildProgress and OnBeingBuiltProgress where it crosses 0.25, 0.5 and
+-- 0.75; at 1 the unit's OnStopBeingBuilt(builder, layer), then the builder's OnStopBuild(unit, order)
+function __fxBuild(builderId, unitId, order, seconds)
+  local b, u = __fxObjects[builderId], __fxObjects[unitId]
+  if not b or not u then return end
+  local function try(o, name, ...)
+    local f = o[name]
+    if type(f) ~= 'function' then return end
+    local ok, why = pcall(f, o, unpack(arg))
+    if not ok then print('fx stand: ' .. name .. ': ' .. tostring(why)) end
+  end
+  try(b, 'OnStartBuild', u, order)
+  local buildTime = (u.Blueprint.Economy or {}).BuildTime or 1
+  local rate = (b.Blueprint.Economy or {}).BuildRate or 1
+  local delta = seconds > 0 and 0.1 / seconds or 0.1 / math.max(buildTime / math.max(rate, 0.001), 0.1)
+  ForkThread(function()
+    local f = 0
+    while f < 1 do
+      WaitTicks(1)
+      if __fxDead(unitId) or __fxDead(builderId) then return end
+      local old = f
+      f = math.min(1, f + delta)
+      __fxSetFraction(unitId, f)
+      for _, q in ipairs({0.25, 0.5, 0.75}) do
+        if old < q and q <= f then
+          try(b, 'OnBuildProgress', u, old, f)
+          try(u, 'OnBeingBuiltProgress', b, old, f)
+          break
+        end
+      end
+    end
+    try(u, 'OnStopBeingBuilt', b, u.Layer)
+    try(b, 'OnStopBuild', u, order)
+  end)
 end
 function __fxKillObject(u, overkill)
   local ok, why = pcall(u.OnKilled, u, nil, 'Normal', overkill)
@@ -781,6 +897,22 @@ struct Ent {
   float modelScale = 1;              // the unit's model's (its bones' places times this are world units)
   bool falling = false;              // a dead aircraft on its way down (the engine's ballistic fall)
   Vec3 tumble;                       // its turn, radians a second
+  float fraction = 1;                // a unit's fraction complete (one being built: from 0)
+  uint32_t parent = 0;               // it goes with that entity's bone (AttachBoneTo -2, AttachTo)
+  int parentBone = -1;
+  // a unit driven round a loop (the stand's --fx-move: the engine's motion, stood in for): the loop's
+  // points and the distance along it at each, its blueprint's speed, acceleration, elevation and way
+  // of moving, the horizontal motion state the scripts were told (0 Cruise, 1 TopSpeed, 2 Stopping,
+  // 3 Stopped) and the terrain type code it stands on
+  std::vector<Vec3> loop;
+  std::vector<float> loopAt;
+  float loopLength = 0, distance = 0, speed = 0, topSpeed = 0, accel = 0, elevation = 0;
+  int laps = 1;
+  double driveStart = 0;
+  int horz = 3;
+  bool driveDone = false;
+  std::string motion;
+  int terrainCode = -1;
 };
 
 Quat Facing(Vec3 d) {
@@ -830,6 +962,64 @@ struct FxEntities::Impl {
   uint32_t seed = 1;
   std::map<int, uint32_t> sideSeeds;
   std::map<int, uint32_t> scriptSeeds;  // the scripts' Random, one run for each side
+  std::function<int(float, float)> terrainCode;  // the map's terrain type code at a place (-1: none)
+
+  // What is attached to another's bone goes where that bone is.
+  void FollowParents() {
+    for (Ent& e : ents) {
+      if (e.dead || !e.parent) continue;
+      const Ent* p = Find(e.parent);
+      if (!p) {
+        e.parent = 0;
+        continue;
+      }
+      Quat q;
+      e.position = BoneWorld(*p, e.parentBone, &q);
+      e.turn = q;
+      e.velocity = {};
+    }
+  }
+  // A place on a driven unit's loop, `d` along it, and the way it runs there.
+  void OnLoop(const Ent& e, float d, Vec3* at, Vec3* way) const {
+    const size_t n = e.loop.size();
+    d = e.loopLength > 0 ? std::fmod(d, e.loopLength) : 0;
+    if (d < 0) d += e.loopLength;
+    size_t i = 0;
+    while (i + 1 < n && e.loopAt[i + 1] <= d) ++i;
+    const Vec3 a = e.loop[i], b = e.loop[(i + 1) % n];
+    const float span = (i + 1 < n ? e.loopAt[i + 1] : e.loopLength) - e.loopAt[i];
+    const float t = span > 1e-6f ? (d - e.loopAt[i]) / span : 0;
+    *at = Lerp(a, b, t);
+    const Vec3 w{b.x - a.x, 0, b.z - a.z};
+    *way = Length(w) > 1e-6f ? Normalize(w) : Vec3{0, 0, 1};
+  }
+  // Where a unit of that way of moving stands at a place, and in which layer.
+  float StandHeight(const std::string& motion, float elevation, float x, float z, std::string* layer) const {
+    const float ground = Ground(x, z);
+    const bool wet = water && ground < waterLevel;
+    if (motion.find("Air") != std::string::npos) {
+      *layer = "Air";
+      return Surface(x, z) + std::max(elevation, 2.0f);
+    }
+    if (motion.find("Hover") != std::string::npos) {
+      *layer = wet ? "Water" : "Land";
+      return (wet ? waterLevel : ground) + elevation;
+    }
+    if (motion.find("AmphibiousFloating") != std::string::npos) {
+      *layer = wet ? "Water" : "Land";
+      return wet ? waterLevel : ground;
+    }
+    if (motion.find("Amphibious") != std::string::npos) {
+      *layer = wet ? "Seabed" : "Land";
+      return ground;
+    }
+    if (motion.find("Water") != std::string::npos || motion.find("SurfacingSub") != std::string::npos) {
+      *layer = "Water";
+      return wet ? waterLevel : ground;
+    }
+    *layer = "Land";
+    return ground;
+  }
 
   Ent* Find(uint32_t id) {
     for (Ent& e : ents)
@@ -1243,6 +1433,76 @@ int Light(lua_State* L) {
   m.events.push_back(ev);
   return 0;
 }
+// __fxBeam(name, entity, bone, entity2, bone2, army, blueprint) -> the effect's id: a beam between two
+// things' bones (AttachBeamEntityToEntity, CreateBeamEntityToEntity)
+int Beam(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  FrameEffectEvent ev = m.Event(FrameEffectEvent::Create, Str(L, 1));
+  ev.id = m.nextEffect++;
+  ev.army = static_cast<int>(Num(L, 6));
+  ev.blueprint = Str(L, 7);
+  if (ev.blueprint.empty()) {
+    lua_pushnumber(L, ev.id);
+    return 1;
+  }
+  if (const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 2)))) {
+    ev.entity = e->id;
+    ev.bone = m.BoneOf(*e, L, 3);
+    const Vec3 p = m.BoneWorld(*e, ev.bone);
+    ev.position[0] = p.x;
+    ev.position[1] = p.y;
+    ev.position[2] = p.z;
+    ev.original = e->original;
+  }
+  if (const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 4)))) {
+    ev.entity2 = e->id;
+    ev.bone2 = m.BoneOf(*e, L, 5);
+    const Vec3 p = m.BoneWorld(*e, ev.bone2);
+    ev.hasPosition2 = true;
+    ev.position2[0] = p.x;
+    ev.position2[1] = p.y;
+    ev.position2[2] = p.z;
+  }
+  m.events.push_back(ev);
+  lua_pushnumber(L, ev.id);
+  return 1;
+}
+// __fxAttachBeam(effect, entity, bone): a beam made without a place gets one (AttachBeamToEntity)
+int AttachBeam(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  FrameEffectEvent ev = m.Event(FrameEffectEvent::Call, "AttachBeamToEntity");
+  ev.id = static_cast<uint32_t>(Num(L, 1));
+  if (const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 2)))) {
+    ev.entity = e->id;
+    ev.bone = m.BoneOf(*e, L, 3);
+    const Vec3 p = m.BoneWorld(*e, ev.bone);
+    ev.position[0] = p.x;
+    ev.position[1] = p.y;
+    ev.position[2] = p.z;
+  }
+  m.events.push_back(ev);
+  return 0;
+}
+// __fxSplatOnBone(entity, bone, texture, offset x, y, z, sizeX, sizeZ, lod, duration): a mark under a bone
+int SplatOnBone(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  if (!e) return 0;
+  FrameEffectEvent ev = m.Event(FrameEffectEvent::Create, "CreateSplatOnBone");
+  ev.id = m.nextEffect++;
+  ev.entity = e->id;
+  ev.bone = m.BoneOf(*e, L, 2);
+  ev.blueprint = Str(L, 3);
+  const Vec3 p = m.BoneWorld(*e, ev.bone);
+  ev.position[0] = p.x;
+  ev.position[1] = p.y;
+  ev.position[2] = p.z;
+  ev.numbers = {Num(L, 4), Num(L, 5), Num(L, 6), Num(L, 7, 1), Num(L, 8, 1), Num(L, 9, 100), Num(L, 10)};
+  ev.original = e->original;
+  m.events.push_back(ev);
+  return 0;
+}
+
 // __fxDecal(name, x, y, z, heading, texture, texture2, kind, sizeX, sizeZ, lod, duration)
 int Decal(lua_State* L) {
   FxEntities::Impl& m = *FxEntities::Impl::Of(L);
@@ -1399,6 +1659,45 @@ int CopyPose(lua_State* L) {
   to->hidden = from->hidden;
   return 0;
 }
+// __fxFraction(unit) -> its fraction complete; __fxSetFraction(unit, f)
+int Fraction(lua_State* L) {
+  const Ent* e = FxEntities::Impl::Of(L)->Find(static_cast<uint32_t>(Num(L, 1)));
+  lua_pushnumber(L, e ? e->fraction : 1);
+  return 1;
+}
+int SetFraction(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.fraction = std::clamp(Num(L, 2), 0.0f, 1.0f); }); }
+// __fxAttach(entity, parent, parentBone): it goes with the parent's bone (0: no parent any more)
+int Attach(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Ent* e = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  if (!e) return 0;
+  const Ent* p = m.Find(static_cast<uint32_t>(Num(L, 2)));
+  e->parent = p ? p->id : 0;
+  e->parentBone = p ? m.BoneOf(*p, L, 3) : -1;
+  m.FollowParents();
+  return 0;
+}
+// __fxNewEntity() -> id: a script entity without a mesh (Entity(spec))
+int NewEntity(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Ent e;
+  e.id = m.nextEntity++;
+  e.align = false;
+  e.original = m.spawnOriginal;
+  e.side = m.spawnSide;
+  e.born = m.now;
+  m.ents.push_back(e);
+  lua_pushnumber(L, e.id);
+  return 1;
+}
+// __fxTerrainCode(x, z) -> the map's terrain type code there (-1: out of the map, or no map)
+int TerrainCode(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  const float x = Num(L, 1, -1), z = Num(L, 2, -1);
+  lua_pushnumber(L, m.terrainCode && x >= 0 && z >= 0 ? m.terrainCode(x, z) : -1);
+  return 1;
+}
+
 // __fxAnimator(unit) -> its number among the unit's animators
 int Animator(lua_State* L) {
   Ent* e = FxEntities::Impl::Of(L)->Find(static_cast<uint32_t>(Num(L, 1)));
@@ -1502,7 +1801,9 @@ bool FxEntities::Init(moho::Vfs* vfs, uint32_t seed, std::string* error) {
                     {"__fxSeen", Seen},
                     {"__fxEmitter", Emitter},     {"__fxCall", Call},
                     {"__fxEnd", End},             {"__fxLight", Light},
-                    {"__fxDecal", Decal},         {"__fxRandom", ScriptRandom}};
+                    {"__fxDecal", Decal},         {"__fxRandom", ScriptRandom},
+                    {"__fxBeam", Beam},           {"__fxAttachBeam", AttachBeam},
+                    {"__fxSplatOnBone", SplatOnBone}};
   for (const auto& f : kFunctions) Register(L, &m, f.name, f.f);
   lua_pushstring(L, "__fxSeed");
   lua_pushnumber(L, std::max<uint32_t>(seed % 2147483646u, 1));
@@ -1516,10 +1817,12 @@ bool FxEntities::Init(moho::Vfs* vfs, uint32_t seed, std::string* error) {
 }
 
 bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool water, float waterLevel,
-                           std::function<const Model*(const std::string&)> unitModel, std::string* error) {
+                           std::function<const Model*(const std::string&)> unitModel, std::string* error,
+                           std::function<int(float, float)> terrainType) {
   Impl& m = *impl_;
   if (!m.state) return false;
   m.units = true;
+  m.terrainCode = std::move(terrainType);
   m.terrain = std::move(terrain);
   m.water = water;
   m.waterLevel = waterLevel;
@@ -1535,7 +1838,8 @@ bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool wate
                     {"__fxWarp", WarpTo},         {"__fxProp", Prop},           {"__fxSetMesh", SetMesh},
                     {"__fxCopyPose", CopyPose},   {"__fxAnimator", Animator},   {"__fxPlayAnim", PlayAnim},
                     {"__fxAnimRate", AnimRate},   {"__fxAnimSet", AnimSet},     {"__fxAnimStop", AnimStop},
-                    {"__fxAnimInfo", AnimInfo}};
+                    {"__fxAnimInfo", AnimInfo},   {"__fxFraction", Fraction},   {"__fxSetFraction", SetFraction},
+                    {"__fxAttach", Attach},       {"__fxNewEntity", NewEntity}, {"__fxTerrainCode", TerrainCode}};
   for (const auto& f : kFunctions) Register(L, &m, f.name, f.f);
   // the engine's class tables and the methods it binds, for the runtime to fill
   lua_pushstring(L, "__fxClassTables");
@@ -1600,7 +1904,7 @@ bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool wate
   return true;
 }
 
-uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, Vec3 forward, bool original, int side, float fallAfter, std::string* error) {
+uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& how, std::string* error) {
   Impl& m = *impl_;
   if (!m.state || !m.units) {
     *error = "the stand's units are not set up";
@@ -1608,53 +1912,47 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, Vec3 forward, bool 
   }
   const std::string unitId = Lower(id);
   const std::string path = "/units/" + unitId + "/" + unitId + "_unit.bp";
-  auto text = m.vfs->ReadFile(moho::Vfs::Normalize(path));
-  if (!text) {
+  if (!m.vfs->Exists(moho::Vfs::Normalize(path))) {
     *error = "no unit blueprint " + path;
     return 0;
   }
-  // its layer and where it stands, by how it moves (Physics.MotionType) and where `at` is
+  Echo echo;
+  lua_State* L = m.state->L();
+  // what it is, as the game's blueprint loading makes its blueprint
   std::string motion;
-  float elevation = 0, speed = 0;
-  {
-    auto field = [&](const char* name) -> std::string {
-      const size_t k = text->find(name);
-      if (k == std::string::npos) return std::string();
-      size_t v = text->find('=', k);
-      if (v == std::string::npos) return std::string();
-      ++v;
-      while (v < text->size() && ((*text)[v] == ' ' || (*text)[v] == '"' || (*text)[v] == '\'')) ++v;
-      size_t e = v;
-      while (e < text->size() && (*text)[e] != ',' && (*text)[e] != '"' && (*text)[e] != '\'' && (*text)[e] != '\n' && (*text)[e] != '\r') ++e;
-      return text->substr(v, e - v);
-    };
-    motion = field("MotionType");
-    elevation = static_cast<float>(std::atof(field("Elevation").c_str()));
-    speed = static_cast<float>(std::atof(field("MaxAirspeed").c_str()));
+  float elevation = 0, landSpeed = 0, airSpeed = 0, accel = 0;
+  lua_getglobal(L, "__fxUnitInfo");
+  lua_pushstring(L, unitId.c_str());
+  lua_pushstring(L, path.c_str());
+  if (lua_pcall(L, 2, 8, 0) != 0) {
+    *error = std::string("its blueprint cannot be read: ") + (lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    lua_pop(L, 1);
+    return 0;
   }
+  if (lua_isstring(L, -8)) motion = lua_tostring(L, -8);
+  elevation = Num(L, -7);
+  landSpeed = Num(L, -6);
+  airSpeed = Num(L, -5);
+  accel = Num(L, -4);
+  lua_pop(L, 8);
+  Vec3 forward = how.forward;
   forward.y = 0;
   forward = Length(forward) > 1e-4f ? Normalize(forward) : Vec3{0, 0, 1};
-  std::string layer = "Land";
+  const bool air = motion.find("Air") != std::string::npos;
+  const float speed = air ? std::max(airSpeed, 1.0f) : std::max(landSpeed, 0.5f);
   Vec3 place = at;
-  const bool wet = m.water && m.Ground(at.x, at.z) < m.waterLevel;
-  if (motion.find("Air") != std::string::npos) {
-    layer = "Air";
+  if (air && how.flyIn) {
     // flying level at its elevation and speed, so that if it dies `fallAfter` seconds from now it
     // comes down at `at` (its fall: from its elevation under the simulation's gravity)
     const float h = std::max(elevation, 2.0f);
     const float fall = std::sqrt(2 * h / -kGravity);
-    place = at - forward * (std::max(speed, 1.0f) * (fallAfter + fall));
-    place.y = m.Surface(place.x, place.z) + h;
-  } else if (motion.find("Water") != std::string::npos || motion.find("Hover") != std::string::npos ||
-             motion.find("SurfacingSub") != std::string::npos) {
-    layer = wet || motion.find("Hover") == std::string::npos ? "Water" : "Land";
-    if (!wet && motion.find("Hover") == std::string::npos)
-      fprintf(stderr, "render: --fx-death: %s moves on water and --fx-at is not on water: it dies as a ship does all the same\n", unitId.c_str());
-    place.y = wet ? m.waterLevel : m.Ground(at.x, at.z);
-  } else {
-    place.y = m.Ground(at.x, at.z);
-    if (wet && motion.find("Amphibious") != std::string::npos) layer = "Seabed";
+    place = at - forward * (speed * (how.fallAfter + fall));
   }
+  std::string layer;
+  place.y = m.StandHeight(motion, elevation, place.x, place.z, &layer);
+  const bool wet = m.water && m.Ground(place.x, place.z) < m.waterLevel;
+  if (!air && !wet && motion.find("Water") != std::string::npos)
+    fprintf(stderr, "render: --fx: %s moves on water and is not on water: it stands on the ground all the same\n", unitId.c_str());
   Ent e;
   e.id = m.nextUnit++;  // (army 0's: the low ids)
   e.unit = true;
@@ -1662,30 +1960,36 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, Vec3 forward, bool 
   e.position = place;
   e.turn = Facing(forward);
   e.direction = forward;
-  e.original = original;
-  e.side = side;
+  e.original = how.original;
+  e.side = how.side;
   e.born = m.now;
   e.layer = layer;
+  e.motion = motion;
+  e.elevation = elevation;
+  e.topSpeed = speed;
+  e.accel = accel > 0 ? accel : speed;
+  e.terrainCode = m.terrainCode ? m.terrainCode(place.x, place.z) : -1;
+  e.fraction = how.builder ? 0.0f : 1.0f;
   e.blueprint = m.BlueprintIndex(unitId);
-  if (layer == "Air") e.velocity = forward * std::max(speed, 1.0f);
+  if (air && how.flyIn) e.velocity = forward * speed;
   m.TakeSkeleton(e, unitId);
   if (e.bones.empty()) {
     *error = "the model of " + unitId + " cannot be read";
     return 0;
   }
   m.ents.push_back(e);
-  Echo echo;
-  m.spawnOriginal = original;
-  m.spawnSide = side;
-  m.SetSide(side);
-  lua_State* L = m.state->L();
+  m.spawnOriginal = how.original;
+  m.spawnSide = how.side;
+  m.SetSide(how.side);
   lua_getglobal(L, "__fxMakeUnit");
   lua_pushnumber(L, e.id);
   lua_pushstring(L, unitId.c_str());
   lua_pushstring(L, path.c_str());
   lua_pushstring(L, layer.c_str());
+  if (how.builder) lua_pushnumber(L, how.builder);
+  else lua_pushnil(L);
   bool made = false;
-  if (lua_pcall(L, 4, 1, 0) == 0) {
+  if (lua_pcall(L, 5, 1, 0) == 0) {
     made = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
   } else {
@@ -1698,6 +2002,52 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, Vec3 forward, bool 
     return 0;
   }
   return e.id;
+}
+
+void FxEntities::Build(uint32_t builder, uint32_t unit, const std::string& order, float seconds) {
+  Impl& m = *impl_;
+  const Ent* b = m.Find(builder);
+  if (!m.state || !b || !m.Find(unit)) return;
+  Echo echo;
+  m.spawnOriginal = b->original;
+  m.spawnSide = b->side;
+  m.SetSide(b->side);
+  lua_State* L = m.state->L();
+  lua_getglobal(L, "__fxBuild");
+  lua_pushnumber(L, builder);
+  lua_pushnumber(L, unit);
+  lua_pushstring(L, order.c_str());
+  lua_pushnumber(L, seconds);
+  if (lua_pcall(L, 4, 0, 0) != 0) {
+    fprintf(stderr, "render: --fx-build: %s\n", lua_isstring(L, -1) ? lua_tostring(L, -1) : "the build did not run");
+    lua_pop(L, 1);
+  }
+}
+
+void FxEntities::Drive(uint32_t unit, const std::vector<Vec3>& loop, double start, int laps) {
+  Impl& m = *impl_;
+  Ent* e = m.Find(unit);
+  if (!e || !e->unit || loop.size() < 2) return;
+  e->loop = loop;
+  e->loopAt.assign(loop.size(), 0.0f);
+  e->loopLength = 0;
+  for (size_t i = 0; i < loop.size(); ++i) {
+    e->loopAt[i] = e->loopLength;
+    const Vec3 d = loop[(i + 1) % loop.size()] - loop[i];
+    e->loopLength += std::sqrt(d.x * d.x + d.z * d.z);
+  }
+  e->driveStart = start;
+  e->laps = std::max(1, laps);
+  e->distance = e->speed = 0;
+  e->horz = 3;
+  e->driveDone = false;
+  // set on the loop's start, facing along it
+  Vec3 at, way;
+  m.OnLoop(*e, 0, &at, &way);
+  std::string layer;
+  e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer), at.z};
+  e->turn = Facing(way);
+  e->direction = way;
 }
 
 void FxEntities::Kill(uint32_t unit, float overkill) {
@@ -1841,9 +2191,83 @@ void FxEntities::Advance(double now) {
         impact(*e, h.second);
       }
     }
+    // the driven units move on along their loops: each tick to its place on the loop, telling the
+    // unit's scripts what the engine tells them - its horizontal motion (Stopped, Cruise, TopSpeed,
+    // Stopping), its layer, the terrain type it moves onto
+    {
+      std::vector<uint32_t> driven;
+      for (const Ent& e : m.ents)
+        if (!e.dead && e.unit && !e.loop.empty() && !e.driveDone && m.now >= e.driveStart) driven.push_back(e.id);
+      static const char* const kHorz[4] = {"Cruise", "TopSpeed", "Stopping", "Stopped"};
+      auto event = [&](uint32_t id, const char* name, const std::string& a, const std::string& b) {
+        lua_getglobal(L, "__fxEvent");
+        lua_pushnumber(L, id);
+        lua_pushstring(L, name);
+        lua_pushstring(L, a.c_str());
+        lua_pushstring(L, b.c_str());
+        if (lua_pcall(L, 4, 0, 0) != 0) lua_pop(L, 1);
+      };
+      for (uint32_t id : driven) {
+        Ent* e = m.Find(id);
+        if (!e) continue;
+        m.SetSide(e->side);
+        m.spawnOriginal = e->original;
+        m.spawnSide = e->side;
+        std::vector<std::pair<int, int>> horz;  // (new, old)
+        const float total = e->loopLength * static_cast<float>(e->laps);
+        if (e->horz == 3) {  // sets off
+          horz.emplace_back(0, 3);
+          e->horz = 0;
+        }
+        if (e->horz == 0 || e->horz == 1) {
+          e->speed = std::min(e->topSpeed, e->speed + e->accel * 0.1f);
+          if (e->speed >= e->topSpeed && e->horz == 0) {
+            horz.emplace_back(1, 0);
+            e->horz = 1;
+          }
+          if (total - e->distance <= e->speed * e->speed / (2 * e->accel) + e->speed * 0.1f) {
+            horz.emplace_back(2, e->horz);
+            e->horz = 2;
+          }
+        } else if (e->horz == 2) {
+          e->speed = std::max(0.0f, e->speed - e->accel * 0.1f);
+        }
+        e->distance = std::min(total, e->distance + e->speed * 0.1f);
+        if (e->horz == 2 && (e->speed <= 0 || e->distance >= total)) {
+          e->speed = 0;
+          horz.emplace_back(3, 2);
+          e->horz = 3;
+          e->driveDone = true;
+        }
+        Vec3 at, way;
+        m.OnLoop(*e, e->distance, &at, &way);
+        std::string layer;
+        e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer), at.z};
+        e->turn = Facing(way);
+        e->direction = way;
+        e->velocity = way * e->speed;
+        const std::string oldLayer = e->layer;
+        e->layer = layer;
+        const int code = m.terrainCode ? m.terrainCode(at.x, at.z) : -1;
+        const int oldCode = e->terrainCode;
+        e->terrainCode = code;
+        // (the scripts may make what moves the list: the unit is looked for again after each call)
+        for (const auto& h : horz) event(id, "OnMotionHorzEventChange", kHorz[h.first], kHorz[h.second]);
+        if (layer != oldLayer) event(id, "OnLayerChange", layer, oldLayer);
+        if (code != oldCode) {
+          lua_getglobal(L, "__fxTerrainChange");
+          lua_pushnumber(L, id);
+          lua_pushnumber(L, code);
+          lua_pushnumber(L, oldCode);
+          if (lua_pcall(L, 3, 0, 0) != 0) lua_pop(L, 1);
+        }
+      }
+    }
+    m.FollowParents();
     m.state->DoString("__fxRun(" + std::to_string(next) + ")", "fx stand tick");
   }
   m.Move(now - m.now);
+  m.FollowParents();
   m.now = now;
   m.ents.erase(std::remove_if(m.ents.begin(), m.ents.end(), [](const Ent& e) { return e.dead; }), m.ents.end());
   // the frame: with a mesh as projectiles, without as script entities (for what hangs on them), the
@@ -1864,6 +2288,7 @@ void FxEntities::Advance(double now) {
       b.position = e.position;
       b.turn = e.turn;
       b.scale = e.wreck ? e.size.x : e.modelScale;
+      b.built = e.wreck ? 1.0f : e.fraction;
       std::vector<Vec3> P;
       std::vector<Quat> Q;
       m.ModelPose(e, &P, &Q);
