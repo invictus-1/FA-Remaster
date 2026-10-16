@@ -73,13 +73,15 @@ class MeshRenderer {
   float minPixels = 1.5f;         // smaller than this on screen: not drawn (a strategic icon's job)
   float shadowMinPixels = 12;     // smaller than this: casts no shadow
   float shadowDetail = 0.25f;     // shadows are drawn from coarser levels: this share of the triangles
-  // The scene's solid models first lay their depth alone (with the holes of leaves and of what is
-  // being built), so that the full shading runs once a pixel, for what is in front, and not again
-  // for every tree behind it. The same picture. OFF: measured on an RTX 4090 (2026-10-15) it costs
-  // more than it saves (units and scenery at 1440p, rebuilt Seton's: 3.9 against 2.8 ms from low, 3.5
-  // against 2.9 at middle zoom); the card's own early depth test already spares what is hidden. Kept
-  // to try on slower cards (viewer --prepass).
-  bool depthPrepass = false;
+  // The scene's solid models that are large on screen first lay their depth alone (with the holes of
+  // leaves and of what is being built), and are then shaded writing no depth, so that the full shading
+  // runs once a pixel, for what is in front, and not again for every leaf behind it. The same picture.
+  // ON (2026-10-15, RTX 4090, 1440p, the best of three runs each): units and scenery on the rebuilt
+  // Seton's at middle zoom 2.49 -> 1.84 ms, from far 1.97 -> 1.82; the stock map and a battle the same
+  // either way. (A first try kept writing depth in the full shading: the card then tests depth only
+  // after shading what cuts holes, and it saved nothing. Small models are left out: drawing them twice
+  // cost more than it spared.) Viewer --no-prepass: off.
+  bool depthPrepass = true;
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
@@ -123,12 +125,14 @@ class MeshRenderer {
     const ModelLod* lod;
     Entry* entry;
     float bones;  // Instance::bones.x for this pass
+    bool near;    // large on screen (depthPrepass: only these have their depth laid first)
   };
   void BuildRows(Entry* entry);
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
   gfx::Pipeline prepass_, prepassLeaves_;  // (depthPrepass: depth alone, the scene's samples)
+  gfx::Pipeline laid_, laidLeaves_;        // (depthPrepass: then the full shading, writing no depth)
   // two of the game's lookup textures for the original look (where the game's files have them):
   // the Cybran's highlight by how the sun's mirror image and the sun itself stand to the surface,
   // and the Seraphim's ramp of how strongly a surface mirrors by the angle it is seen at
