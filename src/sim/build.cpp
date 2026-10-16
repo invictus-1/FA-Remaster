@@ -247,7 +247,7 @@ bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
     const int oz = static_cast<int16_t>(RoundEven(z - fp.sizeZ * 0.5f));
     const int ox = static_cast<int16_t>(RoundEven(x - fp.sizeX * 0.5f));
     unsigned caps = sim.navigation().MobileCaps(fp, ox, oz);
-    if (caps && sim.navigation().AnyStructureIn(ox, oz, ox + fp.sizeX, oz + fp.sizeZ)) caps &= ~0xbu;
+    caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, ox, oz);
     return caps != 0;
   }
   if (!StructureLayers(sim, bp, d, x, z)) return false;
@@ -313,7 +313,7 @@ void OccupyStructure(Sim& sim, Unit* u) {
   if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
-  sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+  sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
@@ -343,7 +343,7 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
   // walking to reclaim a rock at (152.2, 558.3): the original's path does not cross the rock at (153.9, 567.6)
   // (cells 152..154 x 565..569), its first target stops at (156, 568); ours went through it to (154, 566).
   if (p->occCaps & 15) {
-    if (occupy) sim.navigation().AddStructure(EntityRef(p), x0, z0, x0 + sx, z0 + sz);
+    if (occupy) sim.navigation().AddStructure(EntityRef(p), x0, z0, x0 + sx, z0 + sz, p->occCaps);
     else sim.navigation().RemoveStructure(EntityRef(p));
   }
   LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
@@ -1165,7 +1165,10 @@ bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F, int fr[4]) {
   fr[3] = fr[1] + fp.sizeZ;
   for (Unit* e : UnitsMeetingBox(sim, static_cast<float>(fr[0]), static_cast<float>(fr[1]), static_cast<float>(fr[2]),
                                  static_cast<float>(fr[3]))) {
-    if (e == F || e->dead || e->destroyQueued || !e->blueprint) continue;
+    // (IsDead vt+0x28 only, 0x62dbae: a destroy-queued unit still counts. Seen: Skirmish 1863, Chloe's Aeon T2 air factory
+    // 0x60001f finishes its upgrade over the T1 one, 0x600016, which is destroy-queued in the same command stage: the
+    // original's new factory waits (return 50) under the old one, ours started its first unit at once.)
+    if (e == F || e->dead || !e->blueprint) continue;
     if (!e->commands.empty()) continue;  // flag 1: 0x62dbca
     if (e->parentId || e->unitStates.count("Attached") || e->layer == "Air") continue;
     if (!(e->motion.bp && e->motion.bp->mobile())) {
@@ -2620,11 +2623,20 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
     g.ownCmd.reset();
   }
   g.result = 0;
-  // (b) a changed U+0x4e0 (upgrade hand-over)
+  // (b) a changed U+0x4e0 (upgrade hand-over), 0x6142d3..0x614369: the Guard command, found in U's queue by its id
+  // (FindCommandIndex 0x6edd30), is retargeted with CUnitCommandQueue::SetCommandTarget 0x6ee470: for an entity not
+  // dead (+0x99) a new CAiTarget (UpdateTarget 0x5d55b0 at 0x6ee4ae: one target-point draw for a unit with target
+  // bones), then CUnitCommand::SetTarget 0x6e8820. Seen: Skirmish 1863, army 6's five engineers guarding the air
+  // factory 0x600016, whose upgrade 0x60001f took them over (NotifyUpgrade, 1862): the original draws five target
+  // points (0x6aaf94) at the start of the beat; ours retargeted without a draw.
   if (g.G != U->guardedId) {
     g.G = U->guardedId;
     if (auto c = g.cmd.lock())
-      if (g.G) c->targetId = g.G;
+      if (Unit* nG = FindUnitAny(sim, g.G))
+        if (std::find(U->commands.begin(), U->commands.end(), c) != U->commands.end() && !nG->dead) {
+          c->targetPoint = TargetPointDraw(sim, nG);
+          c->targetId = g.G;
+        }
   }
   U->unitStates.erase("GuardBusy");
   // (c) validity
@@ -3627,7 +3639,17 @@ void Detach(Sim& sim, Unit* u) {
   }
   u->parentId = 0;
   u->unitStates.erase("Attached");
-  u->motion.needSnap = true;
+  // NotifyDetached's motion+0x90 asks for a snap only where the motion step reads it: CalcMoveLand (0x6c31b7) and
+  // CalcMoveHover. CalcMoveWater 0x6c3480 (any other layer, no hover) sets the unit on the water only when it moved,
+  // dives, or still pitches (0x6c34b0 / 0x6c3523): a submarine let go by its naval factory stays at the build bone's
+  // height until it moves (ProcessSurfaceCollisionFromLastMove, which reads +0x90 too, skips the Sub layer).
+  // Seen: Skirmish 1986, army 5's submarine 0x500022 finished at y 17.508: the original kept that y to 1988 and was
+  // at its depth (15.0) when it moved at 1989; ours set it at its depth at once (our creation-time snap request,
+  // still pending while the unit was attached, is dropped here too: CalcMoveWater has no such request).
+  const MotionBlueprint* mb = u->motion.bp;
+  const bool waterCalc = mb && !mb->canFly && mb->motionType != kMotionHover && u->layer != "Land" && u->layer != "Seabed";
+  u->motion.needSnap = !waterCalc;
+  if (waterCalc) u->motion.surfaceNext = true;
   {  // the motion's facing: the unit's heading now (CUnitMotion::NotifyDetached)
     Vec3 f = vm::Forward(u->orientation);
     float l = std::sqrt(f.x * f.x + f.z * f.z);

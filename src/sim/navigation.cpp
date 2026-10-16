@@ -48,6 +48,8 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
   h_ = map.height();
   cells_.assign(static_cast<size_t>(w_) * h_, 0);
   blocked_.assign(static_cast<size_t>(w_) * h_, 0);
+  blockedWater_.assign(static_cast<size_t>(w_) * h_, 0);
+  ignoreStructures = (fp.flags & 1) != 0;
   sizeX = std::max<int>(1, fp.sizeX);
   sizeZ = std::max<int>(1, fp.sizeZ);
   for (int z = 0; z < h_; ++z)
@@ -58,24 +60,31 @@ uint8_t Navigation::MobileCaps(const NamedFootprint& fp, int x, int z) const {
   return map_ ? MobileCheckCaps(*map_, fp, blocking_.data(), x, z) : 0;
 }
 
-void PathGrid::Block(int x0, int z0, int x1, int z1, int delta) {
+void PathGrid::Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ) {
   // origins o with [o, o+size) overlapping [x0, x1)
   int ox0 = std::max(0, x0 - sizeX + 1), oz0 = std::max(0, z0 - sizeZ + 1);
   int ox1 = std::min(w_ - 1, x1 - 1), oz1 = std::min(h_ - 1, z1 - 1);
   for (int z = oz0; z <= oz1; ++z)
     for (int x = ox0; x <= ox1; ++x) {
-      uint16_t& b = blocked_[static_cast<size_t>(z) * w_ + x];
-      b = static_cast<uint16_t>(b + delta);
+      const size_t i = static_cast<size_t>(z) * w_ + x;
+      if (occ & kOccLand) blocked_[i] = static_cast<uint16_t>(blocked_[i] + delta);
+      if (occ & kOccWater) blockedWater_[i] = static_cast<uint16_t>(blockedWater_[i] + delta);
     }
 }
 
-void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1) {
-  if (!map_ || x1 <= x0 || z1 <= z0) return;
-  structures_.push_back({entity, x0, z0, x1, z1});
-  for (auto& [k, g] : grids_) g->Block(x0, z0, x1, z1, +1);
+void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps) {
+  const uint8_t occ = OccLayersOf(fpCaps);
+  if (!map_ || x1 <= x0 || z1 <= z0 || !occ) return;
+  structures_.push_back({entity, x0, z0, x1, z1, occ});
+  for (auto& [k, g] : grids_) g->Block(x0, z0, x1, z1, +1, occ);
   if (occ_.empty()) occ_.assign(static_cast<size_t>(map_->width()) * map_->height(), 0);
+  if (occWater_.empty()) occWater_.assign(static_cast<size_t>(map_->width()) * map_->height(), 0);
   for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
-    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x) ++occ_[static_cast<size_t>(z) * map_->width() + x];
+    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x) {
+      const size_t i = static_cast<size_t>(z) * map_->width() + x;
+      if (occ & kOccLand) ++occ_[i];
+      if (occ & kOccWater) ++occWater_[i];
+    }
 }
 
 void Navigation::RemoveStructure(uint32_t entity) {
@@ -83,30 +92,36 @@ void Navigation::RemoveStructure(uint32_t entity) {
     if (structures_[i].entity != entity) continue;
     OccupiedRect r = structures_[i];
     structures_.erase(structures_.begin() + static_cast<long>(i));
-    for (auto& [k, g] : grids_) g->Block(r.x0, r.z0, r.x1, r.z1, -1);
+    for (auto& [k, g] : grids_) g->Block(r.x0, r.z0, r.x1, r.z1, -1, r.occ);
     for (int z = std::max(0, r.z0); z < std::min(map_->height(), r.z1); ++z)
-      for (int x = std::max(0, r.x0); x < std::min(map_->width(), r.x1); ++x)
-        --occ_[static_cast<size_t>(z) * map_->width() + x];
+      for (int x = std::max(0, r.x0); x < std::min(map_->width(), r.x1); ++x) {
+        const size_t i = static_cast<size_t>(z) * map_->width() + x;
+        if (r.occ & kOccLand) --occ_[i];
+        if (r.occ & kOccWater) --occWater_[i];
+      }
     return;
   }
 }
 
-bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1) const {
+bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1, uint8_t occ) const {
   if (occ_.empty() || !map_) return false;
   for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
-    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x)
-      if (occ_[static_cast<size_t>(z) * map_->width() + x]) return true;
+    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x) {
+      const size_t i = static_cast<size_t>(z) * map_->width() + x;
+      if (((occ & kOccLand) && occ_[i]) || ((occ & kOccWater) && occWater_[i])) return true;
+    }
   return false;
 }
 
 const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   if (!map_) return nullptr;
   std::string key = fp.name;
-  key += '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' + std::to_string(fp.caps);
+  key += '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' + std::to_string(fp.caps) + '/' +
+         std::to_string(fp.flags & 1);
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
   auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data());
-  for (const auto& st : structures_) g->Block(st.x0, st.z0, st.x1, st.z1, +1);
+  for (const auto& st : structures_) g->Block(st.x0, st.z0, st.x1, st.z1, +1, st.occ);
   const PathGrid* r = g.get();
   grids_[key] = std::move(g);
   return r;

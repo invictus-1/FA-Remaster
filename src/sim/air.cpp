@@ -651,7 +651,8 @@ bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps
   const PathGrid* g = sim.navigation().Grid(fp);
   int c = g ? g->Caps(cx, cz) : 0;
   if (u->layer == "Water") c &= ~kSub;
-  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S)) c &= ~3;
+  c = FitsCaps(static_cast<uint8_t>(c), (fp.flags & 1) != 0, sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S, kOccLand),
+               sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S, kOccWater));
   if (!c) return false;
   int r[4] = {cx, cz, cx + S, cz + S};
   if (!CanReserve(sim, u, r)) return false;
@@ -729,7 +730,7 @@ bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int c
   const PathGrid* g = sim.navigation().Grid(fp);
   int c = g ? g->Caps(cx, cz) : 0;
   if (u->layer == "Water") c &= ~kSub;
-  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) c &= ~3;
+  c = sim.navigation().FootprintFits(static_cast<uint8_t>(c), fp, cx, cz);
   if (!c) {
     *why = "caps";
     return false;
@@ -2080,7 +2081,7 @@ bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz) {  // as GroundSpotOkImpl
   const PathGrid* g = sim.navigation().Grid(fp);
   int c = g ? g->Caps(cx, cz) : 0;
   if (u->layer == "Water") c &= ~kSub;
-  if ((c & 3) && !(fp.flags & 1) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) c &= ~3;
+  c = sim.navigation().FootprintFits(static_cast<uint8_t>(c), fp, cx, cz);
   return c != 0;
 }
 

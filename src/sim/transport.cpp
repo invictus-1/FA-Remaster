@@ -547,6 +547,8 @@ void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBo
   sim.MarkUnitsMoved();
 }
 
+void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic);
+
 // Unit::DetachFrom 0x6ab480 + CUnitMotion::NotifyDetached 0x6b9570
 void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   if (!child->parentId) return;
@@ -555,6 +557,12 @@ void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   SetState(child, "Attached", false);
   child->transportedBy = 0;
   child->detachedAt = sim.tick();
+  NotifyDetachedMotion(sim, child, skipBallistic);
+}
+
+// CUnitMotion::NotifyDetached 0x6b9570 (transport_core.md 5.3): a unit that cannot fly falls (motion Ballistic) unless
+// skipBallistic, a flier resumes its own motion; without skipBallistic the unit takes the Air layer.
+void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic) {
   UnitMotion& m = child->motion;
   m.vel = {};
   // the motion's facing: the unit's current heading
@@ -618,7 +626,7 @@ bool FootprintFitsHere(Sim& sim, const Unit* cu) {
   const PathGrid* g = sim.navigation().Grid(fp);
   if (!g) return true;
   int caps = g->Caps(cx, cz);
-  if ((caps & 3) && sim.navigation().AnyStructureIn(cx, cz, cx + fp.sizeX, cz + fp.sizeZ)) caps &= ~3;
+  caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, cx, cz);
   return caps != 0;
 }
 
@@ -1390,6 +1398,8 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
   return kTaskRunning;
 }
 
+void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic);
+
 void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   // the walk to the pickup place is a move child (NewMoveTask in state 1), torn down first: CUnitMoveTask's dtor
   // 0x618700 clears Moving (0x6187bd). Seen: Skirmish 1616, army 2's engineer 0x200022 walking to its transport when
@@ -1407,7 +1417,11 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
     Callback(sim, u, "OnStopTransportBeamUp");
     SetState(u, "Teleporting", false);
   }
-  if (d.k < 10.0f) u->motion.needSnap = true;  // NotifyDetached: back on the ground
+  // a beam-up under way (k < 10, 0x5ff89b): CUnitMotion::NotifyDetached 0x6b9570 with skipBallistic 0 (0x5ff8b4): a
+  // unit that cannot fly falls from where the beam had lifted it, on the Air layer. Seen: Skirmish 1756, army 5's
+  // engineer 0x500015 half-way up its transport's beam when M28 clears the transport's load (1755): the original's
+  // engineer falls from 19.67 to the ground (Air layer until 1762); ours stood on the ground at once.
+  if (d.k < 10.0f && u->motion.bp && u->motion.bp->mobile()) NotifyDetachedMotion(sim, u, false);
   Unit* T = UnitRef(sim, d.transport);
   if (T && !T->dead && T->transport) RemovePickupUnit(sim, *T->transport, u, true);
   // (the walk to the pickup place is a move child: its destructor's abort rule. A unit whose load order is given
@@ -2871,6 +2885,10 @@ bool TeleportBeaconReady(Sim& sim, const Unit* teleporter) {
 bool TransportLoadMoving(const Unit* u) {
   const BuildTask* t = u->task;
   return t && t->tdata && t->tdata->kind == 1 && t->tdata->moving;
+}
+bool TransportLoadWaiting(const Unit* u) {
+  const BuildTask* t = u->task;
+  return t && t->tdata && t->tdata->kind == 1 && !t->tdata->moving;
 }
 
 void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {

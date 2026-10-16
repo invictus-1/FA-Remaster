@@ -813,7 +813,7 @@ namespace {
 // while moving (hover units).
 void UpdateBody(UnitMotion& m) {
   const MotionBlueprint& b = *m.bp;
-  if (b.rotateBodyWhileMoving && b.turnFacingRate > 0) {
+  if (b.motionType == kMotionHover && b.rotateBodyWhileMoving && b.turnFacingRate > 0) {  // (as GenBody)
     RotateToward(m.bx, m.bz, m.fx, m.fz, b.turnFacingRate * m.turnMult * kDegToRadTenth);
     float l = std::sqrt(m.bx * m.bx + m.bz * m.bz);
     if (l > 0) {
@@ -914,8 +914,14 @@ StepParams Params(const UnitMotion& m) {
   return P;
 }
 
+// The point's body direction. For a unit that is not a hover unit it is the point's direction itself: CalcMoveCommon
+// 0x6c2297 makes the orientation the look rotation of point.dir (the front F of the step, spline_generate.md 3 / 4.1),
+// with no turn at TurnFacingRate, whatever RotateBodyWhileMoving says. Seen: Skirmish 2012, army 6's Aeon Flare
+// 0x600029 (ual0106: RotateBodyWhileMoving, TurnFacingRate 180) taking a sharp bend at about 20 degrees a beat: the
+// original's heading was each point's direction (-68.1, -47.1, -26.9, -7.7 degrees); ours lagged at 18 a beat.
+// (A hover unit's hull turns in HoverPointTurn, which does not read this; its body here is kept as it was.)
 void GenBody(const MotionBlueprint& b, const UnitMotion& m, Gen& g) {
-  if (b.rotateBodyWhileMoving && b.turnFacingRate > 0) {
+  if (b.motionType == kMotionHover && b.rotateBodyWhileMoving && b.turnFacingRate > 0) {
     RotateToward(g.bx, g.bz, g.fx, g.fz, b.turnFacingRate * m.turnMult * kDegToRadTenth);
     float l = std::sqrt(g.bx * g.bx + g.bz * g.bz);
     if (l > 0) {
