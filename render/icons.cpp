@@ -215,7 +215,7 @@ void StrategicIcons::Begin(const View& view) {
   marks_.clear();
   under_.clear();
   bars_.clear();
-  pixel_ = scale > 0 ? scale : std::max(1.0f, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f));
+  pixel_ = scale > 0 ? scale : std::max({1.0f, playerScale, std::floor(static_cast<float>(view.height) / 1080.0f + 0.25f)});
 }
 
 void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, int cy, uint32_t* pixels, int width, int height, bool blip, bool known) const {
@@ -300,7 +300,7 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
   const float distance = Length(position - view_.eye);
   const float from = kind->fadeIn * (1 - fadeShare);
   float alpha = kind->fadeIn > from ? (distance - from) / (kind->fadeIn - from) : (distance >= from ? 1.0f : 0.0f);
-  if (blip) alpha = 1;  // (a blip is all there is to see of the unit)
+  if (blip || always) alpha = 1;  // (a blip is all there is to see of the unit; or the player wants them at every distance)
   if (alpha <= 0) return;
   alpha = std::min(alpha, 1.0f);
   const Mat4& m = view_.constants.viewProj;

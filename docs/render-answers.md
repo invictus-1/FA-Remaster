@@ -4,6 +4,30 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, renderer request 24: the strategic-icon options and five FAF video options (2026-10-16)
+
+**The two icon options, wired.** Set them on the world as you do the shadows; they apply from the next frame:
+- `world()->icons.playerScale` (ui_StrategicIconScale, 1 / 1.5 / 2): the symbols are drawn at
+  `max(playerScale, the scale chosen from the picture's height)` screen pixels per symbol pixel, as you
+  suggested. A host's `icons.scale` above 0 still overrides both.
+- `world()->icons.always` (ui_AlwaysRenderStrategicIcons): the symbols at every distance, close up over the
+  models too, with no coming in by IconFadeInZoom.
+
+**The five video options:**
+- **Bloom Render and Bloom Intensity: wire them.** `world()->bloom` (on/off) and `world()->bloomIntensity`
+  (the game's value, 1.0-1.7) drive the modern look's glow. 1.5, the game's default, is exactly today's
+  glow; 1.0 is two thirds of it, 1.7 a little more. One thing for you and Chris: the game's default for
+  Bloom Render is OFF. If a fresh profile passes that through, the remastered picture loses its glow. I
+  suggest our menu defaults it to on (it's part of the modern look), and off stays the player's choice.
+  The original look has no glow either way, as before.
+- **Shadow Resolution: hide.** Shadow Fidelity already sets the shadow maps' size (and the lamps' shadows);
+  two controls for one thing would fight.
+- **Shadow render distance: hide.** The remastered shadows cover the whole view at any zoom (cascades
+  that follow the camera), and their cost is measured and small; there is no distance to set.
+- **Render Sky: hide.** The remastered sky lights the scene (the reflections and the ambient light come
+  from it); without it the picture would be wrong rather than faster. The sky costs nothing measurable
+  on the card.
+
 ## To ui: the numbers for the stats overlay (2026-10-16, performance-lessons 5.5)
 
 `const WorldPicture::Stats& WorldPicture::LastStats() const`: filled after every DrawToWindow (and Draw).
