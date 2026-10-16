@@ -145,6 +145,17 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
 
   // Create
   const std::string& f = event.name;
+  // (one made in the original effects' look whatever the world's: the effects stand's side by side)
+  struct Look {
+    Particles* p;
+    Ribbons* r;
+    bool particles, ribbons;
+    ~Look() {
+      p->remastered = particles;
+      r->remastered = ribbons;
+    }
+  } look{particles_, ribbons_, particles_->remastered, ribbons_->remastered};
+  if (event.original) particles_->remastered = ribbons_->remastered = false;
   // what is made at a place and stays there (an explosion, a flash of light, a mark on the ground)
   // is not made where the army the picture is for does not see; what hangs on a unit or a shot is
   // made all the same and hidden while that is not seen (Update)

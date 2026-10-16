@@ -89,6 +89,10 @@ std::vector<std::string> SplitList(const std::string& list) {
   return parts;
 }
 
+std::string EntityPath(const std::string& name) {
+  return name.find('/') != std::string::npos ? name : "/effects/entities/" + name + "/" + name + "_proj.bp";
+}
+
 std::string EmitterPath(const std::string& name) {
   return name.find('/') != std::string::npos ? name : "/effects/emitters/" + name + "_emit.bp";
 }
@@ -102,6 +106,9 @@ Quat Facing(Vec3 d) {
 }
 
 }  // namespace
+
+const char* FxStandStubs() { return kStubs; }
+const char* FxStandImport() { return kImport; }
 
 bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error) {
   setup_ = setup;
@@ -160,6 +167,9 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
         "  put('PolyTrails', c.PolyTrails)\n"
         "  put('FxTrails', c.FxTrails)\n"
         "  put('Impact', c." + hitField + ")\n"
+        "  local o = setmetatable({}, {__index = function(t, k) local v = c[k]; if v ~= nil then return v end; return __fxStub end})\n"
+        "  if type(c.OnCreate) == 'function' then pcall(c.OnCreate, o) end\n"
+        "  put('Entity', rawget(o, 'effectEntityPath'))\n"
         "end\n";
     std::vector<std::string> fields;
     if (!RunScript(vfs, code, &fields, error)) return false;
@@ -174,10 +184,21 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
         fxTrails_.push_back(value);
       } else if (key == "Impact") {
         impact_.push_back(value);
+      } else if (key == "Entity" && setup.entity.empty() && setup.hit != "none") {
+        entity_ = value;
       }
     }
   }
-  if (fxEmitters_.empty() && projectile_.empty()) {
+  if (!setup.entity.empty()) entity_ = EntityPath(setup.entity);
+  if (!entity_.empty()) {
+    entities_ = std::make_unique<FxEntities>();
+    if (!entities_->Init(vfs, setup.seed, error)) return false;
+    if (!vfs->ReadFile(moho::Vfs::Normalize(entity_))) {
+      *error = "no effect entity blueprint " + entity_;
+      return false;
+    }
+  }
+  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -206,6 +227,7 @@ std::string FxStand::Describe() const {
   list("trails", polyTrails_);
   list("riding on it", fxTrails_);
   list("hit", impact_);
+  if (!entity_.empty()) s += "; effect entity " + entity_ + (projectile_.empty() ? "" : " where it lands");
   return s.empty() ? s : s.substr(2);
 }
 
@@ -223,6 +245,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   right = Length(right) > 1e-4f ? Normalize(right) : Vec3{1, 0, 0};
   auto place = [&](Vec3 p, const Side& side) { return Vec3{p.x + side.shift.x, ground(p.x + side.shift.x, p.z + side.shift.z) + p.y, p.z + side.shift.z}; };
   const bool again = now - started_ >= setup_.repeat || now < started_;
+  if (entities_) {
+    entities_->Advance(now);  // (to the moment the round starts, so that what is made now starts now)
+    if (again) entities_->Clear();
+  }
   for (size_t k = 0; k < sides_.size(); ++k) {
     Side& side = sides_[k];
     side.shift = sides_.size() == 2 ? right * (setup_.spacing * (k == 0 ? -0.5f : 0.5f)) : Vec3{0, 0, 0};
@@ -234,6 +260,11 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       if (!fxEmitters_.empty()) {
         const Vec3 at = place(setup_.at, side);
         for (const std::string& e : fxEmitters_) side.emitters.push_back(world.particles.Start(e, at, Quat{}, 1));
+      }
+      if (entities_ && projectile_.empty()) {
+        std::string why;
+        if (!entities_->Spawn(entity_, place(setup_.at, side), sides_.size() == 2 ? !side.remastered : !lookRemastered, &why))
+          fprintf(stderr, "render: --fx-entity: %s\n", why.c_str());
       }
       if (!projectile_.empty()) {
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
@@ -267,11 +298,24 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         for (uint32_t e : side.emitters) world.particles.Stop(e);
         side.emitters.clear();
         for (const std::string& e : impact_) side.emitters.push_back(world.particles.Start(EmitterPath(e), to, turn, 1));
+        if (entities_) {  // what its impact makes (a nuke's explosion)
+          std::string why;
+          if (!entities_->Spawn(entity_, to, sides_.size() == 2 ? !side.remastered : !lookRemastered, &why))
+            fprintf(stderr, "render: --fx-shot: %s\n", why.c_str());
+        }
       }
     }
   }
   if (again) started_ = now;
   world.particles.remastered = world.ribbons.remastered = lookRemastered;
+  if (entities_) {  // the effect entities, to the world as a game's
+    entities_->Advance(now);  // (once more: what was made this frame is in the frame too)
+    entities_->TakeEvents(&events_);
+    world.effects.Queue(std::move(events_));
+    events_.clear();
+    world.effects.Update(now * 10, entities_->Current());
+    world.AddFrame(entities_->Current(), {});
+  }
 }
 
 }  // namespace render

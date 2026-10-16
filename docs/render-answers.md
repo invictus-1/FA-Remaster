@@ -4,6 +4,72 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 25: a remastered look for the UEF's ball of fire (2026-10-15)
+
+Done, waiting for your two files. In the remastered look, when your
+`effects/Entities/UEFNukeEffect01/UEFNukeEffect01_albedo.dds` exists, a "NukeUEF" ball is drawn the new way
+(render/mesh_renderer.cpp); without it, and always in the original look, it keeps the game's shader:
+- Colour: your albedo as light of its own (not greyed by the noise), about four times as bright as the
+  picture in the modern look, so its hot parts bloom. The CreateLightParticle flashes light the ground.
+- Churn: your `_normals.dds` R, G and B noises, at the original's sizes (x6, x4, x0.25) and creep speeds
+  (age x 0.018 x 1.25, and x 0.1 for the wide one), bend where the albedo is read: up to about 0.05 of
+  the texture from the fine ones and 0.15 from the wide one. The albedo also drifts slowly (the wide
+  speed).
+- Alpha: your albedo's alpha x the original's fade from 50 seconds (0.015 a second), cut below 15/255 as
+  before. The original's "eaten after 20 seconds by the noise" is left out, as you asked (alpha as
+  yours). Say if you want it back.
+- UEFBillyNukeEffect01 names the same textures, so it changes too. The other balls (EMP, quantum) are
+  unchanged.
+Tried with stand-in textures of my own (a procedural fire and noise, kept out of the repository, not
+art); the sheet (the new way on top, the original below, at 3, 6 and 9 s) went to you by message. Your
+files replace them by being there. Brightness, bend amounts and drift are numbers I can change
+when you've seen it with your art.
+
+## visuals, section 24: the UEF nuke in the stand (2026-10-15)
+
+Done (option 1). The stand now runs effect entities' own scripts (`render/fx_entities.h`):
+- `--fx-entity UEFNukeEffectController01` (an id under /effects/entities, or a blueprint path) makes it at
+  `--fx-at` as a nuke's impact makes its controller: made, then its EffectThread started (unless its
+  OnCreate starts one, as Controller02's does). It plays again every `--fx-repeat` seconds (25 unless
+  given). The camera starts 160 away.
+- `--fx-shot TIFMissileNuke01 --fx-hit land` fires the missile, and where it lands makes what its OnCreate
+  names (`effectEntityPath`), so a nuke goes off at the end of its flight.
+- `--fx-compare`: remastered on the LEFT, original on the RIGHT, as for shots. A nuke needs room:
+  `--fx-spacing 230` and a camera about 330 away (`--cam x,z,330,50,0`), on a spot with land on both sides.
+- `--fx-seed n`: where Random starts (1). The same seed plays the same way. Checked: two runs give the
+  identical picture at 8 seconds.
+- Example: `moho64view --init offline/bin/init_lab.lua --remasters visuals/work --map /maps/SCMP_009/SCMP_009.scmap
+  --time-of-day 16 --fx-entity UEFNukeEffectController01 --fx-at 672,346 --frames 1200 --shots 120
+  --screenshot <name>.png` (one picture every 2 seconds of the play).
+
+What runs: the entities' scripts in a script state of the stand's own, with NullShell / EmitterProjectile
+stand-ins (EmitterProjectile starts its FxTrails on itself with FxTrailScale and FxTrailOffset).
+Supported: CreateProjectile, SetVelocity (a speed, or x y z), SetAcceleration, SetBallisticAcceleration,
+SetScaleVelocity, SetScale, SetVelocityAlign, SetOrientation with OrientFromDir, Destroy, ForkThread,
+WaitTicks, WaitSeconds, KillThread, Random, Vector and the V* helpers. Also CreateEmitterAtEntity /
+AtBone / OnEntity, CreateAttachedEmitter and the handles' ScaleEmitter, OffsetEmitter,
+SetEmitterParam and SetEmitterCurveParam, plus CreateLightParticle, CreateDecal and CreateSplat. What
+the scripts make goes to the world as a game's projectiles and effect events, so the stand shows it as
+a game would: the fireball with the NukeUEF look grown by its scale velocity, the flashes, the decals.
+Not in the stand: sound, damage and force rings, camera shake. Guesses, said plainly: Physics.Lifetime
+is taken as seconds; RotationalVelocity (plus or minus its range) as degrees a second about the
+entity's forward axis; a single number to SetBallisticAcceleration as upward; InitialSpeedRange as
+plus or minus.
+
+Your three questions (also answered by message):
+1. An effect entity's mesh textures: yes. In the remastered look a texture an effect's mesh names under
+   /effects is read from your export at the same path when you have made one (new: render/models.cpp),
+   e.g. `effects/Entities/UEFNukeEffect01/UEFNukeEffect01_albedo.dds`. The mesh stays the game's
+   (Sphere01, shared with the shields).
+2. Decal textures by name: they are read from the game's folders (env/common/decals, splats). You
+   decided they stay original for now; if that changes, tell me and I'll read them from your export
+   at those paths.
+3. CreateLightParticle as real light: already so in games. The modern look gives each one a light on the
+   ground and units (its size the reach, its ramp the colour, its lifetime the fade), besides the
+   original's flat glow, which the original look keeps alone. The stand shows both.
+
+Section 25 (a remastered NukeUEF look for the ball) is next.
+
 ## To ui, request 22 (2026-10-15): the modern water with Anti-Aliasing Off
 
 Done. The modern water now works with 1 sample a pixel too. It reads the scene's depth as an ordinary

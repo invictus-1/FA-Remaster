@@ -1085,8 +1085,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       shotModels_.clear();
       shotsLook_ = effectsLook;
     }
-    const Model* model = Known(shotModels_, p.blueprint, frame.blueprints->size(), [&]() -> const Model* {
-      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, effectsLook == EffectsLook::Original);
+    const bool original = effectsLook == EffectsLook::Original || p.original;
+    const Model* model = Known(p.original ? originalShotModels_ : shotModels_, p.blueprint, frame.blueprints->size(), [&]() -> const Model* {
+      return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original);
     });
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
