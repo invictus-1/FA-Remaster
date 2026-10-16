@@ -27,6 +27,7 @@
 #include "sim/commands.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/ai_brain.h"
 #include "sim/ai_personality.h"
 #include "sim/ai_platoon.h"
 #include "sim/ai_threat.h"
@@ -783,6 +784,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterTransportBindings(L);
   RegisterIntelBindings(L);
   RegisterThreatBindings(L);
+  RegisterBrainBindings(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -906,6 +908,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
 
   InitIntelGrids(*this, L);  // each army's recon DB (CArmyImpl ctor)
   InitThreatMaps(*this);     // and its threat map (CArmyImpl ctor 0x6feb94)
+  InitBrainState(*this);     // and its no-rush timer and brain state (sim/ai_brain.cpp)
 
   // Brains: an instance of /lua/aibrain.lua's AIBrain bound to the engine brain.
   for (auto& a : armies_) {
