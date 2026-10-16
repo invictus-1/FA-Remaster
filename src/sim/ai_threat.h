@@ -46,6 +46,8 @@ void ThreatMapBeat(Sim& sim);
 float ThreatRect(const Sim& sim, int a, int cx, int cz, int rings, bool playableOnly, int type, int threatArmy);
 // CInfluenceMap::VectorToCoords 0x715c60: the cell index (cz * W + cx) of a world point in army index a's map.
 int ThreatCellOf(const Sim& sim, int a, float x, float z);
+// GetThreatRect around the cell of a world point ((int)x / cell size, (int)z / cell size, clamped to the grid).
+float ThreatRectAt(const Sim& sim, int a, float x, float z, int rings, bool playableOnly, int type, int threatArmy);
 
 // EThreatType (EThreatTypeTypeInfo::AddEnums 0x715590): Overall 0, OverallNotAssigned 1, Structures 2,
 // StructuresNotMex 3, Naval 4, Land 5, Air 6, Experimental 7, Commander 8, Artillery 9, AntiAir 10, AntiSurface 11,

@@ -982,6 +982,13 @@ int ThreatCellOf(const Sim& sim, int a, float x, float z) {
   return m ? VectorToCoords(*m, x, z) : 0;
 }
 
+float ThreatRectAt(const Sim& sim, int a, float x, float z, int rings, bool playableOnly, int type, int threatArmy) {
+  const InfluenceMap* m = MapOf(a);
+  if (!m || m->cells.empty() || m->W <= 0) return 0.0f;
+  const int cell = VectorToCoords(*m, x, z);
+  return GetThreatRect(sim, *m, cell % m->W, cell / m->W, rings, playableOnly, type, threatArmy);
+}
+
 void RegisterThreatBindings(lua_State* L) {
   SetMethod(L, "CAiBrain", "AssignThreatAtPosition", l_AssignThreatAtPosition);
   SetMethod(L, "CAiBrain", "GetThreatAtPosition", l_GetThreatAtPosition);

@@ -56,6 +56,7 @@ struct AirBp {
   float fpMaxSlope = 0, fpMinWaterDepth = 0;
   uint8_t fpFlags = 0;
   bool transportation = false, targetChaser = false, experimental = false;
+  bool airCategory = false;  // in category AIR (the unit's u+0x68b, Unit ctor 0x6a6aae)
 };
 
 // Quaternion in the original's memory order (w, x, y, z).
