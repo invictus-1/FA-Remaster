@@ -11,6 +11,7 @@
 #include <cstdio>
 
 #include "core/vfs.h"
+#include "effect_files.h"
 #include "ground.h"
 
 namespace render {
@@ -858,24 +859,8 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
   ++propsChanged;
 }
 
-// Whose a shield's mesh is: "uef", "aeon", "cybran", "seraphim", or "" (by the dome's folder, or the unit
-// whose own it is: a commander's personal shield)
-std::string World::MeshFaction(const std::string& mesh) {
-  const std::string m = moho::Vfs::Normalize(mesh);
-  const size_t units = m.find("/units/");
-  if (units != std::string::npos && m.size() >= units + 9) {
-    const std::string p = m.substr(units + 7, 2);
-    if (p == "ue" || p == "xe") return "uef";
-    if (p == "ua" || p == "xa") return "aeon";
-    if (p == "ur" || p == "xr") return "cybran";
-    if (p == "xs" || p == "us") return "seraphim";
-  }
-  if (m.find("aeonshield") != std::string::npos) return "aeon";
-  if (m.find("cybranshield") != std::string::npos) return "cybran";
-  if (m.find("seraphimshield") != std::string::npos) return "seraphim";
-  if (m.find("/shield01/") != std::string::npos) return "uef";
-  return std::string();
-}
+// Whose a shield's mesh is (effect_files.h, MeshFaction)
+std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };

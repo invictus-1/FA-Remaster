@@ -8,6 +8,12 @@
 // trails and hits from its script class (PolyTrail(s), FxTrails, FxImpactLand / Unit / Water / ...).
 // The simulation's functions are not there: what the scripts would get from it reads as an empty
 // stand-in, which is enough to read their tables.
+//
+// A unit's death (`death`): the unit made at the spot by its own script class, killed `killAt`
+// seconds into each play by its own death path (OnKilled, DeathThread, the explosions, debris and
+// wreck of /lua/defaultexplosions.lua and /lua/wreckage.lua), run on the stand's stand-ins of the
+// engine (fx_entities.h); the stand draws the unit, posed as its scripts pose it, until it is gone,
+// then its wreck.
 #pragma once
 
 #include <functional>
@@ -43,12 +49,21 @@ struct FxStandSetup {
   // ImpactEffects), as the game's shield script makes them
   std::string shield;
   float hitEvery = 0.8f;
+  // a unit (its id, "UEL0201") made at `at` and killed `killAt` seconds into each play, as the game
+  // kills it (OnKilled with that overkill ratio: above 1 no wreck, above 2 its chassis thrown too)
+  std::string death;
+  float killAt = 1.0f, overkill = 0.2f;
+  // whose faction's effects play in the remastered look ("uef", "aeon", "cybran", "seraphim"); "": as
+  // what they are made on is (a shot: its own, by its id; an effect at a spot: none)
+  std::string faction;
 };
 
 class FxStand {
  public:
   // Reads what it is to play. False with the reason when there is nothing.
   bool Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error);
+  // The map under a unit's death: the ground's height (under water the bottom's) and the water.
+  void SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel);
   // Each frame after World::Begin: starts, moves and ends what it plays (effect entities: handed to
   // the world as a game's projectiles and effects, World::AddFrame and Effects). `right`: the camera's right
   // (the two sides are laid out along it); `ground`: the ground's height at a place.
@@ -66,6 +81,8 @@ class FxStand {
     bool flying = false;
     double nextHit = 0;  // --fx-shield
     uint32_t rng = 1;
+    uint32_t unit = 0;   // --fx-death: the unit, and whether it is dead yet
+    bool killed = false;
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;
@@ -79,6 +96,11 @@ class FxStand {
   std::string shieldUnit_, shieldMesh_, impactMesh_;
   std::vector<std::string> impactEffects_;
   float shieldSize_ = 0, shieldOffset_ = 0;
+  std::string shotFaction_;  // whose the shot's effects are
+  // --fx-death: the map under it, and whether its world is set up
+  std::function<float(float, float)> terrain_;
+  bool water_ = false, unitsReady_ = false, unitsFailed_ = false;
+  float waterLevel_ = 0;
   std::unique_ptr<FxEntities> entities_;
   std::vector<FrameEffectEvent> events_;
   std::vector<Side> sides_;

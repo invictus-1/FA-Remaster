@@ -147,6 +147,9 @@ struct FrameEffectEvent {
   std::vector<float> numbers;
   std::string text, text2;
   bool original = false;  // Create: made in the original effects' look whatever the world's (the effects stand's side by side)
+  // Create: whose faction's effects it plays in the remastered look, when the one who made it says so
+  // (the effects stand); "": as the thing it is made on or at is (Effects).
+  std::string faction;
 };
 
 // How a blueprint looks, as the simulation has it after the game's scripts and the mods changed it
