@@ -611,6 +611,10 @@ Sim::~Sim() {
   armies_.clear();
   threads_.reset();
   state_.reset();
+  // per-sim tables kept by address: last, as the teardown above may still use them
+  LandNavForget(*this);
+  AirForget(*this);
+  FormationsForget(*this);
 }
 
 lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }

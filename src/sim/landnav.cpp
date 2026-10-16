@@ -1066,4 +1066,6 @@ int LandNavStatus(const Unit* u) {
 
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1) { Tables(sim).DirtyRect(x0, z0, x1, z1); }
 
+void LandNavForget(const Sim& sim) { TablesMap().erase(&sim); }
+
 }  // namespace moho

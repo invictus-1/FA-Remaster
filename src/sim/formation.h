@@ -102,5 +102,7 @@ void UpdateGuardFormation(Sim& sim, Unit* G);
 void ReleaseGuardFormation(Unit* G);
 // GetPathDelay(u, 0): the think delay of a formation member, max(1, row x 10) (1 when not in one).
 int FormationPathDelay(Sim& sim, Unit* u);
+// Drops the sim's formation list (Sim::~Sim: a later Sim may get the same address).
+void FormationsForget(const Sim& sim);
 
 }  // namespace moho

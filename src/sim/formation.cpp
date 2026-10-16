@@ -740,10 +740,12 @@ float FormationSpeed(Formation& F, Unit* u, float* mult, FormGroup* g) {
   return g->speed;
 }
 
-std::vector<std::weak_ptr<Formation>>& Registry(Sim& sim) {
+std::map<const Sim*, std::vector<std::weak_ptr<Formation>>>& RegistryMap() {
   static std::map<const Sim*, std::vector<std::weak_ptr<Formation>>> m;
-  return m[&sim];
+  return m;
 }
+
+std::vector<std::weak_ptr<Formation>>& Registry(Sim& sim) { return RegistryMap()[&sim]; }
 
 // CAiFormationDBImpl::NewFormation 0x59c120 (+ SetScale)
 std::shared_ptr<Formation> NewFormation(Sim& sim, const std::vector<Unit*>& units, const std::string& name, float cx,
@@ -1028,5 +1030,7 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
          sim.tick(), F->script.c_str(), F->type, FormationIsForm(*F) ? 1 : 0, F->units.size(), Contains(*F, u, false) ? 1 : 0,
          F->groups[0].size(), F->groups[1].size(), g ? g->speed : -1.0f);
 }
+
+void FormationsForget(const Sim& sim) { RegistryMap().erase(&sim); }
 
 }  // namespace moho

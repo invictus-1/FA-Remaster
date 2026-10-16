@@ -2469,4 +2469,6 @@ void RegisterAirBindings(lua_State* L) {
   SetMethod(L, "Unit", "RevertElevation", l_RevertElevation);
 }
 
+void AirForget(const Sim& sim) { ResMap().erase(&sim); }
+
 }  // namespace moho
