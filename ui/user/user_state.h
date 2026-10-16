@@ -32,6 +32,7 @@ struct GamePace;
 struct WorldLine;
 struct WorldRangeGroup;
 struct WorldMeshView;
+struct WorldDecal;
 struct WorldGhost;
 class UiManager;
 namespace sound {
@@ -451,6 +452,12 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
 // order's mark gone when its time is over).
 void RegisterWorldMeshBindings(lua_State* L);
 void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out);
+// The decals the script lays on the ground (world_meshes.cpp: _c_CreateDecal, the ScriptedDecal
+// methods), those with a texture.
+void UserDecalsForWorld(lua_State* L, std::vector<WorldDecal>* out);
+// The place on the ground under a point of the screen, by the main world view (worldview.cpp);
+// false without one.
+bool ScreenToWorld(lua_State* L, float x, float y, float out[3]);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).

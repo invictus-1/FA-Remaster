@@ -593,6 +593,7 @@ class WorldView : public Control {
     }
     // The meshes the game's script has placed in the world, and the marks of orders just given.
     WorldMeshesForWorld(L, &scene.meshes);
+    UserDecalsForWorld(L, &scene.decals);
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
@@ -1414,6 +1415,14 @@ int l_GetMouseWorldPos(lua_State* L) {
   PushVector(L, world[0], world[1], world[2]);
   return 1;
 }
+}  // namespace
+bool ScreenToWorld(lua_State* L, float x, float y, float out[3]) {
+  WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
+  if (!v) return false;
+  v->Unproject(L, x, y, out);
+  return true;
+}
+namespace {
 int l_GetMouseScreenPos(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   PushPoint(L, ui.mouseX, ui.mouseY);

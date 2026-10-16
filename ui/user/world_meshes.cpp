@@ -1,6 +1,7 @@
 // The meshes the game's script places in the world: its WorldMesh objects
-// (/lua/ui/controls/worldmesh.lua: the factories' rally points, the marks under the cursor) and
-// the marks where an order lands (AddCommandFeedbackBlip).
+// (/lua/ui/controls/worldmesh.lua: the factories' rally points, the marks under the cursor), the
+// marks where an order lands (AddCommandFeedbackBlip), and its decals on the ground (UserDecal:
+// FAF's rings under the cursor while aiming; drawn once the picture takes them, renderer request 25).
 //
 // The engine side keeps what the script sets and hands the list to the picture's source with
 // every scene (WorldScene::meshes); how each is drawn goes by its shader's name and is the
@@ -33,9 +34,16 @@ struct Blip {
   WorldMeshView view;
   double made = 0;
 };
+// A decal on the ground (the game's UserDecal: /lua/user/userdecal.lua; FA exe Moho::ScriptedDecal,
+// made on the world camera at 0x87eb60): its texture (SetTexture 0x87ede0), place (SetPosition
+// 0x87ece0, or SetPositionByScreen) and size (SetScale, x and z).
+struct DecalObject : ScriptObject {
+  WorldDecal decal;
+};
 struct MeshStore : UserState::Extra {
   std::vector<std::unique_ptr<MeshObject>> meshes;
   std::vector<Blip> blips;
+  std::vector<std::unique_ptr<DecalObject>> decals;
   std::string shown;  // which meshes were handed over last (for the log)
 };
 
@@ -246,6 +254,70 @@ int l_AddCommandFeedbackBlip(lua_State* L) {
   return 0;
 }
 
+// _c_CreateDecal(luaobj) (FA exe 0x87f260): the UserDecal's engine side.
+int l_CreateDecal(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  auto decal = std::make_unique<DecalObject>();
+  BindObject(L, 1, decal.get());
+  Store(L).decals.push_back(std::move(decal));
+  return 0;
+}
+DecalObject* CheckDecal(lua_State* L, int idx) { return CheckObject<DecalObject>(L, idx); }
+int l_DecalDestroy(lua_State* L) {
+  DecalObject* d = dynamic_cast<DecalObject*>(GetObject(L, 1));
+  if (!d) return 0;  // destroyed already
+  MeshStore& store = Store(L);
+  d->UnbindLua();
+  store.decals.erase(std::remove_if(store.decals.begin(), store.decals.end(), [d](const auto& p) { return p.get() == d; }),
+                     store.decals.end());
+  return 0;
+}
+int l_DecalSetTexture(lua_State* L) {
+  CheckDecal(L, 1)->decal.texture = luaL_checkstring(L, 2);
+  return 0;
+}
+int l_DecalSetScale(lua_State* L) {  // {x, y, z}: x and z across the ground
+  DecalObject* d = CheckDecal(L, 1);
+  float scale[3] = {d->decal.size[0], 1, d->decal.size[1]};
+  ReadNumbers(L, 2, scale, 3);
+  d->decal.size[0] = scale[0], d->decal.size[1] = scale[2];
+  return 0;
+}
+int l_DecalSetPosition(lua_State* L) {
+  ReadNumbers(L, 2, CheckDecal(L, 1)->decal.position, 3);
+  return 0;
+}
+int l_DecalSetPositionByScreen(lua_State* L) {  // {x, y}: a point of the screen, the ground under it
+  DecalObject* d = CheckDecal(L, 1);
+  float screen[2] = {0, 0}, world[3];
+  ReadNumbers(L, 2, screen, 2);
+  if (ScreenToWorld(L, screen[0], screen[1], world)) std::copy(world, world + 3, d->decal.position);
+  return 0;
+}
+// moho64ui_UserDecals() -> the decals handed over now, each {texture, x, y, z, sizeX, sizeZ}: the
+// host's own function for tests.
+int l_UserDecals(lua_State* L) {
+  std::vector<WorldDecal> list;
+  UserDecalsForWorld(L, &list);
+  lua_newtable(L);
+  int n = 0;
+  for (const WorldDecal& d : list) {
+    lua_newtable(L);
+    lua_pushstring(L, "texture");
+    lua_pushstring(L, d.texture.c_str());
+    lua_rawset(L, -3);
+    const char* names[5] = {"x", "y", "z", "sizeX", "sizeZ"};
+    const float values[5] = {d.position[0], d.position[1], d.position[2], d.size[0], d.size[1]};
+    for (int i = 0; i < 5; ++i) {
+      lua_pushstring(L, names[i]);
+      lua_pushnumber(L, values[i]);
+      lua_rawset(L, -3);
+    }
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 // moho64ui_WorldMeshes() -> what the picture is given now, each {mesh, texture, shader, x, y, z,
 // scale, lifetime, age}: the host's own function for tests.
 int l_WorldMeshes(lua_State* L) {
@@ -311,8 +383,23 @@ void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out) {
   }
 }
 
+void UserDecalsForWorld(lua_State* L, std::vector<WorldDecal>* out) {
+  UserState* user = UserState::From(L);
+  if (!user->worldMeshes) return;
+  for (const auto& d : static_cast<MeshStore&>(*user->worldMeshes).decals)
+    if (!d->decal.texture.empty()) out->push_back(d->decal);
+}
+
 void RegisterWorldMeshBindings(lua_State* L) {
   if (!UserState::From(L)->HasSim()) return;
+  SetGlobal(L, "_c_CreateDecal", l_CreateDecal);
+  const char* decal = "ScriptedDecal";
+  SetMethod(L, decal, "Destroy", l_DecalDestroy);
+  SetMethod(L, decal, "SetTexture", l_DecalSetTexture);
+  SetMethod(L, decal, "SetScale", l_DecalSetScale);
+  SetMethod(L, decal, "SetPosition", l_DecalSetPosition);
+  SetMethod(L, decal, "SetPositionByScreen", l_DecalSetPositionByScreen);
+  lua_register(L, "moho64ui_UserDecals", l_UserDecals);
   SetGlobal(L, "InternalCreateWorldMesh", l_InternalCreateWorldMesh);
   SetGlobal(L, "AddCommandFeedbackBlip", l_AddCommandFeedbackBlip);
   const char* cls = "CUIWorldMesh";

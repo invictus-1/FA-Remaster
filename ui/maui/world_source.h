@@ -62,6 +62,14 @@ struct WorldMeshView {
   float lifetime = 0, age = 0;  // seconds given with SetLifetimeParameter (0: none), and how many have passed
   float fractionComplete = 1;
 };
+// A decal the interface's script lays on the ground (the game's UserDecal, FA exe ScriptedDecal):
+// a texture of the game's files over a square of size[0] x size[1] world units (the script's
+// scale x and z) centred on the position, north up.
+struct WorldDecal {
+  std::string texture;
+  float position[3] = {0, 0, 0};
+  float size[2] = {1, 1};
+};
 struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
@@ -71,6 +79,7 @@ struct WorldScene {
   std::vector<WorldRangeGroup> ranges;
   float zoomNear = 10, zoomFar = 1000;
   std::vector<WorldMeshView> meshes;
+  std::vector<WorldDecal> decals;  // (renderer request 25: not drawn until the picture takes them)
   // The unit under the mouse, to be marked as the original marks it (brackets around it by how
   // its army stands to the player's): 0xffffffff for none. Kinds: 1 the player's own or an
   // ally's, 2 an enemy's, 3 a neutral's. A selected unit is not named here: it has its mark.

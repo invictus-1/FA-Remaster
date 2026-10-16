@@ -1493,6 +1493,32 @@ every zoom, the sky lights the scene). Bloom Render is on unless chosen (his sug
 default is off), and the Fidelity Presets turn it on at High and Ultra (the game's turn it off at every
 level).
 
+### 25. Decals the interface lays on the ground (the game's UserDecal): the area-of-effect rings
+From the interface chat, 2026-10-16, not blocking. FAF's world view (/lua/ui/controls/worldview.lua,
+OnCursorDecals) draws a ring on the ground under the cursor while the player aims: the splash radius
+of the selected units' weapons for an attack order (bombers, artillery: weapon_icon_small.dds at the
+largest DamageRadius (+ FixedSpreadRadius) x 2), a tactical missile's, a nuke's inner and outer rings
+(nuke_icon_inner.dds / nuke_icon_outer.dds at NukeInnerRingRadius / NukeOuterRingRadius x 2), the
+commander's overcharge; textures under /textures/ui/common/game/AreaTargetDecal/. With the option
+"cursor_splash_damage" on, the attack ring shows whenever the cursor is an attack cursor. Today
+nothing shows: `_c_CreateDecal` is a stub.
+The original (R = read in the exe): `UserDecal()` makes a Moho::ScriptedDecal (ctor 0x87eb60, on the
+'WorldCamera'), "a decal in the user layer"; `SetTexture(path)` (0x87ede0) loads it and "adds it to
+the decal manager"; `SetScale({x, y, z})` (0x87f540, x and z used: world units across);
+`SetPosition({x, y, z})` world coordinates (0x87ece0, kept at +0x68..+0x70) or `SetPositionByScreen
+({x, y})`; `Destroy()`. The script moves it to GetMouseWorldPos() every frame while aiming.
+Could the picture take a list of such decals each frame, for example
+`SetUserDecals(std::vector<UserDecal>)` with {texture path in the game's files, centre x / z, size x /
+z in world units}, drawn on the ground (and the water's surface?) as the map's decals are, square,
+north up, alpha-blended, under the units? I keep the script objects (UserDecal) and hand you the live
+ones with SetScene; when you have it I build the Lua side and check it with a bomber and a nuke
+launcher.
+DONE (render 6cbf20a, `docs/render-answers.md`): `WorldPicture::SetUserDecals(std::vector<UserDecal>)`,
+{texture, x, z, sizeX, sizeZ} (sizes across in world units), on the ground in their own colours, under
+units and trees; the list stands until the next call; on water on the bottom, tinted. The host's side
+is built (world_meshes.cpp: the UserDecal objects, WorldScene::decals); the call waits for 6cbf20a on
+main.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

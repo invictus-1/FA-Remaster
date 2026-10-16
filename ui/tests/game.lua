@@ -763,6 +763,29 @@ local function run()
     check("letting go elsewhere orders a row of buildings", buildOrders() >= 3, true)
     check("and the script's build mode has ended", CM.GetCommandMode()[1], false)
 
+    -- a decal on the ground (FAF's rings under the cursor while aiming): made, placed, sized, gone
+    local UserDecal = import("/lua/user/userdecal.lua").UserDecal
+    local decal = UserDecal()
+    check("a decal without a texture is not handed over", table.getn(moho64ui_UserDecals()), 0)
+    decal:SetTexture("/textures/ui/common/game/AreaTargetDecal/weapon_icon_small.dds")
+    decal:SetScale({12, 1, 12})
+    decal:SetPosition({100, 20, 120})
+    local d = moho64ui_UserDecals()[1]
+    check("a decal: its texture, place and size", d and (d.texture .. " " .. d.x .. "," .. d.z .. " " .. d.sizeX .. "x" .. d.sizeZ),
+        "/textures/ui/common/game/AreaTargetDecal/weapon_icon_small.dds 100,120 12x12")
+    decal:Destroy()
+    check("and gone when destroyed", table.getn(moho64ui_UserDecals()), 0)
+    -- a submarine's auto-surface switch reaches the simulation (the commander takes the switch too)
+    local cdrNow = GetArmyAvatars()[1]
+    if cdrNow then
+        SetAutoSurfaceMode({cdrNow}, true)
+        WaitSeconds(0.5)
+        check("SetAutoSurfaceMode is heard by the simulation", GetIsAutoSurfaceMode({cdrNow}), true)
+        SetAutoSurfaceMode({cdrNow}, false)
+        WaitSeconds(0.5)
+        check("and switched off again", GetIsAutoSurfaceMode({cdrNow}), false)
+    end
+
     -- the game's end: SessionEndGame is an order; one more beat runs (its scripts hand over the
     -- final score), then the simulation stands (last, since nothing moves any more)
     check("the game is not over", SessionIsGameOver(), false)

@@ -1542,6 +1542,12 @@ int l_SetAutoMode(lua_State* L) {
   InfoPair(L, 1, "SetAutoMode", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
+// SetAutoSurfaceMode(units, on) (FA exe 0x8bb360; its help text is GetIsAutoSurfaceMode's): the
+// same for a submarine's auto-surface switch, the info pair SetAutoSurfaceMode "true" | "false".
+int l_SetAutoSurfaceMode(lua_State* L) {
+  InfoPair(L, 1, "SetAutoSurfaceMode", lua_toboolean(L, 2) ? "true" : "false");
+  return 0;
+}
 int l_SetFireState(lua_State* L) {
   InfoPair(L, 1, "SetFireState", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
   return 0;
@@ -2450,6 +2456,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "RemoveFromSessionExtraSelectList", l_RemoveFromSessionExtraSelectList);
   SetGlobal(L, "ClearSessionExtraSelectList", l_ClearSessionExtraSelectList);
   SetGlobal(L, "SetAutoMode", l_SetAutoMode);
+  SetGlobal(L, "SetAutoSurfaceMode", l_SetAutoSurfaceMode);
   SetGlobal(L, "SetFireState", l_SetFireState);
   SetGlobal(L, "ToggleFireState", l_ToggleFireState);
   SetGlobal(L, "ToggleScriptBit", l_ToggleScriptBit);
