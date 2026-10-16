@@ -68,4 +68,22 @@ void Logf(LogLevel level, const char* fmt, ...) {
   LogWrite(level, buf);
 }
 
+void LogEmergency(const char* line) {
+  const bool locked = g_mutex.try_lock();
+  std::fprintf(stderr, "error: %s\n", line);
+  std::fflush(stderr);
+  if (g_file) {
+    std::fprintf(g_file, "error: %s\n", line);
+    std::fflush(g_file);
+  }
+  if (locked) g_mutex.unlock();
+}
+
+void LogFlush() {
+  const bool locked = g_mutex.try_lock();
+  std::fflush(stdout);
+  if (g_file) std::fflush(g_file);
+  if (locked) g_mutex.unlock();
+}
+
 }  // namespace moho

@@ -16,5 +16,9 @@ void Logf(LogLevel level, const char* fmt, ...)
     __attribute__((format(printf, 2, 3)))
 #endif
     ;
+// For the crash handler (core/crash.h): one "error: " line to the log file and to stderr, without waiting for the
+// log's lock (the crashing thread may hold it), then flushed; and the log file's buffer written out.
+void LogEmergency(const char* line);
+void LogFlush();
 
 }  // namespace moho

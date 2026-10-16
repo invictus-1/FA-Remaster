@@ -512,10 +512,24 @@ StkId luaV_execute (lua_State *L) {
   };
 #endif
  callentry:  /* entry point when calling new functions */
-  L->ci->u.l.pc = &pc;
-  if (L->hookmask & LUA_MASKCALL)
+  if (L->hookmask & LUA_MASKCALL) {
+    L->ci->u.l.pc = &pc;
     luaD_callhook(L, LUA_HOOKCALL, -1);
+  }
  retentry:  /* entry point when returning to old functions */
+  /* moho64: the frame's `pc' pointer is set here, on every activation, as Lua 5.0.2 does (lvm.c 1.284a; Lua 5.0's
+     bug "pc address is invalidated when a coroutine is suspended"). Set only at `callentry', a caller that a
+     coroutine's yield left in the middle of a call (CI_CALLING) kept the address of the `pc' of the luaV_execute
+     that ran before the yield; after the resume, the return to it (OP_RETURN -> retentry) runs it in a new
+     luaV_execute, and the debug functions (currentpc: error messages, tracebacks, line hooks) read a dead stack
+     slot. Seen: crash 24 (ui/REQUESTS.md), the stock AI's pool platoon thread BaseManagersDistressAI (FAF
+     platoon.lua 1545) fails at 1555 after its brain's defeat, resumed after WaitSeconds; luaG_typeerror's
+     currentline read lineinfo[garbage] and faulted (the interface host: 8 of 21 runs, the others logged
+     "platoon.lua:-1"; the headless host printed the right line, inferred: its resumes all run at one stack depth,
+     so the dead slot is the live one). The original's VM keeps the pc in
+     the CallInfo itself (currentpc 0x912510 reads ci+0xc; luaV_execute 0x929c60 writes it there, e.g. 0x92b2b2
+     on a jump), so no frame of it ever points into a C stack. */
+  L->ci->u.l.pc = &pc;
   lua_assert(L->ci->state == CI_SAVEDPC ||
              L->ci->state == (CI_SAVEDPC | CI_CALLING));
   L->ci->state = CI_HASFRAME;  /* activate frame */

@@ -20,6 +20,7 @@
 #include <cstring>
 
 #include "core/backtrace.h"
+#include "core/crash.h"
 #include "core/log.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
@@ -1332,6 +1333,7 @@ void Sim::Tick() {
   if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
   beatStarted_ = true;
   ++tick_;
+  g_crashTick = tick_;  // (named by a crash's log line, core/crash.h)
   g_prof.Start();
   {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
      // stream's counts match the oracle but its values do not from tick T on, the n that makes the probe's

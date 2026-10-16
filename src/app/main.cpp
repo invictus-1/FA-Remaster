@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -676,6 +677,7 @@ int main(int argc, char** argv) {
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
   if (o.quiet) LogSetEcho(false);
+  InstallCrashHandler();  // a crash writes its place and stack to the log (core/crash.h)
   if (o.init.empty()) {
     std::fprintf(stderr, "usage: moho64 --init <init.lua> [--drive c=/dir] [--mods uids.txt] [--check-lua] [--rules]\n");
     return 2;
