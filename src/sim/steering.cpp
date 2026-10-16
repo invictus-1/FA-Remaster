@@ -13,6 +13,7 @@
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "script/script_state.h"
+#include "sim/build.h"
 #include "sim/navigation.h"
 #include "sim/combat.h"
 #include "sim/formation.h"
@@ -651,6 +652,33 @@ void SetCol(Unit* u, int type, const Vec3& v) {
   u->motion.sideStep = v;
 }
 
+// FindFreeSpot 0x62b200 as ResolvePossibleCollision calls it (0x597783..0x59778e: Sim, size 1, whole map 0, flags
+// 0, 0; the blueprint, unit vt+0x1c, in edi): is there room for Y's footprint at (x, z) or near it?
+//   - STIMap::IsWithin 0x62ca60 with margin 1 on the playable rect. A point outside fails at once; the rings
+//     (0x62b4ed) test the ORIGINAL point again each time, so they can never pass either;
+//   - FootprintFitsStructure 0x720d90 (ours: LocationIsFree) at the point: OCCUPY_Check 0x5652e0's mobile path at
+//     the footprint's origin cell, then the land / water structure grids (GetRectOr 0x8d8460);
+//   - else square rings around the point as given (not snapped), stepping by 1: i over x outside, j over z inside,
+//     a ring's sides stepping by 2r, until a ring ends past 900 candidates (0x62b3f6..0x62b760).
+// Resolve keeps only the answer: the place found (FindFreeSpot writes it back over its copy of T at esp+0x20) is
+// not used, the side-step goes to T as computed (SetCol with esp+0x64, written before the call).
+bool SideStepRoom(Sim& sim, const Unit* Y, float x, float z) {
+  if (!sim.map() || !Y->blueprint) return true;
+  if (!sim.IsWithin(x, z, 1.0f, false)) return false;
+  if (LocationIsFree(sim, *Y->blueprint, x, z)) return true;
+  int tested = 0;
+  for (int r = 1;; ++r) {
+    for (int i = -r; i <= r; ++i) {
+      const int jstep = (i == -r || i == r) ? 1 : 2 * r;
+      for (int j = -r; j <= r; j += jstep) {
+        ++tested;
+        if (LocationIsFree(sim, *Y->blueprint, static_cast<float>(i) + x, static_cast<float>(j) + z)) return true;
+      }
+    }
+    if (tested >= 900) return false;
+  }
+}
+
 // ResolvePossibleCollision 0x596f30 for Y's record. Returns 1 when a reaction was chosen.
 int Resolve(Sim& sim, Unit* Y) {
   UnitMotion& my = Y->motion;
@@ -725,15 +753,12 @@ int Resolve(Sim& sim, Unit* Y) {
     s = RotY(a, vXn);
   }
   Vec3 T = Add(B, Scale(s, clr));
-  // FindFreeSpot 0x62b200 gates the side-step (outline): the point inside the playable rect (0x59778e passes size
-  // 1, whole map 0: STIMap::IsWithin margin 1, whatever the army), and the footprint must fit there
-  if (sim.map() && !sim.IsWithin(T.x, T.z, 1.0f, false)) return 0;
-  const PathGrid* g = UnitFootprintGrid(sim, Y);
-  if (g) {
-    int cx, cz;
-    GoalCell(UnitFootprint(Y), T.x, T.z, &cx, &cz);
-    if (!g->Passable(cx, cz)) return 0;
-  }
+  // FindFreeSpot 0x62b200 only gates the side-step: when it finds no room (0x597798) the record stays as it is.
+  // Seen: Skirmish 2410, engineer 0x1e (uel0105) braked beside the land factory 0x36; its side-step point
+  // (551.37, 470.85) lies in the factory's footprint, a spot one ring out is free, and the original backs away
+  // toward the point itself from 2410 on (its steps run along (0.968, -0.251), T's direction). Ours asked for the
+  // point's own cell only and kept the unit braked.
+  if (!SideStepRoom(sim, Y, T.x, T.z)) return 0;
   SetCol(Y, 2, T);
   if (log)
     Logf(LogLevel::Info, "col %u resolve Y %u X %u: side-step to %.2f %.2f", sim.tick(), Y->id, X->id, T.x, T.z);
