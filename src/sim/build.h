@@ -93,6 +93,9 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 void StopMovingIfTask(Unit* u, const BuildTask& t);
 // The unit's command thread sleeps on a walking child of its head task (a clear of its queue wakes it: re-linked).
 bool TaskThreadAsleepOnMove(const Unit* u);
+// The head task is a guard (CUnitGuardTask) with no child task of its own: whatever goal its navigator has, the guard
+// set itself (UpdateGuardFollowMoveGoal 0x613c40: no move task).
+bool GuardSteersItself(const Unit* u);
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);

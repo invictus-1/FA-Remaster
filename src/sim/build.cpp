@@ -394,7 +394,15 @@ bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
   Unit* target = FindUnitAny(sim, t.targetId);
   if (!target) return true;
   if (builder->paused) {  // (FAF patch 0x1291a27) a paused builder only shows the target's progress
+    t.lastFraction = target->fractionComplete;  // helper+0x3c
     builder->workProgress = target->fractionComplete;
+    // back in the original at 0x5f5c26: done when the builder is not Repairing (state 16) and the target is whole;
+    // else the target's Materialize(0.0) (vt+0x74, 0x5f5c72..0x5f5c80), which marks it worked on this beat (the
+    // tick at Entity+0x520, 0x6a9fa3), so an unfinished target of a paused builder does not decay (Unit::MotionTick
+    // 0x6a910f: decay when more than a beat has passed). Seen: Skirmish 2071, M28 pauses three upgrades of armies 0
+    // and 2 (0x200031, 0x35 and 0x34's builders): the original's health stays where it was; ours decayed from 2073.
+    if (!builder->unitStates.count("Repairing") && target->fractionComplete >= 1.0f) return true;
+    Materialize(sim, L, target, 0.0f);
     return false;
   }
   float rate = builder->resourceConsumed;
@@ -3082,6 +3090,11 @@ void StopMovingIfTask(Unit* u, const BuildTask& t) {
 
 // Whether the unit's command thread sleeps on a walking child (a CUnitMoveTask pushed by the head task, or by the
 // guard's child, waits for the navigator's event: the thread is suspended until then, beat_order.md 2.6).
+bool GuardSteersItself(const Unit* u) {
+  const BuildTask* t = u->task;
+  return t && t->gdata && !t->gdata->child && !t->gdata->childMove;
+}
+
 bool TaskThreadAsleepOnMove(const Unit* u) {
   if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
   for (const BuildTask* t = u->task; t;) {

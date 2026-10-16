@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 
 #include "sim/navigation.h"
@@ -28,14 +29,21 @@ constexpr int kDX[8] = {0, -1, 0, 1, -1, -1, 1, 1};
 constexpr int kDZ[8] = {-1, 0, 1, 0, -1, 1, 1, -1};
 constexpr int kNeed[8] = {0, 0, 0, 0, 3, 6, 12, 9};
 
+// The edge cost class multipliers: the constant table at 0xe35da0 (.rdata, read by AddNeighbours 0x7666e3, the level-2
+// build's ExpandNode 0x9306e2 and 0x7659f0). exp(k / 6) as the source wrote it, to seven digits (1.18136, 1.395612,
+// 1.648721 ...), so eight entries are 1 to 4 float steps off the exact exp (k = 1, 2, 3, 5, 6, 7, 8, 26). Seen:
+// Skirmish 1981, army 2's engineer 0x20001d asks a path to (746, 426): two level-2 routes past (828, 384) cost the
+// same to the last float step, and with the exact exp the one via (832, 412) came out one step cheaper; the
+// original goes via (828, 416) (its navigator takes (828.5, 416.5) at 1982).
 float Cls(int k) {
-  static float t[32];
-  static bool init = false;
-  if (!init) {
-    for (int i = 0; i < 32; ++i) t[i] = static_cast<float>(std::exp(i / 6.0));
-    init = true;
-  }
-  return t[k];
+  static const uint32_t bits[32] = {
+      0x3f800000, 0x3f9736ce, 0x3fb2a36a, 0x3fd3094a, 0x3ff94f59, 0x40134331, 0x402df855, 0x404d8577,
+      0x4072cb75, 0x408f69ff, 0x40a96c76, 0x40c82683, 0x40ec7326, 0x410baa8d, 0x4124ff03, 0x4142eb7f,
+      0x4166454a, 0x4188042e, 0x41a0af2e, 0x41bdd379, 0x41e040c5, 0x42047639, 0x421c7c32, 0x4238dd87,
+      0x425a6481, 0x4281000c, 0x4298654e, 0x42b408c5, 0x42d4af73, 0x42fb4210, 0x431469c5, 0x432f5456};
+  float f;
+  std::memcpy(&f, &bits[k], sizeof f);
+  return f;
 }
 
 // QuantizeEdgeCost 0x92d8b0: ceil(6 ln(dist / octile)), clamped to 0..31 (above 30: 31)
