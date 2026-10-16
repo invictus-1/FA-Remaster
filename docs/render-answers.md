@@ -155,8 +155,8 @@ look only (the original's emitters have none and draw as before); rename any you
 - **Quality levels**: one setting for the whole game (World::effectsQuality, a player option through the
   interface; `--effects-quality 0.5` in the viewer) scales how many particles every emitter throws;
   `KeepAtLowQuality = true` keeps an emitter's in full (a flash's few, a shell's own glow).
-Seen at night with your Gauss hit: it lights the ground around it and fades
-(`_scratch/render/review/fx/hitnight_sheet.jpg`, remastered left, original right).
+Seen at night with your Gauss hit: it lights the ground around it and fades (a sheet in the lab,
+remastered left, original right).
 
 ## ui, to the renderer 21: life bars over own and allied units only (2026-10-15)
 
@@ -275,8 +275,7 @@ rule for explosions and scorch marks, which is right for those), so only the dep
 the first beat were known. A deposit's mark belongs to the map: it is made whatever the army sees,
 on the ground and as an icon. Seen as one army of the eight at 7 seconds, fog of war on, from the
 whole map's height at his picture's size: all 108 mass and 8 hydrocarbon deposits, on both sides
-and the islands (`_scratch\render\review\spots\whole_focus8.png` in the lab, beside his
-`original_mass_and_hydro_spots_fully_zoomed_out.webp`).
+and the islands (a picture in the lab, beside his of the original fully zoomed out).
 
 Nothing for your host to do beyond the rebuild.
 
@@ -352,8 +351,7 @@ strip's middle and how wide the strip is there, both of which do run evenly, and
 
 Seen in the viewer from straight above, in fog (where shafts are plain) and in clear air: both
 shafts run from the eyes straight ahead along the middle of the broad light
-(`_scratch\render\review\eyebeam\fixed_three.png` in the lab: before in fog, after in fog, after in
-clear air). Every unit's head-lamp shafts were drawn this way, so engineers' and tanks' are
+(pictures in the lab: before in fog, after in fog, after in clear air). Every unit's head-lamp shafts were drawn this way, so engineers' and tanks' are
 straightened by the same change; lightning bolts are strips of one width and were not affected.
 
 He had found the beams fine in between: from a low camera the strip is seen along its length and
