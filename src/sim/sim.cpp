@@ -71,9 +71,21 @@ int l_SessionIsReplay(lua_State* L) {
   return 1;
 }
 
+// sim+0xa88 + 1, -1 stays -1 (0x75ce80). It is the focus of the last Sync: a pending change is not seen before
+// the Sync that applies it (Sim::RequestFocusArmy).
 int l_GetFocusArmy(lua_State* L) {
-  lua_pushnumber(L, S(L)->focusArmy < 0 ? -1 : S(L)->focusArmy + 1);
+  lua_pushnumber(L, S(L)->focusArmy == -1 ? -1 : S(L)->focusArmy + 1);
   return 1;
+}
+
+// FAF's sim global SetFocusArmy(index0) (its exe's 0x128ce81, put in the sim's binding list 0xf5a124 by its patch
+// at 0xfe4986..0xfe4a08, help "SetFocusArmy(armyIndex or -1)"; simInit.lua's MergeArmyPair calls it with the
+// 0-based index of the army the focus army was merged into): lua_tonumber of argument 1, truncated, written to
+// the pending focus SimDriver+0xb0. No argument count, no range check: it takes effect at this beat's Sync, as
+// the interface's request does (Sim::RequestFocusArmy). Returns nothing.
+int l_SetFocusArmy(lua_State* L) {
+  S(L)->RequestFocusArmy(static_cast<int>(static_cast<float>(lua_tonumber(L, 1))));
+  return 0;
 }
 
 int l_ArmyIsCivilian(lua_State* L) {
@@ -586,6 +598,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "ListArmies", l_ListArmies);
   SetGlobal(L, "GetArmyBrain", l_GetArmyBrain);
   SetGlobal(L, "GetFocusArmy", l_GetFocusArmy);
+  SetGlobal(L, "SetFocusArmy", l_SetFocusArmy);
   SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
   SetGlobal(L, "ArmyIsCivilian", l_ArmyIsCivilian);
   SetGlobal(L, "ArmyGetHandicap", l_ArmyGetHandicap);
@@ -773,6 +786,9 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 }
 
 bool Sim::Start(const ReplayHeader& replay) {
+  // The sim's focus and the driver's pending one both start as the launch's (Sim::Sim 0x743a63 and the
+  // CSimDriver ctor 0x73b7dc both read +0x68 of the launch info they are given): no change at the first Sync.
+  requestedFocus_.store(focusArmy);
   rng_.seed(replay.seed);
   sessionSeed_ = replay.seed;
   hasGauss_ = false;
@@ -1357,6 +1373,34 @@ void Sim::SyncStep() {
   lua_settop(L, top);
 }
 
+// The start of Sim::Sync (0x7474b0): SimDriver::FinalizeSyncDispatchLocked (0x73dad0) has copied the driver's
+// sync filter, whose first field is the pending focus (SimDriver+0xb0: SetArmyIndex 0x73b1b0, FAF's sim
+// SetFocusArmy 0x128ce81), and Sim::Sync copies it into the sim's own at once (sim+0xa88, 0x7474ef). Only then,
+// when the old focus differs, the scripts' global NoteFocusArmyChanged(new, old) is called (0x747504..0x747562,
+// LuaFunction::Call_Int2: each 1-based, -1 stays -1), so GetFocusArmy answers the new army inside it (FAF's
+// SimPing.lua and Recall.lua OnArmyChange ask it); an error there is only logged, "NoteFocusArmyChanged()
+// puked:\n%s" (Warnf, 0x74757f). After it the sync packet takes the focus (+4, 0x74762c) and the script Sync
+// table is handed over (0x747b11: SyncStep). (Also on a change, not built: every entity's sync data and every
+// command's are sent in full, not only the changed ones (0x7478aa, CCommandDb::PublishSyncData 0x6e0f50): our
+// hosts copy the whole state every beat. And each army's "seen by the focus army" flag, army+0x128, is set from
+// it in CArmyImpl::OnTick 0x6ffdaa (SetCanSee 0x6fdee0): read by nothing of ours.)
+void Sim::ApplyFocusArmy() {
+  const int next = requestedFocus_.load();
+  const int old = focusArmy;
+  focusArmy = next;
+  if (next == old) return;
+  lua_State* L = state_->L();
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_pushstring(L, "NoteFocusArmyChanged");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_pushnumber(L, next == -1 ? -1 : next + 1);
+  lua_pushnumber(L, old == -1 ? -1 : old + 1);
+  if (lua_pcall(L, 2, 0, top + 1) != 0)
+    Logf(LogLevel::Warning, "NoteFocusArmyChanged() puked:\n%s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+  lua_settop(L, top);
+}
+
 std::vector<std::string> Sim::TakeSync() {
   std::vector<std::string> out;
   out.swap(pendingSync_);
@@ -1368,6 +1412,7 @@ void Sim::PausedBeat() {
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
   QueueLateDestroys();
+  ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
   SyncStep();
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
@@ -1707,6 +1752,7 @@ void Sim::Tick() {
   g_prof.Lap(1);
   ProcessDestroyQueue();
   QueueLateDestroys();
+  ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
   SyncStep();
   singleStep = false;  // step 14 (sim+0x8e4 = 0)

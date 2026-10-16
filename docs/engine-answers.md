@@ -3,6 +3,34 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 29: changing the focus army during a game — done
+
+Read in the exe: the user binding SetFocusArmy (0x842ee0, 1-based or -1, range error) -> CWldSession::
+RequestFocusArmy (0x8965e0) -> ValidateFocusArmyRequest (0x896670) -> SimDriver::SetArmyIndex (0x73b1b0: the
+pending value at driver+0xb0, no checks). At the Sync (FinalizeSyncDispatchLocked 0x73dad0 -> Sim::Sync 0x7474b0)
+the order is: the sim's focus is set FIRST (0x7474ef), THEN, if it changed, the sim Lua's global
+NoteFocusArmyChanged(new, old) runs (1-based, -1 kept; an error only logs "NoteFocusArmyChanged() puked"), then
+the sync packet carries the focus and every entity is sent. So the sim's GetFocusArmy (0x75ce50) gives the old
+army for the whole beat and the new one from inside NoteFocusArmyChanged on (FAF's SimPing / Recall rely on it).
+FAF's exe adds the sim-side SetFocusArmy(index0) (0x128ce81: 0-based, no checks, the same pending path; simInit's
+army merge uses it).
+
+Built (`src/sim/sim.h`, next to TakeSync):
+- `sim.RequestFocusArmy(index0)` (0-based, -1 = none): the host validates first, as the original's user side
+  does; the engine stores what it gets. Safe from the host's thread at any time (an atomic). It takes effect at
+  the Sync of the next Tick or PausedBeat (or of the beat running now); that beat still runs with the old focus;
+  the last request wins; asking back for the current army before the Sync does nothing.
+- The sim's own `SetFocusArmy(index0)` applies at the end of the beat that called it.
+- After each Tick / PausedBeat, `sim.focusArmy` is the focus that beat's Sync was made with: read it there (your
+  copy), not while a beat runs. In that beat's Sync table FAF's scripts put Sync.FocusArmyChanged = {new, old},
+  UnitData for the new army, ReleaseIds for the old one, and score.lua sends the score by the new focus.
+- The host's own part on a change, as the original's DoBeat (0x8945b6): its GetFocusArmy / IsObserver, an empty
+  selection (SetSelection 0x89462b), the sounds' army, the picture's focus and allies. The command source never
+  changes. Note: score.lua:399 and createunit.lua:1227 use `ConExecute('SetFocusArmy '..(n-1))`, 0-based.
+- Not built (said in the code): the full entity / command resend on a change (our hosts copy the whole state every
+  beat) and SetCanSee on armies; the original's "beat 0" Sync is folded into beat 1's.
+- Headless: a `--orders` line `<tick> focus <army 1-based | -1>` requests it. Gate: all 13 unchanged.
+
 ## ui 28: layer, attached and attachedCount in UnitView — done
 
 `UnitView::layer` (the original's ELayer bits: 1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air, 32 Orbit; 0 none),

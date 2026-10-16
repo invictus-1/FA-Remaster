@@ -306,7 +306,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   std::string lastSync;
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z> | @<entity id>] [queue]",
   // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>", "<tick> lua <one line of Lua run in
-  // the sim state: a test building its case, not an order>"; <tick> counts beats, paused ones included, and
+  // the sim state: a test building its case, not an order>", "<tick> focus <army 1-based | -1>" (the interface's
+  // focus army request: Sim::RequestFocusArmy); <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
   std::multimap<uint32_t, std::string> orders;
   if (!o.orders.empty()) {
@@ -338,6 +339,10 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         unsigned long id = 0;
         if (std::sscanf(text, "%*s %lu %63s %63s", &id, key, value) == 3) writer.ProcessInfoPair(static_cast<uint32_t>(id), key, value);
       }
+      else if (!std::strcmp(what, "focus")) {  // "<tick> focus <army, 1-based | -1>": the interface's SetFocusArmy
+        int army = 0;
+        if (std::sscanf(text, "%*s %d", &army) == 1) sim.RequestFocusArmy(army == -1 ? -1 : army - 1);
+      }
       else if (!std::strcmp(what, "issue")) {
         // (an entity target: "<tick> issue <type> <unit ids> @<entity id> [queue]")
         char at[32] = "";
@@ -363,7 +368,13 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
     if (!writer.empty() && !ApplyCommands(sim, writer.Take(), &ordersUnhandled)) Logf(LogLevel::Error, "orders: a message was malformed");
   };
+  int hostFocus = sim.focusArmy;  // the host's own copy, as the interface keeps one
   auto takeSync = [&] {
+    if (sim.focusArmy != hostFocus) {  // the beat's Sync applied a requested focus army
+      Logf(LogLevel::Info, "moho64: tick %u: focus army %d -> %d", sim.tick(), hostFocus == -1 ? -1 : hostFocus + 1,
+           sim.focusArmy == -1 ? -1 : sim.focusArmy + 1);
+      hostFocus = sim.focusArmy;
+    }
     for (auto& b : sim.TakeSync()) {
       ++syncBeats;
       syncBytes += b.size();

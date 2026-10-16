@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -120,6 +121,32 @@ class Sim {
   // emptied after every beat (the scripts' ResetSyncTable), as the original does.
   bool collectSync = false;
   std::vector<std::string> TakeSync();
+  // Changing the army the session looks through during a game (the replay's army list, an observer's choice,
+  // NoteGameOver's SetFocusArmy(-1), the score screen), the original's way (ui REQUESTS 29):
+  // - Call RequestFocusArmy(index0): the 0-based army index, or -1 for no army (an observer's or a replay's view
+  //   of everyone). The host checks it first, as the original's interface does (CWldSession::RequestFocusArmy
+  //   0x8965e0: -1 .. armies - 1, else only the log line; ValidateFocusArmyRequest 0x896670); the engine takes
+  //   the number as it comes (SimDriver::SetArmyIndex 0x73b1b0 checks nothing). It may be called from the host's
+  //   thread while a beat runs on another.
+  // - It only waits (the driver's sync filter, SimDriver+0xb0) until the next Sync: the end of the next Tick or
+  //   PausedBeat (or of the beat running now). That beat still runs with the old focus. At the start of its Sync
+  //   (Sim::Sync 0x7474b0): focusArmy takes the new value first (sim+0xa88, 0x7474ef), then the scripts'
+  //   NoteFocusArmyChanged(new, old) runs (1-based, -1 for none; GetFocusArmy already answers the new army in
+  //   it), and the beat's Sync table is handed over after that (0x747b11). With FAF's SimSync.lua that Sync then
+  //   holds Sync.FocusArmyChanged = {new = , old = }, Sync.UnitData of the new army's units, Sync.ReleaseIds of
+  //   the old army's, the enhancements again (SyncUnitEnhancements), a ping flush; score.lua sends Sync.Score by
+  //   the sim's GetFocusArmy from then on. Asking twice before the Sync: the last one counts; asking back for the
+  //   army in focus before the Sync: nothing happens. (Before the first beat: applied with beat 1's Sync, into
+  //   which ours folds the original's initial "beat 0" Sync.)
+  // - The sim's own scripts change it the same way, with FAF's sim global SetFocusArmy(index0) (simInit.lua's
+  //   MergeArmyPair): applied at the end of the beat that called it.
+  // - Read focusArmy after each Tick / PausedBeat, with that beat's TakeSync (not while a beat runs on another
+  //   thread: its Sync writes it): it is the focus that beat's Sync was made with (the original's sync packet +4,
+  //   0x74762c), and the scripts' GetFocusArmy answers it + 1. When it differs from the host's own, the host does
+  //   its part as CWldSession::DoBeat 0x894530 does (its GetFocusArmy / IsObserver, the selection cleared, the
+  //   sounds' army, the picture's focus and allies). The command source never changes with it.
+  void RequestFocusArmy(int index0) { requestedFocus_.store(index0); }
+  int RequestedFocusArmy() const { return requestedFocus_.load(); }  // what the next Sync applies (= focusArmy: none)
   // The scripts' effect calls are listed for a host that shows the game (EffectEvents in sim/sim_view.h); the
   // host takes the list every beat. Off: nothing is kept.
   bool collectEffects = false;
@@ -292,7 +319,9 @@ class Sim {
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
-  int focusArmy = -1;  // 0-based, -1 = observer/replay
+  // The army the session looks through (sim+0xa88): 0-based, -1 = none (an observer, a replay). Hosts read it;
+  // they change it with RequestFocusArmy (applied at the next Sync), never by writing it.
+  int focusArmy = -1;
   bool isReplay = true;  // false for a session launched from a game configuration (Start(SessionDescription))
   // Deliberate departures from the original that repair something broken in it or in the game's scripts
   // (docs/deviations.md lists each one). On in a new game, off while a replay is played back, so that a
@@ -359,6 +388,8 @@ class Sim {
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
   void SyncStep();  // the script part of Sim::Sync
+  std::atomic<int> requestedFocus_{-1};  // the pending focus army (SimDriver+0xb0); Start sets it to focusArmy
+  void ApplyFocusArmy();  // the start of Sim::Sync: a pending focus army takes effect
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;
