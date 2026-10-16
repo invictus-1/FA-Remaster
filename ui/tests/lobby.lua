@@ -107,6 +107,12 @@ check("and more than 4 with 4", moho64ui_Looks().sceneSamples, 4)
 video.shadow_quality.set('shadow_quality', 3, false)
 video.level_of_detail.set('level_of_detail', 2, false)
 video.fidelity.set('fidelity', 2, false)
+-- The renderer's whole look: remastered unless chosen, the original's one click away
+check("the Video tab has Look, Remastered unless chosen", video.remaster_look and video.remaster_look.default, 'remastered')
+video.remaster_look.set('remaster_look', 'original', false)
+check("Look Original gives the renderer's original look", moho64ui_Looks().originalLook, true)
+video.remaster_look.set('remaster_look', 'remastered', false)
+check("and back", moho64ui_Looks().originalLook, false)
 -- The graphics API: Direct3D 12 unless chosen (Chris's choice), or Vulkan
 check("the Video tab has Graphics API, Direct3D 12 unless chosen", video.remaster_graphics_api and video.remaster_graphics_api.default, 'd3d12')
 check("the pictures are drawn with Direct3D 12 at the start", moho64ui_Looks().vulkan, false)

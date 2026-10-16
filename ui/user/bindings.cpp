@@ -188,6 +188,14 @@ void PushBinding(lua_State* L, const std::string& name, lua_CFunction f) {
 }
 }  // namespace
 
+bool BindingProfileOn() { return Profiling(); }
+void AddProfileCost(const char* part, double seconds) {
+  if (!Profiling()) return;
+  BindingCost& cost = BindingCosts()[part];
+  cost.seconds += seconds;
+  ++cost.calls;
+}
+
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
   lua_pushstring(L, name);
   PushBinding(L, name, f);

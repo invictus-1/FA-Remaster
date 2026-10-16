@@ -8,6 +8,7 @@
 // What each function should do exactly is to be read from the original when the renderer's camera
 // takes this one's place.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -475,6 +476,15 @@ class WorldView : public Control {
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
+    // (Its parts are timed under their own names in the binding profile.)
+    const bool timed = BindingProfileOn();
+    auto t = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    auto lap = [&](const char* part) {
+      if (!timed) return;
+      const auto now = std::chrono::steady_clock::now();
+      AddProfileCost(part, std::chrono::duration<double>(now - t).count());
+      t = now;
+    };
     // What the picture shows beside the world: marks under the selected units, the lines of their
     // orders, and while a building is being placed its ghost where the mouse points (by the
     // picture before this one), green where it can stand.
@@ -485,6 +495,7 @@ class WorldView : public Control {
     std::vector<WorldGhost> ordered, queued;
     waypoints_.clear();
     SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued, &waypoints_);
+    lap("(the picture's scene: the selection)");
     if (sim) {
       for (const WorldGhost& site : queued) SiteOutline(L, *sim, site, 0xff10d010u, &scene.lines);
     }
@@ -547,7 +558,9 @@ class WorldView : public Control {
     scene.ghosts.insert(scene.ghosts.end(), ordered.begin(), ordered.end());
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
+    lap("(the picture's scene: hover, buildings)");
     RangeRingsForWorld(L, scene.hover, placing ? &scene.ghosts[0] : nullptr, &scene.ranges);
+    lap("(the picture's scene: range rings)");
     {  // (the eye's distance at the camera's nearest and farthest zoom)
       Camera* c = GetCameraObject(L, cameraName);
       const float zoom = c->zoom;
@@ -559,8 +572,11 @@ class WorldView : public Control {
     }
     // The meshes the game's script has placed in the world, and the marks of orders just given.
     WorldMeshesForWorld(L, &scene.meshes);
+    lap("(the picture's scene: meshes)");
     source->SetScene(scene);
+    lap("(the picture's scene: SetScene)");
     pixels_ = source->Draw(cam, w, h);
+    lap("(the picture's scene: Draw)");
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
     return pixels_ != nullptr;
   }
@@ -1162,14 +1178,28 @@ int l_ViewRightMouseButtonOrder(lua_State* L) {
   std::string mode, name, order;
   v->CommandMode(L, &mode, &name);  // none while the script is in a command mode, as the original
   if (mode.empty() && v->HitTest(ui.mouseX, ui.mouseY)) {
+    // (Its parts are timed under their own names in the binding profile.)
+    using Clock = std::chrono::steady_clock;
+    const bool timed = BindingProfileOn();
+    auto t = timed ? Clock::now() : Clock::time_point{};
+    auto lap = [&](const char* part) {
+      if (!timed) return;
+      const auto now = Clock::now();
+      AddProfileCost(part, std::chrono::duration<double>(now - t).count());
+      t = now;
+    };
     const uint32_t under = v->UnitUnder(L, ui.mouseX, ui.mouseY);
+    lap("(GetRightMouseButtonOrder: the unit under the mouse)");
     order = RightClickOrder(L, under);
+    lap("(GetRightMouseButtonOrder: RightClickOrder)");
     // (over a tree, a rock or a wreck that the selection can reclaim, the click reclaims it:
     // the same test as the click's own, so the cursor says what the click will do)
     float world[3];
     if (under == 0xffffffffu && !order.empty() && !v->miniMap) {
       v->Unproject(L, ui.mouseX, ui.mouseY, world);
+      lap("(GetRightMouseButtonOrder: the ground under the mouse)");
       if (CanReclaimAtPlace(L, world, v->MapUnitsOf(L, 4))) order = "RULEUCC_Reclaim";
+      lap("(GetRightMouseButtonOrder: something to reclaim there)");
     }
   }
   if (order.empty()) lua_pushnil(L);

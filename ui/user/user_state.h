@@ -219,6 +219,10 @@ struct LookSettings {
   // "Graphics API" (Chris, 2026-10-15): Vulkan in place of Direct3D 12, the default; taken when a
   // picture is made (WorldPicture::SetVulkan before Open).
   bool vulkan = false;
+  // "Look" (Chris's rule: every new look is a player's option, the original's way included): the
+  // renderer's original look of lighting, sky, water, ground shading, unit shaders, glow and the
+  // build look all together (World::look, the viewer's key L), at once; the other looks stay apart.
+  bool originalLook = false;
 };
 LookSettings& Looks();
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,

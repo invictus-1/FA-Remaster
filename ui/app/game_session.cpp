@@ -149,6 +149,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
     if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);
     if (render::World* w = picture.world()) {
+      w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;
       w->terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
       w->ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;

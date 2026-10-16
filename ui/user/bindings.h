@@ -19,6 +19,10 @@ void RegisterUserClasses(lua_State* L);
 // Replace a stub with the real function.
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f);
 void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFunction f);
+// The binding profile (MOHO64UI_BINDING_PROFILE=1): whether it is on, and a part of an engine
+// function's work counted under its own name ("(GetRightMouseButtonOrder: UnitUnder)").
+bool BindingProfileOn();
+void AddProfileCost(const char* part, double seconds);
 
 // Push moho.<name> for an engine class ("CMauiBitmap" -> moho.bitmap_methods).
 void PushUserClassTable(lua_State* L, const char* cppClass);

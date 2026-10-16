@@ -326,8 +326,25 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
   RangeStore& store = static_cast<RangeStore&>(*user->ranges);
   if (store.filters.empty()) return;
   const int own = sim->focusArmy + 1;
+  using Entry = std::pair<const std::string, RangeFilter>;  // (a filter as store.filters keeps it: its address stays)
+  // Per blueprint, the filters it is in and their rings' radii, worked out once a call: a
+  // selection may hold thousands of one kind (2,000 tanks: one blueprint, not 24,000 tests).
+  struct Kind {
+    std::vector<const Entry*> filters;
+    std::map<const Entry*, std::pair<float, float>> radii;  // (inner, outer; outer 0: no ring)
+  };
+  std::map<std::string, Kind> kinds;
+  auto kindOf = [&](const std::string& bp) -> Kind& {
+    auto it = kinds.find(bp);
+    if (it != kinds.end()) return it->second;
+    Kind& k = kinds[bp];
+    for (const Entry& entry : store.filters)
+      if (InFilter(L, entry.second, bp)) k.filters.push_back(&entry);
+    return k;
+  };
+  auto has = [](const Kind& k, const Entry* e) { return std::find(k.filters.begin(), k.filters.end(), e) != k.filters.end(); };
   // A unit's ring of a filter is drawn once: under the mouse before selected before switched on.
-  std::map<std::pair<uint32_t, std::string>, uint32_t> colors;
+  std::map<std::pair<uint32_t, const Entry*>, uint32_t> colors;
   std::string blueprint;
   float at[3];
   int army = 0;
@@ -338,14 +355,14 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
       auto f = store.filters.find(name);
       if (f == store.filters.end()) continue;
       for (uint32_t id : all)
-        if (UserUnitFacts(L, id, &blueprint, at, &army) && army == own && InFilter(L, f->second, blueprint))
-          colors[{id, name}] = f->second.normal;
+        if (UserUnitFacts(L, id, &blueprint, at, &army) && army == own && has(kindOf(blueprint), &*f))
+          colors[{id, &*f}] = f->second.normal;
     }
   }
   auto named = [&](uint32_t id, bool rollover) {
     if (!UserUnitFacts(L, id, &blueprint, at, &army) || army != own) return;
-    for (const auto& [name, f] : store.filters)
-      if (name != "AllMilitary" && name != "AllIntel" && InFilter(L, f, blueprint)) colors[{id, name}] = rollover ? f.rollover : f.select;
+    for (const Entry* e : kindOf(blueprint).filters)
+      if (e->first != "AllMilitary" && e->first != "AllIntel") colors[{id, e}] = rollover ? e->second.rollover : e->second.select;
   };
   if (store.selected) {
     std::vector<uint32_t> selected;
@@ -364,10 +381,15 @@ void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, s
   std::vector<Found> found;
   float inner = 0, outer = 0;
   for (const auto& [key, color] : colors) {
-    auto f = store.filters.find(key.second);
-    if (f != store.filters.end() && UserUnitFacts(L, key.first, &blueprint, at, &army) &&
-        RadiiOf(L, store, blueprint, key.second, &inner, &outer))
-      found.push_back({&f->first, &f->second, color, {at[0], at[1], at[2]}, inner, outer});
+    if (!UserUnitFacts(L, key.first, &blueprint, at, &army)) continue;
+    Kind& k = kindOf(blueprint);
+    auto r = k.radii.find(key.second);
+    if (r == k.radii.end()) {
+      if (!RadiiOf(L, store, blueprint, key.second->first, &inner, &outer)) outer = 0;
+      r = k.radii.emplace(key.second, std::make_pair(inner, outer)).first;
+    }
+    if (r->second.second > 0)
+      found.push_back({&key.second->first, &key.second->second, color, {at[0], at[1], at[2]}, r->second.first, r->second.second});
   }
   if (store.build && build)
     for (const auto& [name, f] : store.filters)

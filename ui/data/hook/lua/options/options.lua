@@ -28,6 +28,22 @@ local looks = {
         },
     },
     {
+        -- (Chris's rule: every new look is a player's option, the original's way included. The
+        -- renderer's whole look at once: lighting, sky, water, ground shading, unit shaders, glow,
+        -- the build look; effects, tracers, the day, weather, map edge and rich ground stay apart.)
+        title = "Look",
+        key = 'remaster_look',
+        type = 'toggle',
+        default = 'remastered',
+        set = Look("remaster_look"),
+        custom = {
+            states = {
+                { text = "Remastered", key = 'remastered' },
+                { text = "Original", key = 'original' },
+            },
+        },
+    },
+    {
         -- (Chris, 2026-10-15: a choice, Direct3D 12 by default; from the next map loaded)
         title = "Graphics API",
         key = 'remaster_graphics_api',

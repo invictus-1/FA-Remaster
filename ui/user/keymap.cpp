@@ -327,9 +327,10 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[5] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan"};
-  const bool values[5] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan};
-  for (int i = 0; i < 5; ++i) {
+  const char* names[6] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook"};
+  const bool values[6] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                          looks.originalLook};
+  for (int i = 0; i < 6; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -629,6 +630,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "SC_CAMERASCALELOD") {
       const double lod = std::atof(value.c_str());
       if (!value.empty()) looks.meshDetail = lod < 0.5 ? 0.5f : lod < 1.5 ? 0.75f : 1.0f;
+      return;
+    }
+    if (key == "REMASTER_LOOK") {  // remastered | original
+      if (!value.empty()) looks.originalLook = Upper(value) == "ORIGINAL";
       return;
     }
     if (key == "REN_MIPSKIPLEVELS") {  // the game's Texture Detail

@@ -117,7 +117,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   scene's samples, from the next picture made; `GetAntiAliasingOptions` gives 2 and 4), Level Of
   Detail (model detail 0.5 / 0.75 / 1), and Fidelity Presets sets them together as in the
   original. A player who has never chosen starts at the highest (the hook raises these items'
-  defaults); `LookSettings` keeps them, the picture follows. "Graphics API" in the same tab
+  defaults); `LookSettings` keeps them, the picture follows. "Look" in the same tab
+  (`remaster_look`: Remastered / Original; Chris's rule that every new look is a player's option,
+  the original's way included): the renderer's whole look at once (World::look: lighting, sky,
+  water, ground shading, unit shaders, glow, the build look), from the next frame; the effects,
+  tracers, day, weather, map edge and rich ground keep their own options. "Graphics API" in the same tab
   (`remaster_graphics_api`, Chris, 2026-10-15): Direct3D 12 by default, or Vulkan
   (WorldPicture::SetVulkan before Open; the game's picture, the menu's and its background), from
   the next map loaded.
