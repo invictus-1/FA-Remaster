@@ -3,6 +3,15 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 26: command and toggle caps in UnitView — done (engine e7b8ff8)
+
+`UnitView::commandCaps` and `toggleCaps` (RULEUCC_ / RULEUTC_ bits): the unit's own when a script changed them
+(Unit:AddCommandCap, AddToggleCap ...), else its blueprint's. Each unit blueprint's caps are read once when the
+blueprints are copied into the sim (`BlueprintInfo::commandCaps` / `toggleCaps`), so filling the view runs no sim
+Lua; `UnitStateOf` takes the same values the same way. The same numbers the sim's own `LiveCommandCaps` /
+`UnitToggleCaps` give. Also in e7b8ff8: a second game in the same process now plays exactly as in a fresh
+process (`moho64 --twice` checks it), so relaunched games may join determinism checks again.
+
 ## ui 25: a copy of the terrain heights kept between beats — done
 
 `src/sim/terrain.h`:
