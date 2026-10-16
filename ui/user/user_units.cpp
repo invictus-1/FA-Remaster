@@ -48,11 +48,12 @@ class UserUnit : public ScriptObject {
 struct UnitStore : UserState::Extra {
   std::map<uint32_t, std::unique_ptr<UserUnit>> units;
   std::vector<UserUnit*> selection;
-  // RightClickOrder's work on the selection (its own units, their command caps together), kept
-  // while the selection and the beat are the same: it asks each unit's state of the simulation.
-  std::vector<UserUnit*> capsFor;
-  uint32_t capsTick = 0xffffffffu, capsUnion = 0;
-  std::vector<UserUnit*> capsOwn;
+  std::vector<UserUnit*> capsOwn;  // (RightClickOrder's list of the selection's own units, kept for its room)
+  // CanReclaimAtPlace's last question and answer (see there).
+  uint32_t reclaimTick = 0xffffffffu;
+  std::vector<UserUnit*> reclaimFor;
+  float reclaimAt[3] = {0, 0, 0}, reclaimWithin = -1;
+  bool reclaimAnswer = false;
   bool reporting = false;  // inside OnSelectionChanged
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
@@ -465,44 +466,16 @@ int l_GetUnitCommandData(lua_State* L) {
                                          "RULEUTC_IntelToggle", "RULEUTC_ProductionToggle", "RULEUTC_StealthToggle",
                                          "RULEUTC_GenericToggle", "RULEUTC_SpecialToggle", "RULEUTC_CloakToggle"};
   uint32_t masks[4] = {0, 0, 0, 0};  // the bits for the tables at stack index 2 (orders) and 3 (toggles)
-  auto collect = [&](const char* caps, int out, const char* const* names, int count) {
-    lua_pushstring(L, "General");
-    lua_gettable(L, -2);
-    if (lua_istable(L, -1)) {
-      lua_pushstring(L, caps);
-      lua_gettable(L, -2);
-      if (lua_isstring(L, -1)) {
-        std::string text = lua_tostring(L, -1);
-        bool named = false;
-        for (int i = 0; i < count; ++i)
-          if (text == names[i]) masks[out] |= 1u << i, named = true;
-        if (!named) masks[out] |= static_cast<uint32_t>(std::strtoul(text.c_str(), nullptr, 10));
-      } else if (lua_istable(L, -1)) {  // the form of the blueprint files: {NAME = true, ...}
-        for (int i = 0; i < count; ++i) {
-          lua_pushstring(L, names[i]);
-          lua_rawget(L, -2);
-          if (lua_toboolean(L, -1)) masks[out] |= 1u << i;
-          lua_pop(L, 1);
-        }
-      }
-      lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-  };
   for (UserUnit* u : list) {
     PushBlueprint(L, u->view.blueprint);
     if (!lua_istable(L, -1)) {
       lua_pop(L, 1);
       continue;
     }
-    UnitStateView state;
-    if (StateOf(L, u, &state)) {  // what the unit can do right now
-      masks[2] |= state.commandCaps;
-      masks[3] |= state.toggleCaps;
-    } else {
-      collect("CommandCaps", 2, kOrders, 24);
-      collect("ToggleCaps", 3, kToggles, 9);
-    }
+    // What the unit can do right now: its caps as the beat's copy has them (engine ui 26: the
+    // unit's own, no asking the simulation for each unit).
+    masks[2] |= u->view.commandCaps;
+    masks[3] |= u->view.toggleCaps;
     // What it can build: the sets its blueprint names, less what the unit itself may not build now
     // (its script's AddBuildRestriction: a commander without its upgrades, a factory before its
     // own; the engine's UnitRestrictedBlueprints).
@@ -1200,11 +1173,8 @@ bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableV
   UnitStore& store = Store(L);
   const uint32_t kReclaim = 0x100000;
   uint32_t caps = 0;
-  for (UserUnit* u : store.selection) {
-    if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
-    UnitStateView state;
-    if (StateOf(L, u, &state)) caps |= state.commandCaps;
-  }
+  for (UserUnit* u : store.selection)
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) caps |= u->view.commandCaps;
   return (caps & kReclaim) && ReclaimableAt(*sim, at, within, prop);
 }
 }  // namespace
@@ -1215,8 +1185,20 @@ bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool cle
   return IssueOrder(L, "Reclaim", prop.position[0], prop.position[1], prop.position[2], prop.id, clear, std::string());
 }
 bool CanReclaimAtPlace(lua_State* L, const float at[3], float within) {
+  // (Asked by the cursor's script again and again with the mouse still: the answer is kept while
+  // the place, the reach, the selection and the beat are the same. ReclaimableAt looks at every
+  // prop near the place: about a millisecond in a forest.)
+  UnitStore& store = Store(L);
+  Sim* sim = TheSim(L);
+  const uint32_t tick = sim ? sim->tick() : 0;
+  if (store.reclaimTick == tick && store.reclaimFor == store.selection && store.reclaimAt[0] == at[0] &&
+      store.reclaimAt[2] == at[2] && store.reclaimWithin == within)
+    return store.reclaimAnswer;
   ReclaimableView prop;
-  return ReclaimTargetAt(L, at, within, &prop);
+  store.reclaimAnswer = ReclaimTargetAt(L, at, within, &prop);
+  store.reclaimTick = tick, store.reclaimFor = store.selection, store.reclaimWithin = within;
+  store.reclaimAt[0] = at[0], store.reclaimAt[1] = at[1], store.reclaimAt[2] = at[2];
+  return store.reclaimAnswer;
 }
 
 // moho64ui_ReclaimableAt(x, z, within) -> nil, or {id, blueprint, x, z, mass, energy} of the
@@ -1262,18 +1244,14 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
   if (!sim) return std::string();
   UnitStore& store = Store(L);
   int army = sim->focusArmy + 1;
-  if (store.capsTick != sim->tick() || store.capsFor != store.selection) {
-    store.capsTick = sim->tick(), store.capsFor = store.selection;
-    store.capsUnion = 0, store.capsOwn.clear();
-    for (UserUnit* u : store.selection) {
-      if (u->gone || u->view.dead || u->view.army != army) continue;
-      UnitStateView state;
-      if (StateOf(L, u, &state)) store.capsUnion |= state.commandCaps;
-      store.capsOwn.push_back(u);
-    }
+  uint32_t caps = 0;  // (the beat's copies: engine ui 26)
+  std::vector<UserUnit*>& own = store.capsOwn;
+  own.clear();
+  for (UserUnit* u : store.selection) {
+    if (u->gone || u->view.dead || u->view.army != army) continue;
+    caps |= u->view.commandCaps;
+    own.push_back(u);
   }
-  const uint32_t caps = store.capsUnion;
-  const std::vector<UserUnit*>& own = store.capsOwn;
   if (own.empty()) return std::string();
   const uint32_t kMove = 1, kAttack = 4, kGuard = 8, kRepair = 0x40, kReclaim = 0x100000;
   const std::string move = caps & kMove ? "RULEUCC_Move" : "";

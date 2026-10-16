@@ -722,6 +722,21 @@ UnitStateOf runs in the sim's lua_State, so it is also one of your verdict's "wa
 readers. Could UnitView (src/sim/sim_view.h) carry `uint32_t commandCaps, toggleCaps` as
 UnitStateView has them, filled where the views are made each beat? Then the selection's caps are a
 loop over plain fields of the interface's own copies: no sim, no wait, no Lua.
+DONE (main e7b8ff8): UnitView::commandCaps / toggleCaps. Used by RightClickOrder, ReclaimTargetAt and
+GetUnitCommandData: GetRightMouseButtonOrder 2.78 -> 1.19 ms a call with 2,000 selected (the rest is
+ReclaimableAt, request 27).
+
+### 27. ReclaimableAt without the sim's Lua per prop
+From the interface chat, 2026-10-15, not blocking (performance; also one of your verdict's "waits
+for the beat" readers). The cursor's script asks GetRightMouseButtonOrder every frame the mouse is
+over the world; with a selection that can reclaim (an engineer, the commander) it asks
+ReclaimableAt (src/sim/sim_view.cpp:559) for the prop under the mouse. That walks every prop within
+16 + reach units and, for each, tests BpInCategory(RECLAIMABLE) by name and pushes the blueprint's
+Lua table for SizeX / SizeZ: about 1.2 ms a call in the rebuilt Seton's forests (5,380 calls in a
+minute and a half). Could a prop blueprint's RECLAIMABLE flag and SizeX / SizeZ be read once (as you
+did for the caps at CopyToSim), so the walk touches no Lua? I now keep the answer while the mouse,
+the selection and the beat stay the same, which takes most calls away, but a moving mouse over a
+forest still pays it each frame.
 
 ## To the renderer track
 
