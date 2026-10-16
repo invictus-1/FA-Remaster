@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 
+#include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -778,6 +779,7 @@ void GameSession::TimedTick() {  // (a beat of the simulation, timed for the win
 }
 
 void GameSession::NoteBeat() {
+  g_crashTick = sim_->tick();  // (a crash's line in the log names the beat: src/core/crash.h)
 #ifdef MOHO64UI_WORLD_PICTURE
   const auto tp = std::chrono::steady_clock::now();
   if (picture_) picture_->picture.Beat(*sim_);

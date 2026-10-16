@@ -25,6 +25,7 @@
 #include "app/backdrop.h"
 #include "app/game_session.h"
 #include "app/window.h"
+#include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -250,6 +251,7 @@ int main(int argc, char** argv) {
     }
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
+  InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
