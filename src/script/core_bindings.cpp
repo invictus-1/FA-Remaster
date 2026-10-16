@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <optional>
 #include <string>
 
 #include "core/dmath.h"
@@ -154,6 +156,194 @@ int l_FileCollapsePath(lua_State* L) {
 int l_exists(lua_State* L) {
   const char* name = luaL_checkstring(L, 1);
   lua_pushboolean(L, GetVfs(L)->Exists(name));
+  return 1;
+}
+
+// ---- GetMovieDuration: a movie's length from its Sofdec (.sfd) header, as CRI's library in the original reads it.
+// A .sfd is an MPEG-1 program stream: packs (00 00 01 BA); the Sofdec stream header ("SFH": "SofdecStream" at +0x20
+// of a pack, the frame count at +0xc0, a stream table at +0x180); the video's MPEG sequence header (00 00 01 B3)
+// holds the frame rate code.
+namespace sfd {
+
+constexpr size_t kNone = static_cast<size_t>(-1);
+// fps * 1000 by MPEG frame rate code 1..8 (table 0xd7f8d0; the same values in getPicRate's switch 0xadd7a0).
+constexpr int kFps1000[9] = {0, 23976, 24000, 25000, 29970, 30000, 50000, 59940, 60000};
+
+// The file's bytes. The original memory-maps the file (DISK_MemoryMapFile 0x459d10) and reads a few header bytes
+// without bounds checks (sfcre_AnalyMpv): a byte past the end reads as 0 here, as in the mapping's last page.
+struct Bytes {
+  const unsigned char* p;
+  size_t n;
+  unsigned operator[](size_t i) const { return i < n ? p[i] : 0u; }
+};
+
+// MPS_SearchDelim 0xada450 for a pack header (class 0x10000 of 0xaecc20: exactly 00 00 01 BA): the first at or
+// after `from` with 4 bytes left.
+size_t FindPack(const Bytes& b, size_t from) {
+  for (size_t i = from; i + 4 <= b.n; ++i)
+    if (b.p[i] == 0 && b.p[i + 1] == 0 && b.p[i + 2] == 1 && b.p[i + 3] == 0xBA) return i;
+  return kNone;
+}
+
+// MPV_SearchDelim 0xaea040 for a sequence header (class 0x40 of 0xae9f10: 00 00 01 B3), its state machine as is:
+// 00 -> 1, then 00 -> 2 (else 0), then 01 -> 3 (00 stays at 2, else 0), then the code byte; a code that is not B3
+// starts again at state 0 with the NEXT byte (the code byte is not taken as a first zero).
+size_t FindSequenceHeader(const Bytes& b, size_t from) {
+  int state = 0;
+  for (size_t i = from; i < b.n;) {
+    const unsigned a = b.p[i++];
+    switch (state) {
+      case 0: if (a == 0) state = 1; break;
+      case 1: state = a == 0 ? 2 : 0; break;
+      case 2: if (a == 1) state = 3; else if (a != 0) state = 0; break;
+      default:
+        if (a == 0xB3) return i - 4;
+        state = 0;
+    }
+  }
+  return kNone;
+}
+
+// sfcre_AnalyMpv 0xada880 over the whole file: the first sequence header with an aspect ratio code that is not 0
+// (byte 7 & 0xf0), a frame rate code 1..8 (byte 7 & 0x0f) and the marker bit (byte 10 & 0x20) gives fps * 1000; a
+// header failing that test is skipped and the search goes on from its second byte. 0: none.
+int MpvFps1000(const Bytes& b) {
+  size_t from = 0;
+  while (from < b.n) {
+    const size_t at = FindSequenceHeader(b, from);
+    if (at == kNone) return 0;
+    from = at + 1;
+    const unsigned code = b[at + 7] & 0xF;
+    if ((b[at + 7] & 0xF0) && code >= 1 && code <= 8 && (b[at + 10] & 0x20)) return kFps1000[code];
+  }
+  return 0;
+}
+
+// SFH_IsSfdHeader 0xadc890: at least 0x800 bytes from `at` and "SofdecStream" + 12 spaces at +0x20 (0xf41a80); the
+// version (SFH_AnlyHdrToolVer 0xadcb70) is the larger of the bytes +0x38/+0x39 (major * 100 + minor) and
+// "Ver.<major>.<minor>" in the 32 bytes at +0x60 (getToolVer 0xadcd80: strstr, convAsciiToDigit 0xadcdc0); without
+// "Ver." there it is no header. -1: no header.
+int SfhVersion(const Bytes& b, size_t at) {
+  if (at >= b.n || b.n - at < 0x800) return -1;
+  const unsigned char* h = b.p + at;
+  if (std::memcmp(h + 0x20, "SofdecStream            ", 24) != 0) return -1;
+  char text[34] = {};  // 32 bytes and the terminator (0xadcb30); one more 0 for a minor read past "Ver.1"
+  std::memcpy(text, h + 0x60, 32);
+  const char* c = std::strstr(text, "Ver.");
+  if (!c) return -1;
+  auto digits = [](const char*& s) {
+    int v = 0;
+    while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    return v;
+  };
+  c += 4;
+  const int major = digits(c);
+  ++c;  // past the character that ended the major number, whichever it is
+  const int minor = digits(c);
+  const int text_version = major * 100 + minor;
+  const int byte_version = h[0x38] * 100 + h[0x39];
+  return byte_version >= text_version ? byte_version : text_version;
+}
+
+// The version test of every SFH field read (isEffectiveVer 0xadc980): 107, or 110 and later.
+bool SfhVersionOk(int v) { return v == 107 || v >= 110; }
+
+// MWSFFRM_AnalyzeSofdecHeader 0xaca8e0: the header is looked for at +0x800, then at +0x1000 only (a file under
+// 0x800 bytes: none); the first found gives the frame count, the int at +0xc0 (SFH_AnlyMaxFrmNum 0xadcfd0) when the
+// version passes, else -1. No header: -1.
+int32_t SfhFrames(const Bytes& b) {
+  if (b.n < 0x800) return -1;
+  for (size_t at : {size_t{0x800}, size_t{0x1000}}) {
+    const int v = SfhVersion(b, at);
+    if (v < 0) continue;
+    if (!SfhVersionOk(v)) return -1;
+    int32_t frames;
+    std::memcpy(&frames, b.p + at + 0xc0, 4);
+    return frames;
+  }
+  return -1;
+}
+
+// sfcre_AnalySfh 0xada2b0 (before sfcre_AnalyMpv, which overwrites what it finds): the header at 0, then 1, 2 and 3
+// packs further while bytes are left; when its version passes, the first video stream in its table (ids 0xE0..0xEF
+// in order, sfhds_AnlyUsedStmid 0xae7640; 26 entries of 0x40 bytes at +0x180, the id at +0x18, searchStmId
+// 0xadca60) gives fps * 1000 by the code at +0x1f of its entry (0xadd430 -> getPicRate 0xadd7a0). 0: none.
+int SfhFps1000(const Bytes& b, size_t pack) {
+  size_t at = 0;
+  int v = SfhVersion(b, at);
+  for (int tries = 0; v < 0 && tries < 3; ++tries) {
+    at += pack;
+    if (at >= b.n) return 0;
+    v = SfhVersion(b, at);
+  }
+  if (v < 0 || !SfhVersionOk(v)) return 0;
+  const unsigned char* table = b.p + at + 0x180;
+  for (unsigned id = 0xE0; id <= 0xEF; ++id)
+    for (int k = 0; k < 26; ++k)
+      if (table[0x40 * k + 0x18] == id) {
+        const unsigned code = table[0x40 * k + 0x1f];
+        return code >= 1 && code <= 8 ? kFps1000[code] : 0;
+      }
+  return 0;
+}
+
+// mwPlyGetHdrInf 0xac8df0 -> SFD_AnalyCreInf 0xad9fc0 as MOV_GetDuration needs it: false when the original finds no
+// program stream with video. sfcre_AnalyMps 0xada110 / sfcre_AnalyPackSiz 0xada190: three pack headers, equally
+// spaced, the first at a multiple of that spacing from the start (fewer than three: not a program stream; unequal:
+// not valid). Then the video: the SFH's frame rate, overwritten by the sequence header's (above).
+// Not built: the MPEG-2 transport stream branch (sfcre_AnalyM2ts 0xada0c0, tried first: 0x47 sync bytes 188 bytes
+// apart in the first 0x758 bytes; none of the game's 1004 movies has three), and the audio analysis
+// (sfcre_AnalyAudio 0xada3a0), which decides validity only for a program stream WITHOUT video: there the original
+// goes on to divide by a frame rate of 0 when the stream has ADX or MPEG audio. Such a file reads as "not a valid
+// SFD file" (0) here; every one of the game's movies has video.
+bool Analyze(const Bytes& b, int32_t& frames, int& fps1000) {
+  const size_t p1 = FindPack(b, 0);
+  const size_t p2 = p1 == kNone ? kNone : FindPack(b, p1 + 1);
+  const size_t p3 = p2 == kNone ? kNone : FindPack(b, p2 + 1);
+  if (p3 == kNone) return false;
+  const size_t pack = p2 - p1;
+  if (p3 - p2 != pack || p1 % pack != 0) return false;
+  fps1000 = SfhFps1000(b, pack);
+  if (const int mpv = MpvFps1000(b)) fps1000 = mpv;
+  if (fps1000 == 0) return false;
+  frames = SfhFrames(b);  // MWSFFRM_AnalyzeSofdecHeader, called by mwPlyGetHdrInf after SFD_AnalyCreInf
+  return true;
+}
+
+}  // namespace sfd
+
+// GetMovieDuration(localFileName) (FA exe 0x8753a0 -> 0x875420 -> Moho::MOV_GetDuration 0x874d30), in the core set
+// (0xf59680): every state has it. FAF's ScenarioFramework (Dialogue) calls it in the sim and plays AllyCom.sfd
+// instead when it returns 0.
+// 0x875420: lua_gettop must be 1 ("%s\n  expected %d args, but got %d", 0xe0a220, with the help 0xe49538);
+// lua_tostring(1), else TypeError "string"; the float result pushed with lua_pushnumber.
+// 0x874d30: no movie manager (made by CScApp::CreateDevice 0x8d0ea7, so always there in a game): 0. The VFS's
+// FindFile (CVFSImpl 0x466a20: the path lower-cased, the first search path that has it) finds no file: Warnf
+// "Movie file \"%s\" doesn't exist." (0xe49428) and 0. The file is memory-mapped whole; no bytes: 0. The header
+// read (mwPlyGetHdrInf 0xac8df0) must give a program stream with video (its type 1 or 3), else Warnf "%s is not a
+// valid SFD file." (0xe49244) and 0. Then, in floats (0x874ec4, SSE):
+//   frames / (fps1000 * 0.001f)        (cvtsi2ss both, mulss by 0.001f at 0xdff0ac, divss)
+// e.g. 210 frames at 30000 -> 6.9999995 (FMV_loading02.sfd), not 7: 30000 * 0.001f rounds to 30.000002. A file
+// whose header gives no frame count divides -1.
+int l_GetMovieDuration(lua_State* L) {
+  const int n = lua_gettop(L);
+  if (n != 1) luaL_error(L, "%s\n  expected %d args, but got %d", "GetMovieDuration(localFileName)", 1, n);
+  const char* name = lua_tostring(L, 1);
+  if (!name) luaL_typerror(L, 1, "string");
+  float seconds = 0.0f;
+  const std::optional<std::string> data = GetVfs(L)->ReadFile(name);
+  if (!data) {
+    Logf(LogLevel::Warning, "Movie file \"%s\" doesn't exist.", name);
+  } else if (!data->empty()) {
+    const sfd::Bytes b{reinterpret_cast<const unsigned char*>(data->data()), data->size()};
+    int32_t frames = 0;
+    int fps1000 = 0;
+    if (sfd::Analyze(b, frames, fps1000))
+      seconds = static_cast<float>(frames) / (static_cast<float>(fps1000) * 0.001f);
+    else
+      Logf(LogLevel::Warning, "%s is not a valid SFD file.", name);
+  }
+  lua_pushnumber(L, seconds);
   return 1;
 }
 
@@ -590,6 +780,7 @@ void RegisterCoreBindings(ScriptState& state) {
   Reg(L, "Dirname", l_Dirname);
   Reg(L, "FileCollapsePath", l_FileCollapsePath);
   Reg(L, "exists", l_exists);
+  Reg(L, "GetMovieDuration", l_GetMovieDuration);
   Reg(L, "STR_xtoi", l_STR_xtoi);
   Reg(L, "STR_itox", l_STR_itox);
   Reg(L, "STR_Utf8Len", l_STR_Utf8Len);
