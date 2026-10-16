@@ -725,7 +725,9 @@ int Resolve(Sim& sim, Unit* Y) {
     s = RotY(a, vXn);
   }
   Vec3 T = Add(B, Scale(s, clr));
-  // FindFreeSpot 0x62b200 gates the side-step (outline): the footprint must fit there
+  // FindFreeSpot 0x62b200 gates the side-step (outline): the point inside the playable rect (0x59778e passes size
+  // 1, whole map 0: STIMap::IsWithin margin 1, whatever the army), and the footprint must fit there
+  if (sim.map() && !sim.IsWithin(T.x, T.z, 1.0f, false)) return 0;
   const PathGrid* g = UnitFootprintGrid(sim, Y);
   if (g) {
     int cx, cz;
@@ -755,7 +757,13 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       if (m.wasMoving) {
         m.wasMoving = false;
         LandNavPoke(u);
-        if (Driving(u)) {
+        // 0x5d2cf4..0x5d2d09: the fresh batch is made only when the target st+0x90 is not the no-target vector
+        // (0x4ead40, compared by 0x4f0a50); the navigator is not asked. SetWaypoints(0, 0) writes the no-target
+        // vector, and a new waypoint is taken up only by DriveToNextWaypoint, after this. Seen: Skirmish 2358-2361,
+        // engineer 0x50001a pushed while its Move was replaced by a Guard: the push ends at 2360 with the new path
+        // laid but not yet taken up; the original makes no batch and turns toward the new path at 2361, ours
+        // made one toward the old Move's target (446.5, 850.5) and turned 18 degrees the wrong way first.
+        if (m.steerValid) {
           UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
           CheckCollisions(sim, u);
         }

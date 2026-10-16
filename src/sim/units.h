@@ -137,6 +137,10 @@ class Unit : public Entity {
   uint32_t guardedId = 0;               // unit+0x4e0 (SetGuardedUnit only)
   std::vector<uint32_t> guarders;
   int capturers = 0;               // u+0x690: capture tasks at work on this unit
+  // u+0x560: the unit occupies ground (Unit::Unit 0x6a5f71 after ExecuteOccupyGround; cleared by ReleaseOccupyGround
+  // 0x6a7b81 and by a finished upgrade's dtor 0x5f8581 on the old unit). Unit::OnDestroy frees the o-grid reservation
+  // only while it is set (0x6a8905).
+  bool occupiesGround = false;
   bool isPod = false;              // u+0x688: in category POD or STATIONASSISTPOD (pod_assist.md)
   bool isEngineer = false;         // u+0x689: in category ENGINEER (ctor 0x6a6a0a): never in a guard formation
   // set while the queue is cleared for a new order under which CUnitMoveTask's destructor (0x618700, the table

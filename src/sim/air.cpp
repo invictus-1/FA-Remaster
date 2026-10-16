@@ -587,12 +587,11 @@ bool CanReserve(Sim& sim, Unit* u, const int* r) {
   return !blocked;
 }
 
-bool IsWithin(Sim& sim, const Vec3& p, float m) {
-  const TerrainMap* map = sim.map();
-  if (!map) return true;
-  // the playable rect = the whole map (ScenarioInfo areas not modelled)
-  int W = map->width() + 1, H = map->height() + 1;
-  return 0 <= p.x - m && 0 <= p.z - m && p.x + m < W - 1 && p.z + m < H - 1;
+// STIMap::IsWithin 0x62ca60 with the unit's army's UseWholeMap (vt+0xb8): PrepareMove's candidates (0x62ba1c,
+// 0x62bc62: the flag its callers pass) and ComputeAirCombatTactics (0x6bce16 / 0x6bd036 / 0x6bd110)
+bool IsWithin(Sim& sim, const Unit* u, const Vec3& p, float m) {
+  if (!sim.map()) return true;
+  return sim.IsWithin(p.x, p.z, m, Sim::UseWholeMap(u->army));
 }
 
 // COORDS_CanMoveAt 0x720f70 with strict = 1 (air_extra.md 3.6): no live, completed, non-air unit
@@ -636,7 +635,7 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
 // (S x S, Land (+Water), the blueprint's MaxSlope / MinWaterDepth, MaxWaterDepth 0), structures,
 // other units' o-grid reservations, blocking units.
 bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps) {
-  if (!IsWithin(sim, w, static_cast<float>(S))) return false;
+  if (!IsWithin(sim, u, w, static_cast<float>(S))) return false;
   const AirBp& b = *A(u).bp;
   NamedFootprint fp;
   fp.sizeX = fp.sizeZ = static_cast<uint8_t>(S);
@@ -723,7 +722,7 @@ bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int c
     return false;
   }
   int S = std::max(fp.sizeX, fp.sizeZ);
-  if (!IsWithin(sim, w, static_cast<float>(S))) {
+  if (!IsWithin(sim, u, w, static_cast<float>(S))) {
     *why = "outside";
     return false;
   }
@@ -813,8 +812,14 @@ void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
   a.stopped = false;
   Vec3 orig = p;
   if (const TerrainMap* map = sim.map()) {
-    p.x = std::min(std::max(p.x, 0.0f), static_cast<float>(map->width()));
-    p.z = std::min(std::max(p.z, 0.0f), static_cast<float>(map->height()));
+    // 0x6b8603: into the map (0 .. the heightfield's size - 1) when the army uses the whole map, else into the
+    // playable rect; each axis max(rect min, p) then min(rect max, that) as the SSE compares take them
+    int r[4] = {0, 0, map->width(), map->height()};
+    if (!Sim::UseWholeMap(u->army)) std::copy(sim.playableRect, sim.playableRect + 4, r);
+    float v = p.x > static_cast<float>(r[0]) ? p.x : static_cast<float>(r[0]);
+    p.x = static_cast<float>(r[2]) > v ? v : static_cast<float>(r[2]);
+    v = p.z > static_cast<float>(r[1]) ? p.z : static_cast<float>(r[1]);
+    p.z = static_cast<float>(r[3]) > v ? v : static_cast<float>(r[3]);
   }
   a.target = p;
   if (layer != 0) a.landLayer = layer;
@@ -1363,11 +1368,11 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         break;
     }
   };
-  if (s == 7 && !IsWithin(sim, pos, 5.0f)) return output();
+  if (s == 7 && !IsWithin(sim, u, pos, 5.0f)) return output();
   Vec3 h = Normalized(Vec3{dir3.x, 0, dir3.z});
   float dotF = (h.x * fwd.x + h.y * fwd.y) + h.z * fwd.z;
   bool facing = (s == 3) ? dotF > 0.0f : dotF > 0.866f;
-  if (eAir && !IsWithin(sim, pos, 0.0f)) {
+  if (eAir && !IsWithin(sim, u, pos, 0.0f)) {
     s = 7;
     return output();
   }

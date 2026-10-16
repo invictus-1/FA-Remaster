@@ -377,6 +377,79 @@ bool SessionFromGameConfig(lua_State* L, int config, const LaunchParams& params,
   return true;
 }
 
+bool SessionFromSinglePlayerInfo(lua_State* L, int info, const SinglePlayerParams& params, SessionDescription* out,
+                                 std::string* error) {
+  const int top = lua_gettop(L);
+  info = AbsIndex(L, info);
+  auto fail = [&](const std::string& why) {
+    if (error) *error = why;
+    lua_settop(L, top);
+    return false;
+  };
+  if (!lua_istable(L, info)) return fail("the session info is not a table");
+  *out = SessionDescription{};
+  ReplayHeader& h = out->header;
+  h.version = "Supreme Commander v1.50.3839";
+  h.replayVersion = "Replay v1.9";
+  // WLD_SetupSessionInfo 0x88cbc0: a new LaunchInfoNew; its focus army (+0x68) 0 (0x88cc2e) and its cheats (+0x88)
+  // the debug preference (0x88cc36).
+  out->focusArmy = 0;
+  h.cheats = params.cheats;
+  // the scenario and the mods: the engine's byte form of the values as given (SCR_ToString 0x88cc5b, 0x88cccf)
+  Field(L, info, "scenarioInfo");
+  if (!lua_istable(L, -1)) return fail("sessionInfo.scenarioInfo is not a table");
+  const int scenario = lua_gettop(L);
+  SerializeLua(L, scenario, &h.scenario);
+  Field(L, info, "scenarioMods");
+  SerializeLua(L, -1, &h.mods);
+  lua_pop(L, 1);
+  // the armies: each value of teamInfo, in the table's order (LuaTableIterator 0x88cd3f), its options string
+  // (launch info +0x90) and an empty set of command sources (+0x44, AppendArmyLaunchInfo 0x5439e0)
+  Field(L, info, "teamInfo");
+  if (lua_istable(L, -1)) {
+    lua_pushnil(L);
+    while (lua_next(L, -2)) {
+      ReplayHeader::Army army;
+      SerializeLua(L, -1, &army.options);
+      h.armies.push_back(std::move(army));
+      lua_pop(L, 1);
+    }
+  }
+  lua_pop(L, 1);
+  // the seed: RandomSeed (LuaObject::GetInteger 0x907910: a number, cvttss2si of the float), else the caller's
+  Field(L, info, "RandomSeed");
+  if (lua_isnil(L, -1)) {
+    h.seed = params.seed;
+  } else {
+    if (lua_type(L, -1) != LUA_TNUMBER) return fail("sessionInfo.RandomSeed is not a number");
+    const float f = static_cast<float>(lua_tonumber(L, -1));
+    h.seed = f > -2147483649.0f && f < 2147483648.0f ? static_cast<uint32_t>(static_cast<int32_t>(f)) : 0x80000000u;
+  }
+  lua_pop(L, 1);
+  // the session info (0x30 bytes, 0x88ce86): the map is scenarioInfo.map, createReplay its +0x24
+  Field(L, scenario, "map");
+  if (!IsString(L, -1)) return fail("the scenario names no map");
+  h.map = lua_tostring(L, -1);
+  lua_pop(L, 1);
+  Field(L, info, "createReplay");
+  out->createReplay = lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  // 0x88bbb0: one command source, the player (index 0, pauses -1 at 0x88bc06); every army's set becomes {0}
+  // (0x88bc90..0x88bcb1, the AI armies too); then the client manager with one client, no connector, speed 0,
+  // adjustable (CLIENT_CreateClientManager(1, 0, 0, 1) at 0x88bcb9).
+  Field(L, info, "playerName");
+  h.sources.push_back({lua_isstring(L, -1) ? lua_tostring(L, -1) : "", -1});
+  lua_pop(L, 1);
+  for (ReplayHeader::Army& a : h.armies) {
+    a.sources.assign(1, 0);
+    a.source = 0;
+  }
+  out->gameSpeed = 0;
+  out->adjustableSpeed = true;
+  lua_settop(L, top);
+  return true;
+}
+
 bool PushGameConfigFile(lua_State* L, const std::string& hostPath, std::string* error) {
   auto src = hostfs::ReadFile(hostPath);
   if (!src) {

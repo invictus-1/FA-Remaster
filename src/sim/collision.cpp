@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 
+#include "script/script_state.h"
 #include "sim/entity_grid.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
@@ -291,12 +292,39 @@ int l_RevertCollisionShape(lua_State* L) {
   return 0;
 }
 
+// Entity:GetCollisionExtents() 0x68ca80: one argument (the entity); nil without a collision primitive (+0x178),
+// else a new table {Min = Vector, Max = Vector}, the world box the primitive gives (vt-1, GetBoundingBox: a sphere
+// 0x4ff9a0 centre -+ radius on each axis; a box 0x4ffc20 the box of its eight corners, 0x4fe2d0). Ours takes the
+// box's axes times its half sizes, summed (the same box; the original fits it to the corners with a Wild Magic
+// routine, 0xa3ae40, whose last bits may round differently). The objective arrow sizes itself by it; FAF's
+// Prop:CacheAndRemoveCollisionExtents keeps it to put the shape back later.
+int l_GetCollisionExtents(lua_State* L) {
+  if (lua_gettop(L) != 1) luaL_error(L, "%s\n  expected %d args, but got %d", "Entity:GetCollisionExtents()", 1, lua_gettop(L));
+  Entity* e = CheckObject<Entity>(L, 1);
+  WorldShape ws;
+  if (!GetWorldShape(e, &ws)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  Vec3 mn, mx;
+  ShapeBounds(ws, &mn, &mx);
+  lua_newtable(L);
+  lua_pushstring(L, "Min");
+  PushVector(L, mn.x, mn.y, mn.z);
+  lua_settable(L, -3);
+  lua_pushstring(L, "Max");
+  PushVector(L, mx.x, mx.y, mx.z);
+  lua_settable(L, -3);
+  return 1;
+}
+
 }  // namespace
 
 void RegisterCollisionBindings(lua_State* L) {
   SetMethod(L, "Entity", "SetCollisionShape", l_SetCollisionShape);
   SetMethod(L, "Unit", "RevertCollisionShape", l_RevertCollisionShape);
   SetMethod(L, "Entity", "RevertCollisionShape", l_RevertCollisionShape);
+  SetMethod(L, "Entity", "GetCollisionExtents", l_GetCollisionExtents);
 }
 
 }  // namespace moho

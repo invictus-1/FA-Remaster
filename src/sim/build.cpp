@@ -315,8 +315,10 @@ void OccupyStructure(Sim& sim, Unit* u) {
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+  u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
+  u->occupiesGround = false;  // (ReleaseOccupyGround 0x6a7b81)
   if (!u->bpData || !u->bpData->structure) return;
   for (const auto& r : sim.navigation().Structures())
     if (r.entity == EntityRef(u)) {
@@ -1794,10 +1796,12 @@ void Follow(Sim& sim, Unit* U, GuardData& g) {
   bool forced = false;
   if (!(U->motion.bp->motionType == kMotionAir && Cat(sim, U, "EXPERIMENTAL"))) {
     if (!PrepareMoveFor(sim, U, &ref, excl)) {
-      const TerrainMap* m = sim.map();
-      float w = m ? static_cast<float>(m->width()) : ref.x, h = m ? static_cast<float>(m->height()) : ref.z;
-      ref.x = std::min(std::max(ref.x, 0.0f), w);
-      ref.z = std::min(std::max(ref.z, 0.0f), h);
+      // 0x613f68: into the playable rect (whatever the army's flag), max(x0, x) then min(x1, that)
+      const int* r = sim.playableRect;
+      float v = ref.x > static_cast<float>(r[0]) ? ref.x : static_cast<float>(r[0]);
+      ref.x = static_cast<float>(r[2]) > v ? v : static_cast<float>(r[2]);
+      v = ref.z > static_cast<float>(r[1]) ? ref.z : static_cast<float>(r[1]);
+      ref.z = static_cast<float>(r[3]) > v ? v : static_cast<float>(r[3]);
       forced = true;
     }
   }
@@ -1938,6 +1942,8 @@ Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
   float bestD2 = std::numeric_limits<float>::infinity();
   for (Unit* u : sim.units()) {
     if (!Alive(u) || u == U || !u->blueprint) continue;
+    // 0x61368d: inside the playable rect with a margin of 1 (the whole map if the guard's army may use it)
+    if (!sim.IsWithin(u->position.x, u->position.z, 1.0f, Sim::UseWholeMap(U->army))) continue;
     float rad = static_cast<float>(std::max(Fp(u).sizeX, Fp(u).sizeZ)) * 0.5f;
     float ex = u->position.x - g.pos.x, ey = u->position.y - g.pos.y, ez = u->position.z - g.pos.z;
     if (std::sqrt(ex * ex + ey * ey + ez * ez) > r + rad) continue;  // (collision primitive vs sphere)
@@ -2034,6 +2040,9 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     Unit* R = tg;
     switch (t.state) {
       case 0: {
+        // 0x5f949c: a repairer whose army keeps to the playable rect waits (TaskTick returns 1) while its target
+        // stands outside it (STIMap::IsWithin, margin 0)
+        if (!Sim::UseWholeMap(u->army) && !sim.IsWithin(tg->position.x, tg->position.z, 0.0f, false)) return kTaskRunning;
         if (t.assist) {
           if (Unit* f = FactoryOf(sim, tg)) {
             R = f;
@@ -2993,7 +3002,19 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     // upgrade unit itself (its ground released, the builder's taken back), then OnStopBuild(false)
     u->unitStates.erase("Upgrading");
     u->unitStates.erase("NoCost");  // (0x5f855a)
+    // 0x5f856d: the work progress back to 0 BEFORE OnStopBuild (ours did it after, and not at all once FAF's
+    // OnStopBuild had destroyed the old unit). Seen: Skirmish 2183, army 4's factory 0x400014 finishes its upgrade
+    // 0x400023; M28's threads for both start in that beat's Lua: the original's old factory reads work progress 0, is
+    // "ready" (IsFactoryReadyToBuild) and takes the beat's order decision, so the new one decides at 2184; ours read 1.
+    u->workProgress = 0;
     if (t.completed) {
+      // 0x5f8581: the old unit no longer counts as occupying ground (builder+0x560 = 0), so its OnDestroy leaves the
+      // o-grid reservation alone: the new unit's skirt, reserved by its own constructor over the same cells, stays
+      // (the bits are not counted). Seen: Skirmish 2197, army 6's engineer 0x60002c guarding engineer 0x60002d beside
+      // the Aeon air factory 0x60001f (upgraded from 0x600016 at 1863): the original's anchor search rejects the
+      // factory's skirt and takes (913.5, 87.5); ours had cleared the skirt when the old factory went and took
+      // (913.5, 85.5).
+      u->occupiesGround = false;
       // (0x5f859b: the new unit is no longer BeingUpgraded, before OnStopBuild)
       if (Unit* nu = FindUnit(sim, t.targetId)) nu->unitStates.erase("BeingUpgraded");
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
@@ -3033,9 +3054,25 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (t.type == CommandType::BuildFactory && Alive(u)) u->workProgress = 0;
     if (t.started && Alive(u)) StopBuild(sim, L, u, t, success);
   }
-  if (t.reclaimStarted && Alive(u)) {
+  // CUnitReclaimTask's dtor 0x620280, first of all (0x6202cf..0x620316): a target that is a unit (the entity's
+  // GetUnit, vt+0x10) loses BeingReclaimed (unit state 15: +0x4a0 &= ~0x8000), whoever else still reclaims it; the
+  // flag is not counted, and only TaskTick's state 2 (0x61f940) sets it again, at that reclaimer's next step. These two
+  // are the exe's only writes of the bit. Seen: Skirmish 2288 and 2298, army 4's 0x40001a reclaimed by one, then two,
+  // then three engineers: the original shows it without BeingReclaimed for the one beat in which another reclaimer's
+  // task ended; ours kept it on until the unit died (0x300032 to the end of the run).
+  if (t.type == CommandType::Reclaim && t.goalId) {
     Entity* e = sim.FindEntity(t.goalId);
-    PushObject(L, e && !e->destroyQueued ? e : nullptr);
+    if (e && e->kind == Entity::Kind::Unit) static_cast<Unit*>(e)->unitStates.erase("BeingReclaimed");
+  }
+  if (t.reclaimStarted && Alive(u)) {
+    // the target as the task's weak pointer holds it (0x620110 -> 0x605600 -> 0x6057d0: the entity's Lua object while
+    // the pointer is set, else nil; no test of a Destroy), so a target destroyed this beat, not yet deleted, is passed.
+    // Seen: Skirmish 2300, army 3's engineers 0x300019, 0x300022 and 0x300020 reclaim army 4's 0x40001a; 0x300022
+    // finishes it, 0x300020's task then ends, and M28's OnStopReclaim (ForkThread OnReclaimFinished) clears every
+    // engineer in the target's reftUnitsReclaimingUs in the same beat: the original's 0x300019 and 0x300022 are idle
+    // from 2300. Ours passed nil, nobody was cleared, and 0x300022 reclaimed the wreck until 2309.
+    Entity* e = sim.FindEntity(t.goalId);
+    PushObject(L, e);
     sim.CallMethod(L, u, "OnStopReclaim", 1);
     t.reclaimStarted = false;
   }

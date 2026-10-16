@@ -124,6 +124,125 @@ int l_SetArmyShowScore(lua_State* L) {
   return 0;
 }
 
+// ---- the campaign's army and map functions (ui REQUESTS 31) -----------------------------------------------------
+
+// "%s\n  expected %d args, but got %d" (0xe0a220): every cfunc's first test, with the binding's help text
+void ArgCount(lua_State* L, int n, const char* doc) {
+  if (lua_gettop(L) != n) luaL_error(L, "%s\n  expected %d args, but got %d", doc, n, lua_gettop(L));
+}
+// LuaStackObject "integer" (lua_type must be a number, TypeError 0x4154b0), then _ftol2 0xa89cc0: truncation, out of
+// range 0x80000000
+int IntArg(lua_State* L, int idx) {
+  if (lua_type(L, idx) != LUA_TNUMBER) luaL_typerror(L, idx, "integer");
+  const double d = lua_tonumber(L, idx);
+  return d > -2147483649.0 && d < 2147483648.0 ? static_cast<int>(d) : static_cast<int>(0x80000000u);
+}
+// ... and the same number through fistp with the rounding set to chop (SetArmyColorIndex 0x709f7c,
+// SetArmyFactionIndex 0x70a0db: a 64-bit integer, its low half kept)
+int ChopArg(lua_State* L, int idx) {
+  if (lua_type(L, idx) != LUA_TNUMBER) luaL_typerror(L, idx, "integer");
+  const double d = std::trunc(lua_tonumber(L, idx));
+  return d > -9.2e18 && d < 9.2e18 ? static_cast<int>(static_cast<uint32_t>(static_cast<int64_t>(d)))
+                                   : static_cast<int>(0x80000000u);
+}
+// ARMY_FromLuaState 0x707d60: a 1-based index (LuaObject::GetInteger) or an army's name
+Army* ArmyArg(lua_State* L, int idx) {
+  Sim* sim = S(L);
+  if (lua_type(L, idx) == LUA_TNUMBER) {
+    const int i = static_cast<int>(static_cast<float>(lua_tonumber(L, idx))) - 1;
+    if (i >= 0 && static_cast<size_t>(i) < sim->armies().size()) return sim->armies()[static_cast<size_t>(i)].get();
+    if (i < 0) luaL_error(L, "Invalid army %d. (Use a 1-based index)", i + 1);
+    luaL_error(L, "Invalid army %d", i);
+  }
+  if (lua_type(L, idx) == LUA_TSTRING) {
+    if (Army* a = sim->GetArmy(L, idx)) return a;
+    luaL_error(L, "Unknown army: %s", lua_tostring(L, idx));
+  }
+  luaL_error(L, "Unexpected type for army object");
+  return nullptr;
+}
+
+// SetPlayableRect(minX, minZ, maxX, maxZ) 0x75c830: four integers (truncated); STIMap::SetPlayableMapRect 0x577df0
+// clamps each into 0 .. the map's size (heightfield size - 1) and takes the rect only when maxX > minX and
+// maxZ > minZ, else the error. What it changes: sim.h playableRect (IsWithin and the rect's other readers).
+int l_SetPlayableRect(lua_State* L) {
+  ArgCount(L, 4, "SetPlayableRect( minX, minZ, maxX, maxZ )");
+  Sim& sim = *S(L);
+  const int z1 = IntArg(L, 4);  // (read 4, 3, 2, 1: the first wrong one names itself)
+  const int x1 = IntArg(L, 3);
+  const int z0 = IntArg(L, 2);
+  const int x0 = IntArg(L, 1);
+  const int w = sim.map() ? sim.map()->width() : 0, h = sim.map() ? sim.map()->height() : 0;
+  auto clamp = [](int v, int hi) { return std::max(0, std::min(v, hi)); };
+  const int r[4] = {clamp(x0, w), clamp(z0, h), clamp(x1, w), clamp(z1, h)};
+  if (!(r[2] > r[0] && r[3] > r[1])) return luaL_error(L, "Attempted to set an invalid playable rect.");
+  std::copy(r, r + 4, sim.playableRect);
+  return 0;
+}
+
+// SetIgnorePlayableRect(army, flag) 0x709230: the army's flag (army vt+0xb4 = CArmyImpl::SetIgnorePlayableRect
+// 0x6fdec0, +0x178), a boolean (GetBoolean: nil is false)
+int l_SetIgnorePlayableRect(lua_State* L) {
+  ArgCount(L, 2, "army, flag");
+  Army* a = ArmyArg(L, 1);
+  if (lua_type(L, 2) != LUA_TBOOLEAN && lua_type(L, 2) != LUA_TNIL) luaL_typerror(L, 2, "boolean");
+  a->ignorePlayableRect = lua_toboolean(L, 2) != 0;
+  return 0;
+}
+
+// SetArmyFactionIndex(army, index) 0x70a030: the 0-based faction (+0x174), as the integer given
+int l_SetArmyFactionIndex(lua_State* L) {
+  ArgCount(L, 2, "SetArmyFactionIndex(army,index)");
+  Army* a = ArmyArg(L, 1);
+  a->faction = ChopArg(L, 2);
+  return 0;
+}
+
+// SetArmyColorIndex(army, index) 0x709ed0: GetPlayerColor 0x5068b0 (/lua/gameColors.lua run once in a colour state
+// of its own, GameColors.PlayerColors[index + 1], SCR_DecodeColor 0x4b2d20) becomes the army's colour and its
+// player colour (+0x150 and +0x154), as SetArmyColor sets both: ours keeps it as the colour set outright (rgb).
+int l_SetArmyColorIndex(lua_State* L) {
+  ArgCount(L, 2, "SetArmyColorIndex(army,index)");
+  Sim& sim = *S(L);
+  Army* a = ArmyArg(L, 1);
+  const int index = ChopArg(L, 2);
+  const int top = lua_gettop(L);
+  std::string text;
+  bool isString = false;
+  if (sim.PushImport(L, "/lua/gameColors.lua")) {
+    lua_pushstring(L, "GameColors");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "PlayerColors");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, index + 1);
+        isString = lua_type(L, -1) == LUA_TSTRING;
+        if (isString) text = lua_tostring(L, -1);
+      }
+    }
+  }
+  lua_settop(L, top);
+  if (!isString) return luaL_error(L, "Invalid color, must be a string.");
+  uint32_t argb = 0;
+  if (!DecodeColor(text.c_str(), &argb)) return luaL_error(L, "Unknown color: %s", text.c_str());
+  a->rgb[0] = static_cast<int>((argb >> 16) & 0xff);
+  a->rgb[1] = static_cast<int>((argb >> 8) & 0xff);
+  a->rgb[2] = static_cast<int>(argb & 0xff);
+  return 0;
+}
+
+// SetArmyAIPersonality(army, personality) 0x70a180: a string (lua_tostring, TypeError "string"); a non-empty one
+// replaces the army's personality name (+0x158)
+int l_SetArmyAIPersonality(lua_State* L) {
+  ArgCount(L, 2, "SetArmyAIPersonality(army,personality)");
+  Army* a = ArmyArg(L, 1);
+  const char* s = lua_tostring(L, 2);
+  if (!s) luaL_typerror(L, 2, "string");
+  if (*s) a->personality = s;
+  return 0;
+}
+
 int l_GetGameTick(lua_State* L) {
   lua_pushnumber(L, S(L)->tick());
   return 1;
@@ -606,6 +725,11 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "SetArmyOutOfGame", l_SetArmyOutOfGame);
   SetGlobal(L, "SetArmyColor", l_SetArmyColor);
   SetGlobal(L, "SetArmyShowScore", l_SetArmyShowScore);
+  SetGlobal(L, "SetPlayableRect", l_SetPlayableRect);
+  SetGlobal(L, "SetIgnorePlayableRect", l_SetIgnorePlayableRect);
+  SetGlobal(L, "SetArmyFactionIndex", l_SetArmyFactionIndex);
+  SetGlobal(L, "SetArmyColorIndex", l_SetArmyColorIndex);
+  SetGlobal(L, "SetArmyAIPersonality", l_SetArmyAIPersonality);
   SetGlobal(L, "GetCueBank", l_GetCueBank);
   SetGlobal(L, "GetGameTick", l_GetGameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
@@ -810,6 +934,11 @@ bool Sim::Start(const ReplayHeader& replay) {
       return false;
     }
     Logf(LogLevel::Info, "Background task \"Map loader %s\" finished.", Vfs::Normalize(mapPath).c_str());
+    // the STIMap ctor 0x5779c0: the playable rect is the whole map until a script sets one
+    playableRect[0] = 0;
+    playableRect[1] = 0;
+    playableRect[2] = map_->width();
+    playableRect[3] = map_->height();
   }
 
   // Sim Lua state
@@ -891,6 +1020,15 @@ bool Sim::Start(const ReplayHeader& replay) {
   return true;
 }
 
+bool Sim::IsWithin(float x, float z, float m, bool wholeMap) const {
+  if (wholeMap) {  // (0x62ca6e: the heightfield's size - 1, x87 sums at single precision)
+    const float W = map_ ? static_cast<float>(map_->width()) : 0.0f, H = map_ ? static_cast<float>(map_->height()) : 0.0f;
+    return !(0.0f > x - m) && !(0.0f > z - m) && x + m < W && z + m < H;
+  }
+  return !(static_cast<float>(playableRect[0]) > x - m) && !(static_cast<float>(playableRect[1]) > z - m) &&
+         !(x + m > static_cast<float>(playableRect[2])) && !(z + m > static_cast<float>(playableRect[3]));
+}
+
 bool Sim::Start(const SessionDescription& session) {
   focusArmy = session.focusArmy;
   isReplay = session.replay;
@@ -937,6 +1075,8 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     army->civilian = lua_toboolean(L, -1);
     field("Human");
     army->human = lua_toboolean(L, -1);
+    field("AIPersonality");  // (CArmyImpl ctor 0x6fe94f: "Human" for a human, else the option)
+    army->personality = army->human ? "Human" : (lua_isstring(L, -1) ? lua_tostring(L, -1) : "");
     field("ArmyColor");
     army->armyColor = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
     field("PlayerColor");
@@ -946,14 +1086,20 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     armies_.push_back(std::move(army));
   }
   lua_settop(L, saveArmies - 1);
-  float cap = 1000;  // the lobby's unit cap (ScenarioInfo.Options.UnitCap)
+  // The lobby's unit cap: the CArmyImpl ctor (0x6ff2ed) takes Options.UnitCap only when it is a string
+  // (LuaObject::IsString 0x907370: the type itself, not a number), as atol; 500 when it is none or atol gives 0.
+  // (A campaign's options have none: its armies start at 500.)
+  float cap = 500;
   lua_getglobal(L, "ScenarioInfo");
   lua_pushstring(L, "Options");
   lua_gettable(L, -2);
   if (lua_istable(L, -1)) {
     lua_pushstring(L, "UnitCap");
     lua_gettable(L, -2);
-    if (lua_isstring(L, -1)) cap = static_cast<float>(std::atof(lua_tostring(L, -1)));
+    if (lua_type(L, -1) == LUA_TSTRING) {
+      const long v = std::atol(lua_tostring(L, -1));
+      if (v) cap = static_cast<float>(v);
+    }
     lua_pop(L, 1);
   }
   lua_pop(L, 2);
@@ -1026,23 +1172,47 @@ void Sim::CreateMapProps() {
       if (++missing <= 5) Logf(LogLevel::Debug, "moho64: map prop blueprint not found: %s", mp.blueprint.c_str());
       continue;
     }
-    // rotation rows are the prop's x, y, z axes -> quaternion
+    // CWldProps::Load 0x8918e0 (the sim's map props are made from its list, 0x7447cc): the nine floats as read are
+    // the rows A (the prop's x, y, z axes), turned into a quaternion by MatrixToQuat 0x4eb3f0 (0x891b2c) and then
+    // normalised (0x891b31..0x891be8: length of ((z^2 + y^2) + x^2) + w^2, fsqrt, above 1e-6 each part times
+    // 1.0f / length, else zero), in the exe's operations. A generic conversion gave other last bits, and a prop box
+    // tilted by them picks another SAT axis on a near tie (Skirmish 2158: tree group 804259698 against unit 0x21,
+    // face axis 0 against edge axis 11: the original's edge wins, no OnCollision; ours split the group 5 beats early).
     const float* m = mp.rotation;
-    float r00 = m[0], r01 = m[3], r02 = m[6], r10 = m[1], r11 = m[4], r12 = m[7], r20 = m[2], r21 = m[5], r22 = m[8];
-    Quat q;
-    float tr = r00 + r11 + r22;
-    if (tr > 0) {
-      float s = std::sqrt(tr + 1.0f) * 2;
-      q = {(r21 - r12) / s, (r02 - r20) / s, (r10 - r01) / s, 0.25f * s};
-    } else if (r00 > r11 && r00 > r22) {
-      float s = std::sqrt(1.0f + r00 - r11 - r22) * 2;
-      q = {0.25f * s, (r01 + r10) / s, (r02 + r20) / s, (r21 - r12) / s};
-    } else if (r11 > r22) {
-      float s = std::sqrt(1.0f + r11 - r00 - r22) * 2;
-      q = {(r01 + r10) / s, 0.25f * s, (r12 + r21) / s, (r02 - r20) / s};
-    } else {
-      float s = std::sqrt(1.0f + r22 - r00 - r11) * 2;
-      q = {(r02 + r20) / s, (r12 + r21) / s, 0.25f * s, (r10 - r01) / s};
+    const float A[3][3] = {{m[0], m[1], m[2]}, {m[3], m[4], m[5]}, {m[6], m[7], m[8]}};
+    float qw, qv[3];
+    {
+      const float tr = (A[0][0] + A[1][1]) + A[2][2];
+      if (tr > 0.0f) {
+        const double r = std::sqrt(static_cast<double>(tr + 1.0f));  // 0x40eaf0 (fsqrt)
+        const float rf = static_cast<float>(r);
+        qw = static_cast<float>(r * 0.5);
+        const float inv = 0.5f / rf;
+        qv[0] = (A[1][2] - A[2][1]) * inv;
+        qv[1] = (A[2][0] - A[0][2]) * inv;
+        qv[2] = (A[0][1] - A[1][0]) * inv;
+      } else {
+        static const int next[3] = {1, 2, 0};  // 0xf61f1c
+        int i = A[1][1] > A[0][0] ? 1 : 0;
+        if (A[2][2] > A[i][i]) i = 2;
+        const int j = next[i], k = next[j];
+        const double r = std::sqrt(static_cast<double>((A[i][i] - (A[k][k] + A[j][j])) + 1.0f));
+        const float rf = static_cast<float>(r);
+        qv[i] = static_cast<float>(r * 0.5);
+        const float inv = 0.5f / rf;
+        qw = (A[j][k] - A[k][j]) * inv;
+        qv[j] = (A[j][i] + A[i][j]) * inv;
+        qv[k] = (A[i][k] + A[k][i]) * inv;
+      }
+    }
+    Quat q{};
+    {
+      const float l2 = ((qv[2] * qv[2] + qv[1] * qv[1]) + qv[0] * qv[0]) + qw * qw;
+      const float len = static_cast<float>(std::sqrt(static_cast<double>(l2)));  // 0x452fc0 (fsqrt), fst
+      if (len > 9.99999997e-07f) {
+        const float inv = 1.0f / len;
+        q = {qv[0] * inv, qv[1] * inv, qv[2] * inv, qw * inv};
+      }
     }
     if (Prop* p = CreateProp(state_->L(), *bp, mp.position, q, mp.scale)) {
       // (for PropEvents: a host has this one from the map file, as the file has it)
@@ -1084,7 +1254,8 @@ void Sim::ProcessDestroyQueue() {
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
     CallMethod(L, e, "OnDestroy", 0);
-    if (e->kind == Entity::Kind::Unit) GroundFreeRect(*this, static_cast<Unit*>(e));  // Unit::OnDestroy 0x6a89d2
+    // Unit::OnDestroy 0x6a8905: the o-grid reservation is freed only for a unit that occupies ground (unit+0x560)
+    if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->occupiesGround) GroundFreeRect(*this, static_cast<Unit*>(e));
     entities_.erase(e->handle);
     byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);

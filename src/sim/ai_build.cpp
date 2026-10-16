@@ -466,13 +466,10 @@ namespace {
 // ---- FindFreeSpot 0x62b200 for a structure (flags 0, 0: OrderBuildStructure) ----------------------------------
 
 // STIMap::IsWithin 0x62ca60: the point with a margin inside the playable rect (map+8..+0x14), or with wholeMap the
-// map (x + m < cells). We keep no playable area smaller than the map (as ai_threat.cpp's PlayableRect).
+// map (x + m < cells): Sim::IsWithin.
 bool IsWithin(Sim& sim, float x, float z, float m, bool wholeMap) {
-  const TerrainMap* map = sim.map();
-  if (!map) return false;
-  const float W = static_cast<float>(map->width()), H = static_cast<float>(map->height());
-  if (wholeMap) return !(0.0f > x - m) && !(0.0f > z - m) && x + m < W && z + m < H;
-  return !(0.0f > x - m) && !(0.0f > z - m) && !(x + m > W) && !(z + m > H);
+  if (!sim.map()) return false;
+  return sim.IsWithin(x, z, m, wholeMap);
 }
 
 // The point itself, then square rings stepping by `size` (i over x outside, j over z inside; the ring's sides step
@@ -801,7 +798,7 @@ int l_FindPlaceToBuild(lua_State* L) {
 
 // func_OrderBuildStructure 0x57a790 (end, brain, builder, name, pos, angle): the structure goes to the first free spot
 // at or around the point (FindFreeSpot: rings of max(8, footprint size), the playable rect unless the army may build
-// outside it, army vt+0xb8: not kept, inferred false); the builder gets a BuildMobile order there without clear
+// outside it: the brain's army's UseWholeMap, vt+0xb8 at 0x57a8f8); the builder gets a BuildMobile order there without clear
 // (UNIT_IssueCommand 0x6f12c0): the snapped spot at the terrain's elevation (STIMap::GetElevation 0x44fb90), the end
 // point as its second target, the footprint origin as its cell, an orientation of `angle` degrees about y. nullptr
 // when the blueprint or the spot is not found.
@@ -815,7 +812,7 @@ std::shared_ptr<UnitCommand> OrderBuildStructure(Sim& sim, Unit* builder, const 
   int size = std::max(fp.sizeX, fp.sizeZ);
   size = std::max(size, 8);
   float x = pos.x, z = pos.z;
-  if (!StructureFreeSpot(sim, *bp, size, false, &x, &z)) return nullptr;
+  if (!StructureFreeSpot(sim, *bp, size, Sim::UseWholeMap(builder->army), &x, &z)) return nullptr;
   const float y = sim.map() ? sim.map()->TerrainHeight(x, z) : 0.0f;
   StreamIssueData d;
   d.type = static_cast<int>(CommandType::BuildMobile);

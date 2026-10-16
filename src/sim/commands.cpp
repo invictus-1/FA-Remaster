@@ -259,9 +259,9 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
 // - a prop: U in RECLAIM, the prop in RECLAIMABLE; with one resource stored above 3/4 it must give the other
 //   (blueprint ReclaimEnergyMax bp+0x1a8 / ReclaimMassMax bp+0x1a4 > 0); and not one this patrol already sent the
 //   unit to reclaim (the set +0xc8, 0x61c540); weight 1.
-// Each must stand within the map with a margin of 1 (STIMap::IsWithin 0x62ca60; the army's whole-map flag, vt+0xb8,
-// not kept: false) and, while the no-rush timer (army+0x1cc) runs, within its circle (not modelled: no replay has
-// no-rush). The least weight x 3D distance squared from U wins (strictly less, from +inf 0x10b19a4).
+// Each must stand within the playable rect with a margin of 1 (STIMap::IsWithin 0x62ca60, 0x61bfd3; U's army's
+// whole-map flag, vt+0xb8) and, while the no-rush timer (army+0x1cc) runs, within its circle (not modelled: no replay
+// has no-rush). The least weight x 3D distance squared from U wins (strictly less, from +inf 0x10b19a4).
 // Seen: Skirmish 1268, engineer 0x700007 on AggressiveMove reclaims a prop 1 cell away first (its navigator idle
 // until the reclaim child moves it at 1274); ours walked off toward the goal.
 Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
@@ -283,8 +283,7 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
   const Vec3 boxMx{centre.x + ext.x, centre.y + ext.y, centre.z + ext.z};
   std::vector<Entity*> cand;
   sim.entityGrid().GatherBox(boxMn.x, boxMn.z, boxMx.x, boxMx.z, 3, &cand);
-  const TerrainMap* map = sim.map();
-  const float W = map ? static_cast<float>(map->width()) : 0.0f, H = map ? static_cast<float>(map->height()) : 0.0f;
+  const bool wholeMap = Sim::UseWholeMap(u->army);
   Entity* best = nullptr;
   float bestD = std::numeric_limits<float>::infinity();
   for (Entity* e : cand) {
@@ -326,7 +325,7 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
       continue;
     }
     const Vec3& q = e->position;
-    if (0.0f > q.x - 1.0f || 0.0f > q.z - 1.0f || q.x + 1.0f > W || q.z + 1.0f > H) continue;  // IsWithin(1, false)
+    if (!sim.map() || !sim.IsWithin(q.x, q.z, 1.0f, wholeMap)) continue;  // IsWithin(1, the army's flag)
     const float dx = u->position.x - q.x, dy = u->position.y - q.y, dz = u->position.z - q.z;
     const float d = (dx * dx + dy * dy + dz * dz) * w;
     if (bestD > d) {
@@ -925,7 +924,45 @@ bool RefusesOrderWhileBuilt(Sim& sim, const Unit* u) {
   return u->beingBuilt && !BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, u->blueprint, "CQUEMOV");
 }
 
-std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type) {
+// ProcessUnitCommand 0x6efc8e: an order with a target (the target's type +0x10 not 0: an entity, or a point) is
+// refused by a unit when the target's position (the entity's +0xac, else the order's point +0x18) is not inside the
+// playable rect (STIMap::IsWithin 0x6efcf9, margin 0, the unit's army's whole-map flag): 0x6efe44, the unit does not
+// take the order. Every way an order reaches a unit goes through it (UNIT_IssueCommand 0x6f12c0: the command
+// stream, the scripts' Issue* functions, the platoons, the factories, the auto-attack).
+bool RefusesTargetOutside(Sim& sim, const Unit* u, const Vec3* target) {
+  return target && sim.map() && !sim.IsWithin(target->x, target->z, 0.0f, Sim::UseWholeMap(u->army));
+}
+
+// ProcessUnitCommand, the Guard case (0x6f08a7: the type switch 0x6efdc2, index type - 2 = 13; IssueGuard, the
+// stream's Guard and IssueFactoryAssist come here alike). The unit does not take the order (0x6efe44)
+// - when it rides a transport that is no CARRIER and it is no POD (0x6f08a9..0x6f097c);
+// - without the Guard command cap (0x6f098b: caps +0x60 bit 8);
+// with a unit as the target (0x6f099d, IsUnit):
+// - the unit itself (0x6f09b2);
+// - (both immobile FACTORY units whose buildable categories, bp+0x528, do not meet: 0x6f09ba..0x6f0ae7, not built);
+// - a FERRYBEACON that is the unit's own ferry beacon (0x6f0af1..0x6f0b60, not built);
+// - the unit a FACTORY and the target not (0x6f0b66..0x6f0ba7);
+// - the target guarding the unit already (GetGuardedUnit 0x59a430 == the unit, 0x6f0baf): two units never guard
+//   each other. (FAF's FactoryUnit.CalculateRollOffPoint walks the guard chain until it ends or meets the factory:
+//   a pair guarding each other would hold it in that loop for ever.)
+// Without a target unit (0x6f0bcf) only a mobile unit takes it (vt+0x30 IsMobile).
+bool RefusesGuard(Sim& sim, lua_State* L, const Unit* u, const Entity* target) {
+  if (u->transportedBy) {
+    const Entity* t = sim.FindEntity(u->transportedBy);
+    const Unit* tu = t && t->kind == Entity::Kind::Unit ? static_cast<const Unit*>(t) : nullptr;
+    if (tu && !BpInCategory(sim, tu->blueprint, "CARRIER") && !BpInCategory(sim, u->blueprint, "POD")) return true;
+  }
+  if (!(LiveCommandCaps(L, u) & 0x8u)) return true;  // RULEUCC_Guard
+  const Unit* g = target && target->kind == Entity::Kind::Unit ? static_cast<const Unit*>(target) : nullptr;
+  if (!g) return !(u->motion.bp && u->motion.bp->mobile());
+  if (g == u) return true;
+  if (BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, g->blueprint, "FACTORY")) return true;
+  if (g->guardedId && g->guardedId == EntityRef(u)) return true;
+  return false;
+}
+
+std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type,
+                                   const Vec3* target = nullptr, const Entity* targetEntity = nullptr) {
   static const long dbgIssue = getenv("MOHO64_DEBUG_ISSUE") ? atol(getenv("MOHO64_DEBUG_ISSUE")) : -1;
   if (dbgIssue >= 0)
     for (Unit* u : units)
@@ -949,6 +986,8 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     // through IssueFactoryRallyPoint / IssueFactoryCommand, factory_handoff.md 3.2)
     if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
     if (RefusesOrderWhileBuilt(*sim, u)) continue;
+    if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
+    if (RefusesTargetOutside(*sim, u, target)) continue;
     u->commands.push_back(c);
     c->units.insert(u);
     AirSpeedThroughEvent(*sim, u);  // queue event 0
@@ -1135,11 +1174,26 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     return true;
   };
   std::shared_ptr<UnitCommand> c;
+  // the target's position for the playable-rect test (RefusesTargetOutside): the entity's, or the order's point
+  Vec3 targetAt{};
+  const Vec3* target = nullptr;
+  const Entity* targetEntity = nullptr;
+  if (d.target.type == 1) {
+    const Entity* e = sim.FindEntityById(d.target.entity);
+    targetEntity = e;
+    targetAt = e ? e->position : d.target.pos;
+    target = &targetAt;
+  } else if (d.target.type == 2) {
+    targetAt = d.target.pos;
+    target = &targetAt;
+  }
   for (Unit* u : units) {
     // ProcessUnitCommand 0x6ef9e0 (outline only, command_stream.md 5.2): dead units refuse
     if (!IsAlive(u)) continue;
     if (RefusesOrderWhileBuilt(sim, u)) continue;  // (the being-built rule, above)
     if (sameOrderAgain(u)) continue;
+    if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
+    if (RefusesTargetOutside(sim, u, target)) continue;
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
     if (d.insertBefore != -1) {
@@ -1288,6 +1342,11 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
 std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip, bool pastDeath,
                                              uint32_t fakeId) {
   if (!IsAlive(u) || !target) return nullptr;
+  {
+    const Entity* f = viaBlip && fakeId ? sim.FindEntity(fakeId) : nullptr;
+    const Vec3 at = f ? f->position : target->position;
+    if (RefusesTargetOutside(sim, u, &at)) return nullptr;
+  }
   auto c = std::make_shared<UnitCommand>();
   c->id = sim.nextCommandId++;
   c->type = CommandType::Attack;
@@ -1370,7 +1429,9 @@ int l_IssueTarget(lua_State* L) {
     formIndex = FormationScriptIndex(L, name, units);
     if (formIndex < 0) return 0;
   }
-  auto c = Issue(L, units, T);
+  Vec3 targetAt{};  // (the target as ProcessUnitCommand tests it: RefusesTargetOutside)
+  const bool hasTarget = te ? (targetAt = te->position, true) : PosArg(L, 2, &targetAt);
+  auto c = Issue(L, units, T, hasTarget ? &targetAt : nullptr, te);
   if (Entity* e = te) {
     // a blip the script passed stands for its unit, as in a player's order (BlackOps' drone carriers:
     // IssueAttack({drone}, unit:GetBlip(army)); seen in Experimental2 at 964: the original's drones fly at the
@@ -1399,7 +1460,23 @@ int l_IssueTarget(lua_State* L) {
 template <CommandType T>
 int l_IssueOther(lua_State* L) {
   auto units = UnitsArg(L, 1);
-  auto c = Issue(L, units, T);
+  // the target as ProcessUnitCommand tests it (RefusesTargetOutside): the entity argument's position, else the
+  // first position table's (the loop below takes them in the same way)
+  Vec3 targetAt{};
+  bool hasTarget = false;
+  for (int i = 2; i <= lua_gettop(L) && !hasTarget; ++i) {
+    if (lua_type(L, i) == LUA_TSTRING || lua_type(L, i) == LUA_TNUMBER) continue;
+    if (Entity* e = ToObject<Entity>(L, i)) {
+      targetAt = e->position;
+      hasTarget = true;
+    } else if (lua_istable(L, i)) {
+      lua_rawgeti(L, i, 1);
+      const bool isPos = lua_isnumber(L, -1);
+      lua_pop(L, 1);
+      if (isPos) hasTarget = PosArg(L, i, &targetAt);
+    }
+  }
+  auto c = Issue(L, units, T, hasTarget ? &targetAt : nullptr);
   for (int i = 2; i <= lua_gettop(L); ++i) {
     if (lua_type(L, i) == LUA_TSTRING && c->blueprintId.empty()) c->blueprintId = lua_tostring(L, i);
     else if (lua_type(L, i) == LUA_TNUMBER) c->count = static_cast<int>(lua_tonumber(L, i));
@@ -1429,8 +1506,12 @@ int l_IssueFactoryAssist(lua_State* L) {
   Entity* e = ToObject<Entity>(L, 2);
   TargetPointDraw(sim, e);  // UpdateTarget 0x5d55b0 on the target arg
   std::shared_ptr<UnitCommand> c;
+  Vec3 targetAt{};
+  const bool hasTarget = e ? (targetAt = e->position, true) : PosArg(L, 2, &targetAt);
   for (Unit* u : UnitsArg(L, 1)) {
     if (!(LiveCommandCaps(L, u) & 0x8u) || !u->isFactoryBuilder || u->dead) continue;  // RULEUCC_Guard
+    if (RefusesGuard(sim, L, u, e)) continue;  // (the Guard case of ProcessUnitCommand, above)
+    if (RefusesTargetOutside(sim, u, hasTarget ? &targetAt : nullptr)) continue;
     if (!c) {
       c = std::make_shared<UnitCommand>();
       c->id = sim.nextCommandId++;
@@ -1486,7 +1567,9 @@ int l_IssueBuildFactory(lua_State* L) {
 // IssueBuildMobile(units, position, blueprintId, table)
 int l_IssueBuildMobile(lua_State* L) {
   auto units = UnitsArg(L, 1);
-  auto c = Issue(L, units, CommandType::BuildMobile);
+  Vec3 targetAt{};
+  const bool hasTarget = PosArg(L, 2, &targetAt);
+  auto c = Issue(L, units, CommandType::BuildMobile, hasTarget ? &targetAt : nullptr);
   c->hasPos = PosArg(L, 2, &c->pos);
   if (lua_isstring(L, 3)) c->blueprintId = lua_tostring(L, 3);
   PushCommand(L, c);

@@ -123,14 +123,9 @@ InfluenceMap* MapOf(int a) {
   return a >= 0 && static_cast<size_t>(a) < g_maps.size() ? &g_maps[static_cast<size_t>(a)] : nullptr;
 }
 
-// The playable rect (STIMap +0x08..+0x14, ints). The STIMap ctor 0x5779c0 makes it (0, 0, width, height);
-// SetPlayableRect would change it, but that is not modelled (still a stub), so it is the whole map.
+// The playable rect (STIMap +0x08..+0x14, ints; sim.h playableRect): the whole map until SetPlayableRect.
 void PlayableRect(const Sim& sim, int r[4]) {
-  const TerrainMap* m = sim.map();
-  r[0] = 0;
-  r[1] = 0;
-  r[2] = m ? m->width() : 0;
-  r[3] = m ? m->height() : 0;
+  for (int i = 0; i < 4; ++i) r[i] = sim.playableRect[i];
 }
 
 // _ftol2 (the Lua functions' (int) of a number): truncation; out of range gives 0x80000000.
