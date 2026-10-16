@@ -688,6 +688,9 @@ no debugger here for a stack. Logs: `<my scratchpad>/v_merged.log` (crash), `v_b
 LATER THE SAME HOUR: with main at 83b2250 the same game passes (b51d742 or 83b2250 fixed or hides
 it). NOT BLOCKING any more; Chris's build is on 83b2250. Whether the cause needs a look is the
 engine's call (the d756565 repro holds).
+MASKED, NOT FIXED: with main at 3b62705 it crashes again (same command). BLOCKING again for
+Chris's build, which stays on 83b2250 (passes the whole ui suite). The engine has a helper on
+it (his message): the cause, and a crash handler that logs a stack.
 
 ## To the renderer track
 
