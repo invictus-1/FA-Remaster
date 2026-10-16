@@ -143,8 +143,18 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       if (cube.first == "<default>") environment_ = textures.Get(cube.second);
     step("water, decals, mist");
     // the map's props (trees, rocks, wrecks): where each stands does not change
+    {  // (their models' files read on the worker threads first, all together)
+      std::vector<std::string> kinds;
+      std::unordered_set<std::string> seen;
+      for (const MapProp& p : map.props)
+        if (seen.insert(p.blueprint).second) kinds.push_back(p.blueprint);
+      models.PrefetchBlueprints(kinds);
+    }
+    step("props' files read");
+    std::unordered_map<std::string, const Model*> kindModels;  // (each kind looked up once, not once a prop)
     for (const MapProp& p : map.props) {
-      const Model* model = models.Blueprint(p.blueprint);
+      auto known = kindModels.find(p.blueprint);
+      const Model* model = known != kindModels.end() ? known->second : kindModels.emplace(p.blueprint, models.Blueprint(p.blueprint)).first->second;
       if (!model->ok) {  // (kept in the list all the same: the simulation names a prop by its place in it)
         props_.push_back({nullptr, Mat4::Identity()});
         continue;
@@ -156,11 +166,14 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
                      {0, 0, 0, 1}}};
       props_.push_back({model, world});
     }
+    step("props' models made");
     // ... listed by squares of the map
     propCellsX_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.width) / kPropCell)));
     propCellsZ_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.height) / kPropCell)));
     propCells_.assign(static_cast<size_t>(propCellsX_) * static_cast<size_t>(propCellsZ_), {});
     for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
+    textures.DropFetched();
+    step("props listed by squares");
   }
   sky_ = textures.SkyCube(haveMap_ ? map.skyCubemap : std::string());
   {  // the ring under a selected unit: a thin white circle, soft at both edges
@@ -181,7 +194,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     selectionRing_ = device_->CreateTexture(td);
     LoadBrackets();
   }
-  step("props and the rest");
+  step("sky and the rest");
   fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
 }
@@ -866,6 +879,16 @@ std::string World::MeshFaction(const std::string& mesh) {
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
+  CpuTimes::Part("units seen first: their files read ahead");
+  {  // (their models' files read on the worker threads, all together; the models are made below)
+    std::vector<std::string> fresh;
+    for (const FrameUnit& u : frame.units) {
+      if (!u.Seen() || u.blueprint >= frame.blueprints->size() || (u.blueprint < unitModels_.size() && unitModels_[u.blueprint].known)) continue;
+      const std::string& id = (*frame.blueprints)[u.blueprint];
+      if (!id.empty() && std::find(fresh.begin(), fresh.end(), id) == fresh.end()) fresh.push_back(id);
+    }
+    if (!fresh.empty()) models.Prefetch(fresh);
+  }
   CpuTimes::Part("units listed");
   ++frameStamp_;
   rememberedGone.clear();
@@ -1204,6 +1227,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     const Vec3 c = colorOf(b.army) * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
+  textures.DropFetched();  // (what was read ahead and not used)
   CpuTimes::Part(nullptr);
 }
 

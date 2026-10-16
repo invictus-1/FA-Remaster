@@ -1,8 +1,10 @@
 // Textures by virtual path, each loaded once from the game's files.
 #pragma once
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "gfx.h"
 
@@ -40,6 +42,16 @@ class TextureCache {
   // What the textures made here take on the graphics card, in bytes (all their sizes).
   size_t bytes = 0;
 
+  // Files read ahead (virtual paths): read on the worker threads, all together, and kept until
+  // ReadFile takes them; what is here already as a texture, or kept, is left out. For the models
+  // seen for the first time in a frame: their files' reading is most of their making.
+  void Fetch(const std::vector<std::string>& paths);
+  // A file's bytes: those read ahead (taken, and so let go of), else read now. Get reads through it,
+  // and the models' meshes do.
+  std::optional<std::string> ReadFile(const std::string& path);
+  // Lets go of what was read ahead and not taken.
+  void DropFetched() { fetched_.clear(); }
+
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)
   gfx::Texture FlatNormal() const { return flatNormal_; }  // (0.5, 0.5, 1, 0.5): a normal pointing straight out
@@ -50,6 +62,7 @@ class TextureCache {
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   std::unordered_map<std::string, gfx::Texture> cache_;
+  std::unordered_map<std::string, std::string> fetched_;  // read ahead, not yet taken
   gfx::Texture white_, black_, flatNormal_, greyCube_;
 };
 

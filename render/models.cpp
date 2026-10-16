@@ -204,8 +204,15 @@ const std::string& ModelCache::UnitBlueprintPath(const std::string& blueprintId)
   // the game's own units are in /units; a mod's are in its own folder under /mods
   std::string path = "/units/" + id + "/" + id + "_unit.bp";
   if (!vfs_->Exists(path)) {
-    std::vector<std::string> found = vfs_->FindFiles("/mods", id + "_unit.bp");
-    if (!found.empty()) path = found.front();
+    if (!modUnitsListed_) {
+      modUnitsListed_ = true;
+      for (std::string& found : vfs_->FindFiles("/mods", "*_unit.bp")) {
+        const std::string name = Lower(found.substr(found.rfind('/') + 1));
+        modUnits_.emplace(name, std::move(found));  // (sorted: the first of a name is kept)
+      }
+    }
+    auto mod = modUnits_.find(id + "_unit.bp");
+    if (mod != modUnits_.end()) path = mod->second;
   }
   return unitPaths_.emplace(id, path).first->second;
 }
@@ -278,19 +285,33 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   auto it = models_.find(key);
   if (it != models_.end()) return it->second.get();
   Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
+  std::vector<LodSource> sources;
+  std::string error;
+  if (!ReadSources(path, &sources, &m->scale, &error)) {
+    if (!error.empty()) fprintf(stderr, "render: model %s: %s\n", path.c_str(), error.c_str());
+    return m;
+  }
+  Build(m, path, base, sources, original, false, faction);
+  return m;
+}
 
+bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error) {
+  const size_t slash = path.rfind('/');
+  const std::string dir = path.substr(0, slash + 1);
+  std::string base = path.substr(slash + 1);
+  const size_t under = base.rfind('_');
+  base = under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
   auto text = vfs_->ReadFile(path);
   BpValue bp;
   if (!text || !ReadBlueprintFile(*text, &bp)) {
-    fprintf(stderr, "render: model %s: %s\n", path.c_str(), text ? "the blueprint cannot be read" : "no such blueprint");
-    return m;
+    *error = text ? "the blueprint cannot be read" : "no such blueprint";
+    return false;
   }
   const BpValue& display = bp["Display"];
   const bool meshFile = !display.IsTable() && bp["LODs"].IsTable();  // a mesh blueprint itself
-  if (!meshFile && !display["Mesh"].IsTable()) return m;  // nothing to draw (many projectiles are effects only)
+  if (!meshFile && !display["Mesh"].IsTable()) return false;  // nothing to draw (many projectiles are effects only)
   const BpValue& lods = meshFile ? bp["LODs"] : display["Mesh"]["LODs"];
-  m->scale = static_cast<float>((meshFile ? bp : display)["UniformScale"].NumberOr(1));
-  std::vector<LodSource> sources;
+  *scale = static_cast<float>((meshFile ? bp : display)["UniformScale"].NumberOr(1));
   const size_t count = std::max<size_t>(1, lods.items.size());
   for (size_t i = 0; i < count; ++i) {
     const BpValue& entry = lods.Item(i);
@@ -310,10 +331,70 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     s.normals = file("NormalsName", "_normalsts.dds", &s.normalsNamed);
     s.specular = file("SpecularName", "_specteam.dds", &s.specularNamed);
     s.secondary = file("SecondaryName", "", &s.secondaryNamed);
-    sources.push_back(std::move(s));
+    sources->push_back(std::move(s));
   }
-  Build(m, path, base, sources, original, false, faction);
-  return m;
+  return true;
+}
+
+void ModelCache::Prefetch(const std::vector<std::string>& unitIds) {
+  std::vector<std::string> files;
+  for (const std::string& unitId : unitIds) {
+    const std::string id = Lower(unitId);
+    std::vector<LodSource> sources;
+    auto listed = display_.find(id);
+    if (listed != display_.end()) {
+      if (models_.count("display:" + id)) continue;
+      sources = listed->second.lods;
+    } else {
+      const std::string& path = UnitBlueprintPath(id);
+      if (models_.count(path)) continue;
+      float scale = 1;
+      std::string error;
+      if (!ReadSources(path, &sources, &scale, &error)) continue;
+    }
+    for (const LodSource& s : sources)
+      for (const std::string* f : {&s.mesh, &s.albedo, &s.normals, &s.specular, &s.secondary})
+        if (!f->empty()) files.push_back(*f);
+    // (a remastered one's: its own meshes and textures, as Build looks for them; a shared mesh's
+    // remaster is found by Build itself)
+    const std::string preview = "/preview/" + id + "/";
+    if (vfs_->Exists(preview + id + "_lod0.scm")) {
+      for (int i = 0; i < 8 && vfs_->Exists(preview + id + "_lod" + std::to_string(i) + ".scm"); ++i)
+        files.push_back(preview + id + "_lod" + std::to_string(i) + ".scm");
+      for (const std::string folder : {preview, preview + "textures/"})
+        for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back(folder + id + "_lab_" + kind + ".dds");
+    } else {
+      for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back("/mods/labvisuals/textures/" + id + "/" + id + "_lab_" + kind + ".dds");
+    }
+  }
+  textures_->Fetch(files);
+}
+
+void ModelCache::PrefetchBlueprints(const std::vector<std::string>& blueprintPaths) {
+  std::vector<std::string> files;
+  for (const std::string& given : blueprintPaths) {
+    const std::string path = moho::Vfs::Normalize(given);
+    if (models_.count(path)) continue;
+    std::vector<LodSource> sources;
+    std::string base = path.substr(path.rfind('/') + 1);
+    const size_t under = base.rfind('_');
+    base = under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
+    auto listed = display_.find(path);
+    if (listed != display_.end()) {
+      sources = listed->second.lods;
+    } else {
+      float scale = 1;
+      std::string error;
+      if (!ReadSources(path, &sources, &scale, &error)) continue;
+      // (the lab's LabVisuals textures for the finest level, as Build looks for them)
+      for (const char* kind : {"albedo", "normal", "spec", "ao"})
+        files.push_back("/mods/labvisuals/textures/" + base + "/" + base + "_lab_" + kind + ".dds");
+    }
+    for (const LodSource& s : sources)
+      for (const std::string* f : {&s.mesh, &s.albedo, &s.normals, &s.specular, &s.secondary})
+        if (!f->empty()) files.push_back(*f);
+  }
+  textures_->Fetch(files);
 }
 
 // Loads a model's levels from their file names. `merged`: the names come from the simulation's merged
@@ -326,7 +407,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   // whatever the blueprint lists. The scale stays the blueprint's.
   // the skeleton is that of the mesh the blueprint names, which is what the simulation poses
   std::string skeletonMesh = sources.empty() ? std::string() : sources[0].mesh;
-  auto skeletonFile = skeletonMesh.empty() ? std::nullopt : vfs_->ReadFile(skeletonMesh);
+  auto skeletonFile = skeletonMesh.empty() ? std::nullopt : textures_->ReadFile(skeletonMesh);
   if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
   // (the remaster is looked for under the blueprint's own name first, then under the name of the
   // mesh it draws: several projectiles draw one projectile's mesh by their MeshName - the cruise
@@ -478,7 +559,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
                kind == "normalmappedglow" || kind == "effect" || kind == "explosion") {
       lod.teamMask = false;  // rocks and other scenery
     }
-    auto mesh = s.mesh == skeletonMesh ? skeletonFile : vfs_->ReadFile(s.mesh);
+    auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
     std::string error;
     if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error)) {
       // a missing coarser level is common: the finer ones then stand in
