@@ -1497,7 +1497,19 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
   Vec3 fv{};
-  if (!SlavedFaceVector(sim, u, &fv)) fv = Vec3{dirX, 0, dirZ};
+  if (!SlavedFaceVector(sim, u, &fv)) {
+    // 0x6c21eb: without a slaved target the face POINT is the point's place plus its direction (addss), and
+    // TurnInfo 0x6990e0 takes the place off again (0x699143: T - the transform's position, which 0x6c21bb has just
+    // set to the point's): the direction as the float sum left it, a unit vector beside a coordinate of a few
+    // hundred keeping only its first five digits. (Skirmish: Aeon engineer 0x600002 driving out of its factory,
+    // beats 345-348: with the exact direction its quaternion was 3e-7 to 1e-6 off the original's each beat, with
+    // the float sum it is within a last bit. Carried on by its hover wobble, that turned its height one float step
+    // at 530 / 531 while it stood reclaiming in engineer 0x600006's goal cell, so that 0x600006's navigator took
+    // it for a mover at 532 (UnitClearTo's filter 0x62eee9: position bytes changed) and did not ask for a
+    // continuation path as the original did.)
+    const float tx = u->position.x + dirX, tz = u->position.z + dirZ;
+    fv = Vec3{tx - u->position.x, 0, tz - u->position.z};
+  }
   const Quat& q = u->orientation;
   float cx = (q.w * q.y + q.z * q.x) * 2.0f, cz = -(1.0f - (q.y * q.y + q.x * q.x) * 2.0f);
   if (const float cl = std::sqrt(cx * cx + cz * cz); cl > 9.99999997e-07f) {  // 0x6999f0: times 1 / length

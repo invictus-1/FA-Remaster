@@ -276,6 +276,23 @@ void ReleaseStructure(Sim& sim, Unit* u) {
   sim.navigation().RemoveStructure(EntityRef(u));
 }
 
+// COGrid::ExecuteOccupy 0x721a90 / ReleaseOccupy 0x721b30 for a prop: the rect is the blueprint footprint at
+// (fistp(x - SizeX/2), fistp(z - SizeZ/2)) (0x6f9f4f..0x6f9fda; the destructor the same at the prop's position then,
+// 0x6fa067..0x6fa105). The layer bits go on only for OccupancyCaps & 7 (land) / & 8 (water); the clusters of every
+// footprint's path map around the rect are dirtied in any case (0x721ae0 / 0x721b80 -> 0x76bbd0).
+void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
+  const int sx = p->occSizeX, sz = p->occSizeZ;
+  const int x0 = static_cast<int16_t>(RoundEven(pos.x - sx * 0.5f));
+  const int z0 = static_cast<int16_t>(RoundEven(pos.z - sz * 0.5f));
+  static const bool dbg = getenv("MOHO64_DEBUG_NAV") != nullptr;
+  if (dbg)
+    Logf(LogLevel::Info, "prop %s %08x %s caps %d rect (%d,%d)-(%d,%d)", occupy ? "occupy" : "release", p->id,
+         p->blueprint ? p->blueprint->id.c_str() : "?", p->occCaps, x0, z0, x0 + sx, z0 + sz);
+  // NOT PORTED: the layer bits. Seton's Clutch has 14 such props (fieldstone rocks, OccupancyCaps 3: land layer, so
+  // no land footprint without IgnoreStructures fits on them in the original); ours does not block them.
+  LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
+}
+
 // ---- build helper (CBuildTaskHelper) -----------------------------------------------------------
 
 namespace {
@@ -1263,13 +1280,19 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     if (!u->motion.hasGoal) MoveToward(sim, u, t.site);
     return kTaskRunning;
   }
+  // The original's task, state by state (above). (MOHO64_OLD_RECLAIM=1: the shorter form this had before, kept
+  // for comparing the two on a replay.)
+  static const bool oldForm = getenv("MOHO64_OLD_RECLAIM") != nullptr;
+  // the move child on top of the task (TickPropReclaim state 1) holds it: the target test below waits for the
+  // move's end too. Seen: Engineers 2629, engineers 2 and 3 share three prop reclaims; 3 takes the second prop
+  // while 2 walks to it; the original's 2 walks on (Reclaim x2, Moving) until it arrives at 2688 and then drops
+  // both orders (3 took the third at 2632); ours dropped the order at once and turned to the third
+  if (!oldForm && t.moving && t.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed)
+    return kTaskRunning;
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
   if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   if (tu && tu->unitStates.count("NoReclaim")) return kTaskFailed;
-  // The original's task, state by state (above). (MOHO64_OLD_RECLAIM=1: the shorter form this had before, kept
-  // for comparing the two on a replay.)
-  static const bool oldForm = getenv("MOHO64_OLD_RECLAIM") != nullptr;
   if (!oldForm) return TickPropReclaim(sim, L, u, t);
   // range: like building, with the target's size
   auto inRange = [&]() {
@@ -2117,16 +2140,10 @@ bool CaptureCosts(Sim& sim, lua_State* L, Unit* u, Unit* T, float out[3]) {
   return ok;
 }
 
-}  // namespace
+// One pass of TaskTick 0x6043e0 (the checks, then the state): kCaptureAgain where the original returns 0
+constexpr int kCaptureAgain = 2;
 
-int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
-  if (t.moving) {  // the move child: the task runs again when it ends
-    if (u->motion.hasGoal) return kTaskRunning;
-    t.moving = false;
-    u->unitStates.erase("Moving");
-  } else if (sim.tick() < t.waitUntil) {
-    return kTaskRunning;
-  }
+int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
   if (e && e->destroyQueued) e = nullptr;
   Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
@@ -2161,8 +2178,9 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         TaskMoveToward(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});
         u->unitStates.insert("Moving");
         t.moving = true;
+        return kTaskRunning;  // the move child runs; this task again when it ends
       }
-      return kTaskRunning;
+      return kCaptureAgain;
     case 1: {
       if (gap > 10.0f) return kTaskFailed;
       if (!T || T->dead) return kTaskDone;
@@ -2171,7 +2189,7 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       SetArmAimTarget(sim, u, Vec3{T->position.x, T->position.y + hy, T->position.z});
       u->unitStates.insert("Capturing");
       t.state = 2;
-      return kTaskRunning;
+      return kCaptureAgain;  // 0x6048d4
     }
     case 2: {  // the costs: the target's, and those of the units it carries (the carried part: inferred)
       if (!T) return kTaskDone;
@@ -2205,7 +2223,7 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       }
       CaptureCallback(sim, L, u, t, true);
       t.state = 3;
-      return kTaskRunning;
+      return kCaptureAgain;  // 0x604c4b: the first beat's payment is tested at once
     }
     case 3: {  // a beat's worth when it is paid in full: every capturer of the target counts for each of them
       if (!T) return kTaskDone;
@@ -2226,8 +2244,9 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
              sim.tick(), u->id, t.capProgress, t.capTotal, t.capPerTick[0], t.capPerTick[1],
              t.capRequest ? t.capRequest->granted[0] : -1.0f, t.capRequest ? t.capRequest->granted[1] : -1.0f,
              T->capturers);
-      if (t.capProgress >= t.capTotal) t.state = 4;
-      return kTaskRunning;
+      if (t.capProgress < t.capTotal) return kTaskRunning;  // 0x604d37: return 1
+      t.state = 4;  // 0x604d31 -> 0x604785: the end in the same beat
+      return kCaptureAgain;
     }
     default: {  // done: the capturer stops, the target hears it was captured (its script changes sides)
       PushObject(L, e);
@@ -2244,6 +2263,27 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       return kTaskDone;
     }
   }
+}
+
+}  // namespace
+
+// TaskTick 0x6043e0. Every state but a capture still under way (state 3, return 1) and the move child returns 0
+// (0x604789, 0x6048d4, 0x604c4b): the dispatch calls it again in the same beat, the checks first. Seen: Engineers
+// 2370, engineer 7 arrives, is Capturing and the target BeingCaptured in the same beat (the request counted at 2371);
+// ours one beat apart
+int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  if (t.moving) {  // the move child: the task runs again when it ends
+    if (u->motion.hasGoal) return kTaskRunning;
+    t.moving = false;
+    u->unitStates.erase("Moving");
+  } else if (sim.tick() < t.waitUntil) {
+    return kTaskRunning;
+  }
+  for (int guard = 0; guard < 8; ++guard) {
+    const int r = CaptureStep(sim, L, u, t);
+    if (r != kCaptureAgain) return r;
+  }
+  return kTaskRunning;
 }
 
 // dtor 0x6050f0: the focus goes, Capturing off, work progress 0, and the start is undone if it happened
@@ -2701,6 +2741,10 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       if (!c.targetId) return nullptr;
       t->order = "Capture";
       t->goalId = c.targetId;
+      // the ctor 0x603f90 first makes its own CAiTarget of the order's entity (UpdateTarget 0x5d55b0 at 0x604020):
+      // one Unit::PickTargetPoint draw for a unit (or a unit's blip) with AI.TargetBones, the value unused. Seen:
+      // Engineers 2272, three engineers given Capture of a blip at 2271 draw 0x6aaf94 once each as their tasks start
+      TargetPointDraw(sim, sim.FindEntity(c.targetId));
       u->focusId = c.targetId;
       sim.CallMethod(sim.L(), u, "OnAssignedFocusEntity", 0);
       break;

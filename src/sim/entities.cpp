@@ -1666,6 +1666,34 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   RegisterEntity(p);
   lua_settop(L, top);
   CallMethod(L, p, "OnCreate", 0);
+  // Prop::Prop, after OnCreate (0x6f9f1f..0x6f9fde): a prop whose blueprint gives reclaim (Economy.ReclaimMassMax or
+  // ReclaimEnergyMax > 0: +0x270 / +0x274, read from bp+0x1a4 / +0x1a8 at 0x6f9ed6) is marked (+0x278 = 1) and
+  // enters the occupancy grid with its blueprint footprint (bp+0xd8 SizeX, +0xd9 SizeZ, +0xda OccupancyCaps; the
+  // default caps are 0, REntityBlueprint ctor 0x511d18) at the place it was created at (the transform passed in,
+  // not where OnCreate warped it): COGrid::ExecuteOccupy 0x721a90 sets the land / water layer bits only for caps & 7
+  // / caps & 8, but always dirties the path clusters around (0x721ae0: PathQueue::DirtyClusters 0x76bbd0 -> every
+  // ClusterMap::DirtyRect). So a tree (no footprint caps) blocks nothing, yet each one made or destroyed makes the
+  // path searches rebuild the clusters around it. ~Prop releases it (0x6fa05a, ProcessDestroyQueue).
+  {
+    bps_.PushTable(L, bp);
+    int bpIdx = lua_gettop(L);
+    auto num = [&](const char* a, const char* b) {
+      PushPath(L, bpIdx, a, b);
+      double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
+      lua_pop(L, 1);
+      return v;
+    };
+    const float mass = static_cast<float>(num("Economy", "ReclaimMassMax"));
+    const float energy = static_cast<float>(num("Economy", "ReclaimEnergyMax"));
+    if (mass > 0 || energy > 0) {
+      p->occupies = true;
+      p->occSizeX = static_cast<uint8_t>(static_cast<int>(num("Footprint", "SizeX")));
+      p->occSizeZ = static_cast<uint8_t>(static_cast<int>(num("Footprint", "SizeZ")));
+      p->occCaps = static_cast<uint8_t>(static_cast<int>(num("Footprint", "OccupancyCaps")));
+      PropOccupancy(*this, p, pos, true);
+    }
+    lua_settop(L, top);
+  }
   return p;
 }
 

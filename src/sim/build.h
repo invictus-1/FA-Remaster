@@ -11,6 +11,7 @@ namespace moho {
 
 class Sim;
 class Unit;
+class Prop;
 struct BlueprintInfo;
 struct UnitCommand;
 enum class CommandType : int;
@@ -72,6 +73,8 @@ bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z);
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp);
 void OccupyStructure(Sim& sim, Unit* u);
 void ReleaseStructure(Sim& sim, Unit* u);
+// A reclaimable prop enters (occupy) / leaves the occupancy grid at pos (Prop::Prop 0x6f9f48 / ~Prop 0x6fa05a).
+void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy);
 // Adjacency of finished structures (OnAdjacentTo / OnNotAdjacentTo).
 void AdjacencyGained(Sim& sim, lua_State* L, Unit* u);
 void AdjacencyLost(Sim& sim, lua_State* L, Unit* u);

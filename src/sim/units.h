@@ -240,6 +240,10 @@ class Prop : public Entity {
   Quat viewOri;
   float viewScale[4] = {1, 1, 1, 1};  // scale x, y, z and the draw scale
   std::string viewMesh;
+  // In the occupancy grid (prop+0x278, Prop::Prop 0x6f9f48): its blueprint gives reclaim. Footprint size and
+  // OccupancyCaps of its blueprint (bp+0xd8 / +0xd9 / +0xda).
+  bool occupies = false;
+  uint8_t occSizeX = 0, occSizeZ = 0, occCaps = 0;
 };
 
 class ShieldEntity : public Entity {
