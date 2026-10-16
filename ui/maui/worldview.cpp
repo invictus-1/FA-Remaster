@@ -607,19 +607,36 @@ class WorldView : public Control {
   // (INFERRED: that this y is the text's top; the exe's font routine 0x426470 is not read), a black
   // shadow one pixel right and down, then the text in its colour. The picture gives the bars of
   // the frame about to be shown (WorldPicture::LifeBarAnchors), so the names are of that moment.
+  // Then a unit's selection sets ("1 3 ", sub_85E3A0, read by a helper): centred a line below the
+  // point the custom name's routine gives back, which is the name's LEFT edge and top (so with a
+  // name the sets are centred on its left edge: the original's own way), or below the bars' anchor
+  // when the unit has no name; the same font, shadow and rule of the life bars' list.
   void DrawCustomNames(lua_State* L, DrawTarget& target, const Rect& r) {
     const CustomNameStyle& style = CustomNames();
-    if (!style.on || miniMap || !AnyCustomNames(L)) return;  // (else nothing is asked of the picture)
+    if (miniMap) return;
+    const bool names = style.on && AnyCustomNames(L), sets = style.setsOn && AnySelectionSets(L);
+    if (!names && !sets) return;  // (else nothing is asked of the picture)
     std::vector<WorldSource::BarAnchor> anchors;
     UserState::From(L)->config().world->LifeBarAnchors(&anchors);
     const FontMetrics m = GetFontMetrics(style.font, style.size);
+    auto line = [&](const std::string& text, float px, float py, uint32_t color, float* left, float* top) {
+      const float w = StringAdvance(style.font, style.size, text);
+      *left = std::floor(px - w * 0.5f), *top = std::floor(py + m.height);
+      DrawString(target, style.font, style.size, text, r.x0 + *left + 1, r.y0 + *top + 1 + m.ascent, 0xff000000u);
+      DrawString(target, style.font, style.size, text, r.x0 + *left, r.y0 + *top + m.ascent, color);
+    };
     for (const WorldSource::BarAnchor& a : anchors) {
-      const std::string* name = CustomNameOf(L, a.unit);
-      if (!name) continue;
-      const float w = StringAdvance(style.font, style.size, *name);
-      const float x = r.x0 + std::floor(a.x - w * 0.5f), top = r.y0 + std::floor(a.y + m.height);
-      DrawString(target, style.font, style.size, *name, x + 1, top + 1 + m.ascent, 0xff000000u);
-      DrawString(target, style.font, style.size, *name, x, top + m.ascent, style.color);
+      float px = a.x, py = a.y;
+      if (const std::string* name = names ? CustomNameOf(L, a.unit) : nullptr) {
+        float left = 0, top = 0;
+        line(*name, a.x, a.y, style.color, &left, &top);
+        px = left, py = top;  // (what the name's routine returns: the sets go under it)
+      }
+      if (!sets) continue;
+      const std::string text = SelectionSetsText(L, a.unit);
+      if (text.empty()) continue;
+      float left = 0, top = 0;
+      line(text, px, py, style.setsColor, &left, &top);
     }
   }
 
