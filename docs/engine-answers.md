@@ -1592,6 +1592,12 @@ plays ten game-minutes headless, the AIs building up to 1,400 units. The classic
 `OnCreate` call were missing) but do not build: their brains rest on engine functions that are still
 stubs (39 of `CAiBrain`'s: threat map, `BuildPlatoon`, `DecideWhatToBuild`, attack vectors; 44 of
 `CPlatoon`'s: forming platoons, their orders). That block comes after the interface can show a game.
+**Update 2026-10-16:** those functions are built from the exe (src/sim/ai_threat.cpp, ai_platoon.cpp,
+ai_brain.cpp, ai_build.cpp; engine d7e3624, 64a3518, e78131a). A rush AI in a 6000-tick test game now
+builds factories, mass extractors (and upgrades them), power and engineers, forms 19 platoons and sends
+tanks to attack. Not yet checked against the original game (an oracle run with the classic AI would need a
+probe of FindPlaceToBuild / BuildStructure / DecideWhatToBuild). OPEN: the interface chat's request 24, a
+crash in a game against the classic AI (being found).
 
 ## render 5: standing request to merge `render` into `main` — accepted
 
