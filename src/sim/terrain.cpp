@@ -177,6 +177,15 @@ void TerrainMap::SetHeightAt(int x, int z, float h) {
   ++changes_;
 }
 
+void TerrainMap::NoteHeightChange(int x0, int z0, int x1, int z1) {
+  x0 = std::max(x0, 0);
+  z0 = std::max(z0, 0);
+  x1 = std::min(x1, width_);
+  z1 = std::min(z1, height_);
+  if (x0 > x1 || z0 > z1) return;
+  heightChanges_.push_back({x0, z0, x1, z1});
+}
+
 float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, float z) {
   if (!raw) return 0;
   auto at = [&](int ix, int iz) {  // TerrainMap::HeightAt
