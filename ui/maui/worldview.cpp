@@ -594,6 +594,7 @@ class WorldView : public Control {
     // The meshes the game's script has placed in the world, and the marks of orders just given.
     WorldMeshesForWorld(L, &scene.meshes);
     UserDecalsForWorld(L, &scene.decals);
+    IconColorsForWorld(L, &scene.iconColors);
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");

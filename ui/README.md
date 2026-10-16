@@ -565,7 +565,26 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   mouse, and nuke rings made by a script lie on the ground under the trees.
 - `SetAutoSurfaceMode(units, on)` (FA exe 0x8bb360): the info pair `SetAutoSurfaceMode` for each
   own unit, as `SetAutoMode`; the simulation keeps the switch (`GetIsAutoSurfaceMode` reads it
-  back) but does not surface a submarine by it yet (the engine's).
+  back) but does not surface a submarine by it yet (the engine's). `GetIsSubmerged(units)` (0x8bafe0,
+  the dive button): -1 all in the Sub layer, 1 none, 0 mixed or none (the engine's UnitView::layer).
+- The Dock order, `IssueDockCommand(clear)` (0x840a70, read in full by a helper): the selected units
+  that can dock go to the player's own air staging platforms (finished, alive, not under water, not
+  hanging on a parent, nothing queued, with room: StorageSlots less what is attached, or
+  DockingSlots); all to the nearest when it has room, else shared among those within 100 of it by
+  their room; one Dock order (39, the platform its target) per platform; with no platform or none
+  free the army's voice line (`PlayNoStagingPlatformsVO` / `PlayBusyStagingPlatformsVO`). Ours takes
+  units by id where the original goes by memory address. Test `ui/tests/dock.lua`. The idle
+  selection (UISelectionByCategory's idle, 0x8664c6) now leaves out units hanging on a parent
+  (docked, loaded, stored), as the original; it read "being built" before.
+- `TeamColorMode(on | "aarrggbb,...")` (0x847e10 with FAF's patch): the strategic icons in team
+  colours (`WorldPicture::SetIconColors`, renderer request 26): FAF's list by army, the original's
+  GameColors.TeamColorMode Self / Ally / Enemy / Neutral for armies it leaves out; off with no focus
+  army. `RenderOverlayEconomy(on)` (0x847d30, drawn as CWldSession::DrawEconomyOverlay 0x858d80):
+  over each of the player's units on screen that makes or uses something, its energy and mass a
+  second on a small plate (econoverlayparams.lua's look; the plate's layout is inferred, the unit's
+  place is the last beat's). `DeleteCommand(id)` (0x843fa0): one less of an order the player's
+  units hold (message 15, as DecreaseBuildCountInQueue). `IsObserver()` (0x843150): true with no
+  focus army. The colour names scripts may use are now the original's 141 (FA exe 0xdff690), not 17.
 - A factory's rally point: an order given in the world with a factory selected goes into the
   factory's rally queue (`CommandWriter::IssueFactoryCommand`), so what it builds walks there.
   (Inferred: that this holds for buildings in category FACTORY and for every order but a

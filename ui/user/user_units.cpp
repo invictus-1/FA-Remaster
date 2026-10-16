@@ -2712,6 +2712,24 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "DecreaseBuildCountInQueue", l_DecreaseBuildCountInQueue);
   SetGlobal(L, "DeleteCommand", l_DeleteCommand);
   SetGlobal(L, "RenderOverlayEconomy", l_RenderOverlayEconomy);
+  // moho64ui_EconomyMarks() -> the economy overlay's numbers now, each {energy, mass}; the host's
+  // own function for tests.
+  lua_register(L, "moho64ui_EconomyMarks", [](lua_State* L) -> int {
+    std::vector<EconomyMark> marks;
+    EconomyMarks(L, &marks);
+    lua_newtable(L);
+    for (size_t i = 0; i < marks.size(); ++i) {
+      lua_newtable(L);
+      lua_pushstring(L, "energy");
+      lua_pushnumber(L, marks[i].energy);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "mass");
+      lua_pushnumber(L, marks[i].mass);
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  });
 }
 
 // In front of the engine's category functions: call this once those are registered.

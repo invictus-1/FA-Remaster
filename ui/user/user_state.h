@@ -124,6 +124,10 @@ class UserState {
   // "economy" button): each of the player's units on screen shows what it makes or uses
   // (worldview.cpp, DrawEconomyOverlay).
   bool economyOverlay = false;
+  // TeamColorMode (FA exe 0x847e10, patched by FAF): the switch (session+0x4e9) and FAF's colour
+  // list, one 0xAARRGGBB per army counted from 0 (0: none given); IconColorsForWorld resolves them.
+  bool teamColors = false;
+  std::vector<uint32_t> teamColorTable;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -470,6 +474,9 @@ struct EconomyMark {
   float energy, mass;
 };
 void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out);
+// The strategic icons' colours by army counted from 0 while TeamColorMode is on and there is a focus
+// army (empty: the armies' own colours; session_bindings.cpp).
+void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).
