@@ -451,6 +451,7 @@ int main(int argc, char** argv) {
     gameCfg.waitForBeat = [&session]() { session.WaitForWorker(); };
     gameCfg.groundHeight = [&session](float x, float z) { return session.TerrainHeight(x, z); };
     gameCfg.beatRunning = [&session]() { return session.BeatRunning(); };
+    gameCfg.gameTime = [&session]() { return session.PictureTick() * 0.1; };
     gameCfg.commandSource = session.commandSource();
     gameCfg.ownArmy = session.OwnArmy();
     gameCfg.world = session.world();

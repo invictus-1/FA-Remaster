@@ -2242,6 +2242,15 @@ void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out) {
   }
 }
 
+bool UnitPlace(lua_State* L, uint32_t id, float position[3], float orientation[4]) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(id);
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return false;
+  for (int i = 0; i < 3; ++i) position[i] = it->second->view.position[i];
+  for (int i = 0; i < 4; ++i) orientation[i] = it->second->view.orientation[i];
+  return true;
+}
+
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority) {
   Sim* sim = TheSim(L);
   if (!sim) return;

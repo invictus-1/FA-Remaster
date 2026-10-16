@@ -86,11 +86,33 @@ class Camera : public ScriptObject {
   bool turned = false, swingBack = false;
   float turnedPitch = 0;
   bool placed = false;  // false until the map's size or a script put it somewhere
-  // A move that takes time (the original's timed move, FA exe 0x7a74c0): from where the camera
-  // was to `moveFocus` and `moveZoom` in `moveSeconds`.
-  bool moving = false;
-  float moveFromFocus[3] = {0, 0, 0}, moveFocus[3] = {0, 0, 0};
-  float moveFromZoom = 0, moveZoom = 0, moveSeconds = 0, moveTime = 0;
+  // Scripted moves, as the original's CameraImpl (read by a helper: TimedMoveInit 0x7a74c0,
+  // SetupHermite 0x7a8940, InterpolateBasis 0x7a9ba0, UpdateTargets 0x7a9110). `mode` (+0x37c):
+  // 0 free, 1 a box, 2 following units, 3 a unit's nose, 4 a scripted move or a spin. A timed
+  // command runs from where the camera was (`from...`) to its targets (`to...`) in `moveSeconds`,
+  // begun at `moveStart` on the camera's clock (the system's, or the game's with UseGameClock:
+  // paused with the game, at its speed); the curve is soft at both ends while `ease` is on (as
+  // after Reset; DisableEaseInOut makes it straight), its pace by `accMode` (SetAccMode: Linear,
+  // FastInSlowOut, SlowInOut). Focus and zoom follow it always (the zoom by its value), heading and
+  // pitch in modes 3 and 4. The camera is an event for WaitFor (+0x10): unsignalled when a timed
+  // command begins, signalled when it ends. Spin's rates: turns and map units a second.
+  int mode = 0;
+  bool signalled = false;
+  bool ease = true;
+  int accMode = 0;  // 0 Linear, 1 FastInSlowOut, 2 SlowInOut
+  bool gameClock = false;
+  double systemClock = 0, clockNow = 0, lastGameTime = -1, moveStart = 0;
+  float moveSeconds = 0;
+  float fromFocus[3] = {0, 0, 0}, toFocus[3] = {0, 0, 0};
+  float fromZoom = 0, toZoom = 0, fromHeading = kPi, toHeading = kPi, fromPitch = 0, toPitch = kFarPitch * kDegrees;
+  float spinRate = 0, spinZoomRate = 0;
+  // Following units (TrackEntities, mode 2: the first living one, then the next when it is gone) or
+  // one unit's nose (NoseCam, mode 3: behind it, looking its way, raised by its pitch and
+  // `pitchAdjust`; the old view blends into it over `transition`).
+  std::vector<uint32_t> entities;
+  size_t entityAt = 0;
+  float pitchAdjust = 0, transition = 0;
+  int EventState() const override { return signalled ? 1 : 0; }
   // The shake a blast gives the camera (the original's +0x428..+0x448, see ShakeCamera below):
   // where it is, how far it reaches, how hard at its middle and at its reach, how long it lasts
   // and how long it has lasted; `shakeSign` turns over every frame. `shakeOffset`: this frame's
@@ -181,6 +203,14 @@ void Place(lua_State* L, Camera* c) {
   c->heading = kPi;
   c->turned = c->swingBack = false;
   c->zoom = c->targetZoom = MaxZoom(c);
+  // (and as the original's Reset 0x7a80a0: the curve soft again, no spin, free; a timed move,
+  // the clock and the event stay as they are)
+  c->ease = true;
+  c->spinRate = c->spinZoomRate = 0;
+  c->mode = 0;
+  c->entities.clear();
+  c->pitchAdjust = 0;
+  c->toHeading = kPi, c->toPitch = kFarPitch * kDegrees;
 }
 
 // Turning by hand (FA exe 0x7a6ce0): the heading by dx, the lean by dy, both at cam_SpinSpeed (360
@@ -197,8 +227,10 @@ void SpinCamera(Camera* c, float dx, float dy, float viewWidth) {
   c->turnedPitch = std::max(kMinSpinPitch, std::min(c->turnedPitch + dy * k, kMaxSpinPitch));
   c->turned = true, c->swingBack = false;
 }
-void RevertCamera(Camera* c) {
-  if (c->turned) c->swingBack = true;
+void RevertCamera(Camera* c) {  // (RevertRotation, FA exe 0x7a6e40)
+  if (!c->turned) return;
+  c->swingBack = true;
+  if (c->mode != 2) c->mode = 0;  // (a spin or a nose camera ends)
 }
 
 // The camera of a name; made on first use, with a script table whose methods are moho.CameraImpl's.
@@ -267,29 +299,158 @@ int l_GetCamera(lua_State* L) {
 
 void SetZoomClamped(Camera* c, float z) { c->zoom = c->targetZoom = ClampZoom(c, z); }
 
-// The camera goes to a place and a zoom, at once or in `seconds` (the original's timed move:
-// TimedMoveInit 0x7a74c0, then a curve through time, SetupHermite 0x7a8940). The way's shape is
-// OURS: soft at both ends, the zoom by its logarithm; the original's curve is not read.
-void StartMove(Camera* c, const float focus[3], float zoom, float seconds) {
-  zoom = ClampZoom(c, zoom);
+// The heading `to` turned to the nearest of its equals from `from`, so a turn goes the short way
+// (NormalizeQuadrant, FA exe 0x7a88a0).
+float NearestAngle(float from, float to) {
+  while (to - from > kPi) to -= 2 * kPi;
+  while (to - from < -kPi) to += 2 * kPi;
+  return to;
+}
+// A timed command begins (TimedMoveInit, FA exe 0x7a74c0): from where the camera is now, on its
+// clock; the camera as an event is unsignalled until it ends. With no time, nothing of this.
+void StartTimed(Camera* c, float seconds) {
+  c->moveSeconds = seconds > 0 ? seconds : 0;
+  if (seconds <= 0) return;
+  for (int i = 0; i < 3; ++i) c->fromFocus[i] = c->focus[i];
+  c->fromZoom = c->zoom;
+  c->fromPitch = PitchOf(c);
+  c->fromHeading = NearestAngle(0, c->heading);
+  c->moveStart = c->clockNow;
+  c->signalled = false;
+}
+// MoveTo / SnapTo / SetZoom / RestoreSettings (TargetManual, FA exe 0x7a8d40): the camera looks at
+// `focus` from heading and pitch at `zoom`, at once (it then holds that turn: the pitch no longer
+// follows the zoom until RevertRotation or Reset) or along the curve in `seconds` (mode 4). The
+// zoom is not brought into bounds. (The roll of a script's orientation is not used.)
+void TargetManual(Camera* c, const float focus[3], float heading, float pitch, float zoom, float seconds) {
   c->anchored = false;
-  if (seconds <= 0) {
-    for (int i = 0; i < 3; ++i) c->focus[i] = focus[i];
-    c->zoom = c->targetZoom = zoom;
-    c->moving = false;
-    ClampFocus(c);
+  c->entities.clear();  // (following stops)
+  StartTimed(c, seconds);
+  for (int i = 0; i < 3; ++i) c->toFocus[i] = focus[i];
+  c->toZoom = zoom;
+  c->toPitch = pitch;
+  c->toHeading = NearestAngle(seconds > 0 ? c->fromHeading : c->heading, heading);
+  if (seconds > 0) {
+    c->mode = 4;
     return;
   }
-  for (int i = 0; i < 3; ++i) c->moveFromFocus[i] = c->focus[i], c->moveFocus[i] = focus[i];
-  c->moveFromZoom = c->zoom, c->moveZoom = zoom;
-  c->moveSeconds = seconds, c->moveTime = 0;
-  c->moving = true;
+  for (int i = 0; i < 3; ++i) c->focus[i] = focus[i];
+  c->zoom = c->targetZoom = zoom;
+  c->heading = c->toHeading;
+  c->turned = true, c->turnedPitch = pitch;
+  c->mode = 0;
+  ClampFocus(c);
 }
-// Show a box of the world (FA exe 0x7a83e0, the camera's slot 13): the focus goes to the box's
-// middle, the zoom to the larger of its width and depth.
+// Show a box of the world (TargetBox, FA exe 0x7a83e0): the focus goes to the box's middle, the
+// zoom to the larger of its width and depth (mode 1; the turn stays as it is).
 void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
   float focus[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
-  StartMove(c, focus, std::max(hi[0] - lo[0], hi[2] - lo[2]), seconds);
+  const float zoom = std::max(hi[0] - lo[0], hi[2] - lo[2]);
+  c->anchored = false;
+  c->entities.clear();
+  StartTimed(c, seconds);
+  for (int i = 0; i < 3; ++i) c->toFocus[i] = focus[i];
+  c->toZoom = zoom;
+  c->toHeading = c->heading, c->toPitch = PitchOf(c);
+  if (seconds > 0) {
+    c->mode = 1;
+    return;
+  }
+  for (int i = 0; i < 3; ++i) c->focus[i] = focus[i];
+  c->zoom = c->targetZoom = ClampZoom(c, zoom);
+  c->mode = 0;
+  ClampFocus(c);
+}
+// Ours: the player's hand (pan, wheel) ends a timed move (the original lets it run on); waiting
+// scripts are let go.
+void EndTimedByHand(Camera* c) {
+  if (c->moveSeconds > 0) c->signalled = true;
+  c->moveSeconds = 0;
+  if (c->mode != 0) c->mode = 0;  // (the original's pan: TargetNothing, following ends too)
+  c->entities.clear();
+}
+// A unit's place and turn for the camera: as the coming frame shows it (the picture's), else as
+// the last beat left it.
+bool FollowedPlace(lua_State* L, uint32_t id, float position[3], float orientation[4]) {
+  WorldSource* source = UserState::From(L)->config().world;
+  if (source && source->UnitTransform(id, position, orientation)) return true;
+  return UnitPlace(L, id, position, orientation);
+}
+// A unit's heading (the way it faces) and nose-down pitch from its turn (NoseCam, FA exe 0x7a8a20;
+// a quaternion x, y, z, w).
+void YawPitchOf(const float q[4], float* yaw, float* pitch) {
+  const float x = q[0], y = q[1], z = q[2], w = q[3];
+  *yaw = std::atan2(2 * (z * x + y * w), 1 - 2 * (x * x + y * y));
+  *pitch = std::asin(std::max(-1.0f, std::min(1.0f, 2 * (x * w - y * z))));
+}
+// TrackEntities / TargetEntities (TargetEntities, FA exe 0x7a8640): the camera goes to the first
+// living unit of the list at `zoom` (in `seconds`); following (mode 2) it stays on it every frame,
+// then on the next living one when it is gone. Heading and pitch stay as they are.
+void TargetEntities(lua_State* L, Camera* c, const std::vector<uint32_t>& ids, bool track, float zoom, float seconds) {
+  c->anchored = false;
+  c->entities = ids;
+  c->entityAt = 0;
+  StartTimed(c, seconds);
+  float p[3], q[4];
+  bool found = false;
+  for (; c->entityAt < c->entities.size(); ++c->entityAt)
+    if (FollowedPlace(L, c->entities[c->entityAt], p, q)) {
+      found = true;
+      break;
+    }
+  for (int i = 0; i < 3; ++i) c->toFocus[i] = found ? p[i] : c->focus[i];
+  c->toZoom = zoom;
+  c->toHeading = c->heading, c->toPitch = PitchOf(c);
+  c->mode = track ? 2 : 0;
+  if (!track) c->entities.clear();
+  if (seconds <= 0) {
+    for (int i = 0; i < 3; ++i) c->focus[i] = c->toFocus[i];
+    c->zoom = c->targetZoom = zoom;
+  }
+}
+// NoseCam(unit, pitchAdjust, zoom, seconds, transition) (TargetNoseCam, FA exe 0x7a8a20): behind the
+// unit, looking the way it faces, its pitch plus pitchAdjust, at `zoom` (mode 3), from now on; the
+// old view blends into it over `transition` (none: at once); the event at `seconds`.
+void TargetNoseCam(lua_State* L, Camera* c, uint32_t id, float pitchAdjust, float zoom, float seconds, float transition) {
+  c->anchored = false;
+  float p[3], q[4];
+  if (!FollowedPlace(L, id, p, q)) return;
+  c->entities = {id};
+  c->entityAt = 0;
+  StartTimed(c, seconds);
+  c->transition = transition;
+  c->pitchAdjust = pitchAdjust;
+  float yaw, pitch;
+  YawPitchOf(q, &yaw, &pitch);
+  for (int i = 0; i < 3; ++i) c->toFocus[i] = p[i];
+  c->toHeading = NearestAngle(c->heading, yaw);
+  c->toPitch = pitch + pitchAdjust;
+  c->toZoom = zoom;
+  c->mode = 3;
+  c->turned = true;
+}
+// Each frame, the followed unit's place (and for the nose its turn) become the targets
+// (UpdateTargets 0x7a9110); a gone unit gives way to the next living one; none left: free, and a
+// held turn swings back.
+void FollowTargets(lua_State* L, Camera* c) {
+  if ((c->mode != 2 && c->mode != 3) || c->entities.empty()) return;
+  float p[3], q[4];
+  for (size_t n = 0; n < c->entities.size(); ++n) {
+    const size_t at = (c->entityAt + n) % c->entities.size();
+    if (!FollowedPlace(L, c->entities[at], p, q)) continue;
+    c->entityAt = at;
+    for (int i = 0; i < 3; ++i) c->toFocus[i] = p[i];
+    if (c->mode == 3) {
+      float yaw, pitch;
+      YawPitchOf(q, &yaw, &pitch);
+      c->toHeading = NearestAngle(c->heading, yaw);
+      c->toPitch = pitch + c->pitchAdjust;
+    }
+    return;
+  }
+  c->entities.clear();
+  c->mode = 0;
+  if (c->turned) c->swingBack = true;
 }
 
 // Pan (FA exe 0x7a6f00): the focus moves over the ground, to the view's left by dx and up the
@@ -297,7 +458,7 @@ void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
 // source has them for our heading.)
 void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
   if (viewWidth <= 0) return;
-  c->moving = false;  // (ours: the player's hand ends a timed move)
+  EndTimedByHand(c);
   float k = c->zoom / viewWidth * kPanSpeed, turn = c->heading - kPi, sh = std::sin(turn), ch = std::cos(turn);
   c->focus[0] += -ch * k * dx - sh * k * dy;
   c->focus[2] += sh * k * dx - ch * k * dy;
@@ -307,21 +468,21 @@ void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
 // factor 2^-cam_ZoomAmount; the zoom itself glides after it (AdvanceCamera).
 void ZoomByWheel(Camera* c, float notches, float x, float y) {
   c->anchorX = x, c->anchorY = y, c->anchored = true;
-  c->moving = false;  // (ours: the player's hand ends a timed move)
+  EndTimedByHand(c);
   c->targetZoom = ClampZoom(c, c->targetZoom * std::pow(2.0f, -CameraKeys().zoomAmount * notches));
 }
 
-// MoveTo(position, orientationHPR, zoom, seconds) / SnapTo(position, orientationHPR, zoom): the
-// camera looks at a place from a distance, at once or after `seconds`. (The heading turns at
-// once.)
+// MoveTo(position, orientationHPR, zoom, seconds) / SnapTo(position, orientationHPR, zoom) (FA exe
+// 0x7ab760 / 0x7ab560 -> TargetManual): the camera looks at a place from the orientation's heading
+// and pitch at a zoom, along the curve or at once.
 int l_CamMoveTo(lua_State* L) {
   Camera* c = CheckCamera(L, 1);
   float focus[3] = {c->focus[0], c->focus[1], c->focus[2]};
   ReadVector(L, 2, focus);
-  float hpr[3];
-  if (ReadVector(L, 3, hpr)) c->heading = hpr[0];  // (the pitch a script asks for is not kept: it follows the zoom)
-  StartMove(c, focus, lua_isnumber(L, 4) ? static_cast<float>(lua_tonumber(L, 4)) : c->targetZoom,
-            lua_isnumber(L, 5) ? static_cast<float>(lua_tonumber(L, 5)) : 0);
+  float hpr[3] = {c->heading, PitchOf(c), 0};
+  ReadVector(L, 3, hpr);
+  TargetManual(c, focus, hpr[0], hpr[1], lua_isnumber(L, 4) ? static_cast<float>(lua_tonumber(L, 4)) : c->targetZoom,
+               lua_isnumber(L, 5) ? static_cast<float>(lua_tonumber(L, 5)) : 0);
   return 0;
 }
 // MoveToRegion(region, seconds): the camera shows a rectangle of the map ({x0, y0, x1, y1}).
@@ -340,9 +501,10 @@ int l_CamMoveToRegion(lua_State* L) {
       r[i] = static_cast<float>(lua_tonumber(L, -1));
       lua_pop(L, 1);
     }
-    float focus[3] = {(r[0] + r[2]) * 0.5f, c->focus[1], (r[1] + r[3]) * 0.5f};
-    StartMove(c, focus, std::max(std::fabs(r[2] - r[0]), std::fabs(r[3] - r[1])) * 1.2f,
-              lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0);
+    // (the original's: the corners at floor + 0.5, the zoom the larger side, TargetBox 0x7a83e0)
+    float lo[3] = {std::floor(std::min(r[0], r[2])) + 0.5f, c->focus[1], std::floor(std::min(r[1], r[3])) + 0.5f};
+    float hi[3] = {std::floor(std::max(r[0], r[2])) + 0.5f, c->focus[1], std::floor(std::max(r[1], r[3])) + 0.5f};
+    TargetBox(c, lo, hi, lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0);
   }
   return 0;
 }
@@ -404,9 +566,14 @@ int l_CamGetMaxZoom(lua_State* L) {
   lua_pushnumber(L, MaxZoom(CheckCamera(L, 1)));
   return 1;
 }
-// SetZoom(zoom, seconds): the move takes no time here. SetTargetZoom(zoom): the zoom glides there.
+// SetZoom(zoom, seconds) (FA exe 0x7ac7e0): a scripted move to the zoom, from the focus it is
+// going to, holding its turn. SetTargetZoom(zoom): the zoom glides there.
 int l_CamSetZoom(lua_State* L) {
-  SetZoomClamped(CheckCamera(L, 1), static_cast<float>(luaL_checknumber(L, 2)));
+  Camera* c = CheckCamera(L, 1);
+  const float* focus = c->moveSeconds > 0 ? c->toFocus : c->focus;
+  float f[3] = {focus[0], focus[1], focus[2]};
+  TargetManual(c, f, c->heading, PitchOf(c), static_cast<float>(luaL_checknumber(L, 2)),
+               lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0);
   return 0;
 }
 int l_CamSetTargetZoom(lua_State* L) {
@@ -437,17 +604,27 @@ int l_CamSaveSettings(lua_State* L) {
   lua_rawset(L, -3);
   return 1;
 }
+// RestoreSettings(table) (FA exe 0x7ad150): a snap to the saved focus, heading, pitch and zoom, then
+// free again, then the turn swings back to north up (RevertRotation).
 int l_CamRestoreSettings(lua_State* L) {
   Camera* c = CheckCamera(L, 1);
   if (!lua_istable(L, 2)) return 0;
+  float focus[3] = {c->focus[0], c->focus[1], c->focus[2]};
+  float heading = c->heading, pitch = PitchOf(c), zoom = c->zoom;
   lua_pushstring(L, "Focus");
   lua_gettable(L, 2);
-  ReadVector(L, lua_gettop(L), c->focus);
+  ReadVector(L, lua_gettop(L), focus);
   lua_pop(L, 1);
-  lua_pushstring(L, "Zoom");
-  lua_gettable(L, 2);
-  if (lua_isnumber(L, -1)) SetZoomClamped(c, static_cast<float>(lua_tonumber(L, -1)));
-  lua_pop(L, 1);
+  auto number = [&](const char* key, float* out) {
+    lua_pushstring(L, key);
+    lua_gettable(L, 2);
+    if (lua_isnumber(L, -1)) *out = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  };
+  number("Heading", &heading), number("Pitch", &pitch), number("Zoom", &zoom);
+  TargetManual(c, focus, heading, pitch, zoom, 0);
+  c->mode = 0;
+  RevertCamera(c);
   return 0;
 }
 // HoldRotation(): the camera keeps the turn it has (0x7ac580); RevertRotation(): it swings back
@@ -462,8 +639,62 @@ int l_CamRevertRotation(lua_State* L) {
   RevertCamera(CheckCamera(L, 1));
   return 0;
 }
-int l_CamNothing(lua_State* L) {
-  CheckCamera(L, 1);
+// TrackEntities(ids, zoom, seconds) / TargetEntities(ids, zoom, seconds) (FA exe 0x7abae0 / 0x7abec0):
+// a list of entity ids (strings or numbers); unknown ones are passed over.
+template <bool Track>
+int l_CamTargetEntities(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  std::vector<uint32_t> ids;
+  if (lua_istable(L, 2)) {
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, 2, i);
+      if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      if (lua_isnumber(L, -1) || lua_isstring(L, -1)) ids.push_back(static_cast<uint32_t>(std::strtoul(lua_tostring(L, -1), nullptr, 10)));
+      lua_pop(L, 1);
+    }
+  }
+  TargetEntities(L, c, ids, Track, lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : c->targetZoom,
+                 lua_isnumber(L, 4) ? static_cast<float>(lua_tonumber(L, 4)) : 0);
+  return 0;
+}
+// NoseCam(entity id, pitchAdjust, zoom, seconds, transition) (FA exe 0x7ac240).
+int l_CamNoseCam(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  if (!lua_isnumber(L, 2) && !lua_isstring(L, 2)) return 0;
+  const uint32_t id = static_cast<uint32_t>(std::strtoul(lua_tostring(L, 2), nullptr, 10));
+  auto number = [&](int idx, float otherwise) { return lua_isnumber(L, idx) ? static_cast<float>(lua_tonumber(L, idx)) : otherwise; };
+  TargetNoseCam(L, c, id, number(3, 0), number(4, c->targetZoom), number(5, 0), number(6, 0));
+  return 0;
+}
+// Spin(headingRate [, zoomRate]) (FA exe 0x7ad910): the camera turns by headingRate turns a second
+// and its zoom goes by zoomRate map units a second, holding its pitch, until RevertRotation, Reset
+// or Spin(0, 0) (mode 4).
+int l_CamSpin(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  c->spinRate = static_cast<float>(luaL_checknumber(L, 2));
+  c->spinZoomRate = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0;
+  if (c->mode != 4) c->toHeading = c->heading, c->toPitch = PitchOf(c);
+  c->turned = true, c->turnedPitch = c->toPitch;
+  c->mode = 4;
+  return 0;
+}
+// SetAccMode(name): the pace of a timed move along its way: "Linear" (as after Reset),
+// "FastInSlowOut", "SlowInOut"; another name changes nothing.
+int l_CamSetAccMode(lua_State* L) {
+  Camera* c = CheckCamera(L, 1);
+  std::string name = luaL_checkstring(L, 2);
+  for (char& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  if (name == "linear") c->accMode = 0;
+  else if (name == "fastinslowout") c->accMode = 1;
+  else if (name == "slowinout") c->accMode = 2;
+  return 0;
+}
+template <bool Camera::*Field, bool Value>
+int l_CamSetFlag(lua_State* L) {  // EnableEaseInOut / DisableEaseInOut, UseGameClock / UseSystemClock
+  CheckCamera(L, 1)->*Field = Value;
   return 0;
 }
 
@@ -1475,15 +1706,62 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   if (!c->placed) return;
   WorldView* v = ViewOf(UserState::From(L)->ui().GetFrame(0), c->name);
   if (v) v->TakeAspect(c);
-  if (c->moving) {  // a timed move: soft at both ends
-    c->moveTime += seconds;
-    float t = c->moveSeconds > 0 ? std::min(1.0f, c->moveTime / c->moveSeconds) : 1.0f, s = t * t * (3 - 2 * t);
-    for (int i = 0; i < 3; ++i) c->focus[i] = c->moveFromFocus[i] + (c->moveFocus[i] - c->moveFromFocus[i]) * s;
-    float from = std::log(std::max(c->moveFromZoom, 1.0f)), to = std::log(std::max(c->moveZoom, 1.0f));
-    c->zoom = c->targetZoom = t >= 1 ? c->moveZoom : std::exp(from + (to - from) * s);
-    if (t >= 1) c->moving = false;
+  // The camera's clock (Frame, FA exe 0x7a9030): the system's, or the game's (UseGameClock: its
+  // time with the frame's share of a beat; the frame's step is then game time too).
+  if (c->gameClock && UserState::From(L)->config().gameTime) {
+    const double now = UserState::From(L)->config().gameTime();
+    seconds = c->lastGameTime >= 0 ? static_cast<float>(std::max(0.0, now - c->lastGameTime)) : 0.0f;
+    c->lastGameTime = c->clockNow = now;
+  } else {
+    c->systemClock += seconds;
+    c->clockNow = c->systemClock;
+    c->lastGameTime = -1;
   }
-  c->targetZoom = ClampZoom(c, c->targetZoom);
+  FollowTargets(L, c);  // (the followed unit's place and turn)
+  // A spin (UpdateTargets 0x7a9110, mode 4): the heading's target turns, the zoom's target goes.
+  if (c->mode == 4 && c->moveSeconds <= 0 && (c->spinRate != 0 || c->spinZoomRate != 0)) {
+    c->toHeading += c->spinRate * 2 * kPi * seconds;
+    c->targetZoom += c->spinZoomRate * seconds;
+  }
+  if (c->moveSeconds > 0) {  // a timed command (InterpolateBasis 0x7a9ba0)
+    const double t = (c->clockNow - c->moveStart) / c->moveSeconds;
+    if (t >= 1) {
+      for (int i = 0; i < 3; ++i) c->focus[i] = c->toFocus[i];
+      c->zoom = c->targetZoom = c->toZoom;
+      if (c->mode == 3 || c->mode == 4) c->heading = c->toHeading, c->turned = true, c->turnedPitch = c->toPitch;
+      c->moveSeconds = 0;
+      c->signalled = true;
+      if (c->mode == 4 || c->mode == 1) c->mode = 0;
+    } else {
+      // its pace (SetAccMode), then soft at both ends while `ease` is on (the original's curve
+      // with both tangents 0) or straight (both tangents the whole way)
+      float u = static_cast<float>(std::max(0.0, t));
+      if (c->accMode == 1) u = std::sin(u * kPi * 0.5f);
+      else if (c->accMode == 2) u = 0.5f - 0.5f * std::cos(kPi * u);
+      float k = c->ease ? u * u * (3 - 2 * u) : u;
+      if (c->mode == 3) {  // (a unit's nose: the old view blends in over `transition`, none: at once)
+        const float b = c->transition > 0 ? std::min(1.0f, static_cast<float>((c->clockNow - c->moveStart) / c->transition)) : 1.0f;
+        k = b * b * (3 - 2 * b);
+      }
+      for (int i = 0; i < 3; ++i) c->focus[i] = c->fromFocus[i] + (c->toFocus[i] - c->fromFocus[i]) * k;
+      c->zoom = c->targetZoom = c->fromZoom + (c->toZoom - c->fromZoom) * k;
+      if (c->mode == 3 || c->mode == 4) {
+        c->heading = c->fromHeading + (c->toHeading - c->fromHeading) * k;
+        c->turned = true, c->turnedPitch = c->fromPitch + (c->toPitch - c->fromPitch) * k;
+      }
+    }
+  } else if (c->mode == 4 || c->mode == 3) {  // a spin, a scripted turn held, a unit's nose (UpdateBasis 0x7a95f0)
+    if (c->mode == 3) {
+      for (int i = 0; i < 3; ++i) c->focus[i] = c->toFocus[i];
+      c->targetZoom = c->toZoom;
+    }
+    c->heading = c->toHeading;
+    c->turned = true, c->turnedPitch = c->toPitch;
+  } else if (c->mode == 2) {  // following units: on the unit every frame
+    for (int i = 0; i < 3; ++i) c->focus[i] = c->toFocus[i];
+  }
+  // (the zoom is brought into bounds only while the camera is not held in a turn: the original's)
+  if (!c->turned) c->targetZoom = ClampZoom(c, c->targetZoom);
   float before = c->zoom;
   // The ground under the anchor, as the camera sees it before this frame's step.
   float under[3];
@@ -1497,8 +1775,9 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   if (c->zoom != c->targetZoom && c->zoom > 0) {
     float left = std::log2(c->targetZoom) - std::log2(c->zoom);
     float step = std::min(std::fabs(left), (std::fabs(left) * kZoomSpeedLarge + kZoomSpeedSmall) * seconds);
-    c->zoom = step >= std::fabs(left) ? c->targetZoom : ClampZoom(c, c->zoom * std::pow(2.0f, left < 0 ? -step : step));
-  } else {
+    const float z = c->zoom * std::pow(2.0f, left < 0 ? -step : step);
+    c->zoom = step >= std::fabs(left) ? c->targetZoom : c->turned ? z : ClampZoom(c, z);
+  } else if (!c->turned) {
     c->zoom = ClampZoom(c, c->zoom);
   }
   if (towards && c->zoom < before) {
@@ -1852,9 +2131,15 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, cam, "RestoreSettings", l_CamRestoreSettings);
   SetMethod(L, cam, "HoldRotation", l_CamHoldRotation);
   SetMethod(L, cam, "RevertRotation", l_CamRevertRotation);
-  for (const char* name : {"EnableEaseInOut", "DisableEaseInOut", "SetAccMode", "Spin",
-                           "UseGameClock", "UseSystemClock"})
-    SetMethod(L, cam, name, l_CamNothing);
+  SetMethod(L, cam, "Spin", l_CamSpin);
+  SetMethod(L, cam, "TrackEntities", l_CamTargetEntities<true>);
+  SetMethod(L, cam, "TargetEntities", l_CamTargetEntities<false>);
+  SetMethod(L, cam, "NoseCam", l_CamNoseCam);
+  SetMethod(L, cam, "SetAccMode", l_CamSetAccMode);
+  SetMethod(L, cam, "EnableEaseInOut", l_CamSetFlag<&Camera::ease, true>);
+  SetMethod(L, cam, "DisableEaseInOut", l_CamSetFlag<&Camera::ease, false>);
+  SetMethod(L, cam, "UseGameClock", l_CamSetFlag<&Camera::gameClock, true>);
+  SetMethod(L, cam, "UseSystemClock", l_CamSetFlag<&Camera::gameClock, false>);
 
   SetGlobal(L, "GetMouseWorldPos", l_GetMouseWorldPos);
   SetGlobal(L, "MapBorderAdd", l_MapBorderAdd);

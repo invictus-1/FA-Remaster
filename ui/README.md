@@ -557,9 +557,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (0x866970; Ctrl-Z: the units in view of the kinds that are selected). Not read: how `+idle
   +goto` steps the camera from one idle unit to the next (0x865590); ours goes to the one found. So a
   game now opens as the original does: the game's script sends the camera to the commander in
-  one second and selects it. The camera's moves can take time (`MoveTo`, `MoveToRegion` and
-  these): soft at both ends, the zoom by its logarithm; the path's exact shape is ours (the
-  original's curve, 0x7a8940, is not read), and the player's wheel or drag ends such a move.
+  one second and selects it. The camera's scripted moves (2026-10-16, for the campaign's
+  cinematics; the original's CameraImpl read by a helper): a timed command (MoveTo, SnapTo, SetZoom,
+  MoveToRegion, TrackEntities / TargetEntities, NoseCam) runs one curve over focus, zoom (by its
+  value) and, for MoveTo and the nose, heading and pitch: soft at both ends while EnableEaseInOut
+  is on (as after Reset; the original's Hermite with both tangents 0), straight after
+  DisableEaseInOut, its pace by SetAccMode (Linear, FastInSlowOut, SlowInOut); on the system's
+  clock or the game's (UseGameClock: paused with the game). The camera is an event for WaitFor:
+  signalled when a timed command ends. A scripted heading and pitch are held (the pitch no longer
+  follows the zoom, which is then not bounded) until RevertRotation or Reset. Spin(rate, zoomRate):
+  turns a second. TrackEntities follows the first living unit of its list (then the next);
+  NoseCam sits behind a unit, looking its way, raised by its pitch and the adjustment. Ours: the
+  player's wheel or drag ends a timed move (and lets a waiting script go); a followed unit's place
+  is the last beat's until the picture gives the frame's (renderer request 28); the focus is not
+  yet moved along the view onto the ground for markers above or below it. Test `ui/tests/camera.lua`.
   Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
   structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.
 - Range rings, first form (`user/range_rings.cpp`, with what was read from the original's range

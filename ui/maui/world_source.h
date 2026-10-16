@@ -154,6 +154,13 @@ class WorldSource {
     float x, y;
   };
   virtual void LifeBarAnchors(std::vector<BarAnchor>* out) { out->clear(); }
+  // A unit's place and turn as the coming frame shows it (orientation a quaternion x, y, z, w), for
+  // the camera following units (renderer request 28); false: not known here (the camera then takes
+  // the last beat's).
+  virtual bool UnitTransform(uint32_t id, float position[3], float orientation[4]) {
+    (void)id, (void)position, (void)orientation;
+    return false;
+  }
 };
 
 }  // namespace moho::ui

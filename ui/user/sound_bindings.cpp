@@ -77,9 +77,12 @@ int Play(lua_State* L, bool prepareOnly) {
 
 // handle = PlaySound(sndParams, prepareOnly)
 int l_PlaySound(lua_State* L) { return Play(L, lua_toboolean(L, 2) != 0); }
-// PlayVoice(params, duck), PlayTutorialVO(params): a voice is a cue like any other, its bank among
-// the voices of the language. (Ducking the other sounds under it is not built.)
-int l_PlayVoice(lua_State* L) { return Play(L, false); }
+// PlayVoice(params, duck [, prepareOnly]) (FA exe 0x8ade00: one to three arguments),
+// PlayTutorialVO(params): a voice is a cue like any other, its bank among the voices of the
+// language; with prepareOnly it waits for StartSound, as a movie's voice does (/lua/maui/movie.lua
+// prepares it at Set and starts it with Play). (Ducking the other sounds under it is not built: the
+// original's CUserSoundManager::PushDuck 0x8ab020 ramps a global variable of its XACT project.)
+int l_PlayVoice(lua_State* L) { return Play(L, lua_toboolean(L, 3) != 0); }
 
 int l_SoundIsPrepared(lua_State* L) {
   ToHandle(L, 1);

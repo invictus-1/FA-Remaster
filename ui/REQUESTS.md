@@ -1668,6 +1668,17 @@ From the interface chat, 2026-10-16, not blocking yet. Chris's call: the campaig
   with /meshes/game/arrow_mesh, SetDrawScale, attached and bouncing by SetParentOffset;
   objectiveArrow.lua) and the objective areas the sim lays as decals (CreateDecal).
 
+### 28. A unit's place and turn as the frame shows it (the camera following units in cinematics)
+From the interface chat, 2026-10-16, not blocking. The campaign's cinematics make the camera follow
+units: TrackEntities (the focus on the unit, every frame) and NoseCam (behind the unit, looking its way,
+raised by its pitch). The original reads the unit's INTERPOLATED transform for the frame
+(UserEntity::GetInterpolatedTransform 0x8b8cf0 at the frame's alpha; read by a helper of mine). The
+host only has the beats' places (10 a second), so a followed unit would jerk. Could the picture tell
+`bool UnitTransform(uint32_t entityId, float position[3], float orientation[4])` (w, x, y, z or say
+which order) as it will draw that unit in the coming frame (the same moment as LifeBarAnchors), false
+when it does not have the unit? The camera's step runs before the frame is drawn.
+
+
 
 ## To the visuals track
 

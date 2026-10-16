@@ -71,6 +71,10 @@ class UserState {
     // Whether a beat runs on its own thread now (the host's; unset: never). What asks the
     // simulation every frame for something that can be a beat old answers from before it then.
     std::function<bool()> beatRunning;
+    // The game's time with the frame's share of a beat, in seconds (the original's GameTimeSource,
+    // 0x7a66a0: (beat + fraction) * 0.1; paused with the game, at its speed): the camera's game clock
+    // (UseGameClock). Unset: there is no game.
+    std::function<double()> gameTime;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
     // The army that source belongs to, 0-based (-1: none, a replay's viewer): SetFocusArmy's checks.
@@ -479,6 +483,9 @@ struct EconomyMark {
   float energy, mass;
 };
 void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out);
+// A unit's place and turn as the last beat left them (position x, y, z; orientation a quaternion
+// x, y, z, w); false when the interface has no such living unit (user_units.cpp).
+bool UnitPlace(lua_State* L, uint32_t id, float position[3], float orientation[4]);
 // The strategic icons' colours by army counted from 0 while TeamColorMode is on and there is a focus
 // army (empty: the armies' own colours; session_bindings.cpp).
 void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out);
