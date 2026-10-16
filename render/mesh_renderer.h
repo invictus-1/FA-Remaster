@@ -135,6 +135,7 @@ class MeshRenderer {
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
+  gfx::Pipeline glassRgb_, domeRgb_;  // the same two writing the colour alone (ModelLod::rgbOnly)
   gfx::Pipeline prepass_, prepassLeaves_;  // (depthPrepass: depth alone, the scene's samples)
   gfx::Pipeline laid_, laidLeaves_;        // (depthPrepass: then the full shading, writing no depth)
   // two of the game's lookup textures for the original look (where the game's files have them):

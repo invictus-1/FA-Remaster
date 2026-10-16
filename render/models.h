@@ -85,6 +85,10 @@ struct ModelLod {
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
+  // The original draws it into the colour alone, not the frame's alpha (its technique's AlphaState is
+  // ..._Write_RGB: GlassAlpha, UEFBuildCube, Cloud, OuterCloud, Explosion, Effect, NukeUEF, ShieldSeraphim):
+  // so it adds nothing to the original look's bloom, which reads that alpha as glow.
+  bool rgbOnly = false;
   bool noShadow = false;       // "...NoShadow" (the objective arrow's NormalMappedAlphaNoShadow): casts none
   bool glass = false;          // see-through, drawn after the water without writing depth (frames of light, shields)
   bool shield = false;         // "Shield...": a shield's bubble: a faint tinted shell, brighter toward its rim

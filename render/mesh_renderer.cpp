@@ -92,7 +92,8 @@ cbuffer MeshKind : register(b3) {
                 // often its texture repeats, how fast it slides, from what age it fades)
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
                 // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
-  float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w)
+  float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w); y: 1 = no glow in the
+                // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -574,7 +575,7 @@ float4 Shade(VOut i, bool front) {
   }
   // (the original look's glow, in the picture's alpha, for its bloom: what the original's unit shaders
   // write, its specular's blue plus glowMinimum 0.01; wreckage and the like only the 0.01; render 28)
-  const float glowAlpha = kind4.x > 0.5 ? 0.01 : spec.b + 0.01;
+  const float glowAlpha = kind4.x > 0.5 || kind6.y > 0.5 ? 0.01 : spec.b + 0.01;
   if (shielded) work += (faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0)) * (0.03 + 0.6 * pow(1 - saturate(dot(toCamera, N)), 3));
   float3 light = OriginalLight(dot(sunDirection, N), shadow);
   if (kind.y > 0.5) return float4(i.color.rgb * albedo.rgb * light, kind2.y > 0.5 ? albedo.a : 0.01);  // the plain look ("VertexNormal"; leaves: their coverage)
@@ -659,11 +660,21 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaWrite = true;
   glass_ = device_->CreatePipeline(pd, error);
   if (!glass_) return false;
+  pd.name = "models, see-through, colour alone";
+  pd.alphaWrite = false;
+  glassRgb_ = device_->CreatePipeline(pd, error);
+  if (!glassRgb_) return false;
+  pd.alphaWrite = true;
   pd.cull = gfx::Cull::Back;
   pd.depthWrite = true;
   pd.name = "models, a ball of fire";  // (seen from outside only, and it hides what burns inside it)
   dome_ = device_->CreatePipeline(pd, error);
   if (!dome_) return false;
+  pd.name = "models, a ball of fire, colour alone";
+  pd.alphaWrite = false;
+  domeRgb_ = device_->CreatePipeline(pd, error);
+  if (!domeRgb_) return false;
+  pd.alphaWrite = true;
   pd.name = "models, adding their light";  // (a shield's flash where it is hit)
   pd.cull = gfx::Cull::None;
   pd.depthWrite = false;
@@ -1095,10 +1106,12 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     const bool laid = prepass && !depthOnly && early;  // (its depth laid in the round before)
     const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
                        : laid ? (lod->leaves ? 9 : 8)
-                       : shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
+                       : shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
+                       : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ : wanted == 6 ? prepass_ : wanted == 5 ? adding_ :
-                           wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
+      device_->SetPipeline(wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
+                           wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
+                           wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
@@ -1127,6 +1140,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
     kind[20] = lod->scrolling ? 1.0f : 0.0f;
+    kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

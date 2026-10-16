@@ -503,6 +503,11 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     std::string kind = Lower(lod.shaderName);
     const bool solidScenery = kind == "tmeshnonormals";  // rocks, logs, debris
     lod.noShadow = kind.find("noshadow") != std::string::npos;
+    {  // (the names as the first game's are turned into today's below; both spellings here)
+      static const char* const kRgbOnly[] = {"glassalpha", "uefbuildcube", "cloud", "tmeshcloud", "outercloud", "tmeshoutercloud", "explosion",
+                                             "tmeshexplosion", "effect", "tmeshadd", "nukeuef", "shieldseraphim"};
+      for (const char* name : kRgbOnly) lod.rgbOnly = lod.rgbOnly || kind == name;
+    }
     {
       static const char* const kOld[][2] = {
           {"tmeshnolighting", "flat"}, {"tmeshnonormals", "vertexnormal"}, {"tmeshalpha", "normalmappedalpha"},
