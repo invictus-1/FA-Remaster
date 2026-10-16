@@ -119,6 +119,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height)));
       });
     if (map.water.present) decals.SetWater(terrain.WaterMap(), terrain.WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
+    decals.waterLevel = map.water.present ? map.water.elevation : -1e9f;
+    decals.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     if (options.mapDecals != "off") {
       int laid = 0;
@@ -614,6 +616,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     }
     const float perUnit = static_cast<float>(std::max(screenHeight_, 1)) / (2 * std::tan(camera.fovY * 0.5f));  // pixels a world unit takes at distance 1
     for (const Decals::Deposit& d : decals.Deposits()) {
+      if (OutsidePlayable(d.position.x, d.position.z)) continue;  // (in the dark beyond the part that can be played)
       const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
       const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
       icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((away - full * 0.8f) / (full * 0.2f), 0, 1));
@@ -949,7 +952,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // going down, a walker toppling. Drawn as the simulation moves and poses it, without anything
       // that belongs to a live unit (symbol, bars, lamps, wake; it cannot be pointed at).
       const std::string& dying = (*frame.blueprints)[u.blueprint];
-      const Model* body = u.Seen() && !dying.empty()
+      const Model* body = u.Seen() && !dying.empty() && !OutsidePlayable(u.position[0], u.position[2])
                               ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(dying); })
                               : nullptr;
       if (body && body->ok) {
@@ -999,6 +1002,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
     }
     if (!u.Seen() && !blip && !remembered) continue;
+    if (OutsidePlayable(position.x, position.z)) continue;  // (beyond the part of the map that can be played now)
     if (!blueprint.empty()) {  // its strategic icon, when it is far enough away
       if (u.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[u.blueprint];
@@ -1008,7 +1012,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const Model* bracketed = (isSelected || u.id == hover) && !blip
                                    ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); })
                                    : nullptr;
-      if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
+      if (!selectionMarks) {
+        // (none: a cinematic's)
+      } else if (isSelected && haveBrackets_) {  // the original's brackets about it, turned as the unit is
         AddBrackets(0, position, orientation, *kind, bracketed);
       } else if (isSelected) {  // (the game's pictures are not there: a ring)
         const Vec3 forward = Rotate(orientation, {0, 0, 1});
@@ -1176,7 +1182,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       continue;
     }
     const std::string& blueprint = (*frame.blueprints)[r.blueprint];
-    if (!blueprint.empty()) {
+    if (!blueprint.empty() && !OutsidePlayable(r.position.x, r.position.z)) {
       if (r.blueprint >= iconKinds_.size()) iconKinds_.resize(frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = iconKinds_[r.blueprint];
       if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
@@ -1422,6 +1428,14 @@ void World::Render() {
     } else {
       water.Draw(view);
     }
+    // the campaign's objective areas over the water: on its surface (Decals::AddWater)
+    if (decals.AnyWater() && map.water.present && hide.find("decals") == std::string::npos) {
+      post.BeginColorOnly();
+      lights.Bind();
+      decals.Draw(view, camera, post.Depth(), clock_, true);
+      post.ContinueScene();
+      lights.Bind();
+    }
     if (ranges.Any() && map.water.present) {
       post.BeginColorOnly();
       ranges.Lay(view, camera, post.Depth(), true);
@@ -1466,6 +1480,10 @@ void World::Render() {
     sight.neverSeen = unexplored ? 0.04f : sight.darkness;
     sight.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
+  }
+  if (haveMap_ && playable[2] > playable[0]) {  // what lies beyond the part of the map that can be played now
+    post.BeginColorOnly();
+    sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
   }
   Stage("finishing (exposure, bloom)");
   post.Present(view, &upscaler, screenWidth_, screenHeight_);

@@ -178,6 +178,9 @@ void SimFrames::Beat(const moho::Sim& sim) {
   for (moho::EffectEvent& v : e.effects) {
     FrameEffectEvent f;
     if (focusNow > 0 && v.kind == moho::EffectEvent::Create) f.seen = (moho::ReconAt(sim, focusNow, v.position) & moho::kReconSeenNow) != 0;
+    // (a mark on the ground laid for the army the picture is for is its own: shown where it does not see,
+    // as the campaign's objective areas are, made for army 1 anywhere on the map)
+    if (focusNow > 0 && v.army == focusNow && (v.name == "CreateDecal" || v.name == "CreateSplat")) f.seen = true;
     f.kind = v.kind == moho::EffectEvent::Create ? FrameEffectEvent::Create
              : v.kind == moho::EffectEvent::Call ? FrameEffectEvent::Call : FrameEffectEvent::Destroy;
     f.tick = sim.tick();
@@ -336,6 +339,12 @@ void SimFrames::Beat(const moho::Sim& sim) {
     const int stance = static_cast<size_t>(army - 1) < towards.size() ? towards[static_cast<size_t>(army - 1)] : 0;
     return (stance == 2 ? allies : stance == 1 ? neutrals : enemies) == 2;
   };
+  // (and 'Always': seen whatever the army knows, as an objective's arrow over a unit in the fog of war)
+  auto always = [&](int army, uint8_t own, uint8_t allies, uint8_t enemies, uint8_t neutrals) {
+    if (focus <= 0 || army <= 0 || army == focus) return own == 1;
+    const int stance = static_cast<size_t>(army - 1) < towards.size() ? towards[static_cast<size_t>(army - 1)] : 0;
+    return (stance == 2 ? allies : stance == 1 ? neutrals : enemies) == 1;
+  };
   beat.projectiles.reserve(e.projectiles.size());
   for (const moho::ProjectileView& v : e.projectiles) {
     FrameProjectile p;
@@ -380,7 +389,9 @@ void SimFrames::Beat(const moho::Sim& sim) {
     f.shield = v.shield;
     // (for the army the picture is for: where it sees. The script's own say on who sees it,
     // SetVizTo..., is 'Intel' for whoever is not its owner's side, which comes to the same; 'Never' is kept)
-    if (focus > 0) f.seen = (moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0 && !never(v.army, v.vizFocus, v.vizAllies, v.vizEnemies, v.vizNeutrals);
+    if (focus > 0)
+      f.seen = always(v.army, v.vizFocus, v.vizAllies, v.vizEnemies, v.vizNeutrals) ||
+               ((moho::ReconOf(sim, focus, v.id) & moho::kReconSeenNow) != 0 && !never(v.army, v.vizFocus, v.vizAllies, v.vizEnemies, v.vizNeutrals));
     beat.entities.push_back(f);
   }
   // how the scenery changed (the engine's list is emptied by taking it, which is why the simulation is not const here)
@@ -458,6 +469,30 @@ uint32_t SimFrames::FirstTick() const {
 uint32_t SimFrames::LastTick() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return beats_.empty() ? 0 : beats_.back().tick;
+}
+
+bool SimFrames::UnitAt(double tick, uint32_t id, float position[3], float orientation[4]) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (beats_.empty()) return false;
+  tick = std::clamp(tick, static_cast<double>(beats_.front().tick), static_cast<double>(beats_.back().tick));
+  size_t i = 0;
+  while (i + 1 < beats_.size() && static_cast<double>(beats_[i + 1].tick) <= tick) ++i;
+  const Beat_& a = beats_[i];
+  const Beat_* b = i + 1 < beats_.size() ? &beats_[i + 1] : nullptr;
+  const float t = b ? static_cast<float>((tick - a.tick) / static_cast<double>(b->tick - a.tick)) : 0;
+  // (a beat's units are in the order of their ids, as BlendUnits walks them)
+  auto find = [id](const std::vector<FrameUnit>& units) -> const FrameUnit* {
+    auto it = std::lower_bound(units.begin(), units.end(), id, [](const FrameUnit& u, uint32_t want) { return u.id < want; });
+    return it != units.end() && it->id == id ? &*it : nullptr;
+  };
+  const FrameUnit* u = find(a.units);
+  if (!u) return false;
+  std::vector<FrameUnit> blended;
+  const FrameUnit* v = b && t > 0 ? find(b->units) : nullptr;
+  BlendUnits(u, 1, v, v ? 1 : 0, t, &blended, 0);  // (the same blend as the frame's)
+  std::memcpy(position, blended[0].position, sizeof blended[0].position);
+  std::memcpy(orientation, blended[0].orientation, sizeof blended[0].orientation);
+  return true;
 }
 
 bool SimFrames::FrameAt(double tick, Frame* out) {

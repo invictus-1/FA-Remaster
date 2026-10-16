@@ -502,6 +502,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     // original program's own table, docs/engine-answers.md, render 17; no name at all is "Unit")
     std::string kind = Lower(lod.shaderName);
     const bool solidScenery = kind == "tmeshnonormals";  // rocks, logs, debris
+    lod.noShadow = kind.find("noshadow") != std::string::npos;
     {
       static const char* const kOld[][2] = {
           {"tmeshnolighting", "flat"}, {"tmeshnonormals", "vertexnormal"}, {"tmeshalpha", "normalmappedalpha"},

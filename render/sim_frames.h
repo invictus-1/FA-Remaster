@@ -49,6 +49,9 @@ class SimFrames {
   // The frame at a moment given in ticks, blended between the two beats around it (clamped to the
   // beats kept). False while there is no beat yet.
   bool FrameAt(double tick, Frame* out);
+  // One unit's place and turn at that moment, blended as FrameAt blends it (orientation x, y, z, w).
+  // False when the beat there does not have it.
+  bool UnitAt(double tick, uint32_t id, float position[3], float orientation[4]) const;
   // The effect events of the beats since the last call, in order (each says its beat).
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   // How the scenery changed in the beats since the last call, in order (each says its beat).

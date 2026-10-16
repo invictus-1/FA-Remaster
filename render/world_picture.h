@@ -161,6 +161,21 @@ class WorldPicture {
   // the armies' own: the game's "team colour" button (TeamColorMode). Only the icons change (the minimap's
   // too); the models keep their army's colour; a blip not yet known stays grey. Empty: the armies' own.
   void SetIconColors(const std::vector<uint32_t>& argbByArmy);
+  // The part of the map that can be played now (the campaign's: ScenarioFramework.SetPlayableArea, the
+  // user side's SyncPlayableRect), in world units, x0 < x1 and z0 < z1; the whole map at first, and
+  // again when x1 <= x0. Outside it nothing of the game is shown: no unit, no strategic icon, no bar,
+  // and UnitAt / UnitsIn do not find them there. The picture there is black, as the original's (its
+  // boundary pass blackens everything that lies there: ground, water, units); in the modern look with
+  // the world beyond the map's edge (World::worldBeyond, the "no machinery" choice) it is dimmed instead,
+  // behind a thin dark line along the edge. The minimap shows this part alone (see DrawMinimap).
+  void SetPlayableRect(float x0, float z0, float x1, float z1);
+  // The cinematics' and the score screen's switches (gamemain.lua, NIS mode), each on at first:
+  // the strategic icons (UI_NisRenderIcons; the minimap keeps its own), the selection's and the
+  // mouse's brackets (ren_SelectBoxes), and the world itself (ren_Oblivion: off = Draw and
+  // DrawToWindow show black under the interface; the game goes on underneath, its effects too).
+  void SetStrategicIcons(bool on);
+  void SetSelectionMarks(bool on);
+  void SetWorldShown(bool on);
   // Lines between places of the world and rings lying on the ground (the lines of a unit's orders,
   // ranges). Colours are 0xAARRGGBB; lines are hidden by what is in front of them. A line's width
   // is in pixels on the screen, the same from near and from far (1: a hairline, as before).
@@ -222,7 +237,9 @@ class WorldPicture {
 
   // --- the minimap: the whole map from straight above with every unit's strategic icon ---
   // `width` x `height` pixels as Draw gives them. The map's whole height fills the picture's height;
-  // give a width in the map's proportion (MapSize) and the map fills it exactly. The ground is drawn
+  // give a width in the map's proportion (MapSize) and the map fills it exactly. With a playable
+  // part set (SetPlayableRect) the same for that part: its height fills the picture's, give a width
+  // in its proportion. The ground is drawn
   // by the graphics card once per size and kept; the icons are laid on it on the processor at
   // every call, from the units of the last Draw (selected ones in their selected form).
   const std::vector<uint32_t>& DrawMinimap(int width, int height);
@@ -238,6 +255,13 @@ class WorldPicture {
   bool Project(Vec3 world, float* x, float* y) const;
   // The place on the ground (or the water's surface) under a point of the picture.
   bool GroundAt(float x, float y, Vec3* hit) const;
+  // Where a unit will be drawn by the Draw, DrawToWindow or LifeBarAnchors given the same `tick`: its
+  // place (world units) and its turn as a quaternion x, y, z, w (y up; turned by it, the unit's +z is
+  // where it faces), blended between the beats as the picture blends them, not the beat's own. For a
+  // camera that follows a unit (a cinematic's TrackEntities, NoseCam): ask first, then draw with the
+  // camera made from it. False when there is no such unit at that moment (gone, or not yet there).
+  // It does not say whether the army the picture is for sees the unit.
+  bool UnitTransform(uint32_t id, double tick, float position[3], float orientation[4]) const;
   // The entity id of the unit under a point of the picture; 0xffffffff: none.
   uint32_t UnitAt(float x, float y) const;
   // The units whose middle lies in a rectangle of the picture.

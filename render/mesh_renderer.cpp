@@ -954,6 +954,7 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (lod->hidden || lod->glass != glass) return;
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) return;
+    if (shadowPass && lod->noShadow) return;  // (a shader of the original's that casts none)
     // (near: so large on screen that its leaves and parts lie over each other on many pixels)
     out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f, pixels >= kPrepassPixels});
   }

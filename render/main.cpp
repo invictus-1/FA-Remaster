@@ -127,6 +127,9 @@
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
 //           only as it knows them (seen, a blip on radar, or not at all)
+// --playable x0,z0,x1,z1  only that part of the map can be played (World::playable, the campaign's
+//           SetPlayableArea): outside it black (the original's), or dimmed in the modern look with the world
+//           beyond the map's edge; nothing of the game shown there
 // --ranges  test range rings round where the camera starts: a red group that glows (three rings that join, one
 //           of them with a hole, and one apart) and a blue one
 // --unexplored  with --focus: ground that army has never seen is all but black (the game's option
@@ -251,6 +254,7 @@ struct Options {
   float clouds = 0.3f;                  // --clouds
   float mist = -1;                      // --mist
   int focus = 0;                        // --focus
+  float playable[4] = {0, 0, 0, 0};     // --playable
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
   bool shielded = false;                // --shielded
@@ -468,7 +472,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
     else if (a == "--pitch") o->pitch = static_cast<float>(atof(v));
-    else if (a == "--at") {
+    else if (a == "--playable") {
+      if (sscanf(v, "%f,%f,%f,%f", &o->playable[0], &o->playable[1], &o->playable[2], &o->playable[3]) != 4) return false;
+    } else if (a == "--at") {
       if (sscanf(v, "%f,%f", &o->at[0], &o->at[1]) != 2) return false;
       o->hasAt = true;
     }
@@ -714,6 +720,7 @@ int main(int argc, char** argv) {
     if (opt.inspect == kInspect[i]) world.inspect = i;
   if (!opt.inspect.empty() && !world.inspect) fprintf(stderr, "render: --inspect %s: expected albedo, normals, roughness, metal, occlusion, shadow or lights\n", opt.inspect.c_str());
   world.iconsOn = opt.icons;
+  std::copy(opt.playable, opt.playable + 4, world.playable);
   world.sun = opt.sun;
   world.sky = opt.sky;
   world.exposure = opt.exposure;
@@ -1337,6 +1344,7 @@ int main(int argc, char** argv) {
         picture.SetSelection(ids);
         picture.SetLifeBars(true);  // (and their anchors, for the custom names)
         picture.SetIconColors({0xffff00ffu, 0xff00ffffu});  // (the team colour button: the first two armies' icons magenta and cyan)
+        if (opt.playable[2] > opt.playable[0]) picture.SetPlayableRect(opt.playable[0], opt.playable[1], opt.playable[2], opt.playable[3]);
         // and marks as under the mouse: the first three units not selected, one of each kind in turn
         if (!frame.units.empty()) {
           const size_t which = 1 + 3 * ((frameCount / 2) % 3);
@@ -1402,6 +1410,10 @@ int main(int argc, char** argv) {
       {  // the minimap, in the map's proportion
         float mw, mh;
         picture.MapSize(&mw, &mh);
+        if (opt.playable[2] > opt.playable[0]) {  // (--playable: that part's proportion)
+          mw = opt.playable[2] - opt.playable[0];
+          mh = opt.playable[3] - opt.playable[1];
+        }
         const int mapH = 400, mapW = mh > 0 ? static_cast<int>(400 * mw / mh) : 400;
         // (the ground under the picture's middle must be the same place before and after the minimap's
         // first drawing of a size: that pass has a camera of its own, which must not stay)
@@ -1443,7 +1455,49 @@ int main(int argc, char** argv) {
         printf("render: --picture: unit %x at %.1f %.1f %.1f -> pixel %.0f %.0f; the ground there %.1f %.1f %.1f%s; the unit there %x%s\n", u.id,
                u.position[0], u.position[1], u.position[2], x, y, ground.x, ground.y, ground.z, hit ? "" : " (none)", under,
                under == u.id ? " (itself)" : "");
+        if (shown == 0) {  // (and where the picture would draw it at this moment, for a camera that follows it)
+          float p[3], q[4];
+          if (picture.UnitTransform(u.id, playTick + 1, p, q))
+            printf("render: --picture: unit %x as drawn now: %.2f %.2f %.2f, turned %.3f %.3f %.3f %.3f (x y z w); %.2f from the viewer's own frame\n", u.id, p[0], p[1], p[2],
+                   q[0], q[1], q[2], q[3], Length(Vec3{p[0], p[1], p[2]} - Vec3{u.position[0], u.position[1], u.position[2]}));
+          else
+            printf("render: --picture: unit %x: UnitTransform has it not (FAILED)\n", u.id);
+        }
         if (++shown == 6) break;
+      }
+      {  // the campaign's: the world off (black under the interface), a playable part that leaves a unit
+         // outside (then not found at its pixel), and a cinematic's icons and selection marks off
+        picture.SetWorldShown(false);
+        const std::vector<uint32_t>& dark = picture.Draw(camera, w, h, playTick + 1);
+        size_t lit = 0;
+        for (uint32_t p : dark) lit += (p & 0x00ffffffu) != 0;
+        picture.SetWorldShown(true);
+        printf("render: --picture: the world off: %zu of %zu pixels not black%s\n", lit, dark.size(), lit ? " (NOT black)" : "");
+        float mw, mh;
+        picture.MapSize(&mw, &mh);
+        picture.Draw(camera, w, h, playTick + 1);
+        for (const FrameUnit& u : frame.units) {
+          float x, y;
+          if (u.dead || !picture.Project({u.position[0], u.position[1], u.position[2]}, &x, &y) || x < 0 || y < 0 || x >= static_cast<float>(w) ||
+              y >= static_cast<float>(h) || picture.UnitAt(x, y) != u.id)
+            continue;
+          const bool west = u.position[0] > mw * 0.5f;  // (the half of the map it is not in)
+          picture.SetPlayableRect(west ? 0 : mw * 0.5f, 0, west ? mw * 0.5f : mw, mh);
+          picture.Draw(camera, w, h, playTick + 1);
+          const uint32_t outside = picture.UnitAt(x, y);
+          picture.SetPlayableRect(0, 0, 0, 0);
+          picture.Draw(camera, w, h, playTick + 1);
+          const uint32_t again = picture.UnitAt(x, y);
+          printf("render: --picture: unit %x outside a playable half: the unit there %x%s; the whole map again: %x%s\n", u.id, outside,
+                 outside == 0xffffffffu ? " (none, right)" : " (WRONG)", again, again == u.id ? " (itself)" : " (WRONG)");
+          break;
+        }
+        picture.SetStrategicIcons(false);
+        picture.SetSelectionMarks(false);
+        picture.Draw(camera, w, h, playTick + 1);
+        picture.SetStrategicIcons(true);
+        picture.SetSelectionMarks(true);
+        printf("render: --picture: icons and selection marks off, then on again: drawn\n");
       }
       break;
     }

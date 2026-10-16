@@ -110,6 +110,8 @@ class Effects {
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;
   std::unordered_map<uint32_t, Effect> effects_;
+  // the decals a script laid for good, by the effect's number: taken away when it destroys them
+  std::unordered_map<uint32_t, uint32_t> decalOf_;
   std::unordered_map<std::string, int> said_;
   std::unordered_map<uint32_t, int> hanging_;  // entity -> how many effects hang on it
   // this frame: what the glowing things on each shot come to (the shot's place in the frame's list ->

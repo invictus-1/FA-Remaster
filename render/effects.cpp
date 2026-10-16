@@ -151,6 +151,11 @@ const std::string& Effects::ArmyFaction(const Frame& frame, int army) {
 }
 
 void Effects::End(uint32_t id) {
+  if (auto d = decalOf_.find(id); d != decalOf_.end()) {  // a mark on the ground (DecalHandle:Destroy)
+    decals_->Remove(d->second);
+    decalOf_.erase(d);
+    return;
+  }
   auto it = effects_.find(id);
   if (it == effects_.end()) return;
   const Effect& e = it->second;
@@ -299,10 +304,16 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     // second texture, which is the usual: seen so in games)
     std::string kind = event.text2.empty() ? event.text : event.text2;
     for (char& c : kind) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return;
+    // (one laid for good is remembered, for the script to take away: DecalHandle:Destroy)
+    auto keep = [&]() {
+      if (n[4] <= 0) decalOf_[event.id] = decals_->LastAdded();
+    };
+    if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
+    // the campaign's objective areas ("Water Albedo": unlit, and over water on its surface)
+    if (n.size() >= 5 && kind == "water albedo" && decals_->AddWater(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
     // the ground's shape under it: a crater's dent, the joints of a building's tarmac ("Normals",
     // "Alpha Normals": both drawn as the map's own normal decals are)
-    if (n.size() >= 5 && kind.find("normals") != std::string::npos && decals_->AddNormal(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return;
+    if (n.size() >= 5 && kind.find("normals") != std::string::npos && decals_->AddNormal(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
     missed();
     return;
   } else if (f == "CreateSplatOnBone") {
