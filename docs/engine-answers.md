@@ -3,6 +3,48 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## visuals 28: where the 13 replays show UEF units moving and building
+
+Read from our recordings of the 13 replays (every unit named; all on Seton's, SCMP_009). Positions are world
+(x, z); ids are the recordings' hex ids, army = id >> 20. Height is above terrain or water (water at 17.5).
+Our replays match the original over every tick of AIR, LAND, Naval, Transports, Engineers, Missiles and the
+eight-army game, Upgrades through 9014 (the original's recording ends there), Economy through about 3078 and
+the Skirmish through about 900; later ticks show only what our engine does.
+
+- **Fatboy (UEL0401) moving: in no replay.** Only Experimental has Fatboys and neither moves: `7` (army 0)
+  stands at (825, 340) for ticks 237-936 and fires at 257-330; `100003` stands at (844, 381) and dies near 334.
+  Good for the model and its guns, not for its dust.
+- **Riptides (UEL0203), land and water: Naval.** Nine of army 0 (`54`-`5c`) move as one group, 0.1 above the
+  water. `54`: water 233-261 (511, 467) -> (518, 475); ashore 262; land 262-420 -> (553, 515); back on water
+  421; water 421-747 out to (588, 550) at 575 and back; ashore 748 at (545, 523); land 748-900 -> (498, 493);
+  water 901-971 -> (479, 480). The other eight cross within 30 ticks of `54`, at the same places. LAND has
+  Riptides on land only: `e` 902-1033 (291, 722) -> (269, 711), 1064-1234 -> (299, 686), 1450-1600 (303, 702)
+  -> (319, 680); `f` 1490-1625 (284, 709) -> (306, 680).
+- **Transports and gunships low, hovering, landing.** Transports: UEA0107 `1` lands at (656, 329) at 78-109,
+  loads six UEL0201 there at 442-499 (rising to about 4 above ground), flies south 501-747, hovers 3.6-8 above
+  ground at (641.4, 78.8) at 748-787 while the tanks drop, lands 788-807. UEA0104 `3` lands at (671, 341) at
+  83-127, loads 589-657, takes off 669, hovers 5.6-9.5 above ground at (636.0, 424.9) at 756-773 (five units
+  drop), lands at (636, 413) at 780-823. UEA0107 `2` (ferry) hops and lands at 1271-1328 and 1373-1421, loads
+  1450-1557, unloads near (680-689, 364) at 1635-1714, lands at (680.4, 326.0) at 1855-1905. AIR: four
+  UEA0107 land together at 153-185 (`1` (666, 306), `2` (682, 307), `100000` (648, 327), `100001`
+  (659.5, 317)); gunships UEA0203 drift and turn slowly 8-12 above ground under attack orders (`c` 136-230,
+  `10000a` 136-248); `c` then hovers 10 above ground at (691.4, 348.4) at 380-420, comes down 421-437 and
+  stays landed from 438; gunships shot down: `b` 173-191, `10000b` 174-194, `10000a` 249-267.
+- **UEF builders.** No replay has the stock UEL0001: every UEF commander is the modded EEL0001. Best scenes:
+  Transports, factory UEB0201 `7` at (690.5, 329.5) builds 15 UEL0201 back to back at 195-1561 (about 60
+  ticks each) with commander `0` assisting; Economy, T3 engineers UEL0309 `3` and `4` build UEB0101 at
+  (655.5, 336.5) at 489-582 and UEB0102 at (654.5, 323.5) at 518-809, SACU UEL0301_RAS `a` builds storages
+  and fabricators at (667.5, 353.5) at 959-1790; Upgrades, commander `0` builds UEB0101 at (681.5, 340.5) at
+  537-837 then UEB0102 at (671.5, 340.5) at 839-1139, SACU `2` the naval factory at (623, 263) at 1114-1169,
+  SACU `7` a shield UEB4202 at (666.5, 350.5) at 3213-3696, factory upgrades T1 -> T2 from 7647 / 8299 / 8736;
+  Engineers, UEB0201 `9` at (759.5, 238.5) builds four bots at 3099-3439 with three UEL0309 assisting, and
+  the same engineers repair at 1853-2270 and 2791-3017; Missiles, 16 SACUs and 7 drones assist the anti-nuke
+  UEB4302 at (375, 618) at 440-6647 (many beams at once). T1 engineers UEL0105: Skirmish, `400002` and
+  `400006` build a hydrocarbon plant at (694, 176) at 559-808 (commander `400000` assists from 717), then a
+  power generator at (686, 172) at 812-858; the eight-army game, engineer `8` builds a mass extractor at
+  (668, 358) at 630-699 and factory UEB0101 at (680.5, 340.5) builds UEL0105s from 256.
+- UEL0208 builds only in the Skirmish, from 2386 (after its matching range).
+
 ## ui 19 (2), corrected: a Reclaim order without a live entity does nothing (engine 1dded52)
 
 The original's IssueReclaimTask 0x61ef60 makes no task when the order's target has no live entity
