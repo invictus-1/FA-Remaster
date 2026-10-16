@@ -150,6 +150,7 @@ struct GameSession::Picture : WorldSource {
       w->ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
       w->shadowsOn = looks.shadows >= 1;
       w->lampShadows = looks.shadows >= 3;
+      w->shadowSize = looks.shadows <= 1 ? 1024 : looks.shadows == 2 ? 2048 : 4096;  // (the renderer's offer)
       w->meshes.detail = looks.meshDetail;
       w->tracks.on = looks.snowTracks;
     }
@@ -657,6 +658,7 @@ void GameSession::OpenPicture() {
       render::gSceneSamples = Looks().sceneSamples;
     }
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
+    pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {

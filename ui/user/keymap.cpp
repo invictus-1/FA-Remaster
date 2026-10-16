@@ -340,10 +340,11 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "verticalSync");
   lua_pushboolean(L, Pacing().verticalSync);
   lua_rawset(L, -3);
-  const char* gfx[4] = {"fidelity", "shadows", "sceneSamples", "meshDetail"};
-  const double gfxValues[4] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
-                               static_cast<double>(looks.sceneSamples), looks.meshDetail};
-  for (int i = 0; i < 4; ++i) {
+  const char* gfx[5] = {"fidelity", "shadows", "sceneSamples", "meshDetail", "textureDetail"};
+  const double gfxValues[5] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
+                               static_cast<double>(looks.sceneSamples), looks.meshDetail,
+                               static_cast<double>(looks.textureDetail)};
+  for (int i = 0; i < 5; ++i) {
     lua_pushstring(L, gfx[i]);
     lua_pushnumber(L, gfxValues[i]);
     lua_rawset(L, -3);
@@ -628,6 +629,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "SC_CAMERASCALELOD") {
       const double lod = std::atof(value.c_str());
       if (!value.empty()) looks.meshDetail = lod < 0.5 ? 0.5f : lod < 1.5 ? 0.75f : 1.0f;
+      return;
+    }
+    if (key == "REN_MIPSKIPLEVELS") {  // the game's Texture Detail
+      if (!value.empty()) looks.textureDetail = std::max(0, std::min(2, std::atoi(value.c_str())));
       return;
     }
     if (key == "REMASTER_GRAPHICS_API") {  // d3d12 | vulkan
