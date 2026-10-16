@@ -58,6 +58,11 @@ class WorldPicture {
   // read back and the window is not to be drawn into by the host otherwise. Draw is then not to be
   // used; DrawMinimap still is (its ground is drawn without being shown).
   void UseWindow(void* hwnd);
+  // The same for a host on another system (Vulkan; written to the specification, untried: there is no
+  // such system here): its window as its window system has it, `system` as gfx::DeviceDesc::WindowSystem
+  // (1 Xlib: `window` the X11 Window id, `display` the Display*; 2 Wayland: the wl_surface* and the
+  // wl_display*; 3 Metal: a macOS view's CAMetalLayer*, no display), at `width` x `height` pixels.
+  void UseNativeWindow(int system, void* window, void* display, int width, int height);
   // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
   void SetVulkan(bool on);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels

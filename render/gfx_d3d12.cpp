@@ -13,6 +13,8 @@
 //    the GPU each time (load time only).
 #include "gfx.h"
 
+#if defined(_WIN32)  // (the whole file: Direct3D 12 is Windows' alone)
+
 #include <windows.h>
 
 #include <d3d12.h>
@@ -27,19 +29,7 @@
 
 namespace render::gfx {
 
-bool IsBlockCompressed(Format f) { return f >= Format::BC1 && f <= Format::BC7; }
-
-int BytesPerPixelOrBlock(Format f) {
-  switch (f) {
-    case Format::R8: case Format::A8: return 1;
-    case Format::RG8: case Format::R16: case Format::R16F: return 2;
-    case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::R32F: case Format::D32: return 4;
-    case Format::RGBA16F: return 8;
-    case Format::BC1: case Format::BC1_sRGB: case Format::BC4: return 8;
-    case Format::BC2: case Format::BC2_sRGB: case Format::BC3: case Format::BC3_sRGB: case Format::BC5: case Format::BC7: return 16;
-    default: return 0;
-  }
-}
+// (IsBlockCompressed, BytesPerPixelOrBlock and Device::Create: gfx.cpp)
 
 namespace {
 
@@ -1499,13 +1489,12 @@ void D3D12Device::TakeTimes(std::vector<std::pair<const char*, double>>* out) { 
 
 }  // namespace
 
-std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* error);  // gfx_vulkan.cpp
-
-std::unique_ptr<Device> Device::Create(const DeviceDesc& desc, std::string* error) {
-  if (desc.backend == DeviceDesc::Backend::Vulkan) return CreateVulkanDevice(desc, error);
+std::unique_ptr<Device> CreateD3D12Device(const DeviceDesc& desc, std::string* error) {
   auto d = std::make_unique<D3D12Device>();
   if (!d->Init(desc, error)) return nullptr;
   return d;
 }
 
 }  // namespace render::gfx
+
+#endif  // _WIN32

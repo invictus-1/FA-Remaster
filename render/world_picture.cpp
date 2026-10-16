@@ -11,6 +11,7 @@
 #include "window.h"
 #include "world.h"
 
+#if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -18,6 +19,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#endif
 
 namespace render {
 
@@ -25,6 +27,11 @@ struct WorldPicture::Impl {
   const moho::Vfs* vfs = nullptr;
   std::unique_ptr<Window> window;
   void* hostWindow = nullptr;          // UseWindow: the host's own (the picture is shown there)
+  // UseNativeWindow (other systems): its window system (-1: the system's own, as UseWindow), its
+  // display, and its size
+  int hostSystem = -1;
+  void* hostDisplay = nullptr;
+  int hostWidth = 0, hostHeight = 0;
   std::unique_ptr<gfx::Device> device;
   // the host's interface over the world (SetInterfaceLayer)
   gfx::Texture layer;
@@ -79,16 +86,30 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   dd.vsync = false;
   if (m.hostWindow) {  // (the host's window: the picture is shown there, at its size)
     dd.window = m.hostWindow;
+    dd.display = m.hostDisplay;
+    if (m.hostSystem >= 0) dd.windowSystem = static_cast<gfx::DeviceDesc::WindowSystem>(m.hostSystem);
+#if defined(_WIN32)
     RECT r{};
-    if (GetClientRect(static_cast<HWND>(m.hostWindow), &r) && r.right > r.left && r.bottom > r.top) {
+    if (m.hostSystem < 0 && GetClientRect(static_cast<HWND>(m.hostWindow), &r) && r.right > r.left && r.bottom > r.top) {
       dd.width = r.right - r.left;
       dd.height = r.bottom - r.top;
     }
+#endif
+    if (m.hostWidth > 0 && m.hostHeight > 0) {
+      dd.width = m.hostWidth;
+      dd.height = m.hostHeight;
+    }
     dd.vsync = m.vsync;
   } else {
+#if defined(_WIN32)
     m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
     if (!m.window) return false;
     dd.window = m.window->Handle();
+#else
+    // (an invisible window of its own is Windows' alone so far)
+    *error = "the world picture needs the host's window on this system (UseNativeWindow)";
+    return false;
+#endif
   }
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
@@ -143,6 +164,14 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
 }
 
 void WorldPicture::UseWindow(void* hwnd) { impl_->hostWindow = hwnd; }
+
+void WorldPicture::UseNativeWindow(int system, void* window, void* display, int width, int height) {
+  impl_->hostWindow = window;
+  impl_->hostSystem = system;
+  impl_->hostDisplay = display;
+  impl_->hostWidth = width;
+  impl_->hostHeight = height;
+}
 
 void WorldPicture::SetVsync(bool on) {
   impl_->vsync = on;
