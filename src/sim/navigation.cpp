@@ -12,47 +12,50 @@
 
 namespace moho {
 
+// STIMap::OCCUPY_MobileCheck 0x564ab0 for the footprint with its origin cell at (x, z): the layers the terrain
+// allows there (structures not counted). PathGrid keeps it for every cell.
+static uint8_t MobileCheckCaps(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, int x, int z) {
+  const int w = map.width(), h = map.height();
+  const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
+  if (x < 0 || z < 0 || x + sx > w - 1 || z + sz > h - 1) return 0;
+  const float water = map.hasWater ? map.waterElevation : -10000.0f;
+  float lo = 1e30f, hi = -1e30f;
+  for (int cz = z; cz <= z + sz; ++cz)
+    for (int cx = x; cx <= x + sx; ++cx) {
+      float v = map.HeightAt(cx, cz);
+      lo = std::min(lo, v);
+      hi = std::max(hi, v);
+      if (blocking && blocking[map.TerrainType(cx, cz)]) return 0;
+    }
+  uint8_t caps = fp.caps;
+  if (water - hi < fp.minWaterDepth) caps &= 0xf1;  // too shallow somewhere: no seabed/sub/water
+  if (water - lo > fp.maxWaterDepth) caps &= 0xfc;  // too deep somewhere: no land/seabed
+  if ((caps & 3) && fp.maxSlope != 0.0f) {
+    float step = 0;
+    for (int cz = z; cz <= z + sz; ++cz)
+      for (int cx = x; cx < x + sx; ++cx)
+        step = std::max(step, std::fabs(map.HeightAt(cx + 1, cz) - map.HeightAt(cx, cz)));
+    for (int cx = x; cx <= x + sx; ++cx)
+      for (int cz = z; cz < z + sz; ++cz)
+        step = std::max(step, std::fabs(map.HeightAt(cx, cz + 1) - map.HeightAt(cx, cz)));
+    if (fp.maxSlope < step) caps &= 0xfc;
+  }
+  return caps;
+}
+
 PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking) {
   w_ = map.width();
   h_ = map.height();
   cells_.assign(static_cast<size_t>(w_) * h_, 0);
   blocked_.assign(static_cast<size_t>(w_) * h_, 0);
-  const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
-  sizeX = sx;
-  sizeZ = sz;
-  const float water = map.hasWater ? map.waterElevation : -10000.0f;
-  for (int z = 0; z < h_; ++z) {
-    for (int x = 0; x < w_; ++x) {
-      if (x + sx > w_ - 1 || z + sz > h_ - 1) continue;
-      float lo = 1e30f, hi = -1e30f;
-      bool blocked = false;
-      for (int cz = z; cz <= z + sz && !blocked; ++cz)
-        for (int cx = x; cx <= x + sx; ++cx) {
-          float v = map.HeightAt(cx, cz);
-          lo = std::min(lo, v);
-          hi = std::max(hi, v);
-          if (blocking && blocking[map.TerrainType(cx, cz)]) {
-            blocked = true;
-            break;
-          }
-        }
-      if (blocked) continue;
-      uint8_t caps = fp.caps;
-      if (water - hi < fp.minWaterDepth) caps &= 0xf1;  // too shallow somewhere: no seabed/sub/water
-      if (water - lo > fp.maxWaterDepth) caps &= 0xfc;  // too deep somewhere: no land/seabed
-      if ((caps & 3) && fp.maxSlope != 0.0f) {
-        float step = 0;
-        for (int cz = z; cz <= z + sz; ++cz)
-          for (int cx = x; cx < x + sx; ++cx)
-            step = std::max(step, std::fabs(map.HeightAt(cx + 1, cz) - map.HeightAt(cx, cz)));
-        for (int cx = x; cx <= x + sx; ++cx)
-          for (int cz = z; cz < z + sz; ++cz)
-            step = std::max(step, std::fabs(map.HeightAt(cx, cz + 1) - map.HeightAt(cx, cz)));
-        if (fp.maxSlope < step) caps &= 0xfc;
-      }
-      cells_[static_cast<size_t>(z) * w_ + x] = caps;
-    }
-  }
+  sizeX = std::max<int>(1, fp.sizeX);
+  sizeZ = std::max<int>(1, fp.sizeZ);
+  for (int z = 0; z < h_; ++z)
+    for (int x = 0; x < w_; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp, blocking, x, z);
+}
+
+uint8_t Navigation::MobileCaps(const NamedFootprint& fp, int x, int z) const {
+  return map_ ? MobileCheckCaps(*map_, fp, blocking_.data(), x, z) : 0;
 }
 
 void PathGrid::Block(int x0, int z0, int x1, int z1, int delta) {

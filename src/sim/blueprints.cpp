@@ -490,6 +490,25 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
       all_.push_back(std::move(info));
     }
   }
+  // `bpt` now holds the keys in the order the original's RULES state got them (RuleInit.lua's
+  // `__blueprints = {}`, then per registration [ordinal] and [id], func_Add__blueprints 0x529b30). The sim's
+  // __blueprints is not that table but a copy: RRuleGameRules::ExportToLuaState 0x529f70 -> SCR_Copy 0x4d26d0
+  // makes a new empty table (0x909940, sizes 0,0) and inserts the pairs in the order next() walks the rules
+  // table (array part 1..n, then the hash nodes). Built from that other key sequence the copy has another
+  // layout (ours had ordinals 1..8192 in the array part and the rest of them mixed into the hash nodes with the
+  // ids), so `for k, v in __blueprints` meets the blueprints in another order than in the table built directly.
+  // Seen (Skirmish, M28AI): M28UnitInfo's CheckBlueprintSizeSupport keeps the first blueprint of each building
+  // size met in that loop; the original's log has size 4 = bab2303, 5 = brmt3advbtbot, ours had brpt2hvbot and
+  // wel0416, so M28's buildable-location lists (and the engineer it sends at 89.9 s) differed.
+  lua_newtable(sim);
+  int copy = lua_gettop(sim);
+  lua_pushnil(sim);
+  while (lua_next(sim, bpt)) {
+    lua_pushvalue(sim, -2);
+    lua_insert(sim, -2);
+    lua_rawset(sim, copy);
+  }
+  lua_replace(sim, bpt);
   lua_rawset(sim, LUA_GLOBALSINDEX);  // __blueprints
   lua_pop(sim, 1);                    // seen
   lua_settop(rules, list - 1);        // the record list (and the sound set)

@@ -70,6 +70,8 @@ class Navigation {
   }
   const PathGrid* Grid(const NamedFootprint& fp);
   bool IsBlockingType(int code) const { return code >= 0 && code < 256 && blocking_[code]; }
+  // OCCUPY_MobileCheck 0x564ab0 at one origin cell (what Grid(fp)->Caps(x, z) holds), without making the grid.
+  uint8_t MobileCaps(const NamedFootprint& fp, int x, int z) const;
   // Waypoints from `from` to `to` (world positions; the footprint's centre). The last waypoint is
   // `to`, or the nearest reachable cell to it. Returns false when no path exists at all.
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);
