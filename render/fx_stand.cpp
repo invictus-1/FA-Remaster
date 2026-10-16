@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 
 #include "bp_reader.h"
 #include "core/log.h"
@@ -208,11 +209,11 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
   if (!setup.shield.empty()) {  // a unit's shield: what its blueprint says of it
     std::string id = setup.shield;
     for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    const std::string path = "/units/" + id + "/" + id + "_unit.bp";
-    auto text = vfs->ReadFile(moho::Vfs::Normalize(path));
+    const std::string path = FxEntities::UnitBlueprintFile(vfs, id);  // (the game's, or a mod's)
+    auto text = path.empty() ? std::optional<std::string>() : vfs->ReadFile(moho::Vfs::Normalize(path));
     BpValue bp;
     if (!text || !ReadBlueprintFile(*text, &bp)) {
-      *error = "no unit blueprint " + path;
+      *error = "no unit blueprint /units/" + id + "/" + id + "_unit.bp, nor one in a mod";
       return false;
     }
     const BpValue& shield = bp["Defense"]["Shield"];
@@ -236,8 +237,8 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
   if (!setup.death.empty()) {  // a unit to die: its blueprint must be there
     std::string id = setup.death;
     for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (!vfs->Exists(moho::Vfs::Normalize("/units/" + id + "/" + id + "_unit.bp"))) {
-      *error = "no unit blueprint /units/" + id + "/" + id + "_unit.bp";
+    if (FxEntities::UnitBlueprintFile(vfs, id).empty()) {  // (the game's, or a mod's)
+      *error = "no unit blueprint /units/" + id + "/" + id + "_unit.bp, nor one in a mod";
       return false;
     }
     setup_.death = id;
@@ -245,10 +246,10 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
   // a unit on the move, a build: their blueprints must be there; what the stand needs of them
   auto unitBlueprint = [&](std::string* id, BpValue* bp) {
     for (char& ch : *id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    const std::string path = "/units/" + *id + "/" + *id + "_unit.bp";
-    auto text = vfs->ReadFile(moho::Vfs::Normalize(path));
+    const std::string path = FxEntities::UnitBlueprintFile(vfs, *id);  // (the game's, or a mod's)
+    auto text = path.empty() ? std::optional<std::string>() : vfs->ReadFile(moho::Vfs::Normalize(path));
     if (!text || !ReadBlueprintFile(*text, bp)) {
-      *error = "no unit blueprint " + path;
+      *error = "no unit blueprint /units/" + *id + "/" + *id + "_unit.bp, nor one in a mod";
       return false;
     }
     return true;
@@ -289,7 +290,75 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
     extent_ = (setup.compare ? setup_.spacing : 0) + std::max(size(builder), size(built)) + (factory ? 2.0f : setup_.spacing * 0.5f + 2);
   }
-  if (!entity_.empty() || !shieldUnit_.empty() || !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty()) {
+  if (!setup.fire.empty()) {  // a unit to fire: its blueprint (the game's or a mod's), and what its weapons are
+    std::string id = setup.fire;
+    for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string path = FxEntities::UnitBlueprintFile(vfs, id);
+    std::optional<std::string> text;
+    if (!path.empty()) text = vfs->ReadFile(path);
+    BpValue bp;
+    if (!text || !ReadBlueprintFile(*text, &bp)) {
+      *error = "no unit blueprint /units/" + id + "/" + id + "_unit.bp, nor one in a mod";
+      return false;
+    }
+    setup_.fire = id;
+    auto lower = [](std::string s) {
+      for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      return s;
+    };
+    auto listed = [&](const std::vector<std::string>& list, const std::string& label) {
+      for (const std::string& x : list)
+        if (lower(x) == lower(label)) return true;
+      return false;
+    };
+    // the weapons that fire (as the weapons' world chooses them, fx_weapons.cpp): whether one of them cannot
+    // turn all round (then the unit faces its target), and the ranges they share
+    const bool air = bp["Physics"]["MotionType"].StringOr(std::string()).find("Air") != std::string::npos;
+    if (air) fireLift_ = std::max(static_cast<float>(bp["Physics"]["Elevation"].NumberOr(2)), 2.0f);
+    float reach = 1e9f, nearest = 0;
+    int firing = 0;
+    for (const BpValue& w : bp["Weapon"].items) {
+      const std::string label = w["Label"].StringOr(std::string());
+      const bool dummy = w["DummyWeapon"].kind == BpValue::Bool && w["DummyWeapon"].boolean;
+      const bool manualFire = w["ManualFire"].kind == BpValue::Bool && w["ManualFire"].boolean;
+      const std::string caps = w["FireTargetLayerCapsTable"][air ? "Air" : "Land"].StringOr(w["FireTargetLayerCapsTable"].IsTable() ? "" : "Land");
+      const bool death = w["WeaponCategory"].StringOr(std::string()) == "Death" || lower(label).find("death") != std::string::npos;
+      const bool noGround = w["CannotAttackGround"].kind == BpValue::Bool && w["CannotAttackGround"].boolean;
+      bool fires = listed(setup.manual, label) ||
+                   (setup.fireWeapons.empty() ? !manualFire && !death && !noGround && caps.find("Land") != std::string::npos
+                                              : listed(setup.fireWeapons, label) && !manualFire);
+      if (dummy || !fires) continue;
+      ++firing;
+      const bool turret = w["Turreted"].kind == BpValue::Bool && w["Turreted"].boolean;
+      // (a second barrel of its own - TurretDualManipulators - turns a twelfth as far; an aircraft flies at what
+      // it attacks: its guns are made for a target ahead)
+      const bool dual = w["TurretDualManipulators"].kind == BpValue::Bool && w["TurretDualManipulators"].boolean;
+      if (!turret || dual || air || w["TurretYawRange"].NumberOr(180) < 180 || w["HeadingArcRange"].NumberOr(180) < 180) fireFaces_ = true;
+      reach = std::min(reach, static_cast<float>(w["MaxRadius"].NumberOr(30)));
+      nearest = std::max(nearest, static_cast<float>(w["MinRadius"].NumberOr(0)));
+    }
+    if (firing == 0) {
+      *error = id + ": none of its weapons would fire at a point on the ground (name them: --fx-fire " + id +
+               " <label> ..., or a manual-fire one with --fx-manual <label>)";
+      return false;
+    }
+    // (a target not given: as far as all of them reach, well within; to the right of the spot as the camera
+    // sees it, so that the shots' flight is seen from the side - or with --fx-compare, whose two sides lie
+    // along that way, the way it was given: across the spot, away from the camera)
+    if (!setup.toGiven) {
+      Vec3 way{setup.to.x - setup.at.x, 0, setup.to.z - setup.at.z};
+      way = Length(way) > 1e-3f ? Normalize(way) : Vec3{0, 0, -1};
+      if (!setup.compare) way = Vec3{-way.z, 0, way.x};
+      const float d = std::max(std::min(reach * 0.6f, 40.0f), std::min(nearest + 3, reach * 0.9f));
+      setup_.to = Vec3{setup.at.x + way.x * d, setup.to.y, setup.at.z + way.z * d};
+    }
+    const float across = Length(Vec3{setup_.to.x - setup_.at.x, 0, setup_.to.z - setup_.at.z});
+    if (!setup.spacingGiven) setup_.spacing = std::max(8.0f, size(bp) * 2 + 4);
+    if (!setup.repeatGiven) setup_.repeat = setup.manual.empty() ? 8.0f : 14.0f;
+    extent_ = (setup.compare ? setup_.spacing : 0) + across + size(bp) + 4;
+  }
+  if (!entity_.empty() || !shieldUnit_.empty() || !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty() ||
+      !setup_.fire.empty()) {
     entities_ = std::make_unique<FxEntities>();
     if (!entities_->Init(vfs, setup.seed, error)) return false;
     if (!setup.faction.empty()) entities_->SetFaction(setup.faction);
@@ -299,7 +368,7 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
   }
   if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty() && setup_.move.empty() &&
-      setup_.build.empty()) {
+      setup_.build.empty() && setup_.fire.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -365,12 +434,30 @@ std::string FxStand::Describe() const {
     snprintf(b, sizeof b, " (%s), each play of %.0f s", buildOrder_.c_str(), setup_.repeat);
     s += "; " + setup_.build + " building " + setup_.buildUnit + b;
   }
+  if (!setup_.fire.empty()) {
+    char b[200];
+    snprintf(b, sizeof b, " firing at %.1f, %.1f (%.1f away)%s, each play of %.0f s", setup_.to.x, setup_.to.z,
+             Length(Vec3{setup_.to.x - setup_.at.x, 0, setup_.to.z - setup_.at.z}), fireFaces_ ? ", facing it" : "", setup_.repeat);
+    s += "; " + setup_.fire + b;
+    list("its weapons", setup_.fireWeapons);
+    list("by an order", setup_.manual);
+  }
   if (!setup_.faction.empty()) s += "; as " + setup_.faction + "'s";
   return s.empty() ? s : s.substr(2);
 }
 
+Vec3 FxStand::Middle() const {
+  if (!setup_.fire.empty()) {  // (an aircraft's: halfway up to it)
+    const Vec3 m = (setup_.at + setup_.to) * 0.5f;
+    return {m.x, fireLift_ * 0.5f, m.z};
+  }
+  return setup_.shot.empty() ? setup_.at : (setup_.from + setup_.to) * 0.5f;
+}
+
 void FxStand::SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel,
-                        std::function<int(float, float)> terrainType) {
+                        std::function<int(float, float)> terrainType, float mapWidth, float mapHeight) {
+  mapWidth_ = mapWidth;
+  mapHeight_ = mapHeight;
   terrain_ = std::move(terrain);
   terrainType_ = std::move(terrainType);
   water_ = water;
@@ -391,15 +478,17 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   right = Length(right) > 1e-4f ? Normalize(right) : Vec3{1, 0, 0};
   auto place = [&](Vec3 p, const Side& side) { return Vec3{p.x + side.shift.x, ground(p.x + side.shift.x, p.z + side.shift.z) + p.y, p.z + side.shift.z}; };
   const bool again = now - started_ >= setup_.repeat || now < started_;
-  const bool units = !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty();
+  const bool units = !setup_.death.empty() || !setup_.move.empty() || !setup_.build.empty() || !setup_.fire.empty();
   if (entities_ && units && !unitsReady_ && !unitsFailed_) {  // (once: the units' world)
     World* w = &world;
     std::string why;
     unitsReady_ = entities_->InitUnits(terrain_ ? terrain_ : ground, water_, waterLevel_,
                                        [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_);
+    // (--fx-fire: the weapons' world on it, before the first unit)
+    if (unitsReady_ && !setup_.fire.empty()) unitsReady_ = entities_->InitWeapons(&why, mapWidth_, mapHeight_);
     if (!unitsReady_) {
       unitsFailed_ = true;
-      fprintf(stderr, "render: --fx-death: %s\n", why.c_str());
+      fprintf(stderr, "render: --fx: %s\n", why.c_str());
     }
   }
   if (entities_) {
@@ -425,6 +514,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
           entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
                                sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
         side.lastHit = -10;
+        side.hits.clear();
         side.nextHit = now + 0.3;
         side.rng = std::max<uint32_t>(setup_.seed, 1);  // (the same hits on both sides)
       }
@@ -486,6 +576,16 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
           else entities_->Build(side.unit, side.built, buildOrder_, setup_.buildSeconds);
         }
       }
+      if (entities_ && unitsReady_ && !setup_.fire.empty()) {  // the unit to fire, as the game makes one, with its weapons
+        std::string why;
+        // (facing its target when one of its weapons cannot turn all round; else square to the view, its back to
+        // the camera - with --fx-compare its side - so that its turrets are seen turning)
+        const Vec3 way{setup_.to.x - setup_.at.x, 0, setup_.to.z - setup_.at.z};
+        how.forward = fireFaces_ && Length(way) > 1e-3f ? Normalize(way) : sides_.size() == 2 ? right : Vec3{right.z, 0, -right.x};
+        side.unit = entities_->AddUnit(setup_.fire, at, how, &why);
+        side.ordered = side.held = false;
+        if (!side.unit) fprintf(stderr, "render: --fx-fire: %s\n", why.c_str());
+      }
       if (!projectile_.empty()) {
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
         for (uint32_t e : side.carried) world.particles.Stop(e);
@@ -503,15 +603,30 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         // game's: the hit's age on what is built, 3 and a little more, where it struck on the tint)
         float built = 1;
         const Vec3* hitAt = nullptr;
+        // (the unit's own look for it, Display.PersonalShield: only round its hits, on a capsule round it)
+        const PersonalShieldLook& own = world.models.PersonalShield(shieldUnit_);
         if (personalShield_) {
-          built = 3;
           const double age = now - side.lastHit;
-          if (age >= 0 && age < 1) {
+          const bool hit = age >= 0 && age < 1;
+          if (!own.any || (own.hitOnly && !own.capsule && hit)) built = 3;
+          if (own.any && own.capsule) built = 1;
+          if (built > 2 && hit) {
             built = 3.001f + 0.9f * static_cast<float>(age);
             hitAt = &side.hitPoint;
           }
         }
         world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f}, built, nullptr, hitAt);
+        if (personalShield_ && own.any && own.capsule && own.lattice) {
+          const Model* shell = world.models.ShieldShell(unit, own);
+          std::vector<Vec4> lit;
+          for (const auto& h : side.hits) {
+            const double age = now - h.first;
+            if (age < 0 || age >= 1) continue;
+            const Vec3 on = OnShell(*shell, h.second);
+            lit.push_back({on.x, on.y, on.z, static_cast<float>(age)});
+          }
+          if (!lit.empty()) world.meshes.AddShell(shell, Mat4::FromTRS(base, Quat{}, unit->scale), lit);
+        }
       }
       if (entities_ && now >= side.nextHit && side.nextHit > 0) {
         side.nextHit = now + setup_.hitEvery;
@@ -538,6 +653,19 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         if (personalShield_) {
           side.lastHit = now;
           side.hitPoint = from + dir * reach - base;  // (the unit is not turned: its own frame is the world's)
+          // (a shell's look, a unit's own capsule round it: the shot from that way toward the capsule's middle,
+          // so the hits spread over its sides and along it as a game's shots do, not all over its top)
+          Vec3 shellHit = side.hitPoint;
+          const PersonalShieldLook& look = world.models.PersonalShield(shieldUnit_);
+          if (look.any && look.capsule && unit && unit->ok) {
+            const Model::ShellShape& shape = world.models.ShieldShell(unit, look)->shellShape;
+            const float k = unit->scale;
+            float spread[3] = {shape.a * k * 2, shape.b * k * 2, shape.a * k * 2};
+            spread[shape.along] = shape.half * k * 0.9f;
+            shellHit = Vec3{shape.centre[0] * k + dir.x * spread[0], shape.centre[1] * k + dir.y * spread[1], shape.centre[2] * k + dir.z * spread[2]};
+          }
+          side.hits.push_back({now, shellHit});
+          if (side.hits.size() > 8) side.hits.erase(side.hits.begin());
         }
       }
     }
@@ -581,6 +709,23 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       side.killed = true;
       entities_->Kill(side.unit, setup_.overkill);
     }
+  // the firing unit's orders, `fireAt` into the play, and its weapons' targets taken again at `holdAt` (the same
+  // moments on both sides)
+  for (Side& side : sides_) {
+    if (!entities_ || setup_.fire.empty() || !side.unit) continue;
+    const Vec3 target = place(setup_.to, side);
+    if (!side.ordered && now - started_ >= setup_.fireAt) {
+      side.ordered = true;
+      const std::string said = entities_->Order(side.unit, target, setup_.fireWeapons, setup_.manual);
+      if (!fireSaid_) printf("render: --fx-fire: %s\n", said.c_str());
+      fireSaid_ = true;
+    }
+    const float hold = setup_.holdAt > 0 ? setup_.holdAt : setup_.repeat - 2;
+    if (side.ordered && !side.held && hold > setup_.fireAt && now - started_ >= hold) {
+      side.held = true;
+      entities_->Order(side.unit, target, setup_.fireWeapons, setup_.manual, true);
+    }
+  }
   if (entities_) {  // the effect entities, to the world as a game's
     entities_->Advance(now);  // (once more: what was made this frame is in the frame too)
     entities_->TakeEvents(&events_);

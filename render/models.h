@@ -115,6 +115,9 @@ struct ModelLod {
   // where it is hit, its textures sliding over it by its age
   int impact = 0;
   int unlit = 0;
+  // A personal shield's shell round a unit (ModelCache::ShieldShell): nothing but round its hits, where its
+  // lattice (the albedo) lights up.
+  bool shell = false;
   bool frame = false;          // "UEFBuildCube": a box of light round what the UEF builds: see-through, blue,
                                // drifting, not lit (its texture is clouds, with the holes in its alpha)
   bool teamMask = true;        // the team colour replaces the albedo where the spec-team texture says;
@@ -139,6 +142,36 @@ struct Model {
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
   std::vector<float> levelPixels;
   std::vector<ModelLight> lights;  // a remastered unit's lamps (at most 16)
+  // A personal shield's shell (ModelCache::ShieldShell): its shape, in model units, for OnShell.
+  struct ShellShape {
+    int along = 2, acrossA = 0, acrossB = 1;  // its long axis and the two across it (0 x, 1 y, 2 z)
+    float centre[3] = {0, 0, 0};
+    float a = 1, b = 1, half = 1, cap = 1;  // half widths across, half length, each rounded end's length
+  } shellShape;
+};
+
+// Where a point lies on a shell (ModelCache::ShieldShell) seen from its long axis: a hit on a personal
+// shield is told where the shot met the game's shield (a sphere of the blueprint's ShieldSize, often far
+// out), and is lit on the shell where that point's way from the axis crosses it. `rest`: a point in the
+// unit's own frame at rest, world units; the answer the same.
+Vec3 OnShell(const Model& shell, Vec3 rest);
+
+// A mod's own look for a unit's personal shield: its blueprint's Display.PersonalShield (the visuals track's):
+//   Display.PersonalShield = { HitOnly = true, Shell = "Capsule", Lattice = "/mods/<mod>/<texture>.dds" }
+// HitOnly: nothing shows at rest, only round hits. Shell "Capsule": a smooth capsule round the unit, a little
+// off it, instead of the unit's own outline ("Outline", as without it). Lattice: the texture lit round hits:
+// tiling, its colour in RGB and how much shows in A (the lines 1, the cells faint); 3.84 world units a tile.
+// The capsule's size, in model units, where the model's box would make it too big (fins, masts):
+// ShellSize = { half its width (x), half its height (y), its whole length (z) }, and ShellCentre = { x, y, z }
+// (else the box's middle); without ShellSize it is made round the model's box.
+struct PersonalShieldLook {
+  bool any = false;  // the blueprint has one
+  bool hitOnly = false;
+  bool capsule = false;
+  gfx::Texture lattice;
+  bool sized = false, centred = false;
+  float size[3] = {0, 0, 0};
+  float centre[3] = {0, 0, 0};
 };
 
 class ModelCache {
@@ -175,6 +208,13 @@ class ModelCache {
   // the model's scale (a burnt tree); otherwise it is 1 and whoever places it gives the size (a dead
   // unit's wreck: the script sizes the prop).
   const Model* Wreck(const Model* of, bool ownScale);
+  // A unit's own look for its personal shield (from its blueprint file, read once; see PersonalShieldLook).
+  const PersonalShieldLook& PersonalShield(const std::string& blueprintId);
+  // The capsule a personal shield lies on round a model (made once a model): along its longest side, its
+  // section a superellipse (|x/a|^3.2 + |y/b|^3.2 = 1), rounded at both ends, a fifth of its smaller half
+  // width off it all round; in the model's own units, so it is placed as the model is. Its one level is a
+  // shell (ModelLod::shell) with `lattice` as its albedo.
+  const Model* ShieldShell(const Model* of, const PersonalShieldLook& look);
   // Reads the mesh and texture names of blueprints as the simulation has them after the game's
   // scripts and the mods changed them: the log the engine's tools/dump_display.lua writes. Models
   // listed there take their names from it instead of from the .bp file. Returns the levels read.
@@ -208,6 +248,8 @@ class ModelCache {
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
+  std::unordered_map<std::string, PersonalShieldLook> personalShields_;  // by unit id
+  std::unordered_map<const Model*, std::unique_ptr<Model>> shells_;      // by the model they lie round
   std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
   // every mod's unit blueprint file by its name ("<id>_unit.bp"), the first in path order: one search of
   // /mods when the first unit that is not the game's own is asked for (instead of one search each)

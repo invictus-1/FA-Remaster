@@ -925,20 +925,41 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     effects.TakeHits(&hits);
     for (const Vec3& hit : hits) {
       const FrameUnit* best = nullptr;
-      float nearest = 1e30f;
+      float nearest = 1e30f, bestReach = 12;
       for (const FrameUnit& u : frame.units) {
-        if (u.dead || !u.mesh || u.mesh >= frame.blueprints->size() || !u.Seen()) continue;
-        std::string set = (*frame.blueprints)[u.mesh];
-        for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (set.find("shield") == std::string::npos) continue;
+        if (u.dead || !u.Seen() || u.blueprint >= frame.blueprints->size()) continue;
+        // (a personal shield: the script has set a shield's mesh on the unit, or the unit's blueprint has
+        // a look of its own for one, Display.PersonalShield)
+        bool personal = false;
+        if (u.mesh && u.mesh < frame.blueprints->size()) {
+          std::string set = (*frame.blueprints)[u.mesh];
+          for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          personal = set.find("shield") != std::string::npos;
+        }
+        const std::string& id = (*frame.blueprints)[u.blueprint];
+        if (!personal && u.hasShield && !id.empty()) personal = models.PersonalShield(id).any;
+        if (!personal) continue;
         const float d = Length(hit - Vec3{u.position[0], u.position[1], u.position[2]});
-        if (d < nearest) nearest = d, best = &u;
+        if (d >= nearest) continue;
+        // (a big unit is hit far from its middle: within its own size of it, at least 12)
+        float reach = 12;
+        if (!id.empty()) {
+          const Model* m = models.Unit(id);
+          if (m && m->ok) reach = std::max(reach, Length(m->boundsMax - m->boundsMin) * 0.5f * m->scale * 1.2f);
+        }
+        nearest = d, best = &u, bestReach = reach;
       }
-      if (!best || nearest > 12) continue;  // (a bubble's hit, or one far from any)
+      if (!best || nearest > bestReach) continue;  // (a bubble's hit, or one far from any)
       const Quat turn{best->orientation[0], best->orientation[1], best->orientation[2], best->orientation[3]};
-      shieldHits_[best->id] = {Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_};
+      std::vector<ShieldHit>& list = shieldHits_[best->id];
+      list.push_back({Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_});
+      if (list.size() > 8) list.erase(list.begin());
     }
-    for (auto it = shieldHits_.begin(); it != shieldHits_.end();) it = clock_ - it->second.clock > 1.5 || clock_ < it->second.clock ? shieldHits_.erase(it) : std::next(it);
+    for (auto it = shieldHits_.begin(); it != shieldHits_.end();) {
+      std::vector<ShieldHit>& list = it->second;
+      list.erase(std::remove_if(list.begin(), list.end(), [this](const ShieldHit& h) { return clock_ - h.clock > 1.5 || clock_ < h.clock; }), list.end());
+      it = list.empty() ? shieldHits_.erase(it) : std::next(it);
+    }
   }
   ++frameStamp_;
   rememberedGone.clear();
@@ -1109,15 +1130,34 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       // (a shield's last hit, within the second it shows: its age rides on what is built, 3 and a
       // little more, and where it struck on the place a ghost's tint has, which a shielded unit has not)
+      // (a mod's own look for its personal shield, Display.PersonalShield: only round its hits, and on a
+      // capsule round the unit instead of along its outline)
+      const PersonalShieldLook* own = nullptr;
+      if ((shielded || u.hasShield) && !blueprint.empty()) {
+        const PersonalShieldLook& look = models.PersonalShield(blueprint);
+        if (look.any) own = &look;
+      }
+      auto hits = shieldHits_.find(u.id);
+      const ShieldHit* latest = hits == shieldHits_.end() || hits->second.empty() ? nullptr : &hits->second.back();
+      const double latestAge = latest ? clock_ - latest->clock : 2;
+      if (own && own->capsule) shielded = false;                                   // (the hull shows nothing of it)
+      else if (own && own->hitOnly) shielded = latestAge >= 0 && latestAge < 1;  // (along its outline while hit)
       float built = shielded ? 3.0f : fractionComplete;
       const Vec3* hitAt = nullptr;
-      if (shielded) {
-        auto hit = shieldHits_.find(u.id);
-        const double age = hit == shieldHits_.end() ? 2 : clock_ - hit->second.clock;
-        if (age >= 0 && age < 1) {
-          built = 3.001f + 0.9f * static_cast<float>(age);
-          hitAt = &hit->second.at;
+      if (shielded && latestAge >= 0 && latestAge < 1) {
+        built = 3.001f + 0.9f * static_cast<float>(latestAge);
+        hitAt = &latest->at;
+      }
+      if (own && own->capsule && own->lattice && hits != shieldHits_.end()) {  // its shell, lit round its hits
+        const Model* shell = models.ShieldShell(model, *own);
+        shellHits_.clear();
+        for (const ShieldHit& h : hits->second) {
+          const double age = clock_ - h.clock;
+          if (age < 0 || age >= 1) continue;
+          const Vec3 on = OnShell(*shell, h.at);  // (where the shot met the game's shield, onto the shell)
+          shellHits_.push_back({on.x, on.y, on.z, static_cast<float>(age)});
         }
+        if (!shellHits_.empty()) meshes.AddShell(shell, Mat4::FromTRS(position, orientation, model->scale), shellHits_);
       }
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
