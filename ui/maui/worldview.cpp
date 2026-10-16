@@ -594,6 +594,7 @@ class WorldView : public Control {
     // The meshes the game's script has placed in the world, and the marks of orders just given.
     WorldMeshesForWorld(L, &scene.meshes);
     UserDecalsForWorld(L, &scene.decals);
+    IconColorsForWorld(L, &scene.iconColors);
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
@@ -642,6 +643,106 @@ class WorldView : public Control {
       float left = 0, top = 0;
       line(text, px, py, style.setsColor, &left, &top);
     }
+  }
+
+  // The economy overlay (RenderOverlayEconomy; the original's CWldSession::DrawEconomyOverlay
+  // 0x858d80, drawn after the strategic icons): over each of the player's units on screen that
+  // makes or uses something, its energy and mass a second on a small plate, green what it makes,
+  // red what it uses, each line with a black shadow a pixel down and right. The look is the game's
+  // /lua/ui/game/econoverlayparams.lua (read once, as the original's 0x858850): the colours, the
+  // plate's three textures, the font and the lines' offsets (mass above energy). Text as the
+  // original's: "%+4.1f" between -10 and 10, else "%+4i". INFERRED: the plate's layout round the
+  // text, its place against the unit (centred over it), and the unit's place: the last beat's, not
+  // the frame's (the original's is interpolated).
+  struct EconParams {
+    bool read = false;
+    uint32_t positive = 0xff00d000u, negative = 0xffff0000u;
+    std::string left, mid, right, font = "Arial";
+    int size = 9;
+    float energyTop = 13, massTop = 1;
+  };
+  EconParams econ_;
+  void ReadEconParams(lua_State* L) {
+    econ_.read = true;
+    int top = lua_gettop(L);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/econoverlayparams.lua");
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "EconOverlayParams");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        const int t = lua_gettop(L);
+        auto text = [&](const char* key, std::string* out) {
+          lua_pushstring(L, key);
+          lua_gettable(L, t);
+          if (lua_isstring(L, -1)) *out = lua_tostring(L, -1);
+          lua_pop(L, 1);
+        };
+        auto number = [&](const char* key, float* out) {
+          lua_pushstring(L, key);
+          lua_gettable(L, t);
+          if (lua_isnumber(L, -1)) *out = static_cast<float>(lua_tonumber(L, -1));
+          lua_pop(L, 1);
+        };
+        std::string positive, negative;
+        text("positiveColor", &positive), text("negativeColor", &negative);
+        if (!positive.empty()) econ_.positive = ParseColor(positive);
+        if (!negative.empty()) econ_.negative = ParseColor(negative);
+        text("leftTexture", &econ_.left), text("midTexture", &econ_.mid), text("rightTexture", &econ_.right);
+        text("fontName", &econ_.font);
+        float size = static_cast<float>(econ_.size);
+        number("fontSize", &size);
+        econ_.size = static_cast<int>(size);
+        number("energyTopOffset", &econ_.energyTop), number("massTopOffset", &econ_.massTop);
+      }
+    }
+    lua_settop(L, top);
+  }
+  void DrawEconomyOverlay(lua_State* L, DrawTarget& target, const Rect& r) {
+    if (miniMap || !UserState::From(L)->economyOverlay) return;
+    if (!econ_.read) ReadEconParams(L);
+    std::vector<EconomyMark> marks;
+    EconomyMarks(L, &marks);
+    if (marks.empty()) return;
+    WorldSource* source = UserState::From(L)->config().world;
+    const Vfs* vfs = ScriptState::From(L)->vfs();
+    const Image& left = LoadTexture(vfs, econ_.left);
+    const Image& mid = LoadTexture(vfs, econ_.mid);
+    const Image& right = LoadTexture(vfs, econ_.right);
+    const FontMetrics m = GetFontMetrics(econ_.font, econ_.size);
+    auto format = [](float v, bool space) {
+      char text[32];
+      if (v > -10 && v < 10) std::snprintf(text, sizeof text, space ? "%+4.1f " : "%+4.1f", v);
+      else std::snprintf(text, sizeof text, space ? "%+4i " : "%+4i", static_cast<int>(v));
+      return std::string(text);
+    };
+    target.SetClip(r);
+    for (const EconomyMark& mark : marks) {
+      float x = 0, y = 0;
+      if (!source->Project(mark.position, &x, &y)) continue;
+      x += r.x0, y += r.y0;
+      if (x < r.x0 - 64 || x > r.x1 + 64 || y < r.y0 - 64 || y > r.y1 + 64) continue;  // (in the camera's view only)
+      const std::string energy = format(mark.energy, true), mass = format(mark.mass, false);
+      const float textW = std::max(StringAdvance(econ_.font, econ_.size, energy), StringAdvance(econ_.font, econ_.size, mass));
+      const float lw = left.valid() ? static_cast<float>(left.width) : 0, rw = right.valid() ? static_cast<float>(right.width) : 0;
+      const float plateH = mid.valid() ? static_cast<float>(mid.height) : econ_.energyTop + m.height + 2;
+      const float x0 = std::floor(x - (lw + textW + rw) * 0.5f), y0 = std::floor(y - plateH * 0.5f);
+      if (left.valid()) target.DrawImage(left, {0, 0, lw, static_cast<float>(left.height)}, {x0, y0, x0 + lw, y0 + plateH}, 0xffffffffu);
+      if (mid.valid())
+        target.DrawImage(mid, {0, 0, static_cast<float>(mid.width), static_cast<float>(mid.height)}, {x0 + lw, y0, x0 + lw + textW, y0 + plateH},
+                         0xffffffffu);
+      if (right.valid())
+        target.DrawImage(right, {0, 0, rw, static_cast<float>(right.height)}, {x0 + lw + textW, y0, x0 + lw + textW + rw, y0 + plateH},
+                         0xffffffffu);
+      auto line = [&](const std::string& text, float v, float offset) {
+        const float baseline = y0 + offset + m.ascent;
+        DrawString(target, econ_.font, econ_.size, text, x0 + lw + 1, baseline + 1, 0xff000000u);
+        DrawString(target, econ_.font, econ_.size, text, x0 + lw, baseline, v >= 0 ? econ_.positive : econ_.negative);
+      };
+      line(mass, mark.mass, econ_.massTop);
+      line(energy, mark.energy, econ_.energyTop);
+    }
+    target.ClearClip();
   }
 
   // The game script's command mode (the original asks it the same way: commandmode.GetCommandMode(),
@@ -700,6 +801,7 @@ class WorldView : public Control {
     if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
       target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
     DrawCustomNames(L, target, r);
+    DrawEconomyOverlay(L, target, r);
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
     if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {

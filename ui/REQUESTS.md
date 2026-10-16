@@ -761,6 +761,9 @@ loaded, stored), and `int attachedCount` (entities attached to it now)? With the
 GetIsSubmerged and IssueDockCommand as the original's and fix the idle test. (Note for your docs: a
 helper saw that engine-ref/specs/air_staging.md 0.3 and transport_core.md say Transport.DockingSlots
 has no engine reader; the user side reads it here, bp+0x418 at 0x840e33.)
+DONE (engine 35de465, `docs/engine-answers.md`): UnitView::layer (ELayer bits), attached, attachedCount.
+Built on it: GetIsSubmerged, IssueDockCommand (test ui/tests/dock.lua: no platform, no order and the
+voice line's call; with a UEB5202 both bombers get Dock and reach it), and the idle test by `attached`.
 
 ### 29. Changing the focus army during a game (SetFocusArmy: a replay's army list, observers)
 From the interface chat, 2026-10-16, not blocking. The replay's army combo box (replay.lua:60),
@@ -1581,6 +1584,11 @@ From the interface chat, 2026-10-16, not blocking. Two things, both read in the 
   WorldPicture::SetFocusArmy again during a game (army 1-based, 0 = an observer). Is that fine, and
   does 0 show no fog of war, as the original skips ren_FogOfWar with no focus army? (Your header says
   the "seen" memory restarts when an army becomes the focus.)
+DONE (render 159cfb8, main b13aeae): `WorldPicture::SetIconColors(argbByArmy)` (army from 0; the icons in
+the picture, remembered buildings' and the minimap's; models keep theirs; an unknown blip keeps its own;
+empty: the army colours back). SetFocusArmy during a game is fine (0: no fog from the next beat; a new
+army starts its explored ground and remembered buildings afresh). Wired: TeamColorMode in
+session_bindings.cpp (IconColorsForWorld), handed over in GameSession's SetScene when it changes.
 
 
 ## To the visuals track

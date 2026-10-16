@@ -786,6 +786,38 @@ local function run()
         check("and switched off again", GetIsAutoSurfaceMode({cdrNow}), false)
     end
 
+    -- the player is no observer; team colours for the strategic icons (FAF's list wins, the
+    -- original's own rule colours the rest); the economy overlay's numbers; an order deleted by id
+    check("IsObserver: a player with an army is none", IsObserver(), false)
+    check("team colours are off at first", table.getn(moho64ui_IconColors()), 0)
+    TeamColorMode("ff112233,ff445566")
+    TeamColorMode(true)
+    local colors = moho64ui_IconColors()
+    -- (the game's Lua keeps numbers as 32-bit floats: a colour comes back to within 256)
+    check("TeamColorMode: FAF's list by army", table.getn(colors) >= 2 and math.abs(colors[1] - 4279312947) < 512
+        and math.abs(colors[2] - 4282668390) < 512, true)
+    TeamColorMode(false)
+    check("and off again", table.getn(moho64ui_IconColors()), 0)
+    RenderOverlayEconomy(true)
+    local marks = moho64ui_EconomyMarks()
+    check("the economy overlay: the commander's numbers", table.getn(marks) >= 1 and (marks[1].energy ~= 0 or marks[1].mass ~= 0), true)
+    RenderOverlayEconomy(false)
+    local cdrNow2 = GetArmyAvatars()[1]
+    if cdrNow2 then
+        IssueUnitCommand({cdrNow2}, "Stop")  -- (the rows of buildings ordered above)
+        WaitSeconds(0.5)
+        local cp = cdrNow2:GetPosition()
+        IssueUnitCommand({cdrNow2}, "Move", {cp[1] + 30, cp[2], cp[3] + 30})
+        WaitSeconds(0.5)
+        local queue = cdrNow2:GetCommandQueue() or {}
+        check("a move order to delete", queue[1] and queue[1].type, "Move")
+        if queue[1] then
+            DeleteCommand(queue[1].ID)
+            WaitSeconds(0.5)
+            check("DeleteCommand takes it away", table.getn(cdrNow2:GetCommandQueue() or {}), 0)
+        end
+    end
+
     -- the game's end: SessionEndGame is an order; one more beat runs (its scripts hand over the
     -- final score), then the simulation stands (last, since nothing moves any more)
     check("the game is not over", SessionIsGameOver(), false)

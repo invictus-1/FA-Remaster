@@ -5,12 +5,15 @@
 // The facts come from the engine's view functions (sim/sim_view.h); the state's configuration
 // names the simulation. Without one (the front end's state) the functions here are not registered
 // and the front end's answers stay (no session, tick 0).
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "core/log.h"
+#include "draw/draw.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/replay.h"
@@ -169,6 +172,15 @@ int l_GetFocusArmy(lua_State* L) {
   UserState* user = UserState::From(L);
   int a = user->economyCopied ? user->focusArmyCopy : TheSim(L)->focusArmy;  // (the beat's copy, once there is one)
   lua_pushnumber(L, a < 0 ? -1 : a + 1);
+  return 1;
+}
+
+// IsObserver() (FA exe 0x843150): true when there is no focus army (a replay or an observer looking
+// at every army); as GetFocusArmy, from the beat's copy.
+int l_IsObserver(lua_State* L) {
+  UserState* user = UserState::From(L);
+  const int a = user->economyCopied ? user->focusArmyCopy : TheSim(L)->focusArmy;
+  lua_pushboolean(L, a < 0);
   return 1;
 }
 
@@ -345,6 +357,36 @@ int l_IsNeutral(lua_State* L) {
 int l_IsEnemy(lua_State* L) {
   lua_pushboolean(L, Stance(L) == 0);
   return 1;
+}
+
+// TeamColorMode(on | "aarrggbb,aarrggbb,...") (FA exe 0x847e10 with FAF's patch 0x12919a6): a
+// boolean switches the team colours of the strategic icons; anything else is read as FAF's list of
+// colours, one per army counted from 0 (hex digits; any other character ends a colour), and leaves
+// the switch as it is. (The original's own rule, GameColors.TeamColorMode's Self / Ally / Enemy /
+// Neutral by how each army stands to the player's, colours an army the list leaves out.)
+int l_TeamColorMode(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (lua_type(L, 1) == LUA_TBOOLEAN) {
+    user->teamColors = lua_toboolean(L, 1) != 0;
+    return 0;
+  }
+  if (!lua_isstring(L, 1)) return 0;  // (the original's crashes on nil)
+  // (As FAF's parser: every character that is not a hex digit, and the end, stores the colour so
+  // far for the next army; FAF's table holds 32.)
+  const std::string text = lua_tostring(L, 1);
+  size_t army = 0;
+  uint32_t color = 0;
+  for (size_t i = 0; i <= text.size() && army < 32; ++i) {
+    const char ch = i < text.size() ? static_cast<char>(std::tolower(static_cast<unsigned char>(text[i]))) : '\0';
+    if (std::isxdigit(static_cast<unsigned char>(ch))) {
+      color = color << 4 | static_cast<uint32_t>(ch <= '9' ? ch - '0' : ch - 'a' + 10);
+      continue;
+    }
+    if (user->teamColorTable.size() <= army) user->teamColorTable.resize(army + 1, 0);
+    user->teamColorTable[army++] = color;
+    color = 0;
+  }
+  return 0;
 }
 
 // GetSessionClients(): the one local player. (Field names as the scripts read them.)
@@ -541,6 +583,49 @@ void SetGameSpeedTo(lua_State* L, int rate) {
   if (pace && pace->adjustable) pace->rate = rate;
 }
 
+void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out) {
+  UserState* user = UserState::From(L);
+  const int focus = user->economyCopied ? user->focusArmyCopy : -1;
+  if (!user->teamColors || focus < 0 || user->armiesCopy.empty()) return;
+  // The original's own colours (struct_TeamColors 0x85b2a0, from /lua/gameColors.lua's
+  // GameColors.TeamColorMode), for an army FAF's list leaves out.
+  uint32_t own[4] = {0xff4169e1u, 0xff006400u, 0xffe80a0au, 0xffdaa520u};  // Self, Ally, Enemy, Neutral
+  int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/GameColors.lua");
+  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "GameColors");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "TeamColorMode");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        const char* keys[4] = {"Self", "Ally", "Enemy", "Neutral"};
+        for (int k = 0; k < 4; ++k) {
+          lua_pushstring(L, keys[k]);
+          lua_gettable(L, -2);
+          if (lua_isstring(L, -1)) own[k] = ParseColor(lua_tostring(L, -1));
+          lua_pop(L, 1);
+        }
+      }
+    }
+  }
+  lua_settop(L, top);
+  const ArmyView* mine = nullptr;
+  for (const ArmyView& a : user->armiesCopy)
+    if (a.index == focus + 1) mine = &a;
+  int count = 0;
+  for (const ArmyView& a : user->armiesCopy) count = std::max(count, a.index);
+  for (int army = 0; army < count; ++army) {
+    if (static_cast<size_t>(army) < user->teamColorTable.size() && user->teamColorTable[static_cast<size_t>(army)] != 0) {
+      out->push_back(user->teamColorTable[static_cast<size_t>(army)]);
+      continue;
+    }
+    const int stance = army == focus ? 3 : mine && static_cast<size_t>(army) < mine->alliance.size() ? mine->alliance[static_cast<size_t>(army)] : 1;
+    out->push_back(stance == 3 ? own[0] : stance == 2 ? own[1] : stance == 0 ? own[2] : own[3]);
+  }
+}
+
 void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "InternalCreateWldUIProvider", l_InternalCreateWldUIProvider);
   SetMethod(L, "CLuaWldUIProvider", "Destroy", l_ProviderDestroy);
@@ -552,8 +637,22 @@ void RegisterSessionBindings(lua_State* L) {
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
   SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
   for (const char* name : {"WorldIsLoading", "SessionIsMultiplayer",
-                           "SessionIsBeingRecorded", "SessionIsObservingAllowed", "IsObserver"})
+                           "SessionIsBeingRecorded", "SessionIsObservingAllowed"})
     SetGlobal(L, name, l_False);
+  SetGlobal(L, "IsObserver", l_IsObserver);
+  SetGlobal(L, "TeamColorMode", l_TeamColorMode);
+  // moho64ui_IconColors() -> the icons' colours by army as handed over now (empty: the armies'
+  // own); the host's own function for tests.
+  lua_register(L, "moho64ui_IconColors", [](lua_State* L) -> int {
+    std::vector<uint32_t> colors;
+    IconColorsForWorld(L, &colors);
+    lua_newtable(L);
+    for (size_t i = 0; i < colors.size(); ++i) {
+      lua_pushnumber(L, static_cast<double>(colors[i]));
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  });
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSimTicksPerSecond", l_GetSimTicksPerSecond);

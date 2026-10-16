@@ -338,7 +338,9 @@ bool SelectUnitsByCategory(lua_State* L, const char* expr, bool add, bool inView
   float bestDistance = std::numeric_limits<float>::max();
   for (UserUnit* u : asked) {
     if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
-    if (idle && (u->view.beingBuilt || u->view.queueLength != 0)) continue;
+    // (idle, FA exe 0x8664c6: not hanging on a parent, docked, loaded or stored (UserUnit+0x1a2),
+    // and nothing in its queue; until 2026-10-16 this read "being built", a wrong reading)
+    if (idle && (u->view.attached || u->view.queueLength != 0)) continue;
     const BlueprintInfo* bp = bps->Find(u->view.blueprint);
     if (!bp || bp->entityIndex < 0 || static_cast<size_t>(bp->entityIndex >> 6) >= bits.size() ||
         !(bits[bp->entityIndex >> 6] >> (bp->entityIndex & 63) & 1))
@@ -1548,6 +1550,144 @@ int l_SetAutoSurfaceMode(lua_State* L) {
   InfoPair(L, 1, "SetAutoSurfaceMode", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
+// GetIsSubmerged(units) (FA exe 0x8bafe0; orders.lua's dive button): -1 when every unit is in the
+// Sub layer, 1 when none is, 0 when they differ or there are none (each user unit's layer,
+// UserUnit+0xf0; the engine's UnitView::layer, ui request 28).
+int l_GetIsSubmerged(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  int state = 0;
+  for (size_t i = 0; i < list.size(); ++i) {
+    const int one = list[i]->view.layer == 4 ? -1 : 1;
+    if (i == 0) state = one;
+    else if (one != state) {
+      state = 0;
+      break;
+    }
+  }
+  lua_pushnumber(L, state);
+  return 1;
+}
+
+// IssueDockCommand(clear) (FA exe 0x840a70, read by a helper; the Dock order's button and FAF's
+// dock-damaged key): the selected units that can dock (RULEUCC_Dock, 0x400000) go to the player's
+// own air staging platforms. A platform counts when it is finished and alive, in category
+// AIRSTAGINGPLATFORM, not under water (layer Seabed or Sub), not hanging on a parent, with nothing
+// in its queue, and with room: StorageSlots - what is attached to it, or DockingSlots when it
+// stores none (docked aircraft are not counted against those, as the original's). Platforms by
+// their distance from the units' middle (each unit's place, or with `clear` false where its last
+// order goes): all go to the nearest when it has room for all; else the platforms within 100 of the
+// nearest's distance share them by their room (each takes ceil(room * max(1, units / all their
+// room)), the roomiest first), one Dock order (39, the platform as its target) per platform.
+// Without a platform the first selected unit's army hears PlayNoStagingPlatformsVO, with none free
+// PlayBusyStagingPlatformsVO. Ours: units in the order of their ids (the original's: memory
+// addresses), and a last order without a place counts as the unit's own place (the original's
+// gives an invalid point there, and then no order at all).
+int l_IssueDockCommand(lua_State* L) {
+  const bool clear = lua_toboolean(L, 1) != 0;
+  UserState* user = UserState::From(L);
+  const int focus = user->economyCopied ? user->focusArmyCopy : -1;
+  if (focus < 0) return 0;
+  UnitStore& store = Store(L);
+  std::vector<UserUnit*> selected;
+  for (UserUnit* u : store.selection)
+    if (!u->gone && !u->view.dead) selected.push_back(u);
+  std::sort(selected.begin(), selected.end(), [](const UserUnit* a, const UserUnit* b) { return a->view.id < b->view.id; });
+  std::vector<UserUnit*> docking;
+  float cx = 0, cz = 0;
+  for (UserUnit* u : selected) {
+    if (!(u->view.commandCaps & 0x400000u)) continue;
+    float p[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
+    UnitStateView st;
+    if (!clear && StateOf(L, u, &st) && !st.queue.empty()) {
+      const CommandView& last = st.queue.back();
+      if (last.hasPosition) {
+        std::copy(last.position, last.position + 3, p);
+      } else if (last.entity != 0xffffffffu) {
+        auto it = store.units.find(last.entity);
+        if (it != store.units.end()) std::copy(it->second->view.position, it->second->view.position + 3, p);
+      }
+    }
+    cx += p[0], cz += p[2];
+    docking.push_back(u);
+  }
+  if (docking.empty()) return 0;
+  cx /= static_cast<float>(docking.size()), cz /= static_cast<float>(docking.size());
+  struct Platform {
+    uint32_t id;
+    float distance2;
+    int room;
+  };
+  std::vector<Platform> platforms;
+  bool foundAny = false, foundFree = false;
+  for (const auto& [id, u] : store.units) {
+    if (u->gone || u->view.army != focus + 1 || u->view.beingBuilt || u->view.dead) continue;
+    if (!InCategory(L, u.get(), "AIRSTAGINGPLATFORM")) continue;
+    foundAny = true;
+    if (u->view.layer == 2 || u->view.layer == 4 || u->view.attached || u->view.queueLength != 0) continue;
+    int storage = 0, docking = 0;
+    int top = lua_gettop(L);
+    PushBlueprint(L, u->view.blueprint);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "Transport");
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "StorageSlots");
+        lua_rawget(L, -2);
+        storage = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+        lua_pop(L, 1);
+        lua_pushstring(L, "DockingSlots");
+        lua_rawget(L, -2);
+        docking = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+        lua_pop(L, 1);
+      }
+    }
+    lua_settop(L, top);
+    const int room = storage > 0 ? storage - u->view.attachedCount : docking;
+    if (room <= 0) continue;
+    foundFree = true;
+    const float dx = u->view.position[0] - cx, dz = u->view.position[2] - cz;
+    platforms.push_back({id, dx * dx + dz * dz, room});
+  }
+  auto dock = [&](const std::vector<uint32_t>& ids, uint32_t platform) {
+    StreamIssueData d;
+    d.type = 39;  // Dock
+    d.target.type = 1;
+    d.target.entity = platform;
+    Writer(L).IssueCommand(ids, d, clear);
+  };
+  if (!platforms.empty()) {
+    std::sort(platforms.begin(), platforms.end(), [](const Platform& a, const Platform& b) {
+      return a.distance2 < b.distance2 || (a.distance2 == b.distance2 && a.id < b.id);
+    });
+    if (static_cast<int>(docking.size()) <= platforms[0].room) {
+      std::vector<uint32_t> ids;
+      for (const UserUnit* u : docking) ids.push_back(u->view.id);
+      dock(ids, platforms[0].id);
+    } else {
+      const float reach = std::sqrt(platforms[0].distance2) + 100.0f;
+      std::vector<Platform> near;
+      int allRoom = 0;
+      for (const Platform& p : platforms)
+        if (p.distance2 < reach * reach) near.push_back(p), allRoom += p.room;
+      const float factor = std::max(1.0f, static_cast<float>(docking.size()) / static_cast<float>(allRoom));
+      std::sort(near.begin(), near.end(), [](const Platform& a, const Platform& b) {
+        return a.room > b.room || (a.room == b.room && (a.distance2 < b.distance2 || (a.distance2 == b.distance2 && a.id < b.id)));
+      });
+      size_t next = 0;
+      for (const Platform& p : near) {
+        const int quota = static_cast<int>(std::ceil(static_cast<float>(p.room) * factor));
+        std::vector<uint32_t> ids;
+        while (next < docking.size() && static_cast<int>(ids.size()) < quota) ids.push_back(docking[next++]->view.id);
+        if (ids.empty()) return 0;  // (the units ran out: no more orders, no voice; the original's)
+        dock(ids, p.id);
+      }
+    }
+  }
+  if (!selected.empty() && (!foundAny || !foundFree))
+    Writer(L).ProcessInfoPair(selected.front()->view.id, foundAny ? "PlayBusyStagingPlatformsVO" : "PlayNoStagingPlatformsVO", "play");
+  return 0;
+}
 int l_SetFireState(lua_State* L) {
   InfoPair(L, 1, "SetFireState", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
   return 0;
@@ -1943,6 +2083,37 @@ int ChangeBuildCount(lua_State* L, bool more) {
 int l_IncreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, true); }
 int l_DecreaseBuildCountInQueue(lua_State* L) { return ChangeBuildCount(L, false); }
 
+// RenderOverlayEconomy(on) (FA exe 0x847d30): the session's switch for the economy overlay (drawn
+// by the world view, DrawEconomyOverlay).
+int l_RenderOverlayEconomy(lua_State* L) {
+  UserState::From(L)->economyOverlay = lua_toboolean(L, 1) != 0;
+  return 0;
+}
+
+// DeleteCommand(id) (FA exe 0x843fa0): one less of the order with that id (FAF's command graph
+// would pass it when a waypoint is dragged away; its call is commented out there), the same message
+// as DecreaseBuildCountInQueue (15, a count of 1): at 0 the simulation takes the order from every
+// unit that holds it. The original sends it only for an id its command manager knows (the orders it
+// has seen; no check of whose they are, R: the simulation checks); here: an order in the queue of
+// one of the player's units, as the last beat left it.
+int l_DeleteCommand(lua_State* L) {
+  const uint32_t id = static_cast<uint32_t>(static_cast<int64_t>(luaL_checknumber(L, 1)));
+  Sim* sim = TheSim(L);
+  if (!sim) return 0;
+  for (const auto& [unitId, u] : Store(L).units) {
+    if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
+    UnitStateView st;
+    if (!StateOf(L, u.get(), &st)) continue;
+    for (const std::vector<CommandView>* queue : {&st.queue, &st.factoryQueue})
+      for (const CommandView& c : *queue)
+        if (c.id == id) {
+          Writer(L).DecreaseCommandCount(id, 1);
+          return 0;
+        }
+  }
+  return 0;
+}
+
 // After a beat: tell the game script when the shown factory's queue is not what it was.
 void ReportQueueChange(lua_State* L) {
   UnitStore& store = Store(L);
@@ -2053,6 +2224,24 @@ int SelectionPriorityOf(lua_State* L, const UserUnit* u) {
 // taken (a box drawn over tanks, engineers and buildings selects the tanks; over engineers, the
 // commander and buildings: the engineers and the commander), as players know it from the
 // original. INFERRED: the original's code for it is not read; the numbers are the blueprints'.
+// (The original, CWldSession::DrawEconomyOverlay 0x858d80: the focus army's units in the camera's
+// view, E = (energyProduced - energyRequested) * 10 and M the same for mass, a unit left out when
+// both are 0. Ours are a second already: produced and consumptionPerSecond, as GetEconData gives
+// them. INFERRED, not built: its distance cutoff per unit.)
+void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out) {
+  UserState* user = UserState::From(L);
+  const int focus = user->economyCopied ? user->focusArmyCopy : -1;
+  if (focus < 0) return;
+  for (const auto& [id, u] : Store(L).units) {
+    if (u->gone || u->view.dead || u->view.army != focus + 1) continue;
+    UnitStateView st;
+    if (!StateOf(L, u.get(), &st)) continue;
+    const float energy = st.produced[0] - st.consumptionPerSecond[0], mass = st.produced[1] - st.consumptionPerSecond[1];
+    if (energy == 0 && mass == 0) continue;
+    out->push_back({{u->view.position[0], u->view.position[1], u->view.position[2]}, energy, mass});
+  }
+}
+
 void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority) {
   Sim* sim = TheSim(L);
   if (!sim) return;
@@ -2457,6 +2646,8 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "ClearSessionExtraSelectList", l_ClearSessionExtraSelectList);
   SetGlobal(L, "SetAutoMode", l_SetAutoMode);
   SetGlobal(L, "SetAutoSurfaceMode", l_SetAutoSurfaceMode);
+  SetGlobal(L, "GetIsSubmerged", l_GetIsSubmerged);
+  SetGlobal(L, "IssueDockCommand", l_IssueDockCommand);
   SetGlobal(L, "SetFireState", l_SetFireState);
   SetGlobal(L, "ToggleFireState", l_ToggleFireState);
   SetGlobal(L, "ToggleScriptBit", l_ToggleScriptBit);
@@ -2519,6 +2710,26 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "ClearCurrentFactoryForQueueDisplay", l_ClearCurrentFactoryForQueueDisplay);
   SetGlobal(L, "IncreaseBuildCountInQueue", l_IncreaseBuildCountInQueue);
   SetGlobal(L, "DecreaseBuildCountInQueue", l_DecreaseBuildCountInQueue);
+  SetGlobal(L, "DeleteCommand", l_DeleteCommand);
+  SetGlobal(L, "RenderOverlayEconomy", l_RenderOverlayEconomy);
+  // moho64ui_EconomyMarks() -> the economy overlay's numbers now, each {energy, mass}; the host's
+  // own function for tests.
+  lua_register(L, "moho64ui_EconomyMarks", [](lua_State* L) -> int {
+    std::vector<EconomyMark> marks;
+    EconomyMarks(L, &marks);
+    lua_newtable(L);
+    for (size_t i = 0; i < marks.size(); ++i) {
+      lua_newtable(L);
+      lua_pushstring(L, "energy");
+      lua_pushnumber(L, marks[i].energy);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "mass");
+      lua_pushnumber(L, marks[i].mass);
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  });
 }
 
 // In front of the engine's category functions: call this once those are registered.

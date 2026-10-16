@@ -46,6 +46,7 @@ struct GameSession::Picture : WorldSource {
   GameSession* session = nullptr;
   LookSettings lookNow;      // the player's looks as last given to the picture
   bool lookApplied = false;
+  std::vector<uint32_t> iconColorsNow;  // the icons' team colours as last given (empty: the armies' own)
   // On the game's window (UseWindow): the world view's Draw only notes its camera and size, and
   // the frame is drawn and shown by PresentToWindow with the interface over it.
   bool direct = false;
@@ -154,6 +155,11 @@ struct GameSession::Picture : WorldSource {
     std::vector<render::WorldPicture::UserDecal> decals;
     for (const WorldDecal& d : scene.decals) decals.push_back({d.texture, d.position[0], d.position[2], d.size[0], d.size[1]});
     picture.SetUserDecals(decals);
+    // The strategic icons' team colours (TeamColorMode), when they change.
+    if (scene.iconColors != iconColorsNow) {
+      iconColorsNow = scene.iconColors;
+      picture.SetIconColors(iconColorsNow);
+    }
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
     picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
