@@ -234,6 +234,13 @@ const NamedFootprint& PathFinderFootprint(const Unit* u);
 
 // One sim tick of a unit's motion (after its commands ran).
 void MotionTick(Sim& sim, Unit* u);
+// Unit::UpdateTerrainType 0x6a9b50: the terrain type code of the unit's footprint-origin cell at (x, z)
+// (fistp(x - SizeX/2), fistp(z - SizeZ/2) of Entity::GetFootprint; outside the map: 1, 'Default') becomes the
+// unit's (unit+0x57c, 0 at creation); when it changed, the script hears OnTerrainTypeChange(new, old) with the
+// map's TerrainTypes entries for the two codes (nil for a code without one, as code 0). Called by the Unit
+// constructor right after the starting layer is set (0x6a5b6e), by Unit::Warp after its layer (0x6aa428), and by
+// CUnitMotion::MotionTick right after UpdateCurrentLayer (0x6b9f6f), before the move. Defined in sim/sim.cpp.
+void UpdateTerrainType(Sim& sim, Unit* u, float x, float z);
 // The CUnitMotion constructor's last step (0x6b8133), once the unit's starting layer is set: a unit created on
 // the Sub layer is at its depth at once (OnMotionVertEventChange 'Bottom').
 void MotionCreated(Sim& sim, Unit* u);

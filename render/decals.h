@@ -56,7 +56,8 @@ class Decals {
   // whole extent in world units; `heading` turns it about the upright axis (radians).
   // `cutoff`: farther from the camera than this it is not drawn (0: always).
   // `born`, `seconds`: when it was made and how long it stays (seconds <= 0: for good); it fades
-  // out over its last five seconds. Returns false when the texture is not there.
+  // out over its last five seconds, or over the second half of its time when that is shorter (a
+  // tank's tread marks last a second). Returns false when the texture is not there.
   bool Add(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born = 0, float seconds = 0);
   // The same for a normal decal (its texture: the tilt along its own x in alpha, along its own z in
   // green, how much of it to apply in red).

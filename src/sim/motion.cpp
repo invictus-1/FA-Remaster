@@ -1825,7 +1825,13 @@ void MotionTick(Sim& sim, Unit* u) {
     // the height it was created with, until it is let go.
     const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
     // UpdateCurrentLayer 0x6b9f64: before the move, on the committed position, while the last move is non-zero
-    if (!held && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) UpdateLayer(sim, u);
+    // and Unit::UpdateTerrainType right after it (0x6b9f6f, same condition), at the position of the transform
+    // MotionTick copied at its start (0x6b9d93..0x6b9de9, [esp+0x2c]), before CalcMoveLand / Hover / Water and so
+    // before this beat's OnMotionHorzEventChange (ProcessCommonMotionState at their end)
+    if (!held && (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) {
+      UpdateLayer(sim, u);
+      UpdateTerrainType(sim, u, start.x, start.z);
+    }
     const bool oldFits = StandableAt(sim, u, start.x, start.z);
     // MotionTick pre-step: contacts with other units (they push each other apart)
     if (!m.prevPosSet) {

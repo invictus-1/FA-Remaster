@@ -1521,6 +1521,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   lua_pushstring(L, u->layer.c_str());
   lua_pushstring(L, "None");
   CallMethod(L, u, "OnLayerChange", 2);
+  // Unit ctor 0x6a5b6e, right after SetCurrentLayer: the terrain type at the given place (from 0, so a unit on
+  // any typed cell hears OnTerrainTypeChange(type, nil) before its weapons and OnCreate)
+  UpdateTerrainType(*this, u, pos.x, pos.z);
   MotionCreated(*this, u);  // (the CUnitMotion ctor follows SetCurrentLayer: 0x6a5b65, 0x6a5df2)
 
   // Weapons: one per bp.Weapon entry; class from unit:GetWeaponClass(label) (FA exe
@@ -1664,6 +1667,7 @@ void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
     lua_pushstring(L, old.c_str());
     CallMethod(L, u, "OnLayerChange", 2);
   }
+  UpdateTerrainType(*this, u, pos.x, pos.z);  // Unit::Warp 0x6aa428, after SetCurrentLayer, at the given x / z
   MarkUnitsMoved();
 }
 

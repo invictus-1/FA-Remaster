@@ -546,6 +546,36 @@ int l_brain_GetBlueprintStat(lua_State* L) {
 
 }  // namespace
 
+// Unit::UpdateTerrainType 0x6a9b50 (declared in sim/motion.h). The cell: Entity::GetFootprint 0x678880, then
+// fistp(z - SizeZ * 0.5) and fistp(x - SizeX * 0.5) (0x6a9b8a..0x6a9bd6, kept as int16); it must lie inside the
+// heightfield's cells (width - 1, height - 1, unsigned compares 0x6a9bf4 / 0x6a9bfe), else the code is 1. The code
+// is stored in unit+0x57c either way (0x6a9c1e); only when it differs from the stored one are the two entries
+// fetched from the map's table (STIMap+0x18, 256 LuaObjects by TypeCode, nil where TerrainTypes.lua has none:
+// STIMap::LoadTerrainTypes 0x577f60, read by 0x6a4c20) and RunScript_OnTerrainTypeChange 0x6b0c50 called with
+// (new, old).
+void UpdateTerrainType(Sim& sim, Unit* u, float x, float z) {
+  const TerrainMap* m = sim.map();
+  if (!m || !u->motion.bp) return;
+  int cx, cz;
+  GoalCell(UnitFootprint(u), x, z, &cx, &cz);
+  const uint8_t code =
+      (cx >= 0 && cz >= 0 && cx < m->width() && cz < m->height()) ? m->TerrainType(cx, cz) : uint8_t{1};
+  const uint8_t old = u->terrainType;
+  u->terrainType = code;
+  if (code == old) return;
+  // MOHO64_DEBUG_TTYPE=<unit id decimal | -2 for every unit>: each change, with the cell it was read at
+  static const long dbg = getenv("MOHO64_DEBUG_TTYPE") ? atol(getenv("MOHO64_DEBUG_TTYPE")) : -1;
+  if (dbg == -2 || (dbg >= 0 && dbg == static_cast<long>(u->id)))
+    Logf(LogLevel::Info, "ttype %u unit %u (%s) at %.4f %.4f cell %d %d: %d -> %d", sim.tick(), u->id,
+         u->blueprint ? u->blueprint->id.c_str() : "?", x, z, cx, cz, old, code);
+  lua_State* L = sim.L();
+  PushTerrainTypes(L);
+  lua_rawgeti(L, -1, code);
+  lua_rawgeti(L, -2, old);
+  lua_remove(L, -3);
+  sim.CallMethod(L, u, "OnTerrainTypeChange", 2);
+}
+
 void RegisterSimBindings(lua_State* L) {
   SetMethod(L, "CAiBrain", "GetArmyStat", l_brain_GetArmyStat);
   SetMethod(L, "CAiBrain", "SetArmyStat", l_brain_SetArmyStat);
