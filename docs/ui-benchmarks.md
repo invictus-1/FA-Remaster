@@ -17,6 +17,22 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-16: the interface running during a beat (69c7623, landed 0de3111)
+
+Scenario L, `MOHO64UI_SHOW_ONLY_DURING_BEATS=1` (frames during a beat only show the picture) against the default
+(the interface, input and camera run during a beat too; what is asked every frame answers from copies), same build:
+
+| Frame to frame | Show-only frames | Interface live |
+|---|---|---|
+| middle | 4.16 ms | 4.17 ms |
+| 95% | 5.14 ms | 4.25 ms |
+| 99% | 5.88 ms | 5.05 ms |
+| longest | 7.36 ms | 5.88 ms |
+| frames with the world standing still | 1 of 631 | 0 of 631 |
+
+Waits for a beat left (MOHO64UI_BEAT_LOG) in three busy windowed games (the game test, build templates, scenario S):
+2 in all, both one-off (a selection by category). Before the copies: 114 in GetEconomyTotals alone in scenario L.
+
 ## 2026-10-16: the cursor's order and the range rings with 2,000 selected (scenario S; 227b4ca, landed f4e220e)
 
 | Part (a call) | Before | After |

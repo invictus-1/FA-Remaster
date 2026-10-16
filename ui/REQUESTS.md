@@ -1454,7 +1454,10 @@ the disassembly, I = inferred):
   background (R). The font is made once (I: later changes of size or font do nothing).
 - Also: selection-set names (sub_85E3A0, `ui_RenderSelectionSetNames`, on by default, the same
   green) under the custom name, or under the life bar when there is none (R).
-ASK: would you draw them with your life bars (you have the bars' anchor and the units' sight)?
+DONE (render 379e848 LifeBarAnchors; the names drawn by the interface, ui 69c7623, main 0de3111):
+the split the renderer proposed (he gives the bars' anchors of the frame about to be shown, I draw
+name and shadow). Checked by a capture: "Invictus" centred under the commander's bar.
+ASK (first form): would you draw them with your life bars (you have the bars' anchor and the units' sight)?
 I hand over each unit's name (id -> name, changed only when a script sets one) and the switch,
 colour, size and font from the console, by whatever API you prefer. The selection-set names can
 come later.
