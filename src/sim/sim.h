@@ -121,6 +121,13 @@ class Sim {
 
   // Rules state: run the blueprint loader and keep the blueprints for the sim.
   bool LoadRules();
+  // The engine's script fixes (docs/deviations.md), joined to a script state as one more hook folder (read from
+  // data/fixes/hook at each call). For a host's own states that should see what the sim's see, e.g. the interface
+  // host's blueprint state when `fixes` and RulesFixesWanted() (ui REQUESTS 35).
+  static void JoinFixesHooks(ScriptState& st);
+  // A fix in the blueprints is for one of the game's mods (today the stock campaign mod, deviations.md 4): with
+  // `fixes`, Start(SessionDescription) loads the rules again with the fix files.
+  bool RulesFixesWanted() const;
   // Start the session described by a replay header (no commands are played yet).
   bool Start(const ReplayHeader& replay);
   // Start the session a lobby launch describes (sim/session.h): the same start, with the launch's focus army.
@@ -478,7 +485,6 @@ class Sim {
   // The rules state (LoadRules), with the engine's script fixes joined when withFixes (Start(SessionDescription)
   // loads them again so when RulesFixesWanted: a fix in the blueprints is for one of the game's mods).
   bool LoadRulesState(bool withFixes);
-  bool RulesFixesWanted() const;
   bool CreateArmies(const ReplayHeader& replay);
   void CreateMapProps();
 };

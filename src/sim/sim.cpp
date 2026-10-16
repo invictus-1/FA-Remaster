@@ -856,6 +856,8 @@ std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
 }
 }  // namespace
 
+void Sim::JoinFixesHooks(ScriptState& st) { st.SetExtraHooks(FixesHooks()); }
+
 // ---- Sim -----------------------------------------------------------------------------------
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
