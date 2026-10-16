@@ -276,6 +276,23 @@ void ReleaseStructure(Sim& sim, Unit* u) {
   sim.navigation().RemoveStructure(EntityRef(u));
 }
 
+// COGrid::ExecuteOccupy 0x721a90 / ReleaseOccupy 0x721b30 for a prop: the rect is the blueprint footprint at
+// (fistp(x - SizeX/2), fistp(z - SizeZ/2)) (0x6f9f4f..0x6f9fda; the destructor the same at the prop's position then,
+// 0x6fa067..0x6fa105). The layer bits go on only for OccupancyCaps & 7 (land) / & 8 (water); the clusters of every
+// footprint's path map around the rect are dirtied in any case (0x721ae0 / 0x721b80 -> 0x76bbd0).
+void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
+  const int sx = p->occSizeX, sz = p->occSizeZ;
+  const int x0 = static_cast<int16_t>(RoundEven(pos.x - sx * 0.5f));
+  const int z0 = static_cast<int16_t>(RoundEven(pos.z - sz * 0.5f));
+  static const bool dbg = getenv("MOHO64_DEBUG_NAV") != nullptr;
+  if (dbg)
+    Logf(LogLevel::Info, "prop %s %08x %s caps %d rect (%d,%d)-(%d,%d)", occupy ? "occupy" : "release", p->id,
+         p->blueprint ? p->blueprint->id.c_str() : "?", p->occCaps, x0, z0, x0 + sx, z0 + sz);
+  // NOT PORTED: the layer bits. Seton's Clutch has 14 such props (fieldstone rocks, OccupancyCaps 3: land layer, so
+  // no land footprint without IgnoreStructures fits on them in the original); ours does not block them.
+  LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
+}
+
 // ---- build helper (CBuildTaskHelper) -----------------------------------------------------------
 
 namespace {

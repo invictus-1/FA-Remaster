@@ -1038,6 +1038,7 @@ void Sim::ProcessDestroyQueue() {
     } else if (e->kind == Entity::Kind::Beam) {
       beams.erase(std::remove(beams.begin(), beams.end(), static_cast<CollisionBeam*>(e)), beams.end());
     } else if (e->kind == Entity::Kind::Prop) {
+      if (static_cast<Prop*>(e)->occupies) PropOccupancy(*this, static_cast<Prop*>(e), e->position, false);  // ~Prop 0x6fa05a
       if (collectProps) propsGone.emplace_back(e->id, static_cast<Prop*>(e)->mapIndex);
       props.erase(std::remove(props.begin(), props.end(), static_cast<Prop*>(e)), props.end());
       propGridDirty_ = true;
