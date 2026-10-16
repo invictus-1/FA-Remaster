@@ -1,7 +1,7 @@
 // The meshes the game's script places in the world: its WorldMesh objects
 // (/lua/ui/controls/worldmesh.lua: the factories' rally points, the marks under the cursor), the
 // marks where an order lands (AddCommandFeedbackBlip), and its decals on the ground (UserDecal:
-// FAF's rings under the cursor while aiming; drawn once the picture takes them, renderer request 25).
+// FAF's rings under the cursor while aiming; drawn by WorldPicture::SetUserDecals, renderer request 25).
 //
 // The engine side keeps what the script sets and hands the list to the picture's source with
 // every scene (WorldScene::meshes); how each is drawn goes by its shader's name and is the

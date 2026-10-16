@@ -150,6 +150,10 @@ struct GameSession::Picture : WorldSource {
       meshes.push_back(std::move(o));
     }
     picture.SetWorldMeshes(meshes);
+    // The script's decals on the ground (UserDecal: the rings under the cursor while aiming).
+    std::vector<render::WorldPicture::UserDecal> decals;
+    for (const WorldDecal& d : scene.decals) decals.push_back({d.texture, d.position[0], d.position[2], d.size[0], d.size[1]});
+    picture.SetUserDecals(decals);
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
     picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)

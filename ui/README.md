@@ -556,7 +556,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   is gone when its time is over. The engine side keeps what the script sets and hands the list
   over with every scene (`WorldScene::meshes`); the renderer's `SetWorldMeshes` draws each by
   its shader's name. Written from the scripts' use, not read from the original's code; of the
-  `GetInterpolated...` methods only the position is built.
+  `GetInterpolated...` methods only the position is built. The script's decals on the ground
+  (`UserDecal`: `_c_CreateDecal` and the `ScriptedDecal` methods SetTexture, SetScale, SetPosition,
+  SetPositionByScreen, Destroy; FA exe 0x87eb60 ..): FAF's rings under the cursor while the player
+  aims (a weapon's splash for an attack order, a tactical missile's, a nuke's inner and outer
+  rings, overcharge), handed over as `WorldScene::decals` to the renderer's `SetUserDecals`
+  (renderer request 25). Checked in a game: a bomber in attack mode shows its splash ring at the
+  mouse, and nuke rings made by a script lie on the ground under the trees.
+- `SetAutoSurfaceMode(units, on)` (FA exe 0x8bb360): the info pair `SetAutoSurfaceMode` for each
+  own unit, as `SetAutoMode`; the simulation keeps the switch (`GetIsAutoSurfaceMode` reads it
+  back) but does not surface a submarine by it yet (the engine's).
 - A factory's rally point: an order given in the world with a factory selected goes into the
   factory's rally queue (`CommandWriter::IssueFactoryCommand`), so what it builds walks there.
   (Inferred: that this holds for buildings in category FACTORY and for every order but a

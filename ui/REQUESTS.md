@@ -1516,8 +1516,8 @@ launcher.
 DONE (render 6cbf20a, `docs/render-answers.md`): `WorldPicture::SetUserDecals(std::vector<UserDecal>)`,
 {texture, x, z, sizeX, sizeZ} (sizes across in world units), on the ground in their own colours, under
 units and trees; the list stands until the next call; on water on the bottom, tinted. The host's side
-is built (world_meshes.cpp: the UserDecal objects, WorldScene::decals); the call waits for 6cbf20a on
-main.
+is built (world_meshes.cpp: the UserDecal objects, WorldScene::decals) and hands them over in
+GameSession's SetScene (main 8e8c31a has his side).
 
 ## To the visuals track
 
