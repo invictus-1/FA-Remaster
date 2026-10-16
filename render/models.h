@@ -85,6 +85,7 @@ struct ModelLod {
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
   bool vertexNormals = false;  // lit by the mesh's own normals, no normal map
+  bool noShadow = false;       // "...NoShadow" (the objective arrow's NormalMappedAlphaNoShadow): casts none
   bool glass = false;          // see-through, drawn after the water without writing depth (frames of light, shields)
   bool shield = false;         // "Shield...": a shield's bubble: a faint tinted shell, brighter toward its rim
   Vec3 shieldTint{0.25f, 0.5f, 1.0f};

@@ -15,6 +15,8 @@ cbuffer SightCamera : register(b1) {
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: what an unseen place keeps of its light; w: a place never seen
   float4 cover;        // x: what an unseen place under radar keeps; y: the water's level
+  float4 playable;     // BoundaryPS: the part of the map that can be played now, x0, z0, x1, z1
+  float4 boundary;     // BoundaryPS: x what lies outside keeps of its light (0: black); y 1: only on the map
 };
 Texture2D sight : register(t0);
 #ifdef MSAA
@@ -54,6 +56,25 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   float keeps = lerp(mapInfo.w, lerp(mapInfo.z, cover.x, radar), known);
   return float4(lerp(float3(0.85, 0.95, 1.2) * keeps, 1, seen), 1);
 }
+
+// What lies outside the part of the map that can be played now.
+float4 BoundaryPS(float4 position : SV_Position) : SV_Target {
+  float depth = DepthAt(int2(position.xy));
+  if (depth <= 0) return 1;  // the sky
+  float away = cameraBack.w / depth;
+  float2 ndc = float2(position.x * viewport.z * 2 - 1, 1 - position.y * viewport.w * 2);
+  float3 world = cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
+  float outside = length(max(max(playable.xy - world.xz, world.xz - playable.zw), 0));
+  if (outside <= 0) return 1;
+  float2 uv = world.xz * mapInfo.xy;
+  if (boundary.y > 0.5 && (any(uv < 0) || any(uv > 1))) return 1;  // (the original's: on the map only)
+  if (boundary.x <= 0) return float4(0, 0, 0, 1);
+  // (one pixel's width on the ground there, square to the line of sight: the line keeps its width
+  // in the picture however far the camera is)
+  float pixel = away * 2 * cameraRight.w * viewport.w;
+  float edge = saturate(1 - outside / max(pixel * 1.6, 1e-4));
+  return float4(float3(0.9, 0.95, 1.08) * boundary.x * (1 - 0.8 * edge), 1);
+}
 )hlsl";
 
 }  // namespace
@@ -71,7 +92,11 @@ bool SightShade::Init(std::string* error) {
   pd.samples = gSceneSamples;
   pd.alphaWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
-  return static_cast<bool>(pipeline_);
+  if (!pipeline_) return false;
+  pd.name = "playable boundary";
+  pd.pixelEntry = "BoundaryPS";
+  boundary_ = device_->CreatePipeline(pd, error);
+  return static_cast<bool>(boundary_);
 }
 
 void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
@@ -101,15 +126,35 @@ void SightShade::Draw(const View& view, const Camera& camera, gfx::Texture scene
   if (!texture_ || mapWidth <= 0 || mapHeight <= 0 || view.height <= 0) return;
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
-  const float constants[20] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+  const float constants[28] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                back.x, back.y, back.z, camera.zNear,
                                1 / mapWidth, 1 / mapHeight, darkness, neverSeen,
-                               std::max(covered, darkness), waterLevel, 0, 0};
+                               std::max(covered, darkness), waterLevel, 0, 0,
+                               0, 0, 0, 0,
+                               0, 0, 0, 0};
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, constants, sizeof constants);
   device_->SetTexture(0, texture_);
+  device_->SetTexture(1, sceneDepth);
+  device_->Draw(3);
+}
+
+void SightShade::DrawBoundary(const View& view, const Camera& camera, gfx::Texture sceneDepth, const float rect[4], float mapWidth, float mapHeight, bool dimmed) {
+  if (!boundary_ || mapWidth <= 0 || mapHeight <= 0 || view.height <= 0 || rect[2] <= rect[0] || rect[3] <= rect[1]) return;
+  Vec3 right, up, back;
+  camera.Axes(&right, &up, &back);
+  const float constants[28] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+                               up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
+                               back.x, back.y, back.z, camera.zNear,
+                               1 / mapWidth, 1 / mapHeight, 0, 0,
+                               0, 0, 0, 0,
+                               rect[0], rect[1], rect[2], rect[3],
+                               dimmed ? outsideKeeps : 0.0f, dimmed ? 0.0f : 1.0f, 0, 0};
+  device_->SetPipeline(boundary_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, constants, sizeof constants);
   device_->SetTexture(1, sceneDepth);
   device_->Draw(3);
 }

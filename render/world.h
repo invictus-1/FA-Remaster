@@ -222,6 +222,19 @@ class World {
   // --- settings, changeable between frames ---
   Look look = Look::Modern;
   bool shadowsOn = true, iconsOn = true;
+  // The selection's brackets (or ring) and the brackets under the mouse (the console's ren_SelectBoxes:
+  // off in a cinematic). On at first.
+  bool selectionMarks = true;
+  // The part of the map that can be played now (the campaign's SetPlayableArea: an operation opens on
+  // part of the map and grows it): x0, z0, x1, z1 in world units; x1 <= x0: the whole map, as at first.
+  // Outside it nothing is shown of the game (no unit, icon or bar; it cannot be pointed at) and the
+  // picture there is black, as the original's boundary pass makes it (frame.fx Boundary over the
+  // stencil of vision.fx's CastBoundary boxes); in the modern look with the world beyond the map's edge
+  // it is dimmed instead, behind a dark line along the edge, as that world is.
+  float playable[4] = {0, 0, 0, 0};
+  bool OutsidePlayable(float x, float z) const {
+    return playable[2] > playable[0] && (x < playable[0] || z < playable[1] || x > playable[2] || z > playable[3]);
+  }
   // The lamps' shadows (lights.h): what stands in a headlight's beam shadows the ground and the
   // units behind it. `lampShadowsDrawn`: how many lamps had a shadow map in the last frame.
   bool lampShadows = true;
