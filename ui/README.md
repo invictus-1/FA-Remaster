@@ -451,10 +451,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (the simulation's own recon, the engine's `ReconOf` / `ReconAt`); what is only on radar or
   sonar stays silent, so a sound gives away no more than the picture should.
   `MOHO64UI_SOUND_LOG=1` logs every sound of the world, and once for each cue the curves it
-  follows. Not built: the second
-  ("rumble") sound of a running sound, the files' other curves (attack and release times, the
-  angle), ducking the other sounds under a voice, effects, fading as the files set it. How the
-  original's own sound manager limits and fades is not read from its code.
+  follows.
+  Ducking, read from the original's sound manager (FA exe, `CUserSoundManager`): a voice played
+  with `PlayVoice(params, true)` (the simulation's alerts, the mission's talking heads, the
+  lobby's countdown) takes the other sounds down while it plays. The game moves one variable of
+  its sound settings, "Duck", from 0 to 1 over "DuckLength" (0.5 s, read from `SupCom.xgs`) when
+  the first ducking voice starts, in real time, and back over the same time when the last one
+  ends; the cut is the settings' curve by "Duck", 10 dB at most, which the sound banks give
+  nearly every sound of the world and the ambient loops. Music, voices and the interface's
+  sounds have no such curve and stay as they are. As the original: a voice stopped at once lets
+  go at once, one stopped softly when its sound has ended; `SetVolume` and `StopAllSounds` end
+  the duck at once; `PlayTutorialVO(params, prepareOnly)` never ducks (`sound/sound_system.h`,
+  at `Duck`; test `tests/duck.lua`).
+  Not built: the second ("rumble") sound of a running sound, the files' attack and release
+  times, effects, fading as the files set it. How the original's own sound manager limits and
+  fades is not read from its code.
 - The mouse pointer is the game's own: the texture the scripts set (`GetCursor():SetTexture`,
   animated ones step through their pictures) is made into the system's pointer in a live window,
   so it moves with the mouse whatever the frame rate is; a screenshot of a run without a window

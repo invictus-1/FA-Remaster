@@ -582,6 +582,7 @@ int main(int argc, char** argv) {
       shown->ui().Render(shown->L(), target, 0);
       backdrop->WaitUntilReady(30.0);
       target.Clear(0xff000000u);
+                           sounds.Update(static_cast<float>(seconds));
     }
     shown->ui().Render(shown->L(), target, 0);
     if (!game) session.DrawStatus(target);
@@ -603,5 +604,6 @@ int main(int argc, char** argv) {
   }
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
+      sounds.Update(1.0f / 60.0f);
   return ok ? 0 : 1;
 }

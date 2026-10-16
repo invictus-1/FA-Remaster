@@ -406,4 +406,32 @@ bool ParseCurves(const uint8_t* data, size_t size, std::map<uint32_t, Curve>* ou
   return !c.bad;
 }
 
+// The variables (the head as in ParseCurves): at the second offset, 13 bytes each: a flags byte,
+// then the value it starts at, its least and its most (floats); their names at the eighth.
+bool ParseVariables(const uint8_t* data, size_t size, std::map<std::string, float>* out) {
+  if (size < 0x4d || std::memcmp(data, "XGSF", 4) != 0) return false;
+  Reader r(data, size, 4 + 2 + 2 + 2 + 8 + 1);
+  r.U16();
+  uint32_t count = r.U16();
+  r.Skip(10);
+  uint32_t offsets[11];
+  for (uint32_t& o : offsets) o = r.U32();
+  if (r.bad || count > 4096) return false;
+  out->clear();
+  size_t name = offsets[7];
+  for (uint32_t i = 0; i < count && name < size; ++i) {
+    Reader v(data, size, offsets[1] + 13 * static_cast<size_t>(i));
+    v.U8();
+    uint32_t bits = v.U32();
+    if (v.bad) return false;
+    float value;
+    std::memcpy(&value, &bits, 4);
+    size_t len = 0;
+    while (name + len < size && data[name + len]) ++len;
+    (*out)[std::string(reinterpret_cast<const char*>(data + name), len)] = value;
+    name += len + 1;
+  }
+  return true;
+}
+
 }  // namespace moho::ui::sound
