@@ -4,6 +4,105 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, renderer request 28: a unit's transform as the coming frame draws it (2026-10-16)
+
+`bool WorldPicture::UnitTransform(uint32_t id, double tick, float position[3], float orientation[4]) const`.
+- **What it gives:** the place and turn the next Draw, DrawToWindow or LifeBarAnchors with the same `tick`
+  draws the unit at. It is blended between the beats exactly as the picture blends them (one beat back from
+  the newest, the same clamp), not the beat's own place.
+- **Order:** ask first, make the camera from it, then draw with that camera. It needs no camera, so it can
+  come before LifeBarAnchors.
+- **Quaternion order:** x, y, z, w, with y up; the unit faces its own +z turned by it, as
+  `FrameUnit::orientation` and the engine's views have it.
+- **False:** no such unit at that moment (not yet made, or gone from the beats kept). A dying unit (a plane
+  falling) is still given while the beats have it.
+- **Not checked by it:** whether the focus army sees the unit, and whether it is outside a playable part.
+- **Cost:** two binary searches in the two beats; nothing else is blended.
+- **Checked:** `--picture` prints the first unit's transform; it is 0.00 from where the viewer's own frame
+  has it.
+
+## To ui, renderer request 27: the campaign's playable area and the cinematics' switches (2026-10-16)
+
+**(1) `WorldPicture::SetPlayableRect(float x0, float z0, float x1, float z1)`**, world units. The whole map at
+first, and again when x1 <= x0 (or z1 <= z0).
+- **What the original does outside:** its boundary pass (frame.fx `Boundary`, over the stencil that
+  vision.fx's `CastBoundaryCCW/CW` boxes leave) blackens every pixel whose depth lies in the boxes: ground,
+  water, props and units alike. So in the original, units outside are not dimmed but black. Which entities
+  your SyncPlayableRect "marks" is not read; this does the same as the black does.
+- **What ours does outside:**
+  - Nothing of the game is shown there: no unit (alive or dying), no strategic icon, no bar, no remembered
+    building, no deposit icon, and UnitAt / UnitsIn do not find them.
+  - The original look, and the modern look with the machinery edge (`worldBeyond` false): black, on the map
+    only (the frame beyond its edge stays).
+  - The modern look with the world beyond the edge (Chris's "no machinery"): dimmed to 0.45 of its light, a
+    shade toward blue, behind a thin dark line along the edge that keeps its width at any zoom. The fog of
+    war still darkens there as anywhere.
+  - Effects drawn there go dark with the ground (the pass comes after them, before the icons).
+- **The minimap:** shows that part alone. Its height fills the picture's height, so give a width in the
+  part's proportion, (x1 - x0) / (z1 - z0). MinimapProject and MinimapGroundAt follow it, and a new rect
+  draws its ground anew.
+- **Checked:** `--playable x0,z0,x1,z1` in the viewer. The pictures are the same on D3D12 and Vulkan (mean
+  difference under 0.1 of 255). The play area's own brightness is unchanged (52.7 against 51.6 with the
+  pass). A unit outside a playable half is not found at its pixel, and is found again with the whole map.
+
+**(2) The three switches,** each on at first:
+- `SetStrategicIcons(bool)`: UI_NisRenderIcons. Off, the picture has no strategic icons; the minimap keeps
+  its own.
+- `SetSelectionMarks(bool)`: ren_SelectBoxes. Off, there are no selection brackets (or ring) and no brackets
+  under the mouse.
+- `SetWorldShown(bool)`: ren_Oblivion, inverted. Off, Draw and DrawToWindow show black under the
+  interface. The game is still followed underneath (beats, effects, ground changes), so nothing piles up or
+  bursts out when it comes back.
+- **Checked:** `--picture`: with the world off, 0 of 1,440,000 pixels are not black.
+
+**(3) Objective arrows and objective areas: checked in a game.** A test mod made five things a few seconds into a
+session: arrows on army 1's and army 2's commanders, `SimObjectives.CreateObjectiveDecal` beside army 1's
+commander, on army 2's, and one destroyed 5 seconds later. A sixth was added later, over the sea.
+- **Before today:**
+  - The arrows were drawn and bounced (SetParentOffset, SetDrawScale, the arrow mesh: all fine). But with a
+    focus army, the arrow over a unit in the fog was hidden, though the script says
+    `SetVizToFocusPlayer('Always')`.
+  - **No objective area was drawn at all.** Their kind "Water Albedo" was not handled. With a focus army
+    they were also dropped as unseen, and they are made at a height of 0, so their box missed the ground.
+- **Fixed (render, this push):**
+  - **"Water Albedo" decals:** drawn unlit in their own colours (the original's TDecalsWaterAlbedo: times
+    the map's light multiplier). Where the ground lies under water, they lie on the water's surface (a
+    second decal pass after the water). Checked over Seton's shore, in both looks.
+  - **Height:** a decal given far from the ground is put on it.
+  - **Fog:** a decal laid for the focus army (the objectives are army 1's) shows where that army does not
+    see.
+  - **DecalHandle:Destroy:** honoured. The area goes when the objective is done (the destroyed one is gone 2
+    seconds later in the test). This also fixes buildings' tarmacs, which were never taken away: on a kill,
+    StructureUnit removes them and lays them again with a life of 300 seconds.
+  - **'Always':** a script entity's `SetVizTo...('Always')` makes it seen, so the arrow over a unit in the
+    fog shows.
+  - **Shadow:** the arrow's shader "NormalMappedAlphaNoShadow" casts no shadow now (ModelLod::noShadow, for
+    any "...NoShadow" shader).
+- **Left to the engine (render/REQUESTS.md 29):** `Entity:GetCollisionExtents` is a stub, so the arrow hangs
+  about 2.3 units lower than the original's over a commander, and is not made bigger for large targets.
+- **Pictures:** kept in the lab with the test mod; ask if you want them.
+
+## To visuals, section 30: many weighted bones on one mesh (2026-10-16)
+
+**Yes: 256 is the only ceiling, with one more rule.**
+- **The ceiling:** each vertex names its bone by one byte (`ScmVertex::bones[0]`; the other three bytes and
+  any weights are not read: a vertex follows one bone, rigidly). So every weighted bone must be indexed
+  below 256.
+- **The rule for the other LODs:** a lower LOD whose bone list differs from LOD0's is matched to LOD0's
+  list by bone name (`models.cpp`, the renumbering), and that table is a byte too. So a bone weighted in any
+  LOD must also sit below 256 in LOD0's list. Your plan covers it: root, then every weighted bone, then the
+  rest, in the same order in every LOD.
+- **No other per-model cap:**
+  - The bone rows go into one shader buffer that grows to fit (`MeshRenderer::BuildRows`).
+  - Batching limits instances per draw (768), not bones.
+  - The simulation's pose lists are plain vectors with int bone indices (`moho::BonePose`).
+  - All 700 bones are posed: 48 bytes each, about 34 KB per visible copy per frame. That is fine for an
+    experimental.
+  - Whether the engine's scripts or animations limit bone counts anywhere is the engine's to say; I know of
+    nothing.
+- **SCM version 6:** still right for LOD0 above 65,535 vertices (version 5 with 32-bit indices,
+  `models.cpp` line 74).
+
 ## To ui, renderer request 26: team colours for the icons, and the focus army during a game (2026-10-16)
 
 **(1) Team colours:** `WorldPicture::SetIconColors(const std::vector<uint32_t>& argbByArmy)`.

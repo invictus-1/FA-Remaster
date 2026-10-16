@@ -11,6 +11,7 @@
 // ground with (the light it would take tilted) / (the light it took); and lights (a glow added).
 // The map editor's remaining kinds (glow, water masks) are not drawn.
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,20 @@ class Decals {
   // The same for a normal decal (its texture: the tilt along its own x in alpha, along its own z in
   // green, how much of it to apply in red).
   bool AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born = 0, float seconds = 0);
+  // The same for a "Water Albedo" decal (the campaign's objective areas): in its own colours, unlit
+  // (the original's TDecalsWaterAlbedo: times the map's light multiplier), and where the ground under
+  // it lies under water, on the water's surface (drawn by the second Draw, after the water).
+  bool AddWater(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born = 0, float seconds = 0);
+  // The number of the decal the last Add, AddNormal or AddWater laid (from 1), for Remove.
+  uint32_t LastAdded() const { return lastId_; }
+  // Takes that decal away at once (a script's DecalHandle:Destroy: an objective done, a building's
+  // tarmac laid again with a life time when it is killed).
+  void Remove(uint32_t id);
+  // The ground's height (not the water's) at a place, given by the host: a decal whose place is
+  // given far from the ground (the campaign's objective areas are made at a height of 0) is put
+  // on the ground there. `waterLevel`: where the water's surface is (the map's; none: very low).
+  std::function<float(float, float)> groundHeight;
+  float waterLevel = -1e9f;
   // A glow on the ground that adds its light for `seconds`, coloured by `ramp` along that time:
   // the light an explosion throws on its surroundings (the original's "light particle", there a
   // flat sheet drawn over everything; here it lies on the ground). `texture` and `ramp` are paths;
@@ -80,8 +95,10 @@ class Decals {
     mapHeight_ = mapHeight;
   }
   // Draws the decals into the current pass, which must be the scene's colour alone (no depth
-  // target); `sceneDepth` is the scene's depth with the ground in it.
-  void Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now);
+  // target); `sceneDepth` is the scene's depth with the ground in it. `overWater`: the second
+  // drawing, after the water: only the "Water Albedo" decals' parts that lie over water.
+  void Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now, bool overWater = false);
+  bool AnyWater() const { return waterDecals_ > 0; }
 
   float glow = 2.5f;  // the modern look's brightness of a light on the ground (as Particles::glow)
   int drawn = 0;  // in the last Draw
@@ -96,6 +113,8 @@ class Decals {
     float seconds;
     bool normal = false;
     bool mark = false;
+    bool water = false;  // a "Water Albedo" decal
+    uint32_t id = 0;     // (laid by Add: from 1)
     float snowAtBirth = 0;  // snowFallen_ when it was laid (see `snowLying`)
   };
   struct Instance {  // as the shader reads it
@@ -107,6 +126,8 @@ class Decals {
   float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
   double snowClock_ = -1;   // when it was last moved on
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old
+  uint32_t nextId_ = 1, lastId_ = 0;
+  int waterDecals_ = 0;     // "Water Albedo" decals there now
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;

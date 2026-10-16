@@ -63,6 +63,8 @@ struct WorldPicture::Impl {
   std::vector<uint32_t> pixels;
   double lastTick = 0;
   bool prepared = false;  // LifeBarAnchors has begun the frame the next RenderWorld draws
+  bool worldShown = true;  // SetWorldShown
+  float mapRect[4] = {0, 0, 0, 0};  // the playable part the minimap's ground was last drawn for
   WorldPicture::Stats stats;  // LastStats
   // the minimap: the ground as drawn once, the camera it was drawn with, and the picture handed out
   std::vector<uint32_t> mapGround, mapPixels;
@@ -286,7 +288,7 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
   if (!m.prepared) PrepareWorld(camera, width, height, tick);
   m.prepared = false;
   const auto t0 = std::chrono::steady_clock::now();
-  m.world->Render();
+  if (m.worldShown) m.world->Render();
   m.stats.drawMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -360,9 +362,9 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   const bool playing = m.frames.FrameAt(shown, &m.frame);
   m.lastTick = shown;
 
-  const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+  const float clear[4] = {0.05f, 0.06f, 0.08f, 1}, black[4] = {0, 0, 0, 1};
   const auto t1 = std::chrono::steady_clock::now();
-  m.device->BeginFrame(clear);
+  m.device->BeginFrame(m.worldShown ? clear : black);
   const auto t2 = std::chrono::steady_clock::now();
   m.stats.waitMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
   m.world->Begin(camera, width, height, static_cast<float>(shown * 0.1), shown * 0.1);
@@ -456,6 +458,29 @@ void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
   if (impl_->world) impl_->world->borders = meshBlueprints;
 }
 
+void WorldPicture::SetPlayableRect(float x0, float z0, float x1, float z1) {
+  if (!impl_->world) return;
+  float* r = impl_->world->playable;
+  if (x1 <= x0 || z1 <= z0) {
+    r[0] = r[1] = r[2] = r[3] = 0;
+    return;
+  }
+  r[0] = x0;
+  r[1] = z0;
+  r[2] = x1;
+  r[3] = z1;
+}
+
+void WorldPicture::SetStrategicIcons(bool on) {
+  if (impl_->world) impl_->world->iconsOn = on;
+}
+
+void WorldPicture::SetSelectionMarks(bool on) {
+  if (impl_->world) impl_->world->selectionMarks = on;
+}
+
+void WorldPicture::SetWorldShown(bool on) { impl_->worldShown = on; }
+
 void WorldPicture::SetIconColors(const std::vector<uint32_t>& argbByArmy) {
   if (!impl_->world) return;
   std::vector<Vec3>& out = impl_->world->iconColors;
@@ -539,18 +564,23 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
   const float hourNow = w.timeOfDay < 0 ? -1 : w.timeOfDay;
   const float weatherNow = w.timeOfDay < 0 ? 0 : w.cloudCover + w.wet * 2 + w.snowLying * 4 + w.fog * 8;
   if (m.mapWidth != width || m.mapHeight != height || m.mapGround.empty() || std::fabs(hourNow - m.mapHour) > 0.25f ||
-      std::fabs(weatherNow - m.mapWeather) > 0.2f) {
+      std::fabs(weatherNow - m.mapWeather) > 0.2f || !std::equal(m.mapRect, m.mapRect + 4, w.playable)) {
     m.mapHour = hourNow;
     m.mapWeather = weatherNow;
-    // the ground: from so far above with so narrow a view that it is as good as a map
+    std::copy(w.playable, w.playable + 4, m.mapRect);
+    // the ground: from so far above with so narrow a view that it is as good as a map (of the part
+    // that can be played now, when only a part can)
     const float mw = static_cast<float>(w.map.width), mh = static_cast<float>(w.map.height);
+    const bool part = w.playable[2] > w.playable[0];
+    const float x0 = part ? w.playable[0] : 0, z0 = part ? w.playable[1] : 0;
+    const float x1 = part ? w.playable[2] : mw, z1 = part ? w.playable[3] : mh;
     Camera c;
-    c.target = {mw * 0.5f, 0, mh * 0.5f};
+    c.target = {(x0 + x1) * 0.5f, 0, (z0 + z1) * 0.5f};
     c.target.y = w.GroundHeight(c.target.x, c.target.z);
     c.heading = 0;
     c.pitch = 3.14159265f / 2;
     c.fovY = 0.05f;
-    c.distance = mh * 0.5f / std::tan(c.fovY * 0.5f);
+    c.distance = (z1 - z0) * 0.5f / std::tan(c.fovY * 0.5f);
     m.device->Resize(width, height);
     const bool icons = w.iconsOn, shadows = w.shadowsOn;
     std::vector<World::Ghost> ghosts;
@@ -628,7 +658,8 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
   // the buildings the army remembers though they are gone
   for (const World::RememberedGone& r : w.rememberedGone) {
     float x, y;
-    if (MinimapProject(r.position, &x, &y)) w.icons.Blit(r.kind, r.color, false, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, false, true);
+    if (!w.OutsidePlayable(r.position.x, r.position.z) && MinimapProject(r.position, &x, &y))
+      w.icons.Blit(r.kind, r.color, false, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, false, true);
   }
   // every unit's icon on it
   if (m.frame.blueprints) {
@@ -636,7 +667,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
       const std::string& blueprint = (*m.frame.blueprints)[u.blueprint];
       if (blueprint.empty()) continue;
       const bool remembered = u.SeenBefore() && blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
-      if (u.dead || (!u.Seen() && !u.Blip() && !remembered)) continue;
+      if (u.dead || (!u.Seen() && !u.Blip() && !remembered) || w.OutsidePlayable(u.position[0], u.position[2])) continue;
       if (u.blueprint >= m.iconKinds.size()) m.iconKinds.resize(m.frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = m.iconKinds[u.blueprint];
       if (!kind) kind = w.icons.ForBlueprint(w.models.UnitBlueprintPath(blueprint));
@@ -672,6 +703,11 @@ bool WorldPicture::MinimapGroundAt(float x, float y, Vec3* hit) const {
 
 bool WorldPicture::Project(Vec3 world, float* x, float* y) const { return impl_->world && impl_->world->Project(world, x, y); }
 bool WorldPicture::GroundAt(float x, float y, Vec3* hit) const { return impl_->world && impl_->world->GroundAt(x, y, hit); }
+bool WorldPicture::UnitTransform(uint32_t id, double tick, float position[3], float orientation[4]) const {
+  // (the moment PrepareWorld shows for that tick: one beat back from the newest, within the beats kept)
+  const double first = static_cast<double>(impl_->frames.FirstTick()), last = static_cast<double>(impl_->frames.LastTick());
+  return impl_->frames.UnitAt(std::clamp(tick - 1, first, last), id, position, orientation);
+}
 uint32_t WorldPicture::UnitAt(float x, float y) const { return impl_->world ? impl_->world->UnitAt(x, y) : 0xffffffffu; }
 void WorldPicture::UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const {
   out->clear();

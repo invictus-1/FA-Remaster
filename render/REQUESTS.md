@@ -30,6 +30,23 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
+## 29. Entity:GetCollisionExtents is a stub: objective arrows hang too low (2026-10-16, not blocking)
+
+**Who asks:** the renderer, for the campaign (ui's renderer request 27: objective arrows must be drawn).
+
+**What was seen:** a helper's test mod made `import('/lua/objectiveArrow.lua').ObjectiveArrow { AttachTo = acu }`
+in a game. The arrow is drawn, bounces, and is attached as it should be. But the sim log prints
+`stub Entity:GetCollisionExtents`, so the script's height for it falls back to its default.
+- **The script (lua/objectiveArrow.lua):** places the arrow at `extents.Max.y - unit y + size * 0.5 + 0.5` above
+  the unit, and scales it up by `min(extents x, extents z)` when that is over 1.
+- **The result here:** the arrow sits about 2.1 units above the commander, at head height. With UEL0001's
+  SizeY 2.31 the original puts it about 2.3 units higher, and bigger targets get no bigger arrow.
+
+**What:** `Entity:GetCollisionExtents()` returning `{Min = Vector, Max = Vector}` (world positions of the
+entity's collision box, as the original's). FAF's scripts call it elsewhere too.
+
+**Answer:** (none yet)
+
 ## 28. The original look's bloom: how the original makes it (2026-10-16, low priority; DONE the same day: answered in docs/engine-answers.md "render 28", drawn by render ada0e82)
 
 **Who asks:** the renderer, for the original look. The game's Bloom Render / Bloom Intensity options are now

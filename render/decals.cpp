@@ -21,13 +21,15 @@ struct Instance {
   float4 centre;   // xyz; w: half the box's height
   float4 shape;    // x, y: half the footprint along its own x and z; z, w: cos and sin of its heading
   float4 options;  // x: how much of it is there (fading), y: a light's age (0..1 of its time; a plain mark: how much of the lying snow covers it),
-                   // z: 1 = a light (texture x ramp, added), w: the modern look's brightness of a light
+                   // z: 1 = a light (texture x ramp, added), 2 a normal decal, 3 a mark, 4 a "Water Albedo" decal
+                   // where the ground is above the water, 5 the same on the water where the ground is under it;
+                   // w: the modern look's brightness of a light
 };
 cbuffer DecalCamera : register(b1) {
   float4 cameraRight;  // w: tan(half the field of view)
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
-  float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water
+  float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water; w: the water's level
 };
 cbuffer Instances : register(b2) {
   Instance instances[1024];
@@ -73,12 +75,29 @@ float4 PS(VOut i) : SV_Target {
   float depth = DepthAt(int2(i.position.xy));
   if (depth <= 0) discard;  // nothing drawn here
   float3 world = WorldAt(i.position.xy, depth);
+  // a "Water Albedo" decal: the original raises the ground under it to the water's surface
+  // (TDecalsWaterAlbedo). Before the water: only where the ground is above it; after the water: only
+  // where the ground is under it, on the surface the line of sight meets.
+  if (i.options.z > 3.5) {
+    bool under = mapInfo.z > 0.5 && world.y < mapInfo.w;
+    if (under != (i.options.z > 4.5)) discard;
+    if (under) {
+      float3 ray = world - cameraPosition;
+      world = cameraPosition + ray * ((mapInfo.w - cameraPosition.y) / min(ray.y, -1e-4));
+    }
+  }
   float3 d = world - i.centre.xyz;
   if (abs(d.y) > i.centre.w) discard;
   // into the decal's own frame (the heading turned back)
   float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
+  if (i.options.z > 3.5) {  // a "Water Albedo" decal: unlit, in its own colours (the original's times the light multiplier)
+    c.a *= i.options.x;
+    if (c.a <= 0.003) discard;
+    c.rgb = look > 0.5 ? ToLinear(c.rgb) * (1.6 * (falling.w > 0 ? falling.w : 1)) : c.rgb * lightMultiplier;
+    return c;
+  }
   if (i.options.z > 2.5) {  // a mark: as it is (the modern look's picture is linear light, mapped back at the end)
     if (look > 0.5) c.rgb = ToLinear(c.rgb) * (1.6 * (falling.w > 0 ? falling.w : 1));  // (less to an eye opened for the night)
     return c;
@@ -205,9 +224,32 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   }
   const gfx::Texture t = Resolve(texture);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
+  if (groundHeight) {  // (given far from the ground, beyond what its box reaches: on the ground)
+    const float ground = groundHeight(centre.x, centre.z);
+    if (std::fabs(centre.y - ground) > std::max(std::fabs(sizeX), std::fabs(sizeZ)) * 0.5f) centre.y = ground;
+  }
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
   decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
+  decals_.back().id = lastId_ = nextId_++;
   return true;
+}
+
+bool Decals::AddWater(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
+  if (!Add(texture, centre, sizeX, sizeZ, heading, cutoff, born, seconds)) return false;
+  Decal& d = decals_.back();
+  d.water = true;
+  d.centre.y = std::max(d.centre.y, waterLevel);  // (its box reaches the surface)
+  ++waterDecals_;
+  return true;
+}
+
+void Decals::Remove(uint32_t id) {
+  for (auto it = decals_.begin(); it != decals_.end(); ++it)
+    if (it->id == id) {
+      if (it->water) --waterDecals_;
+      decals_.erase(it);
+      return;
+    }
 }
 
 bool Decals::AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
@@ -231,18 +273,22 @@ bool Decals::AddLight(const std::string& texture, const std::string& ramp, Vec3 
   return true;
 }
 
-void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now) {
-  drawn = 0;
-  // the snow that has fallen since the last frame (a mark is covered by one unit of it)
-  if (snowClock_ >= 0 && now > snowClock_) snowFallen_ += snowing * static_cast<float>(std::min(now - snowClock_, 0.5)) / 90.0f;
-  snowClock_ = now;
-  settled_ = true;
-  // those whose time is over go
-  decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [now](const Decal& d) { return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds); }),
-                decals_.end());
+void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now, bool overWater) {
+  if (!overWater) {
+    drawn = 0;
+    // the snow that has fallen since the last frame (a mark is covered by one unit of it)
+    if (snowClock_ >= 0 && now > snowClock_) snowFallen_ += snowing * static_cast<float>(std::min(now - snowClock_, 0.5)) / 90.0f;
+    snowClock_ = now;
+    settled_ = true;
+    // those whose time is over go
+    decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [now](const Decal& d) { return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds); }),
+                  decals_.end());
+    waterDecals_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.water; }));
+  }
   visible_.clear();
   for (size_t which = 0; which < decals_.size() + marks_.size(); ++which) {
     const Decal& d = which < decals_.size() ? decals_[which] : marks_[which - decals_.size()];
+    if (overWater && !d.water) continue;
     const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
     // the ground under a decal may rise and fall across it: the box is tall for its width
     const float halfHeight = reach * 0.7f + 1.5f;
@@ -268,13 +314,13 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.sinHeading = std::sin(d.heading);
     n.alpha = alpha;
     n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
-    n.light = d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
+    n.light = d.water ? (overWater ? 5.0f : 4.0f) : d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
     // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
     if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
     n.glow = glow;
-    visible_.push_back({d.texture.id, d.ramp.id, d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
+    visible_.push_back({d.texture.id, d.ramp.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
   }
-  marks_.clear();
+  if (!overWater) marks_.clear();
   if (visible_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
   std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
@@ -288,7 +334,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   const float cameraConstants[16] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                      up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                      back.x, back.y, back.z, camera.zNear,
-                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, 0};
+                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f};
   int bound = -1;
   for (size_t at = 0; at < visible_.size();) {
     const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp;
