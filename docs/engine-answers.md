@@ -3,6 +3,29 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 25: a copy of the terrain heights kept between beats — done
+
+`src/sim/terrain.h`:
+- `float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, float z)`, the one bilinear
+  rule (STIMap::GetElevation 0x44fb90: z first, then x, every step a float op). `TerrainMap::TerrainHeight` now
+  calls it, so a copy and the sim give the same bits.
+- `TerrainMap::heightData()` (the raw `uint16_t` samples, `(width() + 1) * (height() + 1)`, row by row in z),
+  `heightScale()` and `changes()` (a count of `SetHeightAt` calls; it moves when a building flattens the ground,
+  `l_FlattenMapRect`). Read them only between beats; copy the whole field (or the changed rows) when `changes()`
+  differs from the value of your last copy.
+- `SurfaceHeight` (terrain or water) is `max(TerrainHeightOf(...), waterElevation)` when `hasWater`; the water
+  levels never change during a game.
+
+Gate: all 13 replays unchanged.
+
+## Lua's shared state and the interface's Lua during the beat (the luathreads audit, engine 5787374)
+
+The interface's Lua may run while the sim's beat runs on another thread IF: every interface path to sim data waits
+for the beat or reads a per-beat copy; no rules load, `CopyToSim`, `Vfs::Mount` or `ScriptState` construction
+happens during a beat; the four Lua hook pointers are set once per process (done); `os.setlocale` cannot change the
+process's locale (done). Also done: `math.random` draws from a generator of its own `lua_State` (the Microsoft C
+runtime's numbers from seed 1), so a second game in the same process loads the same blueprints as a fresh one.
+
 ## visuals 28: where the 13 replays show UEF units moving and building
 
 Read from our recordings of the 13 replays (every unit named; all on Seton's, SCMP_009). Positions are world
