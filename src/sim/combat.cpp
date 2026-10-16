@@ -463,8 +463,9 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   }
   const auto& bones = e->skeleton->bones();
   float s = e->meshScale * e->scale[0];
-  if (e->kind == Entity::Kind::Projectile) {
-    // Entity::GetBoneWorldTransform 0x679ce0 for an entity that is no unit: its CURRENT transform (entity+0x9c,
+  if (e->kind == Entity::Kind::Projectile || e->kind == Entity::Kind::Prop) {
+    // Entity::GetBoneWorldTransform 0x679ce0 for an entity that is no unit (a projectile, a prop: Prop has no
+    // override of slots 0x48 / 0x4c): its CURRENT transform (entity+0x9c,
     // which a step taken earlier in this beat has not changed) x GetBoneLocalTransform 0x679e20 = the inverse of
     // the skeleton's rest-pose inverse, place times the entity's scale; one composition (0x549c20), no walk down
     // the chain. Seen: a wreck hanging on FAF's sinker shell by the shell's bone 'anchor'; with the chain's

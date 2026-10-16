@@ -344,16 +344,25 @@ int l_CreatePropAtBone(lua_State* L) {
   BoneWorld(e, bone < 0 ? 0 : bone, &wp, &wq);
   Prop* p = S(L)->CreateProp(L, *bp, wp, wq, Vec3{1, 1, 1});
   // after OnCreate: warp so the new prop's own bone 0 sits on the bone's transform (W o L0^-1; tree meshes
-  // have a rotated bone 0, so the split trees stand upright)
+  // have a rotated bone 0, so the split trees stand upright). In the exe's own arithmetic (prop_split.md 2):
+  // L0 = the new prop's GetBoneLocalTransform(0) 0x679e20 = the inverse of its bone 0's rest-pose inverse
+  // (entRot / entPos), the place times the prop's scale; Inverse 0x46fbf0 (conjugate, the negated place turned by
+  // it, 0x452d40); then Compose 0x549c20 (W o L0^-1). W itself is the group's bone by the same reading
+  // (BoneWorld, a prop: entity transform x GetBoneLocalTransform, one composition). Seen: Skirmish 1522, ours
+  // made the split tree 804267725 stand exactly upright, and the ACU's box test met it on a face (depth 0.0088;
+  // the edge axis tree-y x unit-z is then the unit's x axis, a tie the face wins). In the exe's digits the
+  // tree leans by about 1e-7 (q.x -8.9e-8, q.z 3e-8) and is not knocked over, as in the original (oracle
+  // TREEDBG run); ours fell one tree more (the first differing draw, a FallThread's Random at 1523). Other
+  // split trees stood one float step beside the original's (now the same, to the bit, in that run).
   if (p && !p->destroyQueued && p->skeleton && p->skeleton->Count() > 0) {
     const Bone& b0 = p->skeleton->bones()[0];
-    float sc = p->meshScale * p->scale[0];
-    Vec3 t0{b0.modelPos.x * sc, b0.modelPos.y * sc, b0.modelPos.z * sc};
-    Quat r0c{-b0.modelRot.x, -b0.modelRot.y, -b0.modelRot.z, b0.modelRot.w};
-    Quat q = vm::QMul(wq, r0c);
-    Vec3 d = vm::Rotate(q, t0);
-    p->position = Vec3{wp.x - d.x, wp.y - d.y, wp.z - d.z};
-    p->orientation = q;
+    const Vec3 l0p{b0.entPos.x * (p->meshScale * p->scale[0]), (p->meshScale * p->scale[1]) * b0.entPos.y,
+                   (p->meshScale * p->scale[2]) * b0.entPos.z};
+    const Quat iq{-0.0f - b0.entRot.x, -0.0f - b0.entRot.y, -0.0f - b0.entRot.z, b0.entRot.w};
+    const Vec3 ip = vm::RotateM(iq, Vec3{-0.0f - l0p.x, -0.0f - l0p.y, -0.0f - l0p.z});
+    const Vec3 r = vm::RotateM(wq, ip);
+    p->position = Vec3{wp.x + r.x, wp.y + r.y, wp.z + r.z};
+    p->orientation = vm::ComposeQ(wq, iq);
     GridUpdate(*S(L), p, false);
   }
   return PushNew(L, p);
