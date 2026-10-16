@@ -614,6 +614,14 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) names.font = value;
       return;
     }
+    if (key == "UI_RENDERSELECTIONSETNAMES") {
+      names.setsOn = value.empty() ? !names.setsOn : (value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0);
+      return;
+    }
+    if (key == "UI_SELECTIONSETNAMESCOLOR") {
+      if (!value.empty()) names.setsColor = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, value.size() == 8 ? 16 : 0));
+      return;
+    }
   }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");

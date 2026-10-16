@@ -835,6 +835,25 @@ bool AnyCustomNames(lua_State* L) {
   return false;
 }
 
+std::string SelectionSetsText(lua_State* L, uint32_t id) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(id);
+  if (it == store.units.end() || it->second->gone || it->second->selectionSets.empty()) return std::string();
+  // (The original keeps them in a std::set<std::string>: byte order, each once; FA exe 0x85e490.)
+  std::vector<std::string> sets = it->second->selectionSets;
+  std::sort(sets.begin(), sets.end());
+  sets.erase(std::unique(sets.begin(), sets.end()), sets.end());
+  std::string text;
+  for (const std::string& s : sets) text += s + " ";
+  return text;
+}
+
+bool AnySelectionSets(lua_State* L) {
+  for (const auto& [id, u] : Store(L).units)
+    if (!u->gone && !u->selectionSets.empty()) return true;
+  return false;
+}
+
 bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army) {
   UserState* user = UserState::From(L);
   if (!user->units) return false;

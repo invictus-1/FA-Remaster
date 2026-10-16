@@ -248,16 +248,25 @@ LookSettings& Looks();
 // variables ui_RenderCustomNames, ui_CustomNameColor, ui_CustomNameFontSize, ui_CutsomNameFont, as
 // spelt there; FA exe descriptors 0xf5b2d0.., defaults: on, 0xff00aa00, 12, "Arial"; the game's
 // option "Always Show Custom Names" sends 0 at the start). Read by a helper from the exe (REQUESTS 23).
+// Below them, a unit's selection sets (its control groups: "1 3 "), as sub_85E3A0 draws them:
+// ui_RenderSelectionSetNames (on in the exe and never set by the game's scripts at the start; a key
+// action toggles it) and ui_SelectionSetNamesColor (0xff00aa00); the same font.
 struct CustomNameStyle {
   bool on = true;
   uint32_t color = 0xff00aa00u;
   int size = 12;
   std::string font = "Arial";
+  bool setsOn = true;
+  uint32_t setsColor = 0xff00aa00u;
 };
 CustomNameStyle& CustomNames();
-// A unit's custom name (nullptr: none or no such unit), and whether any unit has one (user_units.cpp).
+// A unit's custom name (nullptr: none or no such unit), its selection sets as the original writes
+// them ("1 3 ": sorted, each with a space after; "" for none), and whether any unit has a name or a
+// set (user_units.cpp).
 const std::string* CustomNameOf(lua_State* L, uint32_t id);
+std::string SelectionSetsText(lua_State* L, uint32_t id);
 bool AnyCustomNames(lua_State* L);
+bool AnySelectionSets(lua_State* L);
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
 // 2026-10-15, via the renderer track: "have options for all and default is vsync on"):
 // remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"
