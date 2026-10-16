@@ -73,6 +73,8 @@
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
+// --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
+// --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
@@ -133,6 +135,7 @@
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
 // V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
+#include <algorithm>
 #include <map>
 #include <cctype>
 #include <chrono>
@@ -204,6 +207,8 @@ struct Options {
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
   bool vulkan = false;                  // --vulkan
+  bool fxc = false;                     // --fxc
+  bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
@@ -290,6 +295,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--timings") o->timings = true;
     else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--vulkan") o->vulkan = true;
+    else if (a == "--fxc") o->fxc = true;
+    else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
@@ -510,6 +517,8 @@ int main(int argc, char** argv) {
   dd.vsync = opt.vsync;
   dd.debug = opt.debug;
   dd.backend = opt.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
+  dd.oldShaderCompiler = opt.fxc;
+  if (!opt.shaderCache) dd.shaderCache = "-";
   auto device = gfx::Device::Create(dd, &error);
   if (device && opt.vulkanClear) {  // --vulkan-clear: the backend's first step alone: frames cleared, shown and read back
     printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
@@ -1058,6 +1067,17 @@ int main(int argc, char** argv) {
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
     double worst = 0;  // the longest whole frame (a hitch)
+    // the card's stages and its whole frame, frame by frame: their middle and their lowest are what a
+    // frame costs when other programs use the card too (they only ever add to it)
+    std::vector<std::pair<std::string, std::vector<double>>> gpuFrames;
+    void AddGpu(const std::string& name, double ms) {
+      for (auto& s : gpuFrames)
+        if (s.first == name) {
+          s.second.push_back(ms);
+          return;
+        }
+      gpuFrames.push_back({name, {ms}});
+    }
     // the slowest frame of all, the first ones too (where loading on first sight goes), part by part
     double slowest = 0;
     int slowestFrame = 0;
@@ -1630,9 +1650,13 @@ int main(int argc, char** argv) {
       double gpu = 0;
       for (const auto& s : stages) {
         timing.Add(std::string("gpu: ") + s.first, s.second);
+        timing.AddGpu(s.first, s.second);
         gpu += s.second;
       }
-      if (!stages.empty()) timing.Add("gpu: whole frame", gpu);
+      if (!stages.empty()) {
+        timing.Add("gpu: whole frame", gpu);
+        timing.AddGpu("whole frame", gpu);
+      }
       for (const auto& part : CpuTimes::parts) timing.Add(std::string("cpu part: ") + part.first, part.second);
       ++timing.frames;
     }
@@ -1696,6 +1720,12 @@ int main(int argc, char** argv) {
                device->AdapterName().c_str(), vsync ? " (vsync on: the waits include it)" : "");
         for (const auto& s : timing.sums) printf("render: --timings:   %-48s %7.3f\n", s.first.c_str(), s.second / timing.frames);
         printf("render: --timings:   %-48s %7.3f\n", "cpu: the longest frame", timing.worst);
+        for (const auto& s : timing.gpuFrames) {
+          std::vector<double> g = s.second;
+          std::sort(g.begin(), g.end());
+          printf("render: --timings:   %-48s %7.3f\n", ("gpu: " + s.first + ", the middle one").c_str(), g[g.size() / 2]);
+          printf("render: --timings:   %-48s %7.3f\n", ("gpu: " + s.first + ", the lowest").c_str(), g.front());
+        }
       }
       if (opt.timings && timing.slowest > 0) {
         printf("render: --timings: the slowest frame of all (frame %d, the first ones counted too): %.1f ms; its parts over 1 ms:\n", timing.slowestFrame,
