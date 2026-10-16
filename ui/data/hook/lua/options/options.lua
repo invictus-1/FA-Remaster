@@ -28,6 +28,20 @@ local looks = {
         },
     },
     {
+        -- (Chris, 2026-10-15: a choice, Direct3D 12 by default; from the next map loaded)
+        title = "Graphics API",
+        key = 'remaster_graphics_api',
+        type = 'toggle',
+        default = 'd3d12',
+        set = Look("remaster_graphics_api"),
+        custom = {
+            states = {
+                { text = "Direct3D 12", key = 'd3d12' },
+                { text = "Vulkan", key = 'vulkan' },
+            },
+        },
+    },
+    {
         title = "Upscaling (FSR 1)",
         key = 'remaster_upscale',
         type = 'toggle',

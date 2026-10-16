@@ -34,7 +34,11 @@ class Backdrop : public BackdropSource {
   // which must not change while a world is alive (render/world.h), so the caller sets it first.
   Backdrop(const Vfs* vfs, std::string map);
   ~Backdrop() override;
-  void Begin() { begun_ = true; }
+  // `vulkan`: drawn with Vulkan in place of Direct3D 12 (the player's Graphics API).
+  void Begin(bool vulkan) {
+    vulkan_ = vulkan;
+    begun_ = true;
+  }
   const uint32_t* Latest(int width, int height) override;
   // End it and give the graphics device back (a game is starting: it has its own picture; or the
   // scene's samples change). Again: nothing.
@@ -50,6 +54,7 @@ class Backdrop : public BackdropSource {
   std::thread thread_;
   std::atomic<bool> running_{true};
   std::atomic<bool> begun_{false};
+  std::atomic<bool> vulkan_{false};
   std::mutex mutex_;
   int wantW_ = 0, wantH_ = 0;      // the size asked for
   std::chrono::steady_clock::time_point asked_{};  // when it was last asked for

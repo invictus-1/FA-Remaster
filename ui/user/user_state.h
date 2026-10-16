@@ -205,6 +205,9 @@ struct LookSettings {
   // SC_CameraScaleLOD 0..2 (model detail 0.5 / 0.75 / 1). Until told: today's full look.
   int fidelity = 2, shadows = 3, sceneSamples = 4;
   float meshDetail = 1.0f;
+  // "Graphics API" (Chris, 2026-10-15): Vulkan in place of Direct3D 12, the default; taken when a
+  // picture is made (WorldPicture::SetVulkan before Open).
+  bool vulkan = false;
 };
 LookSettings& Looks();
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,

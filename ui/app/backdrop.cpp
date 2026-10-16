@@ -97,6 +97,7 @@ void Backdrop::Run() {
   while (running_ && !begun_) std::this_thread::sleep_for(std::chrono::milliseconds(5));
   if (!running_) return;
   render::WorldPicture picture;
+  picture.SetVulkan(vulkan_);
   std::string error;
   auto t0 = Clock::now();
   if (!picture.Open(vfs_, map_, &error)) {

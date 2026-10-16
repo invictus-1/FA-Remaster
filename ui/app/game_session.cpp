@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 
+#include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -573,6 +574,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target) {
   if (!picture_) {  // no game: the menu's picture, the interface alone over black
     if (!menuPicture_) {
       auto menu = std::make_unique<MenuPicture>();
+      menu->picture.SetVulkan(Looks().vulkan);
       menu->picture.UseWindow(window);
       std::string error;
       if (!menu->picture.Open(vfs_, "", &error)) {
@@ -641,6 +643,7 @@ void GameSession::OpenPicture() {
       if (releaseWorlds) releaseWorlds();
       render::gSceneSamples = Looks().sceneSamples;
     }
+    pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     if (window) pic->picture.UseWindow(window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {
@@ -776,6 +779,7 @@ void GameSession::TimedTick() {  // (a beat of the simulation, timed for the win
 }
 
 void GameSession::NoteBeat() {
+  g_crashTick = sim_->tick();  // (a crash's line in the log names the beat: src/core/crash.h)
 #ifdef MOHO64UI_WORLD_PICTURE
   const auto tp = std::chrono::steady_clock::now();
   if (picture_) picture_->picture.Beat(*sim_);
