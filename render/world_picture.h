@@ -147,6 +147,16 @@ class WorldPicture {
     bool free = true;
   };
   void SetBuildPreviews(const std::vector<BuildPreview>& previews);
+  // Pictures laid on the ground (the game's UserDecal: the ring of a weapon's splash while the player
+  // aims, a nuke's inner and outer rings): a texture of the game's files ("/textures/ui/common/game/
+  // AreaTargetDecal/weapon_icon_small.dds"), its middle on the map and its size across in world units.
+  // Square to the map, north up, in their own colours, under the units. The list stands until the next call.
+  struct UserDecal {
+    std::string texture;
+    float x = 0, z = 0;
+    float sizeX = 1, sizeZ = 1;
+  };
+  void SetUserDecals(const std::vector<UserDecal>& decals);
   // Lines between places of the world and rings lying on the ground (the lines of a unit's orders,
   // ranges). Colours are 0xAARRGGBB; lines are hidden by what is in front of them. A line's width
   // is in pixels on the screen, the same from near and from far (1: a hairline, as before).

@@ -456,6 +456,13 @@ void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
   if (impl_->world) impl_->world->borders = meshBlueprints;
 }
 
+void WorldPicture::SetUserDecals(const std::vector<UserDecal>& decals) {
+  if (!impl_->world) return;
+  std::vector<World::UserDecal>& out = impl_->world->userDecals;
+  out.clear();
+  for (const UserDecal& d : decals) out.push_back({d.texture, d.x, d.z, d.sizeX, d.sizeZ});
+}
+
 void WorldPicture::SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings) {
   if (!impl_->world) return;
   World& w = *impl_->world;

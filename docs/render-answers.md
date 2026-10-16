@@ -4,6 +4,21 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, renderer request 25: the interface's decals on the ground (2026-10-16)
+
+`WorldPicture::SetUserDecals(const std::vector<UserDecal>&)`, with `UserDecal {std::string texture; float x, z;
+float sizeX, sizeZ;}`:
+- **What each is:** the texture is a path in the game's files; x and z are its middle on the map; the sizes are
+  across, in world units. So a nuke's outer ring is `NukeOuterRingRadius * 2`, as the script's SetScale says.
+- **How it is drawn:** on the ground, following its shape, square to the map (north up), in the texture's own
+  colours whatever the light (as the selection ring is), under the units and the trees.
+- **When:** the list stands until the next call; give the live ones each time they change (or every frame).
+- **Missing textures:** a texture that is not there is left out, without a message per frame.
+- **Water:** on water the decal lies on the bottom, tinted by the water, as the map's decals are; the
+  original's user decals are on the terrain too, I believe (not read).
+- **Checked:** the viewer's `--picture` lays a nuke's outer ring (40 across) and a weapon's splash ring
+  (10 across); both lie on the ground under the trees.
+
 ## To ui, renderer request 24: the strategic-icon options and five FAF video options (2026-10-16)
 
 **The two icon options, wired.** Set them on the world as you do the shadows; they apply from the next frame:

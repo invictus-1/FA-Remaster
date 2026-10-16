@@ -30,6 +30,32 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
+## 28. The original look's bloom: how the original makes it (2026-10-16, low priority, not blocking)
+
+**Who asks:** the renderer, for the original look. The game's Bloom Render / Bloom Intensity options are now
+wired (ui's renderer request 24): in the modern look they drive our own glow. The original look has no bloom at
+all today, while the original game blooms when a player turns it on (Chris plays with it on at 1.5).
+
+**What the shader files say (READ, effects/frame.fx and mesh.fx):**
+- **Glow in the frame's alpha:** the unit shaders write their glow into the frame's alpha. NormalMappedPS with
+  `glow`: `alpha = specular.b + glowMinimum`; without it, `vertex.material.g * albedo.a`.
+- **The glow copy:** CopyGlowingPS reads the frame (linear) and makes
+  `a = saturate((a - MinimumGlow) * GlowCopyScale + GlowCopyAdd)`, colour times a.
+- **The blur:** TBlurHorizontal / TBlurVertical, 7 taps (weights 0.1027 0.1210 0.1760 0.1995 0.1760 0.1210
+  0.1027), times BlurScale; then TAdd / TFrameAdd adds the result.
+
+**What only the exe says (wanted):**
+- **The constants:** the values or console variables of MinimumGlow, GlowCopyScale, GlowCopyAdd, glowMinimum,
+  glowMultiplier and BlurScale. Is BlurScale `ren_BloomBlurKernelScale`?
+- **The passes:** their order and the sizes of their targets (is the glow copy made at a fraction of the
+  screen, and how many blur rounds?).
+- **Off:** whether `ren_bloom 0` skips all of it.
+- **What the rest writes to alpha:** which techniques write glow (the `glow` flag per technique), and what the
+  terrain, water, decals and effects leave in the frame's alpha before the copy.
+
+**The renderer's side:** the original look's shaders write the glow as the original's do, and the passes as
+read. Not before the engine has time; nothing waits on it.
+
 ## 27. Tread scrolling: AddThreadScroller / RemoveScroller (2026-10-16, Chris: "Yeah lets add that"; DONE the same day: engine main f31bbd1 (UnitView::scrollPrev / scroll, DisplayLod::scrolling, read from the exe), drawn by render 2026-10-16)
 
 **Who asks:** Chris, through the renderer. The original scrolls the texture on a tank's treads as it moves;
