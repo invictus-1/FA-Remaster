@@ -27,7 +27,10 @@ public headers (zlib licence, `ui/third_party/SDL3`) and stb_truetype 1.26 (publ
   main menu's text lies on the same pixels. A test build runs through SDL (`--sdl --sdl-lib <the
   SDL3 mingw package's lib>`): `ui/tests/sdl_input.lua` puts events into SDL's own queue and checks
   what the interface hears (keys, characters, modifiers, clicks, double clicks, the wheel).
-- Not tried anywhere: Wayland and X11 themselves, a Mac's keyboard (Cmd is not Ctrl here), Retina
+- A Mac's Cmd is the game's Ctrl (Chris, 2026-10-16: "that should be fine"): the Cmd key's events carry
+  Ctrl's code and with it held the events say Ctrl; tried on Windows with `--define MOHO64UI_CMD_AS_CTRL`
+  (`tests/sdl_input.lua`, 18 of 18).
+- Not tried anywhere: Wayland and X11 themselves, a Mac's keyboard itself, Retina
   scaling (the window is in points, one interface pixel per point), fontconfig's stand-ins.
 
 ## What is left
@@ -37,8 +40,7 @@ public headers (zlib licence, `ui/third_party/SDL3`) and stb_truetype 1.26 (publ
    `SDL_Vulkan_GetInstanceExtensions` / `SDL_Vulkan_CreateSurface` handed to
    `WorldPicture::UseHostSurface`, the renderer's answer to ui request 29). Written to the
    specifications, untried.
-2. A Mac's keyboard: Cmd as Ctrl for the game's bindings, if Chris wants it so.
-3. Retina screens: the window is in points now; the interface could draw in pixels and keep its
+2. Retina screens: the window is in points now; the interface could draw in pixels and keep its
    pixel-for-pixel layout at a scale.
-4. Packaging: a release folder needs SDL3 (Linux and Mac: the system's), the Vulkan loader and DXC's
+3. Packaging: a release folder needs SDL3 (Linux and Mac: the system's), the Vulkan loader and DXC's
    library (the renderer's notes), and the engine's `data/fixes` beside the program.

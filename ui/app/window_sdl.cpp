@@ -38,6 +38,16 @@ namespace {
 
 SDL_Window* Sdl(void* window) { return static_cast<SDL_Window*>(window); }
 
+// On a Mac, Cmd is the game's Ctrl (Chris, 2026-10-16: "that should be fine"): its key reaches the
+// game as Ctrl's, and with it held the events say Ctrl, as Mac players expect of Ctrl-A, Ctrl-click
+// and the control groups. The Mac's own Ctrl key stays Ctrl too. (MOHO64UI_CMD_AS_CTRL: the same
+// in a Windows test build, to try it.)
+#if defined(__APPLE__) || defined(MOHO64UI_CMD_AS_CTRL)
+const bool kCmdIsCtrl = true;
+#else
+const bool kCmdIsCtrl = false;
+#endif
+
 bool VideoUp() {
   static int up = -1;
   if (up < 0) {
@@ -101,8 +111,8 @@ int VirtualKeyOf(SDL_Scancode sc) {
     case SDL_SCANCODE_LCTRL: case SDL_SCANCODE_RCTRL: return 17;
     case SDL_SCANCODE_LSHIFT: case SDL_SCANCODE_RSHIFT: return 16;
     case SDL_SCANCODE_LALT: case SDL_SCANCODE_RALT: return 18;
-    case SDL_SCANCODE_LGUI: return 91;
-    case SDL_SCANCODE_RGUI: return 92;
+    case SDL_SCANCODE_LGUI: return kCmdIsCtrl ? 17 : 91;
+    case SDL_SCANCODE_RGUI: return kCmdIsCtrl ? 17 : 92;
     default: return 0;
   }
 }
@@ -110,7 +120,7 @@ int VirtualKeyOf(SDL_Scancode sc) {
 void Modifiers(UiEvent* e) {
   const SDL_Keymod m = SDL_GetModState();
   e->shift = (m & SDL_KMOD_SHIFT) != 0;
-  e->ctrl = (m & SDL_KMOD_CTRL) != 0;
+  e->ctrl = (m & SDL_KMOD_CTRL) != 0 || (kCmdIsCtrl && (m & SDL_KMOD_GUI) != 0);
   e->alt = (m & SDL_KMOD_ALT) != 0;
 }
 
@@ -451,7 +461,7 @@ void Window::Present(const SoftwareTarget& target) {
 // try). SDL builds only.
 // moho64ui_SdlKey(scancode [, "down" | "up"]): SDL's key by its scancode, both halves without the
 // second argument. moho64ui_SdlMods(names): the modifiers held from now on ("Ctrl", "Shift Alt",
-// "" for none). moho64ui_SdlText(text): typed text, as the system's text input brings it.
+// "" for none; "Cmd" a Mac's Cmd, Windows' Windows key). moho64ui_SdlText(text): typed text, as the system's text input brings it.
 // moho64ui_SdlMouse(kind, x, y [, button or notches [, clicks]]): "move", "down", "up" (button 1
 // left, 2 middle, 3 right; clicks 2 for a double click's second), "wheel" (notches, away is
 // positive).
@@ -477,6 +487,7 @@ int l_SdlMods(lua_State* L) {
   if (names.find("Ctrl") != std::string::npos) m |= SDL_KMOD_LCTRL;
   if (names.find("Shift") != std::string::npos) m |= SDL_KMOD_LSHIFT;
   if (names.find("Alt") != std::string::npos) m |= SDL_KMOD_LALT;
+  if (names.find("Cmd") != std::string::npos) m |= SDL_KMOD_LGUI;
   SDL_SetModState(m);
   return 0;
 }
@@ -519,6 +530,8 @@ int l_SdlMouse(lua_State* L) {
 void RegisterWindowTestBindings(lua_State* L) {
   lua_register(L, "moho64ui_SdlKey", l_SdlKey);
   lua_register(L, "moho64ui_SdlMods", l_SdlMods);
+  lua_pushboolean(L, kCmdIsCtrl);
+  lua_setglobal(L, "moho64ui_SdlCmdIsCtrl");  // (whether this build takes Cmd as Ctrl)
   lua_register(L, "moho64ui_SdlText", l_SdlText);
   lua_register(L, "moho64ui_SdlMouse", l_SdlMouse);
 }

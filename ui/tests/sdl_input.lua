@@ -68,6 +68,12 @@ ForkThread(function()
     moho64ui_SdlMods("Ctrl")
     check("Ctrl+A: the control character Windows makes", after(function() key(A) end), "KeyDown65c Char1c KeyUp65c")
     moho64ui_SdlMods("")
+    if moho64ui_SdlCmdIsCtrl then  -- (a Mac, or a test build with MOHO64UI_CMD_AS_CTRL)
+        moho64ui_SdlMods("Cmd")
+        check("Cmd held is Ctrl: Cmd+A as Ctrl+A", after(function() key(A) end), "KeyDown65c Char1c KeyUp65c")
+        moho64ui_SdlMods("")
+        check("the Cmd key itself is the Ctrl key", after(function() key(227) end), "KeyDown308 KeyUp308")
+    end
     check("text beyond ASCII: its character's code", after(function() moho64ui_SdlText("\195\169") end), "Char233")
     -- the mouse
     check("a left click on the control", after(function()
