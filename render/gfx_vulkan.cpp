@@ -1646,7 +1646,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
   ds.depthWriteEnable = desc.depthWrite && ds.depthTestEnable;  // (as Direct3D 12: no test, no writes)
   ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // (reversed depth)
   VkPipelineColorBlendAttachmentState bt{};
-  bt.colorWriteMask = desc.colorWrite ? 0xf : 0;
+  bt.colorWriteMask = !desc.colorWrite ? 0 : desc.alphaWrite ? 0xf : 0x7;
   bt.colorBlendOp = bt.alphaBlendOp = VK_BLEND_OP_ADD;
   bt.srcColorBlendFactor = bt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
   bt.dstColorBlendFactor = bt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;

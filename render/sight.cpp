@@ -69,6 +69,7 @@ bool SightShade::Init(std::string* error) {
   pd.blend = gfx::Blend::Multiply;
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
   return static_cast<bool>(pipeline_);
 }

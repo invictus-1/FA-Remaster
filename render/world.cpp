@@ -1302,6 +1302,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
   post.glow = bloom ? 0.5f * std::max(bloomIntensity, 0.0f) / 1.5f : 0.0f;  // (the player's bloom options)
+  // (and the original look's own bloom, as the original makes it: the same options, the map's Bloom)
+  post.originalBloom.on = bloom && look == Look::Original;
+  post.originalBloom.blurScale = std::max(bloomIntensity, 0.0f);
+  post.originalBloom.copyAdd = haveMap_ ? map.lighting.bloom : 0.0f;
   // (a stage of the frame: timed on the graphics card and on the processor, for --timings)
   auto Stage = [this](const char* name) {
     device_->Mark(name);

@@ -462,6 +462,7 @@ bool Sky::Init(std::string* error) {
   pd.depthWrite = false;  // (tested against what was drawn: only where nothing is)
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
   return static_cast<bool>(pipeline_);
 }

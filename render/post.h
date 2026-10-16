@@ -38,6 +38,14 @@ class Post {
   // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
   // sun on water): how much of it is added; 0: none.
   float glow = 0.5f;
+  // The original look's bloom, as the original makes it (render 28): on (the game's ren_bloom), its blur's
+  // scale (ren_BloomBlurKernelScale), the glow copy's scale (ren_BloomGlowCopyScale) and what it adds
+  // (the map's lighting Bloom), and how many times it blurs along and across (ren_BloomBlurCount).
+  struct OriginalBloom {
+    bool on = false;
+    float blurScale = 1.5f, copyScale = 2.0f, copyAdd = 0.08f;
+    int blurCount = 2;
+  } originalBloom;
 
  private:
   gfx::Device* device_;
@@ -49,6 +57,9 @@ class Post {
   gfx::Pipeline glowDown_, glowUp_;
   gfx::Texture glowSteps_[kGlowSteps], black_;
   int glowWidth_[kGlowSteps] = {}, glowHeight_[kGlowSteps] = {};
+  gfx::Pipeline bloomCopy_, bloomBlur_;  // (the original look's bloom)
+  gfx::Texture bloom_[2];
+  int bloomWidth_ = 0, bloomHeight_ = 0;
   int width_ = 0, height_ = 0;
 };
 

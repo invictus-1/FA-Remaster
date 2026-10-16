@@ -152,6 +152,9 @@ struct PipelineDesc {
   bool alphaToCoverage = false;
   bool depthTarget = true;  // false for a pass that has a colour target only (full-screen work)
   bool colorWrite = true;   // false: the colour target is left as it is (a pass that only lays depth)
+  // false: the colour's alpha is left as it is (the scene's alpha holds the original look's glow, which
+  // only some of what is drawn writes, as the original's)
+  bool alphaWrite = true;
 };
 
 struct DeviceDesc {

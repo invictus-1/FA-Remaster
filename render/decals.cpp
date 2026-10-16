@@ -142,14 +142,17 @@ bool Decals::Init(std::string* error) {
   pd.blend = gfx::Blend::Alpha;
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
   pd.name = "lights on the ground";
   pd.blend = gfx::Blend::Additive;
+  pd.alphaWrite = true;
   lights_ = device_->CreatePipeline(pd, error);
   if (!lights_) return false;
   pd.name = "normal decals";
   pd.blend = gfx::Blend::Multiply;
+  pd.alphaWrite = false;
   normals_ = device_->CreatePipeline(pd, error);
   if (!normals_) return false;
   // a cube from -1 to 1, its faces wound counter-clockwise seen from outside

@@ -113,6 +113,10 @@ bool Ribbons::Init(std::string* error) {
     pd.blend = kinds[i].blend;
     pipelines_[i] = device_->CreatePipeline(pd, error);
     if (!pipelines_[i]) return false;
+    pd.alphaWrite = false;  // (a trail's: the original's trails leave the glow as it is; its beams add theirs)
+    trailPipelines_[i] = device_->CreatePipeline(pd, error);
+    if (!trailPipelines_[i]) return false;
+    pd.alphaWrite = true;
   }
   gfx::BufferDesc bd;
   bd.stride = sizeof(Vertex);
@@ -374,7 +378,7 @@ void Ribbons::Draw(const View& view) {
   uint32_t first = 0;
   for (const Batch& b : batches_) {
     if (b.vertices.empty()) continue;
-    device_->SetPipeline(pipelines_[b.kind->blend]);
+    device_->SetPipeline(b.kind->trail ? trailPipelines_[b.kind->blend] : pipelines_[b.kind->blend]);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
