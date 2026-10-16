@@ -164,67 +164,69 @@ int l_cat_mul(lua_State* L) {
   return 1;
 }
 
-// "TECH1 LAND" style expressions: names combined left to right with + - * (no precedence),
-// spaces mean intersection like '*', parentheses group.
-bool ParseExpr(lua_State* L, const char*& p, std::vector<uint64_t>& out);
-bool ParseTerm(lua_State* L, const char*& p, std::vector<uint64_t>& out) {
-  while (*p == ' ' || *p == '\t') ++p;
-  if (*p == '(') {
-    ++p;
-    if (!ParseExpr(L, p, out)) return false;
-    while (*p == ' ') ++p;
-    if (*p != ')') return false;
-    ++p;
-    return true;
-  }
-  const char* s = p;
-  while (std::isalnum(static_cast<unsigned char>(*p)) || *p == '_') ++p;
-  if (p == s) return false;
-  std::string name(s, p);
+// Moho::ParseEntityCategory 0x5552f0, the one parser behind a blueprint's Economy.BuildableCategory
+// (RUnitBlueprint::AddEconomyRestrictions 0x529e90 -> 0x529f1b, each string added into bp+0x528 with
+// EntityCategory::Add 0x52bb50) and Lua's ParseEntityCategory (cfunc 0x759890 -> rules vt+0x5c 0x52b280 -> 0x5552f0):
+// the text is cut at ',' (delimiter string 0xe16724) and each piece at ' ' (0xe03a10) by the tokenizer 0x938cb0
+// (runs of delimiters skipped, no other character special); the names of a piece are looked up in the rules'
+// category map (rules+0xc4, 0x556970) and intersected (the first one found is copied, 0x5554a2; each later one
+// found is intersected in, BVIntSet::IntersectWith 0x401af0); A NAME THE MAP DOES NOT HOLD IS SKIPPED (0x555492 /
+// 0x555499 jump past both); the pieces are united (0x5554f6). There are no operators: "+", "-", "*", "(" are
+// names like any other and are skipped too (FAF's CategoryUtils.lua parses those itself, and calls this one per
+// name). Never an error: nothing found gives the empty category.
+// Seen: Naval 536, the Cybran carrier's external factory (urs0303ef, BuildableCategory copied from urs0303:
+// "BUILTBYTIER3FACTORY CYBRAN MOBILE AIR ANTIGROUND", and no blueprint has ANTIGROUND) starts the strategic bomber
+// ura0304 it is told to build; ours read the unknown name as the empty category and dropped the order.
+void ParseNames(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
   out.assign(g_words, 0);
   auto& cats = Bps(L)->Categories();
-  auto it = cats.find(name);
-  if (it == cats.end()) {
-    // a unit id names that unit's blueprint
-    if (const BlueprintInfo* bp = Bps(L)->Find(name); bp && bp->entityIndex >= 0) {
-      out[bp->entityIndex >> 6] |= uint64_t(1) << (bp->entityIndex & 63);
-      return true;
-    }
-    return true;  // a name no blueprint uses is an empty category, not an error
-  }
-  for (int e : it->second) out[e >> 6] |= uint64_t(1) << (e & 63);
-  return true;
-}
-bool ParseExpr(lua_State* L, const char*& p, std::vector<uint64_t>& out) {
-  if (!ParseTerm(L, p, out)) return false;
+  std::vector<uint64_t> piece, one;
+  const char* p = expr;
   for (;;) {
-    while (*p == ' ' || *p == '\t') ++p;
-    char op = *p;
-    if (op == 0 || op == ')') return true;
-    if (op == '+' || op == '-' || op == '*') ++p;
-    else if (op == ',') {  // "A, B": a list of categories = their union
-      ++p;
-      op = '+';
-    } else op = '*';
-    std::vector<uint64_t> rhs;
-    if (!ParseTerm(L, p, rhs)) return false;
-    for (int i = 0; i < g_words; ++i)
-      out[i] = op == '+' ? out[i] | rhs[i] : op == '-' ? out[i] & ~rhs[i] : out[i] & rhs[i];
+    while (*p == ',') ++p;
+    if (!*p) break;
+    const char* pe = p;
+    while (*pe && *pe != ',') ++pe;
+    bool have = false;
+    const char* q = p;
+    for (;;) {
+      while (q < pe && *q == ' ') ++q;
+      if (q >= pe) break;
+      const char* s = q;
+      while (q < pe && *q != ' ') ++q;
+      const std::string name(s, q);
+      one.assign(g_words, 0);
+      bool found = false;
+      if (auto it = cats.find(name); it != cats.end()) {
+        for (int e : it->second) one[e >> 6] |= uint64_t(1) << (e & 63);
+        found = true;
+      } else if (const BlueprintInfo* bp = Bps(L)->Find(name); bp && bp->entityIndex >= 0) {
+        one[bp->entityIndex >> 6] |= uint64_t(1) << (bp->entityIndex & 63);  // a unit id names that unit's blueprint
+        found = true;
+      }
+      if (!found) continue;
+      if (!have) piece = one;
+      else
+        for (int i = 0; i < g_words; ++i) piece[i] &= one[i];
+      have = true;
+    }
+    if (have)
+      for (int i = 0; i < g_words; ++i) out[i] |= piece[i];
+    p = pe;
   }
 }
 
 }  // namespace
 int CategoryWordCount() { return g_words; }
 bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
-  const char* p = expr;
-  return ParseExpr(L, p, out) && !*p;
+  ParseNames(L, expr, out);
+  return true;
 }
 namespace {
 int l_ParseEntityCategory(lua_State* L) {
   const char* s = luaL_checkstring(L, 1);
-  const char* p = s;
   std::vector<uint64_t> bits;
-  if (!ParseExpr(L, p, bits) || *p) return luaL_error(L, "Invalid category expression: %s", s);
+  ParseNames(L, s, bits);
   uint64_t* r = NewCat(L);
   for (int i = 0; i < g_words; ++i) r[i] = bits[i];
   return 1;

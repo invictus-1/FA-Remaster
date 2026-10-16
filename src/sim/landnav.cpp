@@ -996,7 +996,9 @@ void LandNavTickAll(Sim& sim) {
       n->startedThisTick = false;
       n->prevPos = u->position;
     }
+    SteeringNavStageArmy(u->army ? u->army->index : 0);
     Execute(sim, u, *n);
+    SteeringNavStageArmy(0);
     if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
   }
   HPathTables& T = Tables(sim);

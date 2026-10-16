@@ -371,12 +371,19 @@ bool AssignSlot(Sim& sim, TransportObj& T, Unit* cu, int requested) {
   return false;
 }
 
+// CAiTransportImpl::TransportGetLoadedUnits 0x5e6110 (vt slot 3, Unit:GetCargo 0x6c3eae with excludeStored 0): the
+// units among the owner's attached entities (Entity::GetAttachedEntities 0x5bdc10, entity+0x17c), whatever attached
+// them, less UPGRADE and Refueling. A script's AttachTo counts as much as the transport's own attach: the aircraft a
+// carrier builds on its launch bone (AircraftCarrier BuildingState: unitBuilding:AttachTo(self, bone)) is cargo.
+// Seen: Naval 559, the Cybran carrier 0x32 dies building a strategic bomber; its Kill's KillCargo kills that bomber
+// with "TransportDamage" (StorageSlots > 0), whose OnKilled destroys it in the same beat. Ours left it out (only
+// the transport's own attaches), the external factory's KillUnitBeingBuilt killed it normally and its death thread
+// removed it three beats later.
 std::vector<Unit*> LoadedUnits(Sim& sim, const Unit* tu) {
   std::vector<Unit*> out;
   uint32_t ref = EntityRef(tu);
   for (Unit* u : sim.units())
-    if (!u->destroyQueued && u->parentId == ref && u->attachFull && !InCat(sim, u, "UPGRADE") &&
-        !State(u, "Refueling"))
+    if (!u->destroyQueued && u->parentId == ref && !InCat(sim, u, "UPGRADE") && !State(u, "Refueling"))
       out.push_back(u);
   return out;
 }
