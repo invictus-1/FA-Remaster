@@ -90,52 +90,81 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   IncrementalPainter painter;
   IntRect hostDrawn;  // what the host drew over the interface last frame (its notice)
   long long checkedFrames = 0, wrongFrames = 0;
-  while (window.Pump() && (maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
+  long long busyFrames = 0;  // frames shown while a beat ran on its own thread
+  std::vector<float> frameMs;  // each counted frame's time from the one before (for the stutter: the longest)
+  auto lastShown = Clock::now();
+  auto uiLast = last;  // the interface's last step (frames shown during a beat leave it out)
+  while ((maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
+    // While the game's beat runs on its own thread (game_session.h, BeatRunning), a frame only
+    // shows the world, moving on between the beats, with the interface as it stands: no input, no
+    // step of the interface, nothing that touches the simulation. Those come in the next frame
+    // after the beat, with all the time that passed.
+    const bool busy = hooks.busy && hooks.busy();
+    if (!busy && !window.Pump()) break;
     auto now = Clock::now();
-    double dt = std::chrono::duration<double>(now - last).count();
-    last = now;
-    current().ui().edgeScroll = fullScreen;  // the mouse cannot leave: the screen's edge moves the view
-    current().Frame(dt > 0.25 ? 0.25 : dt);  // a long stall (the window being dragged) is not replayed as one huge step
-    frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
-    auto t0 = Clock::now();
-    // (Shown by the renderer: the interface over a transparent background, which the colour
-    // blending then keeps premultiplied by alpha, as the renderer takes it.)
     const bool direct = hooks.direct && hooks.direct() && hooks.present;
-    const uint32_t clearColor = direct ? 0x00000000u : 0xff000000u;
-    UserState& user = current();
-    IntRect changed;
-    if (incremental) {
-      recorder.Begin(target->Width(), target->Height());
-      user.ui().Render(user.L(), recorder, 0);
-      changed = painter.Paint(recorder.commands(), *target, clearColor, hostDrawn);
-      if (dirtyCheck) {
-        IntRect box;
-        const long long differ = painter.Check(*target, &box);
-        ++checkedFrames;
-        if (differ && ++wrongFrames <= 20)
-          Logf(LogLevel::Warning, "moho64ui: drawn only where changed: frame %d has %lld pixels unlike a full redraw, in %d,%d-%d,%d",
-               frames, differ, box.x0, box.y0, box.x1, box.y1);
+    if (busy) {
+      if (direct) {
+        const double dt = std::chrono::duration<double>(now - last).count();
+        last = now;
+        if (hooks.clock) hooks.clock(dt > 0.25 ? 0.25 : dt);  // (the picture's moment moves on)
+        const auto tp = Clock::now();
+        hooks.present(*target, IntRect{});
+        const double shown = std::chrono::duration<double>(Clock::now() - tp).count();
+        presentSeconds += shown, drawSeconds += shown;
+        ++busyFrames;
+        ++frames;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
       }
     } else {
-      target->Clear(clearColor);
-      user.ui().Render(user.L(), *target, 0);
-      changed = IntRect{0, 0, target->Width(), target->Height()};
+      double dt = std::chrono::duration<double>(now - last).count();  // (since the last frame shown)
+      last = now;
+      double uiDt = std::chrono::duration<double>(now - uiLast).count();  // (since the interface's last step)
+      uiLast = now;
+      current().ui().edgeScroll = fullScreen;  // the mouse cannot leave: the screen's edge moves the view
+      current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
+      frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
+      auto t0 = Clock::now();
+      // (Shown by the renderer: the interface over a transparent background, which the colour
+      // blending then keeps premultiplied by alpha, as the renderer takes it.)
+      const uint32_t clearColor = direct ? 0x00000000u : 0xff000000u;
+      UserState& user = current();
+      IntRect changed;
+      if (incremental) {
+        recorder.Begin(target->Width(), target->Height());
+        user.ui().Render(user.L(), recorder, 0);
+        changed = painter.Paint(recorder.commands(), *target, clearColor, hostDrawn);
+        if (dirtyCheck) {
+          IntRect box;
+          const long long differ = painter.Check(*target, &box);
+          ++checkedFrames;
+          if (differ && ++wrongFrames <= 20)
+            Logf(LogLevel::Warning, "moho64ui: drawn only where changed: frame %d has %lld pixels unlike a full redraw, in %d,%d-%d,%d",
+                 frames, differ, box.x0, box.y0, box.x1, box.y1);
+        }
+      } else {
+        target->Clear(clearColor);
+        user.ui().Render(user.L(), *target, 0);
+        changed = IntRect{0, 0, target->Width(), target->Height()};
+      }
+      const auto te = Clock::now();
+      target->ResetTouched();
+      if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+      changed = changed.Union(target->Touched());
+      hostDrawn = target->Touched();  // (painted over by the interface again next frame)
+      hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
+      renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
+      const auto tp = Clock::now();
+      if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
+      else window.Present(*target);
+      presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
+      updatePointer(current());
+      window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
+      drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
+      ++frames;
     }
-    const auto te = Clock::now();
-    target->ResetTouched();
-    if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
-    changed = changed.Union(target->Touched());
-    hostDrawn = target->Touched();  // (painted over by the interface again next frame)
-    hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
-    renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
-    const auto tp = Clock::now();
-    if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
-    else window.Present(*target);
-    presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
-    updatePointer(current());
-    window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
-    drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
-    ++frames;
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
     else ++steadyFrames;
     if (warmUp && steadyFrames == warmUp) {
@@ -143,6 +172,13 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       drawSeconds = presentSeconds = frameSeconds = renderSeconds = hostSeconds = 0;
       timesBefore = Times();
       statsFrom = frames;
+      frameMs.clear();
+      busyFrames = 0;
+    }
+    {
+      const auto shownAt = Clock::now();
+      if (frames > statsFrom) frameMs.push_back(static_cast<float>(std::chrono::duration<double>(shownAt - lastShown).count() * 1000.0));
+      lastShown = shownAt;
     }
     // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as
     // at first, keeps to the screen's own rate; off, Frametime gives the shortest frame in ms,
@@ -162,6 +198,18 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
              (static_cast<double>(painter.frames) * target->Width() * target->Height()),
          dirtyCheck ? (wrongFrames ? "; UNLIKE A FULL REDRAW in some frames" : "; each frame as a full redraw") : "");
   if (dirtyCheck) Logf(LogLevel::Info, "moho64ui: window: checked %lld frames against a full redraw, %lld unlike", checkedFrames, wrongFrames);
+  if (busyFrames > 0)
+    Logf(LogLevel::Info, "moho64ui: window: %lld of %d counted frames shown while a beat ran on its own thread", busyFrames,
+         frames - statsFrom);
+  if (frameMs.size() > 10) {  // the time between shown frames: the middle one, the slowest 5% and 1%, the longest
+    std::vector<float> sorted = frameMs;
+    std::sort(sorted.begin(), sorted.end());
+    auto at = [&](double share) { return sorted[std::min(sorted.size() - 1, static_cast<size_t>(share * static_cast<double>(sorted.size())))]; };
+    int over20 = 0;
+    for (float ms : frameMs) over20 += ms > 20.0f;
+    Logf(LogLevel::Info, "moho64ui: window: frame to frame %.2f ms (middle), %.2f (95%%), %.2f (99%%), %.2f longest; %d of %zu over 20 ms",
+         at(0.5), at(0.95), at(0.99), sorted.back(), over20, frameMs.size());
+  }
   if (counted > 0)
     Logf(LogLevel::Info, "moho64ui: window: %d frames in %.1f s, drawing %.2f ms per frame", counted, total,
          drawSeconds * 1000.0 / counted);
@@ -180,6 +228,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       Logf(LogLevel::Info, "moho64ui: window: %d beats: %.2f ms each the simulation's, %.2f ms the picture's update, %.2f ms the sounds",
            beats, (now.simBeats - timesBefore.simBeats) * 1000.0 / beats, (now.pictureBeats - timesBefore.pictureBeats) * 1000.0 / beats,
            (now.soundBeats - timesBefore.soundBeats) * 1000.0 / beats);
+    Logf(LogLevel::Info, "moho64ui: window: %d of %d frames showed the world standing still (the next beat not there yet)",
+         now.heldPictures - timesBefore.heldPictures, counted);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
   LogDrawProfile();

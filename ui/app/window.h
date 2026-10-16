@@ -93,6 +93,10 @@ struct WindowHooks {
   std::function<void(const SoftwareTarget& interfaceLayer, const IntRect& changed)> present;
   // True while the host runs ahead (--fast-forward): the frame times count only after it.
   std::function<bool()> catchingUp;
+  // True while the game's beat runs on its own thread: the frame only shows the picture, and the
+  // time that passed goes to `clock` (the picture's moment moves on; eachFrame gets only the rest).
+  std::function<bool()> busy;
+  std::function<void(double seconds)> clock;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,

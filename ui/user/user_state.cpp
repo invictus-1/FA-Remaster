@@ -51,6 +51,8 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 
 UserState::~UserState() {
   units.reset();
+  ranges.reset();
+  worldMeshes.reset();  // (its meshes let go of their Lua tables: before the state closes; a crash at the end of a run before)
   provider.reset();
   cameras.clear();
   ui_.reset();  // the controls let go of their Lua tables while the state is still there

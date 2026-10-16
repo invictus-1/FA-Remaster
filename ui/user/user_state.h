@@ -228,6 +228,7 @@ FramePacing& Pacing();
 struct FrameTimes {
   double worldDraw = 0;
   int worldDraws = 0;
+  int heldPictures = 0;  // frames whose moment lay past the newest beat there was: the world stood still
   // the game's beats: the simulation's own, the picture's per-beat update, the sounds
   double simBeats = 0, pictureBeats = 0, soundBeats = 0;
   int beats = 0;
