@@ -865,7 +865,11 @@ void Stop(Sim& sim, Unit* u, const Vec3* pos) {
       Logf(LogLevel::Info, "airstop %u unit %u from%s", sim.tick(), u->id, s.c_str());
     }
   }
-  if (!State(u, "TransportUnloading") && !State(u, "TransportLoading") && !State(u, "Ferrying")) a.landLayer = kAir;
+  // 0x6b846f: only a unit in category AIR (u+0x68b, set from the blueprint in the Unit ctor 0x6a6aae) is told to stay
+  // airborne. A flyer without it keeps its landing layer: seen, bench's Cybran build drones (ura0001: POD, no AIR)
+  // record landing layer 0 after the IssueClearCommands that follows their CreateUnit(.., 'Air').
+  if (a.bp->airCategory && !State(u, "TransportUnloading") && !State(u, "TransportLoading") && !State(u, "Ferrying"))
+    a.landLayer = kAir;
   a.target = pos ? *pos : u->position;
   (void)sim;
 }
@@ -1914,6 +1918,7 @@ const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp) {
   b.transportation = BpInCategory(*sim, &bp, "TRANSPORTATION");
   b.targetChaser = BpInCategory(*sim, &bp, "TARGETCHASER");
   b.experimental = BpInCategory(*sim, &bp, "EXPERIMENTAL");
+  b.airCategory = BpInCategory(*sim, &bp, "AIR");
   return cache.emplace(&bp, b).first->second;
 }
 
