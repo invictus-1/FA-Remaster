@@ -11,6 +11,7 @@
 #define lmathlib_c
 
 #include "lua.h"
+#include "lstate.h"
 
 #include "lauxlib.h"
 #include "lualib.h"
@@ -173,10 +174,23 @@ static int math_max (lua_State *L) {
 }
 
 
+/* moho64: math.random draws from a generator of its own lua_State, not the C runtime's rand(), which is per
+   thread on Windows and process-wide elsewhere (another state's draws, or another thread's, would move it). The
+   numbers are the Microsoft C runtime's (seed 1, holdrand * 214013 + 2531011, bits 16..30, RAND_MAX 32767), so
+   a state draws what rand() gives on a fresh Windows thread, on every platform. The sim's own Lua never gets
+   here (FAF's config.lua points math.random at Random); the rules states do (mods' blueprint hooks). */
+#define GPG_RAND_MAX 32767
+
+static int gpg_rand (lua_State *L) {
+  global_State *g = G(L);
+  g->randseed = g->randseed * 214013u + 2531011u;
+  return (int)((g->randseed >> 16) & 0x7fff);
+}
+
 static int math_random (lua_State *L) {
   /* the `%' avoids the (rare) case of r==1, and is needed also because on
      some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(rand()%RAND_MAX) / (lua_Number)RAND_MAX;
+  lua_Number r = (lua_Number)(gpg_rand(L)%GPG_RAND_MAX) / (lua_Number)GPG_RAND_MAX;
   switch (lua_gettop(L)) {  /* check number of arguments */
     case 0: {  /* no arguments */
       lua_pushnumber(L, r);  /* Number between 0 and 1 */
@@ -202,7 +216,7 @@ static int math_random (lua_State *L) {
 
 
 static int math_randomseed (lua_State *L) {
-  srand(luaL_checkint(L, 1));
+  G(L)->randseed = (unsigned int)luaL_checkint(L, 1);
   return 0;
 }
 
