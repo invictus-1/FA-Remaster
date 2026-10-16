@@ -831,11 +831,27 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       if (u->paused) return kTaskRunning;
       float k = u->request ? u->request->LimitingRate() : 1.0f;
       float old = e->fractionComplete;
-      float f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
-      e->fractionComplete = f;
+      float f;
+      if (tu) {
+        // 0x61fe55..0x61ff32, a unit (unfinished: a finished one is taken in state 2): Materialize (vt+0x74) by the
+        // step, which takes its share of health off what the unit has (Entity::AdjustHealth), then the health is
+        // brought down to MaxHealth x min(fraction, health / MaxHealth) when that differs (0x4178c0, SetHealth
+        // 0x679940). So damage the unit took while it was being reclaimed stays taken; ours set the health to
+        // MaxHealth x fraction, giving it back. Seen: Skirmish 2592, army 1's unfinished xsb1103 0x100043, reclaimed
+        // and shot (2 damage at 2591): the original's health is 5.474 at 2592, ours was 7.474.
+        Materialize(sim, L, tu, -(c.reclaimStep * k));
+        f = tu->fractionComplete;
+        const float hr = tu->health / tu->maxHealth;
+        const float m = hr > f ? f : hr;
+        const float h = tu->maxHealth * m;
+        if (h != tu->health) EntityAdjustHealth(L, tu, u, h - tu->health);
+      } else {
+        f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
+        e->fractionComplete = f;
+        float h = e->maxHealth * f;
+        if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
+      }
       float taken = old - f;
-      float h = e->maxHealth * f;
-      if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
       u->workProgress = 1.0f - f;
       if (u->army && c.reclaimStep > 0) {
         float q = taken / c.reclaimStep;
@@ -1102,7 +1118,10 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       t.state = 3;
       continue;  // return 0
     case 3: {
-      if (u->paused) return kTaskRunning;      // (return 10)
+      if (u->paused) {  // 0x5f7bb7 -> 0x5f7bc0: return 10
+        t.waitUntil = sim.tick() + 9;
+        return kTaskRunning;
+      }
       if (sim.tick() < t.waitUntil) return kTaskRunning;
       if (t.tries > 10) return kTaskFailed;  // 0x5f7a0b (tries: the "units in the way" rounds below)
       if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {  // join: no arm wait, work this beat
@@ -1146,8 +1165,19 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       return kTaskRunning;
     }
     case 4: {
+      if (sim.tick() < t.waitUntil) return kTaskRunning;
       Unit* target = FindUnit(sim, t.targetId);
       if (!target) return kTaskFailed;
+      // 0x5f7d9e..0x5f7dbb (state 4, the work): with the builder paused (unit+0x2a0) the task returns 10 (0x5f7bc0)
+      // BEFORE the work helper 0x5f5bf0, so the structure is not worked on, not even the helper's paused
+      // Materialize(0) that keeps a paused upgrade's unit from decaying (Skirmish 2071), and it decays
+      // (Unit::MotionTick 0x6a910f: more than a beat since it was last worked on). Seen: Skirmish 2486, army 5's
+      // engineer 0x50000b paused while building 0x500042: the original's structure loses health and progress from
+      // 2487; ours held it.
+      if (u->paused) {
+        t.waitUntil = sim.tick() + 9;
+        return kTaskRunning;
+      }
       if (!UpdateWorkProgress(sim, L, u, t)) return kTaskRunning;
       target = FindUnit(sim, t.targetId);
       if (target) target->unitStates.erase("NoReclaim");
