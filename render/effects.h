@@ -5,6 +5,12 @@
 // The simulation hands over events (frame.h, FrameEffectEvent) beat by beat; they take effect when
 // the picture's clock reaches their beat. An effect's place is its entity's place in the frame: a
 // unit (with the bone's pose), a projectile, or a weapon's beam (bone 0 its start, 1 and 2 its end).
+//
+// In the remastered look an emitter, beam or trail plays its faction's own blueprint where the visuals
+// track has made one (effect_files.h). Its faction is that of the thing it is made on or at: a unit's
+// by its blueprint id, a projectile's or an effect entity's by its blueprint's name, a script entity's
+// by its mesh; where that says nothing (the debris a dying unit throws, the shared helpers), the
+// faction of the army the script made it for - the faction most of that army's units in the frame are.
 #pragma once
 #include <cstdint>
 #include <deque>
@@ -74,6 +80,7 @@ class Effects {
     int8_t glows = -1;
     bool glowTracers = false;  // (a trail's: whether hot tracers were on when it was looked up)
     Vec3 glowColor;
+    std::string faction;       // beams and trails: whose blueprint they play (FactionOf)
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);
@@ -84,6 +91,10 @@ class Effects {
   // shot where it does not see)? What hangs on such a one is not shown.
   // (by this frame's lists of shots and script entities: Update makes them first)
   bool Hidden(const Frame& frame, uint32_t entity) const;
+  // Whose effects an event makes in the remastered look ("uef", ...; "" none known). See the top.
+  std::string FactionOf(const FrameEffectEvent& event, const Frame& frame);
+  // The faction most of an army's units in the frame are (army from 0), worked out once a beat.
+  const std::string& ArmyFaction(const Frame& frame, int army);
 
   Particles* particles_;
   Ribbons* ribbons_;
@@ -105,6 +116,8 @@ class Effects {
   std::unordered_map<uint32_t, ShotGlow> shotGlow_;
   std::unordered_set<uint64_t> shotCells_;  // squares of ground that have a shot's light this frame
   std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_, entityAt_;  // this frame: entity id -> index in the frame's lists
+  std::vector<std::string> armyFactions_;  // ArmyFaction's, for the beat armyFactionsTick_
+  uint32_t armyFactionsTick_ = 0xffffffffu;
 };
 
 }  // namespace render

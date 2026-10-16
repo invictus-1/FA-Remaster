@@ -126,6 +126,7 @@ static void f_luaopen (lua_State *L, void *ud) {
   }
   luaS_fix(luaS_newliteral(L, MEMERRMSG));
   g->extra[0] = g->extra[1] = g->extra[2] = g->extra[3] = NULL;
+  g->randseed = 1;  /* the C runtime's rand() on a fresh thread */
   g->cobjkey = luaS_newliteral(L, "_c_object");
   luaS_fix(g->cobjkey);
   g->GCthreshold = 4*G(L)->nblocks;

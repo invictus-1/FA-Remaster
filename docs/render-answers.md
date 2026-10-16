@@ -4,6 +4,70 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 27: emitters per faction, and a unit's death in the stand (2026-10-15)
+
+Both done (render 9a361d9).
+
+**Per faction.** In the remastered look an emitter, beam or trail blueprint is read from, in this order:
+1. `_effects/export/moho64/<the blueprint's folder>/<faction>/<file>`, for example
+   `effects/emitters/uef/explosion_small_01_emit.bp`;
+2. `_effects/export/moho64/<the game's path>` (yours, as today);
+3. the game's file.
+
+Textures stay addressed by the paths inside the blueprint, so your faction copies can name
+`/textures/particles/uefrm/...`. Faction words: `uef`, `aeon`, `cybran`, `seraphim`. The original look
+never reads any of this. Whose an effect is:
+- **Made on or at a unit:** the unit's faction, by its blueprint id (u, x, d or z, then e, a, r or s).
+  Checked against every unit in FAF's units.nx2. The campaign's civilian buildings (xac, xrc, xsc) count
+  as the faction they look like.
+- **A projectile or effect entity:** by its blueprint's name (TDF..., AIF..., CAA..., SBO...; or
+  Terran / UEF / Aeon / Cybran / Seraphim in the name). Checked against every projectile script in
+  projectiles.nx2.
+- **A script entity:** by its mesh, as for the shields.
+- **Anything none of these names** (the debris a dying unit throws, a weapon's beam, the shared helpers):
+  the faction most of its army's units are. The engine does not tell the renderer which unit launched
+  what, so this is the best available. For a death the result is the same, because the dead unit's
+  army is its own.
+
+So `DefaultHitExplosion01`, `ExplosionSmall` and the rest can each get a `uef/` copy, and only the UEF's
+deaths and hits use it.
+
+**`--fx-death <unit id>`.** The unit is made at `--fx-at` by its own script class and killed by its own
+death path: OnKilled, DeathThread, `CreateScalableUnitExplosion`, debris and wreck, all read from the
+game's files at run time. The engine's side is stood in for. It plays every `--fx-repeat` seconds (12 by
+default) and works with `--fx-compare` (remastered left, original right).
+- `--fx-kill-at <s>`: when it dies in each play (1 by default).
+- `--fx-overkill <r>`: 0.2 by default; above 1 no wreck, above 2 the parts are thrown too.
+- `--fx-faction <word>`: forces a faction, to try a folder.
+
+Tried with these units:
+- **T1 tank UEL0201:** explosion, debris with trails, a burnt wreck with smoke.
+- **T3 bot UEL0303:** its death animation, and the wreck keeps the pose.
+- **Plane UEA0102:** flies in, explodes, falls about 2.4 s and crashes at the spot.
+- **Frigate UES0103:** burns and sinks by its animation. It needs water, for example `--fx-at 575,285` on
+  Seton's, with `--fx-repeat 30` to see all of it.
+- **Factory UEB0101:** timed explosions, then the wreck.
+- **Mass fabricator UEB1104:** parts thrown; no wreck at overkill 2.5.
+
+Example, from the lab folder:
+`--init offline/bin/init_lab.lua --map /maps/SCMP_009/SCMP_009.scmap --time-of-day 16 --remasters
+visuals/work --fx-death UEL0201 --fx-at 672,346 --fx-compare --cam 672,346,16,30,0`
+
+Not in it yet:
+- **Death weapons.** The stand's units carry no weapons, so the commander's nuke death does not play
+  here; `--fx-entity UEFNukeEffectController01` shows it.
+- **Other parts:** camera shake, sound, shield bounce.
+- **The plane's tumble:** a stand-in spin, not the engine's.
+- **Other units' scripts** may log `fx stand: ... OnCreate: ...` for engine parts the stand lacks; the
+  death usually still plays.
+
+**Two changes to know before you review:**
+- **The nuke stand** (`--fx-entity`, and shots that make a nuke) now draws random numbers as the engine
+  does. Before, they fell into repeating one number, so the head of the nuke looks more varied than in
+  your earlier pictures. Both sides of a side by side draw the same numbers.
+- **Debris in games:** a projectile whose blueprint names a mesh blueprint (the chunks a dying unit
+  throws) is now drawn with that mesh in games too, in both looks, as the original draws it.
+
 ## To ui (offered, 2026-10-15): two more settings for slower cards, measured
 
 Chris chose these as the next renderer work ("the boring stuff"). Both default to what was there before;

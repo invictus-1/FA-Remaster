@@ -78,7 +78,7 @@ DxcCompiler3* Compiler(std::string* error) {
   static DxcCompiler3* compiler = nullptr;
   static bool tried = false;
   if (tried) {
-    if (!compiler && error) *error = "Vulkan: DXC (the shader compiler) could not be loaded";
+    if (!compiler && error) *error = "DXC (the shader compiler) could not be loaded";
     return compiler;
   }
   tried = true;
@@ -92,7 +92,7 @@ DxcCompiler3* Compiler(std::string* error) {
 #endif
   void* made = nullptr;
   if (create && create(kClsidCompiler, kIidCompiler3, &made) >= 0) compiler = static_cast<DxcCompiler3*>(made);
-  if (!compiler && error) *error = "Vulkan: DXC (the shader compiler, dxcompiler) not found beside the program";
+  if (!compiler && error) *error = "DXC (the shader compiler, dxcompiler) not found beside the program";
   return compiler;
 }
 
@@ -205,45 +205,60 @@ bool Reflect(const std::vector<uint32_t>& in, SpirvShader* out) {
   return true;
 }
 
-}  // namespace
+// The file a compile is kept in, under a hash of everything that goes into it (empty: none kept).
+std::string CacheFile(const std::string& cacheDir, const char* version, const std::string& source, const std::vector<std::wstring>& args,
+                      const char* extension) {
+  if (cacheDir.empty()) return {};
+  uint64_t h = 1469598103934665603ull;
+  auto mix = [&h](const void* data, size_t size) {
+    for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const uint8_t*>(data)[i]) * 1099511628211ull;
+  };
+  mix(version, std::strlen(version) + 1);
+  mix(source.data(), source.size());
+  for (const std::wstring& a : args) mix(a.data(), a.size() * sizeof(wchar_t) + sizeof(wchar_t));
+  char name[48];
+  snprintf(name, sizeof name, "%016llx.%s", static_cast<unsigned long long>(h), extension);
+  return cacheDir + "/" + name;
+}
 
-bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
-                  std::string* error) {
-  const std::vector<std::wstring> args = Arguments(entry, stage);
-  // kept from an earlier run when nothing that goes into it has changed
-  std::string cached;
-  if (!cacheDir.empty()) {
-    uint64_t h = 1469598103934665603ull;
-    auto mix = [&h](const void* data, size_t size) {
-      for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const uint8_t*>(data)[i]) * 1099511628211ull;
-    };
-    const char kVersion[] = "dxc-spirv/2";
-    mix(kVersion, sizeof kVersion);
-    mix(source.data(), source.size());
-    for (const std::wstring& a : args) mix(a.data(), a.size() * sizeof(wchar_t) + sizeof(wchar_t));
-    char name[40];
-    snprintf(name, sizeof name, "%016llx.spv", static_cast<unsigned long long>(h));
-    cached = cacheDir + "/" + name;
-    if (FILE* f = fopen(cached.c_str(), "rb")) {
-      fseek(f, 0, SEEK_END);
-      const long size = ftell(f);
-      fseek(f, 0, SEEK_SET);
-      std::vector<uint32_t> words(size > 0 ? static_cast<size_t>(size) / 4 : 0);
-      const bool read = !words.empty() && fread(words.data(), 4, words.size(), f) == words.size();
-      fclose(f);
-      if (read && Reflect(words, out)) return true;
-      *out = SpirvShader{};
-    }
+bool ReadWhole(const std::string& path, std::vector<uint8_t>* out) {
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) return false;
+  fseek(f, 0, SEEK_END);
+  const long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  out->resize(size > 0 ? static_cast<size_t>(size) : 0);
+  const bool read = !out->empty() && fread(out->data(), 1, out->size(), f) == out->size();
+  fclose(f);
+  return read;
+}
+
+// (under another name first: a half-written file is never read)
+void WriteWhole(const std::string& path, const void* data, size_t size) {
+  const std::string part = path + ".part";
+  if (FILE* f = fopen(part.c_str(), "wb")) {
+    const bool ok = fwrite(data, 1, size, f) == size;
+    fclose(f);
+    std::remove(path.c_str());
+    if (!ok || std::rename(part.c_str(), path.c_str()) != 0) std::remove(part.c_str());
   }
+}
+
+// DXC run on `source` with `args`: what it made in `out`, or false with its messages in `error`
+// (`missing`: DXC itself is not there).
+bool Run(const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out, std::string* error, bool* missing) {
   DxcCompiler3* compiler = Compiler(error);
-  if (!compiler) return false;
+  if (!compiler) {
+    if (missing) *missing = true;
+    return false;
+  }
   std::vector<const wchar_t*> argv;
   for (const std::wstring& a : args) argv.push_back(a.c_str());
   DxcSource src{source.data(), source.size(), 65001};
   Ref<DxcOperationResult> result;
   void* made = nullptr;
   if (compiler->Compile(&src, argv.data(), static_cast<uint32_t>(argv.size()), nullptr, kIidResult, &made) < 0 || !made) {
-    if (error) *error = "Vulkan: DXC did not run";
+    if (error) *error = "DXC did not run";
     return false;
   }
   result.p = static_cast<DxcOperationResult*>(made);
@@ -254,30 +269,67 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
     result.p->GetErrorBuffer(&errors.p);
     if (error)
       *error = errors.p && errors.p->GetBufferSize() ? std::string(static_cast<const char*>(errors.p->GetBufferPointer()), errors.p->GetBufferSize())
-                                                     : std::string("Vulkan: DXC failed");
+                                                     : std::string("DXC failed");
     return false;
   }
   Ref<DxcBlob> blob;
   result.p->GetResult(&blob.p);
   if (!blob.p || blob.p->GetBufferSize() < 20) {
-    if (error) *error = "Vulkan: DXC gave no SPIR-V";
+    if (error) *error = "DXC gave nothing";
     return false;
   }
-  std::vector<uint32_t> words(blob.p->GetBufferSize() / 4);
-  std::memcpy(words.data(), blob.p->GetBufferPointer(), words.size() * 4);
-  if (!Reflect(words, out)) {
+  const uint8_t* bytes = static_cast<const uint8_t*>(blob.p->GetBufferPointer());
+  out->assign(bytes, bytes + blob.p->GetBufferSize());
+  return true;
+}
+
+}  // namespace
+
+bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
+                  std::string* error) {
+  const std::vector<std::wstring> args = Arguments(entry, stage);
+  // kept from an earlier run when nothing that goes into it has changed
+  const std::string cached = CacheFile(cacheDir, "dxc-spirv/2", source, args, "spv");
+  std::vector<uint8_t> bytes;
+  auto words = [&bytes] {
+    std::vector<uint32_t> w(bytes.size() / 4);
+    std::memcpy(w.data(), bytes.data(), w.size() * 4);
+    return w;
+  };
+  if (!cached.empty() && ReadWhole(cached, &bytes) && Reflect(words(), out)) return true;
+  *out = SpirvShader{};
+  if (!Run(source, args, &bytes, error, nullptr)) return false;
+  if (!Reflect(words(), out)) {
     if (error) *error = "Vulkan: DXC's SPIR-V could not be read";
     return false;
   }
-  if (!cached.empty()) {  // (under another name first: a half-written file is never read)
-    const std::string part = cached + ".part";
-    if (FILE* f = fopen(part.c_str(), "wb")) {
-      const bool ok = fwrite(words.data(), 4, words.size(), f) == words.size();
-      fclose(f);
-      std::remove(cached.c_str());
-      if (!ok || std::rename(part.c_str(), cached.c_str()) != 0) std::remove(part.c_str());
-    }
+  if (!cached.empty()) WriteWhole(cached, bytes.data(), bytes.size() / 4 * 4);
+  return true;
+}
+
+bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
+                 std::string* error, bool* missing) {
+  std::vector<std::wstring> args = {L"-O3", L"-HV", L"2018", L"-E"};  // (HLSL 2018's rules, as for Vulkan)
+  args.push_back(std::wstring(entry, entry + std::strlen(entry)));
+  args.push_back(L"-T");
+  args.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : L"ps_6_0");
+  // (signed: the container's digest, the 16 bytes after "DXBC", is all nought where nothing signed it, and
+  // Direct3D 12 takes no shader that is not; DXC of 2026 signs by itself, older ones through dxil.dll)
+  auto isSigned = [](const std::vector<uint8_t>& code) {
+    if (code.size() < 20 || std::memcmp(code.data(), "DXBC", 4) != 0) return false;
+    for (size_t i = 4; i < 20; ++i)
+      if (code[i]) return true;
+    return false;
+  };
+  const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, args, "dxil");
+  if (!cached.empty() && ReadWhole(cached, out) && isSigned(*out)) return true;
+  if (!Run(source, args, out, error, missing)) return false;
+  if (!isSigned(*out)) {
+    if (error) *error = "DXC's shaders come out unsigned (an older DXC needs its dxil.dll beside the program)";
+    if (missing) *missing = true;
+    return false;
   }
+  if (!cached.empty()) WriteWhole(cached, out->data(), out->size());
   return true;
 }
 

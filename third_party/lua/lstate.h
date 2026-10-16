@@ -131,6 +131,7 @@ typedef struct global_State {
   /* moho64: host pointers (lua_getextra/lua_setextra) and the interned "_c_object" key */
   void *extra[4];
   TString *cobjkey;
+  unsigned int randseed;  /* math.random's state, per lua_State (lmathlib.c) */
 } global_State;
 
 

@@ -73,6 +73,8 @@
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
+// --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
+// --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
@@ -95,6 +97,13 @@
 //           ground every --fx-hit-every seconds (0.8) with its own flash and hit effects, as the game's shield
 //           script makes them; made again every --fx-repeat seconds (20 unless given)
 //           (with --frames n --shots k --screenshot <name>.png: a numbered picture every k frames)
+// --fx-death <unit>  that unit (UEL0201) made at --fx-at by its own script class and killed by its own death
+//           path --fx-kill-at seconds (1) into each play, every --fx-repeat seconds (12 unless given):
+//           its explosion, debris and wreck as the game's scripts make them, an aircraft falling (it
+//           flies in at its elevation and comes down at the spot), a ship sinking on water; --fx-overkill
+//           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck)
+// --fx-faction uef|aeon|cybran|seraphim  the stand's effects are that faction's own in the remastered
+//           look (else the faction of what they are made on: a shot's by its id, a unit's)
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
@@ -133,6 +142,7 @@
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
 // V switches vsync, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
+#include <algorithm>
 #include <map>
 #include <cctype>
 #include <chrono>
@@ -204,6 +214,8 @@ struct Options {
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
   bool vulkan = false;                  // --vulkan
+  bool fxc = false;                     // --fxc
+  bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
@@ -290,6 +302,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--timings") o->timings = true;
     else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--vulkan") o->vulkan = true;
+    else if (a == "--fxc") o->fxc = true;
+    else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
@@ -375,6 +389,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->fxRepeat = true;
     } else if (a == "--fx-entity") o->fx.entity = v;
     else if (a == "--fx-shield") o->fx.shield = v;
+    else if (a == "--fx-death") o->fx.death = v;
+    else if (a == "--fx-kill-at") o->fx.killAt = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-overkill") o->fx.overkill = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-faction") o->fx.faction = v;
     else if (a == "--fx-hit-every") o->fx.hitEvery = std::max(0.05f, static_cast<float>(atof(v)));
     else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
     else if (a == "--fx-spacing") o->fx.spacing = static_cast<float>(atof(v));
@@ -457,7 +475,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -510,6 +528,8 @@ int main(int argc, char** argv) {
   dd.vsync = opt.vsync;
   dd.debug = opt.debug;
   dd.backend = opt.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
+  dd.oldShaderCompiler = opt.fxc;
+  if (!opt.shaderCache) dd.shaderCache = "-";
   auto device = gfx::Device::Create(dd, &error);
   if (device && opt.vulkanClear) {  // --vulkan-clear: the backend's first step alone: frames cleared, shown and read back
     printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
@@ -999,13 +1019,14 @@ int main(int argc, char** argv) {
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
-  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty()) {
+  if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty()) {
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
+    if (!opt.fxRepeat && !opt.fx.death.empty()) opt.fx.repeat = 12;  // (a death's smoke and debris, a ship's sinking, take their time)
     // (an effect entity's play is long: a nuke's lasts some twenty seconds)
     if (!opt.fxRepeat && (!opt.fx.entity.empty() || opt.fx.shot.find("Nuke") != std::string::npos)) opt.fx.repeat = 25;
     if (!opt.hasCam) {  // close to it, a little from above
-      camera.distance = !opt.fx.entity.empty() ? 160.0f : !opt.fx.shield.empty() ? 90.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
+      camera.distance = !opt.fx.entity.empty() ? 160.0f : !opt.fx.shield.empty() ? 90.0f : !opt.fx.death.empty() ? 40.0f : opt.fx.shot.empty() ? 14.0f : 40.0f;  // (a flash is a pace or two across; a shot's flight is long; a nuke is huge)
       camera.pitch = 0.55f;
     }
     {  // (a shot not placed: across the spot, away from the camera)
@@ -1017,6 +1038,8 @@ int main(int argc, char** argv) {
       if (!opt.fxTo) opt.fx.to = opt.fx.at + away * 14;
     }
     fxStand = std::make_unique<FxStand>();
+    // (the map under a unit's death: the ground, and under water the bottom, and the water's level)
+    if (haveMap) fxStand->SetGround([&map](float x, float z) { return map.Height(x, z); }, map.water.present, map.water.elevation);
     std::string fxError;
     if (fxStand->Init(&vfs, opt.fx, &fxError)) {
       printf("render: --fx: %s%s\n", fxStand->Describe().c_str(), opt.fx.compare ? "; remastered left, original right" : "");
@@ -1058,6 +1081,17 @@ int main(int argc, char** argv) {
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
     double worst = 0;  // the longest whole frame (a hitch)
+    // the card's stages and its whole frame, frame by frame: their middle and their lowest are what a
+    // frame costs when other programs use the card too (they only ever add to it)
+    std::vector<std::pair<std::string, std::vector<double>>> gpuFrames;
+    void AddGpu(const std::string& name, double ms) {
+      for (auto& s : gpuFrames)
+        if (s.first == name) {
+          s.second.push_back(ms);
+          return;
+        }
+      gpuFrames.push_back({name, {ms}});
+    }
     // the slowest frame of all, the first ones too (where loading on first sight goes), part by part
     double slowest = 0;
     int slowestFrame = 0;
@@ -1630,9 +1664,13 @@ int main(int argc, char** argv) {
       double gpu = 0;
       for (const auto& s : stages) {
         timing.Add(std::string("gpu: ") + s.first, s.second);
+        timing.AddGpu(s.first, s.second);
         gpu += s.second;
       }
-      if (!stages.empty()) timing.Add("gpu: whole frame", gpu);
+      if (!stages.empty()) {
+        timing.Add("gpu: whole frame", gpu);
+        timing.AddGpu("whole frame", gpu);
+      }
       for (const auto& part : CpuTimes::parts) timing.Add(std::string("cpu part: ") + part.first, part.second);
       ++timing.frames;
     }
@@ -1696,6 +1734,12 @@ int main(int argc, char** argv) {
                device->AdapterName().c_str(), vsync ? " (vsync on: the waits include it)" : "");
         for (const auto& s : timing.sums) printf("render: --timings:   %-48s %7.3f\n", s.first.c_str(), s.second / timing.frames);
         printf("render: --timings:   %-48s %7.3f\n", "cpu: the longest frame", timing.worst);
+        for (const auto& s : timing.gpuFrames) {
+          std::vector<double> g = s.second;
+          std::sort(g.begin(), g.end());
+          printf("render: --timings:   %-48s %7.3f\n", ("gpu: " + s.first + ", the middle one").c_str(), g[g.size() / 2]);
+          printf("render: --timings:   %-48s %7.3f\n", ("gpu: " + s.first + ", the lowest").c_str(), g.front());
+        }
       }
       if (opt.timings && timing.slowest > 0) {
         printf("render: --timings: the slowest frame of all (frame %d, the first ones counted too): %.1f ms; its parts over 1 ms:\n", timing.slowestFrame,

@@ -301,13 +301,25 @@ float Particles::Random() {
   return static_cast<float>(seed_ >> 8) * (1.0f / 16777216.0f);
 }
 
-const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
-  // (each look its own: the remastered one may take a remastered texture for the game's blueprint)
-  const std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
+const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std::string& faction) {
+  // (each look its own: the remastered one may take a remastered texture for the game's blueprint;
+  // and in it a faction its own blueprint where the visuals track has made one - where it has not, the
+  // faction plays the same blueprint as no faction)
+  std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
+  bool own = false;
+  if (remastered && !faction.empty()) {
+    const std::string asked = key + "|" + faction;
+    auto there = factionFiles_.find(asked);
+    if (there == factionFiles_.end()) there = factionFiles_.emplace(asked, vfs_->Exists(FactionEffectFile(path, faction))).first;
+    if (there->second) {
+      key = asked;
+      own = true;
+    }
+  }
   auto known = blueprints_.find(key);
   if (known != blueprints_.end()) return known->second.get();
   EmitterBlueprint* bp = blueprints_.emplace(key, std::make_unique<EmitterBlueprint>()).first->second.get();
-  const std::string file = moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
+  const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
   BpValue v;
   if (!text || !ReadBlueprintFile(*text, &v)) {
@@ -368,8 +380,9 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path) {
   return bp;
 }
 
-uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt, bool attached) {
-  const EmitterBlueprint* bp = Blueprint(blueprint);
+uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt, bool attached,
+                          const std::string& faction) {
+  const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
   std::unique_ptr<Set>& set = sets_[bp];
   if (!set) {

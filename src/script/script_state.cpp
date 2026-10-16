@@ -41,9 +41,14 @@ int ScriptRename(const char* from, const char*) {
 }  // namespace
 
 ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
-  lua_gpg_fopen_hook = ScriptFopen;
-  lua_gpg_remove_hook = ScriptRemove;
-  lua_gpg_rename_hook = ScriptRename;
+  // set once for the process (states are made on more than one thread)
+  static const bool hooked = [] {
+    lua_gpg_fopen_hook = ScriptFopen;
+    lua_gpg_remove_hook = ScriptRemove;
+    lua_gpg_rename_hook = ScriptRename;
+    return true;
+  }();
+  (void)hooked;
   L_ = lua_open();
   luaopen_base(L_);
   luaopen_table(L_);

@@ -720,7 +720,10 @@ static int io_setloc (lua_State *L) {
   int op = luaL_findstring(luaL_optstring(L, 2, "all"), catnames);
   luaL_argcheck(L, l || lua_isnoneornil(L, 1), 1, "string expected");
   luaL_argcheck(L, op != -1, 2, "invalid option");
-  lua_pushstring(L, setlocale(cat[op], l));
+  /* moho64: the C locale is the whole process's (number formatting and parsing, string comparison, and the other
+     thread's Lua state); a script may ask, never change it. No game, FAF or mod script calls os.setlocale. */
+  (void)cat;
+  lua_pushstring(L, (l == NULL || l[0] == '\0' || strcmp(l, "C") == 0) ? "C" : NULL);
   return 1;
 }
 

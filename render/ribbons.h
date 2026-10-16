@@ -36,9 +36,11 @@ class Ribbons {
 
   // A beam of that blueprint ("/effects/emitters/x_beam_01_emit.bp") from `start` to `end`, for
   // this frame. False when the blueprint cannot be read (reported once).
-  bool Beam(const std::string& blueprint, Vec3 start, Vec3 end);
+  // `faction` (here and below; "": none): whose the thing it is made on is. In the remastered look the
+  // blueprint is read first from the visuals track's folder of that faction (effect_files.h).
+  bool Beam(const std::string& blueprint, Vec3 start, Vec3 end, const std::string& faction = std::string());
   // The same from `start` along `direction` (unit length), as long as the blueprint says.
-  bool BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction);
+  bool BeamAlong(const std::string& blueprint, Vec3 start, Vec3 direction, const std::string& faction = std::string());
   // A beam of a texture alone (the scripts' CreateAttachedBeam), adding its light, for this frame.
   void TextureBeam(const std::string& texture, Vec3 start, Vec3 end, float halfWidth);
   // A plain glowing band without a blueprint, for this frame: what stands in where the game's own
@@ -46,11 +48,11 @@ class Ribbons {
   void PlainBeam(Vec3 start, Vec3 end, Vec3 color, float width);
   // Does that beam or trail blueprint add its light? Then a trail says its colour ramp's file and
   // a beam its own colour (as the blueprint gives it, by its alpha).
-  bool Glows(const std::string& blueprint, std::string* rampPath, Vec3* color);
+  bool Glows(const std::string& blueprint, std::string* rampPath, Vec3* color, const std::string& faction = std::string());
 
   // Starts a trail of that blueprint at a place; Move it every frame to where its emitter is.
   // Returns its handle; 0 when the blueprint cannot be read.
-  uint32_t StartTrail(const std::string& blueprint, Vec3 position);
+  uint32_t StartTrail(const std::string& blueprint, Vec3 position, const std::string& faction = std::string());
   void MoveTrail(uint32_t trail, Vec3 position);
   // The trail grows no more; what is there fades out as it would have.
   void StopTrail(uint32_t trail);
@@ -106,7 +108,7 @@ class Ribbons {
     double started = 0;
     bool stopped = false;
   };
-  const Kind* Blueprint(const std::string& path);
+  const Kind* Blueprint(const std::string& path, const std::string& faction = std::string());
   Trail* Find(uint32_t id);
   Batch* BatchFor(const Kind* kind);
   // One camera-facing quad from a to b, `half` wide to either side.
@@ -119,6 +121,7 @@ class Ribbons {
   gfx::Pipeline pipelines_[4];
   gfx::Buffer buffer_;
   std::unordered_map<std::string, std::unique_ptr<Kind>> kinds_;
+  std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file
   Kind plain_;
   struct PendingBeam {
     const Kind* kind;

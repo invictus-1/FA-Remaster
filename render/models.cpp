@@ -287,15 +287,31 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
   std::vector<LodSource> sources;
   std::string error;
-  if (!ReadSources(path, &sources, &m->scale, &error)) {
+  std::string named;
+  if (!ReadSources(path, &sources, &m->scale, &error, &named)) {
     if (!error.empty()) fprintf(stderr, "render: model %s: %s\n", path.c_str(), error.c_str());
+    // (a blueprint that names a mesh blueprint instead of holding its mesh: the debris a dying unit
+    // throws, "/meshes/projectiles/debris_misc_04_mesh"; that one's levels, at this blueprint's scale)
+    if (!named.empty()) {
+      named = moho::Vfs::Normalize(named);
+      if (named.size() < 3 || named.compare(named.size() - 3, 3, ".bp") != 0) named += ".bp";
+      if (named != path && vfs_->Exists(named)) {
+        const float scale = m->scale;
+        const Model* of = Blueprint(named, original, faction);
+        if (of->ok) {
+          *m = *of;  // (the same buffers and textures)
+          m->scale = scale;
+        }
+      }
+    }
     return m;
   }
   Build(m, path, base, sources, original, false, faction);
   return m;
 }
 
-bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error) {
+bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error,
+                             std::string* meshBlueprint) {
   const size_t slash = path.rfind('/');
   const std::string dir = path.substr(0, slash + 1);
   std::string base = path.substr(slash + 1);
@@ -309,7 +325,13 @@ bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* so
   }
   const BpValue& display = bp["Display"];
   const bool meshFile = !display.IsTable() && bp["LODs"].IsTable();  // a mesh blueprint itself
-  if (!meshFile && !display["Mesh"].IsTable()) return false;  // nothing to draw (many projectiles are effects only)
+  if (!meshFile && !display["Mesh"].IsTable()) {
+    // (nothing to draw here, as many projectiles are effects only; but it may name a mesh blueprint
+    // instead of holding its mesh, at its own scale: Blueprint takes that one's)
+    if (meshBlueprint) *meshBlueprint = display["MeshBlueprint"].StringOr(std::string());
+    *scale = static_cast<float>(display["UniformScale"].NumberOr(1));
+    return false;
+  }
   const BpValue& lods = meshFile ? bp["LODs"] : display["Mesh"]["LODs"];
   *scale = static_cast<float>((meshFile ? bp : display)["UniformScale"].NumberOr(1));
   const size_t count = std::max<size_t>(1, lods.items.size());

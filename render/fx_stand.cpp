@@ -8,6 +8,7 @@
 #include "bp_reader.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "effect_files.h"
 #include "script/script_state.h"
 #include "world.h"
 
@@ -127,6 +128,7 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
   }
   if (!setup.shot.empty()) {
     projectile_ = setup.shot.find('/') != std::string::npos ? setup.shot : "/projectiles/" + setup.shot + "/" + setup.shot + "_proj.bp";
+    shotFaction_ = setup.faction.empty() ? PathFaction(projectile_) : setup.faction;
     auto text = vfs->ReadFile(moho::Vfs::Normalize(projectile_));
     BpValue bp;
     if (!text || !ReadBlueprintFile(*text, &bp)) {
@@ -217,15 +219,25 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
       if (!RunScript(vfs, code, &impactEffects_, error)) return false;
     }
   }
-  if (!entity_.empty() || !shieldUnit_.empty()) {
+  if (!setup.death.empty()) {  // a unit to die: its blueprint must be there
+    std::string id = setup.death;
+    for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (!vfs->Exists(moho::Vfs::Normalize("/units/" + id + "/" + id + "_unit.bp"))) {
+      *error = "no unit blueprint /units/" + id + "/" + id + "_unit.bp";
+      return false;
+    }
+    setup_.death = id;
+  }
+  if (!entity_.empty() || !shieldUnit_.empty() || !setup_.death.empty()) {
     entities_ = std::make_unique<FxEntities>();
     if (!entities_->Init(vfs, setup.seed, error)) return false;
+    if (!setup.faction.empty()) entities_->SetFaction(setup.faction);
     if (!entity_.empty() && !vfs->ReadFile(moho::Vfs::Normalize(entity_))) {
       *error = "no effect entity blueprint " + entity_;
       return false;
     }
   }
-  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty()) {
+  if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -261,14 +273,26 @@ std::string FxStand::Describe() const {
     s += "; " + shieldUnit_ + "'s shield " + shieldMesh_ + b + ", hit with " + (impactMesh_.empty() ? std::string("no flash") : impactMesh_);
     list("and", impactEffects_);
   }
+  if (!setup_.death.empty()) {
+    char b[96];
+    snprintf(b, sizeof b, " killed %g s into each play (overkill %g)", setup_.killAt, setup_.overkill);
+    s += "; " + setup_.death + b;
+  }
+  if (!setup_.faction.empty()) s += "; as " + setup_.faction + "'s";
   return s.empty() ? s : s.substr(2);
+}
+
+void FxStand::SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel) {
+  terrain_ = std::move(terrain);
+  water_ = water;
+  waterLevel_ = waterLevel;
 }
 
 void FxStand::Fire(World& world, Side& side, double now, Vec3 from) {
   (void)now;
   const Quat turn = Facing(Normalize(setup_.to - setup_.from));
-  for (const std::string& t : polyTrails_) side.trails.push_back(world.ribbons.StartTrail(t, from));
-  for (const std::string& e : fxTrails_) side.carried.push_back(world.particles.Start(EmitterPath(e), from, turn, 1, -1, true));
+  for (const std::string& t : polyTrails_) side.trails.push_back(world.ribbons.StartTrail(t, from, shotFaction_));
+  for (const std::string& e : fxTrails_) side.carried.push_back(world.particles.Start(EmitterPath(e), from, turn, 1, -1, true, shotFaction_));
   side.flying = true;
 }
 
@@ -278,6 +302,16 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   right = Length(right) > 1e-4f ? Normalize(right) : Vec3{1, 0, 0};
   auto place = [&](Vec3 p, const Side& side) { return Vec3{p.x + side.shift.x, ground(p.x + side.shift.x, p.z + side.shift.z) + p.y, p.z + side.shift.z}; };
   const bool again = now - started_ >= setup_.repeat || now < started_;
+  if (entities_ && !setup_.death.empty() && !unitsReady_ && !unitsFailed_) {  // (once: the dying units' world)
+    World* w = &world;
+    std::string why;
+    unitsReady_ = entities_->InitUnits(terrain_ ? terrain_ : ground, water_, waterLevel_,
+                                       [w](const std::string& id) { return w->models.Unit(id); }, &why);
+    if (!unitsReady_) {
+      unitsFailed_ = true;
+      fprintf(stderr, "render: --fx-death: %s\n", why.c_str());
+    }
+  }
   if (entities_) {
     entities_->Advance(now);  // (to the moment the round starts, so that what is made now starts now)
     if (again) entities_->Clear();
@@ -292,7 +326,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       side.emitters.clear();
       if (!fxEmitters_.empty()) {
         const Vec3 at = place(setup_.at, side);
-        for (const std::string& e : fxEmitters_) side.emitters.push_back(world.particles.Start(e, at, Quat{}, 1));
+        for (const std::string& e : fxEmitters_) side.emitters.push_back(world.particles.Start(e, at, Quat{}, 1, -1, false, setup_.faction));
       }
       if (entities_ && !shieldUnit_.empty()) {  // the shield up (its hits follow, below)
         const Vec3 base = place(setup_.at, side);
@@ -304,8 +338,20 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       }
       if (entities_ && projectile_.empty() && !entity_.empty()) {
         std::string why;
-        if (!entities_->Spawn(entity_, place(setup_.at, side), sides_.size() == 2 ? !side.remastered : !lookRemastered, &why))
+        if (!entities_->Spawn(entity_, place(setup_.at, side), sides_.size() == 2 ? !side.remastered : !lookRemastered, &why,
+                              static_cast<int>(k)))
           fprintf(stderr, "render: --fx-entity: %s\n", why.c_str());
+      }
+      if (entities_ && unitsReady_) {  // the unit to die, as the game makes one
+        std::string why;
+        // (an aircraft flies toward the camera, square to the two sides, so that they stay side by
+        // side; it comes down at the spot)
+        const Vec3 forward = Normalize(Vec3{-right.z, 0, right.x});
+        const Vec3 at{setup_.at.x + side.shift.x, 0, setup_.at.z + side.shift.z};
+        side.unit = entities_->AddUnit(setup_.death, at, forward, sides_.size() == 2 ? !side.remastered : !lookRemastered, static_cast<int>(k),
+                                       setup_.killAt, &why);
+        side.killed = false;
+        if (!side.unit) fprintf(stderr, "render: --fx-death: %s\n", why.c_str());
       }
       if (!projectile_.empty()) {
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
@@ -334,7 +380,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         // toward the hit, for two seconds; its effects made on it and moved out to the hit
         const uint32_t flash = entities_->AddEntity(impactMesh_, centre, Facing(dir), {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
         for (const std::string& e : impactEffects_) {
-          const uint32_t fx = entities_->AddEmitter("CreateEmitterAtBone", flash, EmitterPath(e));
+          const uint32_t fx = entities_->AddEmitter("CreateEmitterAtBone", flash, EmitterPath(e), setup_.faction.empty() ? UnitFaction(shieldUnit_) : setup_.faction);
           entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, shieldSize_ * 0.5f});
         }
       }
@@ -362,10 +408,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         side.carried.clear();
         for (uint32_t e : side.emitters) world.particles.Stop(e);
         side.emitters.clear();
-        for (const std::string& e : impact_) side.emitters.push_back(world.particles.Start(EmitterPath(e), to, turn, 1));
+        for (const std::string& e : impact_) side.emitters.push_back(world.particles.Start(EmitterPath(e), to, turn, 1, -1, false, shotFaction_));
         if (entities_) {  // what its impact makes (a nuke's explosion)
           std::string why;
-          if (!entities_->Spawn(entity_, to, sides_.size() == 2 ? !side.remastered : !lookRemastered, &why))
+          if (!entities_->Spawn(entity_, to, sides_.size() == 2 ? !side.remastered : !lookRemastered, &why, static_cast<int>(k)))
             fprintf(stderr, "render: --fx-shot: %s\n", why.c_str());
         }
       }
@@ -373,13 +419,36 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   }
   if (again) started_ = now;
   world.particles.remastered = world.ribbons.remastered = lookRemastered;
+  // the unit's death, `killAt` into the play (the same moment on both sides)
+  for (Side& side : sides_)
+    if (entities_ && side.unit && !side.killed && now - started_ >= setup_.killAt) {
+      side.killed = true;
+      entities_->Kill(side.unit, setup_.overkill);
+    }
   if (entities_) {  // the effect entities, to the world as a game's
     entities_->Advance(now);  // (once more: what was made this frame is in the frame too)
     entities_->TakeEvents(&events_);
     world.effects.Queue(std::move(events_));
     events_.clear();
     world.effects.Update(now * 10, entities_->Current());
-    world.AddFrame(entities_->Current(), {});
+    if (entities_->Current().units.empty()) {
+      world.AddFrame(entities_->Current(), {});
+    } else {  // (the units the stand draws itself, below: the world draws a game's units with their symbols and bars)
+      Frame drawn = entities_->Current();
+      drawn.units.clear();
+      drawn.bones.clear();
+      world.AddFrame(drawn, {});
+    }
+    // the units and their wrecks, posed as their scripts pose them
+    for (const FxEntities::Body& b : entities_->Bodies()) {
+      const Model* unit = world.models.Unit(b.unit, b.original);
+      if (!unit || !unit->ok) continue;
+      const Model* model = b.wreck ? world.models.Wreck(unit, false) : unit;
+      Pose pose;
+      pose.now = pose.next = b.bones.data();
+      pose.nowCount = pose.nextCount = b.bones.size();
+      world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, 1, &pose);
+    }
   }
 }
 

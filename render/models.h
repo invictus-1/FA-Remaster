@@ -183,7 +183,9 @@ class ModelCache {
   };
   const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction);
   // A blueprint file's levels: their file names, and the model's scale. False when it has none to draw.
-  bool ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error);
+  // (`meshBlueprint`: where the blueprint holds no mesh, the mesh blueprint it names instead, if any)
+  bool ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error,
+                   std::string* meshBlueprint = nullptr);
   void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
              const std::string& faction = std::string());
   std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path

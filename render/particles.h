@@ -91,8 +91,11 @@ class Particles {
   // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was
   // before now (seconds, on Update's clock; negative: now). `attached`: it hangs on something (a
   // unit's bone, a shot) and the caller will Move it; only such emitters mind their LODCutoff.
+  // `faction` ("uef", "aeon", "cybran", "seraphim"; "": none): whose the thing it is made on or at is.
+  // In the remastered look the blueprint is read first from the visuals track's folder of that faction
+  // beside the shared one (effect_files.h); its textures are read by the paths it names, as always.
   uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1,
-                 bool attached = false);
+                 bool attached = false, const std::string& faction = std::string());
   // Where an emitter is now (one that sits on something that moves).
   void Move(uint32_t emitter, Vec3 position, const Quat& orientation);
   // What the game's scripts change on an emitter: its size (ScaleEmitter), and one of its
@@ -189,7 +192,7 @@ class Particles {
     // curves a script set on this emitter in place of its blueprint's (SetCurve)
     std::vector<std::pair<EmitterCurve EmitterBlueprint::*, EmitterCurve>> curves;
   };
-  const EmitterBlueprint* Blueprint(const std::string& path);
+  const EmitterBlueprint* Blueprint(const std::string& path, const std::string& faction);
   Emitter* Find(uint32_t id);
   void Emit(Emitter* emitter, int tick);
   float Random();  // 0..1
@@ -200,6 +203,7 @@ class Particles {
   gfx::Pipeline pipelines_[4];  // alpha, darkening, adding, premultiplied
   gfx::Buffer buffer_;
   std::unordered_map<std::string, std::unique_ptr<EmitterBlueprint>> blueprints_;
+  std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file
   std::unordered_map<const EmitterBlueprint*, std::unique_ptr<Set>> sets_;
   std::vector<Set*> order_;  // the sets in drawing order
   std::vector<Emitter> emitters_;

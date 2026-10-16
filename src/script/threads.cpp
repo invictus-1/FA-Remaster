@@ -184,7 +184,9 @@ bool ThreadScheduler::Resume(lua_State* co) {
 }
 
 void ThreadScheduler::Step(Thread& t) {
-  lua_gpg_resume_error_hook = OnResumeError;
+  // set once for the process (the sim's and the interface's schedulers may run on different threads)
+  static const bool hooked = (lua_gpg_resume_error_hook = OnResumeError, true);
+  (void)hooked;
   Thread* prev = current_;
   current_ = &t;
   int nargs = t.started ? 0 : t.pendingArgs;

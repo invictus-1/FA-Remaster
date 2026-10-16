@@ -80,5 +80,13 @@ when a frame fills one, the read-back in cached memory (reading 15 MB from uncac
   of Illinois/NCSA licence, LICENSE-LLVM.txt), kept for reference: `gfx_vulkan_dxc.cpp` declares the few
   calls it uses itself, so that no Windows headers are needed elsewhere. The compiler itself
   (`dxcompiler.dll`) is not in the repository: the Windows build of it comes under Microsoft's licence
-  "solely for use on Windows", fine for trying Vulkan on Windows; the Linux and macOS builds would ship
-  DXC's LLVM-licensed library (`libdxcompiler.so` / `.dylib`). The viewer finds it beside itself.
+  "solely for use on Windows", fine for Vulkan and Direct3D 12 on Windows; the Linux and macOS builds
+  would ship DXC's LLVM-licensed library (`libdxcompiler.so` / `.dylib`). The viewer finds it beside
+  itself. Whether a release of the game may ship Microsoft's build is Chris's decision: the licence lets
+  "distributable code" be shipped with an application, on the condition that players agree to terms
+  that protect Microsoft at least as much and that the publisher indemnifies Microsoft; the download
+  names no list of what is distributable.
+- Direct3D 12 compiles with DXC too (DXIL, shader model 6.0) where `dxcompiler.dll` is beside the
+  program, and with Direct3D's own compiler (FXC, part of Windows) where it is not, or where DXC fails
+  on a shader (the viewer's `--fxc`: FXC always). DXC of 2026-09-29 signs its shaders itself;
+  `dxil.dll` is not needed (checked: the same bytes with and without it).

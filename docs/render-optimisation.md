@@ -133,5 +133,18 @@ Measured on this PC (Ryzen 9 9950X3D, RTX 4090), eight-army M28 game ten minutes
   own drawing on the processor (9 to 14 ms) is the interface chat's next piece.
 - **FSR 1** (AMD, MIT): the card's frame at 3840x2160 on the rebuilt map 12.6 ms off, 6.5 Ultra Quality,
   3.9 Quality, 2.5 Performance. A player's option.
-- **Tried and left off:** laying the models' depth first (the card already skips hidden pixels; it cost
-  more than it saved on the 4090). Kept as a switch to try on slower cards.
+- **The models' depth laid first**, for those large on screen only, and their full shading then writing no
+  depth: units and scenery on the rebuilt map at middle zoom 2.49 -> 1.84 ms on the card (1440p). A first
+  try that kept writing depth in the full shading saved nothing, and small models drawn twice cost more than
+  they spared. On by default; viewer `--no-prepass` turns it off.
+- **The ground reads a layer only where it is there** (a map's ten layers each cover a part of it,
+  7da8dd3): the card's whole frame, by the lowest of each run's frames (see below), stock map at middle
+  zoom 1.14 -> 1.12 ms, from far 1.50 -> 1.41; rebuilt map 2.41 -> 2.24 and 2.60 -> 2.37 (Direct3D 12,
+  1440p). (The first numbers given for it, ground 0.95 -> 0.55, were averages taken while other programs
+  used the card, and too high.)
+- **Direct3D 12's shaders compiled by DXC** where it is beside the program (docs/render-vulkan.md): a
+  first start without the shader cache 20-26 s -> 9-11 s; with the cache the same. The card's frame
+  0-3 % lower (lowest frames, five scenes). Viewer `--fxc`: the old compiler.
+- **How the card is measured now:** other programs on the card (other chats' replays and tests) raise the
+  average of a run by up to 2-3 times. `--timings` also reports each stage's middle and lowest frame, and
+  the A/B script waits for an idle card before each run; the lowest frame is what a change is judged by.
