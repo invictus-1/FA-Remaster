@@ -112,6 +112,9 @@ class Unit : public Entity {
   // unit whose whole move is on water, ResetPathState 0x5ad9c0 (0x5ada33) clears it. +0x125 is the script's: FAF's
   // Unit:ForceAltFootprint(bool) 0x128dd70 (the Salem's weapon toggle, urs0201_script.lua:176 / 186).
   bool altFootprintNav = false, altFootprintForced = false;
+  // unit+0x57c: the terrain type code under the unit, as Unit::UpdateTerrainType 0x6a9b50 last read it (the
+  // constructor starts it at 0, 0x6a5651; UpdateTerrainType in sim/motion.h)
+  uint8_t terrainType = 0;
   int headState = 0;  // progress of the head command (sim/commands.cpp)
 
   // Economy (sim/economy.cpp): per-second rates as scripts set them, the request that claims the
