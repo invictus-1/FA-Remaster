@@ -221,8 +221,9 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     impactMesh_ = shield["ImpactMesh"].StringOr(std::string());
     shieldSize_ = static_cast<float>(shield["ShieldSize"].NumberOr(0));
     shieldOffset_ = static_cast<float>(shield["ShieldVerticalOffset"].NumberOr(0));
-    if (shieldMesh_.empty() || shieldSize_ <= 0) {
-      *error = id + " has no shield of that kind (Defense.Shield.Mesh and ShieldSize)";
+    personalShield_ = shield["PersonalShield"].kind == BpValue::Bool && shield["PersonalShield"].boolean;
+    if ((shieldMesh_.empty() && !personalShield_) || shieldSize_ <= 0) {
+      *error = id + " has no shield of that kind (Defense.Shield.Mesh or PersonalShield, and ShieldSize)";
       return false;
     }
     const std::string template_ = shield["ImpactEffects"].StringOr(std::string());
@@ -420,8 +421,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       if (entities_ && !shieldUnit_.empty()) {  // the shield up (its hits follow, below)
         const Vec3 base = place(setup_.at, side);
         const float size = shieldSize_;
-        entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
-                             sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
+        if (!personalShield_)  // (a personal shield is the unit's own look: below)
+          entities_->AddEntity(shieldMesh_, base + Vec3{0, shieldOffset_, 0}, Quat{}, {size, size, size}, true,
+                               sides_.size() == 2 ? !side.remastered : !lookRemastered, 0);
+        side.lastHit = -10;
         side.nextHit = now + 0.3;
         side.rng = std::max<uint32_t>(setup_.seed, 1);  // (the same hits on both sides)
       }
@@ -495,7 +498,21 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       const bool original = sides_.size() == 2 ? !side.remastered : !lookRemastered;
       const Vec3 base = place(setup_.at, side);
       const Model* unit = world.models.Unit(shieldUnit_, original);
-      if (unit && unit->ok) world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f});
+      if (unit && unit->ok) {
+        // (a personal shield: the unit with its shield up, and its last hit for a second, as World draws a
+        // game's: the hit's age on what is built, 3 and a little more, where it struck on the tint)
+        float built = 1;
+        const Vec3* hitAt = nullptr;
+        if (personalShield_) {
+          built = 3;
+          const double age = now - side.lastHit;
+          if (age >= 0 && age < 1) {
+            built = 3.001f + 0.9f * static_cast<float>(age);
+            hitAt = &side.hitPoint;
+          }
+        }
+        world.meshes.Add(unit, Mat4::FromTRS(base, Quat{}, unit->scale), {0.2f, 0.45f, 1.0f}, built, nullptr, hitAt);
+      }
       if (entities_ && now >= side.nextHit && side.nextHit > 0) {
         side.nextHit = now + setup_.hitEvery;
         // a direction above the ground (each side draws the same ones)
@@ -507,11 +524,20 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         const Vec3 dir = Normalize(Vec3{std::sin(heading) * std::cos(rise), std::sin(rise), std::cos(heading) * std::cos(rise)});
         const Vec3 centre = base + Vec3{0, shieldOffset_, 0};
         // as the game's shield script: the flash at the shield's centre, sized as the shield, turned
-        // toward the hit, for two seconds; its effects made on it and moved out to the hit
-        const uint32_t flash = entities_->AddEntity(impactMesh_, centre, Facing(dir), {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
+        // toward the hit, for two seconds; its effects made on it and moved out to the hit. A personal
+        // shield's (PersonalShield.CreateImpactEffect): no flash, an entity without a mesh at the
+        // shield, its effects moved out as far as the hit lies; on the unit itself, about its middle
+        const float reach = personalShield_ ? shieldSize_ * 0.35f : shieldSize_ * 0.5f;
+        const Vec3 from = personalShield_ ? base + Vec3{0, shieldOffset_ + shieldSize_ * 0.35f, 0} : centre;
+        const uint32_t flash = entities_->AddEntity(personalShield_ ? std::string() : impactMesh_, from, Facing(dir),
+                                                    {shieldSize_, shieldSize_, shieldSize_}, false, original, 2.0f);
         for (const std::string& e : impactEffects_) {
           const uint32_t fx = entities_->AddEmitter("CreateEmitterAtBone", flash, EmitterPath(e), setup_.faction.empty() ? UnitFaction(shieldUnit_) : setup_.faction);
-          entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, shieldSize_ * 0.5f});
+          entities_->CallEmitter(fx, "OffsetEmitter", {0, 0, reach});
+        }
+        if (personalShield_) {
+          side.lastHit = now;
+          side.hitPoint = from + dir * reach - base;  // (the unit is not turned: its own frame is the world's)
         }
       }
     }

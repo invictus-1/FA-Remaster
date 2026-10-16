@@ -333,6 +333,12 @@ class World {
   void ListProp(PlacedProp* prop, uint32_t key, bool made);
   void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
+  // the last hit on each unit's personal shield: where, on the model at rest (world units), and when
+  struct ShieldHit {
+    Vec3 at;
+    double clock = 0;
+  };
+  std::unordered_map<uint32_t, ShieldHit> shieldHits_;
   const Model* PropModel(const std::string& blueprint, const std::string& mesh);
   void ApplyPropEvent(const FramePropEvent& event);
   std::vector<const StrategicIcons::Kind*> iconKinds_;  // by FrameUnit::blueprint; null: not looked up yet
