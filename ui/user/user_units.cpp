@@ -43,6 +43,9 @@ class UserUnit : public ScriptObject {
   // test over thousands of units looks each up once, not each time.
   mutable const BlueprintInfo* bpInfo = nullptr;
   mutable std::string bpInfoFor;
+  // Its state as last asked of the simulation, and at which sync (StateOf; ~0: never).
+  mutable UnitStateView stateCopy;
+  mutable uint64_t stateSync = ~0ull;
 };
 
 struct UnitStore : UserState::Extra {
@@ -820,6 +823,18 @@ void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids) {
   }
 }
 
+const std::string* CustomNameOf(lua_State* L, uint32_t id) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(id);
+  return it == store.units.end() || it->second->gone || it->second->customName.empty() ? nullptr : &it->second->customName;
+}
+
+bool AnyCustomNames(lua_State* L) {
+  for (const auto& [id, u] : Store(L).units)
+    if (!u->gone && !u->customName.empty()) return true;
+  return false;
+}
+
 bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army) {
   UserState* user = UserState::From(L);
   if (!user->units) return false;
@@ -1528,9 +1543,21 @@ int l_ToggleScriptBit(lua_State* L) {
 // What the panels show of a unit beyond where it is: its queue, what it works on, its switches
 // and meters. Asked of the simulation when a script asks, for the units it asks about.
 
+// A unit's state changes only in a beat: it is kept until the next beat's sync comes (the panels
+// ask the same units every frame; each answer runs in the simulation's Lua), and while a beat runs
+// on its own thread the state from before it is the answer (no wait for the beat).
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
+  if (!u || u->gone) return false;
+  UserState* user = UserState::From(L);
+  const bool beat = user->config().beatRunning && user->config().beatRunning();
+  if (u->stateSync != ~0ull && (beat || u->stateSync == user->syncCount)) {
+    *out = u->stateCopy;
+    return true;
+  }
   Sim* sim = TheSim(L);
-  return sim && u && !u->gone && UnitStateOf(*sim, u->view.id, out);
+  if (!sim || !UnitStateOf(*sim, u->view.id, out)) return false;
+  u->stateCopy = *out, u->stateSync = user->syncCount;
+  return true;
 }
 
 void PushUnitById(lua_State* L, uint32_t id) {

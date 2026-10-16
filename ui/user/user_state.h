@@ -140,6 +140,7 @@ class UserState {
   // What the scripts ask of the simulation every frame, copied when a beat's sync comes (the
   // simulation is idle then), so that asking never waits for a beat: the focus army's economy
   // (EconomyTotals of sim/sim_view.h, its twelve numbers in order). session_bindings.cpp.
+  uint64_t syncCount = 0;  // the beats' syncs delivered so far (what was asked before one is old after it)
   float economyCopy[12] = {};
   std::string focusNickname;  // the focus army's player name (GetSessionClients)
   int focusArmyCopy = -1;     // the simulation's focusArmy, 0-based (GetFocusArmy)
@@ -243,6 +244,20 @@ struct LookSettings {
   bool originalLook = false;
 };
 LookSettings& Looks();
+// The names players give their units, as the original draws them under the life bars (its console
+// variables ui_RenderCustomNames, ui_CustomNameColor, ui_CustomNameFontSize, ui_CutsomNameFont, as
+// spelt there; FA exe descriptors 0xf5b2d0.., defaults: on, 0xff00aa00, 12, "Arial"; the game's
+// option "Always Show Custom Names" sends 0 at the start). Read by a helper from the exe (REQUESTS 23).
+struct CustomNameStyle {
+  bool on = true;
+  uint32_t color = 0xff00aa00u;
+  int size = 12;
+  std::string font = "Arial";
+};
+CustomNameStyle& CustomNames();
+// A unit's custom name (nullptr: none or no such unit), and whether any unit has one (user_units.cpp).
+const std::string* CustomNameOf(lua_State* L, uint32_t id);
+bool AnyCustomNames(lua_State* L);
 // The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
 // 2026-10-15, via the renderer track: "have options for all and default is vsync on"):
 // remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"

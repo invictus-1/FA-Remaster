@@ -494,6 +494,7 @@ void UserState::CopyFromSimulation() {
 
 void UserState::DeliverSync(const std::string& blob) {
   lua_State* L = state_->L();
+  ++syncCount;
   RefreshUserUnits(L);
   CopyFromSimulation();
   int top = lua_gettop(L);

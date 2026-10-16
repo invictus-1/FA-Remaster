@@ -490,9 +490,12 @@ int main(int argc, char** argv) {
       // The game's beats on a thread of their own, the window showing the world meanwhile
       // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
       session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;
-      // (MOHO64UI_UI_DURING_BEATS=1, to try: the interface runs during a beat too, and what reads
-      // the simulation waits for it; MOHO64UI_BEAT_LOG=1 names each wait.)
-      if (std::getenv("MOHO64UI_UI_DURING_BEATS") == nullptr) hooks.busy = [&]() { return session.BeatRunning(); };
+      // The interface, input and camera run during a beat too (the original's way: its interface
+      // reads copies, not the running simulation): what asks the simulation every frame answers
+      // from copies taken between beats, the rest waits for the beat (UserState::LiveSim;
+      // MOHO64UI_BEAT_LOG=1 names each wait). MOHO64UI_SHOW_ONLY_DURING_BEATS=1: frames during a
+      // beat only show the picture, as before.
+      if (std::getenv("MOHO64UI_SHOW_ONLY_DURING_BEATS") != nullptr) hooks.busy = [&]() { return session.BeatRunning(); };
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
@@ -504,7 +507,9 @@ int main(int argc, char** argv) {
                            leaveOrRestart();
                            startGameInterface();
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
-                             if (game && ++capturedFrames == 300) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
+                             // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given)
+                             static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
+                             if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                            }
                            // LAST: a beat it starts on its own thread runs beside nothing more of

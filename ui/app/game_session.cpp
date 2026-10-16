@@ -53,7 +53,20 @@ struct GameSession::Picture : WorldSource {
   int cameraW = 0, cameraH = 0;
   bool vsync = true;
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
+  // The moment the frame shows, once fixed this frame by LifeBarAnchors (PresentToWindow takes
+  // the same, so the bars it draws are those the anchors were of).
+  double moment = 0;
+  bool momentFixed = false;
   bool DrawsToWindow() const override { return direct; }
+  void LifeBarAnchors(std::vector<BarAnchor>* out) override {
+    out->clear();
+    if (!direct || cameraW <= 0 || !session) return;
+    moment = session->PictureTick(), momentFixed = true;
+    std::vector<render::WorldPicture::LifeBarAnchor> anchors;
+    picture.LifeBarAnchors(camera, cameraW, cameraH, moment, &anchors);
+    out->reserve(anchors.size());
+    for (const auto& a : anchors) out->push_back({a.unit, a.x, a.y});
+  }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
     render::Camera cam;
@@ -682,7 +695,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   std::vector<uint8_t> rgba;
   if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
-  const double moment = PictureTick();
+  const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
+  pic.momentFixed = false;
   if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, moment);
   FrameTimes& times = Times();
   // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)

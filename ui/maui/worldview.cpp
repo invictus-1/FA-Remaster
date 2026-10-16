@@ -16,6 +16,7 @@
 
 #include "core/log.h"
 #include "maui/control.h"
+#include "maui/font.h"
 #include "maui/input.h"
 #include "maui/world_source.h"
 #include "script/script_handle.h"
@@ -600,6 +601,28 @@ class WorldView : public Control {
   }
   bool sceneMade_ = false;  // a scene has been given to the picture (EnsurePicture)
 
+  // The names players give their units, under their life bars as the original draws them (FA exe
+  // sub_85E0A0, only for units in the life bars' list, never in the minimap; read by a helper,
+  // REQUESTS 23): centred, floor(x - width / 2), a line's height below the bars' lower edge
+  // (INFERRED: that this y is the text's top; the exe's font routine 0x426470 is not read), a black
+  // shadow one pixel right and down, then the text in its colour. The picture gives the bars of
+  // the frame about to be shown (WorldPicture::LifeBarAnchors), so the names are of that moment.
+  void DrawCustomNames(lua_State* L, DrawTarget& target, const Rect& r) {
+    const CustomNameStyle& style = CustomNames();
+    if (!style.on || miniMap || !AnyCustomNames(L)) return;  // (else nothing is asked of the picture)
+    std::vector<WorldSource::BarAnchor> anchors;
+    UserState::From(L)->config().world->LifeBarAnchors(&anchors);
+    const FontMetrics m = GetFontMetrics(style.font, style.size);
+    for (const WorldSource::BarAnchor& a : anchors) {
+      const std::string* name = CustomNameOf(L, a.unit);
+      if (!name) continue;
+      const float w = StringAdvance(style.font, style.size, *name);
+      const float x = r.x0 + std::floor(a.x - w * 0.5f), top = r.y0 + std::floor(a.y + m.height);
+      DrawString(target, style.font, style.size, *name, x + 1, top + 1 + m.ascent, 0xff000000u);
+      DrawString(target, style.font, style.size, *name, x, top + m.ascent, style.color);
+    }
+  }
+
   // The game script's command mode (the original asks it the same way: commandmode.GetCommandMode(),
   // FA exe 0x83dda0, gives {mode, data}): mode "order" with data.name = an order's name, or
   // "build" with data.name = the blueprint to build; empty when there is none.
@@ -655,6 +678,7 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
       target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    DrawCustomNames(L, target, r);
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
     if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {
@@ -1551,6 +1575,10 @@ void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
 LookSettings& Looks() {
   static LookSettings looks;
   return looks;
+}
+CustomNameStyle& CustomNames() {
+  static CustomNameStyle style;
+  return style;
 }
 FramePacing& Pacing() {
   static FramePacing pacing;

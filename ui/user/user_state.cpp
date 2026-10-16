@@ -150,6 +150,7 @@ void UserState::GameLoaded() {
   // The loading screen goes: the script that made it never removes it, so the engine must.
   // (Inferred: that the root frames are cleared here.)
   for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
+  ++syncCount;
   RefreshUserUnits(state_->L());
   CopyFromSimulation();
   lua_pushboolean(state_->L(), 0);  // not a replay
