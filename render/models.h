@@ -146,7 +146,10 @@ class ModelCache {
   bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp"),
   // or of a mesh blueprint file itself ("/meshes/game/map-border_squ_uef_mesh.bp").
-  const Model* Blueprint(const std::string& blueprintPath, bool original = false);
+  // `faction` ("uef", "aeon", "cybran", "seraphim"): in the remastered look an effect's textures are read
+  // from the visuals track's "<the texture's folder>/<faction>/" first (a shield's flash, whose mesh three
+  // factions share), then as without it.
+  const Model* Blueprint(const std::string& blueprintPath, bool original = false, const std::string& faction = std::string());
   // A model from a mesh file and an albedo texture named outright, with a shader's name (what the
   // game's interface script places in the world, placed.h). One level; `uniformScale` is its scale.
   const Model* Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale = 1);
@@ -173,8 +176,9 @@ class ModelCache {
     float scale = 1;
     std::vector<LodSource> lods;
   };
-  const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry);
-  void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged);
+  const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction);
+  void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
+             const std::string& faction = std::string());
   std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path
   gfx::Device* device_;
   const moho::Vfs* vfs_;

@@ -119,6 +119,9 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       if (e.kind == Kind::Emitter) particles_->SetScale(e.handle, n[0]);
     } else if (event.name == "OffsetEmitter" && n.size() >= 3) {
       e.offset = {n[0], n[1], n[2]};
+      // (one that stays where it was made is moved now, in the frame of what it was made on: a shield's
+      // hit sparks are made at its flash's centre and moved out to the hit, the flash turned toward it)
+      if (!e.attached && e.kind == Kind::Emitter) particles_->Move(e.handle, e.position + Rotate(e.orientation, e.offset), e.orientation);
     } else if (event.name == "SetEmitterParam" && !n.empty()) {
       std::string parameter = event.text;
       for (char& c : parameter) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

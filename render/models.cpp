@@ -192,7 +192,7 @@ const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
   std::string id = Lower(blueprintId);
   if (!original) {
     auto listed = display_.find(id);
-    if (listed != display_.end()) return FromDisplay(id, id, listed->second);
+    if (listed != display_.end()) return FromDisplay(id, id, listed->second, std::string());
   }
   return Blueprint(UnitBlueprintPath(id), original);
 }
@@ -215,12 +215,13 @@ bool ModelCache::Remastered(const std::string& blueprintId) const {
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
 }
 
-const Model* ModelCache::FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry) {
-  auto it = models_.find("display:" + key);
+const Model* ModelCache::FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction) {
+  const std::string name = "display:" + key + (faction.empty() ? std::string() : "#" + faction);
+  auto it = models_.find(name);
   if (it != models_.end()) return it->second.get();
-  Model* m = models_.emplace("display:" + key, std::make_unique<Model>()).first->second.get();
+  Model* m = models_.emplace(name, std::make_unique<Model>()).first->second.get();
   m->scale = entry.scale > 0 ? entry.scale : 1;
-  Build(m, key, base, entry.lods, false, true);
+  Build(m, key, base, entry.lods, false, true, faction);
   return m;
 }
 
@@ -242,7 +243,7 @@ const Model* ModelCache::Mesh(const std::string& meshPath, const std::string& al
   const size_t slash = mesh.rfind('/');
   std::string base = mesh.substr(slash == std::string::npos ? 0 : slash + 1);
   base = base.substr(0, base.rfind('.'));
-  return FromDisplay(key, base, entry);
+  return FromDisplay(key, base, entry, std::string());
 }
 
 const Model* ModelCache::Wreck(const Model* of, bool ownScale) {
@@ -261,7 +262,7 @@ const Model* ModelCache::Wreck(const Model* of, bool ownScale) {
   return kept.emplace(of, std::move(wreck)).first->second.get();
 }
 
-const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original) {
+const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
   const size_t slash = path.rfind('/');
@@ -271,9 +272,9 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
   base = under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
   if (!original) {
     auto listed = display_.find(path);
-    if (listed != display_.end()) return FromDisplay(path, base, listed->second);
+    if (listed != display_.end()) return FromDisplay(path, base, listed->second, faction);
   }
-  const std::string key = original ? path + "#original" : path;
+  const std::string key = original ? path + "#original" : faction.empty() ? path : path + "#" + faction;
   auto it = models_.find(key);
   if (it != models_.end()) return it->second.get();
   Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
@@ -311,13 +312,14 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     s.secondary = file("SecondaryName", "", &s.secondaryNamed);
     sources.push_back(std::move(s));
   }
-  Build(m, path, base, sources, original, false);
+  Build(m, path, base, sources, original, false, faction);
   return m;
 }
 
 // Loads a model's levels from their file names. `merged`: the names come from the simulation's merged
 // blueprints (mods' changes are in them already; every texture has a name, there or not).
-void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged) {
+void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
+                       const std::string& faction) {
   // A remastered model being tried out (the viewer's --preview): its folder, mounted at
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
@@ -490,7 +492,15 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       // (an effect's mesh, as a nuke's ball of fire: in the remastered look the visuals track's
       // texture of that path where it has made one, effect_files.h)
       if (!original && moho::Vfs::Normalize(name).compare(0, 9, "/effects/") == 0) {
-        const std::string ours = EffectFile(*vfs_, name, true);
+        // (and first, with a faction, the visuals track's one for that faction: "<folder>/<faction>/<file>")
+        std::string ours;
+        if (!faction.empty()) {
+          const std::string n = moho::Vfs::Normalize(name);
+          const size_t slash = n.rfind('/');
+          const std::string mine = std::string(kRemasteredEffects) + n.substr(0, slash + 1) + faction + n.substr(slash);
+          if (vfs_->Exists(mine)) ours = mine;
+        }
+        if (ours.empty()) ours = EffectFile(*vfs_, name, true);
         if (remastered) *remastered = ours != name;
         name = ours;
       }
