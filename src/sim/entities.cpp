@@ -1134,18 +1134,13 @@ int l_brain_GetListOfUnits(lua_State* L) {
 // until it is destroyed. Only blueprints with CapCost (bp+0x1f8) > 0 are counted (0x6a6621, 0x6aa0e5, 0x6a6e06).
 // Seen: Skirmish 1119, Gibson's new air factory: M28 counts its air subteam's transports with GetCurrentUnits;
 // Chloe's transport 0x600018 is at 14 % in its factory, the original counts 0 and builds a transport.
+// The stat's values (Army::bpStats) are kept where the exe keeps them: Sim::CreateUnit, Materialize, the destroy
+// queue's ~Unit step (sim.cpp).
 int l_brain_GetCurrentUnits(lua_State* L) {
   AiBrain* b = B(L);
   const uint64_t* cat = ToCategory(L, 2);
-  int n = 0;
-  if (b->army)
-    for (Unit* u : b->army->units) {
-      if (u->beingBuilt || !(u->capCost > 0.0f)) continue;
-      if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
-        continue;
-      ++n;
-    }
-  lua_pushnumber(L, n);
+  const float n = b->army ? b->army->SumBpStat("Units_Active", cat) : 0.0f;
+  lua_pushnumber(L, static_cast<float>(static_cast<int>(n)));  // cvttss2si, cvtsi2ss (0x58783a)
   return 1;
 }
 
@@ -1778,10 +1773,20 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   InitializeArmor(L, u);
   CallMethod(L, u, "OnCreate", 0);
   if (complete) UnitFinishedBuilding(*this, L, u);  // adjacency with what it touches
-  else if (army) army->stats["Units_BeingBuilt"] += 1;
+  // the army's unit statistics (Unit ctor): a construction counts for its blueprint in "Units_BeingBuilt" (0x6a6741,
+  // every blueprint; the item's own value is left alone) before OnStartBeingBuilt; a complete unit of a blueprint with
+  // CapCost > 0 (bp+0x1f8, 0x6a6621) counts in "Units_Active" and "Units_History", its blueprint's value + 1 and the
+  // item + 1 as an int (0x6a663b, 0x6a66c7), after OnStopBeingBuilt
+  if (!complete && army) army->AddBpStat("Units_BeingBuilt", &bp, 1.0f);
   PushObject(L, builder);
   lua_pushstring(L, u->layer.c_str());
   CallMethod(L, u, complete ? "OnStopBeingBuilt" : "OnStartBeingBuilt", 2);
+  if (complete && army && u->capCost > 0.0f) {
+    for (const char* name : {"Units_Active", "Units_History"}) {
+      army->AddBpStat(name, &bp, 1.0f);
+      army->stats[name] += 1.0f;
+    }
+  }
   lua_settop(L, top);
   return u;
 }

@@ -764,8 +764,10 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
     m.ballistic = false;
     lua_State* L = sim.L();
     if (!u->dead) {
+      // the landing kills a unit that does not fit there, that came down outside the playable rect (the map's
+      // rect itself, STIMap+0x8..0x14, whatever the army: 0x6c0a7e..0x6c0ad7) or that lies tilted
       Vec3 up = Rotate(u->orientation, Vec3{0, 1, 0});
-      bool ok = FootprintFitsHere(sim, u) && up.y >= 0.667f;
+      bool ok = FootprintFitsHere(sim, u) && sim.IsWithin(u->position.x, u->position.z, 0.0f, false) && up.y >= 0.667f;
       if (!ok) KillUnit(sim, L, u, nullptr, "", 0.0f);
     }
     if (u->dead) {
@@ -2700,6 +2702,8 @@ int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
 }
 
 }  // namespace
+
+Unit* UnitFerryBeacon(Sim& sim, const Unit* u) { return CmdBeacon(sim, Current(u)); }
 
 BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
   Unit* target = c.targetId ? UnitRef(sim, c.targetId) : nullptr;

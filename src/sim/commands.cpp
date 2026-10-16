@@ -939,8 +939,9 @@ bool RefusesTargetOutside(Sim& sim, const Unit* u, const Vec3* target) {
 // - without the Guard command cap (0x6f098b: caps +0x60 bit 8);
 // with a unit as the target (0x6f099d, IsUnit):
 // - the unit itself (0x6f09b2);
-// - (both immobile FACTORY units whose buildable categories, bp+0x528, do not meet: 0x6f09ba..0x6f0ae7, not built);
-// - a FERRYBEACON that is the unit's own ferry beacon (0x6f0af1..0x6f0b60, not built);
+// - both immobile (IUnit vt+0x30) FACTORY units whose buildable categories (bp+0x528, Economy.BuildableCategory) have
+//   nothing in common (EntityCategory::Mul 0x5577b0 comes back empty: 0x6f09ba..0x6f0ae7);
+// - a FERRYBEACON that is the unit's own ferry beacon (GetTransportFerryBeacon 0x6a8890, 0x6f0af1..0x6f0b60);
 // - the unit a FACTORY and the target not (0x6f0b66..0x6f0ba7);
 // - the target guarding the unit already (GetGuardedUnit 0x59a430 == the unit, 0x6f0baf): two units never guard
 //   each other. (FAF's FactoryUnit.CalculateRollOffPoint walks the guard chain until it ends or meets the factory:
@@ -956,6 +957,16 @@ bool RefusesGuard(Sim& sim, lua_State* L, const Unit* u, const Entity* target) {
   const Unit* g = target && target->kind == Entity::Kind::Unit ? static_cast<const Unit*>(target) : nullptr;
   if (!g) return !(u->motion.bp && u->motion.bp->mobile());
   if (g == u) return true;
+  auto mobile = [](const Unit* x) { return x->motion.bp && x->motion.bp->mobile(); };
+  if (!mobile(g) && !mobile(u) && BpInCategory(sim, g->blueprint, "FACTORY") &&
+      BpInCategory(sim, u->blueprint, "FACTORY") && u->bpData && g->bpData) {
+    const std::vector<uint64_t>& a = u->bpData->buildable;
+    const std::vector<uint64_t>& b = g->bpData->buildable;
+    bool meet = false;
+    for (size_t w = 0; w < a.size() && w < b.size() && !meet; ++w) meet = (a[w] & b[w]) != 0;
+    if (!meet) return true;
+  }
+  if (BpInCategory(sim, g->blueprint, "FERRYBEACON") && UnitFerryBeacon(sim, u) == g) return true;
   if (BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, g->blueprint, "FACTORY")) return true;
   if (g->guardedId && g->guardedId == EntityRef(u)) return true;
   return false;

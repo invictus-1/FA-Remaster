@@ -63,12 +63,21 @@ class Army {
   ArmyEconomy econ;  // sim/economy.cpp
   std::vector<uint64_t> buildRestricted;  // AddBuildRestriction(army, category)
   std::map<std::string, float> stats;  // army statistics (GetArmyStat)
+  // The unit statistics' values per blueprint (CArmyStatItem+0xa4, a map blueprint -> float): what GetCurrentUnits,
+  // GetBlueprintStat and the category stat triggers sum (CArmyStatItem::SumCategory 0x70b580). Written by the Unit
+  // ctor, Unit::Materialize, ~Unit (Units_Active, Units_History, Units_BeingBuilt), Unit::Kill (Units_Killed,
+  // Enemies_Killed) and SIM_DoDamagePoint (Units_TotalDamageDealt, Units_TotalDamageReceive). The original keys them by
+  // blueprint pointer; here by the blueprint's category bit, so the sum's order does not depend on addresses.
+  std::map<std::string, std::map<int, float>> bpStats;
+  void AddBpStat(const char* name, const BlueprintInfo* bp, float v);
+  float SumBpStat(const std::string& name, const uint64_t* category) const;
   // stat triggers (engine-ref army_stats.md): SetArmyStatsTrigger appends, CArmyStats::Update fires and removes
   struct StatCond {
     std::string stat;
     int op = 0;  // 0 >, 1 >=, 2 <, 3 <=
     float thr = 0;
-    bool category = false;  // category conditions sum per-blueprint stats (not kept: they read 0)
+    std::vector<uint64_t> category;  // a 6th argument: the condition sums the stat's per-blueprint values in it
+    bool hasCategory = false;
   };
   struct StatTrigger {
     std::string name;

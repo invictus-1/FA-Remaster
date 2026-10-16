@@ -114,8 +114,16 @@ void DoDamagePoint(Sim& sim, lua_State* L, const DamageSpec& d, Entity* target, 
   }
   float damage = amount;
   if (target->kind == Entity::Kind::Unit) damage = amount * sim.ArmorMult(static_cast<Unit*>(target), d.type);
-  if (d.instigator && d.instigator->army) AddStat(d.instigator->army, "DamageStats_TotalDamageDealt", damage);
-  if (d.instigator && target->army) AddStat(target->army, "DamageStats_TotalDamageReceived", damage);
+  // the army statistics, and a unit's damage also for its blueprint (0x7374af, 0x737597)
+  if (d.instigator && d.instigator->army) {
+    AddStat(d.instigator->army, "DamageStats_TotalDamageDealt", damage);
+    if (d.instigator->kind == Entity::Kind::Unit)
+      d.instigator->army->AddBpStat("Units_TotalDamageDealt", d.instigator->blueprint, damage);
+  }
+  if (d.instigator && target->army) {
+    AddStat(target->army, "DamageStats_TotalDamageReceived", damage);
+    if (target->kind == Entity::Kind::Unit) target->army->AddBpStat("Units_TotalDamageReceive", target->blueprint, damage);
+  }
   if (d.instigator)  // the platoons' lifetime stats (+0xec dealt by a unit, +0xf0 taken by a unit; damage.md 4)
     PlatoonStatDamage(d.instigator->army && d.instigator->kind == Entity::Kind::Unit ? static_cast<Unit*>(d.instigator)
                                                                                       : nullptr,
@@ -328,6 +336,8 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
     mass *= u->fractionComplete;
     energy *= u->fractionComplete;
   }
+  // (Unit::Kill 0x6a84b6: Units_Killed and Enemies_Killed also count the victim's blueprint, 0x6a84cf / 0x6a8667)
+  if (u->army) u->army->AddBpStat("Units_Killed", u->blueprint, 1.0f);
   AddStat(u->army, "Units_Killed", 1);
   PlatoonStatKill(u, instigator && instigator->kind == Entity::Kind::Unit && instigator->army &&
                          IsEnemy(u->army, instigator->army) ? static_cast<Unit*>(instigator) : nullptr);
@@ -335,6 +345,7 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   AddStat(u->army, "Units_EnergyValue_Lost", energy);
   if (instigator && instigator->army && IsEnemy(u->army, instigator->army)) {
     AddStat(instigator->army, "Enemies_Killed", 1);
+    instigator->army->AddBpStat("Enemies_Killed", u->blueprint, 1.0f);
     AddStat(instigator->army, "Enemies_MassValue_Destroyed", mass);
     AddStat(instigator->army, "Enemies_EnergyValue_Destroyed", energy);
     if (BpInCategory(sim, u->blueprint, "COMMAND")) AddStat(instigator->army, "Enemies_Commanders_Destroyed", 1);

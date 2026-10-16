@@ -350,6 +350,10 @@ void EconomyBeginBeat(Sim& sim) {
     CleanUpPlatoons(sim, *a);  // 0x6ffdb8 (sim/ai_platoon.cpp)
     ProcessArmyEconomy(sim, *a);
     if (sim.tick() > 10) EvaluateStatTriggers(sim, *a);
+    // then every tick the unit cap statistics, as floats (0x6ffe3d, 0x6ffe62: army vt+0x4c GetArmyUnitCostTotal,
+    // vt+0xa4 GetArmyUnitCap)
+    a->stats["UnitCap_Current"] = a->unitCost;
+    a->stats["UnitCap_MaxCap"] = a->unitCap;
   }
 }
 
@@ -397,13 +401,18 @@ float Materialize(Sim& sim, lua_State* L, Unit* u, float delta) {
     PushObject(L, builder && !builder->destroyQueued ? builder : nullptr);
     lua_pushstring(L, u->layer.c_str());
     sim.CallMethod(L, u, "OnStopBeingBuilt", 2);
-    if (u->army) {
-      auto& st = u->army->stats;
-      st["Units_Active"] += 1;
-      st["Units_History"] += 1;
-      st["Units_MassValue_Built"] += u->bpData->buildCostMass;
-      st["Units_EnergyValue_Built"] += u->bpData->buildCostEnergy;
-      st["Units_BeingBuilt"] -= 1;
+    // the army's unit statistics (Unit::Materialize 0x6aa0dd), only for a blueprint with CapCost > 0: the unit moves
+    // from "Units_BeingBuilt" to "Units_Active" and "Units_History" for its blueprint (0x70b820), those two items
+    // + 1 (0x593260), and the build costs to Units_MassValue_Built / Units_EnergyValue_Built (0x593290)
+    if (u->army && u->capCost > 0.0f) {
+      Army& a = *u->army;
+      a.AddBpStat("Units_Active", u->blueprint, 1.0f);
+      a.stats["Units_Active"] += 1;
+      a.AddBpStat("Units_History", u->blueprint, 1.0f);
+      a.stats["Units_History"] += 1;
+      a.stats["Units_MassValue_Built"] += u->bpData->buildCostMass;
+      a.stats["Units_EnergyValue_Built"] += u->bpData->buildCostEnergy;
+      a.AddBpStat("Units_BeingBuilt", u->blueprint, -1.0f);
     }
     UnitFinishedBuilding(sim, L, u);
   }

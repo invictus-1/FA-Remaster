@@ -582,12 +582,19 @@ int l_brain_IsDefeated(lua_State* L) {
   return 1;
 }
 
-// GetArmyStat(name, default) -> { Value = ... }
+// GetArmyStat(name, default) 0x586b50 (army_stats.md 2.6) -> { Value = ... }: exactly 3 arguments; a number default
+// gets the item with create = 1 (0x594400: a missing one is made, an int 0) and is then read and dropped, so a missing
+// stat reads 0 and exists from then on (a SetArmyStatsTrigger on it is kept: scenariotriggers.lua:304 asks first);
+// any other default is the error below. (The original's table also carries Name and Type, and a parent node its
+// Children, STAT_GetLuaTable 0x41b390: the scripts read Value.)
 int l_brain_GetArmyStat(lua_State* L) {
+  if (lua_gettop(L) != 3)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "brain:GetArmyStat(StatName,defaultValue)", 3,
+                      lua_gettop(L));
   Army* a = Brain(L)->army;
+  if (lua_type(L, 3) != LUA_TNUMBER) return luaL_error(L, "Could not deduce default type for stat.");
   std::string name = luaL_checkstring(L, 2);
-  auto it = a->stats.find(name);
-  float v = it != a->stats.end() ? it->second : static_cast<float>(luaL_optnumber(L, 3, 0));
+  const float v = a->stats.try_emplace(name, 0.0f).first->second;
   lua_newtable(L);
   lua_pushstring(L, "Value");
   lua_pushnumber(L, v);
@@ -642,7 +649,8 @@ int l_brain_SetArmyStatsTrigger(lua_State* L) {
   int op = ParseTriggerOp(L, luaL_checkstring(L, 4));
   if (lua_type(L, 5) != LUA_TNUMBER) luaL_typerror(L, 5, "number");
   float thr = static_cast<float>(lua_tonumber(L, 5));
-  bool cat = n > 5 && !lua_isnil(L, 6);
+  // the 6th argument, when not nil, as an EntityCategory (0x5575e0), copied into the condition
+  const uint64_t* cat = n > 5 && !lua_isnil(L, 6) ? ToCategory(L, 6) : nullptr;
   std::shared_ptr<Army::StatTrigger> t;
   for (auto& x : a->statTriggers)
     if (IEquals(x->name, name)) {
@@ -658,7 +666,15 @@ int l_brain_SetArmyStatsTrigger(lua_State* L) {
     Logf(LogLevel::Warning, "ArmyStatItem %s does not exist.", stat.c_str());
     return 0;
   }
-  t->conds.push_back({stat, op, thr, cat});
+  Army::StatCond c;
+  c.stat = stat;
+  c.op = op;
+  c.thr = thr;
+  if (cat) {
+    c.category.assign(cat, cat + CategoryWordCount());
+    c.hasCategory = true;
+  }
+  t->conds.push_back(std::move(c));
   return 0;
 }
 // RemoveArmyStatsTrigger(statName, triggerName) 0x588020: the first trigger of that name (the stat is ignored)
@@ -674,13 +690,37 @@ int l_brain_RemoveArmyStatsTrigger(lua_State* L) {
     }
   return 0;
 }
+// GetBlueprintStat(statName, category) 0x5875a0: exactly 3 arguments; the stat as it is (CArmyStats::GetStat 0x70b860
+// creates nothing), its per-blueprint values in the category summed (SumCategory 0x70b580), 0 without the stat.
 int l_brain_GetBlueprintStat(lua_State* L) {
-  Brain(L);
-  lua_pushnumber(L, 0);  // TODO(M4): per-blueprint army stats
+  if (lua_gettop(L) != 3)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "Return a blueprint stat filtered by category", 3,
+                      lua_gettop(L));
+  Army* a = Brain(L)->army;
+  const uint64_t* cat = ToCategory(L, 3);
+  std::string name = luaL_checkstring(L, 2);
+  lua_pushnumber(L, a && cat ? a->SumBpStat(name, cat) : 0.0f);
   return 1;
 }
 
 }  // namespace
+
+// CArmyStats 0x70b820: the float item is got or made (0x594720), then its value for the blueprint
+// (FindOrCreateBlueprintStatValue 0x70e2b0) += v; the item's own value stays as it is.
+void Army::AddBpStat(const char* name, const BlueprintInfo* bp, float v) {
+  auto it = stats.try_emplace(name, 0.0f).first;
+  if (bp && bp->entityIndex >= 0) bpStats[it->first][bp->entityIndex] += v;
+}
+// CArmyStatItem::SumCategory 0x70b580: the values of the blueprints in the category, summed in single precision;
+// nullptr (no category given) sums them all.
+float Army::SumBpStat(const std::string& name, const uint64_t* category) const {
+  auto it = bpStats.find(name);
+  if (it == bpStats.end()) return 0.0f;
+  float s = 0.0f;
+  for (const auto& [e, v] : it->second)
+    if (!category || CategoryHas(category, e)) s += v;
+  return s;
+}
 
 // Unit::UpdateTerrainType 0x6a9b50 (declared in sim/motion.h). The cell: Entity::GetFootprint 0x678880, then
 // fistp(z - SizeZ * 0.5) and fistp(x - SizeX * 0.5) (0x6a9b8a..0x6a9bd6, kept as int16); it must lie inside the
@@ -1309,9 +1349,20 @@ void Sim::ProcessDestroyQueue() {
   std::vector<Entity*> done;
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
     Entity* e = destroyQueue_[i];
+    // Unit::OnDestroy 0x6a88d0, all before the script's OnDestroy (Entity::OnDestroy 0x679b80, called last): the o-grid
+    // reservation is freed for a unit that occupies ground (unit+0x560, 0x6a8905); then a unit that was not killed
+    // (unit+0xa1) loses its adjacency (0x6a894f; a killed one lost it in Unit::Kill) and is marked dead (SetDead and
+    // the flag, 0x6a8a1b / 0x6a8a31)
+    if (e->kind == Entity::Kind::Unit) {
+      Unit* u = static_cast<Unit*>(e);
+      if (u->occupiesGround) GroundFreeRect(*this, u);
+      if (!u->dead) {
+        AdjacencyLost(*this, L, u);
+        CallMethod(L, u, "SetDead", 0);
+        u->dead = true;
+      }
+    }
     CallMethod(L, e, "OnDestroy", 0);
-    // Unit::OnDestroy 0x6a8905: the o-grid reservation is freed only for a unit that occupies ground (unit+0x560)
-    if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->occupiesGround) GroundFreeRect(*this, static_cast<Unit*>(e));
     entities_.erase(e->handle);
     byId_.erase(e->id);
     ReleaseEntityIntel(*this, e);
@@ -1334,7 +1385,6 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);
-      AdjacencyLost(*this, L, u);
       UnitEconomyRelease(u);
       ReleaseStructure(*this, u);
       RemoveUnitFromLists(u);
@@ -1352,7 +1402,23 @@ void Sim::ProcessDestroyQueue() {
   // Economy 3952, T2 mex 0x3a reclaimed while upgrading: the original's T3 0x57 is still listed after that beat and
   // gone after the next; ours took it in the same drain.
   for (Entity* e : done)
-    if (e->kind == Entity::Kind::Unit) ForgetUnitCommands(static_cast<Unit*>(e));
+    if (e->kind == Entity::Kind::Unit) {
+      Unit* u = static_cast<Unit*>(e);
+      ForgetUnitCommands(u);
+      // ~Unit's army statistics (0x6a6de8): a finished unit of a blueprint with CapCost > 0 leaves "Units_Active" (its
+      // blueprint's value - 1, the item - 1 as an int, 0x6a6e13), a construction leaves "Units_BeingBuilt" (its
+      // blueprint's value - 1, 0x6a6e84)
+      if (u->army) {
+        if (!u->beingBuilt) {
+          if (u->capCost > 0.0f) {
+            u->army->AddBpStat("Units_Active", u->blueprint, -1.0f);
+            u->army->stats["Units_Active"] -= 1.0f;
+          }
+        } else {
+          u->army->AddBpStat("Units_BeingBuilt", u->blueprint, -1.0f);
+        }
+      }
+    }
   // ~Entity in EntityDb::Purge: every kind gives its id back, recon blips too (the player's orders name blips
   // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
   for (Entity* e : done) ReleaseId(e->id);
@@ -1520,7 +1586,9 @@ void EvaluateStatTriggers(Sim& sim, Army& a) {
     bool ok = !t.conds.empty();
     for (const Army::StatCond& c : t.conds) {
       float v = 0;
-      if (!c.category) {
+      if (c.hasCategory) {
+        v = a.SumBpStat(c.stat, c.category.data());  // SumCategory 0x70b580 (0x70bf57)
+      } else {
         auto f = a.stats.find(c.stat);
         v = f != a.stats.end() ? f->second : 0.0f;
       }

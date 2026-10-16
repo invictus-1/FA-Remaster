@@ -3337,35 +3337,58 @@ bool OverlapsWith(const Unit* a, const Unit* b) {
     return (q.x0 <= r.x0 && r.x1 <= q.x1) || (r.x0 <= q.x0 && q.x1 <= r.x1);
   return false;
 }
+// Unit::CollectAllOverlapping 0x62d460: the units the entity grid finds within 20 of u (COGrid::ForAllEntitiesIterator
+// 0x721fb0, units 0x100, radius 0xdff25c) that are not dead (IUnit vt+0x28, unit+0xa1), immobile (vt+0x30), of u's
+// army, not u, on u's layer (+0x120) and touching it (OverlapsWith 0x62d2b0). Nothing else is asked: a construction
+// is taken (the scripts' OnAdjacentTo / OnNotAdjacentTo test IsBeingBuilt themselves), and so is a unit whose Destroy
+// is queued: it stays in the entity grid until the destroy queue, and only Unit::OnDestroy marks it dead. Seen:
+// X1CA_002 creates its wrecked Loyalist base (walls among it) and Destroys it in OnPopulate, then the M1_Walls beside
+// it; leaving the destroy-queued walls out gave the new walls no AdjacentUnits, and the old walls' end called
+// OnNotAdjacentTo on them (StructureUnit.lua:824 indexes nil). Here the grid's box around u stands for the sphere
+// (OverlapsWith decides), and the units are taken in id order.
 std::vector<Unit*> Overlapping(Sim& sim, Unit* u) {
   std::vector<Unit*> out;
   const float R = 20.0f;
-  sim.ForUnitsInRect(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, [&](Unit* o) {
-    if (o == u || !Alive(o) || o->beingBuilt || !o->bpData || !o->bpData->structure) return;
-    if (o->army != u->army || o->layer != u->layer) return;
+  std::vector<Entity*> cand;
+  sim.entityGrid().GatherBox(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &cand);
+  for (Entity* e : cand) {
+    if (e->kind != Entity::Kind::Unit || e == u || e->dead) continue;
+    Unit* o = static_cast<Unit*>(e);
+    if (!o->bpData || !o->bpData->structure) continue;
+    if (o->army != u->army || o->layer != u->layer) continue;
     if (OverlapsWith(u, o)) out.push_back(o);
-  });
+  }
   std::sort(out.begin(), out.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   return out;
 }
 }  // namespace
 
+// The Unit ctor for a complete immobile unit (0x6a646d) and Unit::Materialize at completion (0x6aa272): for each unit
+// it touches, u:OnAdjacentTo(o, u), then o:OnAdjacentTo(u, u) (the third argument is the unit that caused it).
 void AdjacencyGained(Sim& sim, lua_State* L, Unit* u) {
   for (Unit* o : Overlapping(sim, u)) {
-    PushObject(L, u);
-    sim.CallMethod(L, o, "OnAdjacentTo", 1);
     PushObject(L, o);
-    sim.CallMethod(L, u, "OnAdjacentTo", 1);
+    PushObject(L, u);
+    sim.CallMethod(L, u, "OnAdjacentTo", 2);
+    PushObject(L, u);
+    PushObject(L, u);
+    sim.CallMethod(L, o, "OnAdjacentTo", 2);
   }
 }
 
+// Unit::Kill (the units collected at 0x6a81fe, the calls at 0x6a8369) and Unit::OnDestroy for a unit not killed
+// (0x6a894f, 0x6a8982), when u is immobile and finished: u:OnNotAdjacentTo(o), then o:OnNotAdjacentTo(u), then o
+// takes its o-grid reservation again (Unit::ReserveOgridRect 0x6ab6f0 with its own rect, 0x6a83b9 / 0x6a89d2: u's end
+// may have freed cells they share).
 void AdjacencyLost(Sim& sim, lua_State* L, Unit* u) {
   if (!u->bpData || !u->bpData->structure || u->beingBuilt) return;
   for (Unit* o : Overlapping(sim, u)) {
-    PushObject(L, u);
-    sim.CallMethod(L, o, "OnNotAdjacentTo", 1);
     PushObject(L, o);
     sim.CallMethod(L, u, "OnNotAdjacentTo", 1);
+    PushObject(L, u);
+    sim.CallMethod(L, o, "OnNotAdjacentTo", 1);
+    const int r[4] = {o->ogridRect[0], o->ogridRect[1], o->ogridRect[2], o->ogridRect[3]};
+    GroundReserveRect(sim, o, r);
   }
 }
 
