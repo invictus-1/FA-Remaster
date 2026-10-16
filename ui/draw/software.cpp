@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -47,6 +48,21 @@ const Name kNames[] = {
 
 }  // namespace
 
+uint64_t NewImageSerial() {
+  static std::atomic<uint64_t> next{1};
+  return next++;
+}
+
+IntRect IntRect::Intersect(const IntRect& o) const {
+  return IntRect{std::max(x0, o.x0), std::max(y0, o.y0), std::min(x1, o.x1), std::min(y1, o.y1)};
+}
+
+IntRect IntRect::Union(const IntRect& o) const {
+  if (o.empty()) return *this;
+  if (empty()) return o;
+  return IntRect{std::min(x0, o.x0), std::min(y0, o.y0), std::max(x1, o.x1), std::max(y1, o.y1)};
+}
+
 uint32_t ParseColor(const std::string& text) {
   bool hex = (text.size() == 8 || text.size() == 6);
   for (char c : text) hex = hex && std::isxdigit(static_cast<unsigned char>(c));
@@ -72,6 +88,19 @@ SoftwareTarget::SoftwareTarget(int width, int height)
 
 void SoftwareTarget::Clear(uint32_t color) { std::fill(pixels_.begin(), pixels_.end(), color); }
 
+void SoftwareTarget::ClearRect(const IntRect& r, uint32_t color) {
+  const IntRect c = r.Intersect(IntRect{0, 0, width_, height_});
+  for (int y = c.y0; y < c.y1; ++y) {
+    uint32_t* row = &pixels_[static_cast<size_t>(y) * static_cast<size_t>(width_)];
+    std::fill(row + c.x0, row + c.x1, color);
+  }
+}
+
+void SoftwareTarget::SetClipPixels(const IntRect& r) {
+  cx0_ = std::max(0, r.x0), cy0_ = std::max(0, r.y0);
+  cx1_ = std::min(width_, r.x1), cy1_ = std::min(height_, r.y1);
+}
+
 void SoftwareTarget::SetClip(const Rect& r) {
   cx0_ = std::max(0, FirstPixel(r.x0));
   cy0_ = std::max(0, FirstPixel(r.y0));
@@ -90,6 +119,7 @@ void SoftwareTarget::FillRect(const Rect& d, uint32_t color) {
   int y0 = std::max(cy0_, FirstPixel(d.y0)), y1 = std::min(cy1_, FirstPixel(d.y1));
   uint32_t a = A(color), r = R(color), g = G(color), b = B(color);
   if (a == 0) return;
+  Touch(x0, y0, x1, y1);
   for (int y = y0; y < y1; ++y) {
     uint32_t* row = &pixels_[static_cast<size_t>(y) * static_cast<size_t>(width_)];
     for (int x = x0; x < x1; ++x) Blend(row[x], r, g, b, a);
@@ -101,6 +131,7 @@ void SoftwareTarget::DrawPixels(const uint32_t* src, int w, int h, int x, int y)
   int x0 = std::max(cx0_, x), x1 = std::min(cx1_, x + w);
   int y0 = std::max(cy0_, y), y1 = std::min(cy1_, y + h);
   if (x0 >= x1) return;
+  Touch(x0, y0, x1, y1);
   for (int row = y0; row < y1; ++row) {
     const uint32_t* from = src + static_cast<size_t>(row - y) * static_cast<size_t>(w) + (x0 - x);
     uint32_t* to = &pixels_[static_cast<size_t>(row) * static_cast<size_t>(width_) + static_cast<size_t>(x0)];
@@ -113,6 +144,7 @@ void SoftwareTarget::DrawImage(const Image& img, const Rect& s, const Rect& d, u
   int x0 = std::max(cx0_, FirstPixel(d.x0)), x1 = std::min(cx1_, FirstPixel(d.x1));
   int y0 = std::max(cy0_, FirstPixel(d.y0)), y1 = std::min(cy1_, FirstPixel(d.y1));
   if (x0 >= x1 || y0 >= y1) return;
+  Touch(x0, y0, x1, y1);
   float sx = (s.x1 - s.x0) / (d.x1 - d.x0), sy = (s.y1 - s.y0) / (d.y1 - d.y0);
   uint32_t ca = A(color), cr = R(color), cg = G(color), cb = B(color);
   bool plain = color == 0xffffffffu;
@@ -179,6 +211,7 @@ void SoftwareTarget::DrawImageTiled(const Image& img, const Rect& s, const Rect&
 void SoftwareTarget::DrawGlyph(const GlyphMask& gl, int x, int y, uint32_t color) {
   uint32_t ca = A(color), r = R(color), g = G(color), b = B(color);
   if (ca == 0) return;
+  Touch(std::max(cx0_, x), std::max(cy0_, y), std::min(cx1_, x + gl.width), std::min(cy1_, y + gl.height));
   for (int gy = 0; gy < gl.height; ++gy) {
     int py = y + gy;
     if (py < cy0_ || py >= cy1_) continue;

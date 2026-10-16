@@ -130,8 +130,9 @@ class GameSession {
   void OpenPictureIfDue();
   bool DrawsToWindow() const;
   // The frame drawn and shown: the world, `target` (the interface, premultiplied ARGB, the
-  // window's size, transparent where the world shows) over it.
-  void PresentToWindow(const SoftwareTarget& target);
+  // window's size, transparent where the world shows) over it. `changed`: the part of `target`
+  // drawn anew since the last call (a picture new or of another size takes all of it).
+  void PresentToWindow(const SoftwareTarget& target, const IntRect& changed);
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
 
@@ -160,6 +161,10 @@ class GameSession {
   float TerrainHeight(float x, float z) const;
   // Run the beats that are due after `seconds` more of real time (ten beats a second).
   void Advance(double seconds);
+  // For measurements (--fast-forward): the beats run as fast as they go, up to 50 a frame, until
+  // this beat; then real time again.
+  uint32_t fastForwardTo = 0;
+  bool CatchingUp() const;
 
   uint32_t tick() const;
   double PictureTick() const;

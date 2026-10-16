@@ -130,13 +130,14 @@ for _, item in looks do
 end
 
 -- The game's own graphics settings drive the renderer (Fidelity, Shadow Fidelity, Anti-Aliasing,
--- Level Of Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
+-- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The
 -- anti-aliasing choices are the renderer's (Off, 2, 4).
 for _, item in options.video.items do
     if item.key == 'fidelity' then item.default = 2
     elseif item.key == 'shadow_quality' then item.default = 3
     elseif item.key == 'level_of_detail' then item.default = 2
+    elseif item.key == 'texture_level' then item.default = 0  -- (High)
     elseif item.key == 'antialiasing' then
         item.default = 4
         item.custom.states = {

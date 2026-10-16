@@ -93,6 +93,7 @@ bool noWorld = false;             // --no-world: a launched game gets no picture
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
+uint32_t fastForward = 0;         // --fast-forward N: a game runs ahead to beat N as fast as it goes (for measurements)
 std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
@@ -235,6 +236,7 @@ int main(int argc, char** argv) {
     else if (a == "--remasters") remastersFolder = next();
     else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
+    else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
     else if (a == "--size") {
       std::string v = next();  // 1920x1080
@@ -316,6 +318,7 @@ int main(int argc, char** argv) {
   ui::GameSession session(&vfs, cfg.hookDirs);
   session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
+  session.fastForwardTo = fastForward;
   session.wantPicture = !noWorld;
   session.waitForWindow = windowed && directWindow;  // (a launched table's picture opens on the window)
   session.sky = sky;
@@ -350,7 +353,7 @@ int main(int argc, char** argv) {
 #ifdef MOHO64UI_WORLD_PICTURE
     render::gSceneSamples = ui::Looks().sceneSamples;
 #endif
-    if (backdrop) backdrop->Begin(ui::Looks().vulkan);
+    if (backdrop) backdrop->Begin(ui::Looks().vulkan, ui::Looks().textureDetail);
   };
   // The front end's state. A new one is made when a game is left (the original makes a new state
   // for every change between front end and game, FA exe 0x885de0).
@@ -478,8 +481,9 @@ int main(int argc, char** argv) {
         session.OpenPictureIfDue();  // (a launched table's game: its picture opens now, the window still hidden)
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
-      hooks.present = [&](const ui::SoftwareTarget& layer) { session.PresentToWindow(layer); };
+      hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
     }
+    hooks.catchingUp = [&]() { return session.CatchingUp(); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();

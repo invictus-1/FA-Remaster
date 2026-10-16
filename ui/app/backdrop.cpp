@@ -98,6 +98,7 @@ void Backdrop::Run() {
   if (!running_) return;
   render::WorldPicture picture;
   picture.SetVulkan(vulkan_);
+  picture.SetTextureDetail(textureDetail_);
   std::string error;
   auto t0 = Clock::now();
   if (!picture.Open(vfs_, map_, &error)) {

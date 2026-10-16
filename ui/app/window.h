@@ -89,7 +89,10 @@ class UserState;
 struct WindowHooks {
   std::function<void(void* handle)> opened;
   std::function<bool()> direct;
-  std::function<void(const SoftwareTarget& interfaceLayer)> present;
+  // `changed`: the part of the layer drawn anew since the last call.
+  std::function<void(const SoftwareTarget& interfaceLayer, const IntRect& changed)> present;
+  // True while the host runs ahead (--fast-forward): the frame times count only after it.
+  std::function<bool()> catchingUp;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,

@@ -97,7 +97,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   button", now built).
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
-  (Off: none; Low, Medium: the sun's; High: the lamps' too), Anti-Aliasing (Off, 2, 4: the
+  (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'
+  too), Texture Detail (`ren_MipSkipLevels`: High all sizes, Medium and Low leave out each big
+  texture's largest one or two, from the next picture made), Anti-Aliasing (Off, 2, 4: the
   scene's samples, from the next picture made; `GetAntiAliasingOptions` gives 2 and 4), Level Of
   Detail (model detail 0.5 / 0.75 / 1), and Fidelity Presets sets them together as in the
   original. A player who has never chosen starts at the highest (the hook raises these items'
