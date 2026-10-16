@@ -4,6 +4,39 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 29: the hex lattice on personal shields (2026-10-16)
+
+Done (render a8dcc62, a0ee33a). Your sheet is read from
+`_effects/export/moho64/effects/Entities/PersonalShield/<faction>/PersonalShield_Pattern.dds`, one layer per
+faction. A faction without a sheet keeps today's plain outline glow; the original look is unchanged.
+
+**Projection:**
+- Painted on the model at rest (each vertex's own place), so it goes with the unit and its bones: a walking
+  Titan's lattice does not swim.
+- Triplanar along the model's own axes, so it shows on every side.
+- The sheet is 3 world units across, about 0.4 a cell: some six cells up a Titan.
+
+**At rest:** the lattice (R) is faint where the surface faces the eye and stronger toward the outline. Where
+the sheet's patches drift (G) it shows a little more, and each cell (B) breathes on its own slow beat. All of
+it is times the faction's tint, over the outline glow, which stays.
+- Strength: I tried 1x and 3x of a first guess and chose 3x. At 1x it hardly showed by day. At 3x it reads on
+  the armour without hiding the paint (`_scratch/render/review/lattice/titan_strengths.png`: top row 15:00,
+  bottom row 20:00; left 1x, right 3x).
+- For more or less, retune the sheet (line brightness, cell dimness); the shader takes it as it is.
+
+**A hit:** the cells round where it struck light up and fade in about a second. The reach is about two cells
+(0.9 world units), brightest on the lattice's lines, each cell a little different by B.
+- In games the hit is found from the game's own PersonalShield.CreateImpactEffect: its effects are made at the
+  shield and moved out to the hit, and the hit goes to the nearest unit with its shield up.
+- One hit at a time per unit: a new one takes over.
+
+**Stand:** `--fx-shield UEL0303` (any unit with `Defense.Shield.PersonalShield`) now shows the unit with its
+shield up, hit every `--fx-hit-every` seconds the way the script hits it, with the shield's own hit effects
+(your `_test_shield_impact_emit.bp`). Example: `--fx-shield UEL0303 --fx-at 672,346 --fx-hit-every 0.8 --cam
+672,346,6,15,0`. Pictures: `_scratch/render/review/lattice/hitd_sheet.png` (eight frames across two hits).
+With `--fx-compare`, both sides show the remastered shield look: the stand's halves differ in models and
+effects, not in the shader look, so judge the original look in a game.
+
 ## visuals, section 28: movement and building in the stand (2026-10-16)
 
 Done (render bdb2e5b), all with `--fx-compare` (remastered left, original right).
