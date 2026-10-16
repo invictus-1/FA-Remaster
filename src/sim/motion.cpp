@@ -9,6 +9,7 @@
 #include "sim/air.h"
 #include "sim/transport.h"
 #include "sim/steering.h"
+#include "sim/vecmath.h"
 
 #include <algorithm>
 #include <cmath>
@@ -530,16 +531,20 @@ const Unit* RaisedPlatform(const Sim& sim, const Unit* u) {
   Entity* e = sim.FindEntity(u->motion.platformRef);
   return e && e->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e) : nullptr;
 }
-// 0x62af70: the first quad (unrotated, from the platform's position) holding p, bilinear in it
+// 0x62af70: the first quad (unrotated, from the platform's position) holding p, bilinear in it. The quad's width
+// and depth are taken from its corners in the world (0x62b0e4: (x1 + px) - (x0 + px), (z1 + pz) - (z0 + pz)), not
+// from the blueprint's numbers: beside a coordinate of several hundred they keep fewer digits, and an engineer
+// rolling off a Seraphim factory's deck stands a float step higher or lower with it.
 float PlatformHeight(const Unit* P, float x, float z) {
   if (P->dead) return 0;
   const auto& q = P->motion.bp->raisedPlatforms;
   float px = P->position.x, pz = P->position.z;
   for (size_t i = 0; i + 12 <= q.size(); i += 12) {
-    float x0 = q[i] + px, z0 = q[i + 1] + pz, x3 = q[i + 9] + px, z3 = q[i + 10] + pz;
+    float x0 = q[i] + px, z0 = pz + q[i + 1], x1 = q[i + 3] + px, z1 = q[i + 7] + pz, x3 = q[i + 9] + px,
+          z3 = q[i + 10] + pz;
     if (!(x0 <= x && x <= x3 && z0 <= z && z <= z3)) continue;
-    float u = (x - x0) / (q[i + 3] - q[i]);
-    float v = (z - z0) / (q[i + 7] - q[i + 1]);
+    float u = (x - x0) / (x1 - x0);
+    float v = (z - z0) / (z1 - z0);
     float a = q[i + 2] + (q[i + 8] - q[i + 2]) * v;
     float b = q[i + 5] + (q[i + 11] - q[i + 5]) * v;
     return a + u * (b - a);
@@ -1529,7 +1534,9 @@ void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
     m.bx = nx / l;
     m.bz = -nz / l;
   }
-  u->orientation = LookQuat(m.bx, 0.0f, m.bz);
+  // 0x6c2289: the orientation is 0x699940 of the turned vector as RotateToward 0x6992c0 left it (TurnQuat), as
+  // for a turn without a point; not the look rotation of the normalised heading
+  u->orientation = TurnQuat(nx, nz);
 }
 
 // ---- hover: CUnitMotion::CalcMoveHover 0x6c2bc0 (lean and wobble) and SnapToGround 0x6c1610's hover branch ----
@@ -1547,6 +1554,9 @@ bool ClampLength(Vec3& v, float p) {  // 0x5d1e70
 float WobbleDraw(Sim& sim, float W) {
   float lo = -0.0f - W;
   uint32_t r = sim.NextUInt32();
+  // (0x6c2d0d..0x6c2d13: fild of the draw as a signed int, fadd 2^32 when negative: a draw with its top bit set is
+  // rounded to a float before the product, dmath::MulU32. Seen: bench, engineer 0x200002's wobble target at 350,
+  // one float step off in x with one rounding; the tilt it gives decided its heading later.)
   return dmath::MulU32(r, W - lo) * 2.3283064365386963e-10f + lo;
 }
 // 0x452af0: normalise in place, returns the length (0 and a zero vector at or below 1e-6)
@@ -1634,7 +1644,7 @@ void HoverSnap(Sim& sim, Unit* u) {
   // or Seraphim engineer let go by its factory stands on the deck, 0.5 to 0.65 above the ground
   const Unit* plat = RaisedPlatform(sim, u);
   for (int i = 0; i < 4; ++i) {
-    Vec3 r = Rotate(u->orientation, offs[i]);
+    Vec3 r = vm::RotateM(u->orientation, offs[i]);  // (0x6c16b2...: 0x452d40, through the quaternion's matrix)
     c[i] = {u->position.x + r.x, 0, u->position.z + r.z};
     c[i].y = map->SurfaceHeight(c[i].x, c[i].z);
     if (plat) c[i].y += PlatformHeight(plat, c[i].x, c[i].z);
@@ -1653,8 +1663,22 @@ void HoverSnap(Sim& sim, Unit* u) {
     y -= (hi - lo) * 0.25f;
   }
   u->position.y = b.elevation + y;
-  n = {(m.wobble.x + m.hoverLean.x) + n.x, (m.wobble.y + m.hoverLean.y) + n.y, (m.wobble.z + m.hoverLean.z) + n.z};
+  const Vec3 nTerrain = n;
+  const Quat qPre = u->orientation;
+  // 0x6c1c15..0x6c1c57: the lean (m+0xc0) is added to the normal first, then the wobble (m+0xd8)
+  n = {m.wobble.x + (m.hoverLean.x + n.x), m.wobble.y + (m.hoverLean.y + n.y), m.wobble.z + (m.hoverLean.z + n.z)};
   AlignUp(u->orientation, n);
+  {  // MOHO64_DEBUG_HOVERSNAP=<unit id>: the tilt's inputs and result as exact (hex) floats, for a float32 replay
+    static const long dbgHs = getenv("MOHO64_DEBUG_HOVERSNAP") ? atol(getenv("MOHO64_DEBUG_HOVERSNAP")) : -1;
+    if (dbgHs == static_cast<long>(u->id)) {
+      fprintf(stderr, "hsnap %u pos %a %a %a pre %a %a %a %a nt %a %a %a lean %a %a %a wob %a %a %a post %a %a %a %a c",
+              sim.tick(), u->position.x, u->position.y, u->position.z, qPre.x, qPre.y, qPre.z, qPre.w, nTerrain.x,
+              nTerrain.y, nTerrain.z, m.hoverLean.x, m.hoverLean.y, m.hoverLean.z, m.wobble.x, m.wobble.y, m.wobble.z,
+              u->orientation.x, u->orientation.y, u->orientation.z, u->orientation.w);
+      for (int i = 0; i < 4; ++i) fprintf(stderr, " %a %a %a", c[i].x, c[i].y, c[i].z);
+      fprintf(stderr, " plat %d accel %a %a %a\n", plat ? 1 : 0, m.accel.x, m.accel.y, m.accel.z);
+    }
+  }
 }
 // the CalcMoveHover part after CalcMoveCommon
 void HoverMove(Sim& sim, Unit* u) {
@@ -1914,7 +1938,12 @@ void MotionTick(Sim& sim, Unit* u) {
       moved = false;
     }
     if (b.motionType == kMotionHover) {
-      if (m.needSnap && !(m.pointNow && !m.pushed)) u->orientation = LookQuat(m.bx, 0.0f, m.bz);  // turned in place
+      // (No rebuild of the orientation from m.bx / m.bz here: CalcMoveHover 0x6c2bc0 tilts the transform as
+      // CalcMoveCommon left it. A turn in place has set it already (0x699940, m.turnQ), and a unit let go or
+      // turned by a script keeps the quaternion it was given, sign included: FAF's factory gives an engineer
+      // SetRotation(spin) = SetOrientation (0x68f6e0: the transform, nothing of the motion) before DetachFrom, and
+      // the original's quaternion there has w < 0 (bench, Seraphim engineer 0x200002 at 344). The look rotation
+      // of the heading made a w > 0 quaternion with other last digits, which the hover's tilt carried on.)
       // CalcMoveHover 0x6c2bf5: the platform search when CalcMoveCommon moved the unit or m+0x90 asks
       if (HoverRuns(u) && (common || m.surfaceNext)) FindRaisedPlatform(sim, u);
       if (HoverRuns(u)) HoverMove(sim, u);

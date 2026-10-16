@@ -13,8 +13,12 @@ namespace moho::dmath {
 // The original's sim thread runs the x87 with precision control 24 bits (confirmed by the tick recorder,
 // 2026-10-10): +, -, *, / and fsqrt on the x87 stack round like float ops (transcendentals fsin/fcos/fpatan/
 // fyl2x do not: they stay wide). An integer loaded with fild is exact; the first op on it rounds.
-// u * f for an unsigned 32-bit u and a float f, rounded once to float (fild + fmul at PC_24).
+// u * f for an unsigned 32-bit u and a float f, rounded once to float (fild + fmul at PC_24). The exe loads the
+// unsigned draw with fild as a SIGNED int and adds 2^32 when it came out negative (fadd [0xe4f710], e.g.
+// CRandomStream::FRand 0x51b5c0): at PC_24 that sum is rounded to 24 bits, so a u with its top bit set enters the
+// product as the float nearest to it, and the result is rounded twice.
 inline float MulU32(uint32_t u, float f) {
+  if (u & 0x80000000u) return static_cast<float>(u) * f;
   if (u == 0 || f == 0.0f || !std::isfinite(f)) return static_cast<float>(u) * f;
   int e;
   float m = std::frexp(f, &e);                                     // f = m * 2^e, 0.5 <= |m| < 1
