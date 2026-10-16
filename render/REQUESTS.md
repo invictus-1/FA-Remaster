@@ -30,7 +30,7 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
-## 29. Entity:GetCollisionExtents is a stub: objective arrows hang too low (2026-10-16, not blocking)
+## 29. Entity:GetCollisionExtents is a stub: objective arrows hang too low (2026-10-16, not blocking; DONE the same day: main 45ff67e, as the exe's 0x68ca80)
 
 **Who asks:** the renderer, for the campaign (ui's renderer request 27: objective arrows must be drawn).
 
@@ -45,7 +45,7 @@ in a game. The arrow is drawn, bounces, and is attached as it should be. But the
 **What:** `Entity:GetCollisionExtents()` returning `{Min = Vector, Max = Vector}` (world positions of the
 entity's collision box, as the original's). FAF's scripts call it elsewhere too.
 
-**Answer:** (none yet)
+**Answer:** done by the engine (45ff67e): `{Min = Vector, Max = Vector}` from the collision primitive's bounding box (sphere or box), nil for an entity without one.
 
 ## 28. The original look's bloom: how the original makes it (2026-10-16, low priority; DONE the same day: answered in docs/engine-answers.md "render 28", drawn by render ada0e82)
 

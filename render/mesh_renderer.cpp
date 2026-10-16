@@ -78,8 +78,8 @@ StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away (-1: glass, seen through by its alpha and glow), y: 1 = lit by the mesh's normals only (2: a frame of light,
                 // 3: a shield's bubble, 4: a slab that fades, 5: a nuke's ball of fire, 6: a nuke's sliding
-                // shell, 7: its texture's own colours, 8: a quantum gate's field, 9: a zapper's ball; none of
-                // them is lit),
+                // shell, 7: its texture's own colours, 8: a quantum gate's field, 9: a zapper's ball, 10 and 11:
+                // a shield's flash where it is hit, 12: a personal shield's shell; none of them is lit),
                 // z: 1 = the colour multiplies the albedo (0: it replaces it where the team mask says),
                 // w: 1 = the specular texture is a remastered unit's material
   float4 kind2; // x: whose look the textures were painted for: 0 UEF and all else, 1 Aeon, 2 Cybran, 3 Seraphim;
@@ -170,6 +170,10 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
   }
   o.position = mul(viewProj, float4(o.world, 1));
+  // (a personal shield's shell lies close over its unit, and the unit's details stand out of it here and
+  // there: it is tested as if a world unit and a half nearer the eye, along the line of sight, so that its
+  // patches show over what lies just under it; where it is drawn on the screen does not change)
+  [branch] if (kind.y > 11.5) o.position = mul(viewProj, float4(o.world + normalize(cameraPosition - o.world) * 1.5, 1));
   float3x3 r = float3x3(n.row0.xyz, n.row1.xyz, n.row2.xyz);
   o.normal = mul(r, normal);
   o.tangent = mul(r, tangent);
@@ -261,6 +265,35 @@ float4 Shade(VOut i, bool front) {
     float level = kind5.z;
     float3 mark = level < 0.5 ? float3(1, 1, 1) : level < 1.5 ? float3(1, 0.9, 0.25) : level < 2.5 ? float3(1, 0.55, 0.15) : level < 3.5 ? float3(1, 0.2, 0.15) : float3(0.7, 0.3, 1);
     return float4(mark * (0.45 + 0.55 * saturate(normalize(i.normal).y * 0.5 + 0.5)) * (modern.x * lightMultiplier) * 0.6, 1);
+  }
+  if (kind.y > 11.5) {
+    // a personal shield's shell (ModelLod::shell: a mod's Display.PersonalShield): nothing but round its
+    // hits. Each lights a patch of its lattice (the albedo: RGB its colour, A how much shows) round where
+    // it struck, with a white-hot middle and a faint ring going out, and fades within its second. The
+    // instance's colour says where its hits are in the bone buffer (x) and how many (y): each where it
+    // struck on the unit at rest (world units) and its age (0..1).
+    float3 q = i.rest * (1.0 / 3.84);  // (the lattice: 3.84 world units a tile, sixteen cells across)
+    float3 w = pow(abs(normalize(i.restNormal)), 4);
+    w /= w.x + w.y + w.z;
+    float4 lattice = albedoMap.Sample(samplerAniso, q.zy) * w.x + albedoMap.Sample(samplerAniso, q.xz) * w.y +
+                     albedoMap.Sample(samplerAniso, q.xy) * w.z;
+    float3 c = 0;
+    uint first = (uint)(i.color.x + 0.5), count = (uint)(i.color.y + 0.5);
+    for (uint k = 0; k < count; ++k) {
+      float4 hit = boneRows[first + k];
+      float d = length(i.rest - hit.xyz);
+      float fade = saturate(1 - hit.w);
+      fade *= fade;
+      float patch = saturate(1 - d / 3.9);  // (some 26 of the visuals track's model units round it)
+      patch = patch * patch * (3 - 2 * patch);
+      float ring = saturate(1 - abs(d - lerp(2.6, 3.6, hit.w)) / 0.3);  // (going out as it fades)
+      float core = saturate(1 - d / 0.6);
+      c += lattice.rgb * (lattice.a * (patch * 3.0 + ring * 1.5) + patch * 0.6) * fade + float3(1.0, 0.92, 0.88) * (core * core * 5 * fade);
+    }
+    float dark = falling.w > 0 ? falling.w : 1;
+    // (the pipeline adds what is returned; its alpha is the original look's glow, for its bloom)
+    // (a glow of its own: strong, as the bright red disc of the visuals track's pictures; its lines kept from blowing out)
+    return float4(look > 0.5 ? pow(clamp(c, 0, 2), 2.2) * 10 * dark : c, saturate(max(c.r, max(c.g, c.b)) * 0.5));
   }
   if (kind.y > 9.5) {
     // the flash on a shield where it is hit (the original's "ShieldImpact" and its Cybran kind,
@@ -740,6 +773,7 @@ void MeshRenderer::Begin() {
   culls_.clear();
   groupsListed_.clear();
   rowsOut_ = nullptr;
+  shellHits_.clear();
   prepared_ = false;
 }
 
@@ -776,6 +810,14 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     floats += e.model->bones.size() * 12;
     rowsToBuild_.push_back(&e);
   }
+  // after them the shells' hits, a row each; the instance's colour says where they begin and how many
+  const size_t hitsFrom = floats;
+  for (const ShellHits& s : shellHits_) {
+    Entry& e = entries_[s.entry];
+    e.instance.color[0] = static_cast<float>(floats / 4);
+    e.instance.color[1] = static_cast<float>(s.hits.size());
+    floats += s.hits.size() * 4;
+  }
   // the bones' matrices, written straight into the frame's copy of the buffer: many models, each into
   // its own stretch, so on several threads at once
   CpuTimes::Part("bones: matrices made");
@@ -786,8 +828,15 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
       const size_t from = static_cast<size_t>(k) * kPerPiece, to = std::min(from + kPerPiece, rowsToBuild_.size());
       for (size_t j = from; j < to; ++j) BuildRows(rowsToBuild_[j]);
     });
+    float* out = rowsOut_ + hitsFrom;
+    for (const ShellHits& s : shellHits_)
+      for (const Vec4& h : s.hits) {
+        out[0] = h.x, out[1] = h.y, out[2] = h.z, out[3] = h.w;
+        out += 4;
+      }
   } else {
     for (Entry* e : rowsToBuild_) e->rows = -1;  // (no room this frame: drawn at rest)
+    for (const ShellHits& s : shellHits_) entries_[s.entry].instance.color[1] = 0;  // (and the shells without their hits)
     const float none[4] = {0, 0, 0, 0};  // (the shaders' buffer is never left unset)
     device_->UpdateBuffer(boneBuffer_, none, sizeof none);
   }
@@ -879,6 +928,13 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
     e.radius *= 1.25f;  // parts swing out of the rest pose's bounds
   }
   Push(e);
+}
+
+void MeshRenderer::AddShell(const Model* shell, const Mat4& world, const std::vector<Vec4>& hits) {
+  if (!shell || !shell->ok || hits.empty()) return;
+  Entry e = MakeEntry(shell, world, {0, 0, 0}, 1, nullptr);
+  Push(e);
+  shellHits_.push_back({entries_.size() - 1, hits});
 }
 
 uint32_t MeshRenderer::AddGroup() {
@@ -1106,7 +1162,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     const bool laid = prepass && !depthOnly && early;  // (its depth laid in the round before)
     const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
                        : laid ? (lod->leaves ? 9 : 8)
-                       : shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
+                       : shadowPass ? 0 : glass ? (lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
                        : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
       device_->SetPipeline(wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
@@ -1120,7 +1176,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[24] = {lod->alphaCut, lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[24] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};

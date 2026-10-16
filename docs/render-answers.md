@@ -4,6 +4,48 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, sections 31 and 32: the stand fires a unit's weapons; a personal shield seen only where it is hit (2026-10-16)
+
+**31: `--fx-fire <unit> [weapon label ...]`** (a mod's unit too, with `--mods`). Options at the top of `render/main.cpp`.
+- **What it does:** the unit is made at `--fx-at` by its own script class, with its weapons as the engine makes
+  them. One second into each play the named weapons (none named: every one that shoots at the ground and is no
+  death weapon) take `--fx-to x,z[,height]` as their target. Then they fire through their own scripts:
+  - turrets aim by their script's manipulators, and rotators, sliders and slavers pose bones too;
+  - shots fly with their own physics and land with their impact effects;
+  - collision beams run from muzzle to ground with their emitters.
+  
+  Two seconds before the play ends they lose the target. Each play is `--fx-repeat` seconds, 8 by default.
+- **Manual fire:** `--fx-manual <label>` fires a manual-fire weapon once a play, as a player's order does,
+  through the weapon's own script. A script that opens doors, slides, rotates or hides bones and charges emitters
+  before firing, and closes after, runs as it would in a game. Tactical and strategic missiles and a
+  commander's overcharge follow the engine's own order paths.
+- **Aircraft** hover at their elevation, and the camera looks halfway up to them. `--fx-compare` works.
+- **Checked:** UEL0201, URL0402 (its beam and bolters), UEA0305, XSL0303, URL0303, XSB2301, UEB2108 with its
+  cruise missile, UEL0001's overcharge, and a test mod's scripted manual-fire beam. A mod air experimental with
+  about a hundred weapons and its manual main gun runs at full frame rate. The other stand modes are unchanged,
+  pixel for pixel.
+- **Not yet:** shots and beams meet only the ground and water, not units, shields or props. Missiles do not
+  zig-zag. Emitters at a weapon beam's two ends do not yet turn with it (they point along world +z).
+- **All stand modes** now find a mod's unit (`--fx-shield`, `--fx-death`, `--fx-move`, `--fx-build`).
+
+**32: `Display.PersonalShield`** in a unit's blueprint:
+`{ HitOnly = true, Shell = "Capsule", Lattice = "<texture>", ShellSize = { half x, half y, length z }, ShellCentre = { x, y, z } }`
+(model units).
+- **At rest:** nothing shows.
+- **When hit:** the hit's patch of the lattice lights up on a smooth capsule round the unit. It is a disc about
+  3.9 world units across, with the texture's colour (lines bright, cells glowing), a white-hot middle and a ring
+  going out, fading within a second. Up to eight show at once.
+- **The capsule:** a superellipse section (exponent 3.2), rounded at both ends. ShellSize gives its size, or it
+  is made round the model's box (often too big: fins and masts). It is tested as if 1.5 world units nearer the
+  eye, so hull details just under it do not hide its patches.
+- **Where a hit lights:** the game tells where a shot met its own shield (a sphere of ShieldSize). That point is
+  lit on the capsule where its way from the capsule's axis crosses it.
+- **Hit matching:** a hit is matched to the nearest unit with a personal shield within its own size (at least
+  12), so a long ship's ends count.
+- **Stand:** `--fx-shield <unit> --mods ...` shows it, its hits spread over the capsule.
+- **Checked:** in a game (anti-air firing at a mod air experimental) and in the stand. Stock personal and bubble
+  shields are unchanged, pixel for pixel. Direct3D 12 and Vulkan give the same picture.
+
 ## To visuals (and the engine's performance lessons): BC5 normal maps are read (2026-10-16)
 
 Not asked yet; made ready so that a switch to BC5 needs nothing on this side.

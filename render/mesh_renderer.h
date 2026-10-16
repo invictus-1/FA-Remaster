@@ -39,6 +39,10 @@ class MeshRenderer {
   // v above 0.95 and between 0.90 and 0.95); null: none. Not with `tint`.
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr,
            const float* treads = nullptr);
+  // A personal shield's shell (ModelCache::ShieldShell) placed as its unit, lit round these hits: each
+  // where it struck on the unit at rest (world units, the unit's own frame) and its age (w, 0..1 of the
+  // second it shows). Drawn with what is see-through.
+  void AddShell(const Model* shell, const Mat4& world, const std::vector<Vec4>& hits);
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
@@ -184,6 +188,12 @@ class MeshRenderer {
   float* rowsOut_ = nullptr;
   std::vector<uint8_t> posedSeen_;   // Prepare's: for each of culls_, 1 when it is posed and some pass sees it
   std::vector<Entry*> rowsToBuild_;  // Prepare's: those models, in the order of their rows
+  // the shells' hits this frame: which entry, and its hits (Prepare lays them in the buffer after the bones)
+  struct ShellHits {
+    size_t entry;
+    std::vector<Vec4> hits;
+  };
+  std::vector<ShellHits> shellHits_;
   bool prepared_ = false;
 };
 

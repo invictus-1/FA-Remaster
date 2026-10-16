@@ -23,6 +23,12 @@
 // builds `buildUnit`): a factory builds the unit at the spot (on its build bone), an engineer builds
 // it at the spot from beside it, its build effects as the game's scripts make them; the unit drawn as
 // far built as it is.
+//
+// A unit firing (`fire`): made as for a death (an aircraft hovering at its elevation), with its weapons
+// as the engine makes them (FxEntities::InitWeapons), facing its target when it is an aircraft or one of its
+// weapons cannot turn all round (else square to the view, so that its turrets are seen turning); a second into each play its
+// weapons get the point `to` as their target and fire as the engine lets them, its manual-fire weapons are
+// fired by an order; two seconds before the play's end they lose the target again.
 #pragma once
 
 #include <functional>
@@ -74,6 +80,17 @@ struct FxStandSetup {
   float buildSeconds = 0;
   // whether --fx-repeat and --fx-spacing were given (else a move's and a build's are worked out)
   bool repeatGiven = false, spacingGiven = false;
+  // a unit (its id; a mod's too) firing its weapons at the point `to` (on the ground, `to.y` above it): the
+  // weapons `fireWeapons` names (their blueprints' Label; none: every weapon that shoots at the ground and is
+  // no death weapon) given the point as their target `fireAt` seconds into each play, and losing it again
+  // `holdAt` seconds into it (0: two seconds before the play's end); the manual-fire weapons `manual` names
+  // fired at it once each play, `fireAt` seconds into it, as a player's order fires them. `toGiven`: `to` was
+  // given (else it is put in reach of the weapons: square to the way it was given, to the camera's right; with
+  // `compare` that way)
+  std::string fire;
+  std::vector<std::string> fireWeapons, manual;
+  float fireAt = 1, holdAt = 0;
+  bool toGiven = false;
 };
 
 class FxStand {
@@ -81,9 +98,9 @@ class FxStand {
   // Reads what it is to play. False with the reason when there is nothing.
   bool Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error);
   // The map under a unit's death, move or build: the ground's height (under water the bottom's), the
-  // water, and the map's terrain type code at a place.
+  // water, and the map's terrain type code at a place; its size (--fx-fire: a structure turns to its middle).
   void SetGround(std::function<float(float, float)> terrain, bool water, float waterLevel,
-                 std::function<int(float, float)> terrainType = nullptr);
+                 std::function<int(float, float)> terrainType = nullptr, float mapWidth = 0, float mapHeight = 0);
   // Each frame after World::Begin: starts, moves and ends what it plays (effect entities: handed to
   // the world as a game's projectiles and effects, World::AddFrame and Effects). `right`: the camera's right
   // (the two sides are laid out along it); `ground`: the ground's height at a place.
@@ -91,8 +108,12 @@ class FxStand {
   // What it read, for the log.
   std::string Describe() const;
   // How far across what it plays reaches, both sides together, for the camera to frame it (0: it says
-  // nothing): --fx-build's builder and unit; --fx-move's units, which the camera follows (Focus).
+  // nothing): --fx-build's builder and unit; --fx-move's units, which the camera follows (Focus); --fx-fire's
+  // unit and its target.
   float Extent() const { return extent_; }
+  // Where the camera looks at what it plays: the spot, a shot's way's middle, between a firing unit and its
+  // target (heights above the ground).
+  Vec3 Middle() const;
   // Where the driven units are (--fx-move: between the two sides'), for the camera to follow; false
   // when there are none.
   bool Focus(Vec3* at) const;
@@ -109,9 +130,11 @@ class FxStand {
     uint32_t rng = 1;
     double lastHit = -10;  // --fx-shield, a personal shield: its last hit, and where on the unit at rest
     Vec3 hitPoint;
+    std::vector<std::pair<double, Vec3>> hits;  // (and its last eight: when, where, for a shell's look)
     uint32_t unit = 0;   // --fx-death: the unit, and whether it is dead yet; --fx-move, --fx-build: the unit
     bool killed = false;
     uint32_t built = 0;  // --fx-build: the unit being built
+    bool ordered = false, held = false;  // --fx-fire: its weapons given their orders, and their targets taken again
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;
@@ -131,11 +154,16 @@ class FxStand {
   float loopHalf_ = 8, loopRadius_ = 3;
   std::string buildOrder_;
   float extent_ = 0;
+  // --fx-fire: the unit faces its target (a weapon of it cannot turn all round), else square to the view; the
+  // log said what the orders did
+  bool fireFaces_ = false, fireSaid_ = false;
+  float fireLift_ = 0;  // (an aircraft: its elevation)
   // --fx-death, --fx-move, --fx-build: the map under it, and whether its world is set up
   std::function<float(float, float)> terrain_;
   std::function<int(float, float)> terrainType_;
   bool water_ = false, unitsReady_ = false, unitsFailed_ = false;
   float waterLevel_ = 0;
+  float mapWidth_ = 0, mapHeight_ = 0;
   std::unique_ptr<FxEntities> entities_;
   std::vector<FrameEffectEvent> events_;
   std::vector<Side> sides_;

@@ -116,6 +116,20 @@
 // --fx-build <builder> <unit>  (or <builder>,<unit>) the builder building that unit at --fx-at as the game's
 //           scripts make it: a factory (UEB0101 UEL0201) on its build bone, an engineer (UEL0105 UEB1101) from
 //           beside it; --fx-build-seconds s: the build takes that long (else the game's own time)
+// --fx-fire <unit> [label ...]  that unit (UEL0201; a mod's too, with --mods) made at --fx-at by its own script class
+//           with its weapons as the engine makes them, firing at the point --fx-to x,z[,height] (else one in its
+//           weapons' reach, to the right of the spot as the camera sees it; with --fx-compare across it, away from
+//           the camera): --fx-fire-at s (1) into each play the weapons named (their blueprints' Label, with commas
+//           or as the words after the unit; none: every weapon that shoots at the ground and is no death weapon)
+//           get the point as their target, their turrets turn to it and they fire as their own scripts and the
+//           engine's fire clock let them (shots with their trails and hits, beams with their emitters);
+//           --fx-hold-at s (two seconds before the play's end) they lose it again; made again every --fx-repeat
+//           seconds (8 unless given). An aircraft hovers at its elevation. It faces the point when it is an
+//           aircraft or one of those weapons cannot turn all round, else its back is to the camera (side by side:
+//           its side), so that its turrets are seen turning.
+// --fx-manual <label>  with --fx-fire: that manual-fire weapon (a tactical or strategic missile, a commander's
+//           overcharge, a scripted main gun) fired at the point once each play as a player's order fires it,
+//           through the weapon's own script (a play is 14 s unless --fx-repeat); may be given several times
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
@@ -428,6 +442,30 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         o->fx.buildUnit = w;
       }
     } else if (a == "--fx-build-seconds") o->fx.buildSeconds = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-fire" || a == "--fx-manual") {  // --fx-fire <unit>[,label...] [label ...]; --fx-manual <label>[,label...]
+      // (the labels: given with commas, and for --fx-fire also as the words that follow it, up to the next option)
+      std::vector<std::string> words;
+      auto split = [&words](const std::string& all) {
+        for (size_t at = 0; at <= all.size();) {
+          const size_t comma = all.find(',', at);
+          const std::string w = all.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+          if (!w.empty()) words.push_back(w);
+          if (comma == std::string::npos) break;
+          at = comma + 1;
+        }
+      };
+      split(v);
+      if (a == "--fx-fire") {
+        while (i + 1 < argc && argv[i + 1][0] != '-') split(argv[++i]);
+        if (words.empty()) return false;
+        o->fx.fire = words[0];
+        o->fx.fireWeapons.insert(o->fx.fireWeapons.end(), words.begin() + 1, words.end());
+      } else {
+        o->fx.manual.insert(o->fx.manual.end(), words.begin(), words.end());
+      }
+    }
+    else if (a == "--fx-fire-at") o->fx.fireAt = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-hold-at") o->fx.holdAt = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-hit-every") o->fx.hitEvery = std::max(0.05f, static_cast<float>(atof(v)));
     else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
     else if (a == "--fx-spacing") {
@@ -515,7 +553,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty() || !o.fx.fire.empty()), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -1062,7 +1100,7 @@ int main(int argc, char** argv) {
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
   if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||
-      !opt.fx.move.empty() || !opt.fx.build.empty()) {
+      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty()) {
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
     if (!opt.fxRepeat && !opt.fx.death.empty()) opt.fx.repeat = 12;  // (a death's smoke and debris, a ship's sinking, take their time)
@@ -1079,6 +1117,7 @@ int main(int argc, char** argv) {
       away = Length(away) > 1e-4f ? Normalize(away) : Vec3{0, 0, -1};
       if (!opt.fxFrom) opt.fx.from = opt.fx.at - away * 14 + Vec3{0, 1.5f, 0};
       if (!opt.fxTo) opt.fx.to = opt.fx.at + away * 14;
+      opt.fx.toGiven = opt.fxTo;  // (--fx-fire: else the stand puts it in its weapons' reach, that way)
     }
     fxStand = std::make_unique<FxStand>();
     // (the map under a unit's death: the ground, and under water the bottom, and the water's level)
@@ -1088,13 +1127,15 @@ int main(int argc, char** argv) {
                            if (map.terrainTypes.empty() || map.width <= 0 || map.height <= 0) return -1;
                            const int cx = std::clamp(static_cast<int>(x), 0, map.width - 1), cz = std::clamp(static_cast<int>(z), 0, map.height - 1);
                            return map.terrainTypes[static_cast<size_t>(cz) * static_cast<size_t>(map.width) + static_cast<size_t>(cx)];
-                         });
+                         },
+                         static_cast<float>(map.width), static_cast<float>(map.height));
     std::string fxError;
     if (fxStand->Init(&vfs, opt.fx, &fxError)) {
       printf("render: --fx: %s%s\n", fxStand->Describe().c_str(), opt.fx.compare ? "; remastered left, original right" : "");
       if (!opt.hasCam) {
-        const Vec3 c = opt.fx.shot.empty() ? opt.fx.at : (opt.fx.from + opt.fx.to) * 0.5f;
+        const Vec3 c = fxStand->Middle();
         camera.target = {c.x, groundHeight(c.x, c.z) + 1, c.z};
+        if (!opt.fx.fire.empty()) targetLift = c.y;  // (a firing aircraft: the camera looks halfway up to it)
         // (a build: all of it in view; a move: the two sides' units, which the camera then follows;
         // near enough to see their effects)
         if (fxStand->Extent() > 0) camera.distance = std::max(12.0f, fxStand->Extent() * 0.6f / std::tan(camera.fovY * 0.5f));

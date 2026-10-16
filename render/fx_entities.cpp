@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 
 #include "core/log.h"
@@ -17,6 +18,8 @@ namespace render {
 // (fx_stand.cpp: the stand-ins for what the simulation would have made, and the game's import)
 const char* FxStandStubs();
 const char* FxStandImport();
+// (fx_weapons.cpp: the weapons' world, for --fx-fire)
+const char* FxWeaponRuntime();
 
 namespace {
 
@@ -268,8 +271,8 @@ __fxModules['/lua/sim/projectiles/nullprojectile.lua'] = shells
 __fxModules['/lua/sim/projectiles/emitterprojectile.lua'] = shells
 
 -- an entity made: the stand places it, its class is its script's, its OnCreate runs. Also says
--- whether OnCreate started a thread.
-function __fxCreate(bp, parent, ox, oy, oz, dx, dy, dz, bone)
+-- whether OnCreate started a thread. (`shot`, a weapon's shot of --fx-fire: {target x, y, z, has a target})
+function __fxCreate(bp, parent, ox, oy, oz, dx, dy, dz, bone, shot)
   local blueprint = __fxBlueprintOf(bp)
   local physics, display = blueprint.Physics, blueprint.Display
   -- (in the dying units' world, what the engine takes when the script gives no direction: the
@@ -285,16 +288,30 @@ function __fxCreate(bp, parent, ox, oy, oz, dx, dy, dz, bone)
   if type(display.Mesh) == 'table' and type(display.Mesh.LODs) == 'table' and type(display.Mesh.LODs[1]) == 'table' then
     meshName = display.Mesh.LODs[1].MeshName or ''
   end
-  local id = __fxSpawn(bp, Id(parent), ox or 0, oy or 0, oz or 0, dx or 0, dy or 0, dz or 0, dx ~= nil, speed,
-                       physics.Lifetime or (__fxPhysics and 15 or 0), physics.VelocityAlign ~= false, spin, display.UniformScale or 1,
-                       physics.MaxSpeed or 0, display.Mesh ~= nil, bone, meshName, display.MeshBlueprint or '',
-                       physics.UseGravity ~= false, physics.CollideSurface ~= false, physics.DestroyOnWater == true)
+  local id
+  if shot then
+    id = __fxSpawn(bp, Id(parent), ox or 0, oy or 0, oz or 0, dx or 0, dy or 0, dz or 0, dx ~= nil, speed,
+                   physics.Lifetime or 15, physics.VelocityAlign ~= false, spin, display.UniformScale or 1,
+                   physics.MaxSpeed or 0, display.Mesh ~= nil, bone, meshName, display.MeshBlueprint or '',
+                   physics.UseGravity ~= false, physics.CollideSurface ~= false, physics.DestroyOnWater == true,
+                   true, physics.TrackTarget == true, physics.TurnRate or 0, physics.Acceleration or 0,
+                   shot[1] or 0, shot[2] or 0, shot[3] or 0, shot[4] and true or false)
+  else
+    id = __fxSpawn(bp, Id(parent), ox or 0, oy or 0, oz or 0, dx or 0, dy or 0, dz or 0, dx ~= nil, speed,
+                   physics.Lifetime or (__fxPhysics and 15 or 0), physics.VelocityAlign ~= false, spin, display.UniformScale or 1,
+                   physics.MaxSpeed or 0, display.Mesh ~= nil, bone, meshName, display.MeshBlueprint or '',
+                   physics.UseGravity ~= false, physics.CollideSurface ~= false, physics.DestroyOnWater == true)
+  end
   local module = blueprint.ScriptModule or (string.gsub(string.lower(bp), '_proj%.bp$', '_script.lua'))
   local ok, m = pcall(import, module)
   local cls = ok and type(m) == 'table' and rawget(m, 'TypeClass')
   if type(cls) ~= 'table' or cls == __fxStub then cls = __fxNullShell end
   local army = type(parent) == 'table' and rawget(parent, 'Army') or 0
   local obj = setmetatable({__id = id, Army = army, Blueprint = blueprint, Trash = trash}, cls)
+  if shot then  -- (what fired it: the unit)
+    rawset(obj, '__launcher', parent)
+    rawset(obj, 'Launcher', parent)
+  end
   __fxObjects[id] = obj
   local before = table.getn(__fxThreads)
   local made, why = pcall(obj.OnCreate, obj, false)
@@ -650,6 +667,8 @@ function __fxMakeUnit(id, unitId, path, layer, builder)
   try('OnPreCreate')
   try('OnLayerChange', layer, 'None')
   u.Layer = layer
+  -- (in the weapons' world, --fx-fire: its weapons, made between its layer and its OnCreate as the engine makes them)
+  if __fxMakeWeapons then __fxMakeWeapons(u) end
   try('OnCreate')
   if builderObject then try('OnStartBeingBuilt', builderObject, layer) else try('OnStopBeingBuilt', nil, layer) end
   return true
@@ -852,11 +871,69 @@ struct Anim {
   std::vector<int> bones;  // per bone of the animation: the unit's bone of that name, or -1
   float time = 0, rate = 1;
   bool looping = false, gone = false;
+  // its place among the unit's manipulators (a unit with its weapons: Manip below), as the engine orders them
+  int precedence = 0;
+  uint32_t seq = 0;
   bool Done() const {
     if (!sca || gone || rate == 0) return true;
     if (looping) return false;
     return rate < 0 ? time <= 0 : time >= sca->duration;
   }
+};
+
+// A manipulator a unit's script made (the units of --fx-fire, made with their weapons), posed onto its bones
+// each tick together with its animations in the order of their precedence, the ones of equal precedence in the
+// order they were made or last given a precedence, as the engine poses them (src/sim/combat.cpp,
+// UnitAimTickManipulators, RotatorStep, SliderStep, MoveManipulator): an aim controller (CreateAimController: a
+// weapon's yaw and pitch bones turned toward its target), a rotator (CreateRotator), a slider (CreateSlider) and
+// a slaver (CreateSlaver).
+struct Manip {
+  enum Kind { Aim, Rotator, Slider, Slaver } kind = Rotator;
+  int precedence = 0;
+  uint32_t seq = 0;
+  bool alive = true, enabled = true, signalled = true;
+  int bone = -1;  // a rotator's or a slider's bone, a slaver's destination
+  // rotator: about `axis` in the bone's own frame; angles in radians, speeds radians a tick, acceleration
+  // radians a tick a tick
+  Vec3 axis{0, 1, 0};
+  float angle = 0, goal = 0, speed = 0, targetSpeed = 0, accel = 0;
+  bool hasGoal = false, spinDown = false;
+  int followBone = -1;
+  // slider: where it has moved the bone to, in the bone's own frame, and its goal (model units); its speed a tick
+  // (infinite: at once), acceleration and deceleration
+  Vec3 at, to;
+  float slideSpeed = std::numeric_limits<float>::infinity(), vel = 0, slideAccel = 0, slideDecel = 0;
+  bool world = false;
+  // slaver: its source bone, the turn the source had in the pose before (what it hands on), at most this much
+  // a tick (below 0: all at once)
+  int source = -1;
+  float maxRate = -1;
+  Quat taken, sourceLocal;
+  // aim controller: its weapon (FxEntities::Impl::weapons, from 1), its label, its bones, and its angles from the
+  // bones' rest (radians); its arcs (centre, half width) and speeds (radians a tick)
+  uint32_t weapon = 0;
+  std::string label;
+  int yawBone = -1, pitchBone = -1, muzzleBone = -1;
+  float heading = 0, pitch = 0, headingOffset = 0;
+  float hCenter = 0, hHalf = 3.14159265f, hSlew = 0.0628318f, pCenter = 0, pHalf = 0.5236f, pSlew = 0.0610865f;
+  bool onTarget = false, yawVertical = false;
+  int resetTicks = 0, resetCountdown = 0;
+  Vec3 lastMuzzle;  // where its muzzle was in the last tick's pose (the engine aims from there)
+  bool haveMuzzle = false;
+};
+
+// What the aim controllers need of a weapon of the stand's (--fx-fire). Its script object, its target and
+// its firing are the weapons' world's (fx_weapons.cpp); its target, and the numbers for the way its shots fly,
+// are handed down here.
+struct Weap {
+  uint32_t unit = 0;
+  bool hasTarget = false;
+  Vec3 target;
+  float tolerance = 0.01f * 3.14159265f / 180;  // FiringTolerance, radians
+  float muzzleVelocity = 0, reduceDistance = 0;  // MuzzleVelocity, MuzzleVelocityReduceDistance
+  bool gravity = false, tracks = false, highArc = false;  // its shots fall (and are aimed so), home; BallisticArc
+  std::string fireControl = "default";  // the aim controller whose aim is the weapon's (lower case)
+  bool onTarget = true;                 // (true without one: a weapon without a turret is always aimed)
 };
 
 struct Ent {
@@ -913,6 +990,21 @@ struct Ent {
   bool driveDone = false;
   std::string motion;
   int terrainCode = -1;
+  // --fx-fire: a unit made with its weapons poses its bones with its manipulators (else the scripts' manipulators
+  // do nothing in the stand, as before)
+  bool armed = false;
+  std::vector<Manip> manips;
+  // a weapon's shot: it flies as the engine's projectiles do (gravity, thrust along its nose, homing on its
+  // target at its turn rate, degrees a second), not as the effect entities above
+  bool shot = false, track = false, hasTarget = false;
+  float turnRate = 0;
+  Vec3 target, tickFrom;  // (tickFrom: where it was at the last tick)
+  // a weapon's collision beam (CollisionBeamEntity): from the muzzle bone of its unit along the bone's way,
+  // `beamLength` long (its bone 0 is its start, 1 its end), checked every `beamInterval` + 1 ticks while it is on
+  bool beam = false, beamOn = false;
+  uint32_t beamUnit = 0;
+  int beamBone = -1, beamInterval = 1, beamCounter = 0;
+  float beamLength = 0, beamRange = 0;
 };
 
 Quat Facing(Vec3 d) {
@@ -936,7 +1028,42 @@ std::string Lower(std::string s) {
   return s;
 }
 
+constexpr float kPi = 3.14159265f;
+// The turn of `a` radians about `axis` (unit length).
+Quat AxisAngle(Vec3 axis, float a) {
+  const float s = std::sin(a * 0.5f);
+  return {axis.x * s, axis.y * s, axis.z * s, std::cos(a * 0.5f)};
+}
+// An angle brought into -pi..pi.
+float WrapPi(float a) {
+  a = std::fmod(a + kPi, 2 * kPi);
+  if (a < 0) a += 2 * kPi;
+  return a - kPi;
+}
+// `from` turned toward `to` (both unit length) by at most `most` radians.
+Vec3 TurnToward(Vec3 from, Vec3 to, float most) {
+  const float angle = std::acos(std::clamp(Dot(from, to), -1.0f, 1.0f));
+  if (angle <= most || angle < 1e-6f) return to;
+  Vec3 axis = Cross(from, to);
+  if (Length(axis) < 1e-6f) axis = std::fabs(from.y) < 0.9f ? Cross(from, {0, 1, 0}) : Cross(from, {1, 0, 0});
+  return Normalize(Rotate(AxisAngle(Normalize(axis), most), from));
+}
+
+// A unit's blueprint file: the game's own in /units, a mod's in its folder under /mods (as the viewer's models
+// find it, models.h UnitBlueprintPath). "" when there is none.
+std::string FindUnitBlueprint(const moho::Vfs* vfs, const std::string& id) {
+  const std::string low = Lower(id);
+  const std::string own = "/units/" + low + "/" + low + "_unit.bp";
+  if (vfs->Exists(own)) return own;
+  std::string found;
+  for (const std::string& f : vfs->FindFiles("/mods", "*_unit.bp"))
+    if (Lower(f.substr(f.rfind('/') + 1)) == low + "_unit.bp" && (found.empty() || f < found)) found = f;
+  return found;
+}
+
 }  // namespace
+
+std::string FxEntities::UnitBlueprintFile(const moho::Vfs* vfs, const std::string& id) { return FindUnitBlueprint(vfs, id); }
 
 struct FxEntities::Impl {
   moho::Vfs* vfs = nullptr;
@@ -963,6 +1090,11 @@ struct FxEntities::Impl {
   std::map<int, uint32_t> sideSeeds;
   std::map<int, uint32_t> scriptSeeds;  // the scripts' Random, one run for each side
   std::function<int(float, float)> terrainCode;  // the map's terrain type code at a place (-1: none)
+  // --fx-fire: the weapons' world is set up (InitWeapons), its weapons (what their aim controllers need), and
+  // the count manipulators are numbered by (made, or given a precedence)
+  bool armed = false;
+  std::vector<Weap> weapons;
+  uint32_t manipSeq = 1;
 
   // What is attached to another's bone goes where that bone is.
   void FollowParents() {
@@ -1051,6 +1183,7 @@ struct FxEntities::Impl {
 
   // A bone by a script's argument (an index or a name; -1: none, the entity itself).
   int BoneOf(const Ent& e, lua_State* L, int arg) const {
+    if (e.beam) return lua_type(L, arg) == LUA_TNUMBER && lua_tonumber(L, arg) >= 1 ? 1 : 0;  // (a beam's: its start or its end)
     if (lua_type(L, arg) == LUA_TNUMBER) {
       const int i = static_cast<int>(lua_tonumber(L, arg));
       return i >= 0 && static_cast<size_t>(i) < e.bones.size() ? i : -1;
@@ -1121,9 +1254,32 @@ struct FxEntities::Impl {
   }
   // Where a bone of an entity is in the world (-1 or none: the entity's own place).
   Vec3 BoneWorld(const Ent& e, int bone, Quat* turn = nullptr) {
+    if (e.beam) {  // (a weapon's beam: its start at the muzzle, its end as far along as it reaches)
+      if (turn) *turn = e.turn;
+      return bone >= 1 ? e.position + Rotate(e.turn, {0, 0, e.beamLength}) : e.position;
+    }
     if (bone < 0 || static_cast<size_t>(bone) >= e.bones.size()) {
       if (turn) *turn = e.turn;
       return e.position;
+    }
+    if (e.armed && std::find_if(e.carriedBy.begin(), e.carriedBy.end(), [](uint32_t c) { return c != 0; }) == e.carriedBy.end()) {
+      // (a unit of --fx-fire, nothing carried off: down its bone's chain alone - it may have hundreds of bones,
+      // and an aim controller asks for bones a few times a tick)
+      int chain[256];
+      int n = 0;
+      for (int i = bone; i >= 0 && static_cast<size_t>(i) < e.bones.size() && n < 256; i = e.bones[static_cast<size_t>(i)].parent) {
+        chain[n++] = i;
+        if (e.bones[static_cast<size_t>(i)].parent == i) break;
+      }
+      Vec3 p;
+      Quat q;
+      for (int k = n - 1; k >= 0; --k) {
+        const size_t b = static_cast<size_t>(chain[k]);
+        p = p + Rotate(q, e.poseP.empty() ? e.restP[b] : e.poseP[b]);
+        q = Mul(q, e.poseQ.empty() ? e.restQ[b] : e.poseQ[b]);
+      }
+      if (turn) *turn = Mul(e.turn, q);
+      return e.position + Rotate(e.turn, p * e.modelScale);
     }
     std::vector<Vec3> P;
     std::vector<Quat> Q;
@@ -1182,22 +1338,327 @@ struct FxEntities::Impl {
     e.poseQ = e.restQ;
     for (const Anim& a : e.anims) {
       if (!a.sca || a.gone || !a.sca->ok) continue;
-      const Sca& s = *a.sca;
-      const int last = s.frames - 1;
-      const float f = s.duration > 0 ? static_cast<float>(last) / s.duration * a.time : 0;
-      const int i0 = std::clamp(static_cast<int>(std::floor(f)), 0, last);
-      const int i1 = a.looping ? (i0 + 1) % s.frames : std::min(i0 + 1, last);
-      const float t = s.duration > 0 ? std::clamp(f - static_cast<float>(i0), 0.0f, 1.0f) : 0;
-      for (int b = 0; b < s.bones && static_cast<size_t>(b) < a.bones.size(); ++b) {
-        const int to = a.bones[static_cast<size_t>(b)];
-        if (to < 0) continue;
-        const float* p0 = s.Bone(i0, b);
-        const float* p1 = s.Bone(i1, b);
-        const Quat q0{p0[4], p0[5], p0[6], p0[3]}, q1{p1[4], p1[5], p1[6], p1[3]};
-        e.poseP[static_cast<size_t>(to)] = Lerp(Vec3{p0[0], p0[1], p0[2]}, Vec3{p1[0], p1[1], p1[2]}, t);
-        e.poseQ[static_cast<size_t>(to)] = Nlerp(q0, q1, t);
+      ApplyAnim(e, a);
+    }
+  }
+  // One animation sets the bones it moves to its frame at its time (the two frames about it blended).
+  void ApplyAnim(Ent& e, const Anim& a) {
+    const Sca& s = *a.sca;
+    const int last = s.frames - 1;
+    const float f = s.duration > 0 ? static_cast<float>(last) / s.duration * a.time : 0;
+    const int i0 = std::clamp(static_cast<int>(std::floor(f)), 0, last);
+    const int i1 = a.looping ? (i0 + 1) % s.frames : std::min(i0 + 1, last);
+    const float t = s.duration > 0 ? std::clamp(f - static_cast<float>(i0), 0.0f, 1.0f) : 0;
+    for (int b = 0; b < s.bones && static_cast<size_t>(b) < a.bones.size(); ++b) {
+      const int to = a.bones[static_cast<size_t>(b)];
+      if (to < 0) continue;
+      const float* p0 = s.Bone(i0, b);
+      const float* p1 = s.Bone(i1, b);
+      const Quat q0{p0[4], p0[5], p0[6], p0[3]}, q1{p1[4], p1[5], p1[6], p1[3]};
+      e.poseP[static_cast<size_t>(to)] = Lerp(Vec3{p0[0], p0[1], p0[2]}, Vec3{p1[0], p1[1], p1[2]}, t);
+      e.poseQ[static_cast<size_t>(to)] = Nlerp(q0, q1, t);
+    }
+  }
+
+  // --fx-fire: a unit made with its weapons, posed for this tick: from its rest, its animations and its
+  // manipulators one after the other in the order of their precedence (the engine's UnitAimTickManipulators).
+  void PoseArmed(Ent& e) {
+    const size_t n = e.bones.size();
+    if (n == 0) return;
+    // (a slaver hands on its source bone's turn of the pose that is about to be replaced: one tick behind)
+    for (Manip& m : e.manips)
+      if (m.alive && m.kind == Manip::Slaver && m.source >= 0 && static_cast<size_t>(m.source) < n)
+        m.sourceLocal = e.poseQ.size() == n ? e.poseQ[static_cast<size_t>(m.source)] : e.restQ[static_cast<size_t>(m.source)];
+    e.poseP = e.restP;
+    e.poseQ = e.restQ;
+    struct Step {
+      int precedence;
+      uint32_t seq;
+      int anim, manip;
+    };
+    std::vector<Step> order;
+    for (size_t i = 0; i < e.anims.size(); ++i) {
+      const Anim& a = e.anims[i];
+      if (a.sca && !a.gone && a.sca->ok) order.push_back({a.precedence, a.seq, static_cast<int>(i), -1});
+    }
+    for (size_t i = 0; i < e.manips.size(); ++i)
+      if (e.manips[i].alive) order.push_back({e.manips[i].precedence, e.manips[i].seq, -1, static_cast<int>(i)});
+    std::stable_sort(order.begin(), order.end(), [](const Step& a, const Step& b) {
+      return a.precedence != b.precedence ? a.precedence < b.precedence : a.seq < b.seq;
+    });
+    for (const Step& s : order) {
+      if (s.anim >= 0) {
+        ApplyAnim(e, e.anims[static_cast<size_t>(s.anim)]);
+        continue;
+      }
+      Manip& m = e.manips[static_cast<size_t>(s.manip)];
+      if (m.kind == Manip::Rotator) RotatorStep(e, m);
+      else if (m.kind == Manip::Slider) SliderStep(e, m);
+      else if (m.kind == Manip::Slaver) SlaverStep(e, m);
+      else AimStep(e, m);
+    }
+    for (Manip& m : e.manips)
+      if (m.alive && m.kind == Manip::Aim && m.muzzleBone >= 0) {
+        m.lastMuzzle = BoneWorld(e, m.muzzleBone);
+        m.haveMuzzle = true;
+      }
+  }
+  // A bone's turn in its parent's frame turned further by q (the engine's PoseRotate).
+  static void TurnBone(Ent& e, int bone, const Quat& q) {
+    if (bone < 0 || static_cast<size_t>(bone) >= e.poseQ.size()) return;
+    e.poseQ[static_cast<size_t>(bone)] = Mul(e.poseQ[static_cast<size_t>(bone)], q);
+  }
+  // A rotator's tick: toward its goal at its speed, or spinning toward its target speed, or spinning down; its
+  // bone turned by its angle about its axis.
+  void RotatorStep(Ent& e, Manip& r) {
+    if (!r.enabled || r.bone < 0 || static_cast<size_t>(r.bone) >= e.bones.size()) return;
+    if (r.followBone >= 0) {  // (its goal is that bone's heading)
+      Quat q;
+      BoneWorld(e, r.followBone, &q);
+      const Vec3 f = Rotate(q, {0, 0, 1});
+      r.goal = std::atan2(f.x, f.z);
+    }
+    if (r.spinDown && r.accel != 0) {  // slows to a fifth of its target speed, then settles halfway at a time
+      const float slow = r.targetSpeed * 0.2f;
+      if (r.speed > slow) {
+        r.speed = r.accel > std::fabs(r.speed) ? slow : r.speed - r.accel;
+        r.angle = WrapPi(r.angle + r.speed);
+        r.signalled = false;
+      } else if (!(slow < std::fabs(r.angle))) {
+        r.speed = 0;
+        r.angle *= 0.5f;
+        r.signalled = true;
+      } else {
+        r.angle = WrapPi(r.angle + slow);
+        r.signalled = false;
+      }
+    } else if (r.hasGoal) {
+      const float delta = WrapPi(r.goal - r.angle);
+      if (!(r.speed < std::fabs(delta))) {
+        r.angle = r.goal;
+        r.signalled = true;
+      } else {
+        r.angle += std::copysign(r.speed, delta);
+        r.signalled = false;
+      }
+    } else {
+      if (r.accel != 0 && r.speed != r.targetSpeed) {
+        const float d = r.targetSpeed - r.speed;
+        r.speed = r.accel > std::fabs(d) ? r.targetSpeed : r.speed + std::copysign(r.accel, d);
+      }
+      r.signalled = r.targetSpeed == r.speed;
+      r.angle = WrapPi(r.angle + r.speed);
+    }
+    TurnBone(e, r.bone, AxisAngle(r.axis, r.angle));
+  }
+  // A slider's tick: a step of at most its speed toward its goal (braking or speeding up when it has a
+  // deceleration or an acceleration); its bone moved that far in its own frame.
+  void SliderStep(Ent& e, Manip& m) {
+    if (!m.enabled || m.bone < 0 || static_cast<size_t>(m.bone) >= e.bones.size()) return;
+    const bool finite = m.slideSpeed > 0 && m.slideSpeed < std::numeric_limits<float>::infinity();
+    if (finite) {
+      const float left = Length(m.to - m.at);
+      const bool brake = m.slideDecel > 0 && (m.vel * 10) * (m.vel * 10) / (m.slideDecel * 20) > left;
+      if (brake) m.vel = std::clamp(m.vel - m.slideDecel * 0.1f, 0.0f, m.slideSpeed);
+      else if (m.slideAccel > 0) m.vel = std::clamp(m.vel + m.slideAccel * 0.1f, 0.0f, m.slideSpeed);
+      else m.vel = m.slideSpeed;
+    }
+    const Vec3 d = m.to - m.at;
+    if (finite && m.vel * m.vel < Dot(d, d)) {
+      m.at = m.at + d * (m.vel / Length(d));
+      m.signalled = false;
+    } else {
+      m.vel = 0;
+      m.at = m.to;
+      m.signalled = true;
+    }
+    const size_t b = static_cast<size_t>(m.bone);
+    e.poseP[b] = e.poseP[b] + Rotate(e.poseQ[b], m.at);
+  }
+  // A slaver's tick: its bone turned as its source was (in the pose before), at most its rate.
+  void SlaverStep(Ent& e, Manip& m) {
+    if (!m.enabled || m.bone < 0 || m.source < 0) return;
+    if (m.maxRate >= 0) {
+      const Quat d = Mul(Conjugate(m.taken), m.sourceLocal);
+      const float angle = 2 * std::acos(std::min(1.0f, std::fabs(d.w)));
+      if (angle <= m.maxRate || angle < 1e-6f) m.taken = m.sourceLocal;
+      else m.taken = Nlerp(m.taken, m.sourceLocal, m.maxRate / angle);
+    } else {
+      m.taken = m.sourceLocal;
+    }
+    TurnBone(e, m.bone, m.taken);
+  }
+  Weap* WeaponOf(uint32_t id) { return id >= 1 && id <= weapons.size() ? &weapons[id - 1] : nullptr; }
+  // An aim controller's tick (the engine's MoveManipulator): with a target, its bones turn toward it at their
+  // speeds within their arcs, and it is on target when both are within the weapon's firing tolerance; without
+  // one, after a while they turn back to rest. Its weapon is aimed when it is the weapon's fire control.
+  void AimStep(Ent& e, Manip& c) {
+    if (!c.enabled) return;  // (its bones stand as the others leave them)
+    Weap* w = WeaponOf(c.weapon);
+    if (!w) {
+      Hold(e, c);
+      return;
+    }
+    if (!w->hasTarget) {
+      if (c.resetCountdown > 0) {
+        --c.resetCountdown;
+        Hold(e, c);
+      } else {
+        Track(e, c, *w, {0, 0, 1}, true);
+      }
+      c.onTarget = false;
+    } else {
+      c.resetCountdown = c.resetTicks > 0 ? c.resetTicks : 30;  // (else the weapon's TargetCheckInterval, 3 s by default)
+      Vec3 dir;
+      if (AimDirection(e, c, *w, &dir)) {
+        c.onTarget = Track(e, c, *w, dir, false);
+      } else {  // (out of its shots' reach: no way to aim)
+        c.onTarget = false;
+        Hold(e, c);
       }
     }
+    if (Lower(c.label) == w->fireControl) w->onTarget = c.onTarget;
+  }
+  void Hold(Ent& e, const Manip& c) {
+    TurnBone(e, c.yawBone, AxisAngle({0, 1, 0}, c.heading));
+    TurnBone(e, c.pitchBone, AxisAngle({1, 0, 0}, -c.pitch));
+  }
+  // One angle's step toward `goal` (a direction in the world, or with `raw` in the bone's own frame); bit 0: not
+  // within the tolerance yet.
+  int Turn(Ent& e, Manip& c, const Weap& w, bool heading, bool raw, Vec3 goal, int bone) {
+    float& now = heading ? c.heading : c.pitch;
+    const float center = heading ? c.hCenter : c.pCenter, half = heading ? c.hHalf : c.pHalf, slew = heading ? c.hSlew : c.pSlew;
+    Vec3 v = goal;
+    if (!raw) {
+      Quat q;
+      BoneWorld(e, bone, &q);
+      v = Rotate(Conjugate(q), goal);
+    }
+    float target;
+    if (heading) {
+      target = std::atan2(v.x, v.z) + c.headingOffset;
+    } else {
+      const float l = Length(v);
+      target = l > 0 ? std::asin(std::clamp(v.y / l, -1.0f, 1.0f)) : center;
+    }
+    float delta;
+    if (half >= 3.1405928f) delta = WrapPi(target - now);
+    else delta = center + std::clamp(WrapPi(target - center), -half, half) - now;
+    now = WrapPi(now + (std::fabs(delta) > slew ? std::copysign(slew, delta) : delta));
+    return std::fabs(WrapPi(now - target)) > w.tolerance ? 1 : 0;
+  }
+  bool Track(Ent& e, Manip& c, const Weap& w, Vec3 goal, bool raw) {
+    int bits = 0;
+    if (c.yawBone >= 0 && c.yawBone == c.pitchBone && c.yawVertical) {
+      bits |= Turn(e, c, w, false, raw, goal, c.pitchBone);
+      TurnBone(e, c.pitchBone, AxisAngle({1, 0, 0}, -c.pitch));
+      bits |= Turn(e, c, w, true, raw, goal, c.yawBone);
+      TurnBone(e, c.yawBone, AxisAngle({0, 1, 0}, c.heading));
+    } else {
+      if (c.yawBone >= 0) {
+        bits |= Turn(e, c, w, true, raw, goal, c.yawBone);
+        TurnBone(e, c.yawBone, AxisAngle({0, 1, 0}, c.heading));
+      }
+      if (c.pitchBone >= 0) {
+        bits |= Turn(e, c, w, false, raw, goal, c.pitchBone) & 1;
+        TurnBone(e, c.pitchBone, AxisAngle({1, 0, 0}, -c.pitch));
+      }
+    }
+    return !(bits & 1);
+  }
+  // Which way the weapon must shoot from its muzzle (where the last tick left it) to hit its target: straight at
+  // it, or for a shot that falls (and does not home) up the low or the high arc that comes down on it at its
+  // muzzle velocity under the simulation's gravity. False when the target is out of the shot's reach.
+  bool AimDirection(Ent& e, const Manip& c, const Weap& w, Vec3* dir) {
+    if (c.muzzleBone < 0) {
+      *dir = Rotate(e.turn, {0, 0, 1});
+      return true;
+    }
+    const Vec3 m = c.haveMuzzle ? c.lastMuzzle : BoneWorld(e, c.muzzleBone);
+    const Vec3 to = w.target - m;
+    const float d = std::sqrt(to.x * to.x + to.z * to.z);
+    float v = w.muzzleVelocity;
+    if (d < w.reduceDistance && w.reduceDistance > 0) v *= std::sqrt(d / w.reduceDistance);
+    if (!w.gravity || w.tracks || d < 1e-3f) {
+      *dir = Length(to) > 1e-6f ? Normalize(to) : Rotate(e.turn, {0, 0, 1});
+      return true;
+    }
+    if (v <= 0) return false;
+    // tan(angle) = (v^2 -+ sqrt(v^4 - g (g d^2 + 2 dy v^2))) / (g d), g = 4.9 (the simulation's gravity)
+    const float g = -kGravity, v2 = v * v;
+    const float disc = v2 * v2 - g * (g * d * d + 2 * to.y * v2);
+    if (disc < 0) return false;
+    const float angle = std::atan((v2 + (w.highArc ? 1 : -1) * std::sqrt(disc)) / (g * d));
+    *dir = Vec3{to.x / d * std::cos(angle), std::sin(angle), to.z / d * std::cos(angle)};
+    return true;
+  }
+
+  // A weapon's shot that homes, once a tick (the engine's projectile MotionTick, UpdateTracking): its nose turned
+  // toward its target by at most its turn rate, its speed along it. (Its speeding up, its fall when it does not
+  // home, and where it is: Move.)
+  void ShotStep(Ent& e) {
+    if (!e.track) return;
+    Vec3 nose = e.direction;
+    const Vec3 to = e.target - e.position;
+    if (e.hasTarget && Length(to) > 1e-4f) nose = TurnToward(nose, Normalize(to), e.turnRate * 0.1f * kPi / 180);
+    e.velocity = nose * std::max(0.0f, Dot(e.velocity, nose));
+    e.direction = nose;
+  }
+
+  // A weapon's beam goes with its muzzle; while it is on, every interval + 1 ticks it is checked (the engine's
+  // CollisionBeamEntity: BeamTick, BeamCheck).
+  void BeamFollow(Ent& b) {
+    const Ent* u = Find(b.beamUnit);
+    if (!u) return;
+    Quat q;
+    b.position = BoneWorld(*u, b.beamBone, &q);
+    b.turn = q;
+  }
+  // The check: along the muzzle's way as far as the weapon reaches (horizontally; MaximumBeamLength or its
+  // range), to where it meets the ground or the water; the beam's script told what it met (OnImpact).
+  void BeamCheck(uint32_t id) {
+    Ent* b = Find(id);
+    if (!b || !b->beam) return;
+    BeamFollow(*b);
+    const Vec3 dir = Rotate(b->turn, {0, 0, 1});
+    const float flat = b->beamRange * std::sqrt(dir.x * dir.x + dir.z * dir.z);
+    const float reach = b->beamRange * (flat > 0.001f ? std::min(b->beamRange / flat, 5.0f) : 1.0f);
+    const char* type = "Air";
+    float length = reach;
+    // (in steps of a quarter of a world unit, then halved down to where it crosses)
+    const float step = 0.25f;
+    float prev = 0;
+    for (float t = step;; t += step) {
+      const float d = std::min(t, reach);
+      const Vec3 p = b->position + dir * d;
+      const float ground = Ground(p.x, p.z);
+      const bool wet = water && p.y <= waterLevel && waterLevel > ground;
+      if (p.y <= ground || wet) {
+        float lo = prev, hi = d;
+        for (int k = 0; k < 12; ++k) {
+          const float mid = (lo + hi) * 0.5f;
+          const Vec3 q = b->position + dir * mid;
+          const float g = Ground(q.x, q.z);
+          if (q.y <= g || (water && q.y <= waterLevel && waterLevel > g)) hi = mid;
+          else lo = mid;
+        }
+        length = hi;
+        const Vec3 q = b->position + dir * hi;
+        type = water && q.y <= waterLevel + 0.01f && waterLevel > Ground(q.x, q.z) ? "Water" : "Terrain";
+        break;
+      }
+      prev = d;
+      if (d >= reach) break;
+    }
+    b->beamLength = length;
+    lua_State* L = state->L();
+    SetSide(b->side);
+    spawnOriginal = b->original;
+    spawnSide = b->side;
+    lua_getglobal(L, "__fxBeamImpact");
+    lua_pushnumber(L, id);
+    lua_pushstring(L, type);
+    if (lua_pcall(L, 2, 0, 0) != 0) lua_pop(L, 1);
   }
   void Move(double dt) {
     if (dt <= 0) return;
@@ -1205,8 +1666,22 @@ struct FxEntities::Impl {
     for (Ent& e : ents) {
       if (e.dead) continue;
       if (e.hit) continue;  // (what met the ground stays where it met it)
+      if (e.beam) continue;  // (a weapon's beam goes with its muzzle: BeamFollow)
       float speed = Length(e.velocity);
       const Vec3 dir = speed > 1e-6f ? e.velocity * (1 / speed) : e.direction;
+      if (e.shot) {
+        // a weapon's shot: speeding up along its nose, and (unless it homes) falling, all the way, so that it
+        // flies the very curve its aim reckoned with (the engine's steps, of a tick each, take the mean of the
+        // speeds before and after: the same curve); its turn toward its target once a tick (ShotStep)
+        const Vec3 a = dir * e.acceleration + (e.track ? Vec3{} : e.ballistic);
+        e.position = e.position + e.velocity * t + a * (0.5f * t * t);
+        e.velocity = e.velocity + a * t;
+        if (e.maxSpeed > 0 && Length(e.velocity) > e.maxSpeed) e.velocity = e.velocity * (e.maxSpeed / Length(e.velocity));
+        if (Length(e.velocity) > 1e-6f) e.direction = Normalize(e.velocity);
+        e.size = e.size + e.growth * t;
+        e.spun += e.spin * t;
+        continue;
+      }
       if (e.acceleration != 0) {
         speed = std::max(0.0f, speed + e.acceleration * t);
         if (e.maxSpeed > 0) speed = std::min(speed, e.maxSpeed);
@@ -1238,7 +1713,9 @@ std::string Str(lua_State* L, int i) {
 }
 
 // __fxSpawn(bp, parent, ox, oy, oz, dx, dy, dz, hasDirection, speed, lifetime, align, spin, scale, maxSpeed, mesh,
-//           bone, meshName, meshBlueprint, gravity, surface, destroyOnWater) -> id
+//           bone, meshName, meshBlueprint, gravity, surface, destroyOnWater
+//           [, shot, track, turnRate, acceleration, target x, y, z, hasTarget]) -> id
+// (with `shot`: a weapon's shot, --fx-fire)
 int SpawnEntity(lua_State* L) {
   FxEntities::Impl& m = *FxEntities::Impl::Of(L);
   Ent e;
@@ -1284,6 +1761,15 @@ int SpawnEntity(lua_State* L) {
     if (lua_toboolean(L, 20)) e.ballistic = {0, kGravity, 0};
     e.surface = lua_toboolean(L, 21) != 0;
     e.destroyOnWater = lua_toboolean(L, 22) != 0;
+  }
+  if (lua_toboolean(L, 23)) {  // a weapon's shot
+    e.shot = true;
+    e.track = lua_toboolean(L, 24) != 0;
+    e.turnRate = Num(L, 25);
+    e.acceleration = Num(L, 26);
+    e.target = {Num(L, 27), Num(L, 28), Num(L, 29)};
+    e.hasTarget = lua_toboolean(L, 30) != 0;
+    e.tickFrom = e.position;
   }
   e.turn = e.align ? Facing(e.direction) : Quat{};
   e.born = m.now;
@@ -1706,6 +2192,7 @@ int Animator(lua_State* L) {
     return 1;
   }
   e->anims.emplace_back();
+  e->anims.back().seq = FxEntities::Impl::Of(L)->manipSeq++;
   lua_pushnumber(L, static_cast<double>(e->anims.size() - 1));
   return 1;
 }
@@ -1760,6 +2247,301 @@ int AnimInfo(lua_State* L) {
   lua_pushboolean(L, !a || a->Done());
   lua_pushnumber(L, a ? a->rate : 0);
   return 5;
+}
+
+// --fx-fire: the weapons' world (fx_weapons.cpp) on the stand's units.
+
+// __fxAnimPrecedence(unit, animator, precedence): its place among the unit's manipulators (behind its equals)
+int AnimPrecedence(lua_State* L) {
+  if (Anim* a = AnimOf(L)) {
+    a->precedence = static_cast<int>(Num(L, 3));
+    a->seq = FxEntities::Impl::Of(L)->manipSeq++;
+  }
+  return 0;
+}
+
+// __fxManipNew(unit, kind, ...) -> its number on the unit, or -1 when the unit is not one made with its weapons
+// or has no such bone (the script then gets the stand's old manipulator that does nothing):
+//   'rotator', bone, axis, [goal degrees], [speed degrees a second], [acceleration], [target speed]
+//   'slider', bone, [x, y, z], [speed a second], [world units]
+//   'slaver', destination bone, source bone
+//   'aim', weapon, label, yaw bone, [pitch bone], [muzzle bone]
+int ManipNew(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Ent* e = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  const std::string kind = Str(L, 2);
+  auto none = [&]() {
+    lua_pushnumber(L, -1);
+    return 1;
+  };
+  if (!e || !e->armed || e->bones.empty()) return none();
+  auto bone = [&](int arg) { return lua_isnoneornil(L, arg) ? -1 : m.BoneOf(*e, L, arg); };
+  auto given = [&](int arg) { return !lua_isnoneornil(L, arg); };
+  Manip c;
+  if (kind == "rotator") {
+    c.kind = Manip::Rotator;
+    c.bone = bone(3);
+    if (c.bone < 0) return none();
+    // the axis: 'x', 'y' or 'z', with a '-' first the other way round
+    const std::string ax = given(4) ? Str(L, 4) : "y";
+    const float sign = !ax.empty() && ax[0] == '-' ? -1.0f : 1.0f;
+    const char letter = static_cast<char>(std::tolower(static_cast<unsigned char>(ax.empty() ? 'y' : ax[ax[0] == '-' ? 1 : 0])));
+    c.axis = letter == 'x' ? Vec3{sign, 0, 0} : letter == 'z' ? Vec3{0, 0, sign} : Vec3{0, sign, 0};
+    if (given(5)) {  // (a goal alone is reached at once)
+      c.goal = Num(L, 5) * kPi / 180;
+      c.hasGoal = true;
+      c.signalled = c.goal == c.angle;
+      c.speed = std::numeric_limits<float>::infinity();
+    }
+    if (given(6)) c.speed = Num(L, 6) * kPi / 1800;
+    if (given(7)) c.accel = Num(L, 7) * kPi / 18000;
+    if (given(8)) {
+      c.targetSpeed = Num(L, 8) * kPi / 1800;
+      c.signalled = c.speed == c.targetSpeed;
+    }
+  } else if (kind == "slider") {
+    c.kind = Manip::Slider;
+    c.bone = bone(3);
+    if (c.bone < 0) return none();
+    c.world = lua_toboolean(L, 8) != 0;
+    const float s = c.world ? 1 / std::max(e->modelScale, 1e-6f) : 1.0f;  // (the stand's pose is in model units)
+    if (given(4)) {
+      c.to = Vec3{Num(L, 4), Num(L, 5), Num(L, 6)} * s;
+      c.signalled = false;
+    }
+    if (given(7)) c.slideSpeed = Num(L, 7) > 0 ? Num(L, 7) * 0.1f * s : -1.0f;
+  } else if (kind == "slaver") {
+    c.kind = Manip::Slaver;
+    c.bone = bone(3);
+    c.source = bone(4);
+    if (c.bone < 0 || c.source < 0) return none();
+  } else if (kind == "aim") {
+    c.kind = Manip::Aim;
+    c.weapon = static_cast<uint32_t>(Num(L, 3));
+    c.label = Str(L, 4);
+    c.yawBone = bone(5);
+    c.pitchBone = bone(6);
+    const int muzzle = bone(7);
+    c.muzzleBone = muzzle >= 0 ? muzzle : c.pitchBone >= 0 ? c.pitchBone : c.yawBone;
+    if (c.yawBone >= 0) {  // (until its arc is set: about the yaw bone's own way, all round)
+      const Vec3 f = Rotate(e->bones[static_cast<size_t>(c.yawBone)].rotation, {0, 0, 1});
+      c.hCenter = std::atan2(f.x, f.z);
+      c.yawVertical = std::fabs(f.y) > 0.707f;
+    }
+    if (Weap* w = m.WeaponOf(c.weapon)) w->onTarget = false;
+  } else {
+    return none();
+  }
+  c.seq = m.manipSeq++;
+  e->manips.push_back(c);
+  lua_pushnumber(L, static_cast<double>(e->manips.size() - 1));
+  return 1;
+}
+Manip* ManipOf(lua_State* L) {
+  Ent* e = FxEntities::Impl::Of(L)->Find(static_cast<uint32_t>(Num(L, 1)));
+  const int k = static_cast<int>(Num(L, 2, -1));
+  return e && k >= 0 && static_cast<size_t>(k) < e->manips.size() ? &e->manips[static_cast<size_t>(k)] : nullptr;
+}
+// __fxManipSet(unit, k, method, ...): what the script calls on its manipulator (the engine's methods of
+// CRotateManipulator, CSlideManipulator, CSlaveManipulator, CAimManipulator and IAniManipulator)
+int ManipSet(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Ent* e = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  Manip* c = ManipOf(L);
+  if (!e || !c) return 0;
+  const std::string name = Str(L, 3);
+  const float a = Num(L, 4), b = Num(L, 5), d = Num(L, 6);
+  const float deg = kPi / 180;
+  const float s = c->world ? 1 / std::max(e->modelScale, 1e-6f) : 1.0f;
+  if (name == "Destroy") c->alive = false;
+  else if (name == "SetPrecedence") {
+    c->precedence = static_cast<int>(a);
+    c->seq = m.manipSeq++;
+  } else if (name == "Enable") c->enabled = true;
+  else if (name == "Disable") c->enabled = false;
+  else if (c->kind == Manip::Rotator) {
+    if (name == "SetGoal") {
+      c->goal = a * deg;
+      c->hasGoal = true;
+      c->signalled = c->goal == c->angle;
+    } else if (name == "ClearGoal") c->hasGoal = false;
+    else if (name == "SetSpeed") c->speed = a * deg / 10;
+    else if (name == "SetTargetSpeed") {
+      c->targetSpeed = a * deg / 10;
+      c->signalled = c->speed == c->targetSpeed;
+    } else if (name == "SetAccel") c->accel = a * deg / 100;
+    else if (name == "SetSpinDown") c->spinDown = lua_toboolean(L, 4) != 0;
+    else if (name == "SetCurrentAngle") c->angle = a * deg;
+    else if (name == "SetFollowBone") c->followBone = m.BoneOf(*e, L, 4);
+    else if (name == "ClearFollowBone") c->followBone = -1;
+  } else if (c->kind == Manip::Slider) {
+    if (name == "SetGoal") {
+      c->to = Vec3{a, b, d} * s;
+      c->signalled = c->to.x == c->at.x && c->to.y == c->at.y && c->to.z == c->at.z;
+    } else if (name == "SetSpeed") {
+      c->slideSpeed = a > 0 ? a * 0.1f * s : -1.0f;
+      if (a <= 0) c->vel = 0;
+    } else if (name == "SetWorldUnits") c->world = lua_toboolean(L, 4) != 0;
+    else if (name == "SetAcceleration") c->slideAccel = std::max(a, 0.0f) * 0.1f * s;
+    else if (name == "SetDeceleration") c->slideDecel = std::max(a, 0.0f) * 0.1f * s;
+  } else if (c->kind == Manip::Slaver) {
+    if (name == "SetMaxRate") c->maxRate = a * deg / 10;
+  } else if (c->kind == Manip::Aim) {
+    if (name == "SetFiringArc") {  // yaw from, to, speed; pitch from, to, speed (degrees, degrees a second)
+      const float yawMin = a * deg, yawMax = b * deg, pitchMin = Num(L, 7) * deg, pitchMax = Num(L, 8) * deg;
+      c->hCenter = WrapPi((yawMin + yawMax) / 2);
+      c->hHalf = std::fabs(yawMax - yawMin) / 2;
+      c->hSlew = d * deg * 0.1f;
+      c->pCenter = WrapPi((pitchMin + pitchMax) / 2);
+      c->pHalf = std::fabs(pitchMax - pitchMin) / 2;
+      c->pSlew = Num(L, 9) * deg * 0.1f;
+    } else if (name == "SetResetPoseTime") c->resetTicks = static_cast<int>(a * 10);
+    else if (name == "SetEnabled") {
+      c->enabled = lua_toboolean(L, 4) != 0;
+      c->onTarget = false;
+    } else if (name == "SetHeadingPitch") {
+      c->heading = a;
+      c->pitch = b;
+    } else if (name == "SetAimHeadingOffset") c->headingOffset = a * deg;
+  }
+  return 0;
+}
+// __fxManipGet(unit, k, what): 'Signalled' (at its goal; true when gone), 'Angle' (a rotator's, degrees),
+// 'OnTarget', 'HeadingPitch' (two numbers), 'Gone'
+int ManipGet(lua_State* L) {
+  Manip* c = ManipOf(L);
+  const std::string what = Str(L, 3);
+  if (what == "HeadingPitch") {
+    lua_pushnumber(L, c ? c->heading : 0);
+    lua_pushnumber(L, c ? c->pitch : 0);
+    return 2;
+  }
+  if (what == "Angle") lua_pushnumber(L, c ? c->angle * 180 / kPi : 0);
+  else if (what == "OnTarget") lua_pushboolean(L, c && c->onTarget);
+  else if (what == "Gone") lua_pushboolean(L, !c || !c->alive);
+  else lua_pushboolean(L, !c || !c->alive || c->signalled);
+  return 1;
+}
+
+// __fxWeaponNew(unit) -> the weapon's number (from 1)
+int WeaponNew(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Weap w;
+  w.unit = static_cast<uint32_t>(Num(L, 1));
+  m.weapons.push_back(w);
+  lua_pushnumber(L, static_cast<double>(m.weapons.size()));
+  return 1;
+}
+// __fxWeaponSet(weapon, what, ...): 'Target' (has, x, y, z), 'Tolerance' (degrees), 'Shots' (muzzle velocity,
+// reduce distance, falls, homes, high arc), 'FireControl' (label)
+int WeaponSet(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  Weap* w = m.WeaponOf(static_cast<uint32_t>(Num(L, 1)));
+  if (!w) return 0;
+  const std::string what = Str(L, 2);
+  if (what == "Target") {
+    w->hasTarget = lua_toboolean(L, 3) != 0;
+    w->target = {Num(L, 4), Num(L, 5), Num(L, 6)};
+  } else if (what == "Tolerance") {
+    w->tolerance = Num(L, 3) * kPi / 180;
+  } else if (what == "Shots") {
+    w->muzzleVelocity = Num(L, 3);
+    w->reduceDistance = Num(L, 4);
+    w->gravity = lua_toboolean(L, 5) != 0;
+    w->tracks = lua_toboolean(L, 6) != 0;
+    w->highArc = lua_toboolean(L, 7) != 0;
+  } else if (what == "FireControl") {
+    w->fireControl = Lower(Str(L, 3));
+  }
+  return 0;
+}
+// __fxWeaponOnTarget(weapon) -> whether its fire control's aim controller is on target (true without one)
+int WeaponOnTarget(lua_State* L) {
+  Weap* w = FxEntities::Impl::Of(L)->WeaponOf(static_cast<uint32_t>(Num(L, 1)));
+  lua_pushboolean(L, w && w->onTarget);
+  return 1;
+}
+// __fxMuzzle(unit, bone, randomness degrees, side) -> x, y, z: the way the muzzle bone points now, as the aim
+// controllers turned it, scattered by the weapon's FiringRandomness (normally, that many degrees one sigma)
+int Muzzle(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  Quat q;
+  if (e) m.BoneWorld(*e, m.BoneOf(*e, L, 2), &q);
+  Vec3 f = Rotate(q, {0, 0, 1});
+  const float spread = Num(L, 3);
+  if (spread > 0 && e) {
+    // (two normal draws from the side's own numbers: the same scatter on both sides of a side by side)
+    auto normal = [&]() {
+      const float u1 = std::max(m.Uniform(e->side), 1e-7f), u2 = m.Uniform(e->side);
+      return std::sqrt(-2 * std::log(u1)) * std::cos(2 * kPi * u2);
+    };
+    const float pitch = normal() * spread * kPi / 180, yaw = normal() * spread * kPi / 180;
+    f = Rotate(Mul(q, Mul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, pitch))), {0, 0, 1});
+  }
+  lua_pushnumber(L, f.x);
+  lua_pushnumber(L, f.y);
+  lua_pushnumber(L, f.z);
+  return 3;
+}
+// __fxShotSet(shot, what, ...): 'Target' (x, y, z), 'TurnRate' (degrees a second), 'Track' (homes or not),
+// 'MaxSpeed'
+int ShotSet(lua_State* L) {
+  return OnEnt(L, [&](Ent& e) {
+    const std::string what = Str(L, 2);
+    if (what == "Target") {
+      e.target = {Num(L, 3), Num(L, 4), Num(L, 5)};
+      e.hasTarget = true;
+    } else if (what == "TurnRate") e.turnRate = Num(L, 3);
+    else if (what == "Track") e.track = lua_toboolean(L, 3) != 0;
+    else if (what == "MaxSpeed") e.maxSpeed = Num(L, 3);
+  });
+}
+// __fxShotTarget(shot) -> x, y, z: what it flies at (0, 0, 0: nothing)
+int ShotTarget(lua_State* L) {
+  const Ent* e = FxEntities::Impl::Of(L)->Find(static_cast<uint32_t>(Num(L, 1)));
+  const Vec3 t = e && e->hasTarget ? e->target : Vec3{};
+  lua_pushnumber(L, t.x);
+  lua_pushnumber(L, t.y);
+  lua_pushnumber(L, t.z);
+  return 3;
+}
+// __fxBeamNew(unit, muzzle bone, check interval in ticks, reach) -> the beam entity's id
+int BeamNew(lua_State* L) {
+  FxEntities::Impl& m = *FxEntities::Impl::Of(L);
+  const Ent* u = m.Find(static_cast<uint32_t>(Num(L, 1)));
+  Ent b;
+  b.id = m.nextEntity++;
+  b.beam = true;
+  b.align = false;
+  b.beamUnit = u ? u->id : 0;
+  b.beamBone = u ? m.BoneOf(*u, L, 2) : -1;
+  b.beamInterval = std::max(0, static_cast<int>(Num(L, 3, 1)));
+  b.beamRange = std::max(Num(L, 4), 1.0f);
+  b.original = u ? u->original : m.spawnOriginal;
+  b.side = u ? u->side : m.spawnSide;
+  b.born = m.now;
+  m.ents.push_back(b);
+  m.BeamFollow(m.ents.back());
+  lua_pushnumber(L, b.id);
+  return 1;
+}
+// __fxBeamSet(beam, on): switched on (checked at its next tick) or off
+int BeamSet(lua_State* L) {
+  return OnEnt(L, [&](Ent& e) {
+    e.beamOn = lua_toboolean(L, 2) != 0;
+    e.beamCounter = e.beamInterval;
+  });
+}
+int BeamIsOn(lua_State* L) {
+  const Ent* e = FxEntities::Impl::Of(L)->Find(static_cast<uint32_t>(Num(L, 1)));
+  lua_pushboolean(L, e && e->beamOn);
+  return 1;
+}
+// __fxBeamCheck(beam): checked now (SetBeamFx with its check)
+int BeamCheckNow(lua_State* L) {
+  FxEntities::Impl::Of(L)->BeamCheck(static_cast<uint32_t>(Num(L, 1)));
+  return 0;
 }
 
 void Register(lua_State* L, FxEntities::Impl* m, const char* name, lua_CFunction f) {
@@ -1904,6 +2686,88 @@ bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool wate
   return true;
 }
 
+bool FxEntities::InitWeapons(std::string* error, float mapWidth, float mapHeight) {
+  Impl& m = *impl_;
+  if (!m.state || !m.units) {
+    *error = "the stand's units are not set up";
+    return false;
+  }
+  Echo echo;
+  lua_State* L = m.state->L();
+  static const struct {
+    const char* name;
+    lua_CFunction f;
+  } kFunctions[] = {{"__fxAnimPrecedence", AnimPrecedence}, {"__fxManipNew", ManipNew},       {"__fxManipSet", ManipSet},
+                    {"__fxManipGet", ManipGet},             {"__fxWeaponNew", WeaponNew},     {"__fxWeaponSet", WeaponSet},
+                    {"__fxWeaponOnTarget", WeaponOnTarget}, {"__fxMuzzle", Muzzle},           {"__fxShotSet", ShotSet},
+                    {"__fxShotTarget", ShotTarget},         {"__fxBeamNew", BeamNew},         {"__fxBeamSet", BeamSet},
+                    {"__fxBeamIsOn", BeamIsOn},             {"__fxBeamCheck", BeamCheckNow}};
+  for (const auto& f : kFunctions) Register(L, &m, f.name, f.f);
+  // what the engine adds to the physics of every projectile blueprint it registers (src/sim/bp_defaults.inc),
+  // for the weapons' shots: {name, value} (the scripts reckon with them: MaxSpeed + MaxSpeedRange)
+  lua_pushstring(L, "__fxProjectileDefaults");
+  lua_newtable(L);
+  int n = 0;
+  for (const BpDefault& d : kDefaults) {
+    if (d.kind != BpKind::Projectile || std::strncmp(d.path, "Physics.", 8) != 0 || std::strchr(d.path + 8, '.')) continue;
+    lua_newtable(L);
+    lua_pushstring(L, d.path + 8);
+    lua_rawseti(L, -2, 1);
+    if (d.type == 1) lua_pushnumber(L, d.num);
+    else if (d.type == 2) lua_pushstring(L, d.str);
+    else if (d.type == 3) lua_pushboolean(L, d.b);
+    else lua_newtable(L);
+    lua_rawseti(L, -2, 2);
+    lua_rawseti(L, -2, ++n);
+  }
+  lua_settable(L, LUA_GLOBALSINDEX);
+  lua_pushstring(L, "__fxMapWidth");
+  lua_pushnumber(L, mapWidth > 0 ? mapWidth : 1024);
+  lua_settable(L, LUA_GLOBALSINDEX);
+  lua_pushstring(L, "__fxMapHeight");
+  lua_pushnumber(L, mapHeight > 0 ? mapHeight : 1024);
+  lua_settable(L, LUA_GLOBALSINDEX);
+  if (!m.state->DoString(FxWeaponRuntime(), "fx stand weapons")) {
+    *error = "the stand's weapon scripts did not run (see the log)";
+    return false;
+  }
+  m.armed = true;
+  return true;
+}
+
+std::string FxEntities::Order(uint32_t unit, Vec3 target, const std::vector<std::string>& labels, const std::vector<std::string>& manual,
+                              bool stop) {
+  Impl& m = *impl_;
+  const Ent* e = m.Find(unit);
+  if (!m.state || !m.armed || !e) return std::string();
+  Echo echo;
+  m.spawnOriginal = e->original;
+  m.spawnSide = e->side;
+  m.SetSide(e->side);
+  auto join = [](const std::vector<std::string>& v) {
+    std::string s;
+    for (const std::string& x : v) s += (s.empty() ? "" : ",") + x;
+    return s;
+  };
+  lua_State* L = m.state->L();
+  lua_getglobal(L, "__fxOrder");
+  lua_pushnumber(L, unit);
+  lua_pushnumber(L, target.x);
+  lua_pushnumber(L, target.y);
+  lua_pushnumber(L, target.z);
+  lua_pushstring(L, join(labels).c_str());
+  lua_pushstring(L, join(manual).c_str());
+  lua_pushboolean(L, stop);
+  std::string said;
+  if (lua_pcall(L, 7, 1, 0) == 0) {
+    if (lua_isstring(L, -1)) said = lua_tostring(L, -1);
+  } else {
+    said = std::string("the order did not run: ") + (lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+  }
+  lua_pop(L, 1);
+  return said;
+}
+
 uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& how, std::string* error) {
   Impl& m = *impl_;
   if (!m.state || !m.units) {
@@ -1911,9 +2775,10 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
     return 0;
   }
   const std::string unitId = Lower(id);
-  const std::string path = "/units/" + unitId + "/" + unitId + "_unit.bp";
-  if (!m.vfs->Exists(moho::Vfs::Normalize(path))) {
-    *error = "no unit blueprint " + path;
+  // (the game's own in /units, a mod's under /mods)
+  std::string path = FindUnitBlueprint(m.vfs, unitId);
+  if (path.empty()) {
+    *error = "no unit blueprint /units/" + unitId + "/" + unitId + "_unit.bp, nor one in a mod";
     return 0;
   }
   Echo echo;
@@ -1971,6 +2836,7 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
   e.terrainCode = m.terrainCode ? m.terrainCode(place.x, place.z) : -1;
   e.fraction = how.builder ? 0.0f : 1.0f;
   e.blueprint = m.BlueprintIndex(unitId);
+  e.armed = m.armed;  // (in the weapons' world: made with its weapons, its manipulators pose it)
   if (air && how.flyIn) e.velocity = forward * speed;
   m.TakeSkeleton(e, unitId);
   if (e.bones.empty()) {
@@ -2108,6 +2974,7 @@ void FxEntities::Clear() {
   for (Ent& e : m.ents) e.dead = true;
   m.ents.clear();
   m.bodies.clear();
+  m.weapons.clear();
   if (m.state) m.state->DoString("__fxClear()", "fx stand clear");
 }
 
@@ -2139,20 +3006,49 @@ void FxEntities::Advance(double now) {
     m.Move(at - m.now);
     m.now = at;
     m.tick = next;
-    // what has lived out its lifetime goes, then the threads run
+    // (a weapon's shot: its speed and way for the next tick)
     for (Ent& e : m.ents)
-      if (!e.dead && e.lifetime > 0 && m.now - e.born >= e.lifetime) e.dead = true;
+      if (!e.dead && e.shot && !e.hit) m.ShotStep(e);
+    // what has lived out its lifetime goes, then the threads run (a weapon's shot ends as the engine ends one, in
+    // an impact on nothing: 'Air')
+    std::vector<uint32_t> expired;
+    for (Ent& e : m.ents)
+      if (!e.dead && e.lifetime > 0 && m.now - e.born >= e.lifetime) {
+        if (!e.shot) {
+          e.dead = true;
+        } else if (!e.hit) {
+          e.hit = true;
+          e.velocity = {};
+          expired.push_back(e.id);
+        }
+      }
+    for (uint32_t id : expired)
+      if (Ent* e = m.Find(id)) impact(*e, "Air");
     // the units' animations move on (the engine's animators: rate x 0.1 a tick, held at the ends
-    // unless they loop)
+    // unless they loop); a unit made with its weapons is posed by its manipulators as well
     for (Ent& e : m.ents) {
-      if (e.dead || e.anims.empty()) continue;
+      if (e.dead) continue;
       for (Anim& a : e.anims) {
         if (!a.sca || !a.sca->ok || a.gone) continue;
         a.time += a.rate * 0.1f;
         if (a.looping) a.time = a.sca->duration > 0 ? std::fmod(std::fmod(a.time, a.sca->duration) + a.sca->duration, a.sca->duration) : 0;
         else a.time = std::clamp(a.time, 0.0f, a.sca->duration);
       }
-      m.PoseAnims(e);
+      if (e.armed) m.PoseArmed(e);
+      else if (!e.anims.empty()) m.PoseAnims(e);
+    }
+    // the weapons' beams go with their muzzles, and while on are checked every interval + 1 ticks
+    if (m.armed) {
+      std::vector<uint32_t> checks;
+      for (Ent& b : m.ents) {
+        if (b.dead || !b.beam) continue;
+        m.BeamFollow(b);
+        if (b.beamOn && b.beamCounter++ >= b.beamInterval) {
+          b.beamCounter = 0;
+          checks.push_back(b.id);
+        }
+      }
+      for (uint32_t id : checks) m.BeamCheck(id);
     }
     // what meets the ground or the water (in the dying units' world): a dead aircraft, or what a
     // script made that collides with the surface. (A list of ids first: OnImpact makes more.)
@@ -2168,7 +3064,20 @@ void FxEntities::Advance(double now) {
         else if (e.position.y <= ground) with = "Terrain";
         if (!with) continue;
         e.hit = true;
-        e.position.y = std::string(with) == "Water" ? m.waterLevel : ground;
+        if (e.shot) {
+          // (a weapon's shot hits where its way since the last tick crossed the ground or the water, as the
+          // engine sweeps its step, not where this tick left it)
+          const Vec3 a = e.tickFrom, b = e.position;
+          float lo = 0, hi = 1;
+          for (int k = 0; k < 16; ++k) {
+            const float mid = (lo + hi) * 0.5f;
+            const Vec3 p = Lerp(a, b, mid);
+            const bool under = std::string(with) == "Water" ? p.y <= m.waterLevel : p.y <= m.Ground(p.x, p.z);
+            (under ? hi : lo) = mid;
+          }
+          e.position = Lerp(a, b, hi);
+        }
+        e.position.y = std::string(with) == "Water" ? m.waterLevel : m.Ground(e.position.x, e.position.z);
         e.velocity = {};
         e.ballistic = {};
         e.acceleration = 0;
@@ -2179,6 +3088,8 @@ void FxEntities::Advance(double now) {
         }
         hits.emplace_back(e.id, with);
       }
+      for (Ent& e : m.ents)
+        if (e.shot) e.tickFrom = e.position;
       for (const auto& h : hits) {
         Ent* e = m.Find(h.first);
         if (!e) continue;
@@ -2269,10 +3180,14 @@ void FxEntities::Advance(double now) {
       }
     }
     m.FollowParents();
-    m.state->DoString("__fxRun(" + std::to_string(next) + ")", "fx stand tick");
+    // (the weapons fire before the threads run, as the engine's armies' stage comes before its threads)
+    const std::string n = std::to_string(next);
+    m.state->DoString((m.armed ? "__fxTick = " + n + "\n__fxWeaponsTick()\n" : std::string()) + "__fxRun(" + n + ")", "fx stand tick");
   }
   m.Move(now - m.now);
   m.FollowParents();
+  for (Ent& b : m.ents)
+    if (!b.dead && b.beam) m.BeamFollow(b);
   m.now = now;
   m.ents.erase(std::remove_if(m.ents.begin(), m.ents.end(), [](const Ent& e) { return e.dead; }), m.ents.end());
   // the frame: with a mesh as projectiles, without as script entities (for what hangs on them), the
@@ -2281,10 +3196,26 @@ void FxEntities::Advance(double now) {
   m.frame.entities.clear();
   m.frame.units.clear();
   m.frame.bones.clear();
+  m.frame.beams.clear();
   m.frame.blueprints = &m.blueprints;
   m.frame.tick = static_cast<uint32_t>(std::max<int64_t>(m.tick, 0));
   m.bodies.clear();
   for (const Ent& e : m.ents) {
+    if (e.beam) {  // a weapon's beam while it is on, from the muzzle as far as it reaches (what hangs on it goes there)
+      if (e.beamOn) {
+        FrameBeam b;
+        b.id = e.id;
+        const Vec3 end = e.position + Rotate(e.turn, {0, 0, e.beamLength});
+        b.start[0] = e.position.x;
+        b.start[1] = e.position.y;
+        b.start[2] = e.position.z;
+        b.end[0] = end.x;
+        b.end[1] = end.y;
+        b.end[2] = end.z;
+        m.frame.beams.push_back(b);
+      }
+      continue;
+    }
     if (e.unit || e.wreck) {
       Body b;
       b.unit = e.unitId;

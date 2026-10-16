@@ -29,6 +29,10 @@
 // effects as in a game. A build (Build): a unit made as begun by a builder, its fraction complete
 // growing as the engine's build tasks make it grow, the builder's and the unit's build callbacks
 // called as the engine calls them (OnStartBuild, OnBuildProgress, OnStopBeingBuilt, OnStopBuild).
+//
+// A unit firing (InitWeapons, Order): its weapons made and run as the engine runs them (fx_weapons.cpp),
+// the manipulators its scripts make posing its bones, its shots flying as the engine's projectiles fly and
+// its collision beams reaching to the ground; a unit of a mod (under /mods) is found as the game's own.
 #pragma once
 
 #include <functional>
@@ -86,6 +90,25 @@ class FxEntities {
     float fallAfter = 0;
     uint32_t builder = 0;
   };
+  // The weapons' world (the stand's --fx-fire), after InitUnits and before the first unit: from then on a unit
+  // is made with its weapons as the engine makes them (one weapon object per blueprint weapon that is not a
+  // dummy, of the class its script's Weapons table names, OnCreate called), and the stand stands in for the
+  // engine's side of them (fx_weapons.cpp): the manipulators its scripts make pose its bones (aim controllers
+  // turning its turrets toward their targets, rotators, sliders, slavers), its weapons fire as the engine's fire
+  // clock lets them (OnFire), their shots fly as the engine's projectiles do, and its collision beams reach from
+  // their muzzles to where they meet the ground. The units of the other modes stay as they were.
+  // (`mapWidth`, `mapHeight`: the map's size, 0 when there is no map: the scripts ask it)
+  bool InitWeapons(std::string* error, float mapWidth = 0, float mapHeight = 0);
+  // Orders for a unit's weapons, against a point on the ground (`target`, in the world): the weapons named by
+  // `labels` (their blueprints' Label; none: every weapon that can shoot at the ground and is no death weapon)
+  // get it as their target, as the engine's targeting hands them one (OnGotTarget, then they fire by
+  // themselves); the manual-fire weapons named by `manual` are fired at it as a player's order fires them (a
+  // Tactical or Nuke order: the engine's fire-at task; an OverCharge order: the attack task in overcharge mode).
+  // `stop`: the weapons lose their targets (OnLostTarget). Returns what it did, for the log.
+  std::string Order(uint32_t unit, Vec3 target, const std::vector<std::string>& labels, const std::vector<std::string>& manual,
+                    bool stop = false);
+  // A unit's blueprint file: the game's own in /units, a mod's in its folder under /mods ("": none).
+  static std::string UnitBlueprintFile(const moho::Vfs* vfs, const std::string& id);
   // A unit of that blueprint id ("uel0201") made at `at` as the game makes one (its script's class:
   // OnPreCreate, OnLayerChange, OnCreate, then OnStopBeingBuilt or OnStartBeingBuilt): on the ground,
   // on the water (a ship, a hover unit there), or in the air. 0 when it cannot be made (the reason in
