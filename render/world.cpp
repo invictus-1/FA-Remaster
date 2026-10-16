@@ -908,6 +908,27 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (!fresh.empty()) models.Prefetch(fresh);
   }
   CpuTimes::Part("units listed");
+  {  // hits on personal shields: each the nearest unit with its shield up that the hit lies at (its
+     // place on the model at rest, where the shield's lattice is painted), for the lattice to light there
+    std::vector<Vec3> hits;
+    effects.TakeHits(&hits);
+    for (const Vec3& hit : hits) {
+      const FrameUnit* best = nullptr;
+      float nearest = 1e30f;
+      for (const FrameUnit& u : frame.units) {
+        if (u.dead || !u.mesh || u.mesh >= frame.blueprints->size() || !u.Seen()) continue;
+        std::string set = (*frame.blueprints)[u.mesh];
+        for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (set.find("shield") == std::string::npos) continue;
+        const float d = Length(hit - Vec3{u.position[0], u.position[1], u.position[2]});
+        if (d < nearest) nearest = d, best = &u;
+      }
+      if (!best || nearest > 12) continue;  // (a bubble's hit, or one far from any)
+      const Quat turn{best->orientation[0], best->orientation[1], best->orientation[2], best->orientation[3]};
+      shieldHits_[best->id] = {Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_};
+    }
+    for (auto it = shieldHits_.begin(); it != shieldHits_.end();) it = clock_ - it->second.clock > 1.5 || clock_ < it->second.clock ? shieldHits_.erase(it) : std::next(it);
+  }
   ++frameStamp_;
   rememberedGone.clear();
   dyingDrawn = 0;
@@ -1072,7 +1093,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         shielded = set.find("shield") != std::string::npos;
       }
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, shielded ? 3.0f : fractionComplete, asRemembered ? nullptr : &pose);
+      // (a shield's last hit, within the second it shows: its age rides on what is built, 3 and a
+      // little more, and where it struck on the place a ghost's tint has, which a shielded unit has not)
+      float built = shielded ? 3.0f : fractionComplete;
+      const Vec3* hitAt = nullptr;
+      if (shielded) {
+        auto hit = shieldHits_.find(u.id);
+        const double age = hit == shieldHits_.end() ? 2 : clock_ - hit->second.clock;
+        if (age >= 0 && age < 1) {
+          built = 3.001f + 0.9f * static_cast<float>(age);
+          hitAt = &hit->second.at;
+        }
+      }
+      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {

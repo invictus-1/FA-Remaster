@@ -107,6 +107,8 @@ class FxStand {
     bool flying = false;
     double nextHit = 0;  // --fx-shield
     uint32_t rng = 1;
+    double lastHit = -10;  // --fx-shield, a personal shield: its last hit, and where on the unit at rest
+    Vec3 hitPoint;
     uint32_t unit = 0;   // --fx-death: the unit, and whether it is dead yet; --fx-move, --fx-build: the unit
     bool killed = false;
     uint32_t built = 0;  // --fx-build: the unit being built
@@ -123,6 +125,7 @@ class FxStand {
   std::string shieldUnit_, shieldMesh_, impactMesh_;
   std::vector<std::string> impactEffects_;
   float shieldSize_ = 0, shieldOffset_ = 0;
+  bool personalShield_ = false;  // the unit's own (Defense.Shield.PersonalShield): the unit drawn with its shield up
   std::string shotFaction_;  // whose the shot's effects are
   // --fx-move: the loop (half its straight's length, its turns' radius); --fx-build: the order
   float loopHalf_ = 8, loopRadius_ = 3;

@@ -41,6 +41,12 @@ class Effects {
   // `frame`, and lists this frame's beams. Call before Particles::Update and Ribbons::Update, whose
   // clock must be tick / 10 seconds.
   void Update(double tick, const Frame& frame);
+  // Where emitters that stay where they were made were moved out to since the last call (OffsetEmitter:
+  // a shield's hit effects are made at its centre and moved out to where it was struck).
+  void TakeHits(std::vector<Vec3>* out) {
+    out->swap(hits_);
+    hits_.clear();
+  }
   // Does one of the game's own effects hang on that entity (so that no stand-in is needed for it)?
   bool OnEntity(uint32_t entity) const { return hanging_.count(entity) != 0; }
 
@@ -117,6 +123,7 @@ class Effects {
   std::unordered_set<uint64_t> shotCells_;  // squares of ground that have a shot's light this frame
   std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_, entityAt_;  // this frame: entity id -> index in the frame's lists
   std::vector<std::string> armyFactions_;  // ArmyFaction's, for the beat armyFactionsTick_
+  std::vector<Vec3> hits_;                 // TakeHits
   uint32_t armyFactionsTick_ = 0xffffffffu;
 };
 
