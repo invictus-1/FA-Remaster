@@ -685,6 +685,9 @@ d756565 or later (`py ui/build_ui.py`):
 It exits with 139 (segmentation fault). The log stops in the Cybran AI's AIExecuteBuildStructure
 lines (its last ~900 lines; before d7e3624 the whole log was ~400 lines: the AI was quieter). I have
 no debugger here for a stack. Logs: `<my scratchpad>/v_merged.log` (crash), `v_before.log` (passes).
+LATER THE SAME HOUR: with main at 83b2250 the same game passes (b51d742 or 83b2250 fixed or hides
+it). NOT BLOCKING any more; Chris's build is on 83b2250. Whether the cause needs a look is the
+engine's call (the d756565 repro holds).
 
 ## To the renderer track
 
