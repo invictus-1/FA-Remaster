@@ -246,11 +246,12 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
                                 static_cast<uint32_t>(m.layerPitch) * 4);
     }
     m.dirtyW = m.dirtyH = 0;
-    if (m.layer && m.layerWidth == width && m.layerHeight == height) {
-      m.device->SetPipeline(m.layerPipeline);
-      m.device->SetTexture(0, m.layer);
-      m.device->Draw(3);
-    }
+  }
+  // (shown every frame, also one the host gave no layer for: what it last gave stays on the card)
+  if (m.layer && m.layerMadeWidth == width && m.layerMadeHeight == height) {
+    m.device->SetPipeline(m.layerPipeline);
+    m.device->SetTexture(0, m.layer);
+    m.device->Draw(3);
   }
   m.layerPixels = nullptr;
   m.device->EndFrame(m.checkCapture, true);
