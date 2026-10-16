@@ -691,6 +691,12 @@ engine's call (the d756565 repro holds).
 MASKED, NOT FIXED: with main at 3b62705 it crashes again (same command). BLOCKING again for
 Chris's build, which stays on 83b2250 (passes the whole ui suite). The engine has a helper on
 it (his message): the cause, and a crash handler that logs a stack.
+DONE (main f1e7f57, the engine's answer): a bug in our Lua VM, not the AI nor the host. luaV_execute
+set a frame's pc only at callentry, not again at retentry as Lua 5.0.2 does; a coroutine
+resumed after WaitSeconds kept a pointer to a dead C stack slot, read only by error messages
+and tracebacks (the stock AI's platoon.lua:1555 error after its commander dies), so it crashed
+about 1 run in 3. Checked here: victory 12 of 12 (three side by side), the whole suite green.
+The host installs his crash handler (d97c6c2). Chris's build is current again. Closed.
 
 ## To the renderer track
 
