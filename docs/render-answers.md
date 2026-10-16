@@ -4,6 +4,48 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## visuals, section 26: shield domes per faction (2026-10-15)
+
+Done (render 5c2c310), with one correction first. `ShieldSection01` is not the dome: it is the FLASH
+where a shield is hit (Defense.Shield.ImpactMesh), a patch of a sphere turned toward the hit. The dome
+is Defense.Shield.Mesh, and every faction has its own: from the game's unit blueprints,
+- `Shield01_mesh` (shader ShieldUEF; Shield01_Albedo, Shield01_Specular, Shield01_Secondary): UEF only:
+  UEB4202 UEB4301 UEL0001 UEL0301 UEL0307 UEL0401 XEA0306 XES0205;
+- AeonShield01 (UAB4202 UAB4301 UAL0303 UAL0307), CybranShield01 (URB4202/4204-4207), SeraphimShield01
+  (XSB4202 XSB4301 XSL0307), CzarShield (UAA0310).
+- The flash `ShieldSection01_mesh` (ShieldSection01_Albedo, and ShieldSection01_Normals read as its second
+  map): UEF, Aeon and Seraphim, the 15 units above but the Cybran's, which use ShieldSection01b.
+So the UEF dome can take your textures at the game's own path
+(`effects/Entities/Shield01/Shield01_Albedo.dds` ...), touching no other faction. For the shared flash,
+the remastered look now reads the shield's faction's first:
+`_effects/export/moho64/effects/Entities/ShieldSection01/uef/ShieldSection01_Albedo.dds` and
+`.../uef/ShieldSection01_Normals.dds` (later `aeon/`, `seraphim/`; the Cybran's ShieldSection01b the same
+way under `cybran/`), else your file at the folder itself, else the game's. The same faction folder
+works for a dome too, though the dome needs none. The faction is the bubble's (by its dome mesh, or for a
+personal shield the unit whose mesh it is), and the game makes each flash at its bubble's centre, which is
+how the renderer finds whose a flash is. Checked with a stand-in green texture of mine under `uef/`: the
+remastered side's flashes took it, the original side's kept the game's.
+
+Seeing it: `--fx-shield UEB4301 --fx-at x,z` shows the unit with its shield up, hit from random
+directions above the ground every `--fx-hit-every` seconds (0.8) with its own flash and its
+ImpactEffects (UEB4301's UEFShieldHit01 is a single `_test_shield_impact` emitter), as the game's shield
+script makes them: the flash for two seconds, the hit's emitters moved out to the hit. `--fx-compare`
+puts remastered left, original right, both hit in the same places (`--fx-spacing 70` for this size).
+`--fx-seed` changes the hits. Made again every `--fx-repeat` seconds (20). Example:
+`moho64view --init offline/bin/init_lab.lua --remasters visuals/work --map /maps/SCMP_009/SCMP_009.scmap
+--time-of-day 19 --fx-shield UEB4301 --fx-at 672,346 --fx-compare --fx-spacing 70`.
+Fixed on the way, also for games: an emitter made at an entity and then offset (the hit's emitters)
+stayed at the entity's centre, inside the dome; it is now moved out when the offset comes.
+
+The numbers the renderer uses today, and could read per faction (one small table beside your textures,
+say `<folder>/<faction>/shield_look.bp`; tell me which you want and I'll read them):
+- Bubble: tint (UEF 0.25 0.5 1.0; Aeon 0.35 1.0 0.75; Cybran 1.0 0.2 0.12; Seraphim 0.95 0.85 0.55); rim
+  sharpness 2.5 (a power of how edge-on it is seen) and rim brightness 2.0; the pattern (the albedo's red
+  x green at sizes 3 and 7, drifting 0.01, 0.03 and -0.02, -0.013 a second) at brightness 1.2 over a base
+  of 0.8; see-through 0.05 + 0.45 x rim + 0.18 x pattern; at night less of all of it.
+- Flash: colour 0, 0, 0.5 plus the second map's red; brightness 4 in the modern look; the ring (albedo
+  green) sliding outward at the original's speeds; it fades from 2 seconds at 0.2 a second.
+
 ## visuals, section 25: a remastered look for the UEF's ball of fire (2026-10-15)
 
 Done, waiting for your two files. In the remastered look, when your
