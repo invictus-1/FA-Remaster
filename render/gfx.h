@@ -62,7 +62,7 @@ enum class Format : uint8_t {
   BC3,  // DXT5
   BC3_sRGB,
   BC4,
-  BC5,
+  BC5,  // read as (red, green, 0, red): two-channel normal maps read as the game's DXT5 ones do (their .ga)
   BC7,  // (only in files with the newer header; the game's own files have none)
 };
 bool IsBlockCompressed(Format f);

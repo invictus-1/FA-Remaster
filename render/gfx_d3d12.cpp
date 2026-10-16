@@ -958,6 +958,10 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   D3D12_SHADER_RESOURCE_VIEW_DESC view = {};
   view.Format = format;
   view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  if (desc.format == Format::BC5)  // (red also in alpha: a normal map's x where the game's DXT5 ones keep it)
+    view.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+        D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
+        D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0);
   if (desc.cube && desc.layers == 6) {
     view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
     view.TextureCube.MipLevels = static_cast<UINT>(desc.mips);
