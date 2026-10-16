@@ -30,7 +30,41 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
-## 26. Units told their terrain type: OnTerrainTypeChange (2026-10-16, not blocking; touches the simulation)
+## 27. Tread scrolling: AddThreadScroller / RemoveScroller (2026-10-16, Chris: "Yeah lets add that"; not blocking)
+
+**Who asks:** Chris, through the renderer. The original scrolls the texture on a tank's treads as it moves;
+ours keeps them still.
+
+**How the original draws it (READ, the game's effects/mesh.fx, ComputeScrolledTexcoord):**
+- **Inputs:** per instance a flag (`anim.w > 0.5`: scrolling on) and two amounts, `material.z` and `material.w`.
+- **Which vertices:** those whose texcoord0.y is above 0.95 add `material.z` to texcoord0.x and .z (both texture
+  sets' u); those between 0.90 and 0.95 add `material.w`. These are the two treads' strips at the bottom of the
+  texture.
+- **The scripts' side:** FAF's TreadComponent (defaultcomponents.lua) calls `self:AddThreadScroller(1.0,
+  treads.ScrollMultiplier or 0.2)` when the blueprint's Treads.ScrollTreads is set, and `self:RemoveScroller()`
+  when it stops.
+
+**What (the smallest form):** the two amounts per unit as the original computes them.
+- **What drives them:** read from the exe what AddThreadScroller(sideDist, scrollMult) sets up and what makes the
+  amounts change. Likely each tread's distance travelled (forward motion, plus or minus the turn times
+  sideDist, times scrollMult), but INFERRED.
+- **Order and sign:** which tread is z and which w, and the signs.
+- **When:** whether the original works them out per tick or per drawn frame.
+- **How handed over:** in the plain unit view, either the two amounts unwrapped (accumulated, so the renderer can
+  blend them between beats) plus a "scrolling" flag, or, if the original works them out per frame from the drawn
+  motion, the scroller's two parameters and the formula, and the renderer computes them.
+
+**The renderer's side:** the vertex shader takes them as the original's does. It's ready to wire as soon as the
+numbers are there.
+
+**Blocking:** nothing.
+
+## 26. Units told their terrain type: OnTerrainTypeChange (2026-10-16, DONE the same day: main d243ce8, read from the exe, all 13 replays unchanged; tread marks are laid in games now)
+
+(The engine: fired from the unit's creation after OnLayerChange, on Warp, and in the motion tick when the terrain
+code under the footprint's origin cell changes; not for flyers, attached, ballistic, immobile or stunned units;
+the first call with old = nil. Left as no-ops: Entity:AddThreadScroller / RemoveScroller, the treads' texture
+scroll; a request for later if the renderer is to draw it.)
 
 **Who asks:** the renderer, after its helper looked into the Fatboy's tread marks.
 
