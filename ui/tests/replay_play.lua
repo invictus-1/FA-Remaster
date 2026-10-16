@@ -32,6 +32,7 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
 end
 ForkThread(function()
     check("the game is a replay", SessionIsReplay(), true)
+    check("its screen was made as a replay's (no orders panel)", import("/lua/ui/game/gamemain.lua").GetReplayState(), true)
     check("the player watches: no army", GetFocusArmy(), -1)
     local function count(...) return arg.n end
     check("without an army GetArmyAvatars gives nothing (as the original)", count(GetArmyAvatars()), 0)

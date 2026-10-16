@@ -867,6 +867,23 @@ Chris's rule for broken scripts is the one with `Sim::fixes`, docs/deviations.md
    would bring its licence along into the engine's MIT.)
 Not blocking my next step (LaunchSinglePlayerSession), but X1CA_001 cannot get past its intro without 1.
 
+### 33. The setup's "beat 0" sync apart from beat 1's (needed by the campaign's screen)
+From the interface chat, 2026-10-16. Read in the exe while placing the game's screen: DoInitializing
+(0x88c3f0, session state 3) runs CWldSession::DoBeat once at 0x88c507 (the setup's beat 0: its Sync goes
+to the user scripts' OnSync, 0x89509f), THEN the UI provider's StopLoadingDialog (0x88c577) and
+CreateGameInterface(isReplay) (0x88c5cd), then state 4 calls OnStart and state 6 runs the beats. So what
+the sim's setup writes into Sync (OnPopulate / OnStart) reaches the scripts BEFORE the game's screen
+exists, and beat 1's sync (an operation's opening cinematic: Sync.NISMode 'on') after it. Ours folds
+beat 0 into beat 1 (sim.h), so the interface host now delivers the whole of it after CreateGameInterface
+(the cinematic needs the screen). If Sim::Start could leave the setup's Sync in TakeSync (beat 1's then
+holding only its own), I would hand it over before the screen as the original.
+WHAT BREAKS with the fold (found after asking): Sync.CampaignMode = true is written in the setup
+(ScenarioUtilities.lua:724-726, InitializeScenarioArmies from OnPopulate), and FAF's CreateUI reads it
+as the screen is made: gamemain.lua:306 makes the objectives panel only in campaign mode, :116 the score
+panel only outside it, :544 hides the game's UI for the start animation only outside it. Arriving after
+the screen, a campaign game gets no objectives panel. (Before the screen, as one folded sync, the
+opening cinematic fails instead: neither order of the one sync is right.)
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

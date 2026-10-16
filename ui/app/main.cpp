@@ -7,6 +7,7 @@
 //   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--stage userinit|setup|frontend]
 //            [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]
 //            [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -328,6 +329,7 @@ int main(int argc, char** argv) {
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
   session.replayMaps = moreMaps;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
+  cfg.launchSinglePlayer = [&session](lua_State* L, int info, std::string* why) { return session.LaunchSinglePlayer(L, info, why); };
   // The player's own files (replays, saved games) live beside the preferences file (special_files.cpp);
   // every game is written there as LastGame.SCFAReplay, and the Replay dialog plays them back.
   if (!cfg.prefsFile.empty()) {
@@ -417,7 +419,37 @@ int main(int argc, char** argv) {
     Logf(LogLevel::Warning, "moho64ui: the anti-aliasing option could not be read at the start");
   beginBackdrop();
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
-  if (ok && o.stage == "frontend") ok = front->StartFrontEnd();
+  // The game's own command line with /map <name> or /scenario <file> (after "--"): that map is
+  // started at once, without the front end, as the original's start-up does (FA exe 0x8ce480:
+  // /lua/SinglePlayerLaunch.lua's StartCommandLineSession(map, false), 0x8ce2a0). A campaign's
+  // operation by name: `-- /map X1CA_001 /diff 2 /faction 1`. When it cannot start, the original
+  // shows "Unable to launch %s:\n%s" and ends; here it is logged and the front end comes up.
+  std::string commandLineMap;
+  for (size_t i = 0; i + 1 < o.gameArgs.size(); ++i) {
+    std::string a = o.gameArgs[i];
+    for (char& c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (a == "/map" || a == "/scenario") commandLineMap = o.gameArgs[i + 1];
+  }
+  if (ok && o.stage == "frontend" && !commandLineMap.empty()) {
+    lua_State* L = front->L();
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/SinglePlayerLaunch.lua");
+    bool started = lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1);
+    if (started) {
+      lua_pushstring(L, "StartCommandLineSession");
+      lua_gettable(L, -2);
+      lua_pushstring(L, commandLineMap.c_str());
+      lua_pushboolean(L, 0);
+      started = lua_pcall(L, 2, 0, 0) == 0;
+    }
+    if (!started) {
+      Logf(LogLevel::Error, "moho64ui: Unable to launch %s: %s", commandLineMap.c_str(), lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+      commandLineMap.clear();
+    }
+    lua_settop(L, top);
+  }
+  if (ok && o.stage == "frontend" && commandLineMap.empty()) ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
     if (auto code = hostfs::ReadFile(o.luaFile)) front->RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
@@ -460,15 +492,26 @@ int main(int argc, char** argv) {
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());
     up = up && game->Boot() && game->StartMainScript() && game->StartGame();
+    // The setup's own sync first (the original's beat 0: before the game's screen; the campaign's
+    // Sync.CampaignMode is in it, which the screen's making reads), then beat 1.
+    if (up) {
+      const std::vector<std::string> setup = session.TakeSetupSync();
+      Logf(LogLevel::Debug, "moho64ui: the setup's sync: %zu table(s), before the game's screen", setup.size());
+      for (const std::string& sync : setup) game->DeliverSync(sync);
+    }
     session.RunFirstBeat();
-    // What the simulation told its interface before there was one (the first beats).
-    if (up)
-      for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
     Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
     shown = game.get();
     if (up) {
-      // The simulation is already there when the interface's state comes up, so loading ends at once.
+      // The simulation is already there when the interface's state comes up, so loading ends at
+      // once: the game's screen is made (CreateGameInterface) BEFORE beat 1's sync reaches its
+      // scripts, as in the original (DoInitializing 0x88c3f0 runs the setup's "beat 0" at
+      // 0x88c507, then StopLoadingDialog and CreateGameInterface; beat 1 and on come after). An
+      // operation's opening cinematic comes in beat 1's sync (Sync.NISMode 'on': gamemain.NISMode
+      // asks the main world view, which CreateGameInterface makes). (Our engine folds the setup's
+      // own sync into beat 1's, so what the setup wrote also comes after the screen here.)
       game->GameLoaded();
+      for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
       if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
         if (auto code = hostfs::ReadFile(gameLuaFile)) game->RunString(*code, "@" + gameLuaFile);
         else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());
@@ -548,6 +591,7 @@ int main(int argc, char** argv) {
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();
                            listen();
+                           sounds.Update(static_cast<float>(seconds));
                            if (!game) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
                            startGameInterface();
@@ -569,6 +613,7 @@ int main(int argc, char** argv) {
       shown->Frame(1.0 / 60.0);
       session.Advance(1.0 / 60.0);
       listen();
+      sounds.Update(1.0f / 60.0f);
       leaveOrRestart();
       startGameInterface();
     }
@@ -582,7 +627,6 @@ int main(int argc, char** argv) {
       shown->ui().Render(shown->L(), target, 0);
       backdrop->WaitUntilReady(30.0);
       target.Clear(0xff000000u);
-                           sounds.Update(static_cast<float>(seconds));
     }
     shown->ui().Render(shown->L(), target, 0);
     if (!game) session.DrawStatus(target);
@@ -604,6 +648,5 @@ int main(int argc, char** argv) {
   }
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
-      sounds.Update(1.0f / 60.0f);
   return ok ? 0 : 1;
 }

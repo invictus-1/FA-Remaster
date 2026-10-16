@@ -45,6 +45,10 @@ class GameSession {
   // state: the scenario file is run there). False with the reason the original would give the
   // script's LaunchFailed ("NoConfig", "StartSpots"), or a description.
   bool Launch(lua_State* L, int config, std::string* why);
+  // Start a single-player session (LaunchSinglePlayerSession: an operation of the campaign) from
+  // the table FAF's SinglePlayerLaunch.lua makes, at stack index `info` (the engine's
+  // SessionFromSinglePlayerInfo). False with the reason.
+  bool LaunchSinglePlayer(lua_State* L, int info, std::string* why);
   // End the running session: the simulation and its picture go. (The state of the game's
   // interface must be gone before: it looks into both.)
   void End();
@@ -148,6 +152,11 @@ class GameSession {
   // are kept, oldest first, for TakePendingSync: the first beats tell the interface things once only.
   std::function<void(const std::string& sync)> onSync;
   std::vector<std::string> TakePendingSync() { return std::move(pendingSync_); }
+  // The sync tables the simulation's start itself made (its setup: OnPopulate, OnStart; the
+  // original's "beat 0", which DoInitializing 0x88c3f0 hands the scripts BEFORE the game's screen
+  // is made, while beat 1's and on come after it). Empty while the engine folds them into beat 1's
+  // (ui/REQUESTS.md engine 33).
+  std::vector<std::string> TakeSetupSync() { return std::move(setupSync_); }
   // Run the simulation's first beat now if it has not run yet: the interface is made for a game
   // that is under way, and the first beat's sync table tells it the playable area and more.
   void RunFirstBeat();
@@ -244,6 +253,7 @@ class GameSession {
   std::unique_ptr<Sim> sim_;
   std::vector<std::string> modUids_;
   std::vector<std::string> pendingSync_;
+  std::vector<std::string> setupSync_;
   struct Picture;
   std::unique_ptr<Picture> picture_;
   // Without a game, on the window: the renderer's picture without a world, which shows the

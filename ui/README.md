@@ -534,9 +534,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original noted it (the next operation unlocks) and, after a WON one only (the original also after a
   lost one, though that operation stayed locked: our judgement), the next briefing opens back in
   the menu. SetFrontEndData / GetFrontEndData now keep their values across the user states (a copy of
-  plain values; they were lost between the game and the menu). Waiting: the engine's side of
-  starting an operation (engine request 31: a session from the single-player table, the map
-  script's OnPopulate / OnStart, the sim functions the operations call). Built with the renderer
+  plain values; they were lost between the game and the menu). An operation starts as the
+  original starts it: LaunchSinglePlayerSession (FA exe 0x88d3c0) hands FAF's single-player table to
+  the engine's SessionFromSinglePlayerInfo (engine request 31) with Options.ScenarioFile added; the
+  player's army first, the others the computer's, one command source; cheats only with the
+  preference debug.enable_debug_facilities; no LastGame replay (createReplay is false, as the
+  original); a second launch while one runs is the original's script error. The game's own command
+  line starts one at once, without the front end, as the original's start-up does
+  (`moho64ui ... -- /map X1CA_001 /diff 2 /faction 1`: SinglePlayerLaunch.StartCommandLineSession).
+  The game's screen is now made as the original makes it (DoInitializing, FA exe 0x88c3f0: the
+  loading cover, then CreateGameInterface, told whether the session is a replay), before beat 1's
+  sync reaches its scripts (an operation's opening cinematic comes in it). Tests `tests/campaign.lua`
+  (the launch) and `tests/briefing.lua` (the operation briefing's own Launch button). Waiting: two of FAF's scripts
+  the stock operations trip over (ScenarioInfo.HumanPlayers stops the opening cinematic,
+  ScenarioUtils' area triggers), fixed in the engine behind its script fixes (engine request 32).
+  Built with the renderer
   (request 27): the playable part drawn (outside it black in the original's look, dimmed in the modern
   one; the minimap shows the part), the cinematics' switches UI_NisRenderIcons, ren_SelectBoxes,
   ren_Oblivion.

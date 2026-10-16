@@ -50,6 +50,9 @@ class UserState {
     // Starts a session from the game configuration table at stack index `config` when the lobby
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
+    // Starts a single-player session (LaunchSinglePlayerSession: the campaign's operations) from
+    // FAF's single-player table at stack index `info`; false with the reason. Unset: none starts.
+    std::function<bool(lua_State* L, int info, std::string* why)> launchSinglePlayer;
     // The player's own files (replays, saved games): their folder (special_files.cpp), and the
     // host's replay hooks: start a session from a replay file (LaunchReplaySession; unset: none
     // can be started from this state) and the replay file of the game running or last played.
