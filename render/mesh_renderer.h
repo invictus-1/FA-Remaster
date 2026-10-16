@@ -35,7 +35,10 @@ class MeshRenderer {
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
   // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
   // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
-  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr);
+  // `treads`: its two treads' scroll (the amounts the original adds to the u of the texture's strips at
+  // v above 0.95 and between 0.90 and 0.95); null: none. Not with `tint`.
+  void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr,
+           const float* treads = nullptr);
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
@@ -93,7 +96,8 @@ class MeshRenderer {
   struct Instance {
     float row0[4], row1[4], row2[4];  // the top three rows of the world matrix
     float color[4];                   // team colour, w: fraction complete
-    float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none)
+    float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none),
+                                      // or y -1 and z, w its treads' scroll
   };
   // What a pass tests first, for every model of the list, kept apart from the rest so that going
   // through tens of thousands of them reads little memory.
@@ -116,7 +120,7 @@ class MeshRenderer {
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
     uint8_t flags = 0;  // Cull's
   };
-  Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint) const;
+  Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint, const float* treads = nullptr) const;
   void Push(const Entry& e) {
     entries_.push_back(e);
     culls_.push_back({e.centre, e.radius, e.sizeRadius, e.flags});

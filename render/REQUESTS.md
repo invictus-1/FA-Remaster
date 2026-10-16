@@ -30,7 +30,7 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die).
 
-## 27. Tread scrolling: AddThreadScroller / RemoveScroller (2026-10-16, Chris: "Yeah lets add that"; not blocking)
+## 27. Tread scrolling: AddThreadScroller / RemoveScroller (2026-10-16, Chris: "Yeah lets add that"; DONE the same day: engine main f31bbd1 (UnitView::scrollPrev / scroll, DisplayLod::scrolling, read from the exe), drawn by render 2026-10-16)
 
 **Who asks:** Chris, through the renderer. The original scrolls the texture on a tank's treads as it moves;
 ours keeps them still.

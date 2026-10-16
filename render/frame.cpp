@@ -13,6 +13,8 @@ void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t co
     FrameUnit u = a[i];
     u.nextFirstBone = u.firstBone;
     u.nextBoneCount = u.boneCount;
+    u.treads[0] = u.scroll[0];
+    u.treads[1] = u.scroll[1];
     if (b && t > 0) {
       while (j < countB && b[j].id < u.id) ++j;
       if (j < countB && b[j].id == u.id && b[j].blueprint == u.blueprint) {
@@ -28,6 +30,7 @@ void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t co
         u.health += (v.health - u.health) * t;
         u.nextFirstBone = v.firstBone + nextBoneOffset;
         u.nextBoneCount = v.boneCount;
+        for (int k = 0; k < 2; ++k) u.treads[k] = v.scrollPrev[k] + (v.scroll[k] - v.scrollPrev[k]) * t;
       }
     }
     out->push_back(u);
