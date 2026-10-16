@@ -1391,6 +1391,15 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
 }
 
 void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
+  // the walk to the pickup place is a move child (NewMoveTask in state 1), torn down first: CUnitMoveTask's dtor
+  // 0x618700 clears Moving (0x6187bd). Seen: Skirmish 1616, army 2's engineer 0x200022 walking to its transport when
+  // M28 cleared the transport's load at 1615 (the load's dtor aborts the walker's navigator; its move ends, then its
+  // call fails, in the next command stage): the original's engineer is out of Moving at 1616, ours kept it until
+  // its next order's task four beats later.
+  if (d.moving) {
+    d.moving = false;
+    SetState(u, "Moving", false);
+  }
   SetState(u, "TransportLoading", false);
   SetState(u, "WaitingForTransport", false);
   if (d.success) return;
@@ -2857,6 +2866,11 @@ bool TransportOrderOnTheSpot(Sim& sim, Unit* u, const UnitCommand& c) {
 
 bool TeleportBeaconReady(Sim& sim, const Unit* teleporter) {
   return teleporter && teleporter->transport && IsTeleportBeaconReady(sim, *teleporter->transport);
+}
+
+bool TransportLoadMoving(const Unit* u) {
+  const BuildTask* t = u->task;
+  return t && t->tdata && t->tdata->kind == 1 && t->tdata->moving;
 }
 
 void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {

@@ -1100,22 +1100,25 @@ int l_brain_GetArmyStartPos(lua_State* L) {
   lua_pushnumber(L, a->startZ);
   return 2;
 }
-// GetListOfUnits(category, needToBeIdle[, requireBuilt]) (0x5878f0): 3 or 4 arguments; requireBuilt is TRUE when
-// left out (0x5879d0). Each unit of the army in the category, except IsDead (vt+0x28) and DestroyQueued (vt+0x2c);
-// requireBuilt drops IsBeingBuilt (vt+0x34) ones; needToBeIdle keeps only Unit::IsIdleState 0x6a7d60 ones (no head
-// command in the queue, unit+0x4b4).
+// GetListOfUnits(category, needToBeIdle[, requireBuilt]) (0x5878f0): 3 or 4 arguments (a boolean or nil each), but
+// neither flag changes the answer. CArmyImpl::GetUnits 0x700eb0 (army vt+0x9c) fills an EntitySet (sorted by entity
+// id, 0x582eb0) from the army's per-blueprint sets: a unit is added by the Unit ctor (AddUnitToCategorySet 0x700e20,
+// so from the start of its construction) and taken off by ~Unit 0x6a6bf0 (0x6a6c3a, ConsumeUnitFromCategorySet
+// 0x700e70). The binding then tests each unit (IsDead vt+0x28, DestroyQueued vt+0x2c, IsBeingBuilt vt+0x34 with
+// requireBuilt, IsIdleState 0x6a7d60 with needToBeIdle) and adds the ones that pass with EntitySet::Add 0x57ddd0 into
+// THE SAME set (0x587a7b: the set at esp+0x60), where they already are; the table is built from that set's whole
+// size (0x587aaf) and contents (0x587aca). So every unit of the army in the category comes back, dead, destroy-queued
+// and unfinished ones included, until the unit is deleted. Seen: Skirmish, M28's IdleFactoryMonitor (one factory
+// per tick: its cycle is the list's length + 1) lists factories from the tick their construction starts in the
+// oracle's MONDBG run (frac 0 at 49-53); ours started at their completion (251-255), and its cycle ran a tick
+// apart from the original's in every army, which decided which factory built first at 1548.
 int l_brain_GetListOfUnits(lua_State* L) {
   AiBrain* b = B(L);
   const uint64_t* cat = ToCategory(L, 2);
-  const bool idle = lua_toboolean(L, 3) != 0;
-  const bool built = lua_gettop(L) < 4 || lua_toboolean(L, 4) != 0;
   lua_newtable(L);
   int n = 0;
   if (!b->army) return 1;
   for (Unit* u : b->army->units) {
-    if (u->dead || u->destroyQueued) continue;
-    if (built && u->beingBuilt) continue;
-    if (idle && !u->commands.empty()) continue;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       continue;
     PushObject(L, u);

@@ -1208,12 +1208,27 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // (its first load done at 1394, its landing move aborted at 1383) before its next IssueTransportLoad: the original's
 // air target stays where that abort left it (907.168, 30.716, 70.798; target layer Land, elevation 4), ours was
 // stopped again one second ahead and took the Air layer.
+// Nor is an aircraft whose head command has no task yet: nothing is torn down then either. Seen: Skirmish 1615, the
+// air unit 0x20 let go by its factory in this beat's Lua (FinishBuildThread DetachFrom: the target one unit behind the
+// factory's back, layer 0, CUnitMotion::NotifyDetached 0x6b9570) still has its inherited rally Move undispatched (an
+// attached unit's dispatcher waits, 0x598f91); M28 clears and re-orders it the same beat (m28air.lua 11759). The
+// original's target stays (682.5, 324.5), layer 0; ours was stopped where it was and took the Air layer.
+// The tasks go top down (CTask::TaskInterruptSubtasks 0x408d70): a load's landing move (its child CUnitMoveTask)
+// is torn down, and aborts its navigator (dtor 0x618700 -> AbortMove 0x5a4f00 -> CUnitMotion::Stop 0x6b8460), BEFORE
+// the load's own dtor 0x624cc0 clears TransportLoading (transport_tasks.md 3.4): so the Stop still finds the
+// transport loading and keeps its target layer (0x6b846f). Seen: Skirmish 1615, M28 clears army 2's UEF transport
+// 0x20001e hovering over its pickup point (m28orders.lua 1166) before its IssueTransportUnload: the original's
+// target is the point a second ahead on the Land layer, at elevation 4 (TransportHoverHeight); ours stopped it
+// after the load had ended, on the Air layer at elevation 8.
 void IssueClearCommandsTo(Sim& sim, Unit* u) {
   const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
   const bool stopped = HeadTaskStopsMotion(u);
   const bool standing = !u->isPod && u->commands.empty() && u->motion.air && u->motion.air->stopped && !u->motion.hasGoal;
+  const bool undispatched = !u->isPod && u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
+  const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
+  if (loadMove) MotionStop(u);  // (the child move first)
   ForgetUnitCommands(u);
-  if (!stopped && !standing) MotionStop(u);
+  if (!stopped && !standing && !undispatched && !loadMove) MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
   AttackerStop(sim, u);
