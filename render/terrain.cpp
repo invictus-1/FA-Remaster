@@ -347,6 +347,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     fprintf(stderr, "render: the map asks for the terrain look \"%s\", which is not written yet; using TTerrain\n", map->shader.c_str());
 
   // the tree of nodes: per level, each node's lowest and highest ground (for culling and for distances)
+  // (a node of the finest level holds the points [n * kLeafCells, (n + 1) * kLeafCells] each way;
+  // each coarser node the four below it)
   levels_.clear();
   for (int k = 0; k < kMaxLevels; ++k) {
     Level level;
@@ -447,6 +449,56 @@ bool Terrain::Select(const View& view, int level, int ix, int iz) {
     }
   }
   return true;
+}
+
+void Terrain::HeightsChanged(int x0, int z0, int x1, int z1) {
+  if (!map_ || levels_.empty() || !heightTexture_) return;
+  const int w = map_->width, h = map_->height;
+  x0 = std::max(x0, 0), z0 = std::max(z0, 0), x1 = std::min(x1, w), z1 = std::min(z1, h);
+  if (x0 > x1 || z0 > z1) return;
+  // the height texture's rectangle, from the map's heights as they are now
+  device_->UpdateTexture(heightTexture_, x0, z0, x1 - x0 + 1, z1 - z0 + 1,
+                         map_->heights.data() + static_cast<size_t>(z0) * static_cast<size_t>(w + 1) + static_cast<size_t>(x0),
+                         static_cast<uint32_t>((w + 1) * sizeof(uint16_t)));
+  // the finest nodes those points are in (a point on a node's edge is in the nodes on both sides), anew
+  Level& leaf = levels_[0];
+  const int nx0 = std::max(0, (x0 - 1) / kLeafCells), nx1 = std::min(leaf.nx - 1, x1 / kLeafCells);
+  const int nz0 = std::max(0, (z0 - 1) / kLeafCells), nz1 = std::min(leaf.nz - 1, z1 / kLeafCells);
+  for (int nz = nz0; nz <= nz1; ++nz)
+    for (int nx = nx0; nx <= nx1; ++nx) {
+      uint16_t lo = 65535, hi = 0;
+      const int px1 = std::min(w, (nx + 1) * kLeafCells), pz1 = std::min(h, (nz + 1) * kLeafCells);
+      for (int z = nz * kLeafCells; z <= pz1; ++z) {
+        const uint16_t* p = map_->heights.data() + static_cast<size_t>(z) * static_cast<size_t>(w + 1);
+        for (int x = nx * kLeafCells; x <= px1; ++x) {
+          lo = std::min(lo, p[x]);
+          hi = std::max(hi, p[x]);
+        }
+      }
+      const size_t at = static_cast<size_t>(nz) * static_cast<size_t>(leaf.nx) + static_cast<size_t>(nx);
+      leaf.lo[at] = static_cast<float>(lo) * map_->heightScale;
+      leaf.hi[at] = static_cast<float>(hi) * map_->heightScale;
+    }
+  // and the coarser nodes above them, each from the four below it
+  int ax0 = nx0, ax1 = nx1, az0 = nz0, az1 = nz1;
+  for (size_t k = 1; k < levels_.size(); ++k) {
+    const Level& below = levels_[k - 1];
+    Level& level = levels_[k];
+    ax0 /= 2, ax1 /= 2, az0 /= 2, az1 /= 2;
+    for (int nz = az0; nz <= std::min(az1, level.nz - 1); ++nz)
+      for (int nx = ax0; nx <= std::min(ax1, level.nx - 1); ++nx) {
+        float lo = std::numeric_limits<float>::max(), hi = std::numeric_limits<float>::lowest();
+        for (int cz = nz * 2; cz <= std::min(nz * 2 + 1, below.nz - 1); ++cz)
+          for (int cx = nx * 2; cx <= std::min(nx * 2 + 1, below.nx - 1); ++cx) {
+            const size_t from = static_cast<size_t>(cz) * static_cast<size_t>(below.nx) + static_cast<size_t>(cx);
+            lo = std::min(lo, below.lo[from]);
+            hi = std::max(hi, below.hi[from]);
+          }
+        const size_t to = static_cast<size_t>(nz) * static_cast<size_t>(level.nx) + static_cast<size_t>(nx);
+        level.lo[to] = lo;
+        level.hi[to] = hi;
+      }
+  }
 }
 
 void Terrain::Draw(const View& view, bool shadowPass) {

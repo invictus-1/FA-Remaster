@@ -310,6 +310,11 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
       m.frames.TakePropEvents(&changed);
       if (!changed.empty()) m.world->AddPropEvents(changed);
     }
+    {  // how the simulation changed the ground (laid flat under a structure)
+      std::vector<FrameGroundChange> ground;
+      m.frames.TakeGroundChanges(&ground);
+      if (!ground.empty()) m.world->ChangeGround(ground);
+    }
     m.world->effects.Queue(std::move(m.events));
     m.world->effects.Update(shown, m.frame);
     m.world->AddFrame(m.frame, m.armyColors);

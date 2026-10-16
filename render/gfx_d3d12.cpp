@@ -181,6 +181,7 @@ struct TextureRec {
   int width = 0, height = 0, layers = 1, samples = 1;
   uint32_t view = 0;      // its first render-target or depth view (index into that heap)
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+  int pixelBytes = 4;     // textures: bytes a pixel (UpdateTexture; 0 for the block-compressed)
 };
 
 struct PipelineRec {
@@ -876,6 +877,7 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
 
   TextureRec rec;
   rec.used = true;
+  rec.pixelBytes = IsBlockCompressed(desc.format) ? 0 : BytesPerPixelOrBlock(desc.format);
   D3D12_RESOURCE_DESC rd = {};
   rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   rd.Width = static_cast<UINT64>(desc.width);
@@ -1513,12 +1515,12 @@ void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t 
 
 void D3D12Device::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
   TextureRec* rec = Find(texture);
-  if (!rec || rec->target || !inFrame_ || width <= 0 || height <= 0 || !data) return;
+  if (!rec || rec->target || !inFrame_ || width <= 0 || height <= 0 || !data || rec->pixelBytes <= 0) return;
   const D3D12_RESOURCE_DESC rd = rec->resource->GetDesc();
   if (rd.MipLevels != 1 || rd.DepthOrArraySize != 1 || x < 0 || y < 0 || static_cast<UINT64>(x + width) > rd.Width ||
       static_cast<UINT>(y + height) > rd.Height)
     return;
-  const UINT unit = 4;  // (the formats it takes: four bytes a pixel)
+  const UINT unit = static_cast<UINT>(rec->pixelBytes);
   const UINT row = static_cast<UINT>(width) * unit;
   const UINT rowPitch = (row + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) / D3D12_TEXTURE_DATA_PITCH_ALIGNMENT * D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
   Span s = Allocate(static_cast<size_t>(rowPitch) * static_cast<size_t>(height), D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
