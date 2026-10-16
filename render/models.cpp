@@ -178,6 +178,7 @@ void ModelCache::SetLook(const BlueprintLook& look) {
   for (const BlueprintLook::Level& l : look.levels) {
     LodSource s;
     s.cutoff = l.cutoff > 0 ? l.cutoff : 1e9f;
+    s.scrolling = l.scrolling;
     s.shader = l.shader.empty() ? "Unit" : l.shader;
     s.mesh = l.mesh;
     s.albedo = l.albedo;
@@ -348,6 +349,7 @@ bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* so
     };
     LodSource s;
     s.cutoff = static_cast<float>(entry["LODCutoff"].NumberOr(1e9));
+    s.scrolling = entry["Scrolling"].kind == BpValue::Bool && entry["Scrolling"].boolean;
     s.shader = entry["ShaderName"].StringOr("Unit");
     s.mesh = file("MeshName", "_lod" + std::to_string(i) + ".scm", nullptr);
     s.albedo = file("AlbedoName", "_albedo.dds", &s.albedoNamed);
@@ -493,6 +495,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     ModelLod lod;
     lod.serial = NextLodSerial();
     lod.cutoff = s.cutoff;
+    lod.scrolling = s.scrolling && !previewed;
+    if (lod.scrolling) m->scrolls = true;
     lod.shaderName = s.shader;
     // (the first game's names, which many blueprints still carry, mean today's techniques: the
     // original program's own table, docs/engine-answers.md, render 17; no name at all is "Unit")

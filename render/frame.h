@@ -40,6 +40,11 @@ struct FrameUnit {
   bool hasShield = false;
   float shieldRatio = 0;
   bool paused = false;
+  // Its treads' scroll (the engine's UnitView::scrollPrev / scroll: the two amounts before and after this
+  // beat's step, unwrapped; [0] the tread on its +x side, [1] the -x side), and at the moment drawn
+  // (BlendUnits: the newer beat's step from scrollPrev to scroll, as the original's renderer blends it).
+  float scrollPrev[2] = {0, 0}, scroll[2] = {0, 0};
+  float treads[2] = {0, 0};
   // What the army the picture is for knows of it (the engine's ReconBits: 1 radar, 2 sonar, 4 omni,
   // 8 seen now, 0x10 seen at some time, ...). 0xff: the picture is for no one army, everything shows.
   uint8_t recon = 0xff;
@@ -166,6 +171,7 @@ struct BlueprintLook {
   struct Level {
     std::string mesh, albedo, normals, specular, secondary, shader;  // virtual paths; empty: not set
     float cutoff = 0;                                                // LODCutoff (0: not set)
+    bool scrolling = false;                                          // Scrolling: its texture's treads scroll
   };
   std::string id;   // as a frame's blueprint names say it (a unit's id, a projectile's or prop's .bp path)
   int kind = 0;     // 0 unit, 1 projectile, 2 prop

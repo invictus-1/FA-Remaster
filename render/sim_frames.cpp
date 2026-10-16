@@ -115,6 +115,7 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
       level.secondary = std::move(l.secondary);
       level.shader = std::move(l.shader);
       level.cutoff = l.cutoff;
+      level.scrolling = l.scrolling;
       look.levels.push_back(std::move(level));
     }
     look.icon = std::move(d.icon);
@@ -285,6 +286,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.paused = v.paused;
     u.hasShield = v.hasShield;
     u.shieldRatio = v.shieldRatio;
+    std::memcpy(u.scrollPrev, v.scrollPrev, sizeof u.scrollPrev);
+    std::memcpy(u.scroll, v.scroll, sizeof u.scroll);
     auto posed = e.poseOf.find(v.id);
     auto hides = e.hiddenOf.find(v.id);
     if (posed != e.poseOf.end() || hides != e.hiddenOf.end()) {

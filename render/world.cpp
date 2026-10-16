@@ -1105,7 +1105,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           hitAt = &hit->second.at;
         }
       }
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt);
+      // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
+      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
+                 model->scrolls && !hitAt ? u.treads : nullptr);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {

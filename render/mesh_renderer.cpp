@@ -92,6 +92,7 @@ cbuffer MeshKind : register(b3) {
                 // often its texture repeats, how fast it slides, from what age it fades)
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
                 // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
+  float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -177,8 +178,9 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.tint = n.bones.yzw;
   [branch] if (n.bones.y < -0.5) {
     // a tank's treads, scrolled as it drives, as the original's ComputeScrolledTexcoord does it: the two
-    // strips at the foot of its texture, each by its tread's amount (bones.z, bones.w), across both sets
-    float scroll = i.uv.y > 0.95 ? n.bones.z : i.uv.y > 0.90 ? n.bones.w : 0;
+    // strips at the foot of its texture, each by its tread's amount (bones.z, bones.w), across both sets;
+    // where the level's mesh says its treads scroll
+    float scroll = kind6.x < 0.5 ? 0 : i.uv.y > 0.95 ? n.bones.z : i.uv.y > 0.90 ? n.bones.w : 0;
     o.uv.xz += scroll;
     o.tint = 0;  // (no ghost's tint)
   }
@@ -1064,7 +1066,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[20] = {lod->alphaCut, lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[24] = {lod->alphaCut, lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
@@ -1083,6 +1085,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[18] = static_cast<float>(lod - items_[at].entry->model->lods.data());  // (which level this is, for the checking view)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
+    kind[20] = lod->scrolling ? 1.0f : 0.0f;
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

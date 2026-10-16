@@ -66,6 +66,9 @@ struct ModelLod {
   // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
   // modern lighting has to translate.
   bool labPbr = false;
+  // its texture's treads scroll (the mesh blueprint's Scrolling; never on a remastered mesh, whose
+  // texture is laid out its own way)
+  bool scrolling = false;
   bool plainMaterial = false;  // a remastered level without that texture: rough, no metal, no glow
   float cutoff = 0;        // the blueprint's LODCutoff: the distance the ORIGINAL game uses this level up to.
                            // This renderer chooses levels by size on screen instead (mesh_renderer.h).
@@ -118,6 +121,7 @@ struct ModelLod {
 
 struct Model {
   bool ok = false;
+  bool scrolls = false;  // one of its levels' treads scroll (ModelLod::scrolling)
   std::vector<ModelLod> lods;  // finest first
   float scale = 1;             // model units to world units (the blueprint's Display.UniformScale)
   Vec3 boundsMin, boundsMax;   // of the finest level, in model units
@@ -177,6 +181,7 @@ class ModelCache {
  private:
   struct LodSource {
     float cutoff = 1e9f;
+    bool scrolling = false;  // Scrolling
     std::string shader = "Unit";
     std::string mesh, albedo, normals, specular, secondary;  // virtual paths; empty: none
     bool albedoNamed = false, normalsNamed = false, specularNamed = false, secondaryNamed = false;
