@@ -637,6 +637,23 @@ bool MeshRenderer::Init(std::string* error) {
   pd.name = "models, depth first";
   prepass_ = device_->CreatePipeline(pd, error);
   if (!prepass_) return false;
+  // after it: the full shading writing no depth (the depth is there already). A pass that writes depth
+  // and cuts holes (a leaf's edge) has its depth tested only after its shading, so every leaf behind
+  // another would still be shaded; one that writes none can be tested first, and what lies behind is
+  // thrown away unshaded.
+  pd.colorWrite = true;
+  pd.pixelEntry = "PS";
+  pd.depthWrite = false;
+  pd.name = "models, depth laid";
+  laid_ = device_->CreatePipeline(pd, error);
+  if (!laid_) return false;
+  pd.name = "models, leaves, depth laid";
+  pd.cull = gfx::Cull::None;
+  pd.alphaToCoverage = true;
+  laidLeaves_ = device_->CreatePipeline(pd, error);
+  if (!laidLeaves_) return false;
+  pd.alphaToCoverage = false;
+  pd.depthWrite = true;
   pd.colorWrite = true;
   pd.name = "models, shadow";
   pd.samples = 1;
@@ -823,6 +840,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   CpuTimes::Part(outer);
 }
 
+// How many pixels across a model must be on screen to have its depth laid first (depthPrepass).
+constexpr float kPrepassPixels = 32;
+
 // Whether a pass draws that model, and at which level: onto items_ if it does.
 void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
                             float smallest, float wish, std::vector<Item>* out) const {
@@ -857,7 +877,8 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (lod->hidden || lod->glass != glass) return;
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) return;
-    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f});
+    // (near: so large on screen that its leaves and parts lie over each other on many pixels)
+    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f, pixels >= kPrepassPixels});
   }
 }
 
@@ -868,12 +889,12 @@ void MeshRenderer::SortItems() {
   const size_t n = items_.size();
   if (n < 64) {
     std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
-      return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod->serial < b.lod->serial;
+      return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod->serial != b.lod->serial ? a.lod->serial < b.lod->serial : a.near && !b.near;
     });
     return;
   }
   auto key = [](const Item& item) {
-    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 32) | static_cast<uint64_t>(item.lod->serial);
+    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 33) | (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
   };
   // (only the bits that differ between the items need sorting)
   uint64_t all = 0, any = 0, first = key(items_[0]);
@@ -944,19 +965,25 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ...
   for (size_t at = 0; at < items_.size();) {
     const ModelLod* lod = items_[at].lod;
-    if (depthOnly && !plain(lod)) {  // (not in the depth round)
-      while (at < items_.size() && items_[at].lod == lod) ++at;
+    const bool near = items_[at].near;
+    // (in the depth round only what is large on screen, where leaves and parts lie over each other;
+    // for what is small, drawing it twice costs more than the shading it saves)
+    const bool early = plain(lod) && near;
+    if (depthOnly && !early) {  // (not in the depth round)
+      while (at < items_.size() && items_[at].lod == lod && items_[at].near == near) ++at;
       continue;
     }
+    const bool laid = prepass && !depthOnly && early;  // (its depth laid in the round before)
     const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
+                       : laid ? (lod->leaves ? 9 : 8)
                        : shadowPass ? 0 : glass ? (lod->impact == 1 ? 5 : lod->nuke == 1 ? 4 : 3) : lod->blend ? 2 : lod->leaves ? 1 : 0;
     if (wanted != drawing) {
-      device_->SetPipeline(wanted == 7 ? prepassLeaves_ : wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ :
-                           wanted == 2 ? blended_ : wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
+      device_->SetPipeline(wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ : wanted == 6 ? prepass_ : wanted == 5 ? adding_ :
+                           wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ : wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
       drawing = wanted;
     }
     size_t n = 0;
-    while (at + n < items_.size() && items_[at + n].lod == lod && n < kMaxInstances) {
+    while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) {
       batch_[n] = items_[at + n].entry->instance;
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;

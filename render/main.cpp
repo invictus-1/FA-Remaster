@@ -73,7 +73,7 @@
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
-// --prepass  the models' depth is laid first (MeshRenderer::depthPrepass; off by default), to measure it
+// --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
@@ -202,7 +202,7 @@ struct Options {
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
-  bool prepass = false;                 // --prepass
+  bool prepass = true;                  // --no-prepass
   bool vulkan = false;                  // --vulkan
   bool vulkanClear = false;             // --vulkan-clear
   bool pictureWindow = false;           // --picture-window
@@ -294,6 +294,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
+    else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--noicons") o->icons = false;
