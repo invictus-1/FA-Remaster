@@ -4,6 +4,27 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, renderer request 26: team colours for the icons, and the focus army during a game (2026-10-16)
+
+**(1) Team colours:** `WorldPicture::SetIconColors(const std::vector<uint32_t>& argbByArmy)`.
+- **What it changes:** the strategic icons' colours by army, index from 0 as the armies' own colours (`u.Army()`),
+  0xAARRGGBB. The icons in the picture change, those of buildings the army remembers too, and the minimap's.
+  The models keep their army colours.
+- **Blips:** a blip not yet known keeps the colour it had.
+- **Off:** an empty list puts the armies' own colours back.
+- **Checked:** with `--picture`, the first army's icons are magenta in the picture and on the minimap.
+
+**(2) SetFocusArmy during a game: fine.** 1-based, 0 for an observer, as today.
+- **0:** the fog of war goes (the grid is dropped at the next beat), every unit shows as seen, and the life
+  bars and work show for all, as with no focus army from the start.
+- **Switching from one army to another:** the new army starts with what it sees from that beat on. The places
+  it has seen at some time are not kept by the engine, so "explored" begins afresh. Its remembered buildings
+  begin afresh too (fixed today: before, the old army's stayed).
+
+**Found on the way, fixed:** after the minimap's first drawing at a size, GroundAt, UnitAt and UnitsIn
+answered with the minimap's screen size until the next frame, so a click right then could land in the wrong
+place. The minimap pass now puts back everything picking uses (`World::KeepPicking` / `RestorePicking`).
+
 ## To ui, renderer request 25: the interface's decals on the ground (2026-10-16)
 
 `WorldPicture::SetUserDecals(const std::vector<UserDecal>&)`, with `UserDecal {std::string texture; float x, z;

@@ -1336,6 +1336,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < frame.units.size(); i += 3) ids.push_back(frame.units[i].id);
         picture.SetSelection(ids);
         picture.SetLifeBars(true);  // (and their anchors, for the custom names)
+        picture.SetIconColors({0xffff00ffu, 0xff00ffffu});  // (the team colour button: the first two armies' icons magenta and cyan)
         // and marks as under the mouse: the first three units not selected, one of each kind in turn
         if (!frame.units.empty()) {
           const size_t which = 1 + 3 * ((frameCount / 2) % 3);
