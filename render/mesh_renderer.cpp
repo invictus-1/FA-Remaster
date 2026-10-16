@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 
+#include "effect_files.h"
 #include "lighting.h"
 
 namespace render {
@@ -89,7 +90,8 @@ cbuffer MeshKind : register(b3) {
   float4 kind4; // x: 1 = wreckage, 2 = liquid metal (the Aeon's pool) (a nuke's ball of fire: 1 = the remastered
                 // look's, from the visuals track's textures); y, z, w: a shield's tint (a nuke's shell: how
                 // often its texture repeats, how fast it slides, from what age it fades)
-  float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there
+  float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
+                // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -98,6 +100,9 @@ TextureCube environmentMap : register(t3);
 Texture2D secondaryMap : register(t4);
 Texture2D insectLookup : register(t5);
 Texture2D seraphimFalloff : register(t6);
+// personal shields' lattice (the visuals track's, tiling: R the lattice, G drifting patches, B a value per
+// cell), a layer per faction: 0 UEF, 1 Aeon, 2 Cybran, 3 Seraphim
+Texture2DArray shieldPatterns : register(t7);
 
 struct VIn {
   float3 position : POSITION;
@@ -117,6 +122,10 @@ struct VOut {
   float4 color : COLOR;
   float3 tint : TEXCOORD2;
   float3 shape : TEXCOORD3;  // the place on the model in heights of the model; y: 0 at its foot .. 1 at its top
+  // the place on the model and its surface's way at rest, in world units: what is painted on the model
+  // (a personal shield's lattice) goes with its bones
+  float3 rest : TEXCOORD4;
+  float3 restNormal : TEXCOORD5;
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
@@ -133,6 +142,8 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     binormal = mul(turn, binormal);
   }
   VOut o;
+  o.rest = i.position * length(n.row0.xyz);
+  o.restNormal = i.normal;
   o.shape = float3(p.x, p.y - kind3.z, p.z) * kind3.w;
   [branch] if (n.color.a < 0.999 && kind.z < 0.5) {  // a unit under construction
     int whose = int(kind2.x + 0.5);
@@ -514,7 +525,24 @@ float4 Shade(VOut i, bool front) {
     if (shielded) {  // its personal shield: light of its faction's shield along its outline, breathing slowly
       float3 tint = faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0);
       float outline = pow(1 - saturate(dot(toCamera, N)), 3);  // (only where the surface turns away from the eye)
-      emission += tint * ((0.03 + 1.1 * outline) * (0.8 + 0.2 * sin(time * 2.2)) * (falling.w > 0 ? falling.w : 1));
+      float3 glow = tint * ((0.03 + 1.1 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
+      [branch] if (kind5.w > 0.5) {
+        // and its faction's lattice over it, as the bubble's (the visuals track's sheet): painted on the
+        // model at rest and seen along the three axes, so it goes with the unit and its bones and shows
+        // on every side; faint where the surface faces the eye (the paint must show), stronger toward
+        // the outline, a little more where the sheet's patches drift, each cell on its own slow beat
+        float3 q = i.rest * (1.0 / 3.0);  // (the sheet some 3 world units across: about 0.4 a cell)
+        float3 w = pow(abs(normalize(i.restNormal)), 4);
+        w /= w.x + w.y + w.z;
+        const float layer = faction;
+        float3 pat = shieldPatterns.Sample(samplerAniso, float3(q.zy, layer)).rgb * w.x +
+                     shieldPatterns.Sample(samplerAniso, float3(q.xz, layer)).rgb * w.y +
+                     shieldPatterns.Sample(samplerAniso, float3(q.xy, layer)).rgb * w.z;
+        float beat = 0.75 + 0.25 * sin(time * 1.7 + pat.b * 6.283);
+        float drift = pat.g * (0.6 + 0.4 * sin(time * 0.9 + pat.b * 6.283));
+        glow += tint * (pat.r * (beat * (0.18 + 1.5 * outline) + drift * 0.36));
+      }
+      emission += glow * (falling.w > 0 ? falling.w : 1);
     }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
@@ -969,6 +997,16 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     }
     device_->SetTexture(5, insectLookup_);
     device_->SetTexture(6, seraphimFalloff_);
+    if (!triedShieldPatterns_) {  // (once: the visuals track's lattice for each faction's personal shields)
+      triedShieldPatterns_ = true;
+      std::vector<std::string> paths;
+      for (const char* faction : {"uef", "aeon", "cybran", "seraphim"})
+        paths.push_back(std::string(kRemasteredEffects) + "/effects/entities/personalshield/" + faction + "/personalshield_pattern.dds");
+      std::vector<bool> present;
+      shieldPatterns_ = textures_->Layers(paths, &present);
+      for (size_t f = 0; f < 4; ++f) shieldPatternOf_[f] = shieldPatterns_ && present[f];
+    }
+    if (shieldPatterns_) device_->SetTexture(7, shieldPatterns_);
   }
 
   // (the scene's solid models: their depth first, then in full; a level of a look of its own - see-
@@ -1023,6 +1061,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[16] = haveInsectLookup_ ? 1.0f : 0.0f;
     kind[18] = static_cast<float>(lod - items_[at].entry->model->lods.data());  // (which level this is, for the checking view)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
+    kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

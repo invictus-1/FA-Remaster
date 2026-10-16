@@ -138,6 +138,9 @@ class MeshRenderer {
   // and the Seraphim's ramp of how strongly a surface mirrors by the angle it is seen at
   gfx::Texture insectLookup_, seraphimFalloff_;
   bool haveInsectLookup_ = false, haveSeraphimFalloff_ = false;
+  // the visuals track's lattice for personal shields, a layer per faction (where it has made one)
+  gfx::Texture shieldPatterns_;
+  bool shieldPatternOf_[4] = {}, triedShieldPatterns_ = false;
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;
