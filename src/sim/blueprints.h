@@ -37,6 +37,9 @@ struct BlueprintInfo {
   // Units: General.CommandCaps / ToggleCaps as masks, read once by CopyToSim, for views read outside the beat
   // (UnitView, UnitStateView: no sim Lua there). The sim's own reads go through its Lua as before.
   uint32_t commandCaps = 0, toggleCaps = 0;
+  // Props: in RECLAIMABLE, and SizeX / SizeZ (1 when missing), read once by CopyToSim, for the same views.
+  bool reclaimable = false;
+  float sizeX = 1, sizeZ = 1;
 };
 
 

@@ -563,12 +563,10 @@ bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* o
   float bestEdge = 0, bestCentre = 0, bestSx = 0, bestSz = 0;
   sim.ForPropsInRect(at[0] - reach, at[2] - reach, at[0] + reach, at[2] + reach, [&](Prop* p) {
     if (p->destroyQueued || !p->blueprint || !p->HasLuaObject()) return;
-    if (!BpInCategory(sim, p->blueprint, "RECLAIMABLE")) return;
-    const int top = lua_gettop(L);
-    sim.blueprints().PushTable(L, *p->blueprint);
-    const float sx = NumField(L, lua_gettop(L), "SizeX", 1.0f) * p->scale[0];
-    const float sz = NumField(L, lua_gettop(L), "SizeZ", 1.0f) * p->scale[2];
-    lua_settop(L, top);
+    // (the blueprint's RECLAIMABLE and size as CopyToSim read them: no sim Lua per prop, ui request 27)
+    if (!p->blueprint->reclaimable) return;
+    const float sx = p->blueprint->sizeX * p->scale[0];
+    const float sz = p->blueprint->sizeZ * p->scale[2];
     const float dx = std::fabs(at[0] - p->position.x), dz = std::fabs(at[2] - p->position.z);
     const float ex = std::max(0.0f, dx - sx * 0.5f), ez = std::max(0.0f, dz - sz * 0.5f);
     const float edge = std::sqrt(ex * ex + ez * ez), centre = std::sqrt(dx * dx + dz * dz);

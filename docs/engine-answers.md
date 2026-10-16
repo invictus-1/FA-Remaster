@@ -3,6 +3,13 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 27: the reclaim cursor without the sim's Lua per prop — done
+
+`BlueprintInfo::reclaimable`, `sizeX`, `sizeZ` (props): in RECLAIMABLE, and the blueprint's SizeX / SizeZ (1 when
+missing), read once at the end of `CopyToSim`. `ReclaimableAt` now tests every prop near the cursor from those
+(times the prop's scale, as before) and touches the sim's Lua only for the one it picks (its reclaim values). Same
+answers as before. Gate: all 13 unchanged.
+
 ## render 25: the heights FlattenMapRect set, for the drawn ground — done
 
 `TerrainMap::HeightChange { int x0, z0, x1, z1; }` (grid vertices, inclusive, clamped to the map) and
