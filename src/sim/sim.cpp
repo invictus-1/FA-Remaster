@@ -1431,6 +1431,21 @@ void Sim::Tick() {
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     beamsBefore(u->handle);
+    // Entity::TaskTick 0x679c40, step 1 (0x679c51): the texture scroller, before the attached test below, so a
+    // unit sent to the pass's end takes that step twice in that beat. It reads the committed transform and the
+    // one before it: here the unit's transform before this turn's motion and lastPosition / lastOrientation, which
+    // this turn has not taken yet (on a unit's first beat the two are the same: the unit ctor advances its coords
+    // twice, 0x6a5c59 / 0x6a5c5f).
+    if (u->scroller) {
+      const bool had = u->lastPosTick != 0;
+      TextureScrollerTick(u, u->position, u->orientation, had ? u->lastPosition : u->position,
+                          had ? u->lastOrientation : u->orientation);
+      // MOHO64_DEBUG_SCROLL=<unit id decimal | -2 all>: the offsets after each step
+      static const long dbgScroll = getenv("MOHO64_DEBUG_SCROLL") ? atol(getenv("MOHO64_DEBUG_SCROLL")) : -1;
+      if (dbgScroll == -2 || dbgScroll == static_cast<long>(u->id))
+        Logf(LogLevel::Info, "scroll %u unit %u type %d: %.9g %.9g -> %.9g %.9g", tick_, u->id,
+             static_cast<int>(u->scroller->type), u->scrollPrev[0], u->scrollPrev[1], u->scroll[0], u->scroll[1]);
+    }
     // (A unit whose Destroy is queued still has its turn: the entity is only taken away at the beat's end. Seen: a
     // dead aircraft that the flight code had just taken back starts its crash, three draws, in the beat its script
     // destroys it.)

@@ -100,6 +100,10 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.commandCaps = ViewCommandCaps(u);
     v.toggleCaps = ViewToggleCaps(u);
     v.mesh = u->mesh;
+    for (int k = 0; k < 2; ++k) {
+      v.scrollPrev[k] = u->scrollPrev[k];
+      v.scroll[k] = u->scroll[k];
+    }
     out->push_back(std::move(v));
   }
 }
@@ -520,6 +524,10 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
       x.lookup = StrField(L, lod, "LookupName");
       x.shader = StrField(L, lod, "ShaderName");
       x.cutoff = NumField(L, lod, "LODCutoff", 0.0f);
+      lua_pushstring(L, "Scrolling");
+      lua_rawget(L, lod);
+      x.scrolling = lua_toboolean(L, -1) != 0;
+      lua_pop(L, 1);
       d.lods.push_back(std::move(x));
       lua_pop(L, 1);
     }
