@@ -32,6 +32,19 @@
 #endif
 #define VK_NO_PROTOTYPES 1
 #include "third_party/vulkan/include/vulkan/vulkan.h"
+#if !defined(_WIN32)
+// The other systems' surfaces, declared without their window systems' own headers: only a pointer and
+// an id pass through here.
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long VisualID;
+#include "third_party/vulkan/include/vulkan/vulkan_xlib.h"
+struct wl_display;
+struct wl_surface;
+#include "third_party/vulkan/include/vulkan/vulkan_wayland.h"
+#include "third_party/vulkan/include/vulkan/vulkan_metal.h"
+#include <sys/stat.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -77,7 +90,7 @@ namespace {
 #if defined(_WIN32)
 #define VK_SURFACE_FUNCTIONS(X) X(vkCreateWin32SurfaceKHR)
 #else
-#define VK_SURFACE_FUNCTIONS(X)
+#define VK_SURFACE_FUNCTIONS(X) X(vkCreateXlibSurfaceKHR) X(vkCreateWaylandSurfaceKHR) X(vkCreateMetalSurfaceEXT)
 #endif
 #define VK_DEVICE_FUNCTIONS(X)          \
   X(vkDestroyDevice)                    \
@@ -166,11 +179,14 @@ bool LoadLoader(std::string* error) {
   HMODULE lib = LoadLibraryA("vulkan-1.dll");
   if (lib) vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(reinterpret_cast<void*>(GetProcAddress(lib, "vkGetInstanceProcAddr")));
 #elif defined(__APPLE__)
-  void* lib = dlopen("libvulkan.1.dylib", RTLD_NOW | RTLD_LOCAL);
-  if (!lib) lib = dlopen("libMoltenVK.dylib", RTLD_NOW | RTLD_LOCAL);
+  // (the Vulkan SDK's loader, or MoltenVK itself, which also answers vkGetInstanceProcAddr)
+  void* lib = nullptr;
+  for (const char* name : {"libvulkan.1.dylib", "libvulkan.dylib", "libMoltenVK.dylib"})
+    if (!lib) lib = dlopen(name, RTLD_NOW | RTLD_LOCAL);
   if (lib) vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr"));
 #else
   void* lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (!lib) lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
   if (lib) vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr"));
 #endif
   if (!vkGetInstanceProcAddr) {
@@ -652,19 +668,55 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     }
     if (!dir.empty() && (CreateDirectoryA(dir.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS)) shaderCache_ = dir;
 #else
-    if (dir.empty()) {
+    if (dir.empty()) {  // (the usual place for a program's cache: ~/.cache, or XDG_CACHE_HOME)
+      const char* xdg = std::getenv("XDG_CACHE_HOME");
       const char* home = std::getenv("HOME");
-      if (home) dir = std::string(home) + "/.cache/fa-remastered-shaders";
+      std::string base = xdg && *xdg ? std::string(xdg) : home ? std::string(home) + "/.cache" : std::string();
+      if (!base.empty()) {
+        mkdir(base.c_str(), 0755);
+        dir = base + "/fa-remastered-shaders";
+      }
     }
-    shaderCache_ = dir;  // (made by the system's tools when packaged; a missing folder only means no cache)
+    struct stat st{};
+    if (!dir.empty() && (mkdir(dir.c_str(), 0755) == 0 || (stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)))) shaderCache_ = dir;
 #endif
   }
 
-  // the instance: the window's surface, and (with debug) the validation layer when installed
+  // the instance: the window system's surface; on macOS MoltenVK, which a loader lists only when asked
+  // for "portability" drivers; and (with debug) the validation layer when installed
+  bool portability = false;
   std::vector<const char*> extensions = {VK_KHR_SURFACE_EXTENSION_NAME};
+  {
+    uint32_t n = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> have(n);
+    vkEnumerateInstanceExtensionProperties(nullptr, &n, have.data());
+    auto offered = [&](const char* name) {
+      for (const VkExtensionProperties& e : have)
+        if (std::strcmp(e.extensionName, name) == 0) return true;
+      return false;
+    };
+    const char* surface = nullptr;
+    switch (desc.windowSystem) {
 #if defined(_WIN32)
-  extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+      case DeviceDesc::WindowSystem::Win32: surface = VK_KHR_WIN32_SURFACE_EXTENSION_NAME; break;
+#else
+      case DeviceDesc::WindowSystem::Xlib: surface = VK_KHR_XLIB_SURFACE_EXTENSION_NAME; break;
+      case DeviceDesc::WindowSystem::Wayland: surface = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME; break;
+      case DeviceDesc::WindowSystem::Metal: surface = VK_EXT_METAL_SURFACE_EXTENSION_NAME; break;
 #endif
+      default: break;
+    }
+    if (!surface || !offered(surface)) {
+      if (error) *error = std::string("Vulkan: this system's Vulkan cannot show in such a window (") + (surface ? surface : "unknown window system") + ")";
+      return false;
+    }
+    extensions.push_back(surface);
+    if (offered(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+      extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+      portability = true;
+    }
+  }
   std::vector<const char*> layers;
   if (desc.debug) {
     uint32_t n = 0;
@@ -685,6 +737,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   ici.ppEnabledExtensionNames = extensions.data();
   ici.enabledLayerCount = static_cast<uint32_t>(layers.size());
   ici.ppEnabledLayerNames = layers.data();
+  if (portability) ici.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
   VkResult r = vkCreateInstance(&ici, nullptr, &instance_);
   if (r != VK_SUCCESS) return fail("creating the instance", r);
 #define VK_LOAD(name) name = reinterpret_cast<PFN_##name>(vkGetInstanceProcAddr(instance_, #name));
@@ -697,13 +750,38 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   sci.hinstance = GetModuleHandleW(nullptr);
   sci.hwnd = static_cast<HWND>(window_);
   r = vkCreateWin32SurfaceKHR(instance_, &sci, nullptr, &surface_);
-  if (r != VK_SUCCESS) return fail("the window's surface", r);
 #else
-  if (error) *error = "Vulkan: no window surface for this system yet";
-  return false;
+  // (written to the specification; not tried: there is no Linux or macOS here)
+  r = VK_ERROR_INITIALIZATION_FAILED;
+  if (desc.windowSystem == DeviceDesc::WindowSystem::Xlib && vkCreateXlibSurfaceKHR) {
+    VkXlibSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
+    sci.dpy = static_cast<Display*>(desc.display);
+    sci.window = static_cast<Window>(reinterpret_cast<uintptr_t>(window_));
+    r = vkCreateXlibSurfaceKHR(instance_, &sci, nullptr, &surface_);
+  } else if (desc.windowSystem == DeviceDesc::WindowSystem::Wayland && vkCreateWaylandSurfaceKHR) {
+    VkWaylandSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+    sci.display = static_cast<wl_display*>(desc.display);
+    sci.surface = static_cast<wl_surface*>(window_);
+    r = vkCreateWaylandSurfaceKHR(instance_, &sci, nullptr, &surface_);
+  } else if (desc.windowSystem == DeviceDesc::WindowSystem::Metal && vkCreateMetalSurfaceEXT) {
+    VkMetalSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+    sci.pLayer = static_cast<const CAMetalLayer*>(window_);
+    r = vkCreateMetalSurfaceEXT(instance_, &sci, nullptr, &surface_);
+  }
 #endif
+  if (r != VK_SUCCESS) return fail("the window's surface", r);
 
-  // the card: a discrete one first, with a queue that draws and shows on the surface
+  // the card: a discrete one first, with a queue that draws and shows on the surface; Vulkan 1.3, or 1.2
+  // with dynamic rendering and the second synchronization as extensions (MoltenVK, older drivers)
+  auto deviceOffers = [&](VkPhysicalDevice card, const char* name) {
+    uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(card, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> have(n);
+    vkEnumerateDeviceExtensionProperties(card, nullptr, &n, have.data());
+    for (const VkExtensionProperties& e : have)
+      if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+  };
   uint32_t count = 0;
   vkEnumeratePhysicalDevices(instance_, &count, nullptr);
   std::vector<VkPhysicalDevice> cards(count);
@@ -712,7 +790,10 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   for (VkPhysicalDevice card : cards) {
     VkPhysicalDeviceProperties p;
     vkGetPhysicalDeviceProperties(card, &p);
-    if (p.apiVersion < VK_API_VERSION_1_3) continue;
+    if (p.apiVersion < VK_API_VERSION_1_3 &&
+        (p.apiVersion < VK_API_VERSION_1_2 || !deviceOffers(card, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) ||
+         !deviceOffers(card, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)))
+      continue;
     uint32_t families = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(card, &families, nullptr);
     std::vector<VkQueueFamilyProperties> fam(families);
@@ -733,7 +814,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     }
   }
   if (!physical_) {
-    if (error) *error = "Vulkan: no card with Vulkan 1.3 that can draw into this window";
+    if (error) *error = "Vulkan: no card with Vulkan 1.3 (or 1.2 with dynamic rendering) that can draw into this window";
     return false;
   }
   VkPhysicalDeviceMemoryProperties memoryProps;
@@ -762,15 +843,27 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
   VkPhysicalDeviceRobustness2FeaturesEXT robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
   robust.nullDescriptor = VK_TRUE;
+  const bool core13 = props_.apiVersion >= VK_API_VERSION_1_3;
   VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
   f13.dynamicRendering = VK_TRUE;
   f13.synchronization2 = VK_TRUE;
+  VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRendering{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR};
+  dynamicRendering.dynamicRendering = VK_TRUE;
+  VkPhysicalDeviceSynchronization2FeaturesKHR sync2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR};
+  sync2.synchronization2 = VK_TRUE;
+  if (!core13) {
+    deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+    deviceExtensions.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    dynamicRendering.pNext = &sync2;
+  }
+  // (a driver that is a layer over another API, MoltenVK, says what it cannot do; it must be named)
+  if (deviceOffers(physical_, "VK_KHR_portability_subset")) deviceExtensions.push_back("VK_KHR_portability_subset");
   if (nullDescriptors_) {
     deviceExtensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
-    f13.pNext = &robust;
+    (core13 ? f13.pNext : sync2.pNext) = &robust;
   }
   VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-  features.pNext = &f13;
+  features.pNext = core13 ? static_cast<void*>(&f13) : static_cast<void*>(&dynamicRendering);
   features.features.samplerAnisotropy = have.features.samplerAnisotropy;
   features.features.textureCompressionBC = have.features.textureCompressionBC;
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
@@ -784,6 +877,14 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
 #define VK_LOAD(name) name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device_, #name));
   VK_DEVICE_FUNCTIONS(VK_LOAD)
 #undef VK_LOAD
+  if (!core13) {  // (the same calls under their extensions' names)
+#define VK_LOAD_KHR(name) name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device_, #name "KHR"));
+    VK_LOAD_KHR(vkCmdBeginRendering)
+    VK_LOAD_KHR(vkCmdEndRendering)
+    VK_LOAD_KHR(vkCmdPipelineBarrier2)
+    VK_LOAD_KHR(vkCmdWriteTimestamp2)
+#undef VK_LOAD_KHR
+  }
   vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
   memory_.Init(device_, memoryProps);
 
@@ -954,6 +1055,10 @@ bool VulkanDevice::CreateSwapchain(std::string* error) {
   if (!vsync_)
     for (VkPresentModeKHR m : modes)
       if (m == VK_PRESENT_MODE_IMMEDIATE_KHR || (m == VK_PRESENT_MODE_MAILBOX_KHR && mode == VK_PRESENT_MODE_FIFO_KHR)) mode = m;
+  if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+    if (error) *error = "Vulkan: this window's swap chain cannot be copied into (the picture is shown by a copy)";
+    return false;
+  }
   VkExtent2D extent = caps.currentExtent;
   if (extent.width == UINT32_MAX) extent = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)};
   if (extent.width == 0 || extent.height == 0) return true;  // (a minimised window: none until it has a size again)
@@ -2167,6 +2272,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
 
 }  // namespace
 
+// (Device::Create, gfx.cpp, calls it: on Windows when asked for, elsewhere always)
 std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* error) {
   auto d = std::make_unique<VulkanDevice>();
   if (!d->Init(desc, error)) return nullptr;

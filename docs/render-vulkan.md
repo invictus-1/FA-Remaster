@@ -27,7 +27,25 @@ written with care and said to be untried.
    decorations, stripped again before the driver sees them).
 4. **Done**: timestamps (`Mark`/`TakeTimes`), `UpdateTexture`, the whole scene against Direct3D 12, the
    direct window path (`--window-cycle`: menu, game, menu on one window).
-5. Linux (a window and a surface: X11 / Wayland) and macOS (MoltenVK, Apple Silicon). Not started.
+5. **Written, untried** (2026-10-15; there is no Linux or Mac here): Linux and macOS.
+   - The device takes the window as its system has it (`gfx::DeviceDesc::windowSystem`, `window`,
+     `display`): an X11 window (Xlib), a Wayland surface, or a macOS view's CAMetalLayer (through MoltenVK).
+     A host gives it with `WorldPicture::UseNativeWindow(system, window, display, width, height)`.
+   - Vulkan 1.3, or 1.2 with dynamic rendering and the second synchronization as extensions (MoltenVK
+     and older drivers); MoltenVK's "portability" enumeration and `VK_KHR_portability_subset` are asked
+     for when offered. Device features (anisotropy, BC textures, null descriptors) only where the card
+     has them; without null descriptors, empty texture slots get placeholders of each kind.
+   - The loader: `libvulkan.so.1` on Linux; `libvulkan.1.dylib` or `libMoltenVK.dylib` on macOS. DXC:
+     `libdxcompiler.so` / `.dylib` beside the program. Shader cache: `$XDG_CACHE_HOME` or
+     `~/.cache/fa-remastered-shaders`.
+   - Direct3D 12's file builds to nothing outside Windows; `render/gfx.cpp` chooses the backend
+     (Direct3D 12 on Windows unless Vulkan is asked for, Vulkan elsewhere).
+   - Checked here: every file in `render/` compiles for x86_64 Linux and for Apple Silicon macOS (zig's
+     clang cross-compiling), except `window_win32.cpp`, the viewer's own window.
+   - Still to do, by someone with the machine: a window for the viewer there (X11 / Wayland / Cocoa; the
+     game's own window is the interface's), building and linking there (the build script makes the
+     Windows program), shipping DXC's library, and the first run. MoltenVK may refuse something the
+     shaders do (it turns SPIR-V into Metal); that would show at the first run.
 
 ## How it compares (2026-10-15, RTX 4090)
 

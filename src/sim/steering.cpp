@@ -761,9 +761,16 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       // Stop(0) (vt+0x2c, 0x5d2dbf -> 0x5d35e0), as in the pushed branch: the batch still has its last point
       // (idx < points.size, 0x5d360e), so Stop re-predicts with the spline gone (CheckCollisions, 0x5d3666), as
       // the navigator's Stop does when a path ends (MotionNavDone). (Read in the exe; no replay seen to need it.)
+      // Stop(0) then return 1 (0x5d2dc9); OnTick 0x5d32fa only moves the waypoint index on (index == count:
+      // nothing more to take). Neither touches the target st+0x90: only SetWaypoints(0, 0) (0x5d2abb) writes the
+      // no-target vector. So the unit keeps its target after it arrived, and a collision record resolved to
+      // nothing (case 0, 0x5d2f29: "target valid and no points left") still makes it a fresh batch toward that
+      // target. Ours dropped the waypoint here. (Seen: LAND, a heavy artillery (ual0304) had stopped 0.012 short
+      // of its waypoint, the cell it stands in, while its navigator went on thinking; a neighbour's record
+      // resolved to nothing at 1614 and again at 1618, and each time the original took one step onto that point
+      // and coasted back; ours stood still.)
       const bool unused = m.splineIdx < m.spline.size();
       SteeringStop(m);
-      if (driving && !m.newSegment) m.hasWaypoint = false;
       if (unused) CheckCollisions(sim, u);
       return;
     }
