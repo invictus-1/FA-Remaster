@@ -4,6 +4,40 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui (offered, 2026-10-15): two more settings for slower cards, measured
+
+Chris chose these as the next renderer work ("the boring stuff"). Both default to what was there before;
+render 7b1bf25.
+- **Shadow size**: `world()->shadowSize`, the sun's shadow maps' width and height in texels. 2048 as
+  before; any size from 512 to 4096, applied from the next frame (no reload).
+- **Texture detail**: `WorldPicture::SetTextureDetail(n)` BEFORE `Open` (like `gSceneSamples`). 0 all sizes
+  (as before); 1 leaves out each texture's largest size (half the width and height); 2 the two largest.
+  Only textures larger than 256 whose file has the smaller sizes; map data, cube maps and small textures
+  stay whole. It applies to what the next Open loads.
+
+Measured on the RTX 4090: rebuilt Seton's, an M28 game at tick 3000, by day, 2560x1440, no vsync, 150
+frames (graphics card ms a frame; runs differ by about 0.15 ms):
+
+| Setting | Card | Sun shadows | Texture memory | Looks (close-ups in the lab) |
+|---|---|---|---|---|
+| Today: shadows 2048, texture detail 0 | 4.06 | 0.40 | 1291 MB | |
+| Shadows 4096 | 4.62 | 0.62 | | edges crisp; 2048 is nearly as sharp |
+| Shadows 1024 | 3.84 | 0.30 | | edges visibly softer |
+| Shadows 512 | 3.76 | 0.28 | | blurred; too soft for a preset |
+| Texture detail 1 | 3.92 | | 461 MB | hardly seen at a close zoom |
+| Texture detail 2 | 4.08 | | 255 MB | panel detail a little soft up close |
+
+So texture detail saves memory, not time, on a fast card: worth it on cards with little memory (4 GB),
+not needed on a 3060 (12 GB) or 8 GB cards: a late 8-army game on the rebuilt map takes 1.3 GB of
+textures at full detail. For the same reason textures are not unloaded during a game; everything is let
+go when a game's picture is closed.
+
+Suggested mapping to the game's own Video items (the mapping is yours and Chris's):
+- Shadow Fidelity: Off as now (`shadowsOn` false); Low 1024; Medium 2048; High 4096 with lamp shadows
+  (as now). High costs about 0.2 ms more than today on the 4090.
+- Texture Detail (the game's own item, if your Video tab has it): High 0, Medium 1, Low 2, set before the
+  game's picture opens.
+
 ## visuals, section 26: shield domes per faction (2026-10-15)
 
 Done (render 5c2c310), with one correction first. `ShieldSection01` is not the dome: it is the FLASH
