@@ -157,6 +157,10 @@ class WorldPicture {
     float sizeX = 1, sizeZ = 1;
   };
   void SetUserDecals(const std::vector<UserDecal>& decals);
+  // The strategic icons' colours by army (from 0, as the armies' own colours are), 0xAARRGGBB, in place of
+  // the armies' own: the game's "team colour" button (TeamColorMode). Only the icons change (the minimap's
+  // too); the models keep their army's colour; a blip not yet known stays grey. Empty: the armies' own.
+  void SetIconColors(const std::vector<uint32_t>& argbByArmy);
   // Lines between places of the world and rings lying on the ground (the lines of a unit's orders,
   // ranges). Colours are 0xAARRGGBB; lines are hidden by what is in front of them. A line's width
   // is in pixels on the screen, the same from near and from far (1: a hairline, as before).

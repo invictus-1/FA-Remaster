@@ -121,6 +121,11 @@ class World {
   int dyingDrawn = 0;    // units drawn in the last frame that are in their death (falling, sinking, toppling)
   bool workBars = true;  // the thin bar of a unit's work and the pause mark, also while the life bars are off
   int focusArmy = -1;    // the army the picture is for, counted from 0 (-1: no one army): whose work is shown
+  // The strategic icons' colours by army (from 0), in place of the armies' own (the game's "team colour"
+  // button, TeamColorMode: only the icons change, the models keep their army's colour); empty: the
+  // armies' own. A blip not yet known stays as it is.
+  std::vector<Vec3> iconColors;
+  Vec3 IconColor(uint32_t army, Vec3 own) const { return army < iconColors.size() ? iconColors[army] : own; }
   // The height of what one stands on there: the ground, or the water's surface over it.
   float GroundHeight(float x, float z) const;
 
@@ -152,6 +157,21 @@ class World {
   bool Project(Vec3 world, float* x, float* y) const;
   int ScreenWidth() const { return screenWidth_; }
   int ScreenHeight() const { return screenHeight_; }
+  // What GroundAt, UnitAt and UnitsIn answer by between two frames (the camera, the views, the screen's
+  // size): kept and put back around a frame drawn for something else (the minimap).
+  struct Picking {
+    Camera camera;
+    View view, screenView;
+    int screenWidth = 1, screenHeight = 1;
+  };
+  Picking KeepPicking() const { return {camera, view, screenView_, screenWidth_, screenHeight_}; }
+  void RestorePicking(const Picking& p) {
+    camera = p.camera;
+    view = p.view;
+    screenView_ = p.screenView;
+    screenWidth_ = p.screenWidth;
+    screenHeight_ = p.screenHeight;
+  }
   // The place on the ground (or the water's surface) under a point of the screen.
   bool GroundAt(float x, float y, Vec3* hit) const;
   // The unit under a point of the screen (the nearest one whose body or strategic icon is there);
@@ -406,6 +426,7 @@ class World {
     uint32_t stamp;      // the AddFrame its unit was last in
   };
   std::unordered_map<uint32_t, Remembered> remembered_;
+  int rememberedFor_ = -1;  // the focus army remembered_ is of (another army has not seen those buildings)
   uint32_t frameStamp_ = 0;
   // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the
   // kinds of `hoverKind`; corners in the picture's order: top left, top right, bottom left, bottom right.

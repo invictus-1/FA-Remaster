@@ -456,6 +456,14 @@ void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
   if (impl_->world) impl_->world->borders = meshBlueprints;
 }
 
+void WorldPicture::SetIconColors(const std::vector<uint32_t>& argbByArmy) {
+  if (!impl_->world) return;
+  std::vector<Vec3>& out = impl_->world->iconColors;
+  out.clear();
+  for (uint32_t c : argbByArmy)
+    out.push_back({static_cast<float>((c >> 16) & 0xff) / 255.0f, static_cast<float>((c >> 8) & 0xff) / 255.0f, static_cast<float>(c & 0xff) / 255.0f});
+}
+
 void WorldPicture::SetUserDecals(const std::vector<UserDecal>& decals) {
   if (!impl_->world) return;
   std::vector<World::UserDecal>& out = impl_->world->userDecals;
@@ -558,10 +566,9 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
-    // (the world's own camera and view are the main picture's and must be again when this pass is
-    // over: GroundAt, UnitAt and UnitsIn answer by them between two frames)
-    const Camera mainCamera = w.camera;
-    const View mainView = w.view;
+    // (the world's own camera, views and screen size are the main picture's and must be again when this
+    // pass is over: GroundAt, UnitAt and UnitsIn answer by them between two frames)
+    const World::Picking mainPicking = w.KeepPicking();
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
@@ -577,8 +584,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     placed.swap(w.placed);
     m.mapCamera = c;
     m.mapMatrix = w.view.constants.viewProj;
-    w.camera = mainCamera;
-    w.view = mainView;
+    w.RestorePicking(mainPicking);
     m.mapWidth = width;
     m.mapHeight = height;
     MinimapProject({0, c.target.y, 0}, &m.mapX0, &m.mapY0);
@@ -636,7 +642,9 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
       if (!kind) kind = w.icons.ForBlueprint(w.models.UnitBlueprintPath(blueprint));
       float x, y;
       if (!MinimapProject({u.position[0], u.position[1], u.position[2]}, &x, &y)) continue;
-      const Vec3 color = m.armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : m.armyColors[u.Army() % m.armyColors.size()];
+      const Vec3 own = m.armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : m.armyColors[u.Army() % m.armyColors.size()];
+      const bool unknownBlip = u.Blip() && !remembered && !u.SeenBefore();
+      const Vec3 color = unknownBlip ? own : w.IconColor(u.Army(), own);  // (the team colour button's, where it is on)
       w.icons.Blit(kind, color, w.selected.count(u.id) != 0, static_cast<int>(x), static_cast<int>(y), m.mapPixels.data(), width, height, u.Blip() && !remembered, u.SeenBefore());
     }
   }
