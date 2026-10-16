@@ -255,7 +255,8 @@ Huge battles depend on asset budgets as much as code:
   (e.g. T1 small, T3 medium, experimentals large). Record the budgets in the visuals docs.
 - **Textures: a question for Chris, not a rule yet.** The proposal: a 4K main set and 8K as an optional "ultra" tier,
   every texture mipmapped and block-compressed (BC7 for colour, BC5 for normal maps). Today's sets are 2K to 4K
-  (DXT1 / DXT5); the renderer reads BC7 (DX10 header); whether it reads BC5 is to be confirmed by the renderer. The
+  (DXT1 / DXT5); the renderer reads BC7 (DX10 header) and BC5 normal maps (units, decals, ground layers; render
+  a922379, docs/render-answers.md). The
   tiers and formats are decided by Chris with the visuals track, ideally in the refinement phase where texture
   upgrades are already on the list.
 - **Materials:** reuse shared materials per faction so instancing can batch units together.
