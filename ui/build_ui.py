@@ -52,6 +52,8 @@ def main():
         add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"], False)
     for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
+    # The movies' MPEG-1 pictures (ui/draw/movie.cpp): pl_mpeg, MIT, unchanged (ui/third_party/pl_mpeg).
+    add(os.path.join(UI, "third_party", "pl_mpeg", "pl_mpeg.c"), std_c, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src"), "-I", UI, "-I", ROOT] + lua_inc + zlib_inc
     # The world's picture comes from the renderer track's code (render/world_picture.h), which is
     # Direct3D 12: built in on Windows, left out elsewhere (the world view is then empty).

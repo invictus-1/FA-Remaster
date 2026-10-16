@@ -228,8 +228,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and `uimain.StartFrontEndUI()` run without script errors, also with mods' hooks active.
 - Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap, Text, Border,
   ItemList, Scrollbar, Edit and Histogram are built as far as scripts can see them (state, layout,
-  callbacks that need no input). Movie reads a file's size and frame rate but decodes nothing yet:
-  it reports itself loaded and never finishes. Mesh and the map preview are plain controls (they
+  callbacks that need no input). Movie: see "Movies" below. Mesh and the map preview are plain controls (they
   lay out; their own methods are still stubs). The main menu script builds
   its whole screen: 67 controls (logo, borders, the eight menu buttons with their labels) with
   rectangles from the real texture sizes; controls that ask for frame updates get `OnFrame`. Without
@@ -497,7 +496,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   order, a space after each; sub_85E3A0), centred a line below the point the name's routine gives
   back (the name's left edge: the original's own quirk) or below the bars without a name;
   `ui_RenderSelectionSetNames` ON as in the exe, `ui_SelectionSetNamesColor` (0xff00aa00).
-- Not real yet: the other console commands, movies, render passes,
+- Movies (2026-10-16): the game's .sfd files (CRI Sofdec: an MPEG program stream with MPEG-1 video)
+  play in the Movie control: pictures decoded by pl_mpeg (`ui/third_party/pl_mpeg`, MIT, Dominic
+  Szablewski; downloaded with Chris's OK), `ui/draw/movie.*` (MovieDecoder), moved on by the
+  interface's own clock and drawn scaled into the control; at the end OnFinished (unless it loops);
+  GetNumFrames from the stream's time stamps. A movie's sound comes from the game's sound banks,
+  started by the script beside it (/lua/maui/movie.lua: PlaySound / PlayVoice), not from the file.
+  Checked: a talking head (Brackman.sfd, 192x192, 30 fps, 4.9 s, OnFinished on time) and the
+  intro (1600x672): about 3 ms a picture. The main menu's film is still not decoded: the host's
+  moving map is shown there (Chris's new front-end background). Whole files are read into memory
+  (the intro 177 MB, the credits 220 MB): reading them in pieces comes later.
+- Not real yet: the other console commands, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and

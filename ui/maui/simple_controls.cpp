@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 
+#include "core/log.h"
 #include "core/vfs.h"
+#include "draw/movie.h"
 #include "maui/control.h"
 #include "maui/texture_info.h"
 #include "maui/world_source.h"
@@ -169,11 +171,14 @@ int l_Histogram_SetData(lua_State* L) {
 
 // --- Movie: a video file shown in a rectangle ---
 //
-// The game's movies are .sfd files: an MPEG program stream with MPEG-1 video. NOT DECODED YET: we
-// read the picture size and frame rate from the first video sequence header, so the control lays
-// out and reports itself loaded, but no frame is shown, the movie does not advance and it never
-// finishes (OnFinished is not called).
-
+// The game's movies are .sfd files: an MPEG program stream with MPEG-1 video, decoded by
+// MovieDecoder (ui/draw/movie.h: pl_mpeg). A playing movie moves on by the interface's own clock
+// (its frame step), shown scaled into the control's rectangle; at its end it stops on its last
+// picture and the script hears OnFinished (unless it loops). The sound a movie has comes from the
+// game's sound banks, played by the script beside it (/lua/maui/movie.lua: PlaySound / PlayVoice),
+// not from the file. The main menu's film (/movies/main_menu.sfd) is not decoded: the host's
+// moving picture of a map is shown there instead (UserState::Config::backdrop, Chris, 2026-10-12:
+// the new front-end background).
 class Movie : public Control {
  public:
   const char* ClassName() const override { return "movie"; }
@@ -185,20 +190,36 @@ class Movie : public Control {
   bool loaded = false, playing = false, loop = false;
   bool asked = false;  // Play was called (whether or not the file could be read)
   float frameRate = 0;
-  // The film is not decoded. Where the main menu plays its background film, the host's moving
-  // picture is shown instead (UserState::Config::backdrop): the new front-end background.
-  void Draw(lua_State* L, DrawTarget& target) override {
-    BackdropSource* backdrop = UserState::From(L)->config().backdrop;
-    if (!backdrop || !asked) return;
+  MovieDecoder decoder;
+  bool IsMenuFilm() const {
     std::string name = file;
     for (char& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     const std::string menu = "/main_menu.sfd";
-    if (name.size() < menu.size() || name.compare(name.size() - menu.size(), menu.size(), menu) != 0) return;
+    return name.size() >= menu.size() && name.compare(name.size() - menu.size(), menu.size(), menu) == 0;
+  }
+  void FrameUpdate(lua_State* L, float seconds) override {
+    Control::FrameUpdate(L, seconds);
+    if (dead() || !playing || !decoder.IsOpen()) return;
+    decoder.Advance(seconds);
+    if (!loop && decoder.Ended()) {
+      playing = false;
+      RunScript(L, "OnFinished");
+    }
+  }
+  void Draw(lua_State* L, DrawTarget& target) override {
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
-    if (w <= 0 || h <= 0) return;
-    if (const uint32_t* pixels = backdrop->Latest(w, h)) target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    if (r.x1 <= r.x0 || r.y1 <= r.y0) return;
+    if (IsMenuFilm()) {
+      BackdropSource* backdrop = UserState::From(L)->config().backdrop;
+      if (!backdrop || !asked) return;
+      int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+      if (const uint32_t* pixels = backdrop->Latest(w, h)) target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+      return;
+    }
+    const Image& picture = decoder.Picture();
+    if (!asked || !picture.valid()) return;
+    target.DrawImage(picture, {0, 0, static_cast<float>(picture.width), static_cast<float>(picture.height)}, r, 0xffffffffu);
   }
   void MakeVars(lua_State* L) {
     AddLazyVar(L, movieWidth, "MovieWidth");
@@ -232,15 +253,23 @@ int l_InternalCreateMovie(lua_State* L) {
   return 0;
 }
 
-// bool Movie:InternalSet(filename)
+// bool Movie:InternalSet(filename): the file read and its first picture decoded; false when it
+// cannot be read (the script then calls OnStopped).
 int l_Movie_InternalSet(lua_State* L) {
   Movie* c = CheckControl<Movie>(L, 1);
   c->file = luaL_checkstring(L, 2);
   c->loaded = c->playing = false;
   int w = 0, h = 0;
   auto data = ScriptState::From(L)->vfs()->ReadFile(c->file);
-  if (data && MpegVideoInfo(*data, &w, &h, &c->frameRate)) {
+  if (c->IsMenuFilm()) {
+    if (data && MpegVideoInfo(*data, &w, &h, &c->frameRate)) c->loaded = true;
+  } else if (data && c->decoder.Open(std::move(*data))) {
     c->loaded = true;
+    w = c->decoder.Width(), h = c->decoder.Height();
+    c->frameRate = static_cast<float>(c->decoder.FrameRate());
+    c->decoder.SetLoop(c->loop);
+  }
+  if (c->loaded) {
     c->movieWidth.Set(static_cast<float>(w));
     c->movieHeight.Set(static_cast<float>(h));
   }
@@ -252,13 +281,19 @@ int l_Movie_IsLoaded(lua_State* L) {
   return 1;
 }
 int l_Movie_Loop(lua_State* L) {
-  CheckControl<Movie>(L, 1)->loop = lua_toboolean(L, 2) != 0;
+  Movie* c = CheckControl<Movie>(L, 1);
+  c->loop = lua_toboolean(L, 2) != 0;
+  c->decoder.SetLoop(c->loop);
   return 0;
 }
+// Play(): from where it stands (the start after InternalSet; INFERRED: Play after the end starts
+// it again from the first picture).
 int l_Movie_Play(lua_State* L) {
   Movie* c = CheckControl<Movie>(L, 1);
+  if (c->loaded && c->decoder.IsOpen() && c->decoder.Ended()) c->decoder.Rewind();
   c->playing = c->loaded;
   c->asked = true;
+  c->needsFrameUpdate = c->needsFrameUpdate || c->playing;  // (its pictures move on with the frames)
   return 0;
 }
 int l_Movie_Stop(lua_State* L) {
@@ -270,10 +305,10 @@ int l_Movie_GetFrameRate(lua_State* L) {
   lua_pushnumber(L, CheckControl<Movie>(L, 1)->frameRate);
   return 1;
 }
-// GetNumFrames(): not known without reading the whole stream; 0 for now.
+// GetNumFrames(): the length by the stream's time stamps times its frame rate.
 int l_Movie_GetNumFrames(lua_State* L) {
-  CheckControl<Movie>(L, 1);
-  lua_pushnumber(L, 0);
+  Movie* c = CheckControl<Movie>(L, 1);
+  lua_pushnumber(L, c->decoder.IsOpen() ? c->decoder.Frames() : 0);
   return 1;
 }
 
