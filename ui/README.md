@@ -525,8 +525,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the menu. SetFrontEndData / GetFrontEndData now keep their values across the user states (a copy of
   plain values; they were lost between the game and the menu). Waiting: the engine's side of
   starting an operation (engine request 31: a session from the single-player table, the map
-  script's OnPopulate / OnStart, the sim functions the operations call; GetMovieDuration, 30) and
-  the renderer's playable area and cinematic switches (renderer request 27).
+  script's OnPopulate / OnStart, the sim functions the operations call). Built with the renderer
+  (request 27): the playable part drawn (outside it black in the original's look, dimmed in the modern
+  one; the minimap shows the part), the cinematics' switches UI_NisRenderIcons, ren_SelectBoxes,
+  ren_Oblivion.
 - Not real yet: the other console commands, render passes,
   bitmap animation, other texture formats, and the engine functions the screens behind the menu
   call (their stubs are named in the log).
@@ -569,7 +571,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   turns a second. TrackEntities follows the first living unit of its list (then the next);
   NoseCam sits behind a unit, looking its way, raised by its pitch and the adjustment. Ours: the
   player's wheel or drag ends a timed move (and lets a waiting script go); a followed unit's place
-  is the last beat's until the picture gives the frame's (renderer request 28); the focus is not
+  and turn are the frame's (WorldPicture::UnitTransform, renderer request 28); the focus is not
   yet moved along the view onto the ground for markers above or below it. Test `ui/tests/camera.lua`.
   Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
   structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.

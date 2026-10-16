@@ -47,6 +47,7 @@ struct GameSession::Picture : WorldSource {
   LookSettings lookNow;      // the player's looks as last given to the picture
   bool lookApplied = false;
   std::vector<uint32_t> iconColorsNow;  // the icons' team colours as last given (empty: the armies' own)
+  float playableNow[4] = {0, 0, -1, -1};  // the playable part as last given
   // On the game's window (UseWindow): the world view's Draw only notes its camera and size, and
   // the frame is drawn and shown by PresentToWindow with the interface over it.
   bool direct = false;
@@ -59,10 +60,20 @@ struct GameSession::Picture : WorldSource {
   double moment = 0;
   bool momentFixed = false;
   bool DrawsToWindow() const override { return direct; }
+  // The frame's moment, fixed by the first that asks this frame (the camera following a unit asks
+  // before the anchors and the drawing); PresentToWindow lets it go after.
+  double FrameMoment() {
+    if (!direct) return session ? session->PictureTick() : 0.0;
+    if (!momentFixed) moment = session ? session->PictureTick() : 0.0, momentFixed = true;
+    return moment;
+  }
+  bool UnitTransform(uint32_t id, float position[3], float orientation[4]) override {
+    return session && picture.UnitTransform(id, FrameMoment(), position, orientation);
+  }
   void LifeBarAnchors(std::vector<BarAnchor>* out) override {
     out->clear();
     if (!direct || cameraW <= 0 || !session) return;
-    moment = session->PictureTick(), momentFixed = true;
+    FrameMoment();
     std::vector<render::WorldPicture::LifeBarAnchor> anchors;
     picture.LifeBarAnchors(camera, cameraW, cameraH, moment, &anchors);
     out->reserve(anchors.size());
@@ -155,6 +166,11 @@ struct GameSession::Picture : WorldSource {
     std::vector<render::WorldPicture::UserDecal> decals;
     for (const WorldDecal& d : scene.decals) decals.push_back({d.texture, d.position[0], d.position[2], d.size[0], d.size[1]});
     picture.SetUserDecals(decals);
+    // The playable part of the map, when it changes.
+    if (!std::equal(scene.playableRect, scene.playableRect + 4, playableNow)) {
+      std::copy(scene.playableRect, scene.playableRect + 4, playableNow);
+      picture.SetPlayableRect(playableNow[0], playableNow[1], playableNow[2], playableNow[3]);
+    }
     // The strategic icons' team colours (TeamColorMode), when they change.
     if (scene.iconColors != iconColorsNow) {
       iconColorsNow = scene.iconColors;
@@ -186,6 +202,10 @@ struct GameSession::Picture : WorldSource {
       w->bloom = looks.bloom;
       w->bloomIntensity = looks.bloomIntensity;
     }
+    // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
+    if (!lookApplied || looks.strategicIcons != lookNow.strategicIcons) picture.SetStrategicIcons(looks.strategicIcons);
+    if (!lookApplied || looks.selectionMarks != lookNow.selectionMarks) picture.SetSelectionMarks(looks.selectionMarks);
+    if (!lookApplied || looks.worldShown != lookNow.worldShown) picture.SetWorldShown(looks.worldShown);
     lookNow = looks;
     lookApplied = true;
     if (session && session->sim_) picture.SetAllies(session->allies_);  // (as of the last beat: SetScene may come while one runs)

@@ -307,6 +307,11 @@ struct LookSettings {
   // Intensity, ren_BloomBlurKernelScale 1.0..1.7; World::bloom, bloomIntensity). From the next frame.
   float iconScale = 1.0f;
   bool iconsAlways = false;
+  // The cinematics' and the score screen's switches (console UI_NisRenderIcons, ren_SelectBoxes,
+  // ren_Oblivion; gamemain.lua's NIS mode, score.lua): the strategic icons, the selection marks, the
+  // world itself (off: black under the interface). WorldPicture::SetStrategicIcons,
+  // SetSelectionMarks, SetWorldShown (renderer request 27).
+  bool strategicIcons = true, selectionMarks = true, worldShown = true;
   bool bloom = true;
   float bloomIntensity = 1.5f;
 };

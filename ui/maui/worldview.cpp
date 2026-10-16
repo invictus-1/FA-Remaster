@@ -874,6 +874,7 @@ class WorldView : public Control {
     WorldMeshesForWorld(L, &scene.meshes);
     UserDecalsForWorld(L, &scene.decals);
     IconColorsForWorld(L, &scene.iconColors);
+    std::copy(UserState::From(L)->playableRect, UserState::From(L)->playableRect + 4, scene.playableRect);
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
@@ -1054,6 +1055,8 @@ class WorldView : public Control {
     WorldSource* source = UserState::From(L)->config().world;
     float mw = 0, mh = 0;
     if (!source || !miniMap || !source->MapSize(&mw, &mh)) return false;
+    const float* play = UserState::From(L)->playableRect;  // (the playable part alone, in its proportion)
+    if (play[2] > play[0] && play[3] > play[1]) mw = play[2] - play[0], mh = play[3] - play[1];
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     float w = r.x1 - r.x0, h = r.y1 - r.y0;

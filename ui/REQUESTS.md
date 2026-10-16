@@ -1667,6 +1667,12 @@ From the interface chat, 2026-10-16, not blocking yet. Chris's call: the campaig
 - Please check that the operations' own world objects are drawn: the objective arrows (script entities
   with /meshes/game/arrow_mesh, SetDrawScale, attached and bouncing by SetParentOffset;
   objectiveArrow.lua) and the objective areas the sim lays as decals (CreateDecal).
+DONE (render 5419aa2, main 3a9df3e; docs/render-answers.md): SetPlayableRect(x0, z0, x1, z1) (outside: no
+units, icons or bars, not picked; black in the original's look as the original, dimmed with an edge line
+in the modern look; the minimap shows the part, given a width in its proportion), SetStrategicIcons,
+SetSelectionMarks, SetWorldShown; the objective arrows and areas drawn (the areas were not before).
+Wired: WorldScene::playableRect from SyncPlayableRect, the minimap's rectangle in the part's proportion,
+the three console switches in LookSettings (GameSession's SetScene).
 
 ### 28. A unit's place and turn as the frame shows it (the camera following units in cinematics)
 From the interface chat, 2026-10-16, not blocking. The campaign's cinematics make the camera follow
@@ -1677,6 +1683,10 @@ host only has the beats' places (10 a second), so a followed unit would jerk. Co
 `bool UnitTransform(uint32_t entityId, float position[3], float orientation[4])` (w, x, y, z or say
 which order) as it will draw that unit in the coming frame (the same moment as LifeBarAnchors), false
 when it does not have the unit? The camera's step runs before the frame is drawn.
+DONE (render 5419aa2): `UnitTransform(id, tick, position, orientation)` (x, y, z, w; the unit faces its +z)
+for the tick given to Draw / DrawToWindow / LifeBarAnchors. Wired: GameSession's Picture fixes the
+frame's moment at the first ask (UnitTransform or LifeBarAnchors) and DrawToWindow takes it; the
+camera's FollowedPlace asks it first, the beat's place otherwise.
 
 
 

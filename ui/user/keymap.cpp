@@ -719,6 +719,9 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       return;
     }
     if (key == "UI_ALWAYSRENDERSTRATEGICICONS") return void(looks.iconsAlways = value.empty() ? !looks.iconsAlways : on);
+    if (key == "UI_NISRENDERICONS") return void(looks.strategicIcons = value.empty() ? !looks.strategicIcons : on);
+    if (key == "REN_SELECTBOXES") return void(looks.selectionMarks = value.empty() ? !looks.selectionMarks : on);
+    if (key == "REN_OBLIVION") return void(looks.worldShown = value.empty() ? !looks.worldShown : !on);  // (true: no world)
     if (key == "REN_BLOOM") return void(looks.bloom = value.empty() ? !looks.bloom : on);
     if (key == "REN_BLOOMBLURKERNELSCALE") {  // the game's Bloom Intensity / 10
       if (!value.empty()) looks.bloomIntensity = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
