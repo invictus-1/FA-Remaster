@@ -105,6 +105,12 @@ class StrategicIcons {
   // How many screen pixels one pixel of a symbol covers. 0: chosen from the picture's height
   // (1 up to 1440 lines, 2 for 2160), so symbols stay readable on a dense screen.
   float scale = 0;
+  // The player's options (the game's "Scale strategic icons", ui_StrategicIconScale 1 / 1.5 / 2, and
+  // "Always Show Strategic Icons", ui_AlwaysRenderStrategicIcons): symbols at least this large, where
+  // `scale` is 0 (the larger of this and the one chosen from the height); and the symbols at every
+  // distance, close up over the models too (no coming in by the blueprint's IconFadeInZoom).
+  float playerScale = 1;
+  bool always = false;
   // A symbol comes in over this share of its distance, ending at the distance (0.1: from 90% of it).
   float fadeShare = 0.1f;
   int drawn = 0;  // symbols in the last Draw
