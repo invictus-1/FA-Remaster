@@ -2497,6 +2497,7 @@ BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   if (G && (G->beingBuilt || G->unitStates.count("Upgrading")) && !Cat(sim, G, "FACTORY") && !Cat(sim, G, "SHIELD") &&
       !Cat(sim, G, "SILO") && !Mobile(G))
     g.endWhenIdle = true;
+  AttackerUnpackStop(sim, u);  // 0x6115a0..: standing unpacked with AI.NeedUnpack: SetDesiredTarget(none)
   t->state = 3;
   if (!(g.ferryFactory || Cat(sim, u, "NOFORMATION"))) {
     if (Cat(sim, u, "FACTORY") && !Mobile(u)) {

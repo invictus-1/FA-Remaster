@@ -251,6 +251,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   u->unitStates.insert("Patrolling");
   PatrolSearchBox(sim, u, *t->pdata);
   AirSpeedThroughEvent(sim, u);  // the patrol task ctor
+  AttackerUnpackStop(sim, u);    // ctor 0x61b009..0x61b067: standing unpacked with AI.NeedUnpack: SetDesiredTarget(none)
   BuildTask* r = t.get();
   sim.Own(std::move(t));
   return r;
@@ -416,7 +417,12 @@ void StartHead(Sim& sim, Unit* u) {
       default:
         break;
     }
-    if (IsPatrolType(c.type) && u->motion.bp && u->motion.bp->mobile() && !u->immobile) {
+    // (no Immobile test anywhere in DispatchTask 0x608ef0: a unit standing unpacked (Unit:SetImmobile) is given its
+    // move or patrol task as any other; the task's ctor packs it up (AttackerUnpackStop) and the steering holds
+    // still while the state lasts. Seen: LAND 1679, two heavy artillery (url0304) unpacked and firing were given a
+    // player's Move: the original's navigators took the goal at 1680 and the units drove off; ours dropped the
+    // order ("not carried out ... immobile").)
+    if (IsPatrolType(c.type) && u->motion.bp && u->motion.bp->mobile()) {
       u->task = StartPatrolTask(sim, u, c);
       u->headState = kRunning;
       return;
@@ -438,7 +444,7 @@ void StartHead(Sim& sim, Unit* u) {
       u->headState = kRunning;
       return;
     }
-    bool mobile = u->motion.bp && u->motion.bp->mobile() && !u->immobile;
+    bool mobile = u->motion.bp && u->motion.bp->mobile();
     if ((MoveLike(c.type) || ApproachLike(c.type)) && mobile) {
       SetMoving(u, true);
       bool driving = u->motion.hasGoal || (u->motion.vel.x * u->motion.vel.x + u->motion.vel.z * u->motion.vel.z) > 1e-6f;
@@ -446,6 +452,9 @@ void StartHead(Sim& sim, Unit* u) {
       u->motion.failed = false;
       (void)driving;
       RunPathSearch(sim, u, true);  // land units queue their search in the navigator
+      // NewMoveTask 0x6190a0 sets the navigator's goal first, then the ctor (CUnitMoveTask 0x618638, the
+      // form-and-move task's 0x619401) packs up a unit standing unpacked with AI.NeedUnpack
+      if (MoveLike(c.type)) AttackerUnpackStop(sim, u);
       if (MoveLike(c.type)) AirSpeedThroughEvent(sim, u);  // the move task ctor
       return;
     }

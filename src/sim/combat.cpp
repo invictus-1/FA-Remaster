@@ -2469,7 +2469,7 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   // (url0304) unpacking for a target of its own was given a patrol's attack child at 1638; the original's MainGun
   // went to WeaponPackingState in that beat and the unit could move again at 1644, ours kept its target and stood
   // unpacked until the child's first run six beats later.)
-  if (u->unitStates.count("Immobile") && CB(u).needUnpack && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
+  AttackerUnpackStop(sim, u);
   if (CanFlyU(u)) d->firstUpdate = false;
 }
 
@@ -2551,6 +2551,10 @@ void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
 // Update 0x5f3020 (no formation)
 void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
+  // 0x5f303e..0x5f30a5: a unit standing unpacked (IsUnitState(Immobile)) whose blueprint has AI.NeedUnpack (bp+0x48c)
+  // and that has an attacker is told SetDesiredTarget(none) first (as in the ctor 0x5f2c22): its weapons pack up so
+  // it can drive to the goal set below.
+  AttackerUnpackStop(sim, u);
   bool has = TaskHasTarget(sim, target);
   // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
   // command's formation, which is laid out around the target, not for the target itself. (Only while the task
@@ -2684,7 +2688,9 @@ void AbortNavigation(Unit* u) {
 void AttackEvent(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
   if (t.state == 5) return;
-  bool mobile = TaskCanMove(u);
+  // U.IsMobile (vt+0x30 = IUnit::IsMobile 0x6a4a10: the unit has a motion, u+0x4b0) at 0x5f3f04 / 0x5f3f32 /
+  // 0x5f3f54 / 0x5f3f76: not the Immobile state; an artillery standing unpacked is still mobile here
+  bool mobile = IsMobile(u);
   if (!TaskHasTarget(sim, target)) {
     t.state = mobile ? 3 : 5;
   } else {
@@ -2721,7 +2727,12 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   bool direct = BpInCategory(sim, u->blueprint, "DIRECTFIRE");
   if (!TaskHasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
   if (!w && !d.coordinated && !direct) return -1;
-  bool mobile = TaskCanMove(u);
+  // state 1's test (0x5f366e) is U.IsMobile (vt+0x30 = IUnit::IsMobile 0x6a4a10: the unit has a motion, u+0x4b0),
+  // not the Immobile state: a heavy artillery standing unpacked takes the mobile branch (Update, then the chase),
+  // and Update's first step packs it up (0x5f3020). (Seen: LAND, url0304 (unit 0x20) given a patrol's attack child
+  // at 1640 while unpacked; at the child's first run (1646) the original's navigator took the weapon square's goal
+  // (276.5, 622.5) and was stopped again the next beat; ours took the structure branch (UpdateAttacker, state 4).)
+  bool mobile = IsMobile(u);
   switch (t.state) {
     case 0:
       t.state = 1;
@@ -2744,6 +2755,7 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         float gsr = CB(u).guardScanRadius;
         Vec3 p = l > 0 ? Add(tp, Mul(v, gsr / l)) : tp;
         AttackSetPosGoal(sim, u, p);
+        AttackerUnpackStop(sim, u);  // (after the navigator's SetGoal: 0x5f38b8)
         return 10;
       }
       AttackUpdate(sim, u, t, target);
@@ -3117,6 +3129,10 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
 void AttackerStop(Sim& sim, Unit* u) {
   if (u->dead || u->destroyQueued || u->combatGone || u->weapons.empty()) return;
   SetDesiredTarget(sim, u, AiTarget{});
+}
+
+void AttackerUnpackStop(Sim& sim, Unit* u) {
+  if (u->unitStates.count("Immobile") && CB(u).needUnpack && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
 }
 
 void ClearEngagement(Sim& sim, Unit* u) {
