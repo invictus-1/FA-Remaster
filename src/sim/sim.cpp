@@ -1901,7 +1901,6 @@ void Sim::Tick() {
       continue;
     }
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
-    if (!u->parentId) AirFormationFollow(*this, u);  // (the navigator's Execute: last beat's slot, before this beat's)
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
     const Quat prevOri = u->orientation;
     // A parent that no longer exists holds nothing (AttachParentGone): the unit goes back to its own motion on the

@@ -486,8 +486,15 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   PatrolData& p = *t.pdata;
   if (p.child) {  // the child runs; when it ends the patrol runs again in the same tick
     if (sim.tick() < p.childFrom) return kTaskRunning;
-    int r = TickBuildTask(sim, u, *p.child);
+    BuildTask& ch = *p.child;
+    const CommandType chType = ch.type;
+    const uint32_t chGoal = ch.goalId;
+    int r = TickBuildTask(sim, u, ch);
     if (r == kTaskRunning) return kTaskRunning;
+    // the child's result into the dispatcher's +0x2c (its +0x28 points there: the patrol makes its children with the
+    // dispatcher, patrol+0x50, as parent, 0x61c232 / 0x61c2b6 / 0x61c306); the attack child writes none
+    if (chType == CommandType::Repair) u->dispatchResult = r == kTaskDone ? 1 : 2;
+    else if (chType == CommandType::Reclaim) u->dispatchResult = sim.FindEntity(chGoal) ? 2 : 1;
     p.child = nullptr;
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
@@ -499,6 +506,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   if (Unit* e = PatrolFindTarget(sim, u, p.box)) {
     u->leashPos = u->position;
     if (BuildTask* c = MakeAttackTaskOn(sim, u, e)) {
+      u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
       p.child = c;
       p.childFrom = next;
       p.goalIssued = false;
@@ -517,6 +525,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
       p.tried.push_back(EntityRef(r));
       c = MakeReclaimChild(sim, u, r);
     }
+    u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
     p.child = c;
     p.childFrom = next;
     p.goalIssued = false;
@@ -567,8 +576,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // 0x61b2f0 (S from where the unit stands now). A factory's rally orders are the factory's own command objects,
 // shared with every unit that inherited them (InheritCommandsTo 0x5fa550), so dragging a rally point reaches the
 // units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
-// NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60), a child's walk under way (its
-// CUnitMoveTask listens too, and the wake ends it).
+// NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60). (A reclaim child's walk under way
+// ends with the wake: TickPropReclaim.)
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
@@ -585,14 +594,8 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
     PatrolSearchBox(sim, u, p);
     BuildTask* ch = p.child;
     if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
-      if (ch->moving) {
-        static bool warned = false;
-        if (!warned) Logf(LogLevel::Info, "moho64: tick %u: a rally order moved under a reclaim child's walk (not modelled)", sim.tick());
-        warned = true;
-      } else {
-        ReclaimTaskCommandEvent(sim, u, *ch, c);
-        p.childFrom = 0;  // (the listener wakes the thread: counter 0)
-      }
+      ReclaimTaskCommandEvent(sim, u, *ch, c);
+      p.childFrom = 0;  // (the listener wakes the thread: counter 0)
     }
   }
 }
@@ -628,6 +631,7 @@ void StartHead(Sim& sim, Unit* u) {
     u->headState = kNotStarted;
     return;
   }
+  u->dispatchResult = 0;  // (0x598fc4, before DispatchTask)
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
@@ -799,6 +803,16 @@ static bool HeadTaskStopsMotion(const Unit* u) {
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (u->commands.front()->type == CommandType::Move) return true;
+  // a patrol whose repair / reclaim child walks: the child's CUnitMoveTask suspended the thread (ctor 0x6186d6, the
+  // same listener NavEventWakesCommandThread has for it), and the clear wakes it to the run list's end. Seen: MP3
+  // 3109, army 0's engineer 0xf, its patrol's child walking, gets a BuildMobile with clear together with the idle 0x2e
+  // and 0x2f, and the three reclaim the site prop 0x2ff010e3. In the original 0xf leaves Reclaiming at 3117 and 0x2e
+  // at 3118: 0x2e takes the last step and 0xf, after it in the run list, ends at once (the order is inferred from
+  // those states). Ours kept 0xf first (its last re-link 2875): 0xf took the last step and 0x2e ended at once.
+  if (IsPatrolType(u->commands.front()->type)) {
+    const BuildTask* c = u->task && u->task->pdata ? u->task->pdata->child : nullptr;
+    return c && TaskThreadAsleepOnMove(u, c);
+  }
   return TaskThreadAsleepOnMove(u);  // (the head task's walking child, or its guard child's: build.cpp)
 }
 
@@ -953,8 +967,16 @@ void CommandStep(Sim& sim, Unit* u) {
         PopHead(u);
         u->commands.push_back(keep);
         keep->units.insert(u);
+        // IAiCommandDispatchImpl::TaskTick 0x598ebb: with its result word at 2 (the patrol's last child failed) the
+        // point goes to the back (0x598ee0) and the next one is dispatched at once (0x598f6d); otherwise (0x598fed)
         // the next patrol leg starts a beat later (seen: one beat with neither "Patrolling" nor the drive-through
-        // byte between two legs, the new goal the beat after)
+        // byte between two legs, the new goal the beat after). Seen (MP3 3035): army 0's engineer 0x2, whose repair
+        // child failed at 2945, ends its leg at 3035 and keeps Patrolling; ours had a beat without it and set the
+        // next goal a beat late.
+        if (u->dispatchResult == 2 && IsAlive(u) && !u->commands.empty()) {
+          StartHead(sim, u);
+          continue;
+        }
         if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else {
@@ -2069,7 +2091,19 @@ int l_nav_SetDestUnit(lua_State* L) {
   return 0;
 }
 int l_nav_AbortMove(lua_State* L) {
-  if (IsAlive(N(L)->unit)) MotionStop(N(L)->unit);
+  Unit* u = N(L)->unit;
+  if (!IsAlive(u)) return 0;
+  // AbortMove 0x5a3750 (through vt+0x10 from 0x5a5cfd): MakeIdle, then broadcast(Aborted = 1); a move task listening
+  // (navigator listener 0x618bb0) takes Failed and resumes its thread, re-linked at the run list's end, whichever
+  // stage the call comes from. Seen (probe mp1_1958): a stream AbortNavigation aborts MP1 army 1's engineer
+  // 0x10000e's guard walk at 1957. In the original its repair of the factory's unit then ends a beat after that of
+  // its neighbour 0x10001e (2152 / 2151), ours the other way round without the re-link (thread order inferred).
+  // Only a move task under way listens: a navigator with no goal (a UEF pod's AssistCommander aborted by
+  // ConstructionUnit:OnPrepareArmToBuild, Upgrades 3216) wakes nobody.
+  const bool wake = u->motion.hasGoal && !u->motion.arrived && !u->motion.failed &&
+                    NavEventWakesCommandThread(u);  // (asked before the goal is gone)
+  MotionStop(u);
+  if (wake && IsAlive(u)) Sim::From(L)->ResumeCommandThread(u);
   return 0;
 }
 // CAiNavigatorAir (air_nav.md 4.1, 4.6): GetStatus 0x5a37a0 = nav+0x64 (2 from SetGoal / SetDestUnit until the

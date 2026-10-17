@@ -55,6 +55,9 @@ void ReleaseEntityIntel(Sim& sim, Entity* e);
 // End of a beat: army (tick % N) runs its recon tick; moved sources move their circles.
 void ReconBeat(Sim& sim);
 void AdvanceIntelCoords(Sim& sim);
+// Entity::UpdateIntel 0x679120 -> CIntel::Update 0x76e4c0, which CUnitMotion::SetMotionHorzEvent 0x6b8f30 (and
+// NotifyAttached / ProcessCommonMotionState) runs when the unit's horizontal event has just turned to Stopped.
+void IntelExactUpdate(Sim& sim, Unit* u);
 // Whether army index a holds a blip of the unit.
 bool ArmyHasBlip(const Unit* u, int a);
 // What army index a's intel grids say of a point now (bits: 1 radar, 2 sonar, 4 omni, 8 vision). water: 0 land or

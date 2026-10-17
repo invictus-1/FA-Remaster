@@ -324,6 +324,13 @@ void OccupyStructure(Sim& sim, Unit* u) {
   u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
+  // Unit::ReleaseOccupyGround 0x6a7ab0 does nothing for a unit that no longer counts as occupying ground (+0x560 == 0,
+  // 0x6a7ab3): an upgraded structure (0x5f8581) leaves its cells to the new one, whose bits it would otherwise clear.
+  // Seen: Skirmish 1863, army 6's air factory 0x600016 upgraded into 0x60001f on the same cells.
+  if (!u->occupiesGround) {
+    sim.navigation().ForgetStructure(EntityRef(u));
+    return;
+  }
   u->occupiesGround = false;  // (ReleaseOccupyGround 0x6a7b81)
   if (!u->bpData || !u->bpData->structure) return;
   for (const auto& r : sim.navigation().Structures())
@@ -351,8 +358,13 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
   // walking to reclaim a rock at (152.2, 558.3): the original's path does not cross the rock at (153.9, 567.6)
   // (cells 152..154 x 565..569), its first target stops at (156, 568); ours went through it to (154, 566).
   if (p->occCaps & 15) {
-    if (occupy) sim.navigation().AddStructure(EntityRef(p), x0, z0, x0 + sx, z0 + sz, p->occCaps);
-    else sim.navigation().RemoveStructure(EntityRef(p));
+    const int r[4] = {x0, z0, x0 + sx, z0 + sz};
+    if (occupy) sim.navigation().AddStructure(EntityRef(p), r[0], r[1], r[2], r[3], p->occCaps);
+    else sim.navigation().RemoveStructure(EntityRef(p), r);
+    // (Seen, MP3 2988 (probe mp3_boulder): two des_boulder01 rocks share cells, 0x2ff0196b on (263,250)-(266,254) and
+    // 0x2ff00bf2 on (264,250)-(267,254). The first is reclaimed at 2642; from then on the original's land grid holds
+    // only x 266 of the second one's rect (words x 264..265 are 0), and army 3's guard 0x30002d takes its slot cells
+    // (264,252), (264,251), (265,250) as goals; ours still held them and sent it beside the rock.)
   }
   LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
 }
@@ -761,6 +773,17 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // test below, runs again only when the move has ended (mobile_build.md 8.4). Seen in the bench at 492: an
   // engineer walking to a site prop that another took away walks on to its spot in the original.
   if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
+  // A walk under way when the command listener 0x620160 set state 0 and woke the thread: the walk's CUnitMoveTask
+  // (NewMoveTask 0x61f4c0 with no command: it does not listen itself) sits on top of the thread, so it is what the
+  // wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears Moving (0x6187bd) and calls the
+  // navigator's AbortMove (0x618886); then this task runs state 0 in the same pass. Seen: MP1 2040, the player drags
+  // army 0's factory rally point while its engineer 0xb walks to a rock for the rally AggressiveMove; at 2041 the
+  // original's engineer is neither Moving nor Reclaiming (the dragged point is in sight: the task ends), ours walked
+  // on and reclaimed the rock from 2041 to 2043.
+  if (c.moving && c.state == 0) {
+    c.moving = false;
+    EndWalk(u);
+  }
   // A task without an entity (+0x4c, ReclaimTaskCommandEvent). Every Execute first asks the army's recon
   // (0x61f02e..0x61f087: IArmy vt+0x20 GetReconDB, its vt+0x10 ReconCanDetect 0x5c1850 with LOSNow 8; under water by
   // the map's water height): a place in sight ends it (result 2; OnStopReclaim if started). Out of sight the place
@@ -1403,9 +1426,16 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0: {
       if (!t.bp) return kTaskFailed;
-      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit)
+      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit, or paused)
+      u->unitStates.insert("Upgrading");  // (the ctor 0x5f8484: +0x4a0 |= 0x40)
+      // State 1 (0x5f8936): a paused upgrader (unit+0x2a0) returns 10 before anything else: no NoCost, no unit. Seen:
+      // MP1 2660, army 3 orders its mex 0x300018 to upgrade and pauses it in the same beat; the original's record has
+      // no upgrade unit and the mex is Upgrading only (not NoCost) while it stays paused; ours made 0x300033 at 2661.
+      if (u->paused) {
+        t.waitUntil = sim.tick() + 9;  // return 10
+        return kTaskRunning;
+      }
       u->unitStates.insert("NoCost");  // (0x5f89c3, before the unit is made; cleared by the task's dtor 0x5f855a)
-      u->unitStates.insert("Upgrading");
       // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation)
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
       if (!nu || !Alive(nu)) {
@@ -3229,11 +3259,11 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     } else {
       Unit* target = FindUnit(sim, t.targetId);
       if (target) {
+        // 0x5f85d5..0x5f85f5: ReleaseOccupyGround of the upgrade, its Destroy, then the builder's ExecuteOccupyGround
+        // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
-        bool occupied = false;
-        for (const auto& r : sim.navigation().Structures()) occupied = occupied || r.entity == EntityRef(u);
-        if (!occupied && Alive(u)) OccupyStructure(sim, u);
+        if (Alive(u)) OccupyStructure(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
@@ -3381,9 +3411,9 @@ bool GuardSteersItself(const Unit* u) {
   return t && t->gdata && !t->gdata->child && !t->gdata->childMove;
 }
 
-bool TaskThreadAsleepOnMove(const Unit* u) {
+bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from) {
   if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
-  for (const BuildTask* t = u->task; t;) {
+  for (const BuildTask* t = from ? from : u->task; t;) {
     if (t->moving) return true;
     if (t->sub) {
       t = t->sub;

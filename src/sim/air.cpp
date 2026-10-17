@@ -5,6 +5,7 @@
 #include "core/dmath.h"
 #include "sim/air.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/landnav.h"
 #include "sim/commands.h"
 #include "sim/transport.h"
@@ -449,6 +450,7 @@ void SetHorzEvent(Sim& sim, Unit* u, int e) {
   int old = a.horzEvent;
   a.horzEvent = e;
   Callback2(sim, u, "OnMotionHorzEventChange", kHorzNames[e], kHorzNames[old]);
+  if (a.horzEvent == 3) IntelExactUpdate(sim, u);  // CUnitMotion::SetMotionHorzEvent 0x6b8f5a..0x6b8f65
 }
 void SetMotionState(Sim& sim, Unit* u, int s) {
   AirMotion& a = A(u);
@@ -2193,13 +2195,16 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
 }
 
 // CAiNavigatorAir::Execute 0x5a50d0 -> UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while
-// the leader steers. The navigator runs in the army stage, before the command stage gives goals and before the unit's
-// MotionTick: it reads the slot (u+0x59c), the leader (u+0x584) and the formation (u+0x580) as the unit's
+// the leader steers. The navigator runs in the army stage, before the command stage gives goals and before the
+// motion: it reads the slot (u+0x59c), the leader (u+0x584) and the formation (u+0x580) as the unit's
 // UpdateInfoCache 0x6a9810 wrote them in its motion turn of the beat before, and a goal given in this beat's command
 // stage (SetGoal 0x5a4c60 sets the motion's target at once) overrides the slot until the next beat. Seen in MP1's
 // oracle: army 6's interceptor 0x60001b in a transport's guard formation has, at 1938, the slot ours wrote at 1937,
-// and at 1937 the guard's re-goal (884, 25.16, 507), the slot only from 1938. Ours ran it in the motion turn, after
-// UpdateInfoCache and after the goal: so the call stands before UpdateInfoCache in the motion pass.
+// and at 1937 the guard's re-goal (884, 25.16, 507), the slot only from 1938. The leader's status is the one of the
+// army stage too, after its own Execute (creation order): at 2213 the transport it guards is stopped by FAF's
+// AirTransportUnit.OnMotionHorzEventChange ('Stopped' -> navigator:AbortMove, in the transport's motion), and the
+// original's interceptor still follows its slot in that beat and stops following only at 2214. So it runs in the
+// navigators' stage (LandNavTickAll), after AirNavArrival, not in the motion pass.
 void AirFormationFollow(Sim& sim, Unit* u) {
   if (!u->motion.air || u->fractionComplete < 1.0f) return;
   AirMotion& a = A(u);
