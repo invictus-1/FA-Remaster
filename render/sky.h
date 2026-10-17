@@ -41,6 +41,9 @@ struct SkyLight {
   float faint = 0;       // how much of the night's own faint light there is (0 by day, 1 from dusk to dawn)
   float cover = 0;       // how much of the sky the clouds cover, 0..1
   Vec3 cloudLight;       // the falling light on the clouds
+  // The sun's (or moon's) light on the volumetric clouds (clouds.h): at their height the sun is still up
+  // a little after it has set for the ground, in the colour its long way through the air leaves it.
+  Vec3 cloudSun;
 };
 
 // The light at that hour (0..24; 6 sunrise, 12 noon, 18 sunset). The sun rises in the east (+x)
@@ -59,8 +62,9 @@ class Sky {
   bool Init(std::string* error);
   // The sky where nothing was drawn, into the scene's pass after everything solid: the computed
   // one for a view whose sky is computed (SetSky was called with `sky`), and else the map's own sky
-  // picture `mapSky` (a cube map; none: nothing is drawn, as before).
-  void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {});
+  // picture `mapSky` (a cube map; none: nothing is drawn, as before). `clouds`: volumetric clouds
+  // (clouds.h, Clouds::Picture) laid over it in place of the layer of clouds the pass makes itself.
+  void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {}, gfx::Texture clouds = {});
 
  private:
   gfx::Device* device_;

@@ -1130,6 +1130,9 @@ void InitUnitWeapon(lua_State* L, UnitWeapon* w) {
   w->nextAcquire = sim.tick() + 1;
   if (!b.targetRestrictDisallow.empty()) ParseCategory(L, b.targetRestrictDisallow.c_str(), w->disallow);
   if (!b.targetRestrictOnlyAllow.empty()) ParseCategory(L, b.targetRestrictOnlyAllow.c_str(), w->onlyAllow);
+  // (the views' shared copies: WeaponView, ui request 37)
+  w->disallowSet = sim.InternCategorySet(w->disallow);
+  w->onlyAllowSet = sim.InternCategorySet(w->onlyAllow);
 }
 
 static bool HasBlip(const Unit* t, int a) { return ArmyHasBlip(t, a); }

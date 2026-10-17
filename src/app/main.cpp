@@ -171,6 +171,50 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
          u.blueprint.c_str(), u.army, u.position[0], u.position[1], u.position[2], u.health, u.maxHealth,
          u.fractionComplete, u.queueLength, u.selectable ? "" : " unselectable", u.dead ? " dead" : "");
   }
+  {  // the units' weapons (ui request 37): how many, the shared category sets, and two armed units' weapons
+    auto t0 = std::chrono::steady_clock::now();
+    std::vector<UnitView> again;
+    UnitViews(sim, &again);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    size_t weapons = 0, armed = 0;
+    std::map<int, std::string> idOf;  // category index -> a blueprint id, of the units here
+    for (const UnitView& u : again) {
+      weapons += u.weapons.size();
+      armed += !u.weapons.empty();
+      idOf.emplace(u.categoryIndex, u.blueprint);
+    }
+    std::vector<std::vector<uint64_t>> sets;
+    CategorySets(sim, 0, &sets);
+    Logf(LogLevel::Info, "view: %zu of %zu units carry %zu weapons; %zu category sets; UnitViews took %.3f ms", armed,
+         again.size(), weapons, sets.size(), ms);
+    for (size_t s = 0; s < sets.size() && s < 10; ++s) {
+      size_t members = 0;
+      std::string here;
+      for (size_t w = 0; w < sets[s].size(); ++w)
+        for (int b = 0; b < 64; ++b)
+          if ((sets[s][w] >> b) & 1) {
+            ++members;
+            const int idx = static_cast<int>(w * 64 + b);
+            auto it = idOf.find(idx);
+            if (it != idOf.end() && here.size() < 60 && CategorySetHas(sim, static_cast<int>(s), idx)) here += " " + it->second;
+          }
+      Logf(LogLevel::Info, "view: category set %zu: %zu blueprints; of the units here:%s", s, members, here.c_str());
+    }
+    int shownArmed = 0;
+    for (const UnitView& u : again) {
+      if (u.weapons.empty() || shownArmed >= 2) continue;
+      ++shownArmed;
+      std::string list;
+      for (const WeaponView& w : u.weapons) {
+        char b[120];
+        std::snprintf(b, sizeof b, " [layers %#x radius %g..%g disallow %d onlyAllow %d]", w.layerCaps, w.minRadius,
+                      w.maxRadius, w.disallow, w.onlyAllow);
+        list += b;
+      }
+      Logf(LogLevel::Info, "view: unit %#x %s category %d layer %d%s: %zu weapons%s", u.id, u.blueprint.c_str(),
+           u.categoryIndex, u.layer, u.autoSurfaceMode ? " autosurface" : "", u.weapons.size(), list.c_str());
+    }
+  }
   // the panels' state of the first three units that have orders, and each army's build restrictions
   int shown = 0;
   for (const UnitView& u : units) {

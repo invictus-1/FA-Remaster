@@ -1684,6 +1684,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   CallMethod(L, u, u->autoMode ? "OnAutoModeOn" : "OnAutoModeOff", 0);
   CallMethod(L, u, "OnPreCreate", 0);
   u->layer = LayerName(startLayer);
+  u->createLayer = startLayer;
   lua_pushstring(L, u->layer.c_str());
   lua_pushstring(L, "None");
   CallMethod(L, u, "OnLayerChange", 2);

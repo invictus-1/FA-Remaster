@@ -45,6 +45,7 @@ struct LandNav {
   PathCell deadEnd;       // +0x2c
   uint32_t lastAdvance = 0;
   int requestMode = 0;    // +0x98
+  int pathLayer = 0;      // +0x54: the unit's layer as its navigator last took it (ctor 0x5ad513, 0x5ae4d3)
   bool speedThroughGoal = false;
   bool thinking = true;   // navigator status Thinking: the first waypoint brakes
   bool problem = false;   // ProblemGettingToGoal

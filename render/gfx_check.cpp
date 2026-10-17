@@ -43,11 +43,33 @@ RWTexture2D<float> level : register(u0);
 }
 )hlsl";
 
+// Counted at once by many threads into a whole number (atomics), written into slots past the eighth, in
+// R8 and RGBA32F; the counts emptied first by a dispatch of their own.
+const char kEmpty[] = R"hlsl(
+RWTexture2D<uint> counts : register(u12);
+[numthreads(2, 1, 1)] void CS(uint3 id : SV_DispatchThreadID) { counts[id.xy] = 0; }
+)hlsl";
+const char kCount[] = R"hlsl(
+RWTexture2D<uint> counts : register(u12);
+RWTexture2D<float4> wide : register(u9);
+RWTexture2D<float> narrow : register(u15);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  if (id.x >= 16 || id.y >= 16) return;
+  InterlockedMax(counts[uint2(0, 0)], id.x * 16 + id.y);
+  InterlockedAdd(counts[uint2(1, 0)], 1);
+  wide[id.xy] = float4(id.x / 15.0, id.y / 15.0, 1, 1);
+  narrow[id.xy] = id.y / 15.0;
+}
+)hlsl";
+
 // All of it shown in the window's top left corner, to be read back.
 const char kShow[] = R"hlsl(
 Texture2D plane : register(t0);
 Texture3D volume : register(t1);
 Texture2D level : register(t2);
+Texture2D<uint> counts : register(t3);
+Texture2D wide : register(t4);
+Texture2D narrow : register(t5);
 float4 VS(uint id : SV_VertexID) : SV_Position {
   float2 uv = float2((id << 1) & 2, id & 2);
   return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
@@ -58,6 +80,9 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   if (p.x < 128 && p.y < 8) return volume.Load(int4((p.x - 64) % 8, p.y, (p.x - 64) / 8, 0));
   if (p.x < 144 && p.y < 8) return float4(level.Load(int3(p.x - 128, p.y, 1)).r / 2, 0, 0, 1);
   if (p.x < 176 && p.y < 16) return float4(level.Load(int3(p.x - 144, p.y, 0)).r / 64, 0, 0, 1);
+  if (p.x < 178 && p.y < 1) return float4(counts.Load(int3(p.x - 176, 0, 0)) / 256.0, 0, 0, 1);
+  if (p.y >= 32 && p.y < 48 && p.x < 16) return wide.Load(int3(p.x, p.y - 32, 0));
+  if (p.y >= 32 && p.y < 48 && p.x >= 16 && p.x < 32) return float4(narrow.Load(int3(p.x - 16, p.y - 32, 0)).r, 0, 0, 1);
   return float4(0, 0, 0, 1);
 }
 )hlsl";
@@ -83,7 +108,8 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     return p;
   };
   const gfx::Pipeline fill = compute("check: fill", kFill), combine = compute("check: combine", kCombine),
-                      firstLevel = compute("check: first level", kFirstLevel);
+                      firstLevel = compute("check: first level", kFirstLevel), empty = compute("check: empty", kEmpty),
+                      count = compute("check: count", kCount);
   gfx::PipelineDesc pd;
   pd.name = "check: show";
   pd.vertexSource = pd.pixelSource = kShow;
@@ -91,8 +117,9 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   pd.depthTest = pd.depthWrite = false;
   const gfx::Pipeline show = device->CreatePipeline(pd, &error);
   if (!show) fprintf(stderr, "render: --gfx-check: %s\n", error.c_str());
-  printf("render: --gfx-check: compute pipelines %s, the drawing one %s\n", fill && combine && firstLevel ? "made" : "NOT made", show ? "made" : "NOT made");
-  if (!fill || !combine || !firstLevel || !show) return false;
+  const bool computes = fill && combine && firstLevel && empty && count;
+  printf("render: --gfx-check: compute pipelines %s, the drawing one %s\n", computes ? "made" : "NOT made", show ? "made" : "NOT made");
+  if (!computes || !show) return false;
 
   gfx::TargetDesc td;
   td.storage = true;
@@ -109,8 +136,19 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   td.mips = 2;
   td.format = gfx::Format::R32F;
   const gfx::Texture level = device->CreateTarget(td);
-  printf("render: --gfx-check: storage targets %s\n", plane && volume && level ? "made" : "NOT made");
-  if (!plane || !volume || !level) return false;
+  td.width = 2;
+  td.height = 1;
+  td.mips = 1;
+  td.format = gfx::Format::R32UI;
+  const gfx::Texture counts = device->CreateTarget(td);
+  td.width = td.height = 16;
+  td.format = gfx::Format::RGBA32F;
+  const gfx::Texture wide = device->CreateTarget(td);
+  td.format = gfx::Format::R8;
+  const gfx::Texture narrow = device->CreateTarget(td);
+  const bool made = plane && volume && level && counts && wide && narrow;
+  printf("render: --gfx-check: storage targets %s\n", made ? "made" : "NOT made");
+  if (!made) return false;
 
   const float k[4] = {0.25f, 1, 0, 0};
   std::vector<uint8_t> shot;
@@ -136,6 +174,14 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->SetStorage(0, level, 0);
     device->Dispatch(4, 2);
     device->SetStorage(0, {});
+    device->SetPipeline(empty);
+    device->SetStorage(12, counts);
+    device->Dispatch(1);
+    device->SetPipeline(count);
+    device->SetStorage(9, wide);
+    device->SetStorage(15, narrow);
+    device->Dispatch(2, 2);
+    for (int slot : {9, 12, 15}) device->SetStorage(slot, {});
     gfx::PassDesc pass;
     pass.window = true;
     pass.clearColor = false;
@@ -144,19 +190,20 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->SetTexture(0, plane);
     device->SetTexture(1, volume);
     device->SetTexture(2, level);
+    device->SetTexture(3, counts);
+    device->SetTexture(4, wide);
+    device->SetTexture(5, narrow);
     device->Draw(3);
-    device->SetTexture(0, {});
-    device->SetTexture(1, {});
-    device->SetTexture(2, {});
+    for (int slot = 0; slot < 6; ++slot) device->SetTexture(slot, {});
     device->EndFrame(frame + 1 == frames ? &shot : nullptr);
   }
   const int width = device->Width();
-  if (shot.size() < static_cast<size_t>(width) * 32 * 4 || width < 176) {
-    printf("render: --gfx-check: nothing read back (a window of at least 176 x 32 is needed)\n");
+  if (shot.size() < static_cast<size_t>(width) * 48 * 4 || width < 178) {
+    printf("render: --gfx-check: nothing read back (a window of at least 178 x 48 is needed)\n");
     return false;
   }
   // each region's pixels against what they should be (the window's 8 bits a channel: within 2 of 255)
-  int bad[4] = {}, worst[4] = {};
+  int bad[6] = {}, worst[6] = {};
   auto check = [&](int region, int x, int y, float r, float g, float b) {
     const uint8_t* p = &shot[(static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4];
     const float want[3] = {r, g, b};
@@ -178,15 +225,19 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     }
   for (int y = 0; y < 16; ++y)
     for (int x = 144; x < 176; ++x) check(3, x, y, ((x - 144) + y) / 64.0f, 0, 0);
-  const char* names[4] = {"a picture written by a dispatch", "a volume written by a dispatch", "a second level from both, by the next dispatch",
-                          "a first level, by a dispatch after that"};
+  check(4, 176, 0, 255 / 256.0f, 0, 0);  // (the largest of 16 x 16 numbers)
+  check(4, 177, 0, 1, 0, 0);             // (256 threads counted)
+  for (int y = 32; y < 48; ++y)
+    for (int x = 0; x < 32; ++x) check(5, x, y, x < 16 ? x / 15.0f : (y - 32) / 15.0f, x < 16 ? (y - 32) / 15.0f : 0, x < 16 ? 1.0f : 0);
+  const char* names[6] = {"a picture written by a dispatch", "a volume written by a dispatch", "a second level from both, by the next dispatch",
+                          "a first level, by a dispatch after that", "numbers counted at once (atomics, R32UI)", "slots past the eighth (RGBA32F, R8)"};
   bool all = true;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 6; ++i) {
     printf("render: --gfx-check: %-48s %s (largest difference %d in 255)\n", names[i], bad[i] ? "WRONG" : "right", worst[i]);
     all = all && !bad[i];
   }
-  for (gfx::Texture t : {plane, volume, level}) device->Destroy(t);
-  for (gfx::Pipeline p : {fill, combine, firstLevel, show}) device->Destroy(p);
+  for (gfx::Texture t : {plane, volume, level, counts, wide, narrow}) device->Destroy(t);
+  for (gfx::Pipeline p : {fill, combine, firstLevel, empty, count, show}) device->Destroy(p);
   printf("render: --gfx-check on %s: %s\n", device->BackendName(), all ? "all right" : "SOMETHING WRONG");
   return all;
 }

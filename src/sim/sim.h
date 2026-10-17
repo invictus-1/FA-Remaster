@@ -281,6 +281,23 @@ class Sim {
   // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;
+  // The weapons' target category sets (TargetRestrictDisallow / TargetRestrictOnlyAllow as parsed), each distinct
+  // non-empty set once, in the order first seen: UnitWeapon::disallowSet / onlyAllowSet index it, and so do the
+  // views (WeaponView in sim/sim_view.h, ui request 37). It only grows; an index keeps its set. The simulation
+  // itself tests the weapon's own copies.
+  std::vector<std::vector<uint64_t>> categorySets;
+  int InternCategorySet(const std::vector<uint64_t>& set) {
+    bool any = false;
+    for (uint64_t w : set) any = any || w != 0;
+    if (!any) return -1;
+    auto it = categorySetIndex_.find(set);
+    if (it != categorySetIndex_.end()) return it->second;
+    const int i = static_cast<int>(categorySets.size());
+    categorySets.push_back(set);
+    categorySetIndex_.emplace(set, i);
+    return i;
+  }
+  std::map<std::vector<uint64_t>, int> categorySetIndex_;
   template <class F>
   void ForPropsInRect(float x0, float z0, float x1, float z1, F&& f) {
     if (propGridDirty_) RebuildPropGrid();

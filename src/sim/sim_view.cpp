@@ -149,8 +149,42 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
       v.scrollPrev[k] = u->scrollPrev[k];
       v.scroll[k] = u->scroll[k];
     }
+    // ui request 37: the weapons as Unit::Sync 0x6abcc0 copies them (WeaponView in sim/sim_view.h)
+    v.categoryIndex = u->blueprint ? u->blueprint->entityIndex : -1;
+    v.autoSurfaceMode = u->autoSurfaceMode;
+    if (!u->weapons.empty()) {
+      v.weapons.resize(u->weapons.size());
+      for (size_t i = 0; i < u->weapons.size(); ++i) {
+        const UnitWeapon* w = u->weapons[i];
+        WeaponView& wv = v.weapons[i];
+        wv.layerCaps = w->layerCaps;
+        // (0x6ac067 / 0x6ac081: the override unless 0 > it; the blueprint's when it is below 0)
+        if (w->bp) {
+          wv.minRadius = w->ovMinRadius < 0 ? w->bp->minRadius : w->ovMinRadius;
+          wv.maxRadius = w->ovMaxRadius < 0 ? w->bp->maxRadius : w->ovMaxRadius;
+        }
+        wv.disallow = w->disallowSet;
+        wv.onlyAllow = w->onlyAllowSet;
+      }
+    }
     out->push_back(std::move(v));
   }
+}
+
+bool CategorySetHas(const Sim& sim, int set, int categoryIndex) {
+  if (set < 0 || static_cast<size_t>(set) >= sim.categorySets.size() || categoryIndex < 0) return false;
+  const std::vector<uint64_t>& words = sim.categorySets[static_cast<size_t>(set)];
+  const size_t w = static_cast<size_t>(categoryIndex) >> 6;
+  return w < words.size() && ((words[w] >> (categoryIndex & 63)) & 1);
+}
+
+void CategorySets(const Sim& sim, size_t from, std::vector<std::vector<uint64_t>>* out) {
+  for (size_t i = from; i < sim.categorySets.size(); ++i) out->push_back(sim.categorySets[i]);
+}
+
+int CategoryIndexOf(const Sim& sim, const std::string& blueprintId) {
+  const BlueprintInfo* bp = sim.blueprints().Find(blueprintId);
+  return bp ? bp->entityIndex : -1;
 }
 
 void EntityViews(const Sim& sim, std::vector<EntityView>* out) {

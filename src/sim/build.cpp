@@ -496,12 +496,19 @@ void EndMoveChild(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
-// A unit of the same kind being built at the site (join it instead of starting another).
+// A unit of the same kind being built at the site (join it instead of starting another): 0x5f6c70, the units
+// around the site (0x721fb0) that are not dead (vt+0x28), being built (vt+0x34), stand exactly on the site
+// (0x5f6dc9: the x / z distance is not above 0) and have the same blueprint id (0x5f6e0e). Whose they are is not
+// asked. (Seen: Skirmish 3023, army 1's engineer 0x100023 sent to build an xsb2104 where army 5's engineer has
+// one under way: the original's goes Building at once; ours, looking for its own army's only, found the site
+// taken and dropped the order.)
 Unit* ExistingAtSite(Sim& sim, const Unit* builder, const BlueprintInfo& bp, const Vec3& site) {
+  (void)builder;
   Unit* found = nullptr;
   sim.ForUnitsInRect(site.x - 0.5f, site.z - 0.5f, site.x + 0.5f, site.z + 0.5f, [&](Unit* u) {
     if (found || !Alive(u) || u->blueprint != &bp || !u->beingBuilt) return;
-    if (u->army != builder->army) return;
+    const float dx = u->position.x - site.x, dz = u->position.z - site.z;
+    if (std::sqrt(dz * dz + dx * dx) > 0.0f) return;
     found = u;
   });
   return found;
@@ -1118,11 +1125,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       t.state = 3;
       continue;  // return 0
     case 3: {
-      if (u->paused) {  // 0x5f7bb7 -> 0x5f7bc0: return 10
-        t.waitUntil = sim.tick() + 9;
-        return kTaskRunning;
-      }
-      if (sim.tick() < t.waitUntil) return kTaskRunning;
+      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (a task that returned 10 or 50 sleeps first)
       if (t.tries > 10) return kTaskFailed;  // 0x5f7a0b (tries: the "units in the way" rounds below)
       if (Unit* ex = ExistingAtSite(sim, u, *t.bp, t.site)) {  // join: no arm wait, work this beat
         SetFocus(sim, L, u, ex, t);
@@ -1146,6 +1149,14 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         }
       }
       if (!u->armReady) return kTaskRunning;  // 0x5f7ba7: wait for the build arm (after the location checks)
+      // 0x5f7bb7 -> 0x5f7bc0: a paused builder returns 10, after the arm's wait: the 10-beat rounds start when the
+      // arm is ready. (Seen: Skirmish 3024, army 0's engineer 0x3c, paused through its arm's turn at 2858-2861 and
+      // let go at 3017: asked every tenth beat from 2862, it starts its structure 0x5c at 3024; ours asked the
+      // pause first, every beat, and started at 3025.)
+      if (u->paused) {
+        t.waitUntil = sim.tick() + 9;
+        return kTaskRunning;
+      }
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
       if (!UnderUnitCap(u->army, d)) {
         if (++t.tries > 10) return kTaskFailed;

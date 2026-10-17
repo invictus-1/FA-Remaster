@@ -3,7 +3,83 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
-## ui 36: a unit's parent, the units on it and its creator in UnitView; what GetAssistingUnitsList counts — done (b11fa29)
+## ui 37: each unit's weapons in UnitView, for CanAttackTarget, GetValidAttackingUnits and the right click — done (cedf989)
+
+**New in `UnitView`.**
+- `weapons`: one `WeaponView` per weapon.
+  - In blueprint order, DummyWeapon left out, so `weapons[i]` is the scripts' `GetWeapon(i + 1)`. Empty for an
+    unarmed unit. Death weapons are ordinary weapons and are included.
+  - `layerCaps`: ELayer bits, as in `UnitView::layer`. It is what the scripts last gave
+    `UnitWeapon:SetFireTargetLayerCaps` (FAF's `SetValidTargetsForCurrentLayer`, on creation and on every layer
+    change), and 0 before the first call.
+  - `minRadius`, `maxRadius`: the ChangeMinRadius / ChangeMaxRadius value unless it is below 0, else the
+    blueprint's MinRadius / MaxRadius.
+  - `disallow`, `onlyAllow`: TargetRestrictDisallow / TargetRestrictOnlyAllow as the weapon parsed them, as an index
+    into the simulation's table of category sets. -1 is the empty set, i.e. no restriction.
+- `categoryIndex`: the unit's blueprint bit in the simulation's category sets. Test with this, not with the
+  interface state's numbering.
+- `autoSurfaceMode`: the SetAutoSurfaceMode flag (as in UnitStateView); the original reads it for every shooter.
+
+**New functions (sim/sim_view.h).**
+- `CategorySetHas(sim, set, categoryIndex)`: the membership test; false for -1.
+- `CategorySets(sim, from, &out)`: the sets from `from` on, for a host that tests the bits itself (bit `i & 63` of
+  word `i >> 6`). The table only grows and an index always names the same set, so taking the new ones each beat is
+  enough.
+- `CategoryIndexOf(sim, blueprintId)`: the index of any unit, prop or projectile blueprint.
+- Cost: each weapon's sets are interned once, when it is made. At the end of the Skirmish replay (588 units,
+  276 weapons, 9 sets) one UnitViews call takes 0.17 ms in all.
+
+**In the original** (read, build 3839).
+- Unit::Sync 0x6abcc0 copies each weapon (0x6abf60..0x6ac11a) into SSTIUnitVariableData+0xf8 = UserUnit+0x290.
+  Entries are 0x98 bytes:
+  - +0x00 Disallow (weapon+0xf8);
+  - +0x28 OnlyAllow (+0x120), both parsed by the weapon's constructor (0x6d4654 / 0x6d46d3), with no setter;
+  - +0x50 layer caps (+0x148);
+  - +0x54 / +0x58 min / max radius (the override unless below 0, else the blueprint's);
+  - +0x5c EffectiveRadius and +0x60 / +0x7c the UI range visuals. These are not in the view; ask if the range rings
+    want them.
+- Unit::Unit 0x6a5fb6 makes one weapon per blueprint weapon and skips DummyWeapon.
+- The entries are refreshed only in a beat where the unit's byte +0x68e is set (0x6abce5), and not once the unit is
+  dead or destroy-queued (they keep their last values). Ours gives the current values: the same for a live unit.
+
+**UserUnit::CanAttackTarget(T, checkRange)** 0x8c0d30, shooter S:
+1. **No target** (T null or without a blueprint):
+   - checkRange false: false.
+   - S mobile (MotionType 1..8): true.
+   - Otherwise true if some weapon has `minRadius < d < maxRadius` (strict), d the 2-D distance to the cursor's
+     ground point. There is no layer or set test here.
+2. **S mobile and T given: shortcuts.** Categories are tested by name on S's own blueprint, and layers compared as
+   exact values:
+   - If S.autoSurfaceMode: S in OVERLAYANTIAIR and T.layer == 16 → true; S in OVERLAYDIRECTFIRE and T.layer == 1 →
+     true.
+   - If S.layer == 1 and T.layer is 4 or 2: S's MotionType 6 or 8 and S in OVERLAYANTINAVY → true.
+   - If S.layer == 2 and T.layer == 1: MotionType 6 and OVERLAYDIRECTFIRE → true.
+3. **The weapon loop**, for each weapon w:
+   - skip w unless `(w.layerCaps & T.layer) != 0`;
+   - skip w if `CategorySetHas(w.disallow, T.categoryIndex)`;
+   - skip w if `w.onlyAllow != -1` and not `CategorySetHas(w.onlyAllow, T.categoryIndex)`.
+   - The first w that passes gives true if S is mobile or checkRange is false; otherwise true if
+     `w.minRadius <= d <= w.maxRadius` (inclusive), d the 2-D distance between S and T.
+4. Otherwise false.
+
+**GetValidAttackingUnits** 0x896090 (binding 0x8bd410): T is the entity under the cursor, or none. The result is
+every selected unit with CanAttackTarget(T, true), in selection order.
+
+**The right click** (GetRightMouseButtonAction 0x81ec00):
+- With RULEUCC_Attack in the selection's caps (0x81f0ca), 0x81d080 is false if T is none, its byte +0x71 is set, or
+  T is a destroy-queued unit. Otherwise it is true if any selected unit has CanAttackTarget(T, true), and then the
+  action is RULEUCC_Attack.
+- The later steps are your helper's reading.
+- Empty sets: the original takes a set with an empty word vector as empty; ours gives -1 for a set with no bit set
+  (the same test the simulation applies).
+
+**Inferred, not read:**
+- UserEntity+0xf0 is the entity's current layer;
+- refreshing only on the dirty byte changes nothing for a live unit;
+- Unit::Sync runs once per beat per unit.
+Our simulation keeps `autoSurfaceMode` but does not act on it yet.
+
+## ui 36: a unit's parent, the units on it and its creator in UnitView; what GetAssistingUnitsList counts — done (dac70cb)
 
 **New in `UnitView`.** All three are entity ids; `0xffffffff` means none, as in EntityView (0 is army 1's first unit).
 - `parent`: the entity the unit hangs on, a unit or a script entity.

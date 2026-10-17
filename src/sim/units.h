@@ -45,6 +45,9 @@ class UnitWeapon : public ScriptObject {
   Vec3 solution;            // firing solution direction (+0x178), NaN = none
   bool hasSolution = false;
   std::vector<uint64_t> disallow, onlyAllow;  // category sets (empty: none)
+  // The same two sets as entries of Sim::categorySets (-1: the set is empty), for UnitView's WeaponView (ui request
+  // 37). Set with them in InitUnitWeapon; nothing changes them later (no script call writes weapon+0xf8 / +0x120).
+  int disallowSet = -1, onlyAllowSet = -1;
   int layerCaps = 0;
   float firingRandomness = 0;
   std::vector<std::vector<uint64_t>> priorities;
@@ -230,6 +233,7 @@ class Unit : public Entity {
   Quat prevLastOrientation;        // ... and at the start of the tick before (the entity's previous transform)
   Vec3 prevLastPosition;
   uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
+  int createLayer = 0;             // layer bits it was made in (what its navigator's +0x54 starts from)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
   std::vector<class ReconBlip*> fakeBlips;  // a jammer's fake blips (shared by the armies that hold them)
   bool everMobileChecked = false;

@@ -37,6 +37,31 @@ struct EconomyTotals {
   float reclaimed[2] = {0, 0};         // since the game began
 };
 
+// ui request 37: one weapon of a unit as the original's user side holds it, for UserUnit:CanAttackTarget,
+// GetValidAttackingUnits and the right click's attack-invalid rule (docs/engine-answers.md "ui 37" has the rules).
+// The original's entry (UnitWeaponInfo, 0x98 bytes, the vector SSTIUnitVariableData+0xf8 = UserUnit+0x290) is
+// filled by Unit::Sync 0x6abcc0 (0x6abf60..0x6ac11a) from attacker->GetWeapon(i):
+//   +0x00 <- weapon+0xf8 (UnitWeapon::GetCat1 0x6a4c70): the TargetRestrictDisallow set
+//   +0x28 <- weapon+0x120 (0x6a4ca0): the TargetRestrictOnlyAllow set (both parsed by the weapon's constructor,
+//          0x6d4654 / 0x6d46d3; no script binding changes them later)
+//   +0x50 <- weapon+0x148 (0x6ac045): the fire-target layer caps, as UnitWeapon:SetFireTargetLayerCaps 0x6da3d0 last
+//          set them (0 until the scripts' first call)
+//   +0x54 <- weapon+0x60 unless it is below 0, else the blueprint's MinRadius (bp+0x58) (0x6ac05f)
+//   +0x58 <- weapon+0x64 unless it is below 0, else the blueprint's MaxRadius (bp+0x5c) (0x6ac07c): the overrides
+//          are what ChangeMinRadius / ChangeMaxRadius set
+// (and +0x5c the EffectiveRadius, +0x60 / +0x7c the UIMinRangeVisualId / UIMaxRangeVisualId: not here).
+// The original refreshes the entries only in a beat that marked the unit (its byte +0x68e, set by the weapon's
+// creation, SetFireTargetLayerCaps, ChangeMinRadius / ChangeMaxRadius), and no more once the unit is dead or being
+// destroyed (0x6abeb4 / 0x6abec9: IUnit::IsDead, DestroyQueued). These are the weapon's values after the beat: the
+// same for a live unit; a dead one's may have moved on since its death (a crashing aircraft's new layer).
+struct WeaponView {
+  int layerCaps = 0;  // ELayer bits, as UnitView::layer (1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air, 32 Orbit)
+  float minRadius = 0, maxRadius = 0;
+  // the two sets, as indices into the simulation's table of category sets (CategorySetHas, CategorySets below);
+  // -1 = the empty set (no restriction)
+  int disallow = -1, onlyAllow = -1;
+};
+
 struct UnitView {
   uint32_t id = 0;        // the entity id (stable while the unit lives; reused later, as in the recordings)
   std::string blueprint;  // "uel0001"
@@ -111,6 +136,16 @@ struct UnitView {
   // All 0 for a unit that never had a scroller.
   float scrollPrev[2] = {0, 0};
   float scroll[2] = {0, 0};
+  // ui request 37. categoryIndex: its blueprint's bit in the simulation's category sets (what CategorySetHas takes;
+  // the original's REntityBlueprint+0x5c, which UserUnit::CanAttackTarget 0x8c0d30 looks up in a weapon's sets,
+  // 0x8c1115 / 0x8c115f); -1 = none. The interface state's own blueprint numbering may differ: use this one.
+  // weapons: one per weapon in the blueprint's order, DummyWeapon entries left out (Unit::Unit 0x6a5fb6 makes no
+  // weapon for them), so weapons[i] is the scripts' GetWeapon(i + 1); empty for an unarmed unit.
+  // autoSurfaceMode: the SetAutoSurfaceMode flag (UnitStateView::autoSurfaceMode), the original's
+  // SSTIUnitVariableData+9 that CanAttackTarget reads for each shooter (UserUnit+0x1a1, 0x8c0e7c).
+  int categoryIndex = -1;
+  std::vector<WeaponView> weapons;
+  bool autoSurfaceMode = false;
 };
 
 // An entity a script made that is neither unit, projectile nor prop (a shield bubble, a build frame, the pieces
@@ -343,6 +378,15 @@ std::vector<ArmyView> ArmyViews(const Sim& sim);
 EconomyTotals EconomyTotalsOf(const Sim& sim, int army);
 // Every unit the simulation holds (those waiting to be destroyed left out), in entity-id order.
 void UnitViews(const Sim& sim, std::vector<UnitView>* out);
+// The simulation's category sets that WeaponView::disallow / onlyAllow name (ui request 37), each distinct set
+// once: it only grows, and an index always names the same set. CategorySetHas: whether the blueprint with that
+// categoryIndex (UnitView::categoryIndex, CategoryIndexOf) is in set `set`; false for -1, an unknown set or index.
+// CategorySets: the sets from index `from` on, appended to out, for a host that tests the bits itself: the
+// blueprint with category index i is bit (i & 63) of word i >> 6. CategoryIndexOf: the category index of any
+// unit, prop or projectile blueprint by its id (as UnitView::blueprint names it), -1 = none.
+bool CategorySetHas(const Sim& sim, int set, int categoryIndex);
+void CategorySets(const Sim& sim, size_t from, std::vector<std::vector<uint64_t>>* out);
+int CategoryIndexOf(const Sim& sim, const std::string& blueprintId);
 // The posed bones of one unit (false: no such unit; an empty list: it stands in its rest pose), and of every
 // unit that has any, in entity-id order. Read once per beat, after Tick().
 bool UnitPoseOf(const Sim& sim, uint32_t unitId, std::vector<BonePose>* out);

@@ -44,6 +44,20 @@ So: build it against recordings, combine later by swapping the source of the fra
    modern one (physically based lighting, shadows, better water). The modern look is where the work
    goes; matching the original picture for picture is not a goal.
 6. Effects and the rest: emitters, beams, decals, projectiles, shields, fog of war, strategic icons.
+7. The lighting upgrade of the modern look (Chris, 2026-10-16; plan, costs and state in
+   `docs/render-lighting.md`). Every piece a player option, off by default, today's look the fallback,
+   measured against 60 frames a second; ray tracing on Direct3D 12 and Vulkan only (none on macOS).
+   In order:
+   1. Groundwork: compute shaders, storage targets and volumes in `gfx.h` (done, `--gfx-check`).
+   2. Light in the air: volumetric fog, the sun's shafts, lamps' beams (done, first version: `air.h`).
+   3. Motion (`motion.h`, done) and AMD's FSR 3 upscaler (`fsr3.h`): in work.
+   4. Volumetric clouds (3D noise, lit, their shadows on the ground; done, first version: `clouds.h`),
+      the sky from tables of the atmosphere (to come).
+   5. Soft and contact shadows: next.
+   6. Ray tracing: reflections on every surface (the water already mirrors in screen space; a renderer
+      without a G-buffer gets reflections on metal and wet ground best from rays its shaders cast), bounce
+      light from probes, shadows; each with a fallback.
+   7. Rain and snow, with the visuals session's art.
 
 ## Build and run
 

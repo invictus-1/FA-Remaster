@@ -699,6 +699,21 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     n.target = n.cur;  // (0x5ae498)
     return;
   }
+  // 0x5ae4a6..0x5ae4e4: a SurfacingSub (Physics.MotionType 5, bp+0x290) whose layer (unit+0x120) is not the one
+  // its navigator holds (+0x54: the layer the unit was made in, until this changes it) takes the new layer and
+  // asks for a continuation path (mode 2),
+  // and does nothing else in this beat. (Seen: Skirmish 2978, army 4's sub 0x400028 reaches the surface on its
+  // aggressive move; the original's target goes from (225, 525) to (310, 461) at 2980, ours kept the far one.)
+  if (Bp(u).motionType == kMotionSurfacingSub) {
+    const std::string& l = u->layer;
+    const int layer = l == "Land" ? 1 : l == "Seabed" ? 2 : l == "Sub" ? 4 : l == "Water" ? 8 : l == "Air" ? 0x10
+                    : l == "Orbit" ? 0x20 : 0;
+    if (n.pathLayer != layer) {
+      n.pathLayer = layer;
+      RequestContinuation(sim, u, n, 2);
+      return;
+    }
+  }
   float d = n.hasTarget ? Dist(n.cur, n.target) : kInf;
   bool force = n.poke;  // the steering's push report forces a TryAdvance (Func1 0x5a3e80)
   const MotionBlueprint& b = Bp(u);
@@ -894,7 +909,10 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
 // larger rects are taken as they are (pathfinding.md 4.1)
 void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough) {
   u->motion.faceDir = {};  // (CUnitMotion::SetTarget 0x6b8872 takes the goal's facing: none)
-  if (!u->motion.nav) u->motion.nav = std::make_shared<LandNav>();
+  if (!u->motion.nav) {
+    u->motion.nav = std::make_shared<LandNav>();
+    u->motion.nav->pathLayer = u->createLayer;  // (the navigator ctor 0x5ad513: +0x54 = unit+0x120 then)
+  }
   LandNav& n = *u->motion.nav;
   PathCell gc{x0, z0};
   const bool single = x1 == x0 + 1 && z1 == z0 + 1;

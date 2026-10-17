@@ -32,6 +32,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       ao(device),
       post(device),
       air(device),
+      clouds(device),
+      motion(device),
       upscaler(device),
       skyDraw(device),
       falling(device),
@@ -57,7 +59,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     stepStart = now;
   };
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !air.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -431,6 +433,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   const int sceneWidth = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(width) * share))) : width;
   const int sceneHeight = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(height) * share))) : height;
   view = View::Make(camera, sceneWidth, sceneHeight, time);
+  // motion: the view without its jitter kept, this frame's and the frame before's (none yet: no jitter)
+  const bool moving = (motionOn || motionView > 0) && gSceneSamples == 1;
+  meshes.motion = moving;
+  if (moving) motion.Begin(&view, 0, 0, false);
   // the light: the map's sun, in the chosen look
   ViewConstants& c = view.constants;
   const Vec3 sunDirection = haveMap_ ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
@@ -985,7 +991,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         pose.nextCount = u.nextBoneCount;
         pose.blend = frame.blend;
         meshes.Add(body, Mat4::FromTRS({u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]}, body->scale),
-                   colorOf(u.Army()), u.fractionComplete, &pose);
+                   colorOf(u.Army()), u.fractionComplete, &pose, nullptr, nullptr, u.id + 1);
         ++dyingDrawn;
       }
       continue;
@@ -1162,7 +1168,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
-                 model->scrolls && !hitAt ? u.treads : nullptr);
+                 model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
@@ -1336,7 +1342,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       meshes.Add(model, at, Vec3{static_cast<float>(clock_ - born), static_cast<float>(std::fmod(born, 100.0)) * -0.01f, 0});
       continue;
     }
-    meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army));
+    // (keyed apart from the units: the top bit set)
+    meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army), 1, nullptr, nullptr, nullptr, (f.id + 1) | 0x80000000u);
   }
   impactBorn_.swap(impactBornNext_);
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
@@ -1408,6 +1415,9 @@ void World::Render() {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
   }
+  // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
+  Stage("clouds' shadows");
+  clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // light in the air: its volume, between the shadow maps and the scene that reads it
   Stage("light in the air");
   air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
@@ -1417,6 +1427,7 @@ void World::Render() {
   device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
   device_->SetTexture(kEnvironmentSlot, sky_);
   device_->SetTexture(kAirSlot, air.Volume());
+  device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   lights.Bind();
   if (haveMap_) {
     Stage("ground");
@@ -1458,8 +1469,15 @@ void World::Render() {
       post.ContinueScene();
       ao.Apply(view);
     }
+    // the clouds as volumes (when on): from the depth of everything solid, before the sky lays them over itself
+    if (clouds.Shadows()) {
+      Stage("clouds");
+      clouds.Build(view, camera, skyLight, post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    }
     Stage("sky");
-    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{}, clouds.Picture());  // where nothing solid is
     Stage("water");
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
@@ -1490,6 +1508,14 @@ void World::Render() {
   } else {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
+  }
+  // motion: from the depth of everything solid and the water, and the models that moved of themselves
+  if (meshes.motion) {
+    Stage("motion");
+    motion.Build(view, post.Depth(), motionView == 4 ? nullptr : &meshes);  // (4: for checking, the camera's part alone)
+    post.KeepOpaque();  // (the solid scene and the water, for the upscaler's reactive mask)
+    post.ContinueScene();
+    lights.Bind();
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
   Stage("see-through (shields)");
@@ -1531,6 +1557,7 @@ void World::Render() {
     sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
   }
   Stage("finishing (exposure, bloom)");
+  post.shown = meshes.motion ? motion.Check(motionView, view, post.Color()) : gfx::Texture{};
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
   Stage("icons, bars");
   icons.showSymbols = iconsOn;
