@@ -1004,6 +1004,9 @@ aimed at that unit (0x821014), and the simulation logs "command TransportReverse
 TransportLoadUnits does from the other side? Also, while you're there: a teleport beacon right-clicked with a
 TELEPORTATION unit selected gives TransportUnloadUnits aimed at the beacon. Test: ui/tests/transport.lua logs "on
 board after the pick-up order" (2 today, 3 once it works).
+DONE (engine 3c13915, answer "ui 39" in engine-answers.md): carried out the original's way (the transport flies to
+the unit, or the unit drives under a landed transport within its GuardScanRadius); the beacon case needed nothing.
+Used: ui/tests/transport.lua now checks the third tank on board (3, in 7 s).
 
 ## To the renderer track
 

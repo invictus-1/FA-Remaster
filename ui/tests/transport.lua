@@ -1,6 +1,7 @@
 -- The right click's transport and capture orders (GetRightMouseButtonAction, FA exe 0x81ec00): units over
 -- their own transport get on it (0x81d280, TransportLoadUnits), a transport over a unit picks it up
--- (0x81d660, TransportReverseLoadUnits), an engineer over an enemy's building captures it, and a loaded
+-- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
+-- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
 -- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 4200.
 local failed = 0
@@ -108,8 +109,10 @@ ForkThread(function()
             WaitSeconds(0.5)
             waited = waited + 0.5
         end
-        -- (the simulation's part: the engine's, not carried out yet when this was written)
-        LOG("TEST note: on board after the pick-up order: " .. table.getn(GetAttachedUnitsList({transport})))
+        -- (the simulation carries it out the original's way: the transport goes to the tank, or the tank drives
+        -- under a landed transport within its GuardScanRadius; engine request 39)
+        LOG("TEST note: on board after the pick-up order: " .. table.getn(GetAttachedUnitsList({transport})) .. " after " .. waited .. " s")
+        check("the third tank is picked up", table.getn(GetAttachedUnitsList({transport})), 3)
         -- the loaded transport over open ground: a move, never an unload
         local ground = {where[1] - 15, where[2], where[3] - 15}
         local g = view:Project(ground)

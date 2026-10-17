@@ -390,8 +390,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   TransportReverseLoadUnits (the game's skin shows the unload cursor for it, as in the original);
   factories over a ferry beacon send what they build there. Cargo and free room are not asked, as in the
   original. A right click on the ground never unloads: a loaded transport moves (unloading is the
-  order button's). Test: `ui/tests/transport.lua` (the simulation does not carry out
-  TransportReverseLoadUnits yet: engine request 39). A tree, a rock or a wreck is reclaimed too: the simulation names the reclaimable
+  order button's). Test: `ui/tests/transport.lua` (the pick-up carried out by the simulation since
+  engine request 39: the tank on board in 7 s). A tree, a rock or a wreck is reclaimed too: the simulation names the reclaimable
   thing at a place (`ReclaimableAt`), and a right click right on one, with a unit selected that
   can reclaim, or the Reclaim button's click near one, sends the order on it (which thing the
   original's cursor takes is not read; `GetRightMouseButtonOrder` answers Reclaim there too, so
