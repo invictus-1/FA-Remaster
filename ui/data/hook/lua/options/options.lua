@@ -96,6 +96,7 @@ local looks = {
         -- atmosphere's tables; with the lobby's Time of Day
         title = "Atmosphere",
         key = 'remaster_atmosphere',
+        tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky. Needs a Time of Day chosen in the lobby.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_atmosphere"),
@@ -110,6 +111,7 @@ local looks = {
         -- the sun's shadows sharp at the foot and soft farther off; small contact shadows at units' feet
         title = "Soft Shadows",
         key = 'remaster_soft_shadows',
+        tip = "The sun's shadows sharp where they start and soft farther off, and small contact shadows at units' feet.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_soft_shadows"),
@@ -126,6 +128,7 @@ local looks = {
         -- renderer says after its first picture whether the card can)
         title = "Ray Tracing",
         key = 'remaster_ray_tracing',
+        tip = "Bounce light and reflections, on graphics cards that can ray trace. Reflections apply from the next map loaded.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_ray_tracing"),
@@ -144,6 +147,7 @@ local looks = {
         -- shallows' caustics
         title = "Weather Effects",
         key = 'remaster_weather_effects',
+        tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_weather_effects"),
@@ -159,6 +163,7 @@ local looks = {
         -- remastered ground's decals and battle scars too)
         title = "Ground Detail",
         key = 'remaster_ground_detail',
+        tip = "Grass near the camera, pressed flat round units and buildings.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_ground_detail"),
