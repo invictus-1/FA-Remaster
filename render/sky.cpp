@@ -33,8 +33,9 @@ cbuffer SkyPicture : register(b1) {
   float4 sunDisc;     // the sun's disc as seen through the air; w: how much of the night's own faint light there is
   float4 moonPlace;   // toward the moon
   float4 starAxis;    // what the stars turn about
-  float4 cloudLight;  // the falling light on the clouds
+  float4 cloudLight;  // the falling light on the clouds; w: 1 = volumetric clouds (cloudPicture) in place of the layer
 };
+Texture2D cloudPicture : register(t1);  // (clouds.h: rgb their light, a what comes through)
 
 struct VOut {
   float4 position : SV_Position;
@@ -202,7 +203,10 @@ float4 PS(VOut i) : SV_Target {
   // has a thickness, and the view walks up through it in a few steps: a cloud is flat below and
   // heaped above (the more cloud the layer has at a place, the higher it reaches there), and each
   // step is lit by how much cloud lies between it and the light, and by the sky more the higher it is.
-  [branch] if (skyClouds.x > 0 && d.y > 0.02) {
+  [branch] if (cloudLight.w > 0.5) {  // volumetric clouds (clouds.h), marched at half the size: over the sky
+    float4 marched = cloudPicture.SampleLevel(samplerLinearClamp, i.position.xy * viewport.zw, 0);
+    c = c * marched.a + marched.rgb;
+  } else if (skyClouds.x > 0 && d.y > 0.02) {
     float3 body = skyBody.w > 0.5 ? moon : sun;
     float2 toLight = normalize(body.xz + 1e-4) * 38;
     float under = max(150 - cameraPosition.y, 40);  // the layer's underside over the eye
@@ -393,6 +397,16 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach) {
   }
   // the sun's disc: far brighter than anything else, the colour the air leaves it
   s.sunDisc = Reaches(s.body) * 40.0f;
+  // on the clouds, some 3 km up, the sun sets about two degrees later than on the ground: lit in its
+  // last colour (taken from just over the horizon) while it is still above theirs
+  if (s.moon && h < -0.07f) {
+    s.cloudSun = s.color;
+  } else {
+    Vec3 high = s.body;
+    high.y = std::max(high.y, 0.02f);
+    high = Normalize(high);
+    s.cloudSun = Each(against(Reaches(high)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.07f, 0.02f, h);
+  }
   // (a light from the horizon itself would throw shadows without end: it is taken from a little higher)
   Vec3 from = lit;
   from.y = std::max(from.y, 0.2f);
@@ -418,6 +432,7 @@ SkyLight SkyAt(float hours, float cloudCover) {
   // clouds: white in the falling light; the more of them, the more the sky's light is theirs, grey
   s.cover = std::clamp(cloudCover, 0.0f, 1.0f);
   s.cloudLight = s.color * 1.25f;
+  s.cloudSun = s.cloudSun * 1.25f;
   if (s.cover > 0) {
     const float grey = Brightness(s.zenith * 0.5f + s.horizon * 0.5f) + Brightness(s.color) * 0.12f;
     const float share = s.cover * s.cover * 0.9f;
@@ -472,7 +487,7 @@ bool Sky::Init(std::string* error) {
   return static_cast<bool>(pipeline_);
 }
 
-void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky) {
+void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky, gfx::Texture clouds) {
   if ((view.constants.skyZenith[3] < 0.5f && !mapSky) || view.height <= 0) return;
   // the picture's middle and what half a picture adds to a direction, all at the same depth
   const float w = static_cast<float>(view.width), h = static_cast<float>(view.height);
@@ -505,12 +520,14 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   four(pc.sunDisc, sky.sunDisc, sky.faint);
   four(pc.moonPlace, sky.moonPlace, 0);
   four(pc.starAxis, axis, 0);
-  four(pc.cloudLight, sky.cloudLight, 0);
+  four(pc.cloudLight, sky.cloudLight, clouds ? 1.0f : 0.0f);
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &pc, sizeof pc);
   if (mapSky) device_->SetTexture(kEnvironmentSlot, mapSky);
+  device_->SetTexture(1, clouds);
   device_->Draw(3);
+  device_->SetTexture(1, {});
 }
 
 }  // namespace render

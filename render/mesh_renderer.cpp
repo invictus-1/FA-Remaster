@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 
 #include "effect_files.h"
 #include "lighting.h"
@@ -662,6 +663,73 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
 }
 )hlsl";
 
+// Motion (motion.h): a model drawn again where its bones and place put it this frame, exactly as the
+// scene's pass computes them (so it meets the depth that pass left), writing where its bones and place
+// had the same point the frame before; both seen by the views without the jitter.
+const char kMotionShader[] = R"hlsl(
+struct Instance {
+  float4 row0, row1, row2;
+  float4 color;
+  float4 bones;
+};
+cbuffer Instances : register(b2) {
+  Instance instances[768];
+};
+struct Last {
+  float4 row0, row1, row2;
+  float4 bones;  // x: where its bones of the frame before begin (-1: at rest); y: 1 = known
+};
+cbuffer Lasts : register(b3) {
+  Last lasts[768];
+};
+cbuffer Views : register(b1) {
+  row_major float4x4 now;
+  row_major float4x4 before;
+};
+StructuredBuffer<float4> boneRows : register(t0, space1);
+
+struct VIn {
+  float3 position : POSITION;
+  uint4 bones : BLENDINDICES;
+};
+struct VOut {
+  float4 position : SV_Position;
+  float4 here : TEXCOORD0;
+  float4 then : TEXCOORD1;
+};
+
+float4 Posed(float3 position, float firstRow, uint bone) {
+  float4 p = float4(position, 1);
+  [branch] if (firstRow >= 0) {
+    uint at = (uint)firstRow + bone * 3;
+    float4 b0 = boneRows[at], b1 = boneRows[at + 1], b2 = boneRows[at + 2];
+    p = float4(dot(b0, p), dot(b1, p), dot(b2, p), 1);
+  }
+  return p;
+}
+
+VOut VS(VIn i, uint instance : SV_InstanceID) {
+  Instance n = instances[instance];
+  float4 p = Posed(i.position, n.bones.x, i.bones.x);
+  float3 world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
+  VOut o;
+  o.position = mul(viewProj, float4(world, 1));
+  o.here = mul(now, float4(world, 1));
+  float3 then = world;
+  Last l = lasts[instance];
+  [branch] if (l.bones.y > 0.5) {
+    float4 q = Posed(i.position, l.bones.x, i.bones.x);
+    then = float3(dot(l.row0, q), dot(l.row1, q), dot(l.row2, q));
+  }
+  o.then = mul(before, float4(then, 1));
+  return o;
+}
+
+float2 PS(VOut i) : SV_Target {
+  return (i.then.xy / i.then.w - i.here.xy / i.here.w) * float2(0.5, -0.5);
+}
+)hlsl";
+
 }  // namespace
 
 bool MeshRenderer::Init(std::string* error) {
@@ -759,7 +827,22 @@ bool MeshRenderer::Init(std::string* error) {
   pd.depthOnly = true;
   pd.cull = gfx::Cull::None;  // thin and open meshes cast a shadow from either side
   shadow_ = device_->CreatePipeline(pd, error);
+  if (!shadow_) return false;
+  {  // motion: drawn over the scene's depth (one sample a pixel), testing it a hair nearer, writing none
+    const std::string motionSource = std::string(kViewShaderBlock) + kMotionShader;
+    gfx::PipelineDesc md;
+    md.name = "models, motion";
+    md.vertexSource = md.pixelSource = motionSource;
+    md.attrs = pd.attrs;
+    md.stride = pd.stride;
+    md.colorFormat = gfx::Format::RG16F;
+    md.depthWrite = false;
+    md.depthBias = 16;  // (the same placement compiled in another shader may land a hair farther)
+    motionPipeline_ = device_->CreatePipeline(md, error);
+    if (!motionPipeline_) return false;
+  }
   batch_.resize(kMaxInstances);
+  lastBatch_.resize(kMaxInstances);
   gfx::BufferDesc bd;
   bd.kind = gfx::BufferKind::Shader;
   bd.stride = 16;
@@ -769,6 +852,7 @@ bool MeshRenderer::Init(std::string* error) {
 }
 
 void MeshRenderer::Begin() {
+  motionItems_.clear();
   entries_.clear();
   culls_.clear();
   groupsListed_.clear();
@@ -811,6 +895,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     rowsToBuild_.push_back(&e);
   }
   // after them the shells' hits, a row each; the instance's colour says where they begin and how many
+  const size_t rowsEnd = floats;
   const size_t hitsFrom = floats;
   for (const ShellHits& s : shellHits_) {
     Entry& e = entries_[s.entry];
@@ -818,29 +903,98 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     e.instance.color[1] = static_cast<float>(s.hits.size());
     floats += s.hits.size() * 4;
   }
+  // motion: after the hits, the bones of the frame before of each keyed model the camera's view may see
+  // (where the frame before knew it, as the same model)
+  const size_t lastFrom = floats;
+  if (motion) {
+    lastBonesAt_.assign(entries_.size(), -2);
+    lastOf_.assign(entries_.size(), LastInstance{});
+    for (size_t i = 0; i < entries_.size(); ++i) {
+      const Entry& e = entries_[i];
+      if (!e.key) continue;
+      const auto known = last_.find(e.key);
+      if (known == last_.end() || known->second.model != e.model) continue;
+      if (!views.empty()) {
+        const Vec3 r{e.radius, e.radius, e.radius};
+        if (!views[0]->BoxVisible(e.centre - r, e.centre + r)) continue;
+      }
+      lastBonesAt_[i] = -1;
+      if (known->second.bones >= 0) {
+        lastBonesAt_[i] = static_cast<int>(floats / 4);
+        floats += e.model->bones.size() * 12;
+      }
+      LastInstance& l = lastOf_[i];
+      std::memcpy(l.row0, known->second.row0, sizeof l.row0);
+      std::memcpy(l.row1, known->second.row1, sizeof l.row1);
+      std::memcpy(l.row2, known->second.row2, sizeof l.row2);
+      l.bones[0] = static_cast<float>(lastBonesAt_[i]);
+      l.bones[1] = 1;
+    }
+  }
   // the bones' matrices, written straight into the frame's copy of the buffer: many models, each into
-  // its own stretch, so on several threads at once
+  // its own stretch, so on several threads at once (with motion on, into a copy here first, kept for the
+  // next frame: the buffer's memory is slow to read back)
   CpuTimes::Part("bones: matrices made");
   rowsOut_ = floats ? static_cast<float*>(device_->WriteBuffer(boneBuffer_, static_cast<uint32_t>(floats * sizeof(float)))) : nullptr;
   if (rowsOut_) {
+    if (motion) rowsCopy_.resize(rowsEnd);
+    float* rowsTo = motion ? rowsCopy_.data() : rowsOut_;
     constexpr size_t kPerPiece = 256;
     Jobs::Shared().Run(static_cast<int>((rowsToBuild_.size() + kPerPiece - 1) / kPerPiece), [&](int k) {
       const size_t from = static_cast<size_t>(k) * kPerPiece, to = std::min(from + kPerPiece, rowsToBuild_.size());
-      for (size_t j = from; j < to; ++j) BuildRows(rowsToBuild_[j]);
+      for (size_t j = from; j < to; ++j) BuildRows(rowsToBuild_[j], rowsTo);
     });
+    if (motion) {
+      if (rowsEnd) std::memcpy(rowsOut_, rowsCopy_.data(), rowsEnd * sizeof(float));
+      // the frame before's bones where this frame's buffer has room for them
+      for (size_t i = 0; i < entries_.size(); ++i) {
+        if (lastBonesAt_[i] < 0) continue;
+        const LastPlace& l = last_[entries_[i].key];
+        std::memcpy(rowsOut_ + static_cast<size_t>(lastBonesAt_[i]) * 4, lastRows_.data() + static_cast<size_t>(l.bones) * 4,
+                    entries_[i].model->bones.size() * 12 * sizeof(float));
+      }
+    }
     float* out = rowsOut_ + hitsFrom;
     for (const ShellHits& s : shellHits_)
       for (const Vec4& h : s.hits) {
         out[0] = h.x, out[1] = h.y, out[2] = h.z, out[3] = h.w;
         out += 4;
       }
+    (void)lastFrom;
   } else {
     for (Entry* e : rowsToBuild_) e->rows = -1;  // (no room this frame: drawn at rest)
+    if (motion) {  // (and nothing of the frame before)
+      lastBonesAt_.assign(entries_.size(), -2);
+      lastOf_.assign(entries_.size(), LastInstance{});
+    }
     for (const ShellHits& s : shellHits_) entries_[s.entry].instance.color[1] = 0;  // (and the shells without their hits)
     const float none[4] = {0, 0, 0, 0};  // (the shaders' buffer is never left unset)
     device_->UpdateBuffer(boneBuffer_, none, sizeof none);
   }
   rowsToBuild_.clear();
+  if (motion) {  // every keyed model's place and bones, for the next frame
+    lastNext_.clear();
+    lastRowsNext_.clear();
+    for (const Entry& e : entries_) {
+      if (!e.key) continue;
+      LastPlace& l = lastNext_[e.key];
+      l.model = e.model;
+      std::memcpy(l.row0, e.instance.row0, sizeof l.row0);
+      std::memcpy(l.row1, e.instance.row1, sizeof l.row1);
+      std::memcpy(l.row2, e.instance.row2, sizeof l.row2);
+      l.bones = -1;
+      if (e.rows >= 0 && rowsOut_) {
+        l.bones = static_cast<int>(lastRowsNext_.size() / 4);
+        const float* from = rowsCopy_.data() + static_cast<size_t>(e.rows) * 4;
+        lastRowsNext_.insert(lastRowsNext_.end(), from, from + e.model->bones.size() * 12);
+      }
+    }
+    last_.swap(lastNext_);
+    lastRows_.swap(lastRowsNext_);
+  } else if (!last_.empty()) {
+    last_.clear();
+    lastRows_.clear();
+  }
   CpuTimes::Part(outer);
   prepared_ = true;
   const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -850,10 +1004,10 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
 // The rows of a posed model's bones. A bone's matrix is: back from where the bone stands at rest,
 // then to where it is now. Now is between the two beats' poses; a bone a beat does not list is at
 // rest in that beat.
-void MeshRenderer::BuildRows(Entry* entry) {
+void MeshRenderer::BuildRows(Entry* entry, float* rows) {
   const std::vector<ModelBone>& bones = entry->model->bones;
   const Pose& pose = entry->pose;
-  float* out = rowsOut_ + static_cast<size_t>(entry->rows) * 4;
+  float* out = rows + static_cast<size_t>(entry->rows) * 4;
   const float toModel = 1.0f / entry->model->scale;  // poses are in world units
   size_t ia = 0, ib = 0;
   for (size_t i = 0; i < bones.size(); ++i, out += 12) {
@@ -916,9 +1070,10 @@ MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& worl
 }
 
 void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Pose* pose, const Vec3* tint,
-                       const float* treads) {
+                       const float* treads, uint32_t key) {
   if (!model || !model->ok) return;
   Entry e = MakeEntry(model, world, teamColor, built, tint, treads);
+  e.key = key;
   e.scenery = addingScenery;
   if (addingScenery) e.flags |= kScenery;
   if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
@@ -1011,6 +1166,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   for (size_t k = 0; k < pieces_.size(); ++k) items_.insert(items_.end(), pieceItems_[k].begin(), pieceItems_[k].end());
   if (!shadowPass)
     for (const Item& item : items_) posedInstances += item.entry->posed ? 1 : 0;
+  if (motion && !shadowPass && !glass)  // (the keyed models the scene draws, for DrawMotion)
+    for (const Item& item : items_)
+      if (item.entry->key) motionItems_.push_back({item.lod, item.entry, item.bones});
   DrawItems(view, environment, shadowPass, glass);
   CpuTimes::Part(outer);
 }
@@ -1219,6 +1377,36 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     }
     at += n;
   }
+  }
+}
+
+void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& before) {
+  if (!motion || motionItems_.empty() || !motionPipeline_) return;
+  // by level, so that each level's instances go together
+  std::stable_sort(motionItems_.begin(), motionItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });
+  device_->SetPipeline(motionPipeline_);
+  device_->SetShaderBuffer(boneBuffer_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  const Mat4 views[2] = {now, before};
+  device_->SetConstants(1, views, sizeof views);
+  for (size_t at = 0; at < motionItems_.size();) {
+    const ModelLod* lod = motionItems_[at].lod;
+    size_t n = 0;
+    while (at + n < motionItems_.size() && motionItems_[at + n].lod == lod && n < kMaxInstances) {
+      const MotionItem& item = motionItems_[at + n];
+      batch_[n] = item.entry->instance;
+      batch_[n].bones[0] = item.bones;
+      // (its place of the frame before, as Prepare kept it; unknown: it is taken to stand where it is)
+      const size_t index = static_cast<size_t>(item.entry - entries_.data());
+      lastBatch_[n] = index < lastOf_.size() ? lastOf_[index] : LastInstance{};
+      ++n;
+    }
+    device_->SetVertexBuffer(lod->vertices);
+    device_->SetIndexBuffer(lod->indices);
+    device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
+    device_->SetConstants(3, lastBatch_.data(), static_cast<uint32_t>(n * sizeof(LastInstance)));
+    device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
+    at += n;
   }
 }
 

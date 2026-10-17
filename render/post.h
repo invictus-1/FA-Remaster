@@ -20,6 +20,9 @@ class Post {
   // The scene's depth, readable once another pass has begun (several samples a pixel when the
   // scene is anti-aliased).
   gfx::Texture Depth() const { return depth_; }
+  gfx::Texture Color() const { return color_; }  // the scene's picture (one sample a pixel: what is drawn into)
+  // A picture shown in place of the scene's this frame (the scene's size and format; none: the scene's).
+  gfx::Texture shown;
   // Begins the scene's pass again after a pass in between, keeping what was drawn.
   void ContinueScene();
   // Begins a pass into the scene's colour alone, keeping what was drawn: for work that reads the
@@ -30,6 +33,12 @@ class Post {
   // pixel (then there is no copy). It ends the pass: begin one again.
   bool CopyBehind();
   gfx::Texture Behind() const { return behind_; }
+  // For the temporal upscaler (fsr3.h), with one sample a pixel. KeepOpaque, once the solid scene and the
+  // water are drawn (it ends the pass: begin one again), keeps the picture as it is then; Reactive, once
+  // all of it is drawn, makes the mask of where what came after (smoke, sparks, beams: what has no motion
+  // of its own) changed the picture, and how much (R8, the scene's size; none without KeepOpaque).
+  void KeepOpaque();
+  gfx::Texture Reactive();
   // Begins the window's pass and draws the scene's picture into it. More may be drawn on top after.
   // With an `upscaler` and a screen larger than the scene: the picture as a screen shows it, then
   // brought up to the screen's size by FSR 1 (upscale.h).
@@ -61,6 +70,12 @@ class Post {
   gfx::Texture bloom_[2];
   int bloomWidth_ = 0, bloomHeight_ = 0;
   int width_ = 0, height_ = 0;
+  // the glow's and the bloom's targets are made for the size of the picture finished
+  int finishWidth_ = 0, finishHeight_ = 0;
+  void SizeFinishing(int width, int height);
+  gfx::Texture opaque_, reactive_;  // (KeepOpaque, Reactive)
+  bool keptOpaque_ = false;
+  gfx::Pipeline reactiveMask_;
 };
 
 }  // namespace render

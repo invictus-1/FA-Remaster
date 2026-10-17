@@ -2,6 +2,7 @@
 // each pass then draws what of that list it can see, sorted by mesh, each mesh's instances together.
 #pragma once
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "frame.h"
@@ -37,8 +38,10 @@ class MeshRenderer {
   // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
   // `treads`: its two treads' scroll (the amounts the original adds to the u of the texture's strips at
   // v above 0.95 and between 0.90 and 0.95); null: none. Not with `tint`.
+  // `key`: what it is from frame to frame, for its motion (`motion`): an entity's own number, the same
+  // every frame (0: nothing that moves of itself).
   void Add(const Model* model, const Mat4& world, Vec3 teamColor, float built = 1, const Pose* pose = nullptr, const Vec3* tint = nullptr,
-           const float* treads = nullptr);
+           const float* treads = nullptr, uint32_t key = 0);
   // A personal shield's shell (ModelCache::ShieldShell) placed as its unit, lit round these hits: each
   // where it struck on the unit at rest (world units, the unit's own frame) and its age (w, 0..1 of the
   // second it shows). Drawn with what is see-through.
@@ -65,6 +68,13 @@ class MeshRenderer {
   // (range rings) can be laid over the trees and under the units, as the original has it.
   void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false, int part = 0);
   bool addingScenery = false;
+  // Motion (motion.h). With `motion` on, every model added with a key keeps its place and bones from one
+  // frame to the next, and DrawMotion (after the scene's passes) draws those the scene drew where they are,
+  // writing where they were the frame before: last frame's place minus this frame's in the picture's 0..1,
+  // by the views without the jitter (`now`, `before`). Into a pass with an RG16F colour target and the
+  // scene's depth (one sample a pixel), which it tests and does not write.
+  bool motion = false;
+  void DrawMotion(const View& view, const Mat4& now, const Mat4& before);
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -123,8 +133,11 @@ class MeshRenderer {
     bool scenery = false;
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
     uint8_t flags = 0;  // Cull's
+    uint32_t key = 0;   // Add's
   };
   Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint, const float* treads = nullptr) const;
+  // (rows go to `out`: rowsOut_, or with motion on a copy kept on the processor first)
+  void BuildRows(Entry* entry, float* out);
   void Push(const Entry& e) {
     entries_.push_back(e);
     culls_.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
@@ -135,7 +148,6 @@ class MeshRenderer {
     float bones;  // Instance::bones.x for this pass
     bool near;    // large on screen (depthPrepass: only these have their depth laid first)
   };
-  void BuildRows(Entry* entry);  // into its stretch of rows_, from entry->rows on (Prepare gives it)
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
@@ -195,6 +207,32 @@ class MeshRenderer {
   };
   std::vector<ShellHits> shellHits_;
   bool prepared_ = false;
+
+  // motion: each keyed model's place and bones of the frame before (its bones' rows in lastRows_, from
+  // `bones` on in fours of floats; -1: at rest); what Prepare saves for the next frame; and the frame's
+  struct LastPlace {
+    const Model* model = nullptr;
+    float row0[4], row1[4], row2[4];
+    int bones = -1;
+  };
+  std::unordered_map<uint32_t, LastPlace> last_, lastNext_;
+  std::vector<float> lastRows_, lastRowsNext_, rowsCopy_;
+  // for each of entries_: where its bones of the frame before lie in this frame's bone buffer (-1: at
+  // rest), and whether it is known at all (-2: not)
+  std::vector<int> lastBonesAt_;
+  struct MotionItem {
+    const ModelLod* lod;
+    const Entry* entry;
+    float bones;
+  };
+  std::vector<MotionItem> motionItems_;  // what the scene's passes drew of the keyed models
+  struct LastInstance {
+    float row0[4], row1[4], row2[4];
+    float bones[4];  // x: where its bones of the frame before begin (-1: at rest); y: 1 = known
+  };
+  std::vector<LastInstance> lastBatch_;
+  std::vector<LastInstance> lastOf_;  // for each of entries_ the camera may see: its place of the frame before (Prepare's)
+  gfx::Pipeline motionPipeline_;
 };
 
 }  // namespace render
