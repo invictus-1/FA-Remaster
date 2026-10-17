@@ -230,6 +230,7 @@ class Unit : public Entity {
   Quat prevLastOrientation;        // ... and at the start of the tick before (the entity's previous transform)
   Vec3 prevLastPosition;
   uint32_t lastPosTick = 0;        // the tick lastPosition / lastOrientation were taken (motion loop)
+  int createLayer = 0;             // layer bits it was made in (what its navigator's +0x54 starts from)
   class ReconBlip* blip = nullptr;  // the blip armies hold of it (sim/intel.cpp)
   std::vector<class ReconBlip*> fakeBlips;  // a jammer's fake blips (shared by the armies that hold them)
   bool everMobileChecked = false;
