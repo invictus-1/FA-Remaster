@@ -67,6 +67,10 @@
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
 //           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
+// --motion-view <1|2|3>  motion (motion.h), for checking; needs --msaa 1: 1 shows it as colours, 2 shows the
+//           frame before carried to this frame by it (with a still scene it is this frame, but where something
+//           comes out from behind another), 3 what that misses of this frame (black where the motion is right)
+// --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
@@ -257,6 +261,8 @@ struct Options {
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
   bool air = false;                     // --air
+  int motionView = 0;                   // --motion-view
+  float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
@@ -401,6 +407,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
     else if (a == "--picture") o->picture = v;
+    else if (a == "--motion-view") o->motionView = atoi(v);
+    else if (a == "--pan") {
+      if (sscanf(v, "%f,%f", &o->pan[0], &o->pan[1]) != 2) return false;
+    }
     else if (a == "--air-dust") o->airDust = static_cast<float>(atof(v));
     else if (a == "--air-sun") o->airSun = static_cast<float>(atof(v));
     else if (a == "--air-lamps") o->airLamps = static_cast<float>(atof(v));
@@ -764,6 +774,7 @@ int main(int argc, char** argv) {
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
   world.volumetricFog = opt.air;
+  world.motionView = opt.motionView;
   if (opt.airDust >= 0) world.air.dust = opt.airDust;
   if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
   if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;
@@ -1312,6 +1323,8 @@ int main(int argc, char** argv) {
       if (window->KeyDown('D') || window->KeyDown(kKeyRight)) camera.target += r * step;
       if (window->KeyDown('A') || window->KeyDown(kKeyLeft)) camera.target -= r * step;
     }
+    camera.target.x += opt.pan[0];  // (--pan)
+    camera.target.z += opt.pan[1];
     if (haveMap) {
       camera.target.x = Clamp(camera.target.x, 0, static_cast<float>(map.width));
       camera.target.z = Clamp(camera.target.z, 0, static_cast<float>(map.height));

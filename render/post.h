@@ -20,6 +20,9 @@ class Post {
   // The scene's depth, readable once another pass has begun (several samples a pixel when the
   // scene is anti-aliased).
   gfx::Texture Depth() const { return depth_; }
+  gfx::Texture Color() const { return color_; }  // the scene's picture (one sample a pixel: what is drawn into)
+  // A picture shown in place of the scene's this frame (the scene's size and format; none: the scene's).
+  gfx::Texture shown;
   // Begins the scene's pass again after a pass in between, keeping what was drawn.
   void ContinueScene();
   // Begins a pass into the scene's colour alone, keeping what was drawn: for work that reads the

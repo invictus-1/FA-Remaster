@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "air.h"
+#include "motion.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
 #include "tracks.h"
@@ -317,6 +318,12 @@ class World {
   // option, off until it is measured).
   bool volumetricFog = false;
   Air air;
+  // Motion (motion.h): where each pixel was the frame before, for the temporal upscaler; it needs the
+  // scene drawn with one sample a pixel (gSceneSamples 1). `motionView`: a view for checking it (1 the
+  // motion as colours, 2 the frame before carried to this one; Motion::Check).
+  bool motionOn = false;
+  int motionView = 0;
+  Motion motion;
   // The glow round what is brighter than the screen can show, in the modern look (the game's Bloom
   // Render and Bloom Intensity): off, or this strong (1.5, the game's default, is the modern look's own).
   bool bloom = true;

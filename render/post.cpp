@@ -290,6 +290,7 @@ void Post::BeginColorOnly() {
 
 void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int screenHeight) {
   if (drawn_) device_->Resolve(drawn_, color_);
+  const gfx::Texture picture = shown ? shown : color_;
   // the glow (modern look): smaller and smaller, then laid back over each other into the first
   const bool glowing = view.constants.look > 0.5f && glow > 0 && glowSteps_[0];
   if (glowing) {
@@ -303,7 +304,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
       device_->SetPipeline(glowDown_);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetConstants(1, c, sizeof c);
-      device_->SetTexture(0, i ? glowSteps_[i - 1] : color_);
+      device_->SetTexture(0, i ? glowSteps_[i - 1] : picture);
       device_->Draw(3);
     }
     for (int i = kGlowSteps - 2; i >= 0; --i) {
@@ -334,7 +335,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
       device_->Draw(3);
     };
     const float copy[4] = {originalBloom.copyScale, originalBloom.copyAdd, 0, 0};
-    run(bloom_[0], bloomCopy_, color_, copy);
+    run(bloom_[0], bloomCopy_, picture, copy);
     const float along[4] = {1.0f / static_cast<float>(bloomWidth_), 0, originalBloom.blurScale, 0};
     const float across[4] = {0, 1.0f / static_cast<float>(bloomHeight_), originalBloom.blurScale, 0};
     for (int k = 0; k < originalBloom.blurCount; ++k) {
@@ -361,7 +362,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   device_->BeginPass(pass);
   device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetTexture(0, color_);
+  device_->SetTexture(0, picture);
   device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
   device_->Draw(3);
   if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
