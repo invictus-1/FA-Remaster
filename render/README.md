@@ -61,8 +61,8 @@ So: build it against recordings, combine later by swapping the source of the fra
       water mirror what their rays meet, off the screen too; a renderer without a G-buffer gets them best
       from rays its shaders cast); ray-traced shadows put off (the shadow maps cover the game's view, and
       the rays' coarse models would make worse ones); each with a fallback.
-   7. Rain and snow, with the visuals session's art: drops and flakes lit where they fall, first version
-      (`World::litRain`, `--lit-rain`).
+   7. Rain and snow, with the visuals session's art: drops and flakes lit where they fall (`World::litRain`,
+      `--lit-rain`) and splashes (`World::rainSplashes`, `--rain-splashes`), first versions.
 
 ## Build and run
 
