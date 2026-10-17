@@ -11,7 +11,7 @@
 //    into the frame's share of the shader-visible heap (once per distinct set per frame).
 //  - Static buffers and textures are uploaded at creation through a separate command list, waiting for
 //    the GPU each time (load time only).
-//  - Compute shaders share the root signature; its last table holds the eight storage views (u0..u7),
+//  - Compute shaders share the root signature; its last table holds the sixteen storage views (u0..u15),
 //    copied from a CPU-side heap of their own at each dispatch. A storage target is in the
 //    unordered-access state from a dispatch that writes it until a dispatch reads it or a pass begins.
 #include "gfx.h"
@@ -73,7 +73,7 @@ constexpr uint32_t kMaxTextures = 16384;       // CPU-side descriptors, one per 
 constexpr uint32_t kRingDescriptors = kFrames * kTexSlots * 4096;  // shader-visible, split between the frame slots
 constexpr uint32_t kMaxColorTargets = 64;      // render-target views beyond the window's
 constexpr uint32_t kMaxDepthViews = 128;       // depth views beyond the window's (one per layer of a depth target)
-constexpr int kStorageSlots = 8;               // u0..u7
+constexpr int kStorageSlots = 16;              // u0..u15
 constexpr uint32_t kMaxStorageViews = 1024;    // storage views, one per level of a storage target (0: the null view)
 constexpr size_t kPageSize = 8u << 20;
 constexpr DXGI_FORMAT kBackFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -93,6 +93,8 @@ DXGI_FORMAT ToDxgi(Format f) {
     case Format::RG16F: return DXGI_FORMAT_R16G16_FLOAT;
     case Format::RGBA16F: return DXGI_FORMAT_R16G16B16A16_FLOAT;
     case Format::R32F: return DXGI_FORMAT_R32_FLOAT;
+    case Format::R32UI: return DXGI_FORMAT_R32_UINT;
+    case Format::RGBA32F: return DXGI_FORMAT_R32G32B32A32_FLOAT;
     case Format::BC1: return DXGI_FORMAT_BC1_UNORM;
     case Format::BC1_sRGB: return DXGI_FORMAT_BC1_UNORM_SRGB;
     case Format::BC2: return DXGI_FORMAT_BC2_UNORM;
@@ -589,7 +591,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_DESCRIPTOR_RANGE range = {};
   range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
   range.NumDescriptors = kTexSlots;
-  D3D12_DESCRIPTOR_RANGE storageRange = {};  // (compute shaders' u0..u7)
+  D3D12_DESCRIPTOR_RANGE storageRange = {};  // (compute shaders' u0..u15)
   storageRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
   storageRange.NumDescriptors = kStorageSlots;
   D3D12_ROOT_PARAMETER params[kCbSlots + 4] = {};
@@ -1059,11 +1061,11 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
     const bool volume = desc.depth > 1;
     int most = 1;  // (the levels it can have)
     for (int s = std::max({desc.width, desc.height, volume ? desc.depth : 1}); s > 1; s >>= 1) ++most;
-    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
-                          desc.format == Format::RGBA16F || desc.format == Format::R32F;
+    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
+                          desc.format == Format::RGBA16F || desc.format == Format::R32F || desc.format == Format::R32UI || desc.format == Format::RGBA32F;
     if (!writable || desc.width <= 0 || desc.height <= 0 || desc.depth <= 0 || desc.layers != 1 || desc.samples > 1 || desc.mips <= 0 ||
         desc.mips > most) {
-      fprintf(stderr, "render: Direct3D 12: a storage target needs RGBA8, R16F, RG16F, RGBA16F or R32F, one layer, one sample, and levels it can have\n");
+      fprintf(stderr, "render: Direct3D 12: a storage target needs RGBA8, R8, R16F, RG16F, RGBA16F, R32F, R32UI or RGBA32F, one layer, one sample, and levels it can have\n");
       return {};
     }
     uint32_t first = 0;

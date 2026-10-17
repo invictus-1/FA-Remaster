@@ -20,7 +20,7 @@
 //    UpdateBuffer gives it this frame's contents, which last until EndFrame.
 //  - Compute shaders (CreateCompute, Dispatch) do work on the card that draws nothing (the modern look's
 //    lighting: volumes of light in the air, reflections, light thrown back). They read what draws read and
-//    write storage targets (TargetDesc::storage), registers u0..u7. A dispatch lies between passes.
+//    write storage targets (TargetDesc::storage), registers u0..u15. A dispatch lies between passes.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -59,6 +59,8 @@ enum class Format : uint8_t {
   RG16F,
   RGBA16F,
   R32F,
+  R32UI,    // a whole number of 32 bits a pixel (read as uint; compute shaders may add to it atomically)
+  RGBA32F,
   D32,  // depth; only for targets
   BC1,  // DXT1
   BC1_sRGB,
@@ -106,8 +108,8 @@ struct TargetDesc {
   // as a texture: draw into it, then Resolve it into an ordinary target of the same size and format.
   int samples = 1;
   // A storage target: written by compute shaders (SetStorage, Dispatch), never by a pass; read as any
-  // texture. One sample a pixel, one layer, in a format a compute shader can write: RGBA8, R16F, RG16F,
-  // RGBA16F or R32F.
+  // texture. One sample a pixel, one layer, in a format a compute shader can write: RGBA8, R8, R16F, RG16F,
+  // RGBA16F, R32F, R32UI or RGBA32F.
   bool storage = false;
   int depth = 1;  // storage: more than 1 makes it a volume of that many slices (Texture3D, RWTexture3D)
   int mips = 1;   // storage: its levels, each half the one before (SetStorage writes one; a read sees all)
@@ -116,7 +118,7 @@ struct TargetDesc {
 // A compute shader: HLSL, `[numthreads(x, y, z)] void CS(uint3 id : SV_DispatchThreadID)`. It reads
 // constants (b0..b3), textures (t0..t31; a volume as Texture3D), the shader buffers and the fixed
 // samplers as draws do, and writes the storage targets SetStorage binds: `RWTexture2D<float4> out :
-// register(u0)` (RWTexture3D for a volume), u0..u7.
+// register(u0)` (RWTexture3D for a volume), u0..u15.
 struct ComputeDesc {
   const char* name = "";  // for error messages
   std::string_view source;
@@ -257,7 +259,7 @@ class Device {
   virtual void SetConstants(int slot, const void* data, uint32_t size) = 0;
   // (a texture is not read by a dispatch that also writes it: SetTexture and SetStorage, not both)
   virtual void SetTexture(int slot, Texture texture) = 0;
-  // A storage target for the dispatches to write, at one of its levels, in slot u0..u7 (none: empty).
+  // A storage target for the dispatches to write, at one of its levels, in slot u0..u15 (none: empty).
   virtual void SetStorage(int slot, Texture texture, int mip = 0) = 0;
   // Runs the compute pipeline set last over x * y * z groups of its threads. It ends the pass under way,
   // as Resolve does (its targets become readable; begin another before drawing again). What a dispatch
