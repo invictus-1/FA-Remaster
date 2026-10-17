@@ -560,10 +560,12 @@ void GameSession::StartReplayFile(const SessionDescription& session) {
   cstr("\r\n\x1a");
   blob(h.mods);
   // (A game played with the engine's script fixes says so in its scenario's Options,
-  // RemasterFixes = "on", so that its replay is played with them too; the original ignores it.)
+  // RemasterFixes = "on", so that its replay is played with them too; the original ignores it.
+  // The table is made in a scratch Lua state, never the sim's: an object made there outside the
+  // game's own flow would shift the sim's object serials, and with them its pairs() order.)
   std::string scenario = h.scenario;
   if (sim_ && sim_->fixes) {
-    lua_State* S = sim_->L();
+    lua_State* S = lua_open();
     const int top = lua_gettop(S);
     if (PushSerializedLua(S, h.scenario) && lua_istable(S, -1)) {
       lua_pushstring(S, "Options");
@@ -576,7 +578,7 @@ void GameSession::StartReplayFile(const SessionDescription& session) {
         SerializeLua(S, top + 1, &scenario);
       }
     }
-    lua_settop(S, top);
+    lua_close(S);
   }
   blob(scenario);
   out.push_back(static_cast<char>(h.sources.size()));
