@@ -203,8 +203,8 @@ Control* TopmostIn(Control* root, float x, float y) {
 
 namespace {
 
-// The key codes of the mouse buttons as events carry them. Inferred: the original's key code
-// names follow wxWidgets' list in order, where the buttons are 301, 302 and 304.
+// The key codes of the mouse buttons as events carry them: 301, 302 and 304, wxWidgets' order (READ:
+// the EMauiKeyCode names at 0x79cd90, MKEY_BACK .., which IsKeyDown takes, follow that list).
 int ButtonKeyCode(const UiEvent& e) { return e.left ? 301 : e.right ? 302 : e.middle ? 304 : 0; }
 
 // Push the active dragger's table; false (nothing pushed) when there is none or it was destroyed.

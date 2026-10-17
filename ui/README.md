@@ -315,7 +315,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`OnMouseoverItem`), a press or double click on a row (`OnClick`, `OnDoubleClick`), the wheel,
   and the keys that move the selection (`OnKeySelect`). With them the game's drop-down lists
   work: in the lobby a slot's list opens and picking "AI: Normal" puts an AI opponent into the
-  slot.
+  slot. The game's mods manager (FAF's `modsmanager.lua`, opened from the lobby's Game Options)
+  needs nothing more of the engine: it lists the mods found in the mods folders with their icons
+  and descriptions, a click switches one on, and OK hands the choice to the lobby, which keeps it
+  in the preferences, reloads its AI list (so an AI mod's opponents can be picked) and launches
+  the game with those mods (checked 2026-10-17: `ui/tests/mods.lua`, and a launch from the lobby
+  with a mod chosen that way: the session has the mod and loads its blueprints).
 - Key maps (`user/keymap.*`, read from the original): the game's key bindings. At start the key
   names (`/lua/keymap/keyNames.lua`) and the default bindings are loaded as the original loads
   them (184 keys with the stock files); `IN_AddKeyMapTable`, `IN_RemoveKeyMapTable`,
