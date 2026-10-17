@@ -555,7 +555,7 @@ class World {
   float frameSeconds_ = 1 / 60.0f;
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
-  bool grassTried_ = false, grassMade_ = false;  // (ground cover: its shader tried, made)
+  bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
 };
 

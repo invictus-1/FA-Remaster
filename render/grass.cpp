@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include "lighting.h"
 
@@ -19,6 +20,7 @@ cbuffer Grass : register(b1) {
 Texture2D<float> heightMap : register(t0);
 Texture2D cover : register(t1);          // Terrain::GroundColours: rgb the ground's colour, a how grassy
 Texture2D groundNormals : register(t2);  // x in alpha, z in green
+Texture2D<float> trampled : register(t3);  // over the square: 1 where what stands there presses the grass flat
 
 uint GrassHash(uint x) {
   x ^= x >> 16;
@@ -62,25 +64,31 @@ VOut VS(uint id : SV_VertexID) {
   o.world = o.colour = o.normal = 0;
   o.up = o.shadow = 0;
   uint blade = id / 15, corner = id % 15;
+  uint tuft = blade / 3, k = blade % 3;  // (three blades a cell, from close roots)
   uint side = uint(area.w);
-  float2 cellAt = area.xy + float2(blade % side, blade / side) * area.z;
+  float2 cellAt = area.xy + float2(tuft % side, tuft / side) * area.z;
   int2 cellId = int2(floor(cellAt / area.z + 0.5));  // (the cell's whole-number place in the world: the pattern stays)
   uint h = GrassHash(uint(cellId.x) * 73856093u ^ GrassHash(uint(cellId.y) * 19349663u));
   float2 xz = cellAt + float2(GrassRand(h), GrassRand(GrassHash(h + 1))) * area.z;
+  uint hb = GrassHash(h + 101 * (k + 1));  // (this blade of the tuft: its own root near the tuft's, its own shape)
+  xz += (float2(GrassRand(hb), GrassRand(GrassHash(hb + 1))) - 0.5) * 0.07;
   if (any(xz < 0) || any(xz > mapInfo.xy)) return o;
   float4 c = cover.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   float ground = GroundAt(xz);
   if (ground < mapInfo.w + 0.08) return o;  // (none in or at the water)
   float3 root = float3(xz.x, ground, xz.y);
   float far = length(root - cameraPosition);
-  float thin = saturate(1.6 - far / blades.z * 1.6);  // (fewer far off, none at the reach)
+  // (fewer toward the square's edge, none at it: by the distance from what the camera looks at, its middle)
+  float half = area.z * area.w * 0.5;
+  float thin = saturate((1 - length(xz - (area.xy + half)) / half) * 3);
   if (GrassRand(GrassHash(h + 2)) > c.a * thin) return o;
-  float height = blades.x * (0.55 + 0.45 * GrassRand(GrassHash(h + 3))) * saturate(thin * 2.5);
-  float turn = GrassRand(GrassHash(h + 4)) * 6.2832;
+  float height = blades.x * (0.55 + 0.45 * GrassRand(GrassHash(hb + 3))) * saturate(thin * 2.5);
+  height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0);  // (pressed flat)
+  float turn = GrassRand(GrassHash(hb + 4)) * 6.2832;
   float2 face = float2(cos(turn), sin(turn)), across = float2(-face.y, face.x);
   // its lean, and the wind the trees sway in (mesh_renderer.cpp: a slow swing and a quicker one, in gusts that
   // run across the land, harder in rain)
-  float lean = 0.12 + 0.22 * GrassRand(GrassHash(h + 5));
+  float lean = 0.12 + 0.22 * GrassRand(GrassHash(hb + 5));
   float2 leanWay = float2(cos(turn * 1.7 + 1), sin(turn * 1.7 + 1));
   float beat = dot(xz, float2(0.11, 0.07));
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
@@ -96,9 +104,9 @@ VOut VS(uint id : SV_VertexID) {
   o.world = p;
   o.up = v;
   // its colour: the ground's under it, varied; a share of the blades drier toward the tip (late summer)
-  float3 base = ToLinear(c.rgb) * (0.8 + 0.4 * GrassRand(GrassHash(h + 6)));
-  float dry = GrassRand(GrassHash(h + 7)) < 0.22 ? 1 : 0;
-  o.colour = lerp(base, ToLinear(float3(0.62, 0.55, 0.32)) * 0.75, dry * v * 0.85);
+  float3 base = ToLinear(c.rgb) * (0.8 + 0.4 * GrassRand(GrassHash(hb + 6)));
+  float dry = GrassRand(GrassHash(hb + 7)) < 0.22 ? 1 : 0;
+  o.colour = lerp(base * lerp(0.9, 1.15, v), ToLinear(float3(0.62, 0.55, 0.32)) * 0.75, dry * v * 0.85);
   // lit as the ground under it, a little toward the blade's own face
   float4 stored = groundNormals.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   float3 n;
@@ -110,7 +118,7 @@ VOut VS(uint id : SV_VertexID) {
 }
 
 float4 PS(VOut i) : SV_Target {
-  float occlusion = lerp(0.4, 1, i.up);  // (darker down among the blades)
+  float occlusion = lerp(0.65, 1, i.up);  // (darker down among the blades)
   return float4(ModernLight(i.colour, 0, 0.85, occlusion, 0, normalize(i.normal), i.world, i.shadow), 1);
 }
 )hlsl";
@@ -119,10 +127,38 @@ struct GrassConstants {
   float area[4], blades[4], mapInfo[4];
 };
 
+// Over the grass's square, how flat what stands there presses it: each texel the most of the discs round it (full
+// within a disc, nothing a quarter of a world unit outside it). A thread for each texel.
+const char kTrample[] = R"hlsl(
+cbuffer Trample : register(b1) {
+  float4 area;        // as the grass's: the first cell's x, z; a cell's size; cells a side
+  float4 count;       // x: how many discs
+  float4 discs[256];  // x, z, radius
+};
+RWTexture2D<float> trampled : register(u0);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint w, h;
+  trampled.GetDimensions(w, h);
+  if (id.x >= w || id.y >= h) return;
+  float2 p = area.xy + (id.xy + 0.5) / float2(w, h) * (area.z * area.w);
+  float flat = 0;
+  for (uint i = 0; i < uint(count.x); ++i) flat = max(flat, saturate((discs[i].z + 0.25 - length(p - discs[i].xy)) / 0.25));
+  trampled[id.xy] = flat;
+}
+)hlsl";
+
+struct TrampleConstants {
+  float area[4], count[4];
+  float discs[256][4];
+};
+constexpr int kTrampleSize = 256;
+
 }  // namespace
 
 GroundCover::~GroundCover() {
-  if (pipeline_) device_->Destroy(pipeline_);
+  for (gfx::Pipeline p : {pipeline_, trample_})
+    if (p) device_->Destroy(p);
+  if (trampled_) device_->Destroy(trampled_);
 }
 
 bool GroundCover::Init(std::string* error) {
@@ -134,22 +170,61 @@ bool GroundCover::Init(std::string* error) {
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
   pipeline_ = device_->CreatePipeline(pd, error);
-  return static_cast<bool>(pipeline_);
+  if (!pipeline_) return false;
+  const std::string trample = std::string(kViewShaderBlock) + kTrample;
+  gfx::ComputeDesc cd;
+  cd.name = "ground cover: pressed flat";
+  cd.source = trample;
+  trample_ = device_->CreateCompute(cd, error);
+  if (!trample_) return false;
+  gfx::TargetDesc td;
+  td.storage = true;
+  td.width = td.height = kTrampleSize;
+  td.format = gfx::Format::R8;
+  trampled_ = device_->CreateTarget(td);
+  return static_cast<bool>(trampled_);
+}
+
+void GroundCover::Prepare(const View& view, const Camera& camera, const std::vector<float>& discs) {
+  prepared_ = false;
+  if (!pipeline_ || !trample_ || !trampled_ || camera.distance > farthest) return;
+  // a square round what the camera looks at, as wide as it sees near there (no more than about 370 cells a side)
+  const float reach = std::clamp(camera.distance * 0.75f, 8.0f, 28.0f);
+  const int side = static_cast<int>(std::ceil(2 * reach / cell));
+  area_[0] = std::floor((camera.target.x - reach) / cell) * cell;
+  area_[1] = std::floor((camera.target.z - reach) / cell) * cell;
+  area_[2] = cell;
+  area_[3] = static_cast<float>(side);
+  auto k = std::make_unique<TrampleConstants>();
+  std::copy(area_, area_ + 4, k->area);
+  const float wide = cell * static_cast<float>(side);
+  int n = 0;
+  for (size_t i = 0; i + 2 < discs.size() && n < 256; i += 3) {
+    const float x = discs[i], z = discs[i + 1], r = discs[i + 2];
+    if (x + r < area_[0] || z + r < area_[1] || x - r > area_[0] + wide || z - r > area_[1] + wide) continue;
+    k->discs[n][0] = x;
+    k->discs[n][1] = z;
+    k->discs[n][2] = r;
+    ++n;
+  }
+  k->count[0] = static_cast<float>(n);
+  device_->SetPipeline(trample_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, k.get(), static_cast<uint32_t>(sizeof(float) * 8 + sizeof(float) * 4 * std::max(n, 1)));
+  device_->SetStorage(0, trampled_);
+  device_->Dispatch(kTrampleSize / 8, kTrampleSize / 8, 1);
+  device_->SetStorage(0, {});
+  prepared_ = true;
 }
 
 void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover,
                        gfx::Texture normals, float mapWidth, float mapHeight, float waterLevel) {
   drawnBlades = 0;
-  if (!pipeline_ || !heights || !cover || !normals || camera.distance > farthest || view.height <= 0) return;
-  // a square round what the camera looks at, as wide as it sees near there (no more than about 370 cells a side)
-  const float reach = std::clamp(camera.distance * 0.75f, 8.0f, 28.0f);
-  const int side = static_cast<int>(std::ceil(2 * reach / cell));
-  const float x0 = std::floor((camera.target.x - reach) / cell) * cell, z0 = std::floor((camera.target.z - reach) / cell) * cell;
+  if (!prepared_ || !heights || !cover || !normals || view.height <= 0) return;
+  const int side = static_cast<int>(area_[3]);
+  const float reach = 0.5f * area_[2] * area_[3];
   GrassConstants k{};
-  k.area[0] = x0;
-  k.area[1] = z0;
-  k.area[2] = cell;
-  k.area[3] = static_cast<float>(side);
+  std::copy(area_, area_ + 4, k.area);
   k.blades[0] = bladeHeight;
   k.blades[1] = bladeWidth;
   k.blades[2] = reach * 1.4f;
@@ -164,9 +239,10 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   device_->SetTexture(0, heights);
   device_->SetTexture(1, cover);
   device_->SetTexture(2, normals);
-  drawnBlades = side * side;
+  device_->SetTexture(3, trampled_);
+  drawnBlades = side * side * 3;
   device_->Draw(static_cast<uint32_t>(drawnBlades) * 15);
-  for (int slot = 0; slot < 3; ++slot) device_->SetTexture(slot, {});
+  for (int slot = 0; slot < 4; ++slot) device_->SetTexture(slot, {});
 }
 
 }  // namespace render

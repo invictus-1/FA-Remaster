@@ -351,6 +351,21 @@ where it changes the look, off by default, measured like the rest. In the order 
    frame made between two drawn ones, for slower cards; with its own frame pacing; a player's option.
 6. **Ground cover near the camera:** grass and small plants that sway, by the ground's layers, near the camera;
    with the visuals session's art (asked first, so it can be made alongside).
+   - **The blades: first version** (2026-10-17): `World::groundCover` (viewer `--ground-cover`; `WorldPicture::
+     SetGroundDetail`, a fifth setting "Ground Detail"; modern look). grass.h/.cpp: a square round what the camera
+     looks at (0.75 of its distance, 8 to 28 units out), cells 0.15 wide each a tuft of three blades or none, all
+     from the cell's whole-number place in the world (the pattern stays with the ground); blades made by the
+     shader (three segments, at least most of a pixel wide), no taller than 0.22 units (half a small unit's hull),
+     leaning and swaying in the trees' wind, coloured from the ground under them (Terrain::GroundColours, whose
+     alpha now says how grassy the ground is by how green each layer's average is), a fifth of them drier toward
+     the tip; lit as the ground (ModernLight, its sun shadow at the blade), darker down among them; thinner toward
+     the square's edge, none in the water, none at all past 50 units of zoom (a blade is less than a pixel then).
+     **Pressed flat round units and buildings** (Chris's readability rule): before the scene's pass a small pass
+     marks, over the square, the discs of every model drawn that is not scenery and stands on the ground (its
+     footprint from its bounds); blades there lie at a tenth of their height. Cost at 1440p: 0.05 ms at a close
+     zoom (12 units), 0.16 ms at 30. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.06).
+     - Open: the visuals session's plants (cards, an atlas, her density table) when she makes them; roads, decals
+       and build pads not yet kept clear; one shared wind for grass, trees and weather as it is (the trees').
 
 ## The options
 
@@ -387,7 +402,8 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables` | about 0.25 ms less (needs a time of day) |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
-| `SetWeatherEffects` | `litRain`, `rainSplashes` | about +0.05 ms in rain |
+| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
+| `SetGroundDetail` | `groundCover` (later the remastered ground's decals and battle scars) | +0.05 to 0.16 ms zoomed in, nothing far out |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings

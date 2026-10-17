@@ -157,6 +157,9 @@ class WorldPicture {
   // Weather effects: rain and snow lit where they fall, rain's splashes, and wet shorelines with stronger caustics
   //   (World::litRain, rainSplashes, waterDetail); about +0.05 ms while it rains.
   void SetWeatherEffects(bool on);
+  // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
+  //   +0.05 to 0.2 ms when zoomed in, nothing from afar. (Later the remastered ground's decals and battle scars.)
+  void SetGroundDetail(bool on);
   // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
   // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
   bool RayTracingSupported() const;

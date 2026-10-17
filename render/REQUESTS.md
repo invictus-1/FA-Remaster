@@ -31,7 +31,18 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
 the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
 upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718). 32 is addressed to the visuals
-track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials).
+track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
+addressed to the interface track (a fifth lighting setting, Ground Detail; open).
+
+## 33. To the INTERFACE track: a fifth setting, "Ground Detail" (2026-10-17, not blocking)
+
+**Who asks:** the renderer, for Chris (his list of 2026-10-17: ground cover near the camera; all the new looks in the
+settings, bundled).
+
+**What:** like request 31's four, one more option in the Video tab, off by default: "Ground Detail",
+`WorldPicture::SetGroundDetail(bool)` (before or after Open). Today it is grass near the camera, pressed flat round
+units and buildings, about 0.05-0.16 ms when zoomed in and nothing from afar; later the remastered ground's decals
+and battle scars join it, under the same switch. The name is a suggestion.
 
 ## 32. To the VISUALS track: art for ground cover near the camera (2026-10-17, not blocking; ANSWERED the same day: her section 38, a 2048 card atlas after the wrecks and the terrain materials; the renderer's answer in docs/render-answers.md)
 
