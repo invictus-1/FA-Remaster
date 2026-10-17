@@ -5,6 +5,7 @@
 #include "core/dmath.h"
 #include "sim/air.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/landnav.h"
 #include "sim/commands.h"
 #include "sim/transport.h"
@@ -449,6 +450,7 @@ void SetHorzEvent(Sim& sim, Unit* u, int e) {
   int old = a.horzEvent;
   a.horzEvent = e;
   Callback2(sim, u, "OnMotionHorzEventChange", kHorzNames[e], kHorzNames[old]);
+  if (a.horzEvent == 3) IntelExactUpdate(sim, u);  // CUnitMotion::SetMotionHorzEvent 0x6b8f5a..0x6b8f65
 }
 void SetMotionState(Sim& sim, Unit* u, int s) {
   AirMotion& a = A(u);

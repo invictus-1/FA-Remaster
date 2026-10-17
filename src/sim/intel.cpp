@@ -652,6 +652,24 @@ void ReconBeat(Sim& sim) {
   ReconTick(sim, L, static_cast<int>(sim.tick() % static_cast<uint32_t>(n)));
 }
 
+// Entity::UpdateIntel 0x679120 -> CIntel::Update 0x76e4c0 (read): at the entity's current transform (+0xac, the one
+// committed at the end of the last beat; 1 up), every handle: an enabled one whose position differs re-rasters
+// there, a disabled one only stores it, and all get lastTick = the tick, which sets the phase of their 6-tick
+// clock (UpdatePos 0x76f1e0). Its callers (SetMotionHorzEvent 0x6b8f65, NotifyAttached 0x6b9501,
+// ProcessCommonMotionState 0x6c2a8b) run it when the horizontal event has just turned to Stopped, after the Lua
+// callback, if the event is still Stopped then. Seen (oracle probe mp2_2972): MP2, army 0's air scout 0x4 turns
+// Stopped at 2723 and 2751 while it still drifts (its radar's lastTick 2723, 2751, then 2757 .. 2967); ours had
+// no such update for an aircraft and kept the phase of its first flight (2681 .. 2969), so at the recon tick 2972
+// its radar (16 cells) ended one column short of army 1's Striker 0x10003b, whose blip 0x3010000c the original
+// makes there; every later id of army 1's blips was one lower in ours (MP2 3679: an Attack order on 0x3010000f
+// named another unit).
+void IntelExactUpdate(Sim& sim, Unit* u) {
+  if (!u || !u->intel) return;
+  const Vec3& c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+  const Vec3 p{c.x, c.y + 1, c.z};
+  for (int s = 1; s <= 8; ++s) UpdatePos(u->intel->h[s], s, p, sim.tick(), true);
+}
+
 void AdvanceIntelCoords(Sim& sim) {
   uint32_t tick = sim.tick();
   for (size_t i = 0; i < g_sources.size(); ++i) {
@@ -663,8 +681,7 @@ void AdvanceIntelCoords(Sim& sim) {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       moved = u->lastMoveTick == tick;
-      // coming to rest: exact (CUnitMotion::SetMotionHorzEvent Stopped -> Entity::UpdateIntel)
-      if (!moved && u->lastMoveTick + 1 == tick) exact = true;
+      // (coming to rest: the exact update ran when the horizontal event turned Stopped, IntelExactUpdate)
       // CUnitMotion::MotionTick 0x6b9d10 ends every beat of a mobile unit in CUnitMotion::MoveTo 0x6b92e0, whose
       // Entity::SetPendingTransform 0x678e90 links the unit on the moved list with no compare: AdvanceCoords then
       // runs CIntel::ForceUpdate -> UpdatePos for a unit that stands still too, and UpdatePos's 6-tick clock

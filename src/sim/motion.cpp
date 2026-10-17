@@ -3,6 +3,7 @@
 #include "core/dmath.h"
 #include "sim/motion.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/landnav.h"
@@ -1782,6 +1783,7 @@ void SetHorzEvent(Sim& sim, Unit* u, int e) {
   lua_pushstring(L, kHorzEventNames[e]);
   lua_pushstring(L, kHorzEventNames[old]);
   sim.CallMethod(L, u, "OnMotionHorzEventChange", 2);
+  if (m.horzEvent == 3) IntelExactUpdate(sim, u);  // 0x6b8f5a..0x6b8f65: Entity::UpdateIntel
 }
 
 // CUnitMotion::ProcessCommonMotionState 0x6c2a40, the end of CalcMoveLand / Hover / Water. `moving` is what
