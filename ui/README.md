@@ -415,8 +415,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   unless Shift), then the target, as the replays hold it (only the target when a patrol is already queued);
   one unit's Patrol carries no formation; Ctrl with more than one unit makes an attack on a unit a
   FormAttack (FAF's exe leaves a Move as it is: it took the original's Ctrl-FormMove out). Alt and a right
-  click stay FAF's scripted attack-move, as the replays show. Not built yet: the right button held half a
-  second and dragged, which turns the formation's facing. The console command `StartCommandMode`, which the order
+  click stay FAF's scripted attack-move, as the replays show. A right click's order goes when the button is
+  let go, as the original's (CUIWorldView::HandleEvent); held half a second, a group's Move, Attack on a unit
+  or Patrol goes as the formation's (FormMove and the like) at the press point, and dragged it turns the
+  formation to face from the press point towards the pointer (CFormation::UpdateOrientation 0x838860). The console command `StartCommandMode`, which the order
   keys use, is built. So are the orders that need no click: `IssueCommand`, `IssueUnitCommand`
   (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
   run the finished land factory built two engineers), `SimCallback` and the unit switches

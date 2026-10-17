@@ -250,10 +250,16 @@ void InstallUnitCategoryFunctions(lua_State* L);
 // as the command stream's bytes for the engine's ApplyCommands.
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear,
                       const std::string& blueprint = std::string());
+// A right click's order held and dragged (CFormation, FA exe 0x838860): `form` turns a group's Move, Attack on a unit or
+// Patrol into FormMove, FormAttack or FormPatrol; `heading` (radians about the up axis; NaN: the units' mean towards
+// the target) is the formation's facing.
+bool IssueFormationOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
+                         bool ctrl, bool form, float heading);
 // The same with a unit as the target ("Attack", "Guard", "Repair", "Reclaim", "Capture", "Move":
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
 // none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
-bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl = false);
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl = false,
+                        bool form = false, float heading = NAN);
 // The right click's transport orders on a unit ("CallTransport", "Transport": RightClickOrder's answers).
 bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
 // A Script order at a place for the selected units, as the game's own script allows it

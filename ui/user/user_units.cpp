@@ -1211,7 +1211,7 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
 namespace {
 // An order for the selected units of the player's army, with a place or a unit as its target.
 bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
-                const std::string& blueprint, bool ctrl = false) {
+                const std::string& blueprint, bool ctrl = false, bool form = false, float headingGiven = NAN) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
   static const struct {
@@ -1293,13 +1293,21 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     d.type = static_cast<int>(type);
     name = "FormAttack";
   }
+  // The right button held half a second (the formation's "drag held", 0x820767 / 0x81fe53 / 0x8209e5): a group's
+  // Move, Attack on a unit or Patrol goes as its formation order.
+  if (form && units.size() > 1) {
+    if (type == CommandType::Move) type = CommandType::FormMove, name = "FormMove";
+    else if (type == CommandType::Attack && entity != 0xffffffffu) type = CommandType::FormAttack, name = "FormAttack";
+    else if (type == CommandType::Patrol) type = CommandType::FormPatrol, name = "FormPatrol";
+    d.type = static_cast<int>(type);
+  }
   if (forms) {
     float to[2] = {x, z};
     if (entity != 0xffffffffu) {  // (an Attack on a unit: the target point is the unit's place)
       auto it = Store(L).units.find(entity);
       if (it != Store(L).units.end()) to[0] = it->second->view.position[0], to[1] = it->second->view.position[2];
     }
-    const float heading = std::atan2(to[0] - mean[0], to[1] - mean[1]);
+    const float heading = std::isnan(headingGiven) ? std::atan2(to[0] - mean[0], to[1] - mean[1]) : headingGiven;
     d.formIndex = 0;
     d.scale = 1;
     d.qw = std::cos(heading * 0.5f), d.qx = 0, d.qy = std::sin(heading * 0.5f), d.qz = 0;
@@ -1324,7 +1332,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // A Patrol goes as two points (0x820c4e, 0x820c91; factories 0x820d64, as the replays hold them): first where the
   // units are (the mean above, on the ground), clearing the queue unless Shift; then the target, queued. With Shift
   // after a patrol already queued, only the target.
-  if (type == CommandType::Patrol && !queuedPatrol) {
+  if ((type == CommandType::Patrol || type == CommandType::FormPatrol) && !queuedPatrol) {
     StreamIssueData start = d, startRally = rally;
     float ground = y;
     if (const auto& height = UserState::From(L)->config().groundHeight) ground = height(mean[0], mean[1]);
@@ -1345,6 +1353,11 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
 
 bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, float z, bool clear, const std::string& blueprint) {
   return IssueOrder(L, order, x, y, z, 0xffffffffu, clear, blueprint);
+}
+
+bool IssueFormationOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
+                         bool ctrl, bool form, float heading) {
+  return IssueOrder(L, order, x, y, z, entity, clear, std::string(), ctrl, form, heading);
 }
 
 // A Script order at a place: what a left click does while the script's order mode is
@@ -1564,12 +1577,12 @@ bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t enti
   return true;
 }
 
-bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl) {
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl, bool form, float heading) {
   UnitStore& store = Store(L);
   auto it = store.units.find(entity);
   if (it == store.units.end() || it->second->gone) return false;
   const float* p = it->second->view.position;
-  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string(), ctrl);
+  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string(), ctrl, form, heading);
 }
 
 namespace {

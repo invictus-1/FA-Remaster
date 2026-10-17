@@ -3,7 +3,7 @@
 -- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
 -- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
--- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6000.
+-- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6500.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -222,6 +222,26 @@ ForkThread(function()
         moho64ui_MouseButton("Right", false, tp.x, tp.y, "Ctrl")
         WaitSeconds(0.5)
         check("Ctrl and a right click on an enemy: the group's FormAttack", lastIssued(), "FormAttack")
+        -- the right button: a quick click is a plain move (given when it is let go); held half a second and dragged,
+        -- the group's formation move (CFormation 0x838860), facing from the press point towards the pointer
+        local ground = view:Project({pair[1] - 10, pair[2], pair[3] - 10})
+        SelectUnits(group)
+        moho64ui_MouseMove(ground.x, ground.y)
+        WaitSeconds(0.2)
+        moho64ui_MouseButton("Right", true, ground.x, ground.y)
+        moho64ui_MouseButton("Right", false, ground.x, ground.y)
+        WaitSeconds(0.3)
+        check("a quick right click on the ground: a move", lastIssued(), "Move")
+        moho64ui_MouseButton("Right", true, ground.x, ground.y)
+        WaitSeconds(0.7)
+        moho64ui_MouseMove(ground.x + 120, ground.y)
+        WaitSeconds(0.2)
+        moho64ui_MouseButton("Right", false, ground.x + 120, ground.y)
+        WaitSeconds(0.3)
+        check("held and dragged: the group's formation move", lastIssued(), "FormMove")
+        local q = group[1]:GetCommandQueue() or {}
+        local fp = q[1] and q[1].position
+        check("at the press point, not where it was let go", fp ~= nil and math.abs(fp[1] - (pair[1] - 10)) < 3 and math.abs(fp[3] - (pair[3] - 10)) < 3, true)
     end
     LOG("TEST done: " .. failed .. " failed")
 end)

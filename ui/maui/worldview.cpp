@@ -1227,6 +1227,20 @@ class WorldView : public Control {
   bool spinning_ = false;
   float spinX_ = 0, spinY_ = 0;
   void DragMove(lua_State* L, const UiEvent& e) override {
+    if (rightHeld_) {  // (the formation's facing, once the button has been held half a second)
+      if (!RightHeldLong(L)) return;
+      float to[3];
+      Unproject(L, e.x, e.y, to);
+      auto far = [](const float* a, const float* b) {
+        return (a[0] - b[0]) * (a[0] - b[0]) + (a[2] - b[2]) * (a[2] - b[2]) >= 0.0025f;
+      };
+      if (far(to, rightAt_) && far(to, rightLast_)) {
+        rightHeading_ = std::atan2(to[0] - rightAt_[0], to[2] - rightAt_[2]);
+        rightTurned_ = true;
+        for (int i = 0; i < 3; ++i) rightLast_[i] = to[i];
+      }
+      return;
+    }
     if (miniDrag_) {  // the left button held on a minimap: the main camera looks where the pointer is
       float world[3];
       Unproject(L, e.x, e.y, world);
@@ -1275,6 +1289,41 @@ class WorldView : public Control {
   // simulation snaps a site. As players know it from the original; how the original spaces the
   // row is not read: INFERRED.
   bool buildDrag_ = false, buildShift_ = false;
+  // The right button's order is given when it is let go, as the original's (CUIWorldView::HandleEvent: the press
+  // stores the action 0x870f1b, the release issues it 0x870ff7). Held half a second (the interface clock), the group's
+  // formation turns to face from the press point towards the pointer (CFormation::UpdateOrientation 0x838860, once
+  // the pointer is 0.05 map units from both the press point and its last turn), and the order goes as the
+  // formation's (FormMove and the like) at the press point.
+  bool rightHeld_ = false, rightShift_ = false, rightCtrl_ = false, rightAlt_ = false, rightTurned_ = false;
+  std::string rightOrder_;
+  uint32_t rightUnder_ = 0xffffffffu;
+  float rightAt_[3] = {0, 0, 0}, rightLast_[3] = {0, 0, 0}, rightHeading_ = 0;
+  double rightSince_ = 0;  // (the interface's clock: live in a window, as the original's wall clock; frame steps in tests)
+  static constexpr double kFormationHold = 0.5;  // (CFormation +0x5c after Reset)
+  bool RightHeldLong(lua_State* L) const { return UserState::From(L)->clockNow() - rightSince_ >= kFormationHold; }
+  // The stored right click's order, given now (the release).
+  bool IssueRightClick(lua_State* L) {
+    const std::string order = rightOrder_;
+    const uint32_t under = rightUnder_;
+    const bool clear = !rightShift_, held = RightHeldLong(L);
+    const float heading = rightTurned_ ? rightHeading_ : NAN;
+    if (order == "Invalid") return true;  // (an enemy the selection cannot attack: no order, FA exe 0x821a24)
+    if ((order == "CallTransport" || order == "Transport") && IssueTransportOrderAt(L, order, under, clear)) return true;
+    // (With Alt held, a right click that would be a move is FAF's attack-move.)
+    if (order == "Move" && rightAlt_ && !rightCtrl_ && IssueAttackMoveAt(L, rightAt_[0], rightAt_[1], rightAt_[2], clear)) return true;
+    // (A guard held past the half second is the move's, 0x82014f: the cursor offers Guard only before it.)
+    if (order != "Move" && !(order == "Guard" && held)) {
+      if (under != 0xffffffffu) {
+        if (IssueToSelectionAt(L, order, under, clear, rightCtrl_, held, heading)) return true;
+      }
+    }
+    // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
+    // can reclaim: reclaim it. (As players know it from the original; its code for what is
+    // under the cursor beside units is not read. The cursor must be ON it, within a few
+    // pixels: a click beside a tree stays a move.)
+    if (under == 0xffffffffu && !held && !miniMap && IssueReclaimAtPlace(L, rightAt_, MapUnitsOf(L, 4), clear)) return true;
+    return IssueFormationOrder(L, "Move", rightAt_[0], rightAt_[1], rightAt_[2], 0xffffffffu, clear, rightCtrl_, held, heading);
+  }
   std::string buildName_;
   float buildFrom_[3] = {0, 0, 0};
   // The sites of a build template put at a place. As the original draws them (FA exe 0x852eee
@@ -1338,6 +1387,11 @@ class WorldView : public Control {
     }
   }
   void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (rightHeld_) {
+      rightHeld_ = false;
+      IssueRightClick(L);
+      return;
+    }
     if (miniDrag_) {
       miniDrag_ = false;
       return;
@@ -1476,18 +1530,15 @@ class WorldView : public Control {
       Logf(LogLevel::Debug, "moho64ui: right press at %.1f %.1f (world %.1f %.1f): under %u, order %s%s%s", e.x, e.y, world[0], world[2],
            under, order.c_str(), e.shift ? " +Shift" : "", e.alt ? " +Alt" : "");
       if (order.rfind("RULEUCC_", 0) != 0) return false;
-      order = order.substr(8);
-      if (order == "Invalid") return true;  // (an enemy the selection cannot attack: no order, FA exe 0x821a24)
-      if ((order == "CallTransport" || order == "Transport") && IssueTransportOrderAt(L, order, under, !e.shift)) return true;
-      // (With Alt held, a right click that would be a move is FAF's attack-move.)
-      if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
-      if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift, e.ctrl)) return true;
-      // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
-      // can reclaim: reclaim it. (As players know it from the original; its code for what is
-      // under the cursor beside units is not read. The cursor must be ON it, within a few
-      // pixels: a click beside a tree stays a move.)
-      if (under == 0xffffffffu && !miniMap && IssueReclaimAtPlace(L, world, MapUnitsOf(L, 4), !e.shift)) return true;
-      return IssueToSelection(L, "Move", world[0], world[1], world[2], !e.shift);
+      rightOrder_ = order.substr(8);
+      rightUnder_ = under;
+      rightShift_ = e.shift, rightCtrl_ = e.ctrl, rightAlt_ = e.alt, rightTurned_ = false;
+      for (int i = 0; i < 3; ++i) rightAt_[i] = rightLast_[i] = world[i];
+      rightSince_ = UserState::From(L)->clockNow();
+      if (miniMap) return IssueRightClick(L);  // (the minimap: at once, no formation to turn)
+      rightHeld_ = true;
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
     }
     if (!e.left) return false;
     // A left press while the game script is in a command mode: an order with the place as its
