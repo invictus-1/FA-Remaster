@@ -242,6 +242,12 @@ bool Decals::IsDepositMark(const std::string& texture, bool* hydrocarbon) {
   return mass || hydro;
 }
 
+bool Decals::IsScar(const std::string& texture) {
+  std::string name = texture;
+  for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return name.find("scorch") != std::string::npos || name.find("crater") != std::string::npos;
+}
+
 bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
   {  // a resource deposit's mark: remembered, for its icon from far up
     bool hydrocarbon = false;
@@ -256,6 +262,15 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   }
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
   decals_.back().relief = relief;
+  if (battleScars && seconds > 0 && IsScar(texture)) {  // a battle scar: kept; past the most, the oldest fades out
+    decals_.back().scar = true;
+    if (++scars_ > mostScars) {
+      Decal* oldest = nullptr;
+      for (Decal& d : decals_)
+        if (d.scar && d.scarGone <= 0 && (!oldest || d.born < oldest->born)) oldest = &d;
+      if (oldest) oldest->scarGone = born + 10;
+    }
+  }
   decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
   decals_.back().id = lastId_ = nextId_++;
   return true;
@@ -308,8 +323,13 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     snowClock_ = now;
     settled_ = true;
     // those whose time is over go
-    decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [now](const Decal& d) { return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds); }),
-                  decals_.end());
+    // (a battle scar only once it has faded out, as the most there may be asks; with battle scars off, at its time)
+    auto over = [&](const Decal& d) {
+      if (d.scar && battleScars) return d.scarGone > 0 && now >= d.scarGone;
+      return d.seconds > 0 && now - d.born >= static_cast<double>(d.seconds);
+    };
+    decals_.erase(std::remove_if(decals_.begin(), decals_.end(), over), decals_.end());
+    scars_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.scar; }));
     waterDecals_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.water; }));
   }
   visible_.clear();
@@ -327,7 +347,13 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     float alpha = 1;
     // (it fades out over its last five seconds, a short-lived one over the second half of its time: a
     // tank's tread marks last a second, a walker's footprints four; how the original fades them is a GUESS)
-    if (d.seconds > 0) alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
+    if (d.scar && battleScars) {  // a battle scar: weathered after the game's time, faded out once the most is passed
+      const float past = static_cast<float>(now - d.born) - d.seconds;
+      alpha = 1 - (1 - scarFloor) * Clamp(past / std::max(scarWeathering, 1.0f), 0, 1);
+      if (d.scarGone > 0) alpha *= Clamp(static_cast<float>(d.scarGone - now) / 10, 0, 1);
+    } else if (d.seconds > 0) {
+      alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
+    }
     // it comes in over the last fifth of its distance (the original's DecalAlpha; how wide its fade is, is a GUESS)
     if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
     Instance n{};

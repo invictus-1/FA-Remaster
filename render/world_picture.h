@@ -158,7 +158,8 @@ class WorldPicture {
   //   (World::litRain, rainSplashes, waterDetail); about +0.05 ms while it rains.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
-  //   +0.05 to 0.2 ms when zoomed in, nothing from afar. (Later the remastered ground's decals and battle scars.)
+  //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
+  //   craters of the fighting stay on the ground, weathering, up to 2000.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and
@@ -237,6 +238,30 @@ class WorldPicture {
     uint32_t color;
   };
   void SetShapes(const std::vector<Line>& lines, const std::vector<Ring>& rings);
+  // The order lines while Shift is held, as the original draws them (order_lines.h; the interface works out the
+  // legs between the orders' places, their units, states and colours, from the game's commandgraphparams.lua):
+  // each leg a flat textured ribbon on a curve, as wide as its units say and a few pixels more, seen through
+  // hills and units, the first leg given keeping a pixel where legs cross; each mark a waypoint's icon on the
+  // ground. `textures`: their paths, the legs' and marks' `texture` an index into it (-1: none). Stays as set until
+  // set again (empty when Shift is let go). The original's console variables: OrderLineSettings.
+  struct OrderLeg {
+    float a[3], b[3];      // its two places, on the ground
+    float ta[3], tb[3];    // the curve's directions there, unit length (zero: straight)
+    float baseWidth = 1;   // world units: min(sqrt(units on it), 10)
+    uint32_t color = 0xffffffff;  // 0xAARRGGBB
+    int texture = -1;
+    float uvAspect = 1, animRate = 0;  // the texture along it: U per width of length; U moved each game tick
+  };
+  struct OrderMark {
+    float position[3];
+    int texture = -1;      // -1: a solid square
+    uint32_t color = 0xffffffff;
+    float size = 1;        // world units: the node's size times its waypoint scale
+  };
+  void SetOrderLines(const std::vector<std::string>& textures, const std::vector<OrderLeg>& legs, const std::vector<OrderMark>& marks);
+  // ui_WaypointLineScale, ui_CurveSmoothness, ui_CurveSegments, ui_MinWaypointSize, ui_MaxWaypointSize (the game's
+  // Lua: 1, 35, 32, 7, 100, as at first).
+  void SetOrderLineSettings(float lineScale, float curveSmoothness, int curveSegments, float markMinPixels, float markMaxPixels);
   // Range rings as the original draws them: all the rings of a group show as ONE outline round
   // the ground they cover together (a ring inside what the others cover does not show); an inner
   // radius cuts a hole with an outline of its own. On the ground, under what stands on it, and on

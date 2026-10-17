@@ -51,6 +51,17 @@ class Decals {
   // has made one (/remastered, effect_files.h), and lit over the relief beside it where there is one (its
   // "_albedo" named "_normals": a two-channel normal map, x in red, y in green pointing up the picture, OpenGL's).
   bool remastered = false;
+  // Battle scars (World::battleScars; Chris, 2026-10-17: "build it up now"): a scorch or a crater a script lays (a
+  // decal whose name has "scorch" or "crater" in it: deaths, blasts, shells, a nuke's) stays past the time the
+  // game gives it, weathering over `scarWeathering` seconds after that time to `scarFloor` of its strength, and
+  // goes only when there are more than `mostScars`: then the oldest fades out over ten seconds. So a battlefield
+  // keeps the marks of the fighting on it. Set by the world each frame; scars laid while it was off keep the
+  // game's time.
+  bool battleScars = false;
+  int mostScars = 2000;
+  float scarWeathering = 600, scarFloor = 0.5f;
+  int Scars() const { return scars_; }  // (scars there now, the ones fading out included)
+  static bool IsScar(const std::string& texture);
   // The picture a script's mark is named by (a path, or a short name looked up in the game's two
   // folders of them); none: not there.
   gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr); }
@@ -122,6 +133,8 @@ class Decals {
     uint32_t id = 0;     // (laid by Add: from 1)
     float snowAtBirth = 0;  // snowFallen_ when it was laid (see `snowLying`)
     gfx::Texture relief;    // a remastered picture's own relief (`remastered`), or none
+    bool scar = false;      // a battle scar (`battleScars`), and when it has faded out (0: it has not begun to)
+    double scarGone = 0;
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
@@ -136,6 +149,7 @@ class Decals {
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old
   uint32_t nextId_ = 1, lastId_ = 0;
   int waterDecals_ = 0;     // "Water Albedo" decals there now
+  int scars_ = 0;           // battle scars there now
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;

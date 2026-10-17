@@ -4,6 +4,28 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 30: order lines as the original draws them (2026-10-17)
+
+**Done, your form.** `WorldPicture::SetOrderLines(textures, legs, marks)` (order_lines.h): `textures` the paths
+(`/textures/ui/common/game/orderline/orderline_generic.dds`, ...), each `OrderLeg` {a, b (on the ground), ta, tb (unit
+length; zero: straight), baseWidth (min(sqrt(units), 10)), color 0xAARRGGBB, texture (index; -1 plain), uvAspect,
+animRate}, each `OrderMark` {position, texture (-1: a solid square), color, size (the node's size times the order's
+waypoint scale)}; it stays as set until set again (hand empty lists when Shift is let go).
+`SetOrderLineSettings(lineScale, curveSmoothness, curveSegments, markMinPixels, markMaxPixels)` for the console
+variables (1, 35, 32, 7, 100 as at first). Per frame, as your helper read it: w(p) from the window's own view (the
+projection's w times the view's height at one unit, over the window's pixels), width = (baseWidth + 2 max(w(a), w(b)))
+x lineScale, the Hermite curve with c = min(0.25 |b - a|, curveSmoothness x width) over curveSegments + 1 points, the
+flat ribbon's sides (T.z, 0, -T.x) x width / 2 unnormalised, V 0 on the + side, U0 = 1 - frac(ticks x animRate) (the
+game's ticks with their fraction, from the world's clock), + |dP| x uvAspect / width. Texture x colour, linear
+(wrapping along: V reaches the rows where your textures' alpha is 0), nothing where the alpha is 0, blended into the
+colour alone, no depth test against the world; where legs cross, the leg handed first keeps the pixel (each leg
+nearer in the window's depth than the ones after it: the original's stencil), so hand them highlight, selected, then
+normal, as you planned; runs of legs with one texture are drawn together in your order. Then the marks: a flat square
+on the ground, u along +x, v along +z, half side clamp(size / w, 7, 100) pixels' worth, no depth test. Drawn after the
+finished picture, before the strategic icons and your interface (and after the picture frame generation keeps, so the
+lines stay sharp with it on). No glow pass, no arrowheads. Viewer `--order-test`: a move chain, a patrol loop with its
+moving chevrons and an attack round where the camera starts. Both backends; with no lines, pictures unchanged.
+
 ## To visuals, section 45: the scorch decals remastered, and their relief (2026-10-17)
 
 **(1) Yes, now.** In the remastered effects look (`World::effectsLook`), a decal a script lays (CreateDecal,
@@ -22,8 +44,12 @@ scorches (3.2 units across) come out as your burnt ground with its grain and rim
 are a flat dark blob. (A T1 or T3 tank's death lays a 0.6-unit splat that lies under its wreck.) Off the remastered
 effects look, and for the map's decals, the pictures are pixel-identical to before (both backends).
 
-**(3) The build-up** (marks kept past the game's fade, a cap and a fade for cost): Chris queued the rest of the
-terrain list, battle scars with it, until after the 64-bit port; asked whether it moves up now that your art is in.
+**(3) The build-up: done the same day** (Chris: "build it up now"). `World::battleScars`, in the Ground Detail
+setting: a script's decal whose name has "scorch" or "crater" in it (your list of 17 October: `scorch_*`,
+`scorch_generic_*`, `nuke_scorch_*`, `crater*`) stays past the game's time, weathering over ten minutes to half its
+strength; past 2000 the oldest fades out over ten seconds; the map's own decals are never scars. Your batch 2
+(craters with relief, nuke scorches) is covered by the same rule as it lands. Details and costs in
+docs/render-lighting.md, "Battle scars".
 
 ## To visuals, section 39: the remastered ground is read (2026-10-17; Chris: "read them now", the rest of the terrain list queued)
 

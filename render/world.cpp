@@ -48,6 +48,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       wakes(device),
       ranges(device),
       placedDraw(device, &models),
+      orders(device, &textures),
       shadows(device),
       device_(device),
       vfs_(vfs) {}
@@ -78,7 +79,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
   } batch{device_};
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error) || !orders.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -448,6 +449,7 @@ float World::GroundHeight(float x, float z) const {
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
+  decals.battleScars = battleScars;
   particles.quality = effectsQuality;
   camera = cam;
   time_ = time;
@@ -1795,6 +1797,10 @@ void World::Render() {
     framegenIn_.frameSeconds = frameSeconds_;
     framegenIn_.reset = framegenCut_;
     framegenReady_ = framegenIn_.hudless && framegenIn_.depth && framegenIn_.motion;
+  }
+  if (!sidePicture && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
+    Stage("order lines");
+    orders.Draw(screenView_, clock_ * 10);
   }
   Stage("icons, bars");
   icons.showSymbols = iconsOn;
