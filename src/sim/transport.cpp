@@ -2838,6 +2838,10 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
         d->specific = true;
         if (o->transportedBy == EntityRef(u)) d->which.push_back(EntityRef(o));
       }
+    // (c.units is a set of pointers, so in address order, which differs from process to process: TickUnload lets
+    // the units go in id order, as the load, retrieve and launch lists here are sorted and as the original's
+    // command keeps its units, an EntitySet in ascending id; inferred, docs/two-copies.md item 3)
+    std::sort(d->which.begin(), d->which.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
     Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
     d->goal = p;
     SetState(u, "TransportUnloading", true);

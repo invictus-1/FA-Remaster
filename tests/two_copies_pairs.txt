@@ -1,0 +1,6 @@
+# tools/twocopies.py's own test (docs/two-copies.md): an --orders file for moho64.
+# pairs() over a table whose keys are tables goes in the order of the keys' addresses, and two copies of the game
+# have their tables at different addresses. Before beat 101 this makes 16 fresh tables the keys of a table; army 1's
+# first unit loses as much health as the number of the key pairs() yields first. Two copies must then differ at beat
+# 101, in part u1 (and the detail shows that unit's health), unless they happen to pick the same key (1 in 16).
+100 lua local t = {} for i = 1, 16 do t[{}] = i end local _, first = next(t) local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: the first of 16 table keys in pairs order is number ', first) u:SetHealth(u, u:GetHealth() - first)
