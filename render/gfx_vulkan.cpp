@@ -17,6 +17,9 @@
 //   Direct3D 12's backend; the frame's commands begin with a barrier that waits for them.
 // - Vulkan's functions are fetched from the loader at run time (vulkan-1.dll, libvulkan.so.1,
 //   libMoltenVK.dylib): nothing to link; a machine without Vulkan only fails to make this backend.
+// - Ray tracing (gfx.h) where the card offers acceleration structures and ray queries (never MoltenVK): the
+//   structures in buffers of their own, built in the frame's commands as Direct3D 12's backend builds them;
+//   a scene is bound in a texture's binding of set 0 as an acceleration structure descriptor.
 
 #include "gfx.h"
 
@@ -80,6 +83,7 @@ namespace {
   X(vkGetPhysicalDeviceQueueFamilyProperties)  \
   X(vkGetPhysicalDeviceMemoryProperties)       \
   X(vkGetPhysicalDeviceFeatures2)              \
+  X(vkGetPhysicalDeviceProperties2)            \
   X(vkGetPhysicalDeviceFormatProperties)       \
   X(vkEnumerateDeviceExtensionProperties)      \
   X(vkCreateDevice)                            \
@@ -169,11 +173,20 @@ namespace {
   X(vkCmdCopyBufferToImage)             \
   X(vkCmdCopyBuffer)                    \
   X(vkCmdResolveImage)
+// (fetched only where ray tracing is enabled)
+#define VK_RAY_FUNCTIONS(X)                     \
+  X(vkGetBufferDeviceAddress)                   \
+  X(vkCreateAccelerationStructureKHR)           \
+  X(vkDestroyAccelerationStructureKHR)          \
+  X(vkGetAccelerationStructureBuildSizesKHR)    \
+  X(vkGetAccelerationStructureDeviceAddressKHR) \
+  X(vkCmdBuildAccelerationStructuresKHR)
 #define VK_DECLARE(name) PFN_##name name = nullptr;
 VK_GLOBAL_FUNCTIONS(VK_DECLARE)
 VK_INSTANCE_FUNCTIONS(VK_DECLARE)
 VK_SURFACE_FUNCTIONS(VK_DECLARE)
 VK_DEVICE_FUNCTIONS(VK_DECLARE)
+VK_RAY_FUNCTIONS(VK_DECLARE)
 PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
 #undef VK_DECLARE
 
@@ -227,6 +240,8 @@ constexpr uint32_t kTexBinding = 16, kBufferBinding = 56, kSamplerBinding = 64, 
 constexpr int kStorageSlots = 16;  // u0-u15
 // (every set's bindings are seen by the drawing stages and by compute shaders alike)
 constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
+// (the shaders that may trace rays through a scene, inline: RayQuery)
+constexpr VkPipelineStageFlags2 kRayShaders = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 constexpr VkFormat kBackFormat = VK_FORMAT_R8G8B8A8_UNORM;  // our own picture of the window (as Direct3D 12's)
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr VkDeviceSize kConstantRing = 32u << 20;  // a frame's constants (grown when a frame needs more)
@@ -287,9 +302,12 @@ struct Allocation {
 
 class Memory {
  public:
-  void Init(VkDevice device, const VkPhysicalDeviceMemoryProperties& props) {
+  // (`deviceAddresses`: the buffers' blocks allow their buffers' device addresses, which ray tracing's
+  // builds read from)
+  void Init(VkDevice device, const VkPhysicalDeviceMemoryProperties& props, bool deviceAddresses) {
     device_ = device;
     props_ = props;
+    deviceAddresses_ = deviceAddresses;
   }
   ~Memory() { Release(); }
   void Release() {
@@ -337,6 +355,9 @@ class Memory {
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     mai.allocationSize = b.size;
     mai.memoryTypeIndex = type;
+    VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    if (linear && deviceAddresses_) mai.pNext = &flags;
     if (vkAllocateMemory(device_, &mai, nullptr, &b.memory) != VK_SUCCESS) return false;
     if (props_.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
       void* p = nullptr;
@@ -372,6 +393,7 @@ class Memory {
   };
   VkDevice device_ = VK_NULL_HANDLE;
   VkPhysicalDeviceMemoryProperties props_{};
+  bool deviceAddresses_ = false;
   std::vector<Block> blocks_;
 };
 
@@ -411,6 +433,22 @@ struct PipelineRec {
   bool depth = true;  // drawn with a depth attachment (Vulkan wants the pass to match)
 };
 
+// A ray tracing structure (gfx.h): the structure, the buffer it lies in, and its device address (what an
+// instance names it by); for a geometry not built yet, what it is built from (its parts, each part's
+// triangles) and the scratch room its build takes.
+struct StructureRec {
+  bool used = false;
+  bool scene = false;
+  VkAccelerationStructureKHR structure = VK_NULL_HANDLE;
+  VkBuffer buffer = VK_NULL_HANDLE;
+  Allocation memory;
+  VkDeviceSize size = 0;
+  VkDeviceAddress address = 0;
+  std::vector<VkAccelerationStructureGeometryKHR> parts;
+  std::vector<uint32_t> triangles;
+  VkDeviceSize scratch = 0;
+};
+
 struct Page {
   VkBuffer buffer = VK_NULL_HANDLE;
   Allocation memory;
@@ -446,6 +484,11 @@ class VulkanDevice final : public Device {
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
+  bool RayTracing() const override { return rayTracing_; }
+  Structure CreateGeometry(const GeometryPart* parts, int count) override;
+  void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
+  void SetScene(int slot, Structure scene) override;
+  void Destroy(Structure structure) override;
   void BeginFrame(const float clearColor[4]) override;
   void BeginPass(const PassDesc& pass) override;
   void Resolve(Texture from, Texture to) override;
@@ -490,10 +533,20 @@ class VulkanDevice final : public Device {
   void KeepStaging(VkBuffer buffer, const Allocation& memory, VkDeviceSize bytes);
   void FlushUploads();
   bool StagingBuffer(VkDeviceSize size, VkBuffer* buffer, Allocation* memory);
+  // ray tracing
+  VkDeviceAddress Address(VkBuffer buffer);
+  bool RayBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer* buffer, Allocation* memory);
+  bool MakeStructure(StructureRec* rec, VkAccelerationStructureTypeKHR type, VkDeviceSize size);
+  void RetireStructure(StructureRec* rec);
+  bool GrowScratch(VkDeviceSize size);
+  void BuildGeometry();
+  void RayBarrier(VkPipelineStageFlags2 from, VkAccessFlags2 fromAccess, VkPipelineStageFlags2 to, VkAccessFlags2 toAccess);
+  VkAccelerationStructureKHR SceneIn(int slot) const;
   // deferred destruction: let go once the card is done with the frames that might use it
   struct Garbage {
     std::vector<VkImage> images;
     std::vector<VkImageView> views;
+    std::vector<VkAccelerationStructureKHR> structures;  // (each before its buffer)
     std::vector<VkBuffer> buffers;
     std::vector<VkPipeline> pipelines;
     std::vector<Allocation> memory;
@@ -503,6 +556,7 @@ class VulkanDevice final : public Device {
   BufferRec* Find(Buffer b) { return b.id && b.id <= buffers_.size() && buffers_[b.id - 1].used ? &buffers_[b.id - 1] : nullptr; }
   TextureRec* Find(Texture t) { return t.id && t.id < textures_.size() && textures_[t.id].used ? &textures_[t.id] : nullptr; }
   PipelineRec* Find(Pipeline p) { return p.id && p.id <= pipelines_.size() && pipelines_[p.id - 1].used ? &pipelines_[p.id - 1] : nullptr; }
+  StructureRec* Find(Structure s) { return s.id && s.id <= structures_.size() && structures_[s.id - 1].used ? &structures_[s.id - 1] : nullptr; }
 
   void* window_ = nullptr;
   int width_ = 0, height_ = 0;
@@ -602,6 +656,21 @@ class VulkanDevice final : public Device {
   std::vector<PipelineRec> pipelines_; // id = index + 1
   std::vector<uint32_t> freeBuffers_, freeTextures_, freePipelines_;
 
+  // ray tracing (where the card can): the structures, the geometry made since the last scene was built, the
+  // scratch room builds share (its address aligned as the card wants a build's scratch), and the scenes
+  // bound in the texture slots (their own list: a binding's kind in the shader says which is read)
+  bool rayTracing_ = false;
+  std::vector<StructureRec> structures_;  // id = index + 1
+  std::vector<uint32_t> freeStructures_, pendingGeometry_;
+  VkBuffer scratch_ = VK_NULL_HANDLE;
+  Allocation scratchMemory_;
+  VkDeviceSize scratchSize_ = 0, scratchAlign_ = 256;
+  VkDeviceAddress scratchAddress_ = 0;
+  uint32_t boundScenes_[kTexSlots] = {};
+  // what a slot whose shader declares a scene shows when none is bound there: a scene of nothing, built at
+  // the first frame
+  Structure emptyScene_;
+
   // uploads: batches sent ahead of the frame
   static constexpr int kUploadBatches = 4;
   struct Upload {
@@ -661,6 +730,11 @@ VulkanDevice::~VulkanDevice() {
   }
   for (PipelineRec& p : pipelines_)
     if (p.used && p.pipeline) vkDestroyPipeline(device_, p.pipeline, nullptr);
+  for (StructureRec& s : structures_) {
+    if (s.used && s.structure) vkDestroyAccelerationStructureKHR(device_, s.structure, nullptr);
+    if (s.used && s.buffer) vkDestroyBuffer(device_, s.buffer, nullptr);
+  }
+  if (scratch_) vkDestroyBuffer(device_, scratch_, nullptr);
   if (queries_) vkDestroyQueryPool(device_, queries_, nullptr);
   if (readback_) vkDestroyBuffer(device_, readback_, nullptr);
   for (const auto& l : layouts_) {
@@ -887,8 +961,22 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   VkPhysicalDeviceRobustness2FeaturesEXT haveRobust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
   VkPhysicalDeviceFeatures2 have{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
   if (nullDescriptors_) have.pNext = &haveRobust;
+  // ray tracing, only where the card offers all it takes: acceleration structures (with the deferred host
+  // operations they ask for), ray queries in any shader, and buffers' device addresses (what builds read from)
+  bool rays = deviceOffers(physical_, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && deviceOffers(physical_, VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+              deviceOffers(physical_, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+  VkPhysicalDeviceVulkan12Features have12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  VkPhysicalDeviceAccelerationStructureFeaturesKHR haveStructures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+  VkPhysicalDeviceRayQueryFeaturesKHR haveQueries{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+  if (rays) {
+    have12.pNext = &haveStructures;
+    haveStructures.pNext = &haveQueries;
+    haveQueries.pNext = have.pNext;
+    have.pNext = &have12;
+  }
   vkGetPhysicalDeviceFeatures2(physical_, &have);
   nullDescriptors_ = nullDescriptors_ && haveRobust.nullDescriptor;
+  rays = rays && have12.bufferDeviceAddress && haveStructures.accelerationStructure && haveQueries.rayQuery;
   if (!have.features.textureCompressionBC) fprintf(stderr, "render: Vulkan: this card reads no BC textures (most of the game's)\n");
   float priority = 1;
   VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -919,6 +1007,20 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   }
   VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
   features.pNext = core13 ? static_cast<void*>(&f13) : static_cast<void*>(&dynamicRendering);
+  VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  f12.bufferDeviceAddress = VK_TRUE;
+  VkPhysicalDeviceAccelerationStructureFeaturesKHR structures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+  structures.accelerationStructure = VK_TRUE;
+  VkPhysicalDeviceRayQueryFeaturesKHR queries{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+  queries.rayQuery = VK_TRUE;
+  if (rays) {  // (ahead of the rest of the chain)
+    for (const char* name : {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME})
+      deviceExtensions.push_back(name);
+    queries.pNext = features.pNext;
+    structures.pNext = &queries;
+    f12.pNext = &structures;
+    features.pNext = &f12;
+  }
   features.features.samplerAnisotropy = have.features.samplerAnisotropy;
   features.features.textureCompressionBC = have.features.textureCompressionBC;
   // (compute shaders write storage images declared without a format, some in the extended formats: R16F, RG16F)
@@ -936,6 +1038,9 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   if (r != VK_SUCCESS) return fail("creating the device", r);
 #define VK_LOAD(name) name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device_, #name));
   VK_DEVICE_FUNCTIONS(VK_LOAD)
+  if (rays) {
+    VK_RAY_FUNCTIONS(VK_LOAD)
+  }
 #undef VK_LOAD
   if (!core13) {  // (the same calls under their extensions' names)
 #define VK_LOAD_KHR(name) name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device_, #name "KHR"));
@@ -945,8 +1050,18 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     VK_LOAD_KHR(vkCmdWriteTimestamp2)
 #undef VK_LOAD_KHR
   }
+#define VK_HAVE(name) && name
+  rayTracing_ = rays VK_RAY_FUNCTIONS(VK_HAVE);
+#undef VK_HAVE
+  if (rayTracing_ && vkGetPhysicalDeviceProperties2) {  // (where a build's scratch room may start)
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR sp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+    VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    p2.pNext = &sp;
+    vkGetPhysicalDeviceProperties2(physical_, &p2);
+    scratchAlign_ = std::max<VkDeviceSize>(sp.minAccelerationStructureScratchOffsetAlignment, 1);
+  }
   vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
-  memory_.Init(device_, memoryProps);
+  memory_.Init(device_, memoryProps, rayTracing_);
 
   // the six fixed samplers (as Direct3D 12's static samplers: s0 anisotropic wrap, s1 linear clamp, s2 point
   // clamp, s3 linear wrap, s4 point wrap, s5 the shadow maps' comparison)
@@ -996,14 +1111,16 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     if ((r = vkCreateSemaphore(device_, &smi, nullptr, &f.acquired)) != VK_SUCCESS) return fail("a semaphore", r);
     // the frame's descriptor sets (all let go together each time the frame begins)
     // (the fixed samplers count against the pool too)
-    VkDescriptorPoolSize sizes[5] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192 * kTexSlots},
+    // (with ray tracing, a scene for each set of draws and of dispatches)
+    VkDescriptorPoolSize sizes[6] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192 * kTexSlots},
                                      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8192 * 2},
                                      {VK_DESCRIPTOR_TYPE_SAMPLER, 8192 * 6},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 64 * kCbSlots},
-                                     {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 * kStorageSlots}};  // (a set for each dispatch)
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 * kStorageSlots},  // (a set for each dispatch)
+                                     {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 8192 + 1024}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets = 8192 + 64 + 1024;
-    dpi.poolSizeCount = 5;
+    dpi.poolSizeCount = rayTracing_ ? 6 : 5;
     dpi.pPoolSizes = sizes;
     if ((r = vkCreateDescriptorPool(device_, &dpi, nullptr, &f.descriptors)) != VK_SUCCESS) return fail("a descriptor pool", r);
   }
@@ -1254,6 +1371,8 @@ Span VulkanDevice::Allocate(VkDeviceSize size, VkDeviceSize align) {
     bci.size = p.size;
     bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (rayTracing_)  // (a scene's instances are written here, and read by its build)
+      bci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     if (vkCreateBuffer(device_, &bci, nullptr, &p.buffer) != VK_SUCCESS) return {};
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(device_, p.buffer, &req);
@@ -1339,6 +1458,8 @@ Buffer VulkanDevice::CreateBuffer(const BufferDesc& desc) {
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | (desc.kind == BufferKind::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT
                                                      : desc.kind == BufferKind::Vertex ? VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
                                                                                       : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (rayTracing_ && desc.kind != BufferKind::Shader)  // (what a geometry structure is built from)
+      bci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     if (vkCreateBuffer(device_, &bci, nullptr, &rec.buffer) != VK_SUCCESS) return {};
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(device_, rec.buffer, &req);
@@ -1637,6 +1758,7 @@ void VulkanDevice::Collect(Garbage& g) {
   for (VkPipeline p : g.pipelines) vkDestroyPipeline(device_, p, nullptr);
   for (VkImageView v : g.views) vkDestroyImageView(device_, v, nullptr);
   for (VkImage i : g.images) vkDestroyImage(device_, i, nullptr);
+  for (VkAccelerationStructureKHR s : g.structures) vkDestroyAccelerationStructureKHR(device_, s, nullptr);
   for (VkBuffer b : g.buffers) vkDestroyBuffer(device_, b, nullptr);
   for (const Allocation& a : g.memory) memory_.Free(a);
   g = Garbage{};
@@ -1691,7 +1813,10 @@ const VulkanDevice::Layout* VulkanDevice::LayoutFor(const std::vector<SpirvImage
   std::vector<VkDescriptorSetLayoutBinding> b;
   for (const auto& image : images) {
     const bool storage = image.kind == SpirvImage::Storage || image.kind == SpirvImage::StorageVolume;
-    b.push_back({image.binding, storage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, image.count, kStages, nullptr});
+    const VkDescriptorType type = image.kind == SpirvImage::Scene ? VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
+                                  : storage                       ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                                                  : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    b.push_back({image.binding, type, image.count, kStages, nullptr});
   }
   for (uint32_t i = 0; i < 2; ++i) b.push_back({kBufferBinding + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages, nullptr});
   for (uint32_t i = 0; i < 6; ++i) b.push_back({kSamplerBinding + i, VK_DESCRIPTOR_TYPE_SAMPLER, 1, kStages, &samplers_[i]});
@@ -1848,13 +1973,18 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     else images.push_back(image);
   }
   std::sort(images.begin(), images.end());
-  for (const auto& image : images)
-    if (image.binding < kTexBinding || image.binding + image.count > kTexBinding + kTexSlots || image.kind >= SpirvImage::Storage) {
-      if (error) *error = std::string(desc.name) + ": a texture outside t0-t39";
+  for (const auto& image : images) {
+    const char* wrong = image.binding < kTexBinding || image.binding + image.count > kTexBinding + kTexSlots || image.kind >= SpirvImage::Storage
+                            ? "a texture outside t0-t39"
+                        : image.kind == SpirvImage::Scene && !rayTracing_ ? "it traces rays, which this card or its driver cannot"
+                                                                          : nullptr;
+    if (wrong) {
+      if (error) *error = std::string(desc.name) + ": " + wrong;
       for (VkShaderModule m : modules)
         if (m) vkDestroyShaderModule(device_, m, nullptr);
       return {};
     }
+  }
   const Layout* layout = LayoutFor(images);
   if (!layout) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no pipeline layout";
@@ -1900,6 +2030,10 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     const uint32_t from = storage ? kStorageBinding : kTexBinding, slots = storage ? kStorageSlots : kTexSlots;
     if (image.binding < from || image.binding + image.count > from + slots) {
       if (error) *error = std::string(desc.name) + ": a texture outside t0-t39 or u0-u15";
+      return {};
+    }
+    if (image.kind == SpirvImage::Scene && !rayTracing_) {
+      if (error) *error = std::string(desc.name) + ": it traces rays, which this card or its driver cannot";
       return {};
     }
   }
@@ -2042,7 +2176,9 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   dispatched_ = false;
   setDirty_ = true;
   std::fill(std::begin(boundTextures_), std::end(boundTextures_), 0u);
+  std::fill(std::begin(boundScenes_), std::end(boundScenes_), 0u);
   boundBuffers_[0] = boundBuffers_[1] = BoundBuffer{};
+  if (rayTracing_ && !emptyScene_) BuildScene(&emptyScene_, nullptr, 0);  // (the first frame, before anything reads it)
   PassDesc window;
   window.window = true;
   std::memcpy(window.clearValue, clearColor, sizeof window.clearValue);
@@ -2323,7 +2459,7 @@ void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
     general_.push_back(b.first);
   }
   for (const auto& image : computeLayout_->images) {
-    if (image.kind >= SpirvImage::Storage) continue;
+    if (image.kind >= SpirvImage::Storage || image.kind == SpirvImage::Scene) continue;
     for (uint32_t k = 0; k < image.count; ++k) {
       const uint32_t id = boundTextures_[image.binding - kTexBinding + k];
       if (!id || textures_[id].layout != VK_IMAGE_LAYOUT_GENERAL || written(id)) continue;
@@ -2357,8 +2493,25 @@ void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
   VkDescriptorImageInfo images[kTexSlots + kStorageSlots];
   VkDescriptorBufferInfo infos[2];
   VkWriteDescriptorSet writes[kTexSlots + kStorageSlots + 2];
-  uint32_t n = 0, used = 0;
+  VkAccelerationStructureKHR scenes[kTexSlots];
+  VkWriteDescriptorSetAccelerationStructureKHR sceneWrites[kTexSlots];
+  uint32_t n = 0, used = 0, scenesUsed = 0, sceneWritesUsed = 0;
   for (const auto& image : computeLayout_->images) {
+    if (image.kind == SpirvImage::Scene) {  // (the scenes bound in its slots, each written as an acceleration structure)
+      VkWriteDescriptorSetAccelerationStructureKHR& w = sceneWrites[sceneWritesUsed++];
+      w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+      w.accelerationStructureCount = image.count;
+      w.pAccelerationStructures = &scenes[scenesUsed];
+      for (uint32_t k = 0; k < image.count; ++k) scenes[scenesUsed++] = SceneIn(static_cast<int>(image.binding - kTexBinding + k));
+      writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      writes[n].pNext = &w;
+      writes[n].dstSet = set;
+      writes[n].dstBinding = image.binding;
+      writes[n].descriptorCount = image.count;
+      writes[n].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+      ++n;
+      continue;
+    }
     const bool storage = image.kind >= SpirvImage::Storage;
     const uint32_t first = used;
     bool empty = false;
@@ -2410,6 +2563,307 @@ void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
   dispatched_ = true;
 }
 
+// --- ray tracing ---
+
+VkDeviceSize Aligned(VkDeviceSize n, VkDeviceSize a) { return (n + a - 1) / a * a; }
+
+VkDeviceAddress VulkanDevice::Address(VkBuffer buffer) {
+  VkBufferDeviceAddressInfo ai{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+  ai.buffer = buffer;
+  return vkGetBufferDeviceAddress(device_, &ai);
+}
+
+// A buffer of the card's own memory for ray tracing (a structure's, or the scratch room of builds), with its
+// device address.
+bool VulkanDevice::RayBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer* buffer, Allocation* memory) {
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = size;
+  bci.usage = usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+  if (vkCreateBuffer(device_, &bci, nullptr, buffer) != VK_SUCCESS) {
+    *buffer = VK_NULL_HANDLE;
+    return false;
+  }
+  VkMemoryRequirements req;
+  vkGetBufferMemoryRequirements(device_, *buffer, &req);
+  if (!memory_.Get(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, memory)) {
+    fprintf(stderr, "render: Vulkan: no memory for a ray tracing structure's buffer (%llu bytes)\n", static_cast<unsigned long long>(size));
+    vkDestroyBuffer(device_, *buffer, nullptr);
+    *buffer = VK_NULL_HANDLE;
+    return false;
+  }
+  vkBindBufferMemory(device_, *buffer, memory->memory, memory->offset);
+  return true;
+}
+
+// A structure of that type and size in a buffer of its own, with its address (the record's; false: none).
+bool VulkanDevice::MakeStructure(StructureRec* rec, VkAccelerationStructureTypeKHR type, VkDeviceSize size) {
+  if (!RayBuffer(size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, &rec->buffer, &rec->memory)) return false;
+  VkAccelerationStructureCreateInfoKHR ci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+  ci.buffer = rec->buffer;
+  ci.size = size;
+  ci.type = type;
+  if (vkCreateAccelerationStructureKHR(device_, &ci, nullptr, &rec->structure) != VK_SUCCESS) {
+    rec->structure = VK_NULL_HANDLE;
+    RetireStructure(rec);
+    return false;
+  }
+  VkAccelerationStructureDeviceAddressInfoKHR ai{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+  ai.accelerationStructure = rec->structure;
+  rec->address = vkGetAccelerationStructureDeviceAddressKHR(device_, &ai);
+  rec->size = size;
+  return true;
+}
+
+// A record's structure and buffer, let go of once the frames that might use them are done.
+void VulkanDevice::RetireStructure(StructureRec* rec) {
+  Garbage& g = Bin();
+  if (rec->structure) g.structures.push_back(rec->structure);
+  if (rec->buffer) {
+    g.buffers.push_back(rec->buffer);
+    g.memory.push_back(rec->memory);
+  }
+  rec->structure = VK_NULL_HANDLE;
+  rec->buffer = VK_NULL_HANDLE;
+  rec->memory = Allocation{};
+  rec->size = 0;
+  rec->address = 0;
+}
+
+// The scratch room builds share, at least `size` bytes from its (aligned) address.
+bool VulkanDevice::GrowScratch(VkDeviceSize size) {
+  if (size <= scratchSize_ && scratch_) return true;
+  if (scratch_) {  // (a build of a frame still on the card may use it)
+    Bin().buffers.push_back(scratch_);
+    Bin().memory.push_back(scratchMemory_);
+    scratch_ = VK_NULL_HANDLE;
+  }
+  const VkDeviceSize room = (std::max(size, scratchSize_ + scratchSize_ / 2) + 65535) / 65536 * 65536;
+  scratchSize_ = 0;
+  // (with room to move its start up to where a build's scratch may begin)
+  if (!RayBuffer(room + scratchAlign_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &scratch_, &scratchMemory_)) return false;
+  scratchAddress_ = Aligned(Address(scratch_), scratchAlign_);
+  scratchSize_ = room;
+  return true;
+}
+
+// What `from` did with `fromAccess` (to ray tracing's structures, or the scratch room of their builds),
+// finished and seen before `to` does `toAccess`.
+void VulkanDevice::RayBarrier(VkPipelineStageFlags2 from, VkAccessFlags2 fromAccess, VkPipelineStageFlags2 to, VkAccessFlags2 toAccess) {
+  VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+  mb.srcStageMask = from;
+  mb.srcAccessMask = fromAccess;
+  mb.dstStageMask = to;
+  mb.dstAccessMask = toAccess;
+  VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+  di.memoryBarrierCount = 1;
+  di.pMemoryBarriers = &mb;
+  vkCmdPipelineBarrier2(frames_[cur_].cmd, &di);
+}
+
+// The scene a descriptor of that slot holds: the one bound there, or else the scene of nothing (none at all
+// only where that could not be made).
+VkAccelerationStructureKHR VulkanDevice::SceneIn(int slot) const {
+  for (uint32_t id : {boundScenes_[slot], emptyScene_.id})
+    if (id && id <= structures_.size() && structures_[id - 1].used && structures_[id - 1].scene && structures_[id - 1].structure)
+      return structures_[id - 1].structure;
+  return VK_NULL_HANDLE;
+}
+
+Structure VulkanDevice::CreateGeometry(const GeometryPart* parts, int count) {
+  if (!rayTracing_ || !parts || count <= 0) return {};
+  StructureRec rec;
+  for (int i = 0; i < count; ++i) {
+    const GeometryPart& p = parts[i];
+    const BufferRec* v = Find(p.vertices);
+    if (!v || v->dynamic || v->kind != BufferKind::Vertex || !p.vertexCount) return {};
+    VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    g.flags = p.opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+    VkAccelerationStructureGeometryTrianglesDataKHR& t = g.geometry.triangles;
+    t.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    t.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    t.vertexData.deviceAddress = Address(v->buffer) + static_cast<VkDeviceAddress>(p.firstVertex) * v->stride + p.positionOffset;
+    t.vertexStride = v->stride;
+    t.maxVertex = p.vertexCount - 1;
+    t.indexType = VK_INDEX_TYPE_NONE_KHR;
+    uint32_t triangles = p.vertexCount / 3;
+    if (p.indices) {  // (counted from firstVertex, as the vertices' address starts there)
+      const BufferRec* ix = Find(p.indices);
+      if (!ix || ix->dynamic || ix->kind != BufferKind::Index || !p.indexCount) return {};
+      t.indexType = ix->stride == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+      t.indexData.deviceAddress = Address(ix->buffer) + static_cast<VkDeviceAddress>(p.firstIndex) * ix->stride;
+      triangles = p.indexCount / 3;
+    }
+    rec.parts.push_back(g);
+    rec.triangles.push_back(triangles);
+  }
+  VkAccelerationStructureBuildGeometryInfoKHR in{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+  in.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+  in.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+  in.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  in.geometryCount = static_cast<uint32_t>(rec.parts.size());
+  in.pGeometries = rec.parts.data();
+  VkAccelerationStructureBuildSizesInfoKHR info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+  vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &in, rec.triangles.data(), &info);
+  if (!info.accelerationStructureSize) return {};
+  rec.scratch = Aligned(std::max<VkDeviceSize>(info.buildScratchSize, 1), scratchAlign_);
+  if (!MakeStructure(&rec, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, Aligned(info.accelerationStructureSize, 256))) return {};
+  rec.used = true;
+  uint32_t index;
+  if (!freeStructures_.empty()) {
+    index = freeStructures_.back();
+    freeStructures_.pop_back();
+    structures_[index] = std::move(rec);
+  } else {
+    index = static_cast<uint32_t>(structures_.size());
+    structures_.push_back(std::move(rec));
+  }
+  pendingGeometry_.push_back(index);
+  return {index + 1};
+}
+
+void VulkanDevice::BuildGeometry() {
+  if (pendingGeometry_.empty()) return;
+  // (built side by side in the scratch room, in batches of at most 64 MB of it, each batch waited for)
+  constexpr VkDeviceSize kBatch = 64ull << 20;
+  constexpr VkPipelineStageFlags2 build = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+  constexpr VkAccessFlags2 written = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                           both = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+  VkDeviceSize largest = 0;
+  for (uint32_t i : pendingGeometry_)
+    if (structures_[i].used && !structures_[i].parts.empty()) largest = std::max(largest, structures_[i].scratch);
+  if (!largest || !GrowScratch(std::max(largest, std::min(kBatch, scratchSize_)))) {
+    pendingGeometry_.clear();
+    return;
+  }
+  VkCommandBuffer cmd = frames_[cur_].cmd;
+  std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+  VkDeviceSize at = 0;
+  for (uint32_t i : pendingGeometry_) {
+    StructureRec& s = structures_[i];
+    if (!s.used || s.parts.empty()) continue;
+    if (at + s.scratch > scratchSize_) {  // (the batch before done with the scratch room first)
+      RayBarrier(build, written, build, both);
+      at = 0;
+    }
+    VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    b.dstAccelerationStructure = s.structure;
+    b.geometryCount = static_cast<uint32_t>(s.parts.size());
+    b.pGeometries = s.parts.data();
+    b.scratchData.deviceAddress = scratchAddress_ + at;
+    ranges.assign(s.parts.size(), VkAccelerationStructureBuildRangeInfoKHR{});
+    for (size_t k = 0; k < s.parts.size(); ++k) ranges[k].primitiveCount = s.triangles[k];
+    const VkAccelerationStructureBuildRangeInfoKHR* r = ranges.data();
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &b, &r);
+    at += s.scratch;
+    s.parts.clear();
+    s.parts.shrink_to_fit();
+    s.triangles.clear();
+    s.triangles.shrink_to_fit();
+  }
+  pendingGeometry_.clear();
+  RayBarrier(build, written, build | kRayShaders, both);  // (for the scene's build, and the shaders after)
+}
+
+void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) {
+  if (!rayTracing_ || !inFrame_ || !scene) return;
+  EndRendering();
+  ReleasePassTargets();  // (the pass under way ends)
+  BuildGeometry();
+  // the instances, in this frame's memory
+  const Span s = Allocate(sizeof(VkAccelerationStructureInstanceKHR) * std::max<uint32_t>(count, 1), 16);
+  if (!s.cpu) return;
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const StructureRec* g = instances ? Find(instances[i].geometry) : nullptr;
+    if (!g || g->scene || !g->parts.empty()) continue;  // (and a geometry whose build could not be made)
+    VkAccelerationStructureInstanceKHR d{};
+    std::memcpy(d.transform.matrix, instances[i].transform, sizeof d.transform.matrix);
+    d.instanceCustomIndex = instances[i].id & 0xffffffu;
+    d.mask = instances[i].mask;
+    d.accelerationStructureReference = g->address;
+    std::memcpy(s.cpu + sizeof d * n++, &d, sizeof d);
+  }
+  VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+  geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+  geometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+  geometry.geometry.instances.data.deviceAddress = Address(s.buffer) + s.offset;
+  VkAccelerationStructureBuildGeometryInfoKHR in{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+  in.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  in.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+  in.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  in.geometryCount = 1;
+  in.pGeometries = &geometry;
+  VkAccelerationStructureBuildSizesInfoKHR info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+  vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &in, &n, &info);
+  StructureRec* rec = Find(*scene);
+  if (!rec) {  // (the first time: the scene's record)
+    StructureRec r;
+    r.used = r.scene = true;
+    uint32_t index;
+    if (!freeStructures_.empty()) {
+      index = freeStructures_.back();
+      freeStructures_.pop_back();
+      structures_[index] = std::move(r);
+    } else {
+      index = static_cast<uint32_t>(structures_.size());
+      structures_.push_back(std::move(r));
+    }
+    *scene = {index + 1};
+    rec = &structures_[index];
+  }
+  if (!rec->scene) return;
+  const VkDeviceSize need = Aligned(std::max<VkDeviceSize>(info.accelerationStructureSize, 256), 256);
+  if (rec->size < need) {  // (made, or grown by a half more than it needs: a structure anew, which sets name anew)
+    RetireStructure(rec);
+    if (!MakeStructure(rec, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, Aligned(need + need / 2, 256))) return;
+    setDirty_ = true;
+  }
+  if (!GrowScratch(Aligned(std::max<VkDeviceSize>(info.buildScratchSize, 1), scratchAlign_))) {
+    RetireStructure(rec);  // (not built: none, rather than one a shader must not read)
+    setDirty_ = true;
+    return;
+  }
+  constexpr VkPipelineStageFlags2 build = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+  // (what shaders read of it before, finished first; what the build writes, for the builds and shaders after)
+  RayBarrier(kRayShaders, 0, build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+  in.dstAccelerationStructure = rec->structure;
+  in.scratchData.deviceAddress = scratchAddress_;
+  VkAccelerationStructureBuildRangeInfoKHR range{};
+  range.primitiveCount = n;
+  const VkAccelerationStructureBuildRangeInfoKHR* ranges = &range;
+  vkCmdBuildAccelerationStructuresKHR(frames_[cur_].cmd, 1, &in, &ranges);
+  RayBarrier(build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, build | kRayShaders,
+             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+}
+
+void VulkanDevice::SetScene(int slot, Structure scene) {
+  if (slot < 0 || slot >= kTexSlots) return;
+  const StructureRec* rec = Find(scene);
+  const uint32_t id = rec && rec->scene && rec->structure ? scene.id : 0;
+  if (boundScenes_[slot] == id) return;
+  boundScenes_[slot] = id;
+  setDirty_ = true;
+}
+
+void VulkanDevice::Destroy(Structure structure) {
+  StructureRec* rec = Find(structure);
+  if (!rec) return;
+  RetireStructure(rec);
+  for (uint32_t& s : boundScenes_)
+    if (s == structure.id) {
+      s = 0;
+      setDirty_ = true;
+    }
+  const uint32_t index = structure.id - 1;
+  pendingGeometry_.erase(std::remove(pendingGeometry_.begin(), pendingGeometry_.end(), index), pendingGeometry_.end());
+  *rec = StructureRec{};
+  freeStructures_.push_back(index);
+}
+
 // The textures' and buffers' set for what is bound now (made once a frame for each combination), and the
 // constants' offsets.
 bool VulkanDevice::PrepareDraw() {
@@ -2428,12 +2882,19 @@ bool VulkanDevice::PrepareDraw() {
       for (const auto& image : layout_->images)
         for (uint32_t k = 0; k < image.count; ++k)
           if (!views[image.binding - kTexBinding + k] && image.kind <= SpirvImage::Volume) views[image.binding - kTexBinding + k] = dummy_[image.kind].view;
+    // (and the scenes, in the slots where the shaders declare one: the structure itself, which a scene grown
+    // has anew)
+    VkAccelerationStructureKHR scenes[kTexSlots] = {};
+    for (const auto& image : layout_->images)
+      if (image.kind == SpirvImage::Scene)
+        for (uint32_t k = 0; k < image.count; ++k) scenes[image.binding - kTexBinding + k] = SceneIn(static_cast<int>(image.binding - kTexBinding + k));
     BoundBuffer buffers[2] = {boundBuffers_[0], boundBuffers_[1]};
     for (BoundBuffer& b : buffers)
       if (!b.buffer && !nullDescriptors_) b = {dummyBuffer_, 0, 256};
     std::string key(reinterpret_cast<const char*>(&layout_), sizeof layout_);
     for (const auto& image : layout_->images)
-      key.append(reinterpret_cast<const char*>(&views[image.binding - kTexBinding]), image.count * sizeof(VkImageView));
+      if (image.kind == SpirvImage::Scene) key.append(reinterpret_cast<const char*>(&scenes[image.binding - kTexBinding]), image.count * sizeof(VkAccelerationStructureKHR));
+      else key.append(reinterpret_cast<const char*>(&views[image.binding - kTexBinding]), image.count * sizeof(VkImageView));
     for (const BoundBuffer& b : buffers) {
       key.append(reinterpret_cast<const char*>(&b.buffer), sizeof b.buffer);
       key.append(reinterpret_cast<const char*>(&b.offset), sizeof b.offset);
@@ -2457,16 +2918,25 @@ bool VulkanDevice::PrepareDraw() {
       VkDescriptorImageInfo images[kTexSlots];
       VkDescriptorBufferInfo infos[2];
       VkWriteDescriptorSet writes[kTexSlots + 2];
+      VkWriteDescriptorSetAccelerationStructureKHR sceneWrites[kTexSlots];
       uint32_t n = 0;
       for (const auto& image : layout_->images) {  // (an array's elements written together)
         const uint32_t first = image.binding - kTexBinding;
-        for (uint32_t k = 0; k < image.count; ++k) images[first + k] = {VK_NULL_HANDLE, views[first + k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         writes[n].dstSet = set;
         writes[n].dstBinding = image.binding;
         writes[n].descriptorCount = image.count;
-        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[n].pImageInfo = &images[first];
+        if (image.kind == SpirvImage::Scene) {
+          sceneWrites[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+          sceneWrites[n].accelerationStructureCount = image.count;
+          sceneWrites[n].pAccelerationStructures = &scenes[first];
+          writes[n].pNext = &sceneWrites[n];
+          writes[n].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        } else {
+          for (uint32_t k = 0; k < image.count; ++k) images[first + k] = {VK_NULL_HANDLE, views[first + k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+          writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+          writes[n].pImageInfo = &images[first];
+        }
         ++n;
       }
       for (int i = 0; i < 2; ++i) {

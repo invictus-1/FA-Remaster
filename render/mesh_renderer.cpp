@@ -260,7 +260,7 @@ float4 Shade(VOut i, bool front) {
   // (a hit on its shield this many seconds ago, below 1; i.tint: where it struck on the model at rest)
   float hitAge = shielded && i.color.a > 3.0005 ? (i.color.a - 3.001) / 0.9 : -1;
   i.color.a = min(i.color.a, 1);
-  if (inspect.x > 8.5 && look > 0.5) {
+  if (inspect.x > 8.5 && inspect.x < 9.5 && look > 0.5) {
     // a view for checking art: which level of detail each model is drawn at: white the finest,
     // then yellow, orange, red, violet; shaded a little by which way the surface faces
     float level = kind5.z;

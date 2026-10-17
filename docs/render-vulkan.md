@@ -47,6 +47,26 @@ written with care and said to be untried.
      Windows program), shipping DXC's library, and the first run. MoltenVK may refuse something the
      shaders do (it turns SPIR-V into Metal); that would show at the first run.
 
+## Ray tracing (2026-10-17)
+
+`gfx.h`'s ray tracing (structures over triangles, traced inline with `RayQuery`), as Direct3D 12's backend
+has it. Only where the card offers all of `VK_KHR_acceleration_structure` (with
+`VK_KHR_deferred_host_operations`), `VK_KHR_ray_query` and buffers' device addresses; elsewhere
+(MoltenVK, older cards) `RayTracing()` is false and nothing changes, not even a buffer's flags. With it, the
+buffers' memory blocks allow device addresses, static vertex and index buffers (and the frame's pages,
+where a scene's instances are written) may be read by builds. A geometry's structure is made at once and
+built at the next `BuildScene`, side by side in a scratch buffer they share (batches of 64 MB, a barrier
+between); the scene's instances go into the frame's memory, its structure (fast build) is built again and
+made anew, a half larger, when too small. Barriers: what shaders read of a scene, finished before it is
+built again; what builds wrote, seen by the next builds and by vertex, pixel and compute shaders. A scene
+is bound in a texture's binding (t0-t39 at 16-55): the SPIR-V reflection knows an acceleration structure
+there (`OpTypeAccelerationStructureKHR`), the set layout has an acceleration structure descriptor in its
+place, and the set cache's key holds the structure itself (a grown scene is a new one). A slot whose shader
+declares a scene that nothing is bound in reads a scene of nothing, built at the first frame. A shader
+that traces rays on a card without them is refused when its pipeline is made. `--gfx-check --vulkan`
+traces the same rays as Direct3D 12 (RTX 4090: every hit right); the validation layer was not installed
+here, so it has not looked at this part.
+
 ## How it compares (2026-10-15, RTX 4090)
 
 Seven scenes drawn by both (day, close, night with lamps, an effect shot, FSR at
