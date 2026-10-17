@@ -1,0 +1,12 @@
+-- A made-up preferences file that does not load (cut off in the middle), for
+-- ui/tests/prefs_import.lua. Every name here is invented.
+version = {
+    major = 1,
+}
+profile = {
+    current = 1,
+    profiles = {
+        {
+            Name = "Fixture Pilot Broken",
+            options = {
+                wheel_sensitivity =

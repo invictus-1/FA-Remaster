@@ -54,6 +54,7 @@ So the job is two layers:
 ```
 py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip install ziglang)
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
+         [--import-prefs <the original's preferences file> | none]
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
          [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
@@ -145,7 +146,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   trace (the renderer says so after its first picture, the menu's or a game's:
   `moho64ui_RayTracingSupported()`), Ray Tracing offers one state, greyed out, when the dialog opens.
   A fifth, Ground Detail (`remaster_ground_detail`, the renderer's request 33, off by default): grass near the
-  camera, pressed flat round units and buildings (later the remastered ground's decals and battle scars).
+  camera, pressed flat round units and buildings, and (since render 23e9550) the battle's scorches and craters
+  kept on the ground, weathering, up to 2000.
+  A sixth, Frame Generation (`remaster_frame_generation`, the renderer's request 34, off by default): AMD's FSR 3
+  frame generation, a picture made between each two drawn ones; like Temporal Upscaling it needs one sample a
+  pixel, so with the Anti-Aliasing on it does nothing (its tooltip says so).
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'
@@ -219,8 +224,23 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `--session-out` names another place). A second game of one run writes `prefix.2.stream`.
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)
   and counts the calls at exit. `--list-bindings` lists all of them as `built` or `stub`.
-- Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form), or memory only.
-  The original game's own preferences are never read or written. The file is written when a script
+- Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form); without it,
+  in a live window `%LOCALAPPDATA%\FA Remastered\Game.prefs` (Linux: `$XDG_DATA_HOME` or
+  `~/.local/share`, Mac: `~/Library/Application Support`, then `FA Remastered/Game.prefs`; the
+  player's replays and saved games beside it), and without a window (tests, probes) memory only.
+  The original game's own file is never written (a `--prefs` naming it is refused). It is
+  `%LOCALAPPDATA%\Gas Powered Games\Supreme Commander Forged Alliance\Game.prefs` (FA exe: the
+  loader 0x8c89d0, SHGetFolderPathW CSIDL_LOCAL_APPDATA at 0x8c8a3e; the original's own `/prefs
+  <name>` names a file in that folder, 0x8cefb3); FAF's client starts the same exe without `/prefs`,
+  so its players have the same file. TAKEN OVER ONCE (Chris's decision, 2026-10-12: the player's
+  existing profile once, on first start; his file read, never written): when our file does not
+  exist yet, the original's is read (read only) and of each of its profiles with a name only `Name`,
+  `options`, `UserKeyMap`, `UserDebugKeyMap`, `UserKeyMapName` and `UserKeyActions` come over, with
+  `profile.current`; nothing else (no mod lists, window places, lobby choices, build templates). Ours
+  is written at once, so it happens once. A file that does not load, or whose `version.major` is not
+  1 (the original would put it aside as `.bad` too, 0x8c8e63), leaves a fresh start, the reason in
+  the log. For our default file the original's file is the source; `--import-prefs <file>` names
+  another (tests: `ui/tests/prefs_import.lua`), `--import-prefs none` takes nothing over. The file is written when a script
   asks (`SavePreferences()`) and, as the original writes it, when a game is launched and when the
   program closes (func_DoPreload 0x88bee0 and CScApp::Destroy 0x8d0f20 call USER_SavePreferences);
   also when a game's interface state goes, since each of our states keeps its own copy. So what a
@@ -336,13 +356,32 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   in the preferences, reloads its AI list (so an AI mod's opponents can be picked) and launches
   the game with those mods (checked 2026-10-17: `ui/tests/mods.lua`, and a launch from the lobby
   with a mod chosen that way: the session has the mod and loads its blueprints).
+- The console's output (`user/keymap.cpp`, read from the original 2026-10-17; `ui/tests/console.lua`,
+  43 checks): the functions given to `AddConsoleOutputReciever` (the console window's list, the
+  echo on the game's screen) hear what the original's CON_Printf (0x41c990) gets, and only that:
+  the user state's `print(...)` (0x4cd8f0: the arguments one after the other, before each after
+  the first ((length - 1) & 7) + 1 spaces, the exe's "tab"; a newline in the text ends a line;
+  the original logs nothing of it; ours writes each line to its log at debug level), the
+  simulation's `print(...)` (0x74b570; the original sends its lines with the beat's sync,
+  0x895260: NOT YET here, asked of the engine as a list per beat, ui REQUESTS 41; the console
+  side is built and tested through `moho64ui_SimPrint`), and the console commands' own lines: `Unknown console
+  command "x"` for a name the original does not know (one it knows that is not built here is
+  only logged), a variable's value (`toggled ren_Bloom is now off` for a bool typed without a
+  value, `bool ... is ...` with `show`, `int`/`uint32`/`float`/`string ... == ...` for the
+  others), `CON_Echo`, the usage of `WLD_GameSpeed`, the selection set commands and
+  `UI_SelectByCategory`, its `Unknown modifier`, and the engine's "No currently active session"
+  from the commands that need a game. The log never reaches the console (no log target calls
+  CON_Printf; `LOG`, `WARN`, `SPEW` only log). Lines from other threads wait for the main
+  thread's next frame (the original hands them to its main thread as an APC, 0x413b70); the
+  receivers are only ever called on the main thread.
 - Key maps (`user/keymap.*`, read from the original): the game's key bindings. At start the key
   names (`/lua/keymap/keyNames.lua`) and the default bindings are loaded as the original loads
   them (184 keys with the stock files); `IN_AddKeyMapTable`, `IN_RemoveKeyMapTable`,
   `IN_ClearKeyMap`, `IsKeyDown` and the two key code conversions are built with the original's
   tables. A bound key runs its action as a console command before the controls hear of the key;
-  nothing is bound while a control has the keyboard focus. Of the console commands only `UI_Lua`
-  is built (most bindings use it); the others are logged once as not built.
+  nothing is bound while a control has the keyboard focus. The console commands the bindings and
+  the game's options use are built (`UI_Lua`, game speed, selection, camera, graphics switches);
+  one the original knows that is not built here is logged once as not built.
 - The in-game interface comes up on a running game. As in the original, a launched game gets a
   script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
   functions (5,334 blueprints, the categories); the game script makes its world interface
@@ -811,8 +850,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   Small ones with it: `AddToSessionExtraSelectList` and its two kin (units that show the
   selection's mark without being selected), `HasLocalizedVO` (whether the game has the
   folder `/sounds/voice/<language>`, 0x8ae300), `AddConsoleOutputReciever` /
-  `RemoveConsoleOutputReciever` (the receivers are kept; no built console command prints a
-  line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host),
+  `RemoveConsoleOutputReciever` (the functions that hear each line of the console: see "The
+  console's output" below), `FlushEvents` (nothing to do in this host),
   `ConTextMatches` (the console's list above its edit line: the names that begin with what is typed,
   the case not counting, in the original's order, read from its exe 0x83db10; its 435 console
   names, `ui/user/console_names.inc`, read from the exe by a helper, and our `remaster_*` ones; a

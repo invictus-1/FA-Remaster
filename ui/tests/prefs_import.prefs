@@ -1,0 +1,83 @@
+-- A made-up preferences file in the original game's form (its Game.prefs), the stand-in for a
+-- player's file in ui/tests/prefs_import.lua. Every name and value here is invented.
+CPUBenchmark = 1234
+Windows = {
+    Main = {
+        height = 600,
+        maximized = false,
+        width = 800,
+        x = 10,
+        y = 20,
+    },
+}
+active_mods = {
+    ["00000000-fixture-mod-0000-000000000001"] = true,
+}
+mods_favorite = {
+    "00000000-fixture-mod-0000-000000000001",
+}
+options_overrides = {
+    shadow_quality = {
+        value = 1,
+    },
+}
+profile = {
+    current = 3,
+    profiles = {
+        {
+            LastFaction = 1,
+            options = {
+                music_volume = 10,
+            },
+        },
+        {
+            LastFaction = 2,
+            Name = "Fixture Pilot One",
+            options = {
+                camera_shake_intensity = 50,
+                wheel_sensitivity = 30,
+            },
+        },
+        {
+            LastFaction = 3,
+            LastScenario = "/maps/SCMP_009/SCMP_009_scenario.lua",
+            LobbyOpt_Share = "FullShare",
+            Name = "Fixture Pilot Two",
+            UserDebugKeyMap = {
+                ["Ctrl-Alt-P"] = "debug_navpath",
+            },
+            UserKeyActions = {
+                fixture_action = {
+                    action = "UI_Lua LOG('fixture action')",
+                    category = "ui",
+                },
+            },
+            UserKeyMap = {
+                ["Ctrl-Q"] = "fixture_action",
+                F2 = "toggle_score_screen",
+            },
+            UserKeyMapName = "/lua/keymap/hotbuildKeyMap.lua",
+            build_templates = {
+                {
+                    name = "fixture template",
+                },
+            },
+            chat_window = {
+                x = 1,
+                y = 2,
+            },
+            options = {
+                camera_shake_intensity = 0,
+                fixture_list = {
+                    "first",
+                    "second",
+                },
+                wheel_sensitivity = 70,
+            },
+        },
+    },
+}
+version = {
+    major = 1,
+}
+_G["fixture odd key"] = 5

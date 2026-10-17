@@ -29,6 +29,7 @@
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -2639,8 +2640,23 @@ void ReportQueueChange(lua_State* L) {
 
 }  // namespace
 
+// READ (0x866a30): without a session the engine's "no session" line; without arguments the
+// command's usage (0x866ad6: one text of several lines); a word with '+' it does not know, "Unknown
+// modifier %s" (0x866c69), and on. (The original hands that %s the string object itself, copied
+// onto the stack, 0x866c6e, so what it shows there is not the word; here the word.)
 void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
-  if (!TheSim(L)) return;
+  if (!TheSim(L)) return ConsoleNoSession(L);
+  if (arguments.find_first_not_of(" \t") == std::string::npos)
+    return ConsolePrint(L,
+                        "UI_SelectByCategory [+add] [+nearest] [+idle] [+goto] categoryExpression\n"
+                        "Select a set of units with the following parameters....\n"
+                        "+add : add to current selection\n"
+                        "+nearest : select only nearest unit matching category\n"
+                        "+idle : select only idle units\n"
+                        "+inview: select only units in the current view\n"
+                        "+goto: goto the unit if it's already selected\n"
+                        "categoryExpression uses the format CAT1 CAT2, CAT3 CAT4 where a space means intersection and a comma means "
+                        "union\n");
   bool add = false, nearest = false, idle = false, inView = false, goTo = false, noEngineers = false;
   std::string expr;  // the other words, a space after each: side by side they narrow the category
   size_t at = 0;
@@ -2662,7 +2678,7 @@ void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
     else if (flag == "+inview") inView = true;
     else if (flag == "+goto") goTo = true;
     else if (flag == "+excludeengineers") noEngineers = true;
-    else Logf(LogLevel::Info, "Unknown modifier %s", word.c_str());
+    else ConsolePrintf(L, "Unknown modifier %s", word.c_str());
   }
   if (expr.empty()) return;
   expr.pop_back();
@@ -2672,7 +2688,7 @@ void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
 
 void ExpandCurrentSelection(lua_State* L) {
   Sim* sim = TheSim(L);
-  if (!sim) return;
+  if (!sim) return ConsoleNoSession(L);  // (READ 0x866985: the engine's "no session" line)
   UnitStore& store = Store(L);
   std::vector<UserUnit*> now = store.selection, asked;
   std::vector<uint32_t> ids;

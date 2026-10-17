@@ -2117,6 +2117,7 @@ void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float m
   if (seconds > 0) g_pendingShakes.push_back({{at[0], at[1], at[2]}, radius, maxAtMiddle, minAtRadius, seconds});
 }
 void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
+float CameraShakeMult() { return g_shakeMult; }
 LookSettings& Looks() {
   static LookSettings looks;
   return looks;

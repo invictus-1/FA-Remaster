@@ -203,6 +203,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.rayTracing != lookNow.rayTracing) picture.SetRayTracing(looks.rayTracing);
     if (!lookApplied || looks.weatherEffects != lookNow.weatherEffects) picture.SetWeatherEffects(looks.weatherEffects);
     if (!lookApplied || looks.groundDetail != lookNow.groundDetail) picture.SetGroundDetail(looks.groundDetail);  // (request 33)
+    if (!lookApplied || looks.frameGeneration != lookNow.frameGeneration) picture.SetFrameGeneration(looks.frameGeneration);  // (34)
     if (render::World* w = picture.world()) {
       w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;
@@ -727,6 +728,10 @@ void GameSession::BeginLoad() {
     loadStartSeconds_ = secs(t1, std::chrono::steady_clock::now());
     loadOk_ = true;
   });
+}
+
+std::string GameSession::LoadingMapFolder() const {
+  return loadSession_ ? SessionMapFolder(loadSession_->header) : std::string();  // (the engine's: sim/session.h)
 }
 
 bool GameSession::LoadDone() const { return load_ == Load::Running && !BeatRunning(); }

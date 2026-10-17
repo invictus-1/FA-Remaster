@@ -1,0 +1,16 @@
+-- A made-up preferences file the original would not use (its version.major is not 1: the original
+-- puts such a file aside as ".bad"), for ui/tests/prefs_import.lua. Every name here is invented.
+profile = {
+    current = 1,
+    profiles = {
+        {
+            Name = "Fixture Pilot Old",
+            options = {
+                wheel_sensitivity = 10,
+            },
+        },
+    },
+}
+version = {
+    major = 0,
+}
