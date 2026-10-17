@@ -1357,8 +1357,10 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 1: {
       Unit* target = FindUnit(sim, t.targetId);
       if (!target) {  // helper not good: OnStopBuild(false), build again after 10 ticks
+        // (0x5fa97e..0x5fa989: OnStopBuild(false), state 0, return 10, and nothing else: the factory stays Building
+        // while it waits, unlike the finish block's 0x5fa9da. Seen: MP3 2660, army 0's factory 0x1 whose engineer
+        // was killed half built: the original's factory is Building throughout, ours dropped it for ten beats.)
         StopBuild(sim, L, u, t, false);
-        u->unitStates.erase("Building");
         t.state = 0;
         return wait(10);
       }
