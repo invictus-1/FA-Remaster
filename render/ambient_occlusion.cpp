@@ -56,9 +56,10 @@ float4 PS(VOut i) : SV_Target {
   int2 p = int2(i.position.xy);
   float3 P = ViewPosition(p);
   float away = -P.z;
-  if (away > 5e5) return float4(1, 1e6, 0, 1);  // nothing drawn here
+  // (blue 1 in both: lit, no contact shadow; 0 there darkened everything far off once contact shadows were on)
+  if (away > 5e5) return float4(1, 1e6, 1, 1);  // nothing drawn here
   float pixelRadius = min(radius * viewport.y / (2 * tanHalfFov * away), 48.0);
-  if (pixelRadius < 1.5) return float4(1, away, 0, 1);  // too far away to matter
+  if (pixelRadius < 1.5) return float4(1, away, 1, 1);  // too far away to matter
 
   // the surface normal from whichever neighbour on each axis is nearer in depth (so edges stay edges)
   float3 l = ViewPosition(p + int2(-1, 0)), r = ViewPosition(p + int2(1, 0));

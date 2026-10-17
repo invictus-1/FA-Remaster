@@ -1251,7 +1251,13 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   Entity* E = combat::TargetEntity(sim, tgt);
   if (E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air") {
     Unit* tu = static_cast<Unit*>(E);
-    float tgtY = tu->motion.air ? h + tu->motion.air->bp->elevation : TargetPosNow(sim, tgt).y;
+    // 0x6bcc99..0x6bccf2: the flying height of the target's blueprint (bp+0x2dc) above the ground there is asked of
+    // the entity the CAiTarget itself holds (+0x4, Entity vt+0x10 = IsUnit). Held through a recon blip, that entity
+    // is the blip, no unit: the target's point (GetTargetPosGun 0x5e2a90, flag clear) gives the height instead.
+    // Seen: MP3 2624, army 0's interceptor 0x2a ordered onto the radar blip of army 1's bomber: the original's
+    // attack-run velocity points at the bomber's true height (y -0.112 of 10), ours at the ground + 14 (y -0.807).
+    const bool unitHeld = tu->motion.air && !(tgt.viaBlip || tgt.fakeId);
+    float tgtY = unitHeld ? h + tu->motion.air->bp->elevation : TargetPosNow(sim, tgt).y;
     float want = b.elevation * 0.5f + h;
     return std::max(want, tgtY) - u->position.y;
   }

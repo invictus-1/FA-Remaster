@@ -59,7 +59,18 @@ struct WorldPicture::Impl {
   float effectsQuality = 1;            // SetEffectsQuality
   float upscale = 1;                   // SetUpscale
   bool temporalUpscale = false;        // SetTemporalUpscale
-  bool rayReflections = false;         // SetRayReflections
+  bool rayReflections = false;         // SetRayReflections (and SetRayTracing)
+  // the lighting options' bundles (SetAtmosphere, SetSoftShadows, SetRayTracing, SetWeatherEffects): -1 not set
+  // (the world's own switches left as they are), else off or on
+  int atmosphere = -1, softShadows = -1, rayTracing = -1, weatherEffects = -1;
+  void ApplyBundles() {  // (onto the world, where there is one)
+    if (!world) return;
+    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = atmosphere > 0;
+    if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
+    if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
+    world->rayReflections = rayReflections;
+    if (weatherEffects >= 0) world->litRain = world->rainSplashes = weatherEffects > 0;
+  }
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
@@ -152,7 +163,7 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   gRayShaders = m.rayReflections && m.device->RayTracing();
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
-  m.world->rayReflections = m.rayReflections;
+  m.ApplyBundles();  // (the lighting options, as set before Open)
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
   return true;
@@ -466,9 +477,32 @@ void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
 void WorldPicture::SetTemporalUpscale(bool on) { impl_->temporalUpscale = on; }
 
 void WorldPicture::SetRayReflections(bool on) {
-  impl_->rayReflections = on;
-  if (impl_->world) impl_->world->rayReflections = on;  // (on: only where this map's shaders were built for it)
+  impl_->rayReflections = on;  // (on: only where this map's shaders were built for it)
+  impl_->ApplyBundles();
 }
+
+void WorldPicture::SetAtmosphere(bool on) {
+  impl_->atmosphere = on;
+  impl_->ApplyBundles();
+}
+
+void WorldPicture::SetSoftShadows(bool on) {
+  impl_->softShadows = on;
+  impl_->ApplyBundles();
+}
+
+void WorldPicture::SetRayTracing(bool on) {
+  impl_->rayTracing = on;
+  impl_->rayReflections = on;
+  impl_->ApplyBundles();
+}
+
+void WorldPicture::SetWeatherEffects(bool on) {
+  impl_->weatherEffects = on;
+  impl_->ApplyBundles();
+}
+
+bool WorldPicture::RayTracingSupported() const { return impl_->device && impl_->device->RayTracing(); }
 
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 

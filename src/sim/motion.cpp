@@ -1934,11 +1934,14 @@ void MotionTick(Sim& sim, Unit* u) {
       if (q.bx != m.bx || q.bz != m.bz) m.needSnap = true;  // turning on the spot
       u->position.x = q.pos.x;
       u->position.z = q.pos.z;
-      // the point's y is the terrain height at its centre (water: max with the surface for MotionType
-      // 3/7/8); vel = point - prevPos (3-D) (spline_generate.md 3, land_motion_blocking.md 3.1)
-      float py = (b.motionType == kMotionWater || b.motionType == kMotionHover || b.motionType == kMotionAmphibiousFloating)
-                     ? sim.map()->SurfaceHeight(q.pos.x, q.pos.z)
-                     : sim.map()->TerrainHeight(q.pos.x, q.pos.z);
+      // vel = point - prevPos (3-D) and prevPos = the point (0x6c21bb..0x6c230f: the point's own x, y, z): the y is the
+      // height the point was STORED with when its batch was made (terrain at its centre, water: max with the surface
+      // for MotionType 3/7/8; 0x5b40fd), not the ground as it is now (spline_generate.md 3, land_motion_blocking.md
+      // 3.1). They differ where the ground was flattened after the batch was made. Seen: MP3 2366-2374, a Seraphim
+      // engineer (0x300015) walking onto a factory's skirt being flattened: the original's velocity has y +0.0156
+      // from the stale points, ours -0.0025; the collision brake at 2374 takes the 3-D speed, so the first braking
+      // step went 0.1146 in the original and 0.1140 in ours.
+      const float py = q.pos.y;
       Vec3 nv{q.pos.x - m.prevPos.x, py - m.prevPos.y, q.pos.z - m.prevPos.z};
       m.prevPos = Vec3{q.pos.x, py, q.pos.z};
       m.accel = {nv.x - m.vel.x, nv.y - m.vel.y, nv.z - m.vel.z};

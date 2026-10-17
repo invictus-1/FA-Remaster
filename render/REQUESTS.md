@@ -29,7 +29,33 @@ when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 
 SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 done and in use (`hasShield` and
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
-the interface track (the FSR 3 option; done 2026-10-17).
+the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
+upgrade's four settings; open).
+
+## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking)
+
+**Who asks:** the renderer, for Chris (2026-10-17: "just put them all in and if some can be bundled together
+then do so that way it lessens clutter").
+
+**What:** four player options in the Video tab beside "Temporal Upscaling (FSR 3)", each off by default, each one
+call on `WorldPicture` (set before or after Open; each stays as set):
+- "Atmosphere": `SetAtmosphere(bool)` - light in the air (sun shafts, lamp beams, glowing mist), volumetric
+  clouds, the sky from tables of the atmosphere. Needs a time of day (the lobby's day and night); about 0.25 ms
+  cheaper than without.
+- "Soft Shadows": `SetSoftShadows(bool)` - the sun's shadows sharp at the foot and soft farther off, and small
+  contact shadows at units' feet; about +0.37 ms.
+- "Ray Tracing": `SetRayTracing(bool)` - bounce light and reflections; about +0.75 ms. Reflections take effect
+  from the next map loaded (as FSR 3 replacing anti-aliasing does). Grey it out where
+  `RayTracingSupported()` is false (ask after any Open, the menu's picture too; always false on the Mac).
+- "Weather Effects": `SetWeatherEffects(bool)` - rain and snow lit where they fall (they sparkle round lamps),
+  and rain's splashes; about +0.05 ms while it rains.
+
+The names are suggestions; the costs (1440p, RTX 4090) are in `docs/render-lighting.md`, "The options". All four
+on cost about 1.2 ms a frame. The renderer's viewer draws through the same calls with
+`--picture <file> --settings atmosphere,soft-shadows,ray-tracing,weather-effects`.
+
+**Why:** the lighting upgrade (Chris, 2026-10-16) has a first version of every piece; Chris has seen the
+pictures and wants them all in the game, bundled.
 
 ## 30. To the INTERFACE track: the FSR 3 option (2026-10-16, not blocking; DONE 2026-10-17: main a001fb4, ui 6a3f235, Video tab "Temporal Upscaling (FSR 3)", off by default; it replaces Anti-Aliasing from the next map loaded; cameraCut on jumps and minimap clicks)
 
