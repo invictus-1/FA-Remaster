@@ -12,8 +12,9 @@
 namespace render::gfx {
 
 struct SpirvImage {
-  // Texture2D, Texture2DArray, TextureCube, Texture2DMS, Texture3D; a compute shader's storage: RWTexture2D, RWTexture3D
-  enum Kind : uint32_t { Plain, Array, Cube, MultiSample, Volume, Storage, StorageVolume };
+  // Texture2D, Texture2DArray, TextureCube, Texture2DMS, Texture3D; a ray tracing scene (RaytracingAccelerationStructure,
+  // in a texture's register); a compute shader's storage: RWTexture2D, RWTexture3D
+  enum Kind : uint32_t { Plain, Array, Cube, MultiSample, Volume, Scene, Storage, StorageVolume };
   uint32_t binding = 0, count = 1, kind = Plain;
   bool operator==(const SpirvImage& o) const { return binding == o.binding && count == o.count && kind == o.kind; }
   bool operator<(const SpirvImage& o) const { return binding < o.binding; }
@@ -25,7 +26,8 @@ struct SpirvShader {
   // location DXC gave it
   std::vector<std::pair<std::string, uint32_t>> inputs;
   // the textures it reads and writes (set 0): each binding, how many it holds (an array of textures, as
-  // `Texture2D maps[10] : register(t6)`, is one binding of 10) and their kind
+  // `Texture2D maps[10] : register(t6)`, is one binding of 10) and their kind; a scene it traces rays
+  // through is among them
   std::vector<SpirvImage> images;
 };
 
