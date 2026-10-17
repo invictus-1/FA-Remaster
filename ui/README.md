@@ -339,7 +339,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   engineers and factories are found. The order buttons' states as the original's (read by the
   engine track, 2026-10-16): the fire state of the units with that toggle, -1 when they differ;
   automatic modes on when all are, and for no units; a script bit of the units that have it.
-  `ui_SelectTolerance` below 0 (FAF's ignore mode) picks no unit under the mouse. With the
+  `ui_SelectTolerance` below 0 (FAF's ignore mode) picks no unit under the mouse.
+  `GetAttachedUnitsList` gives what hangs on the units (a transport's cargo, the aircraft docked at
+  a platform) in the order it was attached, and `GetAssistingUnitsList` the drones a commander or a
+  drone station made (not the units assisting, despite the name: read by the engine track, 0x8bc820;
+  within one unit by entity id, where the original goes by its map of places). The scripts'
+  `SelectUnits` takes a transport in place of a unit in it that may not be selected, and both it and
+  `AddSelectUnits` use the original's whole test of what may be selected (0x8c0500). With the
   commander selected the game's orders panel, its construction panel with the build icons and the
   commander's avatar come up. Orders are written with the engine's command writer and applied
   before the next beat; the game script hears of each (`commandmode.OnCommandIssued`). A right
@@ -583,9 +589,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (request 27): the playable part drawn (outside it black in the original's look, dimmed in the modern
   one; the minimap shows the part), the cinematics' switches UI_NisRenderIcons, ren_SelectBoxes,
   ren_Oblivion.
-- Not real yet: the other console commands, render passes,
-  bitmap animation, other texture formats, and the engine functions the screens behind the menu
-  call (their stubs are named in the log).
+- Not real yet: the other console commands, render passes, other texture formats, and the
+  engine functions the screens behind the menu call (their stubs are named in the log).
+- A bitmap of several textures animates as the original's (FA exe, CMauiBitmap, read 2026-10-16):
+  a pattern of the textures to show in turn (forward, backward, ping-pong, looping ping-pong, or the
+  script's own with `SetFramePattern`), one step per frame once a step's time has passed (12 a
+  second at first, real time: it runs on in a pause), at the end back to the start when it loops,
+  else it stops on the last; `OnAnimationFrame`, `OnAnimationFinished`, `OnAnimationStopped` as
+  the original calls them (`ui/tests/bitmap.lua`).
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
   (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the

@@ -1,5 +1,7 @@
 // Bitmap: a textured (or solid colour) rectangle, optionally an animation of several textures.
+#include <algorithm>
 #include <cstdio>
+#include <vector>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -29,8 +31,9 @@ class Bitmap : public Control {
       target.FillRect(dst, WithAlpha(ParseColor(color), alpha));
       return;
     }
-    if (textures.empty()) return;
-    size_t index = frame >= 0 && static_cast<size_t>(frame) < textures.size() ? static_cast<size_t>(frame) : 0;
+    if (textures.empty() || pattern.empty()) return;
+    const int at = pattern[static_cast<size_t>(std::max(0, std::min(frame, static_cast<int>(pattern.size()) - 1)))];
+    const size_t index = static_cast<size_t>(std::max(0, std::min(at, static_cast<int>(textures.size()) - 1)));
     const Image& img = LoadTexture(ScriptState::From(L)->vfs(), textures[index]);
     if (!img.valid()) return;
     float b = static_cast<float>(border);
@@ -47,14 +50,62 @@ class Bitmap : public Control {
   bool solid = false;
   std::string color;  // as the script gave it ("ffRRGGBB" or a colour name)
   float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-  bool tiled = false, alphaHitTest = false, loop = false, playing = false;
+  bool tiled = false, alphaHitTest = false;
+  // The animation, as the original's (FA exe, CMauiBitmap; read 2026-10-16, notes in the ui chat's
+  // scratchpad helper_bitmap\findings.md): `pattern` lists the textures to show in turn (0-based),
+  // `frame` is the place in it, one step every `period` seconds (12 a second at first).
+  bool loop = false, playing = false;
   int frame = 0;
-  float frameRate = 10.0f;
-  std::string pattern = "forward";
+  float period = 1.0f / 12.0f, elapsed = 0;
+  std::vector<int> pattern;
 
   void MakeVars(lua_State* L) {
     AddLazyVar(L, bitmapWidth, "BitmapWidth");
     AddLazyVar(L, bitmapHeight, "BitmapHeight");
+  }
+  void SetFrame(int n) { frame = std::max(0, std::min(n, static_cast<int>(pattern.size()) - 1)); }
+  // The patterns the scripts ask for by name (0x780420 .. 0x780700), of the textures' count N:
+  // forward 0..N-1, backward N-1..0, ping-pong 0..N-1..0, looping ping-pong 0..N-1..1. None of them
+  // moves the place in it.
+  void MakePattern(int kind) {
+    const int n = static_cast<int>(textures.size());
+    pattern.clear();
+    if (kind == 1) {
+      for (int i = n - 1; i >= 0; --i) pattern.push_back(i);
+      return;
+    }
+    for (int i = 0; i < n; ++i) pattern.push_back(i);
+    if (kind == 2)
+      for (int i = n - 2; i >= 0; --i) pattern.push_back(i);
+    if (kind == 3)
+      for (int i = n - 2; i >= 1; --i) pattern.push_back(i);
+  }
+  // Every frame while it needs frame updates (Frame, 0x780270): the script's OnFrame, then, while it
+  // plays, the time adds up; once it is more than a step's, it is dropped and the animation moves ONE
+  // place on (0x780160): past the end to the start when it loops, else it stays on the last and
+  // stops (and its frame updates with it); either way OnAnimationFinished(), and after every step
+  // OnAnimationFrame(place). Real time, as the original's: an animation runs on during a pause.
+  void FrameUpdate(lua_State* L, float seconds) override {
+    Control::FrameUpdate(L, seconds);
+    if (!playing || dead()) return;
+    elapsed += seconds;
+    if (!(elapsed > period)) return;
+    elapsed = 0;
+    const int n = static_cast<int>(pattern.size());
+    if (n <= 1) return;
+    frame = std::max(0, frame + 1);
+    if (frame >= n) {
+      if (loop) {
+        frame = 0;
+      } else {
+        frame = n - 1;
+        playing = false;
+        needsFrameUpdate = false;
+      }
+      RunScript(L, "OnAnimationFinished");
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(frame));
+    RunScript(L, "OnAnimationFrame", 1, 0);
   }
 };
 
@@ -99,9 +150,17 @@ int l_SetNewTexture(lua_State* L) {
     }
   }
   b->solid = false;
-  b->frame = 0;
+  // (0x780f50: the place to the start, then the forward pattern of the new textures; playing, loop
+  // and the rate are kept. A texture of another size than the first is warned of, and kept.)
+  b->SetFrame(0);
+  b->MakePattern(0);
   int w = 0, h = 0;
   if (!b->textures.empty()) TextureDimensions(L, b->textures[0], b->border, &w, &h);
+  for (size_t i = 1; i < b->textures.size(); ++i) {
+    int tw = 0, th = 0;
+    if (TextureDimensions(L, b->textures[i], b->border, &tw, &th) && (tw != w || th != h))
+      Logf(LogLevel::Warning, "CMauiBitmap:SetTexture - bitmap #%d in sequence does not have same width and height as parent.", static_cast<int>(i));
+  }
   b->bitmapWidth.Set(static_cast<float>(w));
   b->bitmapHeight.Set(static_cast<float>(h));
   return 0;
@@ -112,6 +171,8 @@ int l_InternalSetSolidColor(lua_State* L) {
   Bitmap* b = CheckControl<Bitmap>(L, 1);
   b->solid = true;
   b->textures.clear();
+  b->SetFrame(0);
+  b->pattern.assign(1, 0);  // (0x7814c0: one solid texture, the pattern {0})
   b->color = lua_tostring(L, 2) ? lua_tostring(L, 2) : "";
   return 0;
 }
@@ -132,23 +193,34 @@ int l_UseAlphaHitTest(lua_State* L) {
   CheckControl<Bitmap>(L, 1)->alphaHitTest = lua_toboolean(L, 2) != 0;
   return 0;
 }
+// Loop(bool), Play(), Stop() give the bitmap back. Play and Stop act only on an animation (more
+// than one texture): Play sets it going from where it is (and asks for frame updates); Stop halts it
+// (and the frame updates, the script's OnFrame with them) and tells the script, OnAnimationStopped,
+// even when it was not playing (FA exe 0x781e48, 0x781fa8).
 int l_Loop(lua_State* L) {
   CheckControl<Bitmap>(L, 1)->loop = lua_toboolean(L, 2) != 0;
-  return 0;
+  lua_settop(L, 1);
+  return 1;
 }
 int l_Play(lua_State* L) {
-  CheckControl<Bitmap>(L, 1)->playing = true;
-  return 0;
+  Bitmap* b = CheckControl<Bitmap>(L, 1);
+  if (b->textures.size() > 1) b->playing = true, b->needsFrameUpdate = true;
+  lua_settop(L, 1);
+  return 1;
 }
-// Stop(): the script hears of it (OnAnimationStopped, FA exe 0x781f20).
 int l_Stop(lua_State* L) {
   Bitmap* b = CheckControl<Bitmap>(L, 1);
-  b->playing = false;
-  b->RunScript(L, "OnAnimationStopped");
-  return 0;
+  if (b->textures.size() > 1) {
+    b->playing = false, b->needsFrameUpdate = false;
+    b->RunScript(L, "OnAnimationStopped");
+  }
+  lua_settop(L, 1);
+  return 1;
 }
+// SetFrame(n): a place in the pattern (0-based), held inside it. GetNumFrames: the pattern's
+// length, not the textures' count. SetFrameRate(fps): a step every 1/fps seconds.
 int l_SetFrame(lua_State* L) {
-  CheckControl<Bitmap>(L, 1)->frame = static_cast<int>(luaL_checknumber(L, 2));
+  CheckControl<Bitmap>(L, 1)->SetFrame(static_cast<int>(luaL_checknumber(L, 2)));
   return 0;
 }
 int l_GetFrame(lua_State* L) {
@@ -156,19 +228,44 @@ int l_GetFrame(lua_State* L) {
   return 1;
 }
 int l_GetNumFrames(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(CheckControl<Bitmap>(L, 1)->textures.size()));
+  lua_pushnumber(L, static_cast<lua_Number>(CheckControl<Bitmap>(L, 1)->pattern.size()));
   return 1;
 }
 int l_SetFrameRate(lua_State* L) {
-  CheckControl<Bitmap>(L, 1)->frameRate = static_cast<float>(luaL_checknumber(L, 2));
+  CheckControl<Bitmap>(L, 1)->period = 1.0f / static_cast<float>(luaL_checknumber(L, 2));
   return 0;
 }
-template <const char* Name>
+template <int Kind>
 int l_SetPattern(lua_State* L) {
-  CheckControl<Bitmap>(L, 1)->pattern = Name;
+  CheckControl<Bitmap>(L, 1)->MakePattern(Kind);
   return 0;
 }
-constexpr char kForward[] = "forward", kBackward[] = "backward", kPingPong[] = "pingpong", kLoopPingPong[] = "looppingpong";
+// SetFramePattern(pattern) (FA exe 0x782b20, 0x7802d0): the textures to show in turn, 0-based; a
+// number outside the textures is warned of and held to the nearest one (kept, not left out); the
+// place in it stays (held inside it here: the original reads past its end).
+int l_SetFramePattern(lua_State* L) {
+  if (lua_gettop(L) != 2) return luaL_error(L, "%s\n  expected %d args, but got %d", "SetFramePattern(pattern)", 2, lua_gettop(L));
+  Bitmap* b = CheckControl<Bitmap>(L, 1);
+  if (!lua_istable(L, 2)) {
+    Logf(LogLevel::Warning, "Bitmap:SetFramePattern requires an array of integers!");
+    return 0;
+  }
+  const int n = luaL_getn(L, 2), textures = static_cast<int>(b->textures.size());
+  std::vector<int> pattern;
+  for (int i = 1; i <= n; ++i) {
+    lua_rawgeti(L, 2, i);
+    if (!lua_isnumber(L, -1)) return luaL_error(L, "get as int");
+    int v = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    if (v < 0) Logf(LogLevel::Warning, "Bitmap:SetFramePattern - Negative frame index %d found in frame pattern.", v);
+    else if (v > textures - 1)
+      Logf(LogLevel::Warning, "Bitmap:SetFramePattern - Frame index %d found in frame pattern which is larger than number of textures(%d).", v, textures);
+    pattern.push_back(std::max(0, std::min(v, textures - 1)));
+  }
+  b->pattern = std::move(pattern);
+  b->SetFrame(b->frame);
+  return 0;
+}
 
 // ShareTextures(bitmap): this bitmap shows the other one's textures.
 int l_ShareTextures(lua_State* L) {
@@ -215,10 +312,11 @@ void RegisterBitmapBindings(lua_State* L) {
   SetMethod(L, cls, "GetFrame", l_GetFrame);
   SetMethod(L, cls, "GetNumFrames", l_GetNumFrames);
   SetMethod(L, cls, "SetFrameRate", l_SetFrameRate);
-  SetMethod(L, cls, "SetForwardPattern", l_SetPattern<kForward>);
-  SetMethod(L, cls, "SetBackwardPattern", l_SetPattern<kBackward>);
-  SetMethod(L, cls, "SetPingPongPattern", l_SetPattern<kPingPong>);
-  SetMethod(L, cls, "SetLoopPingPongPattern", l_SetPattern<kLoopPingPong>);
+  SetMethod(L, cls, "SetForwardPattern", l_SetPattern<0>);
+  SetMethod(L, cls, "SetBackwardPattern", l_SetPattern<1>);
+  SetMethod(L, cls, "SetPingPongPattern", l_SetPattern<2>);
+  SetMethod(L, cls, "SetLoopPingPongPattern", l_SetPattern<3>);
+  SetMethod(L, cls, "SetFramePattern", l_SetFramePattern);
   SetMethod(L, cls, "ShareTextures", l_ShareTextures);
 }
 

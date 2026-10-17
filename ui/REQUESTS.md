@@ -934,6 +934,10 @@ TRANSPORTATION parent) needs the parent too.
    (GetGuardedEntity) is one of them, or their focus, or the assist command's target? If it is a field
    that changes with the queue, UnitView having it too would spare one simulation call per unit.
 Not blocking.
+DONE (engine, dac70cb; answer 14d031f, "ui 36"): UnitView parent / attachedUnits (attach order) / creator.
+GetAssistingUnitsList lists pods by their creator, not assisting units. Used: GetAttachedUnitsList and
+GetAssistingUnitsList as read, SelectUnits' TRANSPORTATION parent, and the full IsSelectable for the scripts'
+SelectUnits / AddSelectUnits (user_units.cpp); checks in ui/tests/dock.lua.
 
 ## To the renderer track
 

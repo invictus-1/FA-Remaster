@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
@@ -219,15 +220,59 @@ int l_GetSelectedUnits(lua_State* L) {
 // ends on tick 52, so there, as here, the commander is selected by the script only if a try
 // happens to step over tick 51. Before this, ours took the commander two seconds before it
 // could build: the build menu came up empty and stayed so until it was selected again.
-// (Not built of the original's: for a refused unit inside a transport it takes the transport.)
-void DropUnselectable(std::vector<UserUnit*>* list) {
-  list->erase(std::remove_if(list->begin(), list->end(), [](const UserUnit* u) { return !u->view.selectable; }), list->end());
+//
+// Whether a unit may be selected (UserUnit::IsSelectable, FA exe 0x8c0500 with FAF's patch at
+// 0x1291519; read by the engine track, docs/engine-answers.md "ui 36"): not if it is dead, in the
+// state UnSelectable, not in SELECTABLE, being built and neither a FACTORY nor a CQUEMOV, or a POD
+// that moves and hangs on something (a docked drone). Used by the scripts' SelectUnits and
+// AddSelectUnits; the click and the box keep their own rules (SelectUnitsById: Chris selects a
+// building under construction in the original).
+bool IsSelectable(lua_State* L, const UserUnit* u) {
+  if (u->gone || u->view.dead || !u->view.selectable || !InCategory(L, u, "SELECTABLE")) return false;
+  if (u->view.beingBuilt && !InCategory(L, u, "FACTORY") && !InCategory(L, u, "CQUEMOV")) return false;
+  if ((u->view.attached || u->view.parent != 0xffffffffu) && InCategory(L, u, "POD")) {
+    // (moves: its Physics.MotionType one of the eight kinds of moving, RULEUMT_Land .. RULEUMT_AmphibiousFloating)
+    bool moves = false;
+    PushBlueprint(L, u->view.blueprint);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "Physics");
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "MotionType");
+        lua_rawget(L, -2);
+        const char* type = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        moves = std::strncmp(type, "RULEUMT_", 8) == 0 && std::strcmp(type, "RULEUMT_None") != 0 && std::strcmp(type, "RULEUMT_Special") != 0;
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (moves) return false;
+  }
+  return true;
 }
+void DropUnselectable(lua_State* L, std::vector<UserUnit*>* list) {
+  list->erase(std::remove_if(list->begin(), list->end(), [L](const UserUnit* u) { return !IsSelectable(L, u); }), list->end());
+}
+// (FA exe 0x8bd8f0, read by the engine track, "ui 36": a unit that may not be selected gives its
+// place to the unit it hangs on, if that one may be selected and is a TRANSPORTATION: one level.)
 int l_SelectUnits(lua_State* L) {
-  std::vector<UserUnit*> list;
+  std::vector<UserUnit*> list, now;
   ReadUnitList(L, 1, &list);
-  DropUnselectable(&list);
-  SetSelection(L, list);
+  UnitStore& store = Store(L);
+  for (UserUnit* u : list) {
+    if (u->view.dead) continue;
+    UserUnit* take = u;
+    if (!IsSelectable(L, u)) {
+      auto parent = store.units.find(u->view.parent);
+      take = u->view.parent != 0xffffffffu && parent != store.units.end() && IsSelectable(L, parent->second.get()) &&
+                     InCategory(L, parent->second.get(), "TRANSPORTATION")
+                 ? parent->second.get()
+                 : nullptr;
+    }
+    if (take && std::find(now.begin(), now.end(), take) == now.end()) now.push_back(take);
+  }
+  SetSelection(L, now);
   return 0;
 }
 // ValidateUnitsList(units) (FA exe 0x8bc5f0): the units of the list that still exist and are not
@@ -259,7 +304,7 @@ int l_GetUnitById(lua_State* L) {
 int l_AddSelectUnits(lua_State* L) {
   std::vector<UserUnit*> now = Store(L).selection;
   ReadUnitList(L, 1, &now);
-  DropUnselectable(&now);
+  DropUnselectable(L, &now);
   SetSelection(L, now);
   return 0;
 }
@@ -597,8 +642,60 @@ int l_GetScriptBit(lua_State* L) {
   lua_pushboolean(L, any);
   return 1;
 }
-int l_ListEmpty(lua_State* L) {
-  lua_newtable(L);
+// GetAttachedUnitsList(units) (FA exe 0x8bc300; read by the engine track, "ui 36"): the units
+// hanging on each of the given units (a transport's cargo), in the order they were attached; one
+// level; a unit given twice lists its cargo twice. Dead ones, given or hanging, are left out.
+// (The original's getter makes a nil, destroyed or foreign entry an error; ours passes over it, as
+// our other lists for now.)
+int l_GetAttachedUnitsList(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "GetAttachedUnitsList", 1, lua_gettop(L));
+  std::vector<UserUnit*> out;
+  if (lua_istable(L, 1)) {
+    UnitStore& store = Store(L);
+    const int n = luaL_getn(L, 1);
+    for (int i = 1; i <= n; ++i) {
+      lua_rawgeti(L, 1, i);
+      UserUnit* u = ToUnit(L, lua_gettop(L));
+      lua_pop(L, 1);
+      if (!u || u->gone || u->view.dead) continue;
+      for (uint32_t id : u->view.attachedUnits) {
+        auto it = store.units.find(id);
+        if (it != store.units.end() && !it->second->gone && !it->second->view.dead) out.push_back(it->second.get());
+      }
+    }
+  }
+  PushUnitList(L, out, false);
+  return 1;
+}
+// GetAssistingUnitsList(units) (FA exe 0x8bc820; read by the engine track, "ui 36"): not the units
+// guarding or assisting, but the drones of a drone station or carrier: for each given unit that is
+// alive, finished and a PODSTAGINGPLATFORM or POD, the player's own living, finished POD units it
+// made (their creator), or itself; each once. Within one given unit the original goes by its map
+// of places, which the views cannot give: here by entity id (INFERRED stand-in). The game's
+// orders.lua gives the first and the second to its two drone buttons. An observer gets none.
+int l_GetAssistingUnitsList(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "GetAssistingUnitsList", 1, lua_gettop(L));
+  std::vector<UserUnit*> out;
+  Sim* sim = TheSim(L);
+  if (lua_istable(L, 1) && sim && sim->focusArmy >= 0) {
+    UnitStore& store = Store(L);
+    const int army = sim->focusArmy + 1;
+    const int n = luaL_getn(L, 1);
+    for (int i = 1; i <= n; ++i) {
+      lua_rawgeti(L, 1, i);
+      UserUnit* s = ToUnit(L, lua_gettop(L));
+      lua_pop(L, 1);
+      if (!s || s->gone || s->view.dead || s->view.beingBuilt) continue;
+      if (!InCategory(L, s, "PODSTAGINGPLATFORM") && !InCategory(L, s, "POD")) continue;
+      for (auto& [id, u] : store.units) {
+        if (u->gone || u->view.dead || u->view.beingBuilt || u->view.army != army) continue;
+        if (u->view.creator != s->view.id && u.get() != s) continue;
+        if (!InCategory(L, u.get(), "POD") || std::find(out.begin(), out.end(), u.get()) != out.end()) continue;
+        out.push_back(u.get());
+      }
+    }
+  }
+  PushUnitList(L, out, false);
   return 1;
 }
 
@@ -2718,7 +2815,8 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetIsPaused", l_ListSwitch<&UnitStateView::paused>);
   SetGlobal(L, "GetIsAutoMode", l_ListSwitch<&UnitStateView::autoMode>);
   SetGlobal(L, "GetIsAutoSurfaceMode", l_ListSwitch<&UnitStateView::autoSurfaceMode>);
-  for (const char* name : {"GetAttachedUnitsList", "GetAssistingUnitsList"}) SetGlobal(L, name, l_ListEmpty);
+  SetGlobal(L, "GetAttachedUnitsList", l_GetAttachedUnitsList);
+  SetGlobal(L, "GetAssistingUnitsList", l_GetAssistingUnitsList);
 
   const char* cls = "UserUnit";
   SetMethod(L, cls, "GetEntityId", l_GetEntityId);
