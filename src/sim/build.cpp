@@ -3415,6 +3415,13 @@ bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from) {
   if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
   for (const BuildTask* t = from ? from : u->task; t;) {
     if (t->moving) return true;
+    // a transport task's landing or walking move (CUnitTransportLoad state 1's NewMoveTask, the call's walk ...):
+    // the thread sleeps in that move task as well, and a clear puts it at the run list's end. Seen: MP2 4338,
+    // army 1's transport 0x100084, descending to its pickup point, and its five cargo units get the load order
+    // again (clear, the transport last in the message): the original runs the cargo's new call tasks before the
+    // transport's new load task at 4339 (they find it not yet loading and wait 10 beats: WaitingForTransport at
+    // 4350); ours had not re-linked the transport, ran its new task first, and the cargo walked from 4341.
+    if (t->tdata) return TransportTaskAsleepOnMove(t);
     if (t->sub) {
       t = t->sub;
       continue;

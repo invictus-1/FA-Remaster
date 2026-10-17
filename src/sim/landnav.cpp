@@ -829,8 +829,12 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     // nothing new goes over; MakeIdle then stops it, and the motion's drive-through byte keeps that waypoint's value.
     // Seen (probe mp2_2201): MP2 army 0's Mantis 0x1a arrives at 2201 with no SetWaypoints(1) and speed-through 1
     // until its next goal's first waypoint at 2204; ours handed over its own cell, in the goal, with 0.
-    const Vec3 wp = FollowsSlotPoint(n) ? Vec3{n.lastFollow.x, WorldOf(sim, u, n.target).y, n.lastFollow.z}
-                                        : WorldOf(sim, u, n.target);
+    // The point is the whole stored slot point, its height included (0x5ad923..0x5ad932 copy +0x84, +0x88, +0x8c),
+    // not the target cell's ground: a follower that holds for its leader (target := its own cell, 0x5ae75a) keeps
+    // the same waypoint. Seen (probe mp3_follow): MP3 3142, army 3's guards 0x30002f / 0x300030 hold while their
+    // commander's path is searched (its status 1 at their turns, +0x91 = 1 at 3143) and the steering gets nothing;
+    // ours took the height of the own cell, so the point differed and went over as a new waypoint, drive-through 1.
+    const Vec3 wp = FollowsSlotPoint(n) ? n.lastFollow : WorldOf(sim, u, n.target);
     const UnitMotion& m = u->motion;
     const bool same = m.steerWpSet && m.steerWp.x == wp.x && m.steerWp.y == wp.y && m.steerWp.z == wp.z;
     if (!same) {
@@ -1110,7 +1114,7 @@ void LandNavBackground(Sim& sim) {
 bool LandNavTarget(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
   *out = WorldOf(*Sim::From(u->luaState()), u, n ? n->target : PathCell{});
-  if (n && n->hasTarget && FollowsSlotPoint(*n)) *out = {n->lastFollow.x, out->y, n->lastFollow.z};
+  if (n && n->hasTarget && FollowsSlotPoint(*n)) *out = n->lastFollow;  // (its height too: 0x5ad929)
   return true;
 }
 bool LandNavGoal(const Unit* u, Vec3* out) {
