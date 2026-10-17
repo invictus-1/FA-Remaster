@@ -147,6 +147,10 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     float3 picture = environmentSky.SampleLevel(samplerLinear, d, 0).rgb;
     back = BeyondGrey(look > 0.5 ? pow(max(picture, 0), 2.2) * (lightMultiplier * modern.x) : picture);
   }
+  [branch] if (air.x > 0.5) {  // (light in the air: through all of the volume, as the sky's pass shows the far distance)
+    float4 a = AirAt(cameraPosition + d * (air.y * exp(air.z) * 0.999));
+    back = back * a.a + a.rgb;
+  }
   float t = saturate(outside * beyond.z);
   // without the haze (beyond.w < 0): the land stays clear and is lost only in the last tenth of
   // the way, where it meets the horizon

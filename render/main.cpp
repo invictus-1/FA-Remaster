@@ -45,6 +45,8 @@
 //           once the game is where --tick asks, the world is drawn through it into that file, its
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
+// --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
+//           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, with commas between
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -362,6 +364,7 @@ struct Options {
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
   std::string picture; // --picture
+  std::string settings; // --settings
   int testLights = 0;  // --lights
   std::string mapDecals = "normals";  // --map-decals
   float decalTurn = 1, decalRange = 1;
@@ -463,6 +466,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
     else if (a == "--picture") o->picture = v;
+    else if (a == "--settings") o->settings = v;
     else if (a == "--motion-view") o->motionView = atoi(v);
     else if (a == "--pan") {
       if (sscanf(v, "%f,%f", &o->pan[0], &o->pan[1]) != 2) return false;
@@ -802,10 +806,18 @@ int main(int argc, char** argv) {
         pictureWindow = Window::Create("FA Remastered (picture into a window)", opt.width, opt.height, &error, true, false);
         if (pictureWindow) picture.UseWindow(pictureWindow->Handle());
       }
+      if (!opt.settings.empty()) {  // (the game's lighting settings, before Open as the interface sets them)
+        const std::string s = "," + opt.settings + ",";
+        picture.SetAtmosphere(s.find(",atmosphere,") != std::string::npos);
+        picture.SetSoftShadows(s.find(",soft-shadows,") != std::string::npos);
+        picture.SetRayTracing(s.find(",ray-tracing,") != std::string::npos);
+        picture.SetWeatherEffects(s.find(",weather-effects,") != std::string::npos);
+      }
       if (!picture.Open(&vfs, opt.map, &error)) {
         fprintf(stderr, "render: --picture: %s\n", error.c_str());
         return 1;
       }
+      printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
       live.onBeat = [&](const moho::Sim& sim) { picture.Beat(sim); };
     }

@@ -142,6 +142,24 @@ class WorldPicture {
   // first. A player's option. The other lighting options are the world's own switches (world(); their costs in
   // docs/render-lighting.md, "The options").
   void SetRayReflections(bool on);
+  // The lighting upgrade's options in the four bundles the game's settings show (Chris, 2026-10-17: all of them
+  // in, bundled where they go together); each off as at first, a player's option, the modern look's; set before
+  // or after Open, each stays as set. Costs at 1440p on an RTX 4090 (docs/render-lighting.md, "The options"):
+  // Atmosphere: light in the air, volumetric clouds, the sky from tables (World::volumetricFog, volumetricClouds,
+  //   skyTables); with a time of day (SetDayAndWeather); together about 0.25 ms cheaper than without.
+  void SetAtmosphere(bool on);
+  // Soft shadows: the sun's shadows soft by their distance from what casts them, and contact shadows
+  //   (World::softShadows, contactShadows); about +0.37 ms.
+  void SetSoftShadows(bool on);
+  // Ray tracing: bounce light and reflections (World::bounceLight, SetRayReflections: reflections from the next
+  //   map opened); about +0.75 ms; only where RayTracingSupported, elsewhere nothing changes.
+  void SetRayTracing(bool on);
+  // Weather effects: rain and snow lit where they fall, and rain's splashes (World::litRain, rainSplashes); with
+  //   the weather; about +0.05 ms while it rains.
+  void SetWeatherEffects(bool on);
+  // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
+  // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
+  bool RayTracingSupported() const;
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).

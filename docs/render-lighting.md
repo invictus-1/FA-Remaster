@@ -95,6 +95,10 @@ Mac", and every ray-traced effect keeps a fallback without it.
      2.85 ms on average (the median within noise). Finer cells are affordable (to try: 240 x 128).
    - Off: pictures identical to the build before, pixel for pixel, on both backends. On: Vulkan as
      Direct3D 12 (mean difference 0.07-0.19 in 255).
+   - Fixed (2026-10-17): the world beyond the map's edge went over far out into the haze without the air's
+     light, while the sky's pass shows the far distance through all of the volume: seen from far out, a
+     hard edge where that ground ended against the sky. With the volume on, the far haze it goes over into
+     is seen through all of the volume too (lighting.h `BeyondFar`).
    - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
      sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
 2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a
@@ -159,6 +163,10 @@ Mac", and every ray-traced effect keeps a fallback without it.
    - Cost at 1440p: soft shadows about +0.25 ms (the ground's pass 0.49 -> 0.73 ms, the models' 0.20 ->
      0.23; Direct3D 12, the still scene with 4x MSAA; Vulkan about +0.2); contact shadows +0.12 ms (the
      occlusion's pass 0.39 -> 0.52; Vulkan +0.13). Off: pictures as before, pixel for pixel, on both backends.
+   - Fixed (2026-10-17): where the occlusion's pass gives up early (a pixel too far off to matter, or the
+     sky) it said "in a contact shadow", so with contact shadows on everything far off was darkened: in a
+     game seen from far out at sunset the picture's mean went 54.5 -> 38.7 (and the land beyond the map's
+     edge black). It says "lit" there now; with contact shadows off nothing changes (that value is not read).
 4. **Ray tracing**: inline ray queries (Direct3D 12's DXR 1.1, shader model 6.5; Vulkan's
    VK_KHR_ray_query), a structure per model's level of detail and one for the ground, the scene's built
    each frame. Then reflections on every surface, bounce light (probes over the map updated by rays a few
@@ -316,4 +324,20 @@ tracing in them when a map opens (`gRayShaders`), so switching it on takes effec
 up from the rows, those that cost come to about 1.2 ms a frame and the clouds and the sky from tables save
 about 0.3. All of them on together (FSR 3 aside), measured as one (the sunset water scene with nine
 commanders, 1440p, 4x MSAA, by the lowest times): the frame 1.83 -> 2.99 ms in clear weather, 2.03 -> 3.30 ms
-in rain; about 300 frames a second, against the 60 aimed for. Ray-traced shadows are put off (step 4). Which ones go in the game's settings is Chris's word; the ui chat then puts them there.
+in rain; about 300 frames a second, against the 60 aimed for. Ray-traced shadows are put off (step 4).
+
+**In the game's settings: four bundles** (Chris, 2026-10-17: all of them in, bundled where they go together,
+so there is less clutter). WorldPicture sets each bundle's options together, before or after Open:
+
+| Setting (`WorldPicture::`) | Options | Cost at 1440p |
+|---|---|---|
+| `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables` | about 0.25 ms less (needs a time of day) |
+| `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
+| `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
+| `SetWeatherEffects` | `litRain`, `rainSplashes` | about +0.05 ms in rain |
+
+`WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
+to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings
+atmosphere,soft-shadows,ray-tracing,weather-effects` draws through them as the game does. Tried from far out
+over a whole map, as the game's camera often is, which the close-up checks had not covered: it found the
+contact shadows' and the far haze's faults fixed above. Which ones go in the game's settings is Chris's word; the ui chat then puts them there.
