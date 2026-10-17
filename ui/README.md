@@ -804,6 +804,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   replay (`RemasterFixes = "on"` in the scenario's Options, unknown to the original) and is
   played back with them (`SessionDescription::fixes`); the original's recordings, without the
   mark, are played without them.
+  Multiplayer replays recorded in the original (the engine track's 1v1, 2v2 and 4v4 of 2026-10-16)
+  play back from the front end the same way: every player's command source, watched by an observer
+  who can watch as any of the players and back (`ui/tests/mp_replay.lua`, the lab's 1v1).
   A game also ends by itself: when the player's commander is destroyed the simulation's victory
   script reports the defeat, the interface's script announces it and offers the score, and the
   game stands a few seconds later. And it is won the same way: when the opponent's commander is
