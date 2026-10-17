@@ -288,7 +288,8 @@ Mac", and every ray-traced effect keeps a fallback without it.
      a pixel or two, faint (a first try at crowns ten pixels high read as tufts of white grass). With the
      rings on puddles already there, the ground looks hit by the rain. Cost at 1440p in a storm: about
      +0.012 ms. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.05).
-     - Open: with FSR 3 such short-lived specks may smear or vanish (not in its reactive mask yet).
+     - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
+       it, Post::KeepOpaque), so it does not build them up from frames before.
 
 ## The options
 
