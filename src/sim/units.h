@@ -45,6 +45,9 @@ class UnitWeapon : public ScriptObject {
   Vec3 solution;            // firing solution direction (+0x178), NaN = none
   bool hasSolution = false;
   std::vector<uint64_t> disallow, onlyAllow;  // category sets (empty: none)
+  // The same two sets as entries of Sim::categorySets (-1: the set is empty), for UnitView's WeaponView (ui request
+  // 37). Set with them in InitUnitWeapon; nothing changes them later (no script call writes weapon+0xf8 / +0x120).
+  int disallowSet = -1, onlyAllowSet = -1;
   int layerCaps = 0;
   float firingRandomness = 0;
   std::vector<std::vector<uint64_t>> priorities;
