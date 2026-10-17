@@ -91,6 +91,10 @@ struct ViewConstants {
   // The volumetric clouds' shadows (clouds.h): x the clouds' underside (0: the layer's own shadows,
   // CloudShadow's formula); y, z the shadow picture's middle (world x, z); w 1 / the width it covers.
   float cloudShadow[4];
+  // Soft shadows (lighting.h, SunShadow): x 1 = on; y how much wider a shadow's edge grows for each world
+  // unit between what casts it and where it falls (the sun's size); z how far round a place what casts
+  // its shadow is looked for, w the widest an edge may grow (both world units).
+  float softShadows[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -127,6 +131,7 @@ cbuffer View : register(b0) {
   float4 beyond;          // the world beyond the map's edge: x, y the map's size; z: 1 / how far out it goes (0: not at all); w: the light kept just outside
   float4 air;             // light in the air (air.h): x 1 = on; y the volume's nearest distance; z log(farthest / nearest); w the most it hides
   float4 cloudShadow;     // the volumetric clouds' shadows (clouds.h): x their underside (0: none); y, z the picture's middle; w 1 / its width
+  float4 softShadows;     // x 1 = soft shadows; y an edge's growth per world unit from the caster; z the search for casters, w the widest edge (world units)
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);

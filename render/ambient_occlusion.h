@@ -27,11 +27,17 @@ class AmbientOcclusion {
 
   float radius = 0.9f;    // world units: how far a surface looks for things that shade it
   float strength = 1.0f;  // 0: no effect
+  // Contact shadows (the lighting upgrade; World::contactShadows): with the occlusion, where a short march
+  // toward the sun along the depth meets something just in front, a shadow too small for the sun's
+  // shadow maps. How dark (0: none), and how far it looks (world units).
+  float contactShadows = 0;
+  float contactLength = 1.0f;
 
  private:
   struct Constants {
     float tanHalfFov, aspect, zNear, radius;
-    float strength, pad[3];
+    float strength, contact, contactLength, contactPad;
+    float sunInView[4], axisRight[4], axisUp[4], axisBack[4];
   };
   gfx::Device* device_;
   gfx::Pipeline compute_, apply_;

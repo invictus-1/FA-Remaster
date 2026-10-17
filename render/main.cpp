@@ -73,6 +73,9 @@
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
+// --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
+//           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
+// --contact-shadows  contact shadows (World::contactShadows; modern look): small shadows the sun's maps cannot hold
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
@@ -263,6 +266,9 @@ struct Options {
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
   bool air = false;                     // --air
+  bool softShadows = false;             // --soft-shadows
+  bool contactShadows = false;          // --contact-shadows
+  float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   int motionView = 0;                   // --motion-view
@@ -360,6 +366,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
     else if (a == "--air") o->air = true;
+    else if (a == "--contact-shadows") o->contactShadows = true;
+    else if (a == "--soft-shadows") {
+      o->softShadows = true;
+      if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
+    }
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--picture-window") o->pictureWindow = true;
@@ -780,6 +791,9 @@ int main(int argc, char** argv) {
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
   world.volumetricFog = opt.air;
+  world.softShadows = opt.softShadows;
+  world.contactShadows = opt.contactShadows;
+  if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
   world.motionView = opt.motionView;
