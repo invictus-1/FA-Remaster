@@ -2793,7 +2793,16 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   } else if (g.childMove) {
     if (U->motion.hasGoal) return kTaskRunning;
     g.childMove = false;
+    // The walk of state 0 is a CUnitMoveTask (NewMoveTask 0x6190a0, SetGoal from 0x6190cb); when it ends, its dtor
+    // 0x618700 clears Moving (0x6187bd) and then calls the navigator's AbortMove (0x618886): SetSpeedThroughGoal(0)
+    // and MakeIdle -> SetWaypoints(0, 0), which rebuilds a brake spline still standing from the unit's state of now
+    // and hands out its point[0] (after an arrival the navigator's Stop has removed the spline: nothing). Seen (probe
+    // mp1_1958): MP1 army 1's engineer 0x10000e, its walk ended by a stream AbortNavigation (Lua navigator:AbortMove,
+    // after the motion of 1957): at 1958, after its steering handed out point[1] of that brake, the move task's dtor
+    // brakes again from 0.266 and the motion takes the new point[0] (0.19). Ours ended the walk without the abort and
+    // stepped to point[1] (0.342).
     U->unitStates.erase("Moving");
+    MotionStop(U);
     resumed = true;
   }
   if (!resumed && sim.tick() < t.waitUntil) return kTaskRunning;
