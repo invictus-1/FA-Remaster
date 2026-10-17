@@ -42,12 +42,16 @@ class Precipitation {
   explicit Precipitation(gfx::Device* device) : device_(device) {}
   bool Init(std::string* error);
   // Into the scene's pass, over everything (it is tested against the scene's depth). `rain` and
-  // `snow`: how hard each falls, 0 (not at all) .. 1.
-  void Draw(const View& view, const Camera& camera, float rain, float snow);
+  // `snow`: how hard each falls, 0 (not at all) .. 1. `lit` (World::litRain, the modern look): each drop or flake lit
+  // where it is, by the sun through its shadow and the clouds' and by the small lights (a lamp's beam through the
+  // lamp's shadow), sent on mostly forward (a drop between the eye and a light shines), on top of the sky's light.
+  void Draw(const View& view, const Camera& camera, float rain, float snow, bool lit = false);
 
  private:
+  gfx::Pipeline Make(bool lit, std::string* error);
   gfx::Device* device_;
-  gfx::Pipeline pipeline_;
+  gfx::Pipeline pipeline_, litPipeline_;
+  bool litTried_ = false;
 };
 
 }  // namespace render

@@ -59,8 +59,10 @@ So: build it against recordings, combine later by swapping the source of the fra
       check view `--ray-view`); bounce light from probes done, first version (`bounce.h`, `--bounce`);
       reflections done, first version (`World::rayReflections`, `--ray-reflections`: smooth surfaces and the
       water mirror what their rays meet, off the screen too; a renderer without a G-buffer gets them best
-      from rays its shaders cast); then shadows, optional; each with a fallback.
-   7. Rain and snow, with the visuals session's art.
+      from rays its shaders cast); ray-traced shadows put off (the shadow maps cover the game's view, and
+      the rays' coarse models would make worse ones); each with a fallback.
+   7. Rain and snow, with the visuals session's art: drops and flakes lit where they fall, first version
+      (`World::litRain`, `--lit-rain`).
 
 ## Build and run
 

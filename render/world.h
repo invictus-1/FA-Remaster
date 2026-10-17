@@ -344,6 +344,10 @@ class World {
   // mirrored ray meets in place of the sky. Needs gRayShaders (set before the world is made); modern look; off by
   // default.
   bool rayReflections = false;
+  // Rain and snow lit where they fall (weather.h): each drop or flake by the sun through its shadow and by the lamps
+  // and their beams through their shadows, sent on mostly forward, so rain shows in a headlight's beam and shines
+  // toward a light. Modern look; off by default.
+  bool litRain = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
