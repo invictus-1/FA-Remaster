@@ -89,7 +89,7 @@ First beat on which any unit differs from the original (10 beats = 1 second), 20
 | Land battle (2,019 beats) | **none: identical to the end** |
 | Economy (6,263 beats) | **none: identical to the end** |
 | Naval battle (972 beats) | **none: identical to the end** |
-| Skirmish against an AI | beat 2950 |
+| Skirmish against an AI | beat 2980 |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. Past its first difference a replay drifts, as any deterministic game does after one changed
