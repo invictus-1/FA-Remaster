@@ -968,6 +968,24 @@ onlyAllow as set indices), categoryIndex, autoSurfaceMode; CategorySets. Used: C
 sets copied after each beat), UserUnit:CanAttackTarget, GetValidAttackingUnits, the right click's Attack / Invalid;
 checks in ui/tests/dock.lua.
 
+### 38. Loading a game off the main thread: is the order safe, and Sim::FixesFor(session)
+From the interface chat, 2026-10-17. Not blocking. Launching a game freezes the window for about 9 s
+(LoadRules about 1 s, Sim::Start about 5 s, the picture about 2 s, all on the main thread), and the game's
+loading screen (FAF's gamemain.lua LoadDialog: a looping faction movie, "IN TRANSIT", tips while
+WorldIsLoading()) never shows. The plan is to run Sim::LoadRules and Sim::Start on the host's beat worker
+while the main thread draws the game state's loading screen, in this order:
+(a) On the main thread first: LoadInterfaceRules, the game's ScriptState made, Boot, SessionInit, StartGameUI,
+    provider:StartLoadingDialog. Then LoadRules and Start on the worker. While they run, the main thread runs
+    only that existing state's frames and Lua, as during a beat. The Sim object exists but is not loaded
+    while the game state boots: the interface's bindings answer "no sim yet" until the load is done.
+(b) The other order, faster but against your rule (2) as written: the worker's load starts first, and the game
+    state and its interface rules are made on the main thread at the same time.
+Questions: is (a) safe? Is anything process-wide in LoadRules / Start that the interface state's frames
+could race with (blueprints, category registries, skeleton caches, ClearSimCaches, the file system)?
+Request: LoadInterfaceRules reads sim_->fixes, which Sim::Start sets from the session (Start's first lines). In
+(a) the host needs it before Start. A static `bool Sim::FixesFor(const SessionDescription&)` that Start also
+uses would keep the host's copy of the formula from drifting from yours.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
