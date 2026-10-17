@@ -324,6 +324,13 @@ void OccupyStructure(Sim& sim, Unit* u) {
   u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
+  // Unit::ReleaseOccupyGround 0x6a7ab0 does nothing for a unit that no longer counts as occupying ground (+0x560 == 0,
+  // 0x6a7ab3): an upgraded structure (0x5f8581) leaves its cells to the new one, whose bits it would otherwise clear.
+  // Seen: Skirmish 1863, army 6's air factory 0x600016 upgraded into 0x60001f on the same cells.
+  if (!u->occupiesGround) {
+    sim.navigation().ForgetStructure(EntityRef(u));
+    return;
+  }
   u->occupiesGround = false;  // (ReleaseOccupyGround 0x6a7b81)
   if (!u->bpData || !u->bpData->structure) return;
   for (const auto& r : sim.navigation().Structures())
@@ -351,8 +358,13 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
   // walking to reclaim a rock at (152.2, 558.3): the original's path does not cross the rock at (153.9, 567.6)
   // (cells 152..154 x 565..569), its first target stops at (156, 568); ours went through it to (154, 566).
   if (p->occCaps & 15) {
-    if (occupy) sim.navigation().AddStructure(EntityRef(p), x0, z0, x0 + sx, z0 + sz, p->occCaps);
-    else sim.navigation().RemoveStructure(EntityRef(p));
+    const int r[4] = {x0, z0, x0 + sx, z0 + sz};
+    if (occupy) sim.navigation().AddStructure(EntityRef(p), r[0], r[1], r[2], r[3], p->occCaps);
+    else sim.navigation().RemoveStructure(EntityRef(p), r);
+    // (Seen, MP3 2988 (probe mp3_boulder): two des_boulder01 rocks share cells, 0x2ff0196b on (263,250)-(266,254) and
+    // 0x2ff00bf2 on (264,250)-(267,254). The first is reclaimed at 2642; from then on the original's land grid holds
+    // only x 266 of the second one's rect (words x 264..265 are 0), and army 3's guard 0x30002d takes its slot cells
+    // (264,252), (264,251), (265,250) as goals; ours still held them and sent it beside the rock.)
   }
   LandNavDirty(sim, x0, z0, x0 + sx, z0 + sz);
 }
@@ -3240,11 +3252,11 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     } else {
       Unit* target = FindUnit(sim, t.targetId);
       if (target) {
+        // 0x5f85d5..0x5f85f5: ReleaseOccupyGround of the upgrade, its Destroy, then the builder's ExecuteOccupyGround
+        // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
-        bool occupied = false;
-        for (const auto& r : sim.navigation().Structures()) occupied = occupied || r.entity == EntityRef(u);
-        if (!occupied && Alive(u)) OccupyStructure(sim, u);
+        if (Alive(u)) OccupyStructure(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }

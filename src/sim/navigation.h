@@ -56,7 +56,7 @@ class PathGrid {
   uint8_t Caps(int x, int z) const {
     return (x >= 0 && z >= 0 && x < w_ && z < h_) ? cells_[static_cast<size_t>(z) * w_ + x] : 0;
   }
-  // How many structures (of either grid) overlap the footprint at origin (x, z) (FindPath's escape test).
+  // How many held cells (of either grid) the footprint at origin (x, z) covers (FindPath's escape test).
   uint16_t Blocked(int x, int z) const {
     if (x < 0 || z < 0 || x >= w_ || z >= h_) return 0;
     const size_t i = static_cast<size_t>(z) * w_ + x;
@@ -108,8 +108,15 @@ class Navigation {
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);
   // Structures: their footprints block movement (and building) until they are gone. fpCaps: the footprint's
   // OccupancyCaps, which pick the occupancy grids (OccLayersOf); none: nothing is held.
+  // The original's COGrid keeps one BIT per cell and layer (BitArray2D at ogrid+0x38 land / +0x48 water): occupying
+  // sets the rect's bits (ExecuteOccupy 0x721a90 -> FillRect 0x8d8370 with 1), releasing clears them (ReleaseOccupy
+  // 0x721b30 -> FillRect with 0), whoever else still stands on those cells. So releasing one of two overlapping
+  // occupiers frees the shared cells. rect: the cells to clear (the releaser's own computation, e.g. a prop's rect
+  // at its position then); nullptr: the rect it occupied.
   void AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps);
-  void RemoveStructure(uint32_t entity);
+  void RemoveStructure(uint32_t entity, const int* rect = nullptr);
+  // The entity's record goes, its cells stay as they are (a unit that no longer counts as occupying ground).
+  void ForgetStructure(uint32_t entity);
   const std::vector<OccupiedRect>& Structures() const { return structures_; }
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] took new heights (FlattenMapRect). The original reads the
   // terrain's caps from the map at every test (CanTraverseCell 0x5aa77d / 0x5aa7e2 call OCCUPY_MobileCheck 0x564ab0
@@ -130,8 +137,11 @@ class Navigation {
   std::array<bool, 256> blocking_;
   std::map<std::string, std::unique_ptr<PathGrid>> grids_;
   std::vector<OccupiedRect> structures_;
-  std::vector<uint16_t> occ_;       // land grid: structure cells (count), map cells
-  std::vector<uint16_t> occWater_;  // water grid
+  std::vector<uint8_t> occ_;       // land grid: the occupancy bit of each map cell
+  std::vector<uint8_t> occWater_;  // water grid
+  // Set (on) or clear the bits of [x0, x1) x [z0, z1) in the grids `occ`; each origin's count of held cells in its
+  // footprint (PathGrid::blocked_) follows every bit that changes.
+  void SetCells(int x0, int z0, int x1, int z1, uint8_t occ, bool on);
 };
 
 }  // namespace moho

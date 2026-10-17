@@ -3095,8 +3095,10 @@ Unit* TransferUnit(Sim& sim, lua_State* L, Unit* u, Army* army) {
       }
     }
   }
-  // (a structure: the original clears the old unit's "occupies ground" byte u+0x560 so that its end does not
-  // free the cells the new one stands on; here each structure has its own record)
+  // 0x7470a2: the old unit's "occupies ground" byte u+0x560 is cleared before its Destroy (0x7470b3), so that its end
+  // (ReleaseOccupyGround 0x6a7ab3) does not free the cells the new one stands on. Seen: Engineers 2791, army 1's land
+  // factory 0x100000 captured as 0x9 on the same cells.
+  u->occupiesGround = false;
   sim.QueueDestroy(u);
   return n;
 }
