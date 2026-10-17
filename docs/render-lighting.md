@@ -333,9 +333,17 @@ where it changes the look, off by default, measured like the rest. In the order 
    release beforehand is not needed now.
 2. **Lightning inside the clouds (done, first version: in the clouds' section above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
    through their depth (clouds.cpp's march takes the flash as a light at the bolt).
-3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader
-   under the water line, by depth and the sun's way), and the beach darker and shinier in a band above the water
-   that the swell has just wetted.
+3. **Water caustics and wet shorelines (done, first version, 2026-10-17):** `World::waterDetail` (viewer
+   `--water-detail`; modern look, a map with water; in the "Weather Effects" setting). The modern water already
+   drew a bright net on a shallow bed in sunlight (water.cpp, two layers of noise), faint: with the option a
+   sharper net with a finer one over it, 2.4 times as strong where it was 0.6 (the view's `shore.w`). And the
+   ground just above the water (terrain.cpp) darker (to 0.6) and shinier (roughness toward 0.22) in a band 0.8
+   world units high over the water's level, its edge uneven by noise; not under the water, whose colours the
+   water makes itself (a first try darkened the bed too and dulled the shallows). Seen from close the beach has a
+   dark wet rim and the shallows a moving web of light; from the game's height a wet strip along the sand.
+   Cost at 1440p: the ground and the water about +0.02 ms each. Off: pictures identical; on, Vulkan as Direct3D 12
+   (mean 0.44 in 255: the water's own). Open: the band does not follow the swell's run up the beach (it is as high
+   everywhere); on a steep rocky shore it is thin.
 4. **Sharper reflections with the models' real textures:** the rays read each model's own albedo (its levels'
    texture coordinates kept for the rays, the albedos in a picture of small copies) instead of one colour a
    model; the visuals session upgrades what looks grainy.

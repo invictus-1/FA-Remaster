@@ -203,6 +203,17 @@ float4 Ground(VOut i) {
     // (a remastered map's layers say their own; the upper, map-wide layer has none)
     roughness = lerp(roughness, matter.y, matter.z);
     float creases = lerp(1, matter.x, matter.z);
+#ifdef MODERN_WATER
+    [branch] if (shore.x > 0.5) {
+      // the beach the waves have just wetted: darker and shinier in a band over the water's level, its edge
+      // uneven
+      float uneven = (CloudNoise(float3(i.world.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8;
+      float over = i.world.y - shore.y;
+      float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);  // (not under the water: its own colours)
+      albedo.rgb *= lerp(1, 0.6, wet);
+      roughness = lerp(roughness, 0.22, wet * 0.85);
+    }
+#endif
     // (ground that glows gives its own light, by day and by night)
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to

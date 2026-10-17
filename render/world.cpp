@@ -495,6 +495,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // wet shorelines and caustics
+  if (waterDetail && look == Look::Modern && haveMap_ && map.water.present) {
+    c.shore[0] = 1;
+    c.shore[1] = map.water.elevation;
+    c.shore[2] = 0.8f;
+    c.shore[3] = 2.4f;
+  } else {
+    std::fill(std::begin(c.shore), std::end(c.shore), 0.0f);
+  }
   // reflections by ray tracing (where the shaders were built for it)
   reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
   if (reflectNow_) {
