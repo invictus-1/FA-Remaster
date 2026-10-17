@@ -31,15 +31,18 @@ Mac", and every ray-traced effect keeps a fallback without it.
      targets (`TargetDesc::storage`), 2D or volumes (`depth`), with levels (`mips`); `Format::RG16F`. Both
      backends; `--gfx-check` tries them and reads the results back (both pass, Direct3D 12's debug layer
      silent; also with `--fxc`).
-   - The scene's depth once a frame as one sample a pixel (from the 4-sample depth), as distance, with a
-     chain of smaller levels holding the nearest and farthest (for screen-space tracing).
-   - Motion: where each pixel was last frame. The camera's part from the depth and last frame's matrices
-     (ground, scenery, water, sky); moving units from their bones' last frame (MeshRenderer keeps them).
-   - Temporal accumulation: the pieces every effect below shares (last frame's result read where the pixel
-     was, clamped by its neighbourhood, a history that resets on cuts).
-   - FSR 2 (or 3's upscaler): needs AMD's FidelityFX SDK (MIT), a download Chris has to approve. Its
-     temporal anti-aliasing would replace MSAA where it is on; until then MSAA stays and each effect
-     accumulates on its own.
+   - **Done** (2026-10-16): sixteen storage slots, R32UI (atomics), RGBA32F, R8 writable (FSR 3 needs them).
+   - **Done** (2026-10-16): motion (`render/motion.h`): where each pixel was last frame, the camera's part
+     from the depth and last frame's matrices (ground, scenery, water, sky), moving units and entities
+     drawn again from their place and bones of the frame before (MeshRenderer keeps them by key). Checked
+     with `--motion-view 2|3 --msaa 1 --pan dx,dz`: a panned still scene carried from the frame before
+     matches (mean 3 in 255, 95 % within 12; what is left: the edge coming in, trees in the wind); in a
+     battle the units' own motion takes the error from 0.88 % of the picture to 0.67 %. Vulkan as
+     Direct3D 12. Also `Post::KeepOpaque` / `Reactive` (the upscaler's reactive mask) and the finishing
+     passes at any picture's size.
+   - **In work**: AMD's FSR 3.1 upscaler (`render/fsr3.h`; the FidelityFX SDK v2.3.0's MIT sources, the
+     download approved by Chris on 2026-10-16), ported by a helper onto gfx's compute shaders. Its temporal
+     anti-aliasing replaces MSAA where it is on (the scene then drawn with one sample a pixel and a jitter).
 1. **Light in the air** (volumetric fog): a volume over the view (froxels, about 160 x 90 x 64), the sun
    through its shadow cascades and the clouds' shadow, the lamps from the light grid, haze and mist as
    densities; reprojected and blended over frames, then summed toward the eye. Every shader's
@@ -60,18 +63,21 @@ Mac", and every ray-traced effect keeps a fallback without it.
      Direct3D 12 (mean difference 0.07-0.19 in 255).
    - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
      sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
-2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a
+2. **Clouds and the sky** (next): clouds as volumes (noise volumes made once by compute shaders, marched at a
    quarter of the pixels and filled in over frames), their shadows on the ground from the same clouds; the
    sky from tables of the atmosphere computed when the time of day changes (transmittance, multiple
    scattering, the sky's view, the air's own light over distance).
-3. **Reflections in screen space** (water, wet ground, metal), traced along the depth's chain, falling back
-   to the sky's cube map where the screen has nothing. **Soft shadows** (the sun's penumbra wider with
-   distance from the caster) and **contact shadows** (a short march along the depth toward the light, for
-   the small creases the shadow maps cannot hold).
+3. **Soft shadows** (the sun's penumbra wider with distance from the caster) and **contact shadows** (a
+   short march along the depth toward the light, for the small creases the shadow maps cannot hold).
 4. **Ray tracing**: inline ray queries (Direct3D 12's DXR 1.1, shader model 6.5; Vulkan's
    VK_KHR_ray_query), a structure per model's level of detail and one for the ground, the scene's built
-   each frame. Then reflections where the screen has nothing, bounce light (probes over the map updated by
-   rays a few at a time) and, optional, ray-traced shadows. Each keeps its fallback.
+   each frame. Then reflections on every surface, bounce light (probes over the map updated by rays a few
+   at a time) and, optional, ray-traced shadows. Each keeps its fallback.
+   (Reflections were step 3 in screen space. Changed on 2026-10-16: the water already mirrors what is
+   around it in screen space (water.cpp: a march along the scene's depth, sampling the picture behind);
+   for metal and wet ground a screen-space pass needs each pixel's normal and roughness, which this
+   renderer, drawing each surface whole in one pass, does not keep. Rays cast by the surfaces' own
+   shaders need none of that and also see what is off screen.)
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units.
 
