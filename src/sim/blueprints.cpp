@@ -241,16 +241,42 @@ int l_EntityCategoryContains(lua_State* L) {
   return 1;
 }
 
+// The length of a list as the original's bindings take it: LuaPlus::LuaObject::GetCount 0x907f50 -> lua_getn
+// 0x90ad30. That is t.n when it is a number, else the largest numeric key that holds a value (the array part's last
+// non-nil slot, then every numeric key of the hash part), truncated. Unlike table.getn (luaL_getn 0x90e090) it does
+// not stop at the first nil: M28's zone lists keep holes where a unit was taken out ({[1] = a, [3] = b} counts 3).
+int ObjectCount(lua_State* L, int t) {
+  if (t < 0 && t > LUA_REGISTRYINDEX) t = lua_gettop(L) + t + 1;
+  lua_pushstring(L, "n");
+  lua_rawget(L, t);
+  if (lua_type(L, -1) == LUA_TNUMBER) {
+    const int n = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    return n;
+  }
+  lua_pop(L, 1);
+  lua_Number best = 0;
+  lua_pushnil(L);
+  while (lua_next(L, t)) {
+    if (lua_type(L, -2) == LUA_TNUMBER && lua_tonumber(L, -2) > best) best = lua_tonumber(L, -2);
+    lua_pop(L, 1);
+  }
+  return static_cast<int>(best);
+}
+
+// EntityCategoryFilterDown 0x759c50 (and EntityCategoryCount 0x759f70): i = 1 .. GetCount (read again each pass),
+// an element that is not a unit or a blueprint id (a nil hole included) is skipped, the loop goes on.
 int FilterImpl(lua_State* L, bool keep) {
   const uint64_t* c = CheckCat(L, 1);
   lua_newtable(L);
   if (!lua_istable(L, 2)) return 1;
   int out = lua_gettop(L), n = 0;
-  for (int i = 1;; ++i) {
+  const int count = ObjectCount(L, 2);
+  for (int i = 1; i <= count; ++i) {
     lua_rawgeti(L, 2, i);
     if (lua_isnil(L, -1)) {
       lua_pop(L, 1);
-      break;
+      continue;
     }
     int e = EntityIndexOf(L, -1);
     if ((e >= 0 && CategoryHas(c, e)) == keep) lua_rawseti(L, out, ++n);
@@ -264,17 +290,15 @@ int l_EntityCategoryFilterOut(lua_State* L) { return FilterImpl(L, false); }
 int l_EntityCategoryCount(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
   int n = 0;
-  if (lua_istable(L, 2))
-    for (int i = 1;; ++i) {
+  if (lua_istable(L, 2)) {
+    const int count = ObjectCount(L, 2);
+    for (int i = 1; i <= count; ++i) {
       lua_rawgeti(L, 2, i);
-      if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        break;
-      }
-      int e = EntityIndexOf(L, -1);
+      int e = lua_isnil(L, -1) ? -1 : EntityIndexOf(L, -1);
       if (e >= 0 && CategoryHas(c, e)) ++n;
       lua_pop(L, 1);
     }
+  }
   lua_pushnumber(L, n);
   return 1;
 }
