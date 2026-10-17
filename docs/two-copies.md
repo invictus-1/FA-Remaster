@@ -141,7 +141,7 @@ Found by reading the source (the work for the next rounds, with item 2):
 4. **The clock in the sim's Lua.** `GetSystemTimeSecondsOnlyForProfileUse` answers the real time. FAF's
    navigation mesh generator, sim callbacks, spawn helper and AI grids, M28's profiler and navigation
    generator, and RNGAI call it; every use looked at only logs or measures. A script that let it decide anything
-   would split the copies.
+   would split the copies. Read in full on 2026-10-17: see "The sim's Lua and the outside world" below.
 5. **tostring() of a table, function or userdata** gives its address (`table: 0000057C9CDAD600`). Harmless in
    a log line; a script that used it as a key, or sorted by it, would split the copies. On Linux the
    C library prints `%p` without leading zeros, so there even the string's length, and with it the heap size,
@@ -220,6 +220,57 @@ collection's moment becomes visible to a script.
 sim-side uses put an address into data: `factory-manager.lua:386` names a platoon "FactoryManager - table: ...",
 `ChatBrainComponent.lua:118` stamps a chat message's Id, `utilities.lua` SerializableDeepCopy marks a repeated table
 (the last two only travel to the interface).
+
+## The sim's Lua and the outside world (read 2026-10-17)
+
+A read of FAF 3839's sim scripts, M28AI, RNGAI, AI-Uveso and the unit packs (items 4 and 5 above). Nothing was
+changed; the remedies below are for before multiplayer ships.
+
+What the sim state can read of the machine:
+- `GetSystemTimeSecondsOnlyForProfileUse` (`src/sim/sim.cpp`), the only one the scripts use.
+- The whole `os` library: `luaopen_io` opens it (`script_state.cpp`, `liolib.c`): clock, time, date, getenv,
+  tmpname, execute, exit. Only test tools that never load in a game call it.
+- `gcinfo` / `collectgarbage`. Only FAF's benchmark runner calls `collectgarbage()`, and it needs cheats.
+- `DiskGetFileInfo().LastWriteTime`. Nothing reads it.
+
+The clock's sites, about 60, are SAFE, GATED or dead:
+- SAFE: they only log or measure.
+- GATED, off by default: the cheat-only benchmark runner (`lua/sim/Profiler.lua`); NavDebug and the AI grids'
+  `Debug`, which need AIs in the game or cheats; M28's profilers, whose `M28Config` constants are all false;
+  M28Map's sites, all inside `bDebugMessages`.
+- Dead: a commented-out branch in Uveso's `aiattackutilities.lua`.
+No AI lets the clock decide how much work it does in a tick or when it yields.
+
+With object keys hashed by serial, "only logs" is weaker than it looks. A clock branch that makes even one table,
+closure, thread or userdata in one copy shifts every later serial there. The one such branch found (low risk):
+- When a callback takes longer than 5 ms, `SimCallbacks.DoCallback` calls `GetCurrentCommandSourceArmy()`.
+- That builds `CommandSourceToArmyMap` on first use (`SimUtils.lua` GetArmyOfCommandSource). Before any chat,
+  painting or AbortNavigation has built it, only the slow machine makes that table.
+- Every multiplayer game with humans can meet it; AI-only games cannot.
+- It splits two machines only together with a walk over object keys that reaches the state, and none was found.
+
+Focus-army allocations break the serial assumption in real multiplayer:
+- `ChatUtils.lua` makes `Sync.ChatMessages` only on the machines an allies-only chat goes to, so the serials
+  then differ between the teams' machines. There are about 120 sim-side `GetFocusArmy` calls.
+- The focus runs above stayed alike because no replay in them had such a chat.
+- The check: twocopies `--focus-a` / `--focus-b` on a stream with an allies-only chat.
+- Remedies: entity script tables take a serial derived from the entity id (in a range of their own), or
+  option (c) above.
+- Commander Survival Kit's `UI/campaignconfig_sim.lua` calls `AddBuildRestriction(GetFocusArmy(), ...)` in the
+  sim, so each machine restricts only its own player's army: a mod that cannot work in multiplayer as written.
+
+Remedies proposed, not built:
+1. In multiplayer sessions, behind `Sim::fixes`:
+   - `GetSystemTimeSecondsOnlyForProfileUse` and `os.clock` answer a clock made from the beat: tick x 0.1 + the
+     calls in this beat x 1e-6. Budget loops still end, and the slow branch is never taken.
+   - `os.time` / `os.date` answer the session's start.
+   - `os.getenv`, `execute`, `exit` and `tmpname` are not in the sim state at all.
+2. The smallest script fix for the callback case: build the map at `BeginSession`.
+
+tostring() of objects: no script uses one as a key that is walked, sorts or compares by one, or parses an
+address back out. Every non-log use is SAFE (the three above, plus `table.hash`, which only gets strings).
+`Projectile.lua:982` tests `tostring(number)` for `'#'`; inf / nan are spelled differently by different C
+runtimes, which matters only between platforms.
 
 ## Orders from other players (designed, not built)
 
