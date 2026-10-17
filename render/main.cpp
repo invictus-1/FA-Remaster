@@ -75,6 +75,8 @@
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
 // --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
+// --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
+//           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -199,6 +201,7 @@
 #include "effects.h"
 #include "frame.h"
 #include "gfx.h"
+#include "gfx_check.h"
 #include "ground.h"
 #include "icons.h"
 #include "lights.h"
@@ -249,6 +252,7 @@ struct Options {
   bool fxc = false;                     // --fxc
   bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
+  bool gfxCheck = false;                // --gfx-check
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
@@ -338,6 +342,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
+    else if (a == "--gfx-check") o->gfxCheck = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -628,6 +633,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
+  if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
 
   moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
   moho::Vfs vfs;

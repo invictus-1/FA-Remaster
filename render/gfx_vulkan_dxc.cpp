@@ -97,14 +97,15 @@ DxcCompiler3* Compiler(std::string* error) {
 }
 
 // The renderer's registers on Vulkan's descriptor sets (gfx_vulkan.cpp lays them out the same way):
-// set 0: t0-t31 at 16-47, t0-t1 of space1 at 48-49, s0-s5 at 64-69; set 1: b0-b3 at 0-3.
+// set 0: t0-t31 at 16-47, t0-t1 of space1 at 48-49, s0-s5 at 64-69, a compute shader's u0-u7 at 80-87;
+// set 1: b0-b3 at 0-3.
 std::vector<std::wstring> Arguments(const char* entry, const char* stage) {
   std::vector<std::wstring> a = {L"-spirv", L"-fspv-target-env=vulkan1.3", L"-fvk-use-dx-layout", L"-O3", L"-fspv-reflect",
                                  L"-HV", L"2018",  // (the shaders are written for Direct3D 12's compiler: HLSL before 2021's rules)
                                  L"-E"};
   a.push_back(std::wstring(entry, entry + std::strlen(entry)));
   a.push_back(L"-T");
-  a.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : L"ps_6_0");
+  a.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : std::strcmp(stage, "cs") == 0 ? L"cs_6_0" : L"ps_6_0");
   if (std::strcmp(stage, "vs") == 0) a.push_back(L"-fvk-invert-y");  // (Vulkan's y runs down the screen)
   // (a pixel's SV_Position.w is the distance's w in Direct3D, 1 / w in Vulkan: particles' soft edges read it)
   if (std::strcmp(stage, "ps") == 0) a.push_back(L"-fvk-use-dx-position-w");
@@ -119,6 +120,8 @@ std::vector<std::wstring> Arguments(const char* entry, const char* stage) {
   for (int i = 0; i < 32; ++i) bind(L"t" + std::to_wstring(i), 0, 16 + i, 0);
   for (int i = 0; i < 2; ++i) bind(L"t" + std::to_wstring(i), 1, 48 + i, 0);
   for (int i = 0; i < 6; ++i) bind(L"s" + std::to_wstring(i), 0, 64 + i, 0);
+  if (std::strcmp(stage, "cs") == 0)  // (only compute shaders write; the others' arguments stay as they were)
+    for (int i = 0; i < 8; ++i) bind(L"u" + std::to_wstring(i), 0, 80 + i, 0);
   return a;
 }
 
@@ -159,8 +162,15 @@ bool Reflect(const std::vector<uint32_t>& in, SpirvShader* out) {
     if (op == 32 && count >= 4) pointee[in[at + 1]] = in[at + 3];                                   // OpTypePointer
     if (op == 28 && count >= 4) arrays[in[at + 1]] = in[at + 3];                                    // OpTypeArray
     if (op == 43 && count >= 4) constants[in[at + 2]] = in[at + 3];                                 // OpConstant
-    if (op == 25 && count >= 8)                                                                     // OpTypeImage: dim, depth, arrayed, multi-sampled
-      images[in[at + 1]] = in[at + 3] == 3 ? SpirvImage::Cube : in[at + 6] ? SpirvImage::MultiSample : in[at + 5] ? SpirvImage::Array : SpirvImage::Plain;
+    if (op == 25 && count >= 9) {                                                                   // OpTypeImage: dim, depth, arrayed, multi-sampled, sampled
+      const uint32_t dim = in[at + 3];  // (1 two dimensions, 2 three, 3 a cube)
+      images[in[at + 1]] = in[at + 7] == 2 ? (dim == 2 ? SpirvImage::StorageVolume : SpirvImage::Storage)  // (sampled 2: written, a storage image)
+                           : dim == 3      ? SpirvImage::Cube
+                           : dim == 2      ? SpirvImage::Volume
+                           : in[at + 6]    ? SpirvImage::MultiSample
+                           : in[at + 5]    ? SpirvImage::Array
+                                           : SpirvImage::Plain;
+    }
     if (op == 5632 || op == 5633) {  // OpDecorateString, OpMemberDecorateString (UserSemantic, UserTypeGOOGLE)
       if (op == 5632 && count >= 4 && in[at + 2] == 5635) {
         std::string s = text(at + 3);
@@ -312,7 +322,7 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
   std::vector<std::wstring> args = {L"-O3", L"-HV", L"2018", L"-E"};  // (HLSL 2018's rules, as for Vulkan)
   args.push_back(std::wstring(entry, entry + std::strlen(entry)));
   args.push_back(L"-T");
-  args.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : L"ps_6_0");
+  args.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : std::strcmp(stage, "cs") == 0 ? L"cs_6_0" : L"ps_6_0");
   // (signed: the container's digest, the 16 bytes after "DXBC", is all nought where nothing signed it, and
   // Direct3D 12 takes no shader that is not; DXC of 2026 signs by itself, older ones through dxil.dll)
   auto isSigned = [](const std::vector<uint8_t>& code) {
