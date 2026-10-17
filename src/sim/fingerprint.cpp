@@ -307,7 +307,8 @@ std::string Fingerprint::Line(const Sim& sim, uint32_t beat) const {
     h.U64(sim.rngDraws_);
     parts.emplace_back("rng", h.h);
   }
-  {  // the sim's own: the path searches waiting their turn (in their order), command ids, pause, focus, playable rect
+  {  // the sim's own: the path searches waiting their turn (in their order), command ids, pause, playable rect (not
+     // the focus army: each player's copy of a multiplayer game has its own, tools/twocopies.py --focus-a / -b)
     Hash h;
     h.U32(static_cast<uint32_t>(sim.pathQueue.size()));
     for (const Unit* u : sim.pathQueue) h.U32(u ? u->id : 0xffffffffu);
@@ -315,14 +316,15 @@ std::string Fingerprint::Line(const Sim& sim, uint32_t beat) const {
     h.I(sim.commandSource);
     h.I(sim.pauseOwner);
     h.B(sim.endGame);
-    h.I(sim.focusArmy);
     for (int v : sim.playableRect) h.I(v);
     h.U32(static_cast<uint32_t>(sim.commandsById.size()));
     h.U32(static_cast<uint32_t>(sim.streamCommands.size()));
     parts.emplace_back("sim", h.h);
   }
-  std::string lua = "-";  // (not hashed: the two numbers themselves, KB)
-  if (lua_State* L = sim.L()) lua = std::to_string(lua_getgccount(L)) + ":" + std::to_string(lua_getgcthreshold(L));
+  std::string lua = "-";  // (not hashed: the numbers themselves, the heap and threshold in KB, and the serial)
+  if (lua_State* L = sim.L())
+    lua = std::to_string(lua_getgccount(L)) + ":" + std::to_string(lua_getgcthreshold(L)) + ":" +
+          std::to_string(lua_getnextserial(L));
   const auto& armies = sim.armies();
   for (const auto& a : armies) {
     Hash h;
@@ -468,7 +470,8 @@ void Fingerprint::WriteDetail(const Sim& sim, uint32_t beat, const std::string& 
   }
   std::fprintf(f, "# beat %u tick %u (%s)\n", beat, sim.tick(), why);
   std::fprintf(f, "rng seed %u draws %llu\n", sim.sessionSeed(), static_cast<unsigned long long>(sim.rngDraws_));
-  if (lua_State* L = sim.L()) std::fprintf(f, "lua kb %d threshold %d\n", lua_getgccount(L), lua_getgcthreshold(L));
+  if (lua_State* L = sim.L())
+    std::fprintf(f, "lua kb %d threshold %d serial %u\n", lua_getgccount(L), lua_getgcthreshold(L), lua_getnextserial(L));
   for (const auto& a : sim.armies()) {
     const ArmyEconomy& e = a->econ;
     std::fprintf(f, "army %d stored %s income %s requested %s usage %s max %lld %lld units %zu cap %.9g cost %.9g%s\n",

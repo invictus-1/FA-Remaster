@@ -23,6 +23,8 @@ TObject *luaH_set (lua_State *L, Table *t, const TObject *key);
 Table *luaH_new (lua_State *L, int narray, int lnhash);
 void luaH_free (lua_State *L, Table *t);
 int luaH_next (lua_State *L, Table *t, StkId key);
+/* moho64: MOHO64_DEBUG_OBJWALKS, a walk over t begins (lwalklog.c) */
+void luaH_notewalk (lua_State *L, Table *t);
 
 /* exported only for debugging */
 Node *luaH_mainposition (const Table *t, const TObject *key);
