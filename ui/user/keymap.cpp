@@ -300,7 +300,7 @@ const std::vector<const char*>& ConsoleNames() {
 #include "user/console_names.inc"
         // ours (the Video options' and the statistics overlay's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
-        "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_tracers", "remaster_upscale"};
+        "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -372,10 +372,10 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[6] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook"};
-  const bool values[6] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
-                          looks.originalLook};
-  for (int i = 0; i < 6; ++i) {
+  const char* names[7] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale"};
+  const bool values[7] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                          looks.originalLook, looks.temporalUpscale};
+  for (int i = 0; i < 7; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -386,11 +386,11 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "verticalSync");
   lua_pushboolean(L, Pacing().verticalSync);
   lua_rawset(L, -3);
-  const char* gfx[5] = {"fidelity", "shadows", "sceneSamples", "meshDetail", "textureDetail"};
-  const double gfxValues[5] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
+  const char* gfx[6] = {"fidelity", "shadows", "sceneSamples", "meshDetail", "textureDetail", "samplesDrawn"};
+  const double gfxValues[6] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
                                static_cast<double>(looks.sceneSamples), looks.meshDetail,
-                               static_cast<double>(looks.textureDetail)};
-  for (int i = 0; i < 5; ++i) {
+                               static_cast<double>(looks.textureDetail), static_cast<double>(looks.SceneSamples())};
+  for (int i = 0; i < 6; ++i) {
     lua_pushstring(L, gfx[i]);
     lua_pushnumber(L, gfxValues[i]);
     lua_rawset(L, -3);
@@ -779,6 +779,10 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "REN_BLOOMBLURKERNELSCALE") {  // the game's Bloom Intensity / 10
       if (!value.empty()) looks.bloomIntensity = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
+      return;
+    }
+    if (key == "REMASTER_TEMPORAL_UPSCALE") {  // (FSR 3: 0 off, 1 on)
+      if (!value.empty()) looks.temporalUpscale = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
     }
     if (key == "REMASTER_UPSCALE") {

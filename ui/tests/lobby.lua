@@ -82,6 +82,12 @@ video.remaster_effects_quality.set('remaster_effects_quality', 0.5, false)
 check("and the effects quality follows", moho64ui_Looks().effectsQuality, 0.5)
 video.remaster_effects_quality.set('remaster_effects_quality', 1, false)
 check("the Video tab has Upscaling (FSR 1), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
+-- FSR 3 (the renderer's request 30): off unless chosen; on, the scene is drawn with one sample a pixel
+check("the Video tab has Temporal Upscaling (FSR 3), off unless chosen", video.remaster_temporal_upscale and video.remaster_temporal_upscale.default, 0)
+video.remaster_temporal_upscale.set('remaster_temporal_upscale', 1, false)
+check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostring(moho64ui_Looks().temporalUpscale) .. " " .. moho64ui_Looks().samplesDrawn, "true 1")
+video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
+check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
 -- The game's own graphics settings drive the renderer and mean what they say; a player who has
 -- never chosen starts at the full look.
 check("Fidelity is High unless chosen", video.fidelity and video.fidelity.default, 2)

@@ -377,7 +377,7 @@ int main(int argc, char** argv) {
   // afterwards only while none lives: the background begins once they are known.
   auto beginBackdrop = [&backdrop]() {
 #ifdef MOHO64UI_WORLD_PICTURE
-    render::gSceneSamples = ui::Looks().sceneSamples;
+    render::gSceneSamples = ui::Looks().SceneSamples();
 #endif
     if (backdrop) backdrop->Begin(ui::Looks().vulkan, ui::Looks().textureDetail);
   };

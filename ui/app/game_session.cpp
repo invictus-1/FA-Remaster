@@ -185,11 +185,15 @@ struct GameSession::Picture : WorldSource {
     // Life bars over the player's and his allies' units only, as the original (render request
     // 21), unless the player asks for the enemies' too.
     picture.SetLifeBarsOnEnemies(scene.lifeBarsOnEnemies);
+    // The camera jumped (a snap, the minimap): FSR 3 starts afresh rather than mix the frames before in.
+    if (scene.cameraCut)
+      if (render::World* w = picture.world()) w->cameraCut = true;
     // The player's own looks (the Options menu's Video tab), when they change.
     const LookSettings& looks = Looks();
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
     if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);
+    if (!lookApplied || looks.temporalUpscale != lookNow.temporalUpscale) picture.SetTemporalUpscale(looks.temporalUpscale);
     if (render::World* w = picture.world()) {
       w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;
@@ -847,9 +851,9 @@ void GameSession::OpenPicture() {
     // (On the game's window when it has one: the renderer shows the picture there itself, the
     // interface laid over it, without reading it back; see PresentToWindow.)
     menuPicture_.reset();  // (one picture per window: the menu's goes first)
-    if (render::gSceneSamples != Looks().sceneSamples) {  // (the player's anti-aliasing, taken when a picture is made)
+    if (render::gSceneSamples != Looks().SceneSamples()) {  // (the player's anti-aliasing, or 1 under FSR 3: taken when a picture is made)
       if (releaseWorlds) releaseWorlds();
-      render::gSceneSamples = Looks().sceneSamples;
+      render::gSceneSamples = Looks().SceneSamples();
     }
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)

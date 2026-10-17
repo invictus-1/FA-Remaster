@@ -131,6 +131,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the original (its start-up runs `/lua/options/optionslogic.lua`'s `Apply`, FA exe 0x8c6cf0):
   that needed FAF's `SetInvertMidMouseButton` (its option "Invert pan direction with middle mouse
   button", now built).
+  Temporal Upscaling (FSR 3; the renderer's request 30, off by default): AMD's FSR 3 in place of FSR 1
+  at Upscaling's share (at Upscaling "Off" it smooths the edges at the screen's own size). It needs one
+  sample a pixel, so it takes Anti-Aliasing's place, from the next map loaded as that setting
+  (`LookSettings::SceneSamples`); a camera that jumps (a snap, a minimap click) tells it to start afresh
+  (`world()->cameraCut`).
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'

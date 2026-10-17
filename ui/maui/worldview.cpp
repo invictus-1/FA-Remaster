@@ -69,6 +69,7 @@ const float kSpinBelowZoom = 125.0f;
 class Camera : public ScriptObject {
  public:
   std::string name;
+  bool cut = false;  // it jumped since the last picture (a snap, a minimap click): FSR 3 starts afresh
   float focus[3] = {256, 0, 256};
   float zoom = 300, targetZoom = 300;
   float maxZoomMult = 1.4f;       // the original's default (camera field +0x850)
@@ -345,6 +346,7 @@ void TargetManual(Camera* c, const float focus[3], float heading, float pitch, f
   c->heading = c->toHeading;
   c->turned = true, c->turnedPitch = pitch;
   c->mode = 0;
+  c->cut = true;
   ClampFocus(c);
 }
 // Show a box of the world (TargetBox, FA exe 0x7a83e0): the focus goes to the box's middle, the
@@ -365,6 +367,7 @@ void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
   for (int i = 0; i < 3; ++i) c->focus[i] = focus[i];
   c->zoom = c->targetZoom = ClampZoom(c, zoom);
   c->mode = 0;
+  c->cut = true;
   ClampFocus(c);
 }
 // Ours: the player's hand (pan, wheel) ends a timed move (the original lets it run on); waiting
@@ -882,6 +885,7 @@ class WorldView : public Control {
     UserDecalsForWorld(L, &scene.decals);
     IconColorsForWorld(L, &scene.iconColors);
     std::copy(UserState::From(L)->playableRect, UserState::From(L)->playableRect + 4, scene.playableRect);
+    if (Camera* jumped = GetCameraObject(L, cameraName)) scene.cameraCut = jumped->cut, jumped->cut = false;
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
@@ -1508,6 +1512,7 @@ class WorldView : public Control {
     if (miniMap && mode.empty()) {  // a left press on the minimap: the main camera looks there, and
       Camera* main = GetCameraObject(L, "WorldCamera");  // follows the pointer while the button is held
       main->focus[0] = world[0], main->focus[2] = world[2];
+      main->cut = true;
       miniDrag_ = true;
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;

@@ -74,6 +74,22 @@ local looks = {
         },
     },
     {
+        -- (the renderer's request 30, 2026-10-16: AMD's FSR 3 in place of FSR 1, at Upscaling's share; at
+        -- Upscaling "Off" it smooths the edges at the screen's own size. It takes Anti-Aliasing's place, from
+        -- the next map loaded as that setting.)
+        title = "Temporal Upscaling (FSR 3)",
+        key = 'remaster_temporal_upscale',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_temporal_upscale"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         title = "Remastered Effects",
         key = 'remaster_effects',
         type = 'toggle',

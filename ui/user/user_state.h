@@ -288,12 +288,18 @@ struct LookSettings {
   bool richGround = true;         // a remastered map's richer ground
   bool snowTracks = true;         // units tread tracks into lying snow
   float upscale = 1.0f;           // AMD FSR 1: the share of the picture's size the scene is drawn at (1: off)
+  // AMD's FSR 3 in place of FSR 1, at that share (at 1: smoother edges at the screen's own size; the renderer's
+  // request 30). It needs one sample a pixel: on, the Anti-Aliasing gives way (SceneSamples), from the next
+  // map loaded as that setting. Off as at first.
+  bool temporalUpscale = false;
   // The game's own graphics settings (its Video tab; Chris, 2026-10-15: they drive the renderer's
   // switches and mean what they say): graphics_Fidelity 0..2 (Low: no ambient occlusion, plain
   // ground), shadow_Fidelity 0..3 (Off: none; Low, Medium: the sun's; High: the lamps' too),
   // SC_AntiAliasingSamples (the scene's samples 1 / 2 / 4, from the next picture made),
   // SC_CameraScaleLOD 0..2 (model detail 0.5 / 0.75 / 1). Until told: today's full look.
   int fidelity = 2, shadows = 3, sceneSamples = 4;
+  // The samples a pixel the scene is drawn with: the player's Anti-Aliasing, or 1 under FSR 3.
+  int SceneSamples() const { return temporalUpscale ? 1 : sceneSamples; }
   float meshDetail = 1.0f;
   // ren_MipSkipLevels 0..2 (the game's Texture Detail: High 0, Medium 1, Low 2): the largest sizes
   // of each big texture left out, from the next picture made (WorldPicture::SetTextureDetail).
