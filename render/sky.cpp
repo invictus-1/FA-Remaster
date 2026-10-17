@@ -235,12 +235,17 @@ float4 PS(VOut i) : SV_Target {
       c = lerp(c, color, covered * smoothstep(0.02, 0.15, d.y));
     }
   }
-  // thick air: the sky low down is its colour
-  if (weather.z > 0) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600) * saturate(1 - d.y * 2.5));
+  // thick air: the sky low down is its colour (with light in the air on, below: the volume's whole depth)
+  if (weather.z > 0 && air.x < 0.5) c = lerp(c, AirColor(), weather.w * saturate(weather.z * 600) * saturate(1 - d.y * 2.5));
   // with a world that goes on beyond the map's edge: below the horizon lies the haze that world
   // is lost in (lighting.h, BeyondMap), not the dark of a ground far away
   if (beyond.z > 0 && d.y < 0.01) c = lerp(c, BeyondGrey(HorizonHaze(d)), saturate((0.01 - d.y) * 60));
-  return float4(c * rayForward.w, 1);
+  c *= rayForward.w;
+  [branch] if (air.x > 0.5) {  // light in the air (air.h): all of the volume lies before the sky
+    float4 a = AirAt(cameraPosition + normalize(d) * (air.y * exp(air.z) * 0.999));
+    c = c * a.a + a.rgb;
+  }
+  return float4(c, 1);
 }
 )hlsl";
 

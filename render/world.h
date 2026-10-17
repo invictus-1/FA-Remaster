@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "air.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
 #include "tracks.h"
@@ -310,6 +311,12 @@ class World {
   DebugDraw draw;
   AmbientOcclusion ao;
   Post post;
+  // Light in the air (air.h; the lighting upgrade, docs/render-lighting.md): a volume of the air's light
+  // over the view, in place of the haze and mist formulas, the sun's shafts and the lamps' beams in it
+  // with their shadows. Modern look only. Off by default (Chris, 2026-10-16: each new look a player's
+  // option, off until it is measured).
+  bool volumetricFog = false;
+  Air air;
   // The glow round what is brighter than the screen can show, in the modern look (the game's Bloom
   // Render and Bloom Intensity): off, or this strong (1.5, the game's default, is the modern look's own).
   bool bloom = true;
