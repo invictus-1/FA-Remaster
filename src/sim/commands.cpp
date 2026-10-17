@@ -567,8 +567,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // 0x61b2f0 (S from where the unit stands now). A factory's rally orders are the factory's own command objects,
 // shared with every unit that inherited them (InheritCommandsTo 0x5fa550), so dragging a rally point reaches the
 // units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
-// NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60), a child's walk under way (its
-// CUnitMoveTask listens too, and the wake ends it).
+// NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60). (A reclaim child's walk under way
+// ends with the wake: TickPropReclaim.)
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
@@ -585,14 +585,8 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
     PatrolSearchBox(sim, u, p);
     BuildTask* ch = p.child;
     if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
-      if (ch->moving) {
-        static bool warned = false;
-        if (!warned) Logf(LogLevel::Info, "moho64: tick %u: a rally order moved under a reclaim child's walk (not modelled)", sim.tick());
-        warned = true;
-      } else {
-        ReclaimTaskCommandEvent(sim, u, *ch, c);
-        p.childFrom = 0;  // (the listener wakes the thread: counter 0)
-      }
+      ReclaimTaskCommandEvent(sim, u, *ch, c);
+      p.childFrom = 0;  // (the listener wakes the thread: counter 0)
     }
   }
 }
@@ -2069,7 +2063,19 @@ int l_nav_SetDestUnit(lua_State* L) {
   return 0;
 }
 int l_nav_AbortMove(lua_State* L) {
-  if (IsAlive(N(L)->unit)) MotionStop(N(L)->unit);
+  Unit* u = N(L)->unit;
+  if (!IsAlive(u)) return 0;
+  // AbortMove 0x5a3750 (through vt+0x10 from 0x5a5cfd): MakeIdle, then broadcast(Aborted = 1); a move task listening
+  // (navigator listener 0x618bb0) takes Failed and resumes its thread, re-linked at the run list's end, whichever
+  // stage the call comes from. Seen (probe mp1_1958): a stream AbortNavigation aborts MP1 army 1's engineer
+  // 0x10000e's guard walk at 1957. In the original its repair of the factory's unit then ends a beat after that of
+  // its neighbour 0x10001e (2152 / 2151), ours the other way round without the re-link (thread order inferred).
+  // Only a move task under way listens: a navigator with no goal (a UEF pod's AssistCommander aborted by
+  // ConstructionUnit:OnPrepareArmToBuild, Upgrades 3216) wakes nobody.
+  const bool wake = u->motion.hasGoal && !u->motion.arrived && !u->motion.failed &&
+                    NavEventWakesCommandThread(u);  // (asked before the goal is gone)
+  MotionStop(u);
+  if (wake && IsAlive(u)) Sim::From(L)->ResumeCommandThread(u);
   return 0;
 }
 // CAiNavigatorAir (air_nav.md 4.1, 4.6): GetStatus 0x5a37a0 = nav+0x64 (2 from SetGoal / SetDestUnit until the

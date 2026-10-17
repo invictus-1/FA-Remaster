@@ -1053,7 +1053,10 @@ void LandNavTickAll(Sim& sim) {
   const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xa8: creation order inside each army)
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
-    if (u->motion.air && !u->destroyQueued && !u->dead) AirNavArrival(sim, u);  // (the air navigator, same stage)
+    if (u->motion.air && !u->destroyQueued && !u->dead) {  // (the air navigator, same stage: CAiNavigatorAir::Execute)
+      AirNavArrival(sim, u);
+      if (!u->parentId) AirFormationFollow(sim, u);
+    }
     LandNav* n = Nav(u);
     if (!n || !n->active || u->destroyQueued || u->dead) continue;
     if (n->startedThisTick) {  // (navigators run at the beat start, before the command stage)

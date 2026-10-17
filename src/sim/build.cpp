@@ -761,6 +761,17 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // test below, runs again only when the move has ended (mobile_build.md 8.4). Seen in the bench at 492: an
   // engineer walking to a site prop that another took away walks on to its spot in the original.
   if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
+  // A walk under way when the command listener 0x620160 set state 0 and woke the thread: the walk's CUnitMoveTask
+  // (NewMoveTask 0x61f4c0 with no command: it does not listen itself) sits on top of the thread, so it is what the
+  // wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears Moving (0x6187bd) and calls the
+  // navigator's AbortMove (0x618886); then this task runs state 0 in the same pass. Seen: MP1 2040, the player drags
+  // army 0's factory rally point while its engineer 0xb walks to a rock for the rally AggressiveMove; at 2041 the
+  // original's engineer is neither Moving nor Reclaiming (the dragged point is in sight: the task ends), ours walked
+  // on and reclaimed the rock from 2041 to 2043.
+  if (c.moving && c.state == 0) {
+    c.moving = false;
+    EndWalk(u);
+  }
   // A task without an entity (+0x4c, ReclaimTaskCommandEvent). Every Execute first asks the army's recon
   // (0x61f02e..0x61f087: IArmy vt+0x20 GetReconDB, its vt+0x10 ReconCanDetect 0x5c1850 with LOSNow 8; under water by
   // the map's water height): a place in sight ends it (result 2; OnStopReclaim if started). Out of sight the place
