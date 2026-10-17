@@ -95,6 +95,10 @@ struct ViewConstants {
   // unit between what casts it and where it falls (the sun's size); z how far round a place what casts
   // its shadow is looked for, w the widest an edge may grow (both world units).
   float softShadows[4];
+  // The temporal upscaler (fsr3.h, World::temporalUpscale): x what is added to the level of detail every
+  // surface texture is read at (Sample, below), negative: read as for the screen's size and finer, since the
+  // frames laid over each other see between the pixels drawn (0 without it).
+  float temporal[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -132,7 +136,11 @@ cbuffer View : register(b0) {
   float4 air;             // light in the air (air.h): x 1 = on; y the volume's nearest distance; z log(farthest / nearest); w the most it hides
   float4 cloudShadow;     // the volumetric clouds' shadows (clouds.h): x their underside (0: none); y, z the picture's middle; w 1 / its width
   float4 softShadows;     // x 1 = soft shadows; y an edge's growth per world unit from the caster; z the search for casters, w the widest edge (world units)
+  float4 temporal;        // the temporal upscaler: x the textures' level of detail bias (0 without it)
 };
+// (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
+// read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
+#define Sample(s, uv) SampleBias(s, uv, temporal.x)
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
 SamplerState samplerPointClamp : register(s2);

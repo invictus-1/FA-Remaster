@@ -27,6 +27,7 @@
 #include "sim/script_object.h"
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
+#include "sim/fingerprint.h"
 #include "sim/session.h"
 #include "sim/sim_view.h"
 #include "sim/sim.h"
@@ -34,6 +35,27 @@
 using namespace moho;
 
 namespace {
+
+// MOHO64_LAYOUT_SHIFT=<n> (tools/twocopies.py gives it to one of its two copies; docs/two-copies.md): before anything
+// else, take and keep n rounds of odd-sized blocks of both heaps the engine uses, the C runtime's (malloc and new:
+// the engine's own objects) and the Lua heap's (mimalloc, reached through a Lua state of its own that is never
+// closed, so the sim state's own byte count and collector are not touched). Every later block then lands at another
+// address than in a copy without it, so whatever goes by addresses (Lua's hash of table and userdata keys, a
+// container ordered by pointer) shows as a difference between the two copies even if Windows happened to lay both
+// processes out alike. Nothing the simulation computes may change with it.
+void ShiftLayout(int rounds) {
+  static std::vector<void*> kept;
+  lua_State* L = lua_open();
+  lua_newtable(L);
+  int k = 0;
+  for (int r = 0; r < rounds; ++r)
+    for (size_t size = 1 + r; size < 4096; size += 1 + size / 8) {
+      kept.push_back(std::malloc(size));
+      lua_newuserdata(L, size);
+      lua_rawseti(L, -2, ++k);
+    }
+  std::fprintf(stderr, "moho64: layout shifted by %d rounds (%zu blocks in each heap)\n", rounds, kept.size());
+}
 
 struct Options {
   std::string init;
@@ -441,7 +463,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     takeSync();
     if (o.view) Logf(LogLevel::Info, "view: the setup's sync: %zu table(s), %zu bytes", syncBeats, syncBytes);
   }
-  while (ok && done < o.ticks) {
+  // MOHO64_FINGERPRINT=<file>: a line per beat for comparing two copies of the game (sim/fingerprint.h); beat 0 is
+  // the state Start left. With a peer, the first beat the two differ at ends the run.
+  std::unique_ptr<Fingerprint> fingerprint = ok ? Fingerprint::FromEnvironment() : nullptr;
+  bool diverged = fingerprint && !fingerprint->Beat(sim, 0);
+  while (ok && !diverged && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
       if (!stream.ApplyUntilAdvance(sim)) {
         Logf(LogLevel::Info, "moho64: the replay's command stream ended after %u beats (tick %u)", stream.beats(),
@@ -454,12 +480,17 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       sim.PausedBeat();
       takeSync();
       ++paused;
-      if (sim.frozen && (stream.AtEnd() || !playStream)) break;
+      if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) diverged = true;
+      if (diverged || (sim.frozen && (stream.AtEnd() || !playStream))) break;
       continue;
     }
     sim.Tick();
     takeSync();
     ++done;
+    if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) {
+      diverged = true;
+      break;
+    }
     if (o.view) {  // the live frame's extras: the most seen at one beat, and one sample of each
       std::vector<UnitPose> poses;
       std::vector<ProjectileView> shots;
@@ -639,6 +670,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     if (!carrySample.empty()) Logf(LogLevel::Info, "view: %s", carrySample.c_str());
     if (!creatorSample.empty()) Logf(LogLevel::Info, "view: %s", creatorSample.c_str());
   }
+  if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);
   if (stream_ && playStream)
@@ -659,25 +691,27 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     else Logf(LogLevel::Error, "cannot read %s", o.simLua.c_str());
   }
   ReportStubCalls();
-  return ok ? 0 : 1;
+  return diverged ? 3 : ok ? 0 : 1;  // (3: the fingerprint's peer differed)
 }
 
 // RunSession, and with --twice a second time after the first Sim is gone, as the interface's Relaunch does: the
 // second game must play exactly as the first (no state of the first sim may reach it). It records beside the first
-// record (MOHO64_RECORD + ".2"); both records must be the same bytes.
+// record (MOHO64_RECORD + ".2"); both records must be the same bytes. A fingerprint likewise goes to
+// MOHO64_FINGERPRINT + ".2".
 int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids,
              const SessionDescription& session, const std::string* stream) {
   int rc = 0;
   for (int run = 0; run < (o.twice ? 2 : 1); ++run) {  // (one call site: the record's call chains stay the same)
     if (run == 1) {
-      if (const char* rec = getenv("MOHO64_RECORD"); rec && *rec) {
-        const std::string second = std::string(rec) + ".2";
+      for (const char* var : {"MOHO64_RECORD", "MOHO64_FINGERPRINT"})
+        if (const char* rec = getenv(var); rec && *rec) {
+          const std::string second = std::string(rec) + ".2";
 #ifdef _WIN32
-        _putenv_s("MOHO64_RECORD", second.c_str());
+          _putenv_s(var, second.c_str());
 #else
-        setenv("MOHO64_RECORD", second.c_str(), 1);
+          setenv(var, second.c_str(), 1);
 #endif
-      }
+        }
       Logf(LogLevel::Info, "moho64: --twice: the second run");
     }
     rc |= RunSession(o, vfs, hookDirs, uids, session, stream);
@@ -879,6 +913,7 @@ int RunSinglePlayer(const Options& o, Vfs& vfs, const std::vector<std::string>& 
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (const char* shift = getenv("MOHO64_LAYOUT_SHIFT"); shift && std::atoi(shift) > 0) ShiftLayout(std::atoi(shift));
   Options o;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];

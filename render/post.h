@@ -4,6 +4,7 @@
 #pragma once
 #include <string>
 
+#include "fsr3.h"
 #include "gfx.h"
 #include "upscale.h"
 #include "view.h"
@@ -39,6 +40,14 @@ class Post {
   // of its own) changed the picture, and how much (R8, the scene's size; none without KeepOpaque).
   void KeepOpaque();
   gfx::Texture Reactive();
+  // Begins a pass into what KeepOpaque kept, keeping what is there (false: nothing kept): for what darkens
+  // the picture where it stands still (the fog of war), drawn there too, so that the reactive mask does not
+  // take it for something that moves. ContinueScene afterwards.
+  bool BeginKept();
+  // The temporal upscaler (fsr3.h): the scene's picture (one sample a pixel) brought up to `screenWidth` x
+  // `screenHeight` by FSR 3 from `in` (its colour, depth and size drawn left empty: the scene's own), for this
+  // frame's Present to finish: the glow and the tone curve then at the screen's size, FSR 1 not run.
+  void UpscaleTemporal(Fsr3* fsr3, Fsr3::Inputs in, int screenWidth, int screenHeight);
   // Begins the window's pass and draws the scene's picture into it. More may be drawn on top after.
   // With an `upscaler` and a screen larger than the scene: the picture as a screen shows it, then
   // brought up to the screen's size by FSR 1 (upscale.h).
@@ -74,6 +83,9 @@ class Post {
   int finishWidth_ = 0, finishHeight_ = 0;
   void SizeFinishing(int width, int height);
   gfx::Texture opaque_, reactive_;  // (KeepOpaque, Reactive)
+  gfx::Texture upscaled_;  // (UpscaleTemporal: FSR 3's picture at the screen's size, until the next Present)
+  int upscaledWidth_ = 0, upscaledHeight_ = 0;
+  bool upscaledNow_ = false;
   bool keptOpaque_ = false;
   gfx::Pipeline reactiveMask_;
 };

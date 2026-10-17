@@ -74,6 +74,9 @@ class MeshRenderer {
   // by the views without the jitter (`now`, `before`). Into a pass with an RG16F colour target and the
   // scene's depth (one sample a pixel), which it tests and does not write.
   bool motion = false;
+  // Without motion this frame: last frame's places are kept (not forgotten) for the next frame that has it
+  // (a frame drawn for something else in between: World::sidePicture).
+  bool keepLast = false;
   void DrawMotion(const View& view, const Mat4& now, const Mat4& before);
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
