@@ -119,6 +119,11 @@ class Unit : public Entity {
   // constructor starts it at 0, 0x6a5651; UpdateTerrainType in sim/motion.h)
   uint8_t terrainType = 0;
   int headState = 0;  // progress of the head command (sim/commands.cpp)
+  // The command dispatcher's result word (IAiCommandDispatchImpl +0x2c): 0 when it dispatches (0x598fc4) and when a
+  // task is made with it as parent (CCommandTask ctor 0x5f095f); a child's end writes its result there through its
+  // +0x28 (a patrol's repair: 1 done, else 2, ~CUnitRepairTask 0x5f8f40; its reclaim: 1 when the target is gone,
+  // else 2, 0x6200b3..0x6200ce). A patrol leg that ends while it holds 2 starts the next leg in the same beat.
+  int dispatchResult = 0;
 
   // Economy (sim/economy.cpp): per-second rates as scripts set them, the request that claims the
   // consumption from the army, and this beat's figures.

@@ -486,8 +486,15 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   PatrolData& p = *t.pdata;
   if (p.child) {  // the child runs; when it ends the patrol runs again in the same tick
     if (sim.tick() < p.childFrom) return kTaskRunning;
-    int r = TickBuildTask(sim, u, *p.child);
+    BuildTask& ch = *p.child;
+    const CommandType chType = ch.type;
+    const uint32_t chGoal = ch.goalId;
+    int r = TickBuildTask(sim, u, ch);
     if (r == kTaskRunning) return kTaskRunning;
+    // the child's result into the dispatcher's +0x2c (its +0x28 points there: the patrol makes its children with the
+    // dispatcher, patrol+0x50, as parent, 0x61c232 / 0x61c2b6 / 0x61c306); the attack child writes none
+    if (chType == CommandType::Repair) u->dispatchResult = r == kTaskDone ? 1 : 2;
+    else if (chType == CommandType::Reclaim) u->dispatchResult = sim.FindEntity(chGoal) ? 2 : 1;
     p.child = nullptr;
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
@@ -499,6 +506,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   if (Unit* e = PatrolFindTarget(sim, u, p.box)) {
     u->leashPos = u->position;
     if (BuildTask* c = MakeAttackTaskOn(sim, u, e)) {
+      u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
       p.child = c;
       p.childFrom = next;
       p.goalIssued = false;
@@ -517,6 +525,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
       p.tried.push_back(EntityRef(r));
       c = MakeReclaimChild(sim, u, r);
     }
+    u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
     p.child = c;
     p.childFrom = next;
     p.goalIssued = false;
@@ -622,6 +631,7 @@ void StartHead(Sim& sim, Unit* u) {
     u->headState = kNotStarted;
     return;
   }
+  u->dispatchResult = 0;  // (0x598fc4, before DispatchTask)
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
@@ -947,8 +957,16 @@ void CommandStep(Sim& sim, Unit* u) {
         PopHead(u);
         u->commands.push_back(keep);
         keep->units.insert(u);
+        // IAiCommandDispatchImpl::TaskTick 0x598ebb: with its result word at 2 (the patrol's last child failed) the
+        // point goes to the back (0x598ee0) and the next one is dispatched at once (0x598f6d); otherwise (0x598fed)
         // the next patrol leg starts a beat later (seen: one beat with neither "Patrolling" nor the drive-through
-        // byte between two legs, the new goal the beat after)
+        // byte between two legs, the new goal the beat after). Seen (MP3 3035): army 0's engineer 0x2, whose repair
+        // child failed at 2945, ends its leg at 3035 and keeps Patrolling; ours had a beat without it and set the
+        // next goal a beat late.
+        if (u->dispatchResult == 2 && IsAlive(u) && !u->commands.empty()) {
+          StartHead(sim, u);
+          continue;
+        }
         if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else {
