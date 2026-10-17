@@ -335,9 +335,11 @@ Entity* TargetEntity(Sim& sim, const AiTarget& t) {
   // there until the beat's destroy queue deletes it, and HasTarget 0x5e2a10 asks only a unit (dead?) or a blip.
   // So a shell destroyed in the weapon stage is aimed at once more in the same beat's manipulator stage, and a
   // tracking shell made with it as its target is not without a target (the Cybran missile deflector destroys
-  // the missile and fires its copy "at" it in one script function). Units stay as they were here: gone once
-  // their destruction is queued (not read for them).
-  if (e && e->destroyQueued && e->kind == Entity::Kind::Unit) return nullptr;
+  // the missile and fires its copy "at" it in one script function). The same for a unit: HasTarget asks a unit
+  // only whether it is dead (0x5e2a40 vt+0x10, then vt+0x28), so a unit destroyed without a kill is a target until
+  // the destroy queue deletes it. (Seen: Skirmish 2949, the unfinished 0x57 decays away in the entity stage; the
+  // two torpedoes homing on it keep tracking in that beat's shell stage and lose it at 2950, OnLostTarget then,
+  // and turn from 2952; ours dropped it at 2949 and they hit the water a beat early.)
   return e;
 }
 // CAiTarget::HasTarget 0x5e2a10

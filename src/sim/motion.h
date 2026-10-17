@@ -150,6 +150,7 @@ struct UnitMotion {
   bool steerValid = false;
   bool pointNow = false;   // a point was handed this tick (motion+4)
   uint32_t handOutTick = 0xffffffffu;  // a point was handed outside the steering stage (SetWaypoints(0,0))
+  uint32_t stopCount = 0;  // MotionStop calls (AbortMove), to tell whether a teardown already made one
   // The beat a collision record was written OUTSIDE the steering stage (a stop in the command or script stage):
   // the original's steering stage has already run by then, so the record is first looked at a beat later.
   uint32_t colLateTick = 0xffffffffu;
