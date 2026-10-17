@@ -17,6 +17,7 @@ inline constexpr int kLampShadowSlot = 27;   // the lamps' shadow maps (lights.h
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade
 inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip levels (blurrier going down)
 inline constexpr int kAirSlot = 30;          // light in the air (air.h), a volume over the view, when it is on
+inline constexpr int kCloudShadowSlot = 31;  // the volumetric clouds' shadows (clouds.h), when they are on
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -87,6 +88,9 @@ struct ViewConstants {
   // place of the haze and mist formulas; y the nearest distance the volume holds; z log(farthest /
   // nearest); w the most of a far thing the air may hide.
   float air[4];
+  // The volumetric clouds' shadows (clouds.h): x the clouds' underside (0: the layer's own shadows,
+  // CloudShadow's formula); y, z the shadow picture's middle (world x, z); w 1 / the width it covers.
+  float cloudShadow[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -122,6 +126,7 @@ cbuffer View : register(b0) {
   float4 tracksArea;      // the tracks in lying snow: x, y: 1 / the map's width and height; z: 1 = there are tracks
   float4 beyond;          // the world beyond the map's edge: x, y the map's size; z: 1 / how far out it goes (0: not at all); w: the light kept just outside
   float4 air;             // light in the air (air.h): x 1 = on; y the volume's nearest distance; z log(farthest / nearest); w the most it hides
+  float4 cloudShadow;     // the volumetric clouds' shadows (clouds.h): x their underside (0: none); y, z the picture's middle; w 1 / its width
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -159,9 +164,16 @@ float CloudField(float2 q) {
   return CloudNoise(p) * 0.55 + CloudNoise(p * 2.3 + 7.1) * 0.3 + CloudNoise(p * 5.1 + 3.3) * 0.15;
 }
 float CloudFrom(float field) { return saturate((field - lerp(0.75, 0.2, skyClouds.x)) * 5); }
+Texture2D<float> cloudShadowPicture : register(t31);  // (clouds.h: what comes through the clouds toward the sun, at their underside)
 float CloudShadow(float3 world) {
   if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
-  float2 q = world.xz + sunDirection.xz * ((150 - world.y) / max(sunDirection.y, 0.2));
+  float under = cloudShadow.x > 0 ? cloudShadow.x : 150;
+  float2 q = world.xz + sunDirection.xz * ((under - world.y) / max(sunDirection.y, 0.2));
+  [branch] if (cloudShadow.x > 0) {  // the volumetric clouds' own (their light through them)
+    float2 at = (q - cloudShadow.yz) * cloudShadow.w + 0.5;
+    if (any(at < 0) || any(at > 1)) return 1;
+    return 0.25 + 0.75 * cloudShadowPicture.SampleLevel(samplerLinearClamp, at, 0);
+  }
   return 1 - 0.75 * CloudFrom(CloudField(q));
 }
 // The map's pictures (masks, normals, the water's depth) read beyond the map's edge: the map laid

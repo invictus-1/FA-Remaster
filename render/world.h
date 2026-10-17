@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "air.h"
+#include "clouds.h"
 #include "motion.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
@@ -318,6 +319,10 @@ class World {
   // option, off until it is measured).
   bool volumetricFog = false;
   Air air;
+  // Volumetric clouds (clouds.h; the lighting upgrade): the layer of clouds under a computed sky as real
+  // volumes, lit by the sun, in place of the sky pass's own. Modern look; off by default.
+  bool volumetricClouds = false;
+  Clouds clouds;
   // Motion (motion.h): where each pixel was the frame before, for the temporal upscaler; it needs the
   // scene drawn with one sample a pixel (gSceneSamples 1). `motionView`: a view for checking it (1 the
   // motion as colours, 2 the frame before carried to this one; Motion::Check).

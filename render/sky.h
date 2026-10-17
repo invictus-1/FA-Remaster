@@ -59,8 +59,9 @@ class Sky {
   bool Init(std::string* error);
   // The sky where nothing was drawn, into the scene's pass after everything solid: the computed
   // one for a view whose sky is computed (SetSky was called with `sky`), and else the map's own sky
-  // picture `mapSky` (a cube map; none: nothing is drawn, as before).
-  void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {});
+  // picture `mapSky` (a cube map; none: nothing is drawn, as before). `clouds`: volumetric clouds
+  // (clouds.h, Clouds::Picture) laid over it in place of the layer of clouds the pass makes itself.
+  void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {}, gfx::Texture clouds = {});
 
  private:
   gfx::Device* device_;

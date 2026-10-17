@@ -71,6 +71,8 @@
 //           frame before carried to this frame by it (with a still scene it is this frame, but where something
 //           comes out from behind another), 3 what that misses of this frame (black where the motion is right)
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
+// --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
+//           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
@@ -261,6 +263,8 @@ struct Options {
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
   bool air = false;                     // --air
+  bool clouds3d = false;                // --clouds-3d
+  bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   int motionView = 0;                   // --motion-view
   float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
@@ -356,6 +360,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
     else if (a == "--air") o->air = true;
+    else if (a == "--clouds-3d") o->clouds3d = true;
+    else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -774,6 +780,8 @@ int main(int argc, char** argv) {
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
   world.volumetricFog = opt.air;
+  world.volumetricClouds = opt.clouds3d;
+  if (opt.cloudsFull) world.clouds.shrink = 1;
   world.motionView = opt.motionView;
   if (opt.airDust >= 0) world.air.dust = opt.airDust;
   if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;

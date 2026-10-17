@@ -32,6 +32,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       ao(device),
       post(device),
       air(device),
+      clouds(device),
       motion(device),
       upscaler(device),
       skyDraw(device),
@@ -58,7 +59,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     stepStart = now;
   };
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !air.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -1414,6 +1415,9 @@ void World::Render() {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
   }
+  // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
+  Stage("clouds' shadows");
+  clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // light in the air: its volume, between the shadow maps and the scene that reads it
   Stage("light in the air");
   air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
@@ -1423,6 +1427,7 @@ void World::Render() {
   device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
   device_->SetTexture(kEnvironmentSlot, sky_);
   device_->SetTexture(kAirSlot, air.Volume());
+  device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   lights.Bind();
   if (haveMap_) {
     Stage("ground");
@@ -1464,8 +1469,15 @@ void World::Render() {
       post.ContinueScene();
       ao.Apply(view);
     }
+    // the clouds as volumes (when on): from the depth of everything solid, before the sky lays them over itself
+    if (clouds.Shadows()) {
+      Stage("clouds");
+      clouds.Build(view, camera, skyLight, post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    }
     Stage("sky");
-    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});  // where nothing solid is
+    skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{}, clouds.Picture());  // where nothing solid is
     Stage("water");
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {
