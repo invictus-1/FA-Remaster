@@ -3,6 +3,67 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui (FYI, 2026-10-16): the defeat warning, the error format, and the interface's list bindings
+
+**platoon.lua:1555 after the AI's defeat:** FAF's own, and the original does the same, word for word.
+- `DefeatForArmy` → `OnDefeat` → `DisableAI` (SimUtils.lua 1430-1495) sets each base's `EngineerManager` to nil.
+- The distress loop runs on the ArmyPool platoon, which is never disbanded (the original's `DisbandPlatoon` 0x700540
+  refuses "ArmyPool").
+- GPG's Lua gives nil for indexing nil, so the error shows at the call: "attempt to call method".
+- Left alone (docs/deviations.md, "Looked broken, left alone").
+
+**Error text (63f339d), shared Lua, so your logs change once you merge:**
+- Positions read `file(12): message`, as the original's do: runtime errors, `error()`, `luaL_error`, and the frames of
+  `debug.traceback`.
+- A failed script thread is logged `Error running lua script: ...`, or `... from destroyed thread: ...`.
+- If a test of yours matches `file:line:`, it needs the new form.
+
+**Sim unit lists (dfbc76f):** every Issue* unit list now goes through func_GetUnitList's rule:
+- a non-table is an error;
+- the list is read 1..GetCount, so a nil hole is an error;
+- destroyed and dead units are skipped;
+- the result is a set sorted by id;
+- a single unit instead of a list gives nothing (FAF's SimHooks wraps single units).
+
+**Your side: the original's user-state bindings that read lists.** These are the original's rules (read from the
+exe by the getcount helper), against your `ReadUnitList` (ui\user\user_units.cpp:156: lua_next, no errors, skips
+holes, non-units and destroyed units, removes duplicates).
+
+The original has two getters:
+- strict (SCR_FromLua_UserUnit 0x822b80): nil = "Expected a game object", destroyed = "Game object has been
+  destroyed", wrong type = "Incorrect type";
+- Opt (0x8377e0): the same, but a destroyed unit is skipped.
+"Skips dead" below means units with IsDead true are skipped.
+
+- **GetIsPaused** 0x8baa70: count once; strict; skips dead; true at the first paused unit.
+- **GetIsAutoMode / GetIsAutoSurfaceMode** (0x8bac20 / 0x8bb1a0): "all"; an empty list or a non-table returns true.
+  Yours uses "any", and empty gives false.
+- **SetAutoMode / SetAutoSurfaceMode / SetPaused** (0x8bade0, 0x8bb360, 0x8bc10c): strict; skips dead; sends to every
+  unit, with no army test. Yours sends to own units only.
+- **GetIsSubmerged** 0x8bafe0: strict; no dead test.
+- **GetFireState** 0x8bb560: only units with the RetaliateToggle cap; −1 when they differ or none qualify. Yours
+  gives 0 and has no cap filter.
+- **ToggleFireState / SetFireState** (0x8bb760 / 0x8bba10): SetFireState reads its argument inside the loop.
+- **GetScriptBit / ToggleScriptBit** (0x8bbc10 / 0x8bbe60): only units whose ToggleCaps have the bit; ToggleScriptBit
+  also needs the unit's bit to equal curState.
+- **GetAttachedUnitsList** 0x8bc300, **GetAssistingUnitsList** 0x8bc820: real lists. Yours returns {}.
+- **ValidateUnitsList** 0x8bc5f0: Opt; skips dead and destroy-queued units; keeps duplicates, in list order.
+- **SelectUnits** 0x8bd8f0: Opt; a non-selectable unit is replaced by its selectable TRANSPORTATION parent; returns
+  nothing (the return path is NOPed in this exe).
+- **AddSelectUnits** 0x8bdcb0: strict, so a destroyed unit is an error.
+- **UIZoomTo** 0x867240: Opt; no dead test.
+- **GetUnitCommandData** 0x840130: Opt; buildable categories are the intersection across the units. Yours is the
+  union.
+- **EntityCategoryFilterDown / FilterOut** (user, 0x8b9f70 / 0x8ba2a0): a string is a blueprint id, anything else
+  goes through the strict getter (a nil hole is an error). FilterOut drops unknown strings; yours keeps them.
+- **SetActiveBuildTemplate** 0x8475e0: an entry that is not a table or counts < 4 gives the warning "Template info
+  error!" and is skipped; an empty template keeps the old one.
+- **CMauiBitmap:SetNewTexture** 0x780f50: strict GetString per element. **SetFramePattern** 0x782b20: strict
+  GetInteger (yours does not register it). **CMauiHistogram:SetData** 0x797e50 has no effect in the exe.
+- **CameraImpl:TrackEntities / TargetEntities** (0x7abae0 / 0x7abec0): lua_getn directly; a nil hole is a type
+  error.
+(The read covered fa-remaster\ui; your worktree's copies of some of these files may differ.)
+
 ## ui 35: the fix hooks for the interface's blueprint state — done (4eb1231)
 
 `static void Sim::JoinFixesHooks(ScriptState& st)` joins the engine's script fixes to any script state (it reads
