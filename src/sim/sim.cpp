@@ -1804,6 +1804,7 @@ void Sim::Tick() {
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   g_prof.Lap(10);
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
+  coordsPending = true;
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
   // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
   // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the
@@ -2084,6 +2085,7 @@ void Sim::Tick() {
   }
   KillCleanupTick(*this);
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
+  coordsPending = false;
   // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
   // previous, is zero from here on; seen in the original's per-beat shell log)
   for (Projectile* p : projectiles)

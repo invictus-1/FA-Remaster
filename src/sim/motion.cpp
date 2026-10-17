@@ -752,6 +752,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
 // AbortMove 0x5a3750 (land: SetSpeedThroughGoal(0) + MakeIdle -> SetWaypoints(0, 0): a brake spline).
 void MotionStop(Unit* u) {
   UnitMotion& m = u->motion;
+  ++m.stopCount;
   Sim& sim = *Sim::From(u->luaState());
   // MOHO64_DEBUG_STOP=<unit id> (or -2: every unit): each abort of a unit's move, with the calling frames
   static const long dbgStop = getenv("MOHO64_DEBUG_STOP") ? atol(getenv("MOHO64_DEBUG_STOP")) : -1;
@@ -1272,7 +1273,17 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     acc *= 2;
     brake *= 2;
   }
-  Vec3 F = Rotate(u->orientation, Vec3{0, 0, 1});
+  // CAiPathSpline::Update 0x5b26c0 asks the unit for its orientation and position (vt+0x18 0x5b270d, vt+0x14
+  // 0x5b278e): the entity's committed transform, which this beat's step only replaces in Entity::AdvanceCoords
+  // (step 13). A unit stopped after its own turn of the motion loop and before step 13 brakes from where the beat
+  // found it (its velocity is the new one, vt+0x3c); one stopped by an order of the command stream, between beats,
+  // from where it is (Skirmish 680, army 7's 0x700005).
+  // (Seen with the probe: Skirmish 2949, engineer 0x2f stopped by IssueClearCommands from M28's death handler of
+  // 0x57, which the motion loop tears down after 0x2f's step: Update(3) runs with the unit at 734.4062, the beat's
+  // start, and 0x2f's 2950 step lands on that brake's second point, 734.1437. Ours braked from 734.2187.)
+  const bool stepped = sim.coordsPending && u->lastPosTick == sim.tick();
+  const Quat& q0 = stepped ? u->lastOrientation : u->orientation;
+  Vec3 F = Rotate(q0, Vec3{0, 0, 1});
   m.brakeDir = F;
   const Vec3& lm = UnitVelocity(u);
   float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
@@ -1283,7 +1294,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   float fxz = std::sqrt(F.x * F.x + F.z * F.z);
   float dfx = fxz > 0 ? F.x / fxz : m.fx, dfz = fxz > 0 ? F.z / fxz : m.fz;
   Gen g;
-  g.p = u->position;
+  g.p = stepped ? u->lastPosition : u->position;
   g.vel = Vec3{V.x, 0, V.z};
   // Every brake point carries dir = F (CAiPathSpline::Update: spline+0x258 too), so the batch that CONTINUES
   // after the stop (PSM's used-up rule, Generate with fresh = 0) starts from the hull's forward axis as it lay

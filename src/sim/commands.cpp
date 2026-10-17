@@ -1374,8 +1374,14 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // ours, still Moving at the abort, lost the right of way and 0x600024 braked.
   if (moveAsleep) SetMoving(u, false);
   if (loadMove) MotionStop(u);  // (the child move first)
+  // The abort below stands for the head task's own (a Move task's dtor). When the teardown has made one already (a
+  // repair's or reclaim's walking child: CUnitMoveTask::~CUnitMoveTask 0x618886 -> AbortMove), there is no second:
+  // the probe saw one AbortMove -> NavigatorMakeIdle -> SetWaypoints(0, 0) -> Update(3) chain under
+  // IssueClearCommands (0x6f19eb) for Skirmish 2949's engineer 0x2f, cleared on its Repair.
+  const uint32_t stops = u->motion.stopCount;
   ForgetUnitCommands(u);
-  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf) MotionStop(u);
+  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && u->motion.stopCount == stops)
+    MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
   AttackerStop(sim, u);

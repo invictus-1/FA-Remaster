@@ -394,6 +394,9 @@ class Sim {
   int commandSource = 0xff;           // sim+0x92c, 0xff = none
   int pauseOwner = -1;                // sim+0x8e0: the source that paused, -1 = running
   bool singleStep = false;            // sim+0x8e4
+  // From the entity stage to step 13 (Entity::AdvanceCoords): a unit that has had its turn of the motion loop
+  // holds its new transform as pending only; its committed one is lastPosition / lastOrientation.
+  bool coordsPending = false;
   bool endGame = false;               // sim+0x8dc (EndGame message)
   bool frozen = false;                // sim+0x8dd (= endGame after the next Sync): beats do nothing
   bool Paused() const { return frozen || (pauseOwner != -1 && !singleStep); }
