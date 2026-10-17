@@ -939,6 +939,31 @@ GetAssistingUnitsList lists pods by their creator, not assisting units. Used: Ge
 GetAssistingUnitsList as read, SelectUnits' TRANSPORTATION parent, and the full IsSelectable for the scripts'
 SelectUnits / AddSelectUnits (user_units.cpp); checks in ui/tests/dock.lua.
 
+### 37. Each unit's weapons as the interface sees them (for UserUnit:CanAttackTarget)
+From the interface chat, 2026-10-16. Not blocking, but it unblocks three things: UserUnit:CanAttackTarget
+(today a stub that always says false), GetValidAttackingUnits, and the right click's rule "an enemy under
+the cursor that no selected unit can hit gives the attack-invalid cursor and no order" (GetRightMouseButtonAction
+0x81ec00, step 4). My helper read the original (notes: my scratchpad helper_attack\, dis_*.txt):
+- The user side's weapon list is SYNCED from the sim, not built from blueprints: SSTIUnitVariableData+0xF8, a
+  vector of UnitWeaponInfo (0x98 bytes) filled by Unit::Sync 0x6abcc0 when the unit's dirty byte +0x68E is set
+  (CreateWeapon, SetFireTargetLayerCaps, ChangeMinRadius / ChangeMaxRadius and the category setters set it); one
+  per weapon in blueprint order, DummyWeapon left out (Unit::Unit 0x6a5fb6).
+- Per weapon: +0x00 the TargetRestrictDisallow set and +0x28 the TargetRestrictOnlyAllow set (as parsed at the
+  weapon's creation, 0x6d4654 / 0x6d46d3); +0x50 the CURRENT fire-target layer mask (weapon+0x148: only
+  UnitWeapon:SetFireTargetLayerCaps writes it, from the scripts' SetValidTargetsForCurrentLayer; 0 until then);
+  +0x54 / +0x58 min / max radius (the ChangeMin/MaxRadius override when >= 0, else MinRadius / MaxRadius).
+- The test (CanAttackTarget 0x8c0d30) is per weapon: (layerMask & target's current layer) != 0, the target's
+  blueprint not in the disallow set, and in the only-allow set when that is not empty; then range for an
+  immobile shooter (min <= 2D distance <= max).
+Your UnitWeapon already has all of it (units.h: layerCaps, disallow, onlyAllow, ovMinRadius / ovMaxRadius over the
+blueprint's). Could UnitView carry, per unit, its weapons in blueprint order (DummyWeapon left out): layerCaps,
+the effective min and max radius, and the two category sets, plus the unit blueprint's own category index (so
+that I can test a target against the SIM's sets: the interface state's blueprint indices may differ)? The sets
+are the same for every unit of a blueprint unless a script changes them, so a shared, deduplicated table with
+an index per weapon would keep the per-beat copy small; your choice of form. The target's current layer I
+already have (UnitView::layer), and the shooter's auto-surface mode too (UnitStateView, or UnitView if cheap:
+the original's shortcut reads it for every selected unit each frame).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
