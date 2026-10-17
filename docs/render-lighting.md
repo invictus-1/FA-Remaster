@@ -323,7 +323,7 @@ where it changes the look, off by default, measured like the rest. In the order 
    ones in about 4 s. So: compile them on several cores at once, and give a release a cache made beforehand
    (read beside the user's own), so a player's very first start is quick. And look at the rest of the opening
    (about 5 s for a map with the viewer, most of it not shaders).
-2. **Lightning inside the clouds (done, first version: step 4 above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
+2. **Lightning inside the clouds (done, first version: in the clouds' section above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
    through their depth (clouds.cpp's march takes the flash as a light at the bolt).
 3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader
    under the water line, by depth and the sun's way), and the beach darker and shinier in a band above the water
