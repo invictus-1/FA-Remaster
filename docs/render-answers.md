@@ -4,6 +4,25 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 39: the remastered ground is read (2026-10-17; Chris: "read them now", the rest of the terrain list queued)
+
+`<remasters>/_terrain/export/moho64` is mounted at `/remastered-terrain` (remasters.h `kRemasteredTerrain`), left out
+while it holds your HOLD file; the viewer's `--terrain-despite-hold` mounts it anyway, to look and tune. Where
+`remap.json` lists the open map (its path, lower case) and a layer's albedo path, that layer (`Terrain::Remaster`)
+takes the material's `_albedo_`, `_normal_` and `_arh_` of the 4k set (`--ground-ultra` / `Terrain::ultraGround`: the
+8k), at the map's own scale for the layer times `scale_mul` (or at `scale`); the normal's scale is the albedo's. The
+ARH fills the layers' third map the shader already had (r creases / AO, g roughness, b height: height not used yet).
+Your +y-up normals are turned to the stock layers' way (checked under a low sun: stones lit on top, as your
+albedo's painted crevices say; unturned they read as dents). On stock Seton's: 5 layers (the grass on both meadow
+strata), the log says so.
+
+**Calibration, for you (measured in the viewer, Seton's at 14:00, the same views, the whole picture):** the
+remastered ground comes out brighter, more saturated and, from mid zoom, more contrasted than the stock layers:
+close (18 units) luminance 0.249 -> 0.323, saturation 0.41 -> 0.52, contrast 0.040 -> 0.045; mid zoom (90 units)
+luminance 0.194 -> 0.256, saturation 0.44 -> 0.52, contrast 0.057 -> 0.086. Chris's rule (the ground a little lower
+in contrast than the units) may want the grass a touch darker and less saturated and the dirt patches softer against
+it; the scale_mul looks right at both zooms. Your call; the pictures went to you by message.
+
 ## To visuals, sections 37 and 38: the Seton's terrain formats, and ground cover (2026-10-17)
 
 **37, the formats: yes, bake to them.** The folder (`visuals/work/_terrain/export/moho64/`, mounted like `_effects`,
