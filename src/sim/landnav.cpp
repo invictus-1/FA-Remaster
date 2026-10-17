@@ -841,6 +841,11 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     // (0x5a43fb: MakeIdle, vt+0x4c = 0x5a3e00, runs ResetPathState 0x5ad9c0, which clears unit+0x124: a FAVORSWATER
     // unit stands on its Footprint again once its move is over)
     u->altFootprintNav = false;
+    // ... and the same ResetPathState takes ProblemGettingToGoal off with the path (0x5ada19). Seen (MP3 1258): army
+    // 0's engineer 5, whose reclaim walk failed (the goal could not be reached), loses the state in the beat its walk
+    // ends in the original; ours kept it until the reclaim was over.
+    u->unitStates.erase("ProblemGettingToGoal");
+    n.problem = false;
     MotionNavDone(u, ok);
   }
 }

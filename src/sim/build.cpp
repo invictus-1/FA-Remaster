@@ -482,6 +482,48 @@ void MoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   u->unitStates.insert("Moving");
 }
 
+// A task's walk (NewMoveTask 0x6190a0 -> CUnitMoveTask ctor 0x6180e0). The ctor asks 0x618a00 (read): not
+// TransportLoading (8), Teleporting (19) or Guarding (4), and the unit's command queue (unit+0x4b4) holds exactly one
+// command (0x6edc20: no second), made by a factory (cmd+0x142). Then it does not walk to the goal it was given: it
+// takes the HEAD COMMAND's target position (0x5e2a90 on cmd+0x11c), x and z rounded (fistp), puts it through
+// PrepareMove (0x618521: spacing 0, no exclusion rect), hands the navigator the footprint cell there (0x618d44-like
+// SNavGoal, vt+8) and reserves the footprint rect there in the o-grid (0x618622 -> ReserveOgridRect 0x6ab6f0, +0x92).
+// So a factory-made engineer still on its rally patrol walks to a free spot by the PATROL POINT, not to the prop it
+// was sent to reclaim (the reclaim then works from where it stops: patrolling, its range is GuardScanRadius). Seen
+// in the oracle: MP3 556, army 2's engineer 0x200002 goes to (70.5, 446.5), the free spot two cells from its patrol
+// point (69, 448) beside the factory's reserved skirt, instead of (69.5, 452.5) by the rock; the MP2 probe at 720
+// shows the ctor's PrepareMove called with the patrol point while the reclaim's goal was another cell.
+void MoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) {
+  const bool override = !u->unitStates.count("TransportLoading") && !u->unitStates.count("Teleporting") &&
+                        !u->unitStates.count("Guarding") && u->commands.size() == 1 && u->commands.front() &&
+                        u->commands.front()->factoryIssued && u->motion.bp;
+  if (!override) {
+    TaskMoveToward(sim, u, goal);
+    AirSpeedThroughEvent(sim, u);  // the ctor's end (0x6186a1): Unit::UpdateSpeedThroughStatus 0x6ac940
+    return;
+  }
+  const UnitCommand& c = *u->commands.front();
+  const Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  const Vec3 tp = te ? te->position : c.pos;
+  Vec3 p{static_cast<float>(RoundEven(tp.x)), tp.y, static_cast<float>(RoundEven(tp.z))};
+  if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f) {  // (0x6184ce: a zero position keeps the goal it was given)
+    TaskMoveToward(sim, u, goal);
+    AirSpeedThroughEvent(sim, u);
+    return;
+  }
+  const float none[4] = {0, 0, 0, 0};
+  if (u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+  else GroundPrepareMove(sim, u, &p, none, 0);
+  const NamedFootprint& fp = Footprint(*u->blueprint);
+  const int x0 = RoundEven(p.x - fp.sizeX * 0.5f), z0 = RoundEven(p.z - fp.sizeZ * 0.5f);
+  TaskMoveToward(sim, u, Vec3{x0 + fp.sizeX * 0.5f, p.y, z0 + fp.sizeZ * 0.5f});
+  const int r[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
+  GroundReserveRect(sim, u, r);
+  // and at its end (0x6186a1) Unit::UpdateSpeedThroughStatus 0x6ac940: a patrol with points queued behind it walks
+  // with speed-through on (head and next move-like). Seen (MP3 1318): army 0's engineer 2 on a three-point patrol.
+  AirSpeedThroughEvent(sim, u);
+}
+
 void StopMoving(Unit* u) {
   if (u->motion.hasGoal) MotionStop(u);
   u->unitStates.erase("Moving");
@@ -732,7 +774,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         // (no o-grid reservation: CUnitReclaimTask 0x61f000 reserves nothing, it is not among ReserveOgridRect's
         // callers. Seen in the Skirmish oracle's navigator lines: a second engineer is given the very cell the
         // first one is still walking to, 40 beats after the first took it.)
-        MoveToward(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});
+        MoveTaskWalk(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});  // NewMoveTask 0x61f4c0
         c.moving = true;
       }
       c.state = 1;
@@ -745,7 +787,15 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         StopMoving(u);
         GroundFreeRect(sim, u);
       }
-      if (gap > maxBD) return kTaskFailed;
+      {
+        // 0x61f4f4..0x61f54a: the range is MaxBuildDistance (bp+0x564), and for a builder in state Patrolling (12) the
+        // larger of that and AI.GuardScanRadius (bp+0x460). State 0 moves by MaxBuildDistance alone, so a patrolling
+        // engineer whose walk to its reclaim spot ends short (the spot cannot be reached) still reclaims from where it
+        // stopped. (Read; seen in the MP3 oracle: army 2's engineer 0x200002 reclaims a rock 7.5 away at 576.)
+        float range = maxBD;
+        if (u->unitStates.count("Patrolling")) range = std::max(GuardScanRadiusOf(u), maxBD);
+        if (gap > range) return kTaskFailed;
+      }
       if (!u->builderArms.empty()) SetArmAimTarget(sim, u, tp);
       if (!c.reclaimStarted) {
         c.reclaimStarted = true;
@@ -1100,7 +1150,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           int z0 = static_cast<int>(std::nearbyint(a.z - ufp.sizeZ * 0.5f));
           int rr[4] = {x0, z0, x0 + ufp.sizeX, z0 + ufp.sizeZ};
           GroundReserveRect(sim, u, rr);
-          MoveToward(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});
+          MoveTaskWalk(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a.y, z0 + ufp.sizeZ * 0.5f});  // NewMoveTask 0x5f7763
           t.moving = true;
         }
       }
@@ -2109,7 +2159,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           int z0 = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
           int rr[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
           GroundReserveRect(sim, u, rr);
-          TaskMoveToward(sim, u, Vec3{x0 + fp.sizeX * 0.5f, a.y, z0 + fp.sizeZ * 0.5f});
+          MoveTaskWalk(sim, u, Vec3{x0 + fp.sizeX * 0.5f, a.y, z0 + fp.sizeZ * 0.5f});  // NewMoveTask 0x5f9829
           u->unitStates.insert("Moving");
           t.moving = true;
           return kTaskRunning;
@@ -2294,7 +2344,7 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         int z0 = static_cast<int>(std::nearbyint(a.z - uf.sizeZ * 0.5f));
         int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
         GroundReserveRect(sim, u, rr);
-        TaskMoveToward(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});
+        MoveTaskWalk(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});  // NewMoveTask 0x60477d
         u->unitStates.insert("Moving");
         t.moving = true;
         return kTaskRunning;  // the move child runs; this task again when it ends
@@ -2475,7 +2525,7 @@ int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         int z0 = static_cast<int>(std::nearbyint(a.z - uf.sizeZ * 0.5f));
         int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
         GroundReserveRect(sim, u, rr);
-        TaskMoveToward(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});
+        MoveTaskWalk(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});  // NewMoveTask 0x5fb809
         u->unitStates.insert("Moving");
         t.moving = true;
       }

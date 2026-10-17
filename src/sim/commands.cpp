@@ -145,6 +145,33 @@ bool SpeedThroughMoveLike(CommandType t) {
   }
 }
 
+void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/);
+
+}  // namespace
+
+// CUnitMoveTask::OnEvent 0x618c40 (read): a move task listens to its command, and on any event of it (CUnitCommand::
+// SetTarget 0x6e8820 broadcasts event 0 through 0x6e94a0 after storing the new target) it hands its navigator the
+// command's position again: SNavGoal(CUnitCommand::GetPosition 0x6e8a30, the unit's footprint cell at the target)
+// through the navigator's SetGoal (vt+8). The PrepareMove variant (task+0x95, set by the ctor for a factory's rally
+// Move) puts that cell through PrepareMove again; RunPathSearch below re-asks the ctor's question instead (inferred
+// to come out the same: no replay retargets a rally Move). Only the head's task exists, so a queued command just
+// keeps its new target for later. Seen (MP3 758): a player drags the waypoint of army 0's commander's running Move
+// (SetCommandTarget at beat 757); the original's navigator plans again from the commander's place (its target its
+// own cell while it thinks, speed-through 0, a new first waypoint at 759); ours drove on to the old path's waypoint.
+// The listeners are told in the command's listener order; ours goes by unit id (inferred: the same for one unit).
+void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::Move || c.form) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* u : holders) {
+    if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
+    if (u->headState != kRunning || u->task || !u->motion.bp || !u->motion.bp->mobile()) continue;
+    RunPathSearch(sim, u, true);
+  }
+}
+
+namespace {
+
 void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
   UnitCommand& c = *u->commands.front();
