@@ -3,7 +3,7 @@
 -- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
 -- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
--- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 4200.
+-- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 5000.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -138,5 +138,35 @@ ForkThread(function()
     rightClick(view, gp.x, gp.y)
     check("a right click: the engineer is told to capture it", lastIssued(), "Capture")
     LOG("TEST note: the engineer's order now: " .. head(engineer))
+    -- a unit made by a factory joins the factory's control groups (UserUnit::UpdateUnitData 0x8c0750 ->
+    -- AddToSelectionSet 0x8bff30 -> selection.lua AddUnitToSelectionSet), kept there by FAF's option "Add to
+    -- factory control group" (off unless chosen; on here)
+    local Prefs = import("/lua/user/prefs.lua")
+    local options = Prefs.GetFromCurrentProfile('options') or {}
+    options.add_to_factory_control_group = 'On'
+    Prefs.SetToCurrentProfile('options', options)
+    local fpos = {spot[1] + 30, spot[2], spot[3] - 10}
+    spawn("ueb0101", fpos)
+    WaitSeconds(2)
+    local factory = made("ueb0101", "FACTORY")[1]
+    check("a land factory is made", factory ~= nil, true)
+    if factory then
+        import("/lua/ui/game/selection.lua").AddSelectionSet("7", {factory})
+        check("it is in control group 7", table.concat(factory:GetSelectionSets() or {}, " "), "7")
+        SelectUnits({factory})
+        IssueBlueprintCommand("UNITCOMMAND_BuildFactory", "uel0201", 1)
+        SelectUnits(nil)
+        -- the tank on its pad (the factory's focus, still being built: it joins at once)
+        local built, waited2 = nil, 0
+        while not built and waited2 < 20 do
+            WaitSeconds(0.5)
+            waited2 = waited2 + 0.5
+            built = factory:GetFocus()
+        end
+        LOG("TEST note: the factory's tank begun after " .. waited2 .. " s; the option reads " ..
+            tostring(import("/lua/user/prefs.lua").GetFromCurrentProfile('options.add_to_factory_control_group')))
+        check("the tank it builds is in group 7 too", built and table.concat(built:GetSelectionSets() or {}, " ") or "no tank", "7")
+        check("and its creator is the factory", built and built:GetCreator() == factory, true)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

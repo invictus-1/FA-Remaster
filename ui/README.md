@@ -760,7 +760,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `UI_ApplySelectionSet <name>` (FA exe 0x834a80, 0x834c10; Ctrl-1 and 1 in the default key map)
   pass the name on, as a string, to the game's selection script, which keeps the sets; the
   units' own `AddSelectionSet` / `RemoveSelectionSet` / `HasSelectionSet` / `GetSelectionSets`
-  were there already. `ExitApplication` ends the program (the main menu's Exit, the game menu's
+  were there already. A unit a factory makes joins the factory's groups as in the original
+  (UserUnit::UpdateUnitData 0x8c0750 -> AddToSelectionSet 0x8bff30, read 2026-10-17): when a unit's
+  creator changes and is a FACTORY, each of the factory's sets is added to the unit and the script
+  hears `selection.AddUnitToSelectionSet(name, unit)`, which with FAF keeps it only under the player's
+  option "Add to factory control group" (off as FAF's default; a building always, so an upgrade keeps
+  its group). Test: `ui/tests/transport.lua`. `ExitApplication` ends the program (the main menu's Exit, the game menu's
   exit to Windows): the host's loops stop after the frame.
 - Leaving a game and starting it over. `ExitGame()` and `RestartSession()` are requests to the
   host, carried out between two frames (`app/main.cpp`): the game's interface state goes, then

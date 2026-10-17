@@ -3126,19 +3126,51 @@ void RefreshUserUnits(lua_State* L) {
   // (A unit whose id went to another unit is kept aside until the selection has let go of it: the
   // selection holds the units themselves.)
   std::vector<std::unique_ptr<UserUnit>> retired;
+  std::vector<UserUnit*> newCreator;  // (units whose creator changed: UserUnit::AddToSelectionSet below)
   for (const UnitView& v : views) {
     auto& slot = store.units[v.id];
     if (slot && slot->view.blueprint != v.blueprint) {  // the id went to another unit
       slot->gone = true;
       retired.push_back(std::move(slot));
     }
+    uint32_t oldCreator = 0xffffffffu;
     if (!slot) {
       slot = std::make_unique<UserUnit>();
       slot->view = v;
       MakeTable(L, slot.get());
+    } else {
+      oldCreator = slot->view.creator;
     }
     slot->view = v;
     slot->gone = false;
+    if (v.creator != oldCreator && v.creator != 0xffffffffu) newCreator.push_back(slot.get());
+  }
+  // A unit made by a factory joins the factory's control groups (FA exe UserUnit::UpdateUnitData 0x8c0750: when the
+  // unit's creator changes and the creator is a FACTORY, UserUnit::AddToSelectionSet 0x8bff30): each of the
+  // factory's selection sets is added to the unit, then the game's script hears of it,
+  // /lua/ui/game/selection.lua AddUnitToSelectionSet(name, unit), which keeps it or takes it out again by the
+  // player's options (FAF: "add to factory control group"; buildings always, so an upgrade keeps its group).
+  for (UserUnit* u : newCreator) {
+    auto f = store.units.find(u->view.creator);
+    if (f == store.units.end() || f->second->gone || !InCategory(L, f->second.get(), "FACTORY")) continue;
+    const std::vector<std::string> sets = f->second->selectionSets;
+    for (const std::string& name : sets) {
+      if (std::find(u->selectionSets.begin(), u->selectionSets.end(), name) == u->selectionSets.end()) u->selectionSets.push_back(name);
+      const int top = lua_gettop(L);
+      lua_pushcfunction(L, ScriptTraceback);
+      lua_getglobal(L, "import");
+      lua_pushstring(L, "/lua/ui/game/selection.lua");
+      if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+        lua_pushstring(L, "AddUnitToSelectionSet");
+        lua_gettable(L, -2);
+        if (lua_isfunction(L, -1)) {
+          lua_pushstring(L, name.c_str());
+          PushObject(L, u);
+          if (lua_pcall(L, 2, 0, top + 1) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+        }
+      }
+      lua_settop(L, top);
+    }
   }
   // Units that are gone leave the selection (the script hears of it) and then the store.
   std::vector<UserUnit*> kept;
