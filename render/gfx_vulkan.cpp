@@ -9,7 +9,9 @@
 // - Bindings as Direct3D 12's root signature has them: set 0 holds t0-t31 (images, at 16-47), t0-t1 of
 //   space1 (storage buffers, 48-49) and the six fixed samplers (64-69), one set for each combination used
 //   in a frame (cached, as Direct3D 12's descriptor tables); set 1 holds b0-b3 (uniform buffers at 0-3),
-//   dynamic, pointing into the frame's ring of constants, so a draw only changes four offsets.
+//   dynamic, pointing into the frame's ring of constants, so a draw only changes four offsets. A compute
+//   shader's storage images (u0-u7) are at 80-87 of set 0; a storage target is in the general layout from
+//   a dispatch that writes it until a dispatch reads it or a pass begins.
 // - Memory comes from large blocks shared out (a card allows only some thousands of allocations).
 // - Uploads (a new texture's or buffer's contents) gather in a batch sent ahead of the frame, as in
 //   Direct3D 12's backend; the frame's commands begin with a barrier that waits for them.
@@ -143,6 +145,7 @@ namespace {
   X(vkCreateShaderModule)               \
   X(vkDestroyShaderModule)              \
   X(vkCreateGraphicsPipelines)          \
+  X(vkCreateComputePipelines)           \
   X(vkDestroyPipeline)                  \
   X(vkCreateQueryPool)                  \
   X(vkDestroyQueryPool)                 \
@@ -160,6 +163,7 @@ namespace {
   X(vkCmdBindIndexBuffer)               \
   X(vkCmdDraw)                          \
   X(vkCmdDrawIndexed)                   \
+  X(vkCmdDispatch)                      \
   X(vkCmdBlitImage)                     \
   X(vkCmdCopyImageToBuffer)             \
   X(vkCmdCopyBufferToImage)             \
@@ -219,7 +223,10 @@ const char* Result(VkResult r) {
 constexpr int kFrames = 3;
 constexpr int kTexSlots = 32;
 constexpr int kCbSlots = 4;
-constexpr uint32_t kTexBinding = 16, kBufferBinding = 48, kSamplerBinding = 64;
+constexpr uint32_t kTexBinding = 16, kBufferBinding = 48, kSamplerBinding = 64, kStorageBinding = 80;
+constexpr int kStorageSlots = 8;  // u0-u7
+// (every set's bindings are seen by the drawing stages and by compute shaders alike)
+constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
 constexpr VkFormat kBackFormat = VK_FORMAT_R8G8B8A8_UNORM;  // our own picture of the window (as Direct3D 12's)
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr VkDeviceSize kConstantRing = 32u << 20;  // a frame's constants (grown when a frame needs more)
@@ -237,6 +244,7 @@ VkFormat ToVk(Format f) {
     case Format::BGRA8_sRGB: return VK_FORMAT_B8G8R8A8_SRGB;
     case Format::R16: return VK_FORMAT_R16_UNORM;
     case Format::R16F: return VK_FORMAT_R16_SFLOAT;
+    case Format::RG16F: return VK_FORMAT_R16G16_SFLOAT;
     case Format::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::R32F: return VK_FORMAT_R32_SFLOAT;
     case Format::D32: return VK_FORMAT_D32_SFLOAT;
@@ -388,10 +396,14 @@ struct TextureRec {
   std::vector<VkImageView> layerViews;    // depth arrays: each layer as an attachment
   VkImageView attachView = VK_NULL_HANDLE;  // colour targets and single depth targets: as an attachment
   VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  bool storage = false;                   // a storage target (written by compute shaders)
+  int slices = 1;                         // its slices, when a volume
+  std::vector<VkImageView> storageViews;  // storage targets: each level as compute shaders write it
 };
 
 struct PipelineRec {
   bool used = false;
+  bool compute = false;
   VkPipeline pipeline = VK_NULL_HANDLE;
   const void* layout = nullptr;  // VulkanDevice::Layout
   bool depth = true;  // drawn with a depth attachment (Vulkan wants the pass to match)
@@ -428,6 +440,7 @@ class VulkanDevice final : public Device {
   void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) override;
   Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
+  Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -440,6 +453,8 @@ class VulkanDevice final : public Device {
   void SetVertexBuffer(Buffer buffer) override;
   void SetIndexBuffer(Buffer buffer) override;
   void SetShaderBuffer(Buffer buffer, int slot) override;
+  void SetStorage(int slot, Texture texture, int mip) override;
+  void Dispatch(uint32_t x, uint32_t y, uint32_t z) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
@@ -465,6 +480,7 @@ class VulkanDevice final : public Device {
   void EndRendering();
   void StartRendering(bool withDepth);
   void ReleasePassTargets();
+  void ReleaseGeneral();  // the storage targets dispatches wrote, readable again (outside a pass)
   bool PrepareDraw();
   Span Allocate(VkDeviceSize size, VkDeviceSize align);
   // uploads
@@ -522,7 +538,7 @@ class VulkanDevice final : public Device {
   std::vector<std::unique_ptr<Layout>> layouts_;
   const Layout* LayoutFor(const std::vector<SpirvImage>& images);
   const Layout* layout_ = nullptr;  // the bound pipeline's
-  TextureRec dummy_[4];  // what an empty texture slot shows when the card has no null descriptors (by SpirvImage::Kind)
+  TextureRec dummy_[5];  // what an empty texture slot shows when the card has no null descriptors (by SpirvImage::Kind, to Volume)
   VkBuffer dummyBuffer_ = VK_NULL_HANDLE;  // and an empty shader buffer slot
 
   struct Frame {
@@ -571,6 +587,13 @@ class VulkanDevice final : public Device {
   std::vector<uint8_t> constants_[kCbSlots];  // what each slot was last given (copied on when a page is full)
   bool setDirty_ = true;
   VkPipeline pipeline_ = VK_NULL_HANDLE;
+  // compute: the pipeline set last and its layout, the storage targets bound (texture, level), those in
+  // the general layout, and whether the last thing recorded was a dispatch (the next waits for its writes)
+  VkPipeline computePipeline_ = VK_NULL_HANDLE;
+  const Layout* computeLayout_ = nullptr;
+  std::pair<uint32_t, int> boundStorage_[kStorageSlots] = {};
+  std::vector<uint32_t> general_;
+  bool dispatched_ = false;
 
   std::vector<BufferRec> buffers_;     // id = index + 1
   std::vector<TextureRec> textures_;   // id = index; 0 is none
@@ -631,6 +654,7 @@ VulkanDevice::~VulkanDevice() {
     if (t.view) vkDestroyImageView(device_, t.view, nullptr);
     if (t.attachView) vkDestroyImageView(device_, t.attachView, nullptr);
     for (VkImageView v : t.layerViews) vkDestroyImageView(device_, v, nullptr);
+    for (VkImageView v : t.storageViews) vkDestroyImageView(device_, v, nullptr);
     if (t.image) vkDestroyImage(device_, t.image, nullptr);
   }
   for (PipelineRec& p : pipelines_)
@@ -895,6 +919,11 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   features.pNext = core13 ? static_cast<void*>(&f13) : static_cast<void*>(&dynamicRendering);
   features.features.samplerAnisotropy = have.features.samplerAnisotropy;
   features.features.textureCompressionBC = have.features.textureCompressionBC;
+  // (compute shaders write storage images declared without a format, some in the extended formats: R16F, RG16F)
+  features.features.shaderStorageImageExtendedFormats = have.features.shaderStorageImageExtendedFormats;
+  features.features.shaderStorageImageReadWithoutFormat = have.features.shaderStorageImageReadWithoutFormat;
+  features.features.shaderStorageImageWriteWithoutFormat = have.features.shaderStorageImageWriteWithoutFormat;
+  if (!have.features.shaderStorageImageWriteWithoutFormat) fprintf(stderr, "render: Vulkan: this card's compute shaders cannot write images without a format\n");
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.pNext = &features;
   dci.queueCreateInfoCount = 1;
@@ -942,7 +971,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   }
   {  // the constants' set layout (the textures' come with the pipelines, LayoutFor)
     std::vector<VkDescriptorSetLayoutBinding> c;
-    for (uint32_t i = 0; i < kCbSlots; ++i) c.push_back({i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
+    for (uint32_t i = 0; i < kCbSlots; ++i) c.push_back({i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, kStages, nullptr});
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = static_cast<uint32_t>(c.size());
     li.pBindings = c.data();
@@ -965,13 +994,14 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     if ((r = vkCreateSemaphore(device_, &smi, nullptr, &f.acquired)) != VK_SUCCESS) return fail("a semaphore", r);
     // the frame's descriptor sets (all let go together each time the frame begins)
     // (the fixed samplers count against the pool too)
-    VkDescriptorPoolSize sizes[4] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192 * kTexSlots},
+    VkDescriptorPoolSize sizes[5] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192 * kTexSlots},
                                      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8192 * 2},
                                      {VK_DESCRIPTOR_TYPE_SAMPLER, 8192 * 6},
-                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 64 * kCbSlots}};
+                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 64 * kCbSlots},
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 * kStorageSlots}};  // (a set for each dispatch)
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    dpi.maxSets = 8192 + 64;
-    dpi.poolSizeCount = 4;
+    dpi.maxSets = 8192 + 64 + 1024;
+    dpi.poolSizeCount = 5;
     dpi.pPoolSizes = sizes;
     if ((r = vkCreateDescriptorPool(device_, &dpi, nullptr, &f.descriptors)) != VK_SUCCESS) return fail("a descriptor pool", r);
   }
@@ -1019,6 +1049,12 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     md.format = Format::R32F;
     md.samples = 4;
     if (TextureRec* rec = Find(CreateTarget(md))) dummy_[SpirvImage::MultiSample] = *rec;
+    TargetDesc vd;  // (a volume of two slices: one would not be a volume)
+    vd.width = vd.height = 1;
+    vd.depth = 2;
+    vd.format = Format::RGBA8;
+    vd.storage = true;
+    if (TextureRec* rec = Find(CreateTarget(vd))) dummy_[SpirvImage::Volume] = *rec;
     std::vector<uint8_t> zeros(256, 0);
     BufferDesc bd;
     bd.kind = BufferKind::Shader;
@@ -1445,7 +1481,7 @@ Texture VulkanDevice::CreateTexture(const TextureDesc& desc) {
 
 void VulkanDevice::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
   TextureRec* rec = Find(texture);
-  if (!rec || rec->target || !inFrame_ || width <= 0 || height <= 0 || !data || rec->mips != 1 || rec->layers != 1 || x < 0 || y < 0 ||
+  if (!rec || rec->target || rec->storage || !inFrame_ || width <= 0 || height <= 0 || !data || rec->mips != 1 || rec->layers != 1 || x < 0 || y < 0 ||
       x + width > rec->width || y + height > rec->height || rec->pixelBytes <= 0)
     return;
   const size_t row = static_cast<size_t>(width) * static_cast<size_t>(rec->pixelBytes);
@@ -1468,6 +1504,70 @@ void VulkanDevice::UpdateTexture(Texture texture, int x, int y, int width, int h
 }
 
 Texture VulkanDevice::CreateTarget(const TargetDesc& desc) {
+  if (desc.storage) {  // written by compute shaders: never an attachment; a storage view for each level
+    const VkFormat format = ToVk(desc.format);
+    const bool volume = desc.depth > 1;
+    int most = 1;  // (the levels it can have)
+    for (int s = std::max({desc.width, desc.height, volume ? desc.depth : 1}); s > 1; s >>= 1) ++most;
+    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
+                          desc.format == Format::RGBA16F || desc.format == Format::R32F;
+    VkFormatProperties fp{};
+    if (writable) vkGetPhysicalDeviceFormatProperties(physical_, format, &fp);
+    if (!writable || !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) || desc.width <= 0 || desc.height <= 0 || desc.depth <= 0 ||
+        desc.layers != 1 || desc.samples > 1 || desc.mips <= 0 || desc.mips > most) {
+      fprintf(stderr, "render: Vulkan: a storage target needs RGBA8, R16F, RG16F, RGBA16F or R32F (as the card can write it), one layer, one sample, and levels it can have\n");
+      return {};
+    }
+    TextureRec rec;
+    rec.used = rec.storage = true;
+    rec.width = desc.width;
+    rec.height = desc.height;
+    rec.slices = desc.depth;
+    rec.mips = desc.mips;
+    rec.format = format;
+    VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ii.imageType = volume ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+    ii.format = format;
+    ii.extent = {static_cast<uint32_t>(desc.width), static_cast<uint32_t>(desc.height), static_cast<uint32_t>(volume ? desc.depth : 1)};
+    ii.mipLevels = static_cast<uint32_t>(desc.mips);
+    ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateImage(device_, &ii, nullptr, &rec.image) != VK_SUCCESS) return {};
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device_, rec.image, &req);
+    if (!memory_.Get(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &rec.memory)) {
+      vkDestroyImage(device_, rec.image, nullptr);
+      return {};
+    }
+    vkBindImageMemory(device_, rec.image, rec.memory.memory, rec.memory.offset);
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = rec.image;
+    vi.viewType = volume ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(desc.mips), 0, 1};
+    if (vkCreateImageView(device_, &vi, nullptr, &rec.view) != VK_SUCCESS) return {};
+    for (int mip = 0; mip < desc.mips; ++mip) {
+      vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(mip), 1, 0, 1};
+      VkImageView v;
+      if (vkCreateImageView(device_, &vi, nullptr, &v) != VK_SUCCESS) return {};
+      rec.storageViews.push_back(v);
+    }
+    // readable from the start, as every target
+    Barrier(UploadCommands(), rec.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+    rec.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    uint32_t index;
+    if (!freeTextures_.empty()) {
+      index = freeTextures_.back();
+      freeTextures_.pop_back();
+    } else {
+      index = static_cast<uint32_t>(textures_.size());
+      textures_.emplace_back();
+    }
+    textures_[index] = rec;
+    return {index};
+  }
   const bool depth = desc.format == Format::D32;
   const VkFormat format = ToVk(desc.format);
   const int samples = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? desc.samples : 1;
@@ -1560,6 +1660,10 @@ void VulkanDevice::Destroy(Texture texture) {
   g.views.push_back(rec->view);
   if (rec->attachView) g.views.push_back(rec->attachView);
   for (VkImageView v : rec->layerViews) g.views.push_back(v);
+  for (VkImageView v : rec->storageViews) g.views.push_back(v);
+  general_.erase(std::remove(general_.begin(), general_.end(), texture.id), general_.end());
+  for (auto& b : boundStorage_)
+    if (b.first == texture.id) b = {};
   g.images.push_back(rec->image);
   g.memory.push_back(rec->memory);
   for (uint32_t& t : boundTextures_)
@@ -1583,9 +1687,12 @@ const VulkanDevice::Layout* VulkanDevice::LayoutFor(const std::vector<SpirvImage
   for (const auto& l : layouts_)
     if (l->images == images) return l.get();
   std::vector<VkDescriptorSetLayoutBinding> b;
-  for (const auto& image : images) b.push_back({image.binding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, image.count, VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
-  for (uint32_t i = 0; i < 2; ++i) b.push_back({kBufferBinding + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
-  for (uint32_t i = 0; i < 6; ++i) b.push_back({kSamplerBinding + i, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_ALL_GRAPHICS, &samplers_[i]});
+  for (const auto& image : images) {
+    const bool storage = image.kind == SpirvImage::Storage || image.kind == SpirvImage::StorageVolume;
+    b.push_back({image.binding, storage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, image.count, kStages, nullptr});
+  }
+  for (uint32_t i = 0; i < 2; ++i) b.push_back({kBufferBinding + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kStages, nullptr});
+  for (uint32_t i = 0; i < 6; ++i) b.push_back({kSamplerBinding + i, VK_DESCRIPTOR_TYPE_SAMPLER, 1, kStages, &samplers_[i]});
   auto l = std::make_unique<Layout>();
   l->images = images;
   VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -1740,7 +1847,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
   }
   std::sort(images.begin(), images.end());
   for (const auto& image : images)
-    if (image.binding < kTexBinding || image.binding + image.count > kTexBinding + kTexSlots) {
+    if (image.binding < kTexBinding || image.binding + image.count > kTexBinding + kTexSlots || image.kind >= SpirvImage::Storage) {
       if (error) *error = std::string(desc.name) + ": a texture outside t0-t31";
       for (VkShaderModule m : modules)
         if (m) vkDestroyShaderModule(device_, m, nullptr);
@@ -1777,6 +1884,63 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
   return {index + 1};
 }
 
+Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error) {
+  SpirvShader cs;
+  std::string why;
+  if (!CompileSpirv(std::string(desc.source), desc.entry, "cs", shaderCache_, &cs, &why)) {
+    if (error) *error = std::string(desc.name) + " (" + desc.entry + "): " + why;
+    return {};
+  }
+  std::vector<SpirvImage> images = cs.images;
+  std::sort(images.begin(), images.end());
+  for (const auto& image : images) {
+    const bool storage = image.kind == SpirvImage::Storage || image.kind == SpirvImage::StorageVolume;
+    const uint32_t from = storage ? kStorageBinding : kTexBinding, slots = storage ? kStorageSlots : kTexSlots;
+    if (image.binding < from || image.binding + image.count > from + slots) {
+      if (error) *error = std::string(desc.name) + ": a texture outside t0-t31 or u0-u7";
+      return {};
+    }
+  }
+  const Layout* layout = LayoutFor(images);
+  if (!layout) {
+    if (error) *error = std::string(desc.name) + ": Vulkan made no pipeline layout";
+    return {};
+  }
+  VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+  mi.codeSize = cs.words.size() * 4;
+  mi.pCode = cs.words.data();
+  VkShaderModule module = VK_NULL_HANDLE;
+  if (vkCreateShaderModule(device_, &mi, nullptr, &module) != VK_SUCCESS) {
+    if (error) *error = std::string(desc.name) + ": Vulkan took no shader module";
+    return {};
+  }
+  VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+  ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+  ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  ci.stage.module = module;
+  ci.stage.pName = desc.entry;
+  ci.layout = layout->pipeline;
+  PipelineRec rec;
+  rec.used = rec.compute = true;
+  rec.layout = layout;
+  const VkResult r = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr, &rec.pipeline);
+  vkDestroyShaderModule(device_, module, nullptr);
+  if (r != VK_SUCCESS) {
+    if (error) *error = std::string(desc.name) + ": Vulkan made no compute pipeline: " + Result(r);
+    return {};
+  }
+  uint32_t index;
+  if (!freePipelines_.empty()) {
+    index = freePipelines_.back();
+    freePipelines_.pop_back();
+    pipelines_[index] = rec;
+  } else {
+    index = static_cast<uint32_t>(pipelines_.size());
+    pipelines_.push_back(rec);
+  }
+  return {index + 1};
+}
+
 // --- the frame ---
 
 void VulkanDevice::EndRendering() {
@@ -1789,6 +1953,13 @@ void VulkanDevice::ReleasePassTargets() {
   for (uint32_t id : {passColor_, passDepth_})
     if (id && id < textures_.size() && textures_[id].used) Transition(&textures_[id], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   passColor_ = passDepth_ = 0;
+}
+
+void VulkanDevice::ReleaseGeneral() {
+  dispatched_ = false;
+  for (uint32_t id : general_)
+    if (id < textures_.size() && textures_[id].used) Transition(&textures_[id], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  general_.clear();
 }
 
 void VulkanDevice::BeginFrame(const float clearColor[4]) {
@@ -1863,6 +2034,10 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   rendering_ = false;
   pipeline_ = VK_NULL_HANDLE;
   layout_ = nullptr;
+  computePipeline_ = VK_NULL_HANDLE;
+  computeLayout_ = nullptr;
+  for (auto& b : boundStorage_) b = {};
+  dispatched_ = false;
   setDirty_ = true;
   std::fill(std::begin(boundTextures_), std::end(boundTextures_), 0u);
   boundBuffers_[0] = boundBuffers_[1] = BoundBuffer{};
@@ -1875,6 +2050,7 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
 void VulkanDevice::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
   EndRendering();
+  ReleaseGeneral();  // (what dispatches wrote, readable by the pass's draws)
   VkCommandBuffer cmd = frames_[cur_].cmd;
   VkImageView colorView = VK_NULL_HANDLE, depthView = VK_NULL_HANDLE;
   int width = width_, height = height_;
@@ -2003,6 +2179,12 @@ void VulkanDevice::Resolve(Texture from, Texture to) {
 void VulkanDevice::SetPipeline(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec || !inFrame_) return;
+  if (rec->compute) {  // (its own binding point: the drawing pipeline and its set stay bound)
+    computePipeline_ = rec->pipeline;
+    computeLayout_ = static_cast<const Layout*>(rec->layout);
+    vkCmdBindPipeline(frames_[cur_].cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rec->pipeline);
+    return;
+  }
   pipeline_ = rec->pipeline;
   pipelineDepth_ = rec->depth;
   if (rec->layout != layout_) {
@@ -2116,6 +2298,116 @@ void VulkanDevice::SetShaderBuffer(Buffer buffer, int slot) {
   setDirty_ = true;
 }
 
+void VulkanDevice::SetStorage(int slot, Texture texture, int mip) {
+  if (slot < 0 || slot >= kStorageSlots) return;
+  const TextureRec* rec = Find(texture);
+  boundStorage_[slot] = rec && rec->storage && mip >= 0 && mip < rec->mips ? std::pair<uint32_t, int>{texture.id, mip} : std::pair<uint32_t, int>{0, 0};
+}
+
+void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
+  if (!inFrame_ || !computePipeline_ || !computeLayout_ || !x || !y || !z) return;
+  Frame& f = frames_[cur_];
+  EndRendering();
+  ReleasePassTargets();  // (the pass under way ends: its targets readable)
+  auto written = [&](uint32_t id) {
+    for (const auto& b : boundStorage_)
+      if (b.first == id) return true;
+    return false;
+  };
+  // the storage images it writes into the general layout; what it reads (that a dispatch wrote) out of it
+  for (const auto& b : boundStorage_) {
+    if (!b.first || !textures_[b.first].used || textures_[b.first].layout == VK_IMAGE_LAYOUT_GENERAL) continue;
+    Transition(&textures_[b.first], VK_IMAGE_LAYOUT_GENERAL);
+    general_.push_back(b.first);
+  }
+  for (const auto& image : computeLayout_->images) {
+    if (image.kind >= SpirvImage::Storage) continue;
+    for (uint32_t k = 0; k < image.count; ++k) {
+      const uint32_t id = boundTextures_[image.binding - kTexBinding + k];
+      if (!id || textures_[id].layout != VK_IMAGE_LAYOUT_GENERAL || written(id)) continue;
+      Transition(&textures_[id], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      general_.erase(std::remove(general_.begin(), general_.end(), id), general_.end());
+    }
+  }
+  if (dispatched_) {  // (the dispatch before wrote: finished before this one reads or writes)
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(f.cmd, &di);
+  }
+  // its set: made for each dispatch (they are few)
+  VkDescriptorSet set = VK_NULL_HANDLE;
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = f.descriptors;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &computeLayout_->set;
+  if (vkAllocateDescriptorSets(device_, &ai, &set) != VK_SUCCESS) {
+    static bool told = false;
+    if (!told) fprintf(stderr, "render: Vulkan: out of descriptor sets this frame\n");
+    told = true;
+    return;
+  }
+  VkDescriptorImageInfo images[kTexSlots + kStorageSlots];
+  VkDescriptorBufferInfo infos[2];
+  VkWriteDescriptorSet writes[kTexSlots + kStorageSlots + 2];
+  uint32_t n = 0, used = 0;
+  for (const auto& image : computeLayout_->images) {
+    const bool storage = image.kind >= SpirvImage::Storage;
+    const uint32_t first = used;
+    bool empty = false;
+    for (uint32_t k = 0; k < image.count; ++k) {
+      VkImageView view = VK_NULL_HANDLE;
+      if (storage) {
+        const auto& b = boundStorage_[image.binding - kStorageBinding + k];
+        if (b.first && textures_[b.first].used) view = textures_[b.first].storageViews[static_cast<size_t>(b.second)];
+      } else {
+        const uint32_t id = boundTextures_[image.binding - kTexBinding + k];
+        view = id ? textures_[id].view : VK_NULL_HANDLE;
+        if (!view && !nullDescriptors_ && image.kind <= SpirvImage::Volume) view = dummy_[image.kind].view;
+      }
+      empty = empty || (!view && !nullDescriptors_);
+      images[used++] = {VK_NULL_HANDLE, view, storage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    if (empty) {  // (a storage slot the shader declares left empty, on a card without null descriptors)
+      static bool told = false;
+      if (!told) fprintf(stderr, "render: Vulkan: a dispatch with an empty storage slot its shader declares\n");
+      told = true;
+      used = first;
+      continue;
+    }
+    writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[n].dstSet = set;
+    writes[n].dstBinding = image.binding;
+    writes[n].descriptorCount = image.count;
+    writes[n].descriptorType = storage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writes[n].pImageInfo = &images[first];
+    ++n;
+  }
+  for (int i = 0; i < 2; ++i) {
+    BoundBuffer b = boundBuffers_[i];
+    if (!b.buffer && !nullDescriptors_) b = {dummyBuffer_, 0, 256};
+    infos[i] = {b.buffer, b.buffer ? b.offset : 0, b.buffer ? b.size : VK_WHOLE_SIZE};
+    writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[n].dstSet = set;
+    writes[n].dstBinding = kBufferBinding + static_cast<uint32_t>(i);
+    writes[n].descriptorCount = 1;
+    writes[n].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[n].pBufferInfo = &infos[i];
+    ++n;
+  }
+  vkUpdateDescriptorSets(device_, n, writes, 0, nullptr);
+  vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_->pipeline, 0, 1, &set, 0, nullptr);
+  if (f.constantPage >= f.constantSets.size()) return;
+  vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_->pipeline, 1, 1, &f.constantSets[f.constantPage], kCbSlots, constantOffsets_);
+  vkCmdDispatch(f.cmd, x, y, z);
+  dispatched_ = true;
+}
+
 // The textures' and buffers' set for what is bound now (made once a frame for each combination), and the
 // constants' offsets.
 bool VulkanDevice::PrepareDraw() {
@@ -2133,7 +2425,7 @@ bool VulkanDevice::PrepareDraw() {
     if (!nullDescriptors_)
       for (const auto& image : layout_->images)
         for (uint32_t k = 0; k < image.count; ++k)
-          if (!views[image.binding - kTexBinding + k]) views[image.binding - kTexBinding + k] = dummy_[image.kind & 3].view;
+          if (!views[image.binding - kTexBinding + k] && image.kind <= SpirvImage::Volume) views[image.binding - kTexBinding + k] = dummy_[image.kind].view;
     BoundBuffer buffers[2] = {boundBuffers_[0], boundBuffers_[1]};
     for (BoundBuffer& b : buffers)
       if (!b.buffer && !nullDescriptors_) b = {dummyBuffer_, 0, 256};
@@ -2223,6 +2515,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   Frame& f = frames_[cur_];
   EndRendering();
   ReleasePassTargets();
+  ReleaseGeneral();
   VkCommandBuffer cmd = f.cmd;
   if (queries_ && !f.marks.empty()) {  // the frame's end
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries_, static_cast<uint32_t>(cur_) * kMarks + static_cast<uint32_t>(f.marks.size()));

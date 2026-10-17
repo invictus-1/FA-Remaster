@@ -12,7 +12,8 @@
 namespace render::gfx {
 
 struct SpirvImage {
-  enum Kind : uint32_t { Plain, Array, Cube, MultiSample };  // Texture2D, Texture2DArray, TextureCube, Texture2DMS
+  // Texture2D, Texture2DArray, TextureCube, Texture2DMS, Texture3D; a compute shader's storage: RWTexture2D, RWTexture3D
+  enum Kind : uint32_t { Plain, Array, Cube, MultiSample, Volume, Storage, StorageVolume };
   uint32_t binding = 0, count = 1, kind = Plain;
   bool operator==(const SpirvImage& o) const { return binding == o.binding && count == o.count && kind == o.kind; }
   bool operator<(const SpirvImage& o) const { return binding < o.binding; }
@@ -23,18 +24,18 @@ struct SpirvShader {
   // the vertex shader's inputs: each HLSL semantic (upper case, with its index: "TEXCOORD0") and the
   // location DXC gave it
   std::vector<std::pair<std::string, uint32_t>> inputs;
-  // the textures it reads (set 0): each binding, how many it holds (an array of textures, as
+  // the textures it reads and writes (set 0): each binding, how many it holds (an array of textures, as
   // `Texture2D maps[10] : register(t6)`, is one binding of 10) and their kind
   std::vector<SpirvImage> images;
 };
 
-// Compiles `source` (HLSL) at `entry` for `stage` ("vs" or "ps") into SPIR-V for Vulkan 1.3, the renderer's
+// Compiles `source` (HLSL) at `entry` for `stage` ("vs", "ps" or "cs") into SPIR-V for Vulkan 1.3, the renderer's
 // registers mapped as gfx_vulkan.cpp lays out its descriptor sets. Kept in `cacheDir` (empty: not kept)
 // under a hash of everything that goes into it. False with the compiler's messages in `error`.
 bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
                   std::string* error);
 
-// Compiles `source` at `entry` for `stage` ("vs" or "ps") into DXIL, shader model 6.0, for Direct3D 12,
+// Compiles `source` at `entry` for `stage` ("vs", "ps" or "cs") into DXIL, shader model 6.0, for Direct3D 12,
 // signed (by DXC itself, or by an older DXC's dxil.dll beside the program). Kept in `cacheDir` as
 // CompileSpirv's. False with the compiler's messages in `error`; `missing` is set when that is because DXC
 // is not there or cannot sign.

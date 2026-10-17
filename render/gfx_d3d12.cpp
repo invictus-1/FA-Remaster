@@ -11,6 +11,9 @@
 //    into the frame's share of the shader-visible heap (once per distinct set per frame).
 //  - Static buffers and textures are uploaded at creation through a separate command list, waiting for
 //    the GPU each time (load time only).
+//  - Compute shaders share the root signature; its last table holds the eight storage views (u0..u7),
+//    copied from a CPU-side heap of their own at each dispatch. A storage target is in the
+//    unordered-access state from a dispatch that writes it until a dispatch reads it or a pass begins.
 #include "gfx.h"
 #include "gfx_vulkan_dxc.h"
 
@@ -70,6 +73,8 @@ constexpr uint32_t kMaxTextures = 16384;       // CPU-side descriptors, one per 
 constexpr uint32_t kRingDescriptors = kFrames * kTexSlots * 4096;  // shader-visible, split between the frame slots
 constexpr uint32_t kMaxColorTargets = 64;      // render-target views beyond the window's
 constexpr uint32_t kMaxDepthViews = 128;       // depth views beyond the window's (one per layer of a depth target)
+constexpr int kStorageSlots = 8;               // u0..u7
+constexpr uint32_t kMaxStorageViews = 1024;    // storage views, one per level of a storage target (0: the null view)
 constexpr size_t kPageSize = 8u << 20;
 constexpr DXGI_FORMAT kBackFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
@@ -85,6 +90,7 @@ DXGI_FORMAT ToDxgi(Format f) {
     case Format::BGRA8_sRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
     case Format::R16: return DXGI_FORMAT_R16_UNORM;
     case Format::R16F: return DXGI_FORMAT_R16_FLOAT;
+    case Format::RG16F: return DXGI_FORMAT_R16G16_FLOAT;
     case Format::RGBA16F: return DXGI_FORMAT_R16G16B16A16_FLOAT;
     case Format::R32F: return DXGI_FORMAT_R32_FLOAT;
     case Format::BC1: return DXGI_FORMAT_BC1_UNORM;
@@ -182,10 +188,16 @@ struct TextureRec {
   uint32_t view = 0;      // its first render-target or depth view (index into that heap)
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
   int pixelBytes = 4;     // textures: bytes a pixel (UpdateTexture; 0 for the block-compressed)
+  // storage targets only
+  bool storage = false;
+  bool unordered = false;  // currently in the unordered-access state (written by a dispatch)
+  int slices = 1, mips = 1;  // (slices: a volume's)
+  uint32_t uav = 0;        // its first storage view, one per level (index into that heap)
 };
 
 struct PipelineRec {
   bool used = false;
+  bool compute = false;
   Com<ID3D12PipelineState> state;
   D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 };
@@ -250,6 +262,7 @@ class D3D12Device final : public Device {
   void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) override;
   Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
+  Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -266,11 +279,15 @@ class D3D12Device final : public Device {
   void SetVertexBuffer(Buffer buffer) override;
   void SetIndexBuffer(Buffer buffer) override;
   void SetShaderBuffer(Buffer buffer, int slot) override;
+  void SetStorage(int slot, Texture texture, int mip) override;
+  void Dispatch(uint32_t x, uint32_t y, uint32_t z) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
 
  private:
+  // Direct3D's own compiler (FXC), the shader kept from an earlier run when its source has not changed
+  bool CompileFxc(std::string_view source, const char* entry, const char* target, const char* name, Com<ID3DBlob>& out, std::string* error);
   bool CreateTargets();
   void WaitFence(uint64_t value);
   void WaitIdle();
@@ -289,7 +306,17 @@ class D3D12Device final : public Device {
   void FreeRange(int block, uint64_t offset, uint64_t size);
   void FlushUploads();
   Span Allocate(size_t size, size_t align);
+  // The bound textures' table in this frame's share of the shader-visible heap (made once a frame for
+  // each set); BindTextures gives it to the draws when the set has changed.
+  D3D12_GPU_DESCRIPTOR_HANDLE TextureTable();
   void BindTextures();
+  // The storage targets a dispatch wrote, readable again (before a pass, and at the frame's end).
+  void ReleaseUnordered();
+  D3D12_CPU_DESCRIPTOR_HANDLE UavHandle(uint32_t index) const {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = uavStart_;
+    h.ptr += static_cast<SIZE_T>(index) * srvStep_;
+    return h;
+  }
   void Retire(IUnknown* object);
   uint32_t NewTextureIndex();
   void ReleasePassTargets();
@@ -372,6 +399,19 @@ class D3D12Device final : public Device {
   TableKey boundTextures_;
   bool texturesDirty_ = true;
   bool warnedDescriptors_ = false;
+
+  // compute: the storage views' heap (CPU-side), what the next dispatch binds, and the constants and
+  // shader buffers set (kept, as compute has its own root arguments, given at each dispatch)
+  Com<ID3D12DescriptorHeap> uavHeap_;
+  D3D12_CPU_DESCRIPTOR_HANDLE uavStart_{};
+  uint32_t nextUav_ = 1;
+  std::vector<std::pair<uint32_t, uint32_t>> freeUav_;  // first view, count
+  std::array<std::pair<uint32_t, int>, kStorageSlots> boundStorage_{};  // texture, level
+  std::vector<uint32_t> unordered_;  // the textures in the unordered-access state
+  D3D12_GPU_VIRTUAL_ADDRESS constantsAt_[kCbSlots] = {}, buffersAt_[2] = {};
+  bool computePipeline_ = false;  // the pipeline set last is a compute one
+  bool computeRoot_ = false;      // the compute root signature set this frame
+  bool dispatched_ = false;       // the last thing recorded was a dispatch (the next waits for its writes)
 };
 
 D3D12Device::~D3D12Device() {
@@ -484,8 +524,10 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   if (FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kFrames + kMaxColorTargets, false, rtvHeap_)) ||
       FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1 + kMaxDepthViews, false, dsvHeap_)) ||
       FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxTextures, false, stagingHeap_)) ||
-      FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kRingDescriptors, true, ringHeap_)))
+      FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kRingDescriptors, true, ringHeap_)) ||
+      FAILED(hr = makeHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxStorageViews, false, uavHeap_)))
     return fail("CreateDescriptorHeap", hr);
+  uavStart_ = uavHeap_->GetCPUDescriptorHandleForHeapStart();
   rtvStart_ = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
   dsvStart_ = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
   stagingStart_ = stagingHeap_->GetCPUDescriptorHandleForHeapStart();
@@ -503,6 +545,12 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   nullView.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   nullView.Texture2D.MipLevels = 1;
   device_->CreateShaderResourceView(nullptr, &nullView, StagingHandle(0));
+  {  // and storage view 0 for every empty storage slot
+    D3D12_UNORDERED_ACCESS_VIEW_DESC nullStorage = {};
+    nullStorage.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    nullStorage.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    device_->CreateUnorderedAccessView(nullptr, nullptr, &nullStorage, UavHandle(0));
+  }
 
   for (FrameSlot& f : frames_) {
     hr = device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(f.allocator.Put()));
@@ -541,7 +589,10 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_DESCRIPTOR_RANGE range = {};
   range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
   range.NumDescriptors = kTexSlots;
-  D3D12_ROOT_PARAMETER params[kCbSlots + 3] = {};
+  D3D12_DESCRIPTOR_RANGE storageRange = {};  // (compute shaders' u0..u7)
+  storageRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  storageRange.NumDescriptors = kStorageSlots;
+  D3D12_ROOT_PARAMETER params[kCbSlots + 4] = {};
   for (int i = 0; i < kCbSlots; ++i) {
     params[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[i].Descriptor.ShaderRegister = static_cast<UINT>(i);
@@ -558,6 +609,10 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   params[kCbSlots + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   params[kCbSlots + 2] = params[kCbSlots + 1];  // the second shader buffer (t1, space1)
   params[kCbSlots + 2].Descriptor.ShaderRegister = 1;
+  params[kCbSlots + 3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[kCbSlots + 3].DescriptorTable.NumDescriptorRanges = 1;
+  params[kCbSlots + 3].DescriptorTable.pDescriptorRanges = &storageRange;
+  params[kCbSlots + 3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_STATIC_SAMPLER_DESC samplers[6] = {};
   // s5: for shadow maps. Compares against the stored (reversed) depth: 1 where the given depth is
   // nearer to the light or equal; blends the four nearest results. Outside the map: lit.
@@ -586,7 +641,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   }
   D3D12_ROOT_SIGNATURE_DESC rd = {};
-  rd.NumParameters = kCbSlots + 3;
+  rd.NumParameters = kCbSlots + 4;
   rd.pParameters = params;
   rd.NumStaticSamplers = 6;
   rd.pStaticSamplers = samplers;
@@ -999,6 +1054,90 @@ uint32_t D3D12Device::NewTextureIndex() {  // 0: no room
 }
 
 Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
+  if (desc.storage) {  // written by compute shaders: no render-target view, a storage view for each level
+    const DXGI_FORMAT format = ToDxgi(desc.format);
+    const bool volume = desc.depth > 1;
+    int most = 1;  // (the levels it can have)
+    for (int s = std::max({desc.width, desc.height, volume ? desc.depth : 1}); s > 1; s >>= 1) ++most;
+    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
+                          desc.format == Format::RGBA16F || desc.format == Format::R32F;
+    if (!writable || desc.width <= 0 || desc.height <= 0 || desc.depth <= 0 || desc.layers != 1 || desc.samples > 1 || desc.mips <= 0 ||
+        desc.mips > most) {
+      fprintf(stderr, "render: Direct3D 12: a storage target needs RGBA8, R16F, RG16F, RGBA16F or R32F, one layer, one sample, and levels it can have\n");
+      return {};
+    }
+    uint32_t first = 0;
+    const uint32_t count = static_cast<uint32_t>(desc.mips);
+    for (size_t i = 0; i < freeUav_.size() && !first; ++i)
+      if (freeUav_[i].second == count) {
+        first = freeUav_[i].first;
+        freeUav_.erase(freeUav_.begin() + static_cast<std::ptrdiff_t>(i));
+      }
+    if (!first && nextUav_ + count <= kMaxStorageViews) {
+      first = nextUav_;
+      nextUav_ += count;
+    }
+    if (!first) {
+      fprintf(stderr, "render: Direct3D 12: too many storage targets\n");
+      return {};
+    }
+    TextureRec rec;
+    rec.used = rec.storage = true;
+    rec.width = desc.width;
+    rec.height = desc.height;
+    rec.slices = desc.depth;
+    rec.mips = desc.mips;
+    rec.format = format;
+    rec.uav = first;
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = volume ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = static_cast<UINT64>(desc.width);
+    rd.Height = static_cast<UINT>(desc.height);
+    rd.DepthOrArraySize = static_cast<UINT16>(volume ? desc.depth : 1);
+    rd.MipLevels = static_cast<UINT16>(desc.mips);
+    rd.Format = format;
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+    HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                  nullptr, IID_PPV_ARGS(rec.resource.Put()));
+    if (FAILED(hr)) {
+      freeUav_.emplace_back(first, count);
+      return Complain("creating a storage target", hr), Texture{};
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+    srv.Format = format;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    if (volume) {
+      srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+      srv.Texture3D.MipLevels = count;
+    } else {
+      srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      srv.Texture2D.MipLevels = count;
+    }
+    for (uint32_t mip = 0; mip < count; ++mip) {
+      D3D12_UNORDERED_ACCESS_VIEW_DESC uv = {};
+      uv.Format = format;
+      if (volume) {
+        uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+        uv.Texture3D.MipSlice = mip;
+        uv.Texture3D.WSize = UINT(-1);  // (all its slices at that level)
+      } else {
+        uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uv.Texture2D.MipSlice = mip;
+      }
+      device_->CreateUnorderedAccessView(rec.resource.Get(), nullptr, &uv, UavHandle(first + mip));
+    }
+    const uint32_t index = NewTextureIndex();
+    if (!index) {
+      freeUav_.emplace_back(first, count);
+      return {};
+    }
+    device_->CreateShaderResourceView(rec.resource.Get(), &srv, StagingHandle(index));
+    textures_[index] = std::move(rec);
+    return {index};
+  }
   const bool depth = desc.format == Format::D32;
   const DXGI_FORMAT format = depth ? DXGI_FORMAT_D32_FLOAT : ToDxgi(desc.format);
   const int samples = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? desc.samples : 1;
@@ -1097,53 +1236,55 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
   return {index};
 }
 
-Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+bool D3D12Device::CompileFxc(std::string_view source, const char* entry, const char* target, const char* name, Com<ID3DBlob>& out,
+                             std::string* error) {
   constexpr UINT kFlags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
-  auto compile = [&](std::string_view source, const char* entry, const char* target, Com<ID3DBlob>& out) {
-    // (kept from an earlier run when the same source was compiled the same way: by a hash of all of it)
-    std::string cached;
-    if (!shaderCache_.empty()) {
-      uint64_t h = 1469598103934665603ull;
-      auto mix = [&h](const void* data, size_t size) {
-        for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const uint8_t*>(data)[i]) * 1099511628211ull;
-      };
-      const char kVersion[] = "d3dcompile/1";
-      mix(kVersion, sizeof kVersion);
-      mix(source.data(), source.size());
-      mix(entry, std::strlen(entry) + 1);
-      mix(target, std::strlen(target) + 1);
-      mix(&kFlags, sizeof kFlags);
-      char name[32];
-      snprintf(name, sizeof name, "%016llx.cso", static_cast<unsigned long long>(h));
-      cached = shaderCache_ + "\\" + name;
-      if (FILE* f = fopen(cached.c_str(), "rb")) {
-        fseek(f, 0, SEEK_END);
-        const long size = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        bool ok = size > 0 && SUCCEEDED(D3DCreateBlob(static_cast<SIZE_T>(size), out.Put())) &&
-                  fread(out->GetBufferPointer(), 1, static_cast<size_t>(size), f) == static_cast<size_t>(size);
-        fclose(f);
-        if (ok) return true;
-        out.Reset();
-      }
+  // (kept from an earlier run when the same source was compiled the same way: by a hash of all of it)
+  std::string cached;
+  if (!shaderCache_.empty()) {
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](const void* data, size_t size) {
+      for (size_t i = 0; i < size; ++i) h = (h ^ static_cast<const uint8_t*>(data)[i]) * 1099511628211ull;
+    };
+    const char kVersion[] = "d3dcompile/1";
+    mix(kVersion, sizeof kVersion);
+    mix(source.data(), source.size());
+    mix(entry, std::strlen(entry) + 1);
+    mix(target, std::strlen(target) + 1);
+    mix(&kFlags, sizeof kFlags);
+    char file[32];
+    snprintf(file, sizeof file, "%016llx.cso", static_cast<unsigned long long>(h));
+    cached = shaderCache_ + "\\" + file;
+    if (FILE* f = fopen(cached.c_str(), "rb")) {
+      fseek(f, 0, SEEK_END);
+      const long size = ftell(f);
+      fseek(f, 0, SEEK_SET);
+      bool ok = size > 0 && SUCCEEDED(D3DCreateBlob(static_cast<SIZE_T>(size), out.Put())) &&
+                fread(out->GetBufferPointer(), 1, static_cast<size_t>(size), f) == static_cast<size_t>(size);
+      fclose(f);
+      if (ok) return true;
+      out.Reset();
     }
-    Com<ID3DBlob> errors;
-    HRESULT hr = D3DCompile(source.data(), source.size(), desc.name, nullptr, nullptr, entry, target, kFlags, 0, out.Put(), errors.Put());
-    if (FAILED(hr)) {
-      std::string text = errors ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "";
-      if (error) *error = std::string(desc.name) + " (" + entry + "): " + text;
-      return false;
+  }
+  Com<ID3DBlob> errors;
+  HRESULT hr = D3DCompile(source.data(), source.size(), name, nullptr, nullptr, entry, target, kFlags, 0, out.Put(), errors.Put());
+  if (FAILED(hr)) {
+    std::string text = errors ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "";
+    if (error) *error = std::string(name) + " (" + entry + "): " + text;
+    return false;
+  }
+  if (!cached.empty()) {  // (written under another name first, so a half-written file is never read)
+    const std::string part = cached + ".part";
+    if (FILE* f = fopen(part.c_str(), "wb")) {
+      const bool ok = fwrite(out->GetBufferPointer(), 1, out->GetBufferSize(), f) == out->GetBufferSize();
+      fclose(f);
+      if (!ok || !MoveFileExA(part.c_str(), cached.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileA(part.c_str());
     }
-    if (!cached.empty()) {  // (written under another name first, so a half-written file is never read)
-      const std::string part = cached + ".part";
-      if (FILE* f = fopen(part.c_str(), "wb")) {
-        const bool ok = fwrite(out->GetBufferPointer(), 1, out->GetBufferSize(), f) == out->GetBufferSize();
-        fclose(f);
-        if (!ok || !MoveFileExA(part.c_str(), cached.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileA(part.c_str());
-      }
-    }
-    return true;
-  };
+  }
+  return true;
+}
+
+Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
   Com<ID3DBlob> vs, ps;
   const bool hasPixelShader = !desc.pixelSource.empty();
   // DXC's DXIL (shader model 6.0) where DXC is beside the program: it compiles the renderer's shaders in
@@ -1175,8 +1316,8 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     }
   }
   if (!compiled) {
-    if (!compile(desc.vertexSource, desc.vertexEntry, "vs_5_1", vs)) return {};
-    if (hasPixelShader && !compile(desc.pixelSource, desc.pixelEntry, "ps_5_1", ps)) return {};
+    if (!CompileFxc(desc.vertexSource, desc.vertexEntry, "vs_5_1", desc.name, vs, error)) return {};
+    if (hasPixelShader && !CompileFxc(desc.pixelSource, desc.pixelEntry, "ps_5_1", desc.name, ps, error)) return {};
   }
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
@@ -1277,6 +1418,48 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
   return {index + 1};
 }
 
+Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error) {
+  Com<ID3DBlob> cs;
+  bool compiled = false;
+  if (dxil_) {  // (DXC where it is beside the program, as for the drawing pipelines)
+    std::vector<uint8_t> code;
+    std::string why;
+    bool missing = false;
+    compiled = CompileDxil(std::string(desc.source), desc.entry, "cs", shaderCache_, &code, &why, &missing) &&
+               SUCCEEDED(D3DCreateBlob(code.size(), cs.Put()));
+    if (compiled) {
+      std::memcpy(cs->GetBufferPointer(), code.data(), code.size());
+    } else {
+      if (missing) dxil_ = false;
+      fprintf(stderr, "render: Direct3D 12: %s: DXC: %s; Direct3D's own compiler instead\n", desc.name, why.c_str());
+      cs.Reset();
+    }
+  }
+  if (!compiled && !CompileFxc(desc.source, desc.entry, "cs_5_1", desc.name, cs, error)) return {};
+  D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
+  cd.pRootSignature = rootSignature_.Get();
+  cd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+  PipelineRec rec;
+  rec.used = rec.compute = true;
+  HRESULT hr = device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(rec.state.Put()));
+  if (FAILED(hr)) {
+    char buf[160];
+    snprintf(buf, sizeof buf, "%s: CreateComputePipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
+    if (error) *error = buf;
+    return {};
+  }
+  uint32_t index;
+  if (!freePipelines_.empty()) {
+    index = freePipelines_.back();
+    freePipelines_.pop_back();
+    pipelines_[index] = std::move(rec);
+  } else {
+    index = static_cast<uint32_t>(pipelines_.size());
+    pipelines_.push_back(std::move(rec));
+  }
+  return {index + 1};
+}
+
 void D3D12Device::Destroy(Buffer buffer) {
   BufferRec* rec = Find(buffer);
   if (!rec) return;
@@ -1293,6 +1476,12 @@ void D3D12Device::Destroy(Texture texture) {
     if (passDepth_ == texture.id) passDepth_ = 0;
     if (rec->depth) freeDsv_.emplace_back(rec->view, static_cast<uint32_t>(rec->layers));
     else freeRtv_.push_back(rec->view);
+  }
+  if (rec->storage) {
+    freeUav_.emplace_back(rec->uav, static_cast<uint32_t>(rec->mips));
+    unordered_.erase(std::remove(unordered_.begin(), unordered_.end(), texture.id), unordered_.end());
+    for (auto& s : boundStorage_)
+      if (s.first == texture.id) s = {};
   }
   Retire(rec->resource.Get());
   *rec = TextureRec{};
@@ -1355,6 +1544,10 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   boundTextures_ = TableKey{};
   texturesDirty_ = true;
   passColor_ = passDepth_ = 0;
+  boundStorage_ = {};
+  std::fill(std::begin(constantsAt_), std::end(constantsAt_), D3D12_GPU_VIRTUAL_ADDRESS{0});
+  buffersAt_[0] = buffersAt_[1] = 0;
+  computePipeline_ = computeRoot_ = dispatched_ = false;
 }
 
 void D3D12Device::SetViewport(int width, int height) {
@@ -1375,6 +1568,21 @@ void D3D12Device::ReleasePassTargets() {
     t.writable = false;
   }
   passColor_ = passDepth_ = 0;
+}
+
+void D3D12Device::ReleaseUnordered() {
+  dispatched_ = false;
+  if (unordered_.empty()) return;
+  std::vector<D3D12_RESOURCE_BARRIER> barriers;
+  for (uint32_t id : unordered_) {
+    TextureRec& t = textures_[id];
+    if (!t.used || !t.unordered) continue;
+    barriers.push_back(Transition(t.resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    t.unordered = false;
+  }
+  unordered_.clear();
+  if (!barriers.empty()) list_->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
 }
 
 void D3D12Device::Resolve(Texture from, Texture to) {
@@ -1398,6 +1606,7 @@ void D3D12Device::Resolve(Texture from, Texture to) {
 
 void D3D12Device::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
+  ReleaseUnordered();  // (what dispatches wrote, readable by the pass's draws)
   if (pass.window) {
     ReleasePassTargets();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(static_cast<uint32_t>(cur_));
@@ -1444,7 +1653,8 @@ void D3D12Device::SetPipeline(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec) return;
   list_->SetPipelineState(rec->state.Get());
-  list_->IASetPrimitiveTopology(rec->topology);
+  computePipeline_ = rec->compute;
+  if (!rec->compute) list_->IASetPrimitiveTopology(rec->topology);
 }
 
 void D3D12Device::SetConstants(int slot, const void* data, uint32_t size) {
@@ -1454,6 +1664,7 @@ void D3D12Device::SetConstants(int slot, const void* data, uint32_t size) {
   if (!s.cpu) return;
   std::memcpy(s.cpu, data, size);
   list_->SetGraphicsRootConstantBufferView(static_cast<UINT>(slot), s.gpu);
+  constantsAt_[slot] = s.gpu;  // (and for the dispatches, which have root arguments of their own)
 }
 
 void D3D12Device::SetTexture(int slot, Texture texture) {
@@ -1467,6 +1678,10 @@ void D3D12Device::SetTexture(int slot, Texture texture) {
 void D3D12Device::BindTextures() {
   if (!texturesDirty_) return;
   texturesDirty_ = false;
+  list_->SetGraphicsRootDescriptorTable(kCbSlots, TextureTable());
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::TextureTable() {
   FrameSlot& f = frames_[cur_];
   const uint32_t share = kRingDescriptors / kFrames;
   const uint32_t base = share * static_cast<uint32_t>(cur_);
@@ -1492,7 +1707,78 @@ void D3D12Device::BindTextures() {
   }
   D3D12_GPU_DESCRIPTOR_HANDLE table = ringGpuStart_;
   table.ptr += static_cast<UINT64>(at) * srvStep_;
-  list_->SetGraphicsRootDescriptorTable(kCbSlots, table);
+  return table;
+}
+
+void D3D12Device::SetStorage(int slot, Texture texture, int mip) {
+  if (slot < 0 || slot >= kStorageSlots) return;
+  const TextureRec* rec = Find(texture);
+  boundStorage_[static_cast<size_t>(slot)] = rec && rec->storage && mip >= 0 && mip < rec->mips ? std::pair<uint32_t, int>{texture.id, mip}
+                                                                                                : std::pair<uint32_t, int>{0, 0};
+}
+
+void D3D12Device::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
+  if (!inFrame_ || !computePipeline_ || !x || !y || !z) return;
+  ReleasePassTargets();  // (the pass under way ends: its targets readable)
+  // what this dispatch writes into the unordered-access state, what it reads out of it; and when the
+  // last thing done was a dispatch, its writes finished first
+  std::vector<D3D12_RESOURCE_BARRIER> barriers;
+  const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  for (const auto& s : boundStorage_) {
+    if (!s.first || !textures_[s.first].used) continue;
+    TextureRec& t = textures_[s.first];
+    if (t.unordered) continue;
+    barriers.push_back(Transition(t.resource.Get(), readable, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+    t.unordered = true;
+    unordered_.push_back(s.first);
+  }
+  for (uint32_t id : boundTextures_.t) {
+    if (!id || !textures_[id].used || !textures_[id].unordered) continue;
+    bool written = false;
+    for (const auto& s : boundStorage_) written = written || s.first == id;
+    if (written) continue;  // (read and written at once: left to the shader; gfx.h says not to)
+    TextureRec& t = textures_[id];
+    barriers.push_back(Transition(t.resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, readable));
+    t.unordered = false;
+    unordered_.erase(std::remove(unordered_.begin(), unordered_.end(), id), unordered_.end());
+  }
+  if (dispatched_) {
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;  // (every storage target: the dispatch before has written all of them)
+    barriers.push_back(b);
+  }
+  if (!barriers.empty()) list_->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+  if (!computeRoot_) {
+    list_->SetComputeRootSignature(rootSignature_.Get());
+    computeRoot_ = true;
+  }
+  for (int i = 0; i < kCbSlots; ++i)
+    if (constantsAt_[i]) list_->SetComputeRootConstantBufferView(static_cast<UINT>(i), constantsAt_[i]);
+  for (int i = 0; i < 2; ++i)
+    if (buffersAt_[i]) list_->SetComputeRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + i), buffersAt_[i]);
+  list_->SetComputeRootDescriptorTable(kCbSlots, TextureTable());
+  {  // the storage views, copied into this frame's share of the shader-visible heap
+    FrameSlot& f = frames_[cur_];
+    const uint32_t share = kRingDescriptors / kFrames;
+    if (f.descriptorsUsed + kStorageSlots > share) {
+      f.descriptorsUsed = 0;
+      f.tables.clear();
+    }
+    const uint32_t at = share * static_cast<uint32_t>(cur_) + f.descriptorsUsed;
+    f.descriptorsUsed += kStorageSlots;
+    for (int i = 0; i < kStorageSlots; ++i) {
+      const auto& s = boundStorage_[static_cast<size_t>(i)];
+      const uint32_t view = s.first && textures_[s.first].used ? textures_[s.first].uav + static_cast<uint32_t>(s.second) : 0;
+      D3D12_CPU_DESCRIPTOR_HANDLE to = ringCpuStart_;
+      to.ptr += static_cast<SIZE_T>(at + static_cast<uint32_t>(i)) * srvStep_;
+      device_->CopyDescriptorsSimple(1, to, UavHandle(view), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    D3D12_GPU_DESCRIPTOR_HANDLE table = ringGpuStart_;
+    table.ptr += static_cast<UINT64>(at) * srvStep_;
+    list_->SetComputeRootDescriptorTable(kCbSlots + 3, table);
+  }
+  list_->Dispatch(x, y, z);
+  dispatched_ = true;
 }
 
 void D3D12Device::SetVertexBuffer(Buffer buffer) {
@@ -1513,6 +1799,7 @@ void D3D12Device::SetShaderBuffer(Buffer buffer, int slot) {
   BufferRec* rec = Find(buffer);
   if (!rec || rec->kind != BufferKind::Shader || !rec->dynamic || rec->frame != frameNumber_ || slot < 0 || slot > 1) return;
   list_->SetGraphicsRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + slot), rec->gpu);
+  buffersAt_[slot] = rec->gpu;
 }
 
 void D3D12Device::Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) {
@@ -1529,7 +1816,7 @@ void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t 
 
 void D3D12Device::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
   TextureRec* rec = Find(texture);
-  if (!rec || rec->target || !inFrame_ || width <= 0 || height <= 0 || !data || rec->pixelBytes <= 0) return;
+  if (!rec || rec->target || rec->storage || !inFrame_ || width <= 0 || height <= 0 || !data || rec->pixelBytes <= 0) return;
   const D3D12_RESOURCE_DESC rd = rec->resource->GetDesc();
   if (rd.MipLevels != 1 || rd.DepthOrArraySize != 1 || x < 0 || y < 0 || static_cast<UINT64>(x + width) > rd.Width ||
       static_cast<UINT>(y + height) > rd.Height)
@@ -1565,6 +1852,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   draws_ = 0;
   FrameSlot& f = frames_[cur_];
   ReleasePassTargets();
+  ReleaseUnordered();
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
   if (capture) {
     D3D12_RESOURCE_DESC bd = f.backBuffer->GetDesc();
