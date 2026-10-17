@@ -30,9 +30,40 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
 the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
-upgrade's four settings; open).
+upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718). 32 is addressed to the visuals
+track (ground cover; open, not blocking).
 
-## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking)
+## 32. To the VISUALS track: art for ground cover near the camera (2026-10-17, not blocking; after the UEF wrecks is fine)
+
+**Who asks:** the renderer, for Chris (2026-10-17: ground cover near the camera, "yes lets do it"; "I want our
+project to be legit insanely beautiful").
+
+**What the renderer will do:** grass near the camera, made in the shader as blades (no art needed for them:
+their colour from the ground's own albedo under them, so they match the ground), swaying in the wind, thinning
+out with the distance and gone where the camera is far (from the game's usual heights it shows only when zoomed
+in), not on rock, roads, under buildings or in water; units flatten it where they stand. A player's option.
+
+**What would make it rich, from you (your form, your budgets):**
+1. Small plants among the grass for Seton's (its own temperate look): a few kinds of clump, weeds, small flowers,
+   dry stalks, maybe ferns at the forests' edges. Cards in an atlas (albedo with alpha, normal; a mask or the
+   texture's v for how much each part sways), or tiny meshes if you prefer: say which.
+2. A table for Seton's ground layers (stock and remastered): which layer gets which cover and how dense (grass
+   thick on meadows, sparse on dirt, none on rock or sand), as file names or by the layer's place in the map.
+3. Anything you would have done differently: tell me before I start the drawing, so the two fit.
+
+**Why:** close up the ground is a flat texture; a field of grass and plants that sway is the biggest step
+toward "a place, not just a map for a game" left in the renderer.
+
+## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking; DONE 2026-10-17: ui a029a76, Video tab Atmosphere / Soft Shadows / Ray Tracing / Weather Effects, remaster_* commands, "Not on this graphics card" where RayTracingSupported is false; the follow-up DONE the same day, main 1acb718)
+
+**Follow-up (2026-10-17):** `GameSession::OpenPicture` makes a new picture for each game and calls the looks'
+setters at its first frame, after `Open`. That is right for three of them and for bounce light, but the
+reflections of "Ray Tracing" need it before `Open` (the surfaces' shaders are built for them when the map
+opens), so in a game they never come on. Wanted: `pic->picture.SetRayTracing(Looks().rayTracing)` before
+`pic->picture.Open(...)`, beside `SetVulkan` and `SetTextureDetail` (the first frame's call may stay; it is
+harmless). Done (main 1acb718): with Ray Tracing on, a game's picture opens in 1.46 s against about 0.5 s (the
+surfaces' shaders built with ray tracing in them; a shader cache would take that away: for the optimisation
+phase).
 
 **Who asks:** the renderer, for Chris (2026-10-17: "just put them all in and if some can be bundled together
 then do so that way it lessens clutter").

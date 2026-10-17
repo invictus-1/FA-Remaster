@@ -121,6 +121,15 @@ Mac", and every ray-traced effect keeps a fallback without it.
    - Cost (1440p, RTX 4090, half the view sky): shadows 0.06 ms, clouds 0.21 ms, the sky then 0.14 ms;
      today's sky with its own layer 0.63 ms. Off: pictures as before; on, Vulkan as Direct3D 12.
    - Open: the clouds' shapes are soft at a distance (Chris to judge).
+   - **Lightning inside the clouds** (2026-10-17, Chris: "YES"): a storm's flash lights the volumetric clouds
+     from within, round where the bolt leaves them (`Clouds::boltAt`, `boltReach`, `boltLight`, set by the
+     world while a bolt shows): in the march a light there, fading through the layer (`exp(-1.5 d) / (1 + d^2)`
+     by the distance in reaches), and while it flashes the clouds keep little of the frame before (0.3 against
+     0.85), so its flicker is not smeared. Part of the volumetric clouds (the "Atmosphere" setting). At the
+     flash the clouds over the bolt glow white and the layer brightens round it; the rest of the picture as
+     before. Costs nothing measurable (only while a bolt shows). Without a flash, 28 pixels in a million round
+     differently (the compiler's); Vulkan as Direct3D 12 (mean 0.64 at the flash, 0.58 without: the clouds'
+     own).
    - **Sky from tables: first version done** (2026-10-17): `World::skyTables` (viewer `--sky-tables`; modern
      look with a time of day), after E. Hillaire 2020 on the same air as today's sky (sky.cpp). Two tables
      made once on the processor (on the worker threads, 14 ms) and handed to the card: what comes through
@@ -248,7 +257,9 @@ Mac", and every ray-traced effect keeps a fallback without it.
        backends; on, Vulkan as Direct3D 12 (mean 0.37 in 255: leaves taken by chance).
      - Open: what the rays meet is coarse (a colour per model, no normals for models, the ground every fourth
        height), fine for water and wet ground, too coarse for a sharp chrome mirror; the minimap's frame has
-       none.
+       none. With it on, a game's picture opens in about 1.46 s against 0.5 s (the surfaces' shaders built
+       with ray tracing in them, measured by the ui chat): a shader cache would take that away (for the
+       optimisation phase).
    - **The small lights in what the rays meet** (2026-10-17): explosions, shots and lamps with their beams
      (`RaySmallLights`, as lighting.h's `SmallLights` without highlights or the lamps' shadow maps), so the
      probes take in light thrown back from a lamp-lit patch of ground, and reflections show what the lights
@@ -283,7 +294,7 @@ Mac", and every ray-traced effect keeps a fallback without it.
        flakes) in a flat box 12 units high at the ground round the camera's target; they take only the small
        lights' light and show by how much it outshines the sky's (nothing in the dark). Seen from the game's
        camera a thin drop in a beam stands against the patch of ground that beam lights and would hardly show,
-       so these send on three times as much, as a glint (a look for Chris to judge): at night the rain
+       so these send on three times as much, as a glint (Chris, 2026-10-17: fine as it is): at night the rain
        sparkles white round lit units. Cost with it, at 1440p in a storm: 0.016 -> 0.051 ms. The unlit rain
        is unchanged, pixel for pixel.
    - **Splashes: first version** (2026-10-17): `World::rainSplashes` (viewer `--rain-splashes`; modern look).
@@ -298,6 +309,32 @@ Mac", and every ray-traced effect keeps a fallback without it.
      +0.012 ms. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.05).
      - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
        it, Post::KeepOpaque), so it does not build them up from frames before.
+
+## The next pieces (Chris, 2026-10-17)
+
+Asked "anything else?", Chris took six of the renderer's ideas ("I want our project to be legit insanely
+beautiful and plays extremely well"; HDR output not, "most hdr monitors are kinda ass"). Each a player's option
+where it changes the look, off by default, measured like the rest. In the order they are taken up:
+
+1. **Shader cache: the first opening fast too.** Measured: the compiled shaders are already kept between runs
+   (`%LOCALAPPDATA%\FA Remastered\shaders`, both backends), and with them kept every pipeline of a map is made in
+   0.06-0.11 s, ray tracing's too (the driver keeps its own compiled pipelines). What is slow is the first
+   opening after the shaders change (every renderer update): then they are compiled anew, the Vulkan ray-tracing
+   ones in about 4 s. So: compile them on several cores at once, and give a release a cache made beforehand
+   (read beside the user's own), so a player's very first start is quick. And look at the rest of the opening
+   (about 5 s for a map with the viewer, most of it not shaders).
+2. **Lightning inside the clouds (done, first version: in the clouds' section above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
+   through their depth (clouds.cpp's march takes the flash as a light at the bolt).
+3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader
+   under the water line, by depth and the sun's way), and the beach darker and shinier in a band above the water
+   that the swell has just wetted.
+4. **Sharper reflections with the models' real textures:** the rays read each model's own albedo (its levels'
+   texture coordinates kept for the rays, the albedos in a picture of small copies) instead of one colour a
+   model; the visuals session upgrades what looks grainy.
+5. **FSR 3 frame generation:** AMD's frame interpolation (FidelityFX SDK, MIT, the download Chris approved), a
+   frame made between two drawn ones, for slower cards; with its own frame pacing; a player's option.
+6. **Ground cover near the camera:** grass and small plants that sway, by the ground's layers, near the camera;
+   with the visuals session's art (asked first, so it can be made alongside).
 
 ## The options
 

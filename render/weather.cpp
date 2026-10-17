@@ -436,7 +436,8 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
     // how much of the light on it goes on to the eye (snow is white); near the ground three times that, as a glint: a
-    // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris to judge)
+    // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris, 2026-10-17:
+    // the sparkle is fine as it is)
     f.lit[0] = (flakes ? 1.0f : 0.6f) * (low ? 3.0f : 1.0f);
     f.lit[1] = low ? 1.0f : 0.0f;
     f.lit[2] = low ? kLowLayer : 0.0f;

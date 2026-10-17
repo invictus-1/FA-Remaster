@@ -527,7 +527,12 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   if (u->unitStates.count("NeedToTerminateTask")) return kTaskDone;
   UnitCommand* c = u->commands.empty() ? nullptr : u->commands.front().get();
   if (p.goalIssued && p.ticks > 3 && AtPatrolGoal(sim, u, p)) {
-    if (!c || !c->form) return kTaskDone;
+    // the task's formation (+0x58): DispatchTask gives one only to FormPatrol / FormAggressiveMove (0x60984e ->
+    // 0x61c4e0 with GetFormation 0x6e8a00); Patrol and AggressiveMove make their task with none (0x6097c2 /
+    // 0x6097f8 -> 0x61c480, push 0), so they end on arrival with no wait for the others. Seen: MP2 3132, army 1's
+    // interceptor 0x100042, one of three on an AggressiveMove, ends it 15 cells from the point while the other two
+    // are still 50 away; ours waited for the formation's groups.
+    if (!c || !c->form || (t.type != CommandType::FormPatrol && t.type != CommandType::FormAggressiveMove)) return kTaskDone;
     if (u->formAllAtGoal || FormationGroupAtGoal(sim, *c, u)) return kTaskDone;
     t.waitUntil = next;
     return kTaskRunning;

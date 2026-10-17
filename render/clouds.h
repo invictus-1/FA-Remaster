@@ -56,6 +56,11 @@ class Clouds {
   int shrink = 2;            // the march at the picture's size (1) or at half its width and height (2)
   float shapeSize = 600;     // the shapes' noise repeats every this many world units
   float detailSize = 110;    // the detail's
+  // A storm's lightning, set by the world each frame: where its flash is in the layer (where the bolt leaves the
+  // clouds), how far its light spreads through them, and its light (0: no flash). It lights them from within.
+  Vec3 boltAt{0, 0, 0};
+  float boltReach = 120;
+  Vec3 boltLight{0, 0, 0};
 
  private:
   bool Size(int width, int height);

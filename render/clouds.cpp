@@ -88,6 +88,8 @@ cbuffer Clouds : register(b1) {
   float4 cloudLook;   // x: light taken per world unit of full cloud; y: steps; z, w: 1 / the shapes' and the detail's sizes
   float4 cloudLight;  // rgb: the falling light on the clouds
   float4 coverAt;     // xy: the coverage picture's middle (world x, z); z: the shadows' underside
+  float4 cloudBolt;   // a lightning's flash in the layer: xyz where; w how far its light spreads (world units)
+  float4 boltLight;   // rgb: its light (0: no flash)
 };
 
 RWTexture2D<float> coverOut : register(u0);
@@ -192,6 +194,7 @@ float Cloud(float3 p, float h, bool frayed) {
     float3 light = 0;
     float through = 1;
     float t = t0 + dt * cloudAhead.w;
+    const bool flashing = boltLight.r + boltLight.g + boltLight.b > 0;
     for (int k = 0; k < steps && through > 0.01; ++k, t += dt) {
       float3 p = cameraPosition + d * t;
       float h = saturate((p.y - bottom) / thick);
@@ -207,6 +210,11 @@ float Cloud(float3 p, float h, bool frayed) {
       // (light scattered on and on inside a cloud keeps its insides from going black)
       float lit = max(exp(-depthToLight), 0.3 * exp(-depthToLight * 0.25));
       float3 scattered = cloudLight.rgb * (lit * phase * 1.1) + around * (0.12 + 0.55 * h);
+      // a lightning's flash lights the cloud from within round where the bolt leaves it, fading through it
+      if (flashing) {
+        float far = length(p - cloudBolt.xyz) / cloudBolt.w;
+        scattered += boltLight.rgb * (exp(-far * 1.5) / (1 + far * far));
+      }
       float sigma = cloud * cloudLook.x;
       float stepThrough = exp(-sigma * dt);
       light += through * scattered * (1 - stepThrough);
@@ -232,6 +240,7 @@ struct Constants {
   float right[4], up[4], ahead[4], size[4];
   Mat4 lastViewProj;
   float look[4], light[4], coverAt[4];
+  float bolt[4], boltLight[4];
 };
 
 }  // namespace
@@ -373,6 +382,16 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   k.light[0] = sky.cloudSun.x;
   k.light[1] = sky.cloudSun.y;
   k.light[2] = sky.cloudSun.z;
+  if (boltLight.x + boltLight.y + boltLight.z > 0) {  // a lightning's flash: in the layer, little of the frame before kept (it flickers)
+    k.bolt[0] = boltAt.x;
+    k.bolt[1] = boltAt.y;
+    k.bolt[2] = boltAt.z;
+    k.bolt[3] = std::max(boltReach, 1.0f);
+    k.boltLight[0] = boltLight.x;
+    k.boltLight[1] = boltLight.y;
+    k.boltLight[2] = boltLight.z;
+    k.size[3] = std::min(k.size[3], 0.3f);
+  }
   device_->SetConstants(0, &c, sizeof c);
   device_->SetConstants(1, &k, sizeof k);
   const int last = now_;

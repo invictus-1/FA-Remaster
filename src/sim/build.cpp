@@ -1803,7 +1803,9 @@ void SkirtRect(const Unit* B, float excl[4]) {
 }
 
 bool PrepareMoveFor(Sim& sim, Unit* u, Vec3* p, const float excl[4], int spacing) {
-  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) return AirPrepareMove(sim, u, p);
+  // (one function, 0x62b780: a flyer is tested against the exclusion rect and takes the spacing as a ground unit does;
+  // seen in MP1 1937: an interceptor guarding a transport is sent outside the transport's skirt, 4 cells off)
+  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) return AirPrepareMove(sim, u, p, excl, spacing);
   return GroundPrepareMove(sim, u, p, excl, spacing);
 }
 
@@ -2969,7 +2971,12 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->bp = sim.blueprints().Find(c.blueprintId);
       break;
     case CommandType::Repair:
-      if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
+      // DispatchTask 0x6099b5: the order's focus (CUnitCommand::GetFocus 0x5d5980; a blip stands for its source,
+      // ReconBlip::GetCreator 0x579670) and, when that is a unit, CUnitRepairTask::operator new 0x5f9e50. No test
+      // for a CAiBuilder (unit+0x554), as in DispatchAssistOrCaptureTask 0x613a80. Seen: MP2 2555, army 0's Mantis
+      // 0x13 (REPAIR, no BuildableCategory) given Repair on the unfinished 0x2e walks to it and works on it from
+      // 2594; ours made no task.
+      if (!u->bpData) return nullptr;
       InitRepair(sim, u, *t, FindUnit(sim, c.targetId), false);
       t->goalId = c.targetId;
       break;
