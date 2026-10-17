@@ -25,6 +25,7 @@ namespace moho::ui::sound {
 struct TimeCurves {
   std::vector<Curve> attack, release;
   float releaseMs = 0;
+  float attackFromMs = 0;  // the attack's time when the voice begins to sound: its event's time in its track
   float Decibels(float attackMs, float releaseMs /* below 0: not stopped */) const;
 };
 

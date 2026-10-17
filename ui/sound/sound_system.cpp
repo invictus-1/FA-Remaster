@@ -307,6 +307,7 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
   auto timeCurves = [&](const PlayEvent& e) -> std::shared_ptr<const TimeCurves> {
     auto t = std::make_shared<TimeCurves>();
     t->releaseMs = releaseMs;
+    t->attackFromMs = static_cast<float>(std::max(0, e.timeMs - e.trackStartMs));
     auto add = [&](uint32_t offset) {
       auto c = curves_.find(offset);
       if (c == curves_.end() || c->second.parameter != 0) return;

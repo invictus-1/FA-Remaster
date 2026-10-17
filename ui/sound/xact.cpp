@@ -208,6 +208,7 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
       const auto& track = trackList[ti];
       Reader t(data, size, track.second);
       int events = t.U8();
+      int trackStartMs = -1;
       for (int k = 0; k < events && !t.bad; ++k) {
         uint32_t info = t.U32();
         t.U16(), t.U8();
@@ -216,6 +217,8 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
         e.timeMs = static_cast<int>((info >> 5) & 0xffff);
         e.volumeMin = e.volumeMax = track.first;
         if (ti < trackCurves.size()) e.curves = trackCurves[ti];
+        if (trackStartMs < 0) trackStartMs = e.timeMs;
+        e.trackStartMs = trackStartMs;
         if (type == 0) {
           t.U8();
           continue;

@@ -83,7 +83,7 @@ void Mixer::SetTimeCurves(int voice, std::shared_ptr<const TimeCurves> curves) {
   for (Voice& v : voices_)
     if (v.id == voice) {
       v.curves = std::move(curves);
-      v.envelope = v.curves ? Linear(v.curves->Decibels(0, -1)) : 1.0f;
+      v.envelope = v.curves ? Linear(v.curves->Decibels(v.curves->attackFromMs, -1)) : 1.0f;
       v.envelopeLeft = 0;
     }
 }
@@ -116,7 +116,7 @@ void Mixer::FadeOut(int voice, float ms) {
 // What a voice's curves give `ahead` frames from now.
 float Mixer::EnvelopeAt(const Voice& v, int64_t ahead) const {
   const float ms = 1000.0f / kRate;
-  return Linear(v.curves->Decibels(static_cast<float>(v.sounded + ahead) * ms,
+  return Linear(v.curves->Decibels(v.curves->attackFromMs + static_cast<float>(v.sounded + ahead) * ms,
                                    v.releasing < 0 ? -1.0f : static_cast<float>(v.releasing + ahead) * ms));
 }
 

@@ -47,6 +47,7 @@ struct PlayEvent {
   float volumeMin = 0, volumeMax = 0;
   std::vector<uint32_t> curves;  // its track's own curves (offsets in the global settings): the
                                  // fades by "AttackTime" and "ReleaseTime" of the units' loops and the music
+  int trackStartMs = 0;  // when its track's first event comes (the attack is timed from there)
 };
 struct SoundDef {
   int category = 0;
