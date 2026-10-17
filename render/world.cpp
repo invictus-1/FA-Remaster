@@ -35,6 +35,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       clouds(device),
       motion(device),
       upscaler(device),
+      fsr3(device),
       skyDraw(device),
       falling(device),
       sight(device),
@@ -94,6 +95,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       return false;
     }
     haveMap_ = true;
+    temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
@@ -433,10 +435,38 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   const int sceneWidth = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(width) * share))) : width;
   const int sceneHeight = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(height) * share))) : height;
   view = View::Make(camera, sceneWidth, sceneHeight, time);
-  // motion: the view without its jitter kept, this frame's and the frame before's (none yet: no jitter)
-  const bool moving = (motionOn || motionView > 0) && gSceneSamples == 1;
+  // the temporal upscaler (FSR 3): its shaders made the first time it is asked for
+  temporalNow_ = false;
+  if (temporalUpscale && !sidePicture && gSceneSamples == 1 && motionView <= 0) {
+    if (fsr3State_ == 0) {
+      std::string error;
+      fsr3State_ = fsr3.Init(&error) ? 1 : -1;
+      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str());
+    }
+    temporalNow_ = fsr3State_ > 0;
+  }
+  if (!sidePicture) {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    frameSeconds_ = lastFrameAt_ > 0 ? static_cast<float>(std::clamp(now - lastFrameAt_, 0.001, 0.25)) : 1 / 60.0f;
+    lastFrameAt_ = now;
+  }
+  // motion: the view without its jitter kept, this frame's and the frame before's; with the temporal
+  // upscaler, the view shifted by this frame's jitter
+  const bool moving = (motionOn || motionView > 0 || temporalNow_) && gSceneSamples == 1 && !sidePicture;
   meshes.motion = moving;
-  if (moving) motion.Begin(&view, 0, 0, false);
+  meshes.keepLast = sidePicture;
+  if (!sidePicture) {
+    const Vec3 eye = camera.Eye();
+    temporalCut_ = cameraCut || !temporalBefore_ || Length(eye - lastEye_) > 0.3f * std::max(camera.distance, 10.0f);
+    cameraCut = false;
+    lastEye_ = eye;
+    temporalBefore_ = temporalNow_;
+  }
+  if (moving) {
+    float jx = 0, jy = 0;
+    if (temporalNow_) Fsr3::Jitter(temporalFrame_++, sceneWidth, width, &jx, &jy);
+    motion.Begin(&view, jx, jy, temporalNow_ && temporalCut_);
+  }
   // the light: the map's sun, in the chosen look
   ViewConstants& c = view.constants;
   const Vec3 sunDirection = haveMap_ ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
@@ -446,6 +476,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  if (temporalNow_)  // (the temporal upscaler: textures read for the screen's size and finer)
+    c.temporal[0] = std::log2(static_cast<float>(sceneWidth) / static_cast<float>(width)) + temporalMipBias;
   if (softShadows && look == Look::Modern) {  // (soft shadows: on, how the edges grow, how far casters are looked for, the widest edge)
     c.softShadows[0] = 1;
     c.softShadows[1] = sunSize;
@@ -608,6 +640,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   meshes.Begin();
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
+  if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
   if (screenWidth_ != view.width || screenHeight_ != view.height) {
     screenView_.width = screenWidth_;
     screenView_.height = screenHeight_;
@@ -1558,13 +1591,33 @@ void World::Render() {
     sight.neverSeen = unexplored ? 0.04f : sight.darkness;
     sight.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
+    // (the same over the picture the temporal upscaler's reactive mask compares with: the fog of war stands still)
+    if (temporalNow_ && post.BeginKept()) sight.Draw(view, camera, post.Depth(), static_cast<float>(map.width), static_cast<float>(map.height));
   }
   if (haveMap_ && playable[2] > playable[0]) {  // what lies beyond the part of the map that can be played now
     post.BeginColorOnly();
     sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
+    if (temporalNow_ && post.BeginKept())
+      sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
   }
   Stage("finishing (exposure, bloom)");
-  post.shown = meshes.motion ? motion.Check(motionView, view, post.Color()) : gfx::Texture{};
+  post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
+  if (temporalNow_ && !post.shown) {  // FSR 3: up to the screen's size from this frame and the ones before
+    Stage("temporal upscale (FSR 3)");
+    Fsr3::Inputs in;
+    in.motion = motion.Texture();
+    in.reactive = post.Reactive();
+    in.jitterX = motion.jitterX;
+    in.jitterY = motion.jitterY;
+    in.exposure = view.constants.look > 0.5f ? view.constants.modern[2] : 1.0f;
+    in.cameraNear = camera.zNear;
+    in.fovY = camera.fovY;
+    in.frameSeconds = frameSeconds_;
+    in.reset = temporalCut_;
+    in.sharpness = upscaler.sharpness;
+    post.UpscaleTemporal(&fsr3, in, screenWidth_, screenHeight_);
+    Stage("finishing at the screen's size (exposure, bloom)");
+  }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
   Stage("icons, bars");
   icons.showSymbols = iconsOn;
@@ -1573,7 +1626,7 @@ void World::Render() {
 }
 
 bool World::Project(Vec3 p, float* x, float* y) const {
-  const Mat4& m = view.constants.viewProj;
+  const Mat4& m = screenView_.constants.viewProj;  // (the scene's, without the temporal upscaler's jitter)
   const float w = m.m[3][0] * p.x + m.m[3][1] * p.y + m.m[3][2] * p.z + m.m[3][3];
   if (w <= 1e-4f) return false;
   *x = ((m.m[0][0] * p.x + m.m[0][1] * p.y + m.m[0][2] * p.z + m.m[0][3]) / w * 0.5f + 0.5f) * static_cast<float>(screenWidth_);

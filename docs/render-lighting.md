@@ -40,9 +40,42 @@ Mac", and every ray-traced effect keeps a fallback without it.
      battle the units' own motion takes the error from 0.88 % of the picture to 0.67 %. Vulkan as
      Direct3D 12. Also `Post::KeepOpaque` / `Reactive` (the upscaler's reactive mask) and the finishing
      passes at any picture's size.
-   - **In work**: AMD's FSR 3.1 upscaler (`render/fsr3.h`; the FidelityFX SDK v2.3.0's MIT sources, the
-     download approved by Chris on 2026-10-16), ported by a helper onto gfx's compute shaders. Its temporal
-     anti-aliasing replaces MSAA where it is on (the scene then drawn with one sample a pixel and a jitter).
+   - **Done, first version** (2026-10-16): AMD's FSR 3.1 upscaler (`render/fsr3.h/.cpp`; the FidelityFX SDK
+     v2.3.0's MIT sources in `render/third_party/fsr3`, the download approved by Chris on 2026-10-16), its
+     passes on gfx's compute shaders (no AMD runtime), its sharpening (RCAS) on the repository's FSR 1.
+     `--fsr3-check` tries it on a made-up scene. In the frame: `World::temporalUpscale`
+     (`WorldPicture::SetTemporalUpscale`; viewer `--fsr3`, with `--fsr <mode>` for the share drawn and
+     `--fsr3-bias`). The scene is drawn with one sample a pixel, shifted by FSR's jitter each frame (Halton
+     over 8 x (screen / drawn) squared phases); its depth, its motion and the reactive mask go to FSR 3, which
+     brings it to the screen's size; the glow and the tone curve then run at the screen's size and FSR 1
+     does not. At a share of 1 it is the anti-aliasing, in place of MSAA.
+     - Textures are read as finely as the screen's size wants: view.h's `temporal.x`, every `Sample` made a
+       `SampleBias` by one definition in the view's shader block, the ground's `SampleGrad` steps scaled by
+       the same. AMD advises one level finer still; measured, that moved the picture further from the native
+       one and flickered a third more where nothing moves, so `World::temporalMipBias` is 0.
+     - Icons, bars and picking use the view without the jitter. A cut starts it afresh: `World::cameraCut`
+       (the host's), a camera that moves 0.3 of its distance in one frame, a map opened, the option switched
+       on. The minimap's frame (`World::sidePicture`) leaves its frames before alone, and the models' last
+       places too. The fog of war is laid on the kept picture the reactive mask compares with as well (it
+       stands still, and would otherwise be taken for something that moves). `--motion-view 5` shows the
+       reactive mask.
+     - Measured (Seton's, a commander, 1080p from 720p, RTX 4090): the mean difference to today's picture at
+       the screen's size with 4x MSAA is 2.5 in 255 (FSR 1 Quality 4.5; the 720p picture stretched by Lanczos
+       3.65); at the screen's own size 2.8, its edges smoother than MSAA's. No smearing with the camera
+       panning or in a battle; Vulkan as Direct3D 12 (mean difference 0.11).
+     - Cost at 1440p: FSR 3's passes 0.53 ms at the screen's own size, 0.37 ms from Quality's 1707 x 960,
+       0.32 ms from Performance's 1280 x 720 (Direct3D 12, the still scene; Vulkan 0.42-0.70 ms, slower and
+       noisier); the motion 0.01-0.03 ms; the finishing at the screen's size 0.05 ms. The whole frame on the
+       card (medians; the card was shared with another program, so within about 0.3 ms): today's 4x MSAA
+       2.7 ms, FSR 3 at the screen's size 2.5-2.8, FSR 3 Quality 1.4-1.9, FSR 3 Performance 1.3-1.4, FSR 1
+       Quality 1.6-1.8.
+     - Off: pictures identical to the build before, pixel for pixel, on both backends, with MSAA on and off
+       and with FSR 1. (MSAA off was not checked before 2026-10-16. Since step 1 (c0e2e6c) the shader
+       compiler rounds a few of the shaders made for one sample a pixel differently: 1 in 255 on 6 % of the
+       pixels, more on a few at the horizon and in the water's mirror of a cloud; the arithmetic is the same.
+       The regression script checks MSAA off since.)
+     - Open: Chris to look; the ui to wire the option (it needs the anti-aliasing at one sample); the light
+       in the air's and the clouds' own frames before are still disturbed for a frame by the minimap's.
 1. **Light in the air** (volumetric fog): a volume over the view (froxels, about 160 x 90 x 64), the sun
    through its shadow cascades and the clouds' shadow, the lamps from the light grid, haze and mist as
    densities; reprojected and blended over frames, then summed toward the eye. Every shader's
@@ -86,6 +119,17 @@ Mac", and every ray-traced effect keeps a fallback without it.
      shapes are soft at a distance (Chris to judge).
 3. **Soft shadows** (the sun's penumbra wider with distance from the caster) and **contact shadows** (a
    short march along the depth toward the light, for the small creases the shadow maps cannot hold).
+   - **First version done** (2026-10-16): `World::softShadows` (viewer `--soft-shadows [size]`): what casts a
+     place's shadow is looked for round it in the cascade (16 taps, turned from place to place), the gap to it
+     in world units from the map's depth, and the edge blurred by that gap times the sun's size (`sunSize`
+     0.02 a world unit, twice the real sun's), between one texel and 1.6 units: a commander's shadow is sharp
+     at its feet and soft where its body casts it. `World::contactShadows` (`--contact-shadows`): in the
+     ambient occlusion's pass a march of a world unit toward the sun along the depth; something just in
+     front of the way, where the shadow maps say the sun reaches, is a shadow too small for them (at the
+     feet of units, under trees), blurred and multiplied in with the occlusion.
+   - Cost at 1440p: soft shadows about +0.25 ms (the ground's pass 0.49 -> 0.73 ms, the models' 0.20 ->
+     0.23; Direct3D 12, the still scene with 4x MSAA; Vulkan about +0.2); contact shadows +0.12 ms (the
+     occlusion's pass 0.39 -> 0.52; Vulkan +0.13). Off: pictures as before, pixel for pixel, on both backends.
 4. **Ray tracing**: inline ray queries (Direct3D 12's DXR 1.1, shader model 6.5; Vulkan's
    VK_KHR_ray_query), a structure per model's level of detail and one for the ground, the scene's built
    each frame. Then reflections on every surface, bounce light (probes over the map updated by rays a few

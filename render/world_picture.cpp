@@ -58,6 +58,7 @@ struct WorldPicture::Impl {
   bool remasteredEffects = true;       // SetRemasteredEffects
   float effectsQuality = 1;            // SetEffectsQuality
   float upscale = 1;                   // SetUpscale
+  bool temporalUpscale = false;        // SetTemporalUpscale
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
@@ -348,6 +349,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   m.world->effectsLook = m.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   m.world->effectsQuality = m.effectsQuality;
   m.world->upscale = m.upscale;
+  m.world->temporalUpscale = m.temporalUpscale;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -456,6 +458,8 @@ void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on
 void WorldPicture::SetEffectsQuality(float share) { impl_->effectsQuality = share; }
 
 void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
+
+void WorldPicture::SetTemporalUpscale(bool on) { impl_->temporalUpscale = on; }
 
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 
@@ -610,6 +614,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     placed.swap(w.placed);
     w.iconsOn = false;
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
+    w.sidePicture = true;  // (no FSR 3 or motion: their frames before are the game camera's, kept for its next)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
     // (the world's own camera, views and screen size are the main picture's and must be again when this
     // pass is over: GroundAt, UnitAt and UnitsIn answer by them between two frames)
@@ -621,6 +626,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.device->EndFrame(&m.capture, !m.HostShows());  // (in the host's window: read back, not shown)
     w.iconsOn = icons;
     w.shadowsOn = shadows;
+    w.sidePicture = false;
     w.sightShown = true;
     ghosts.swap(w.ghosts);
     lines.swap(w.lines);

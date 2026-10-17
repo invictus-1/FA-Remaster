@@ -326,6 +326,40 @@ gfx::Texture Post::Reactive() {
   return reactive_;
 }
 
+bool Post::BeginKept() {
+  if (!keptOpaque_ || !opaque_) return false;
+  gfx::PassDesc pass;
+  pass.color = opaque_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  return true;
+}
+
+void Post::UpscaleTemporal(Fsr3* fsr3, Fsr3::Inputs in, int screenWidth, int screenHeight) {
+  upscaledNow_ = false;
+  if (!fsr3 || drawn_ || !color_ || screenWidth <= 0 || screenHeight <= 0) return;
+  if (!upscaled_ || upscaledWidth_ != screenWidth || upscaledHeight_ != screenHeight) {
+    if (upscaled_) device_->Destroy(upscaled_);
+    gfx::TargetDesc td;
+    td.width = screenWidth;
+    td.height = screenHeight;
+    td.format = kSceneFormat;
+    td.storage = true;
+    upscaled_ = device_->CreateTarget(td);
+    upscaledWidth_ = screenWidth;
+    upscaledHeight_ = screenHeight;
+    if (!upscaled_) return;
+  }
+  if (!in.color) in.color = color_;
+  if (!in.depth) in.depth = depth_;
+  if (in.renderWidth <= 0 || in.renderHeight <= 0) {
+    in.renderWidth = width_;
+    in.renderHeight = height_;
+  }
+  fsr3->Run(in, upscaled_, screenWidth, screenHeight);
+  upscaledNow_ = true;
+}
+
 void Post::SizeFinishing(int width, int height) {
   if (width == finishWidth_ && height == finishHeight_ && glowSteps_[0]) return;
   for (gfx::Texture& t : glowSteps_) {
@@ -371,8 +405,11 @@ void Post::BeginColorOnly() {
 
 void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int screenHeight) {
   if (drawn_) device_->Resolve(drawn_, color_);
-  const gfx::Texture picture = shown ? shown : color_;
-  const int pictureWidth = width_, pictureHeight = height_;
+  // (brought up by FSR 3 this frame: its picture at the screen's size is finished, and FSR 1 is not run)
+  const bool upscaled = upscaledNow_ && upscaled_ && !shown;
+  upscaledNow_ = false;
+  const gfx::Texture picture = upscaled ? upscaled_ : shown ? shown : color_;
+  const int pictureWidth = upscaled ? upscaledWidth_ : width_, pictureHeight = upscaled ? upscaledHeight_ : height_;
   SizeFinishing(pictureWidth, pictureHeight);
   // the glow (modern look): smaller and smaller, then laid back over each other into the first
   const bool glowing = view.constants.look > 0.5f && glow > 0 && glowSteps_[0];
@@ -427,7 +464,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     }
   }
   // drawn smaller than the screen: the picture as a screen shows it first, then FSR brings it up
-  const bool scaled = upscaler && screenWidth > 0 && screenHeight > 0 && (screenWidth != width_ || screenHeight != height_);
+  const bool scaled = !upscaled && upscaler && screenWidth > 0 && screenHeight > 0 && (screenWidth != width_ || screenHeight != height_);
   if (scaled && !ldr_) {
     gfx::TargetDesc td;
     td.width = width_;

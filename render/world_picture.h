@@ -130,6 +130,11 @@ class WorldPicture {
   // to it: 1 off (as at first), 1/1.3 "Ultra Quality", 1/1.5 "Quality", 1/1.7 "Balanced", 1/2
   // "Performance". Icons, bars and the interface stay sharp. A player's option, for slower cards.
   void SetUpscale(float share);
+  // AMD's FSR 3 (fsr3.h) in place of FSR 1, at SetUpscale's share: the scene drawn a little shifted every
+  // frame and brought up from what the frames before saw; at a share of 1 it smooths the edges at the
+  // picture's own size, in place of anti-aliasing. Needs anti-aliasing off (gSceneSamples 1 before Open);
+  // with it on, FSR 1 stays. Off as at first. A player's option.
+  void SetTemporalUpscale(bool on);
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).
