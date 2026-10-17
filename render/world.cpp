@@ -61,6 +61,16 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     steps += b;
     stepStart = now;
   };
+  // the pipelines of everything opened made together at the end, their shaders compiled first on several cores
+  // where the cache lacks them (gfx: a pipeline batch; ended on the way out too, should the opening fail)
+  device_->BeginPipelineBatch();
+  struct Batch {
+    gfx::Device* device;
+    bool open = true;
+    ~Batch() {
+      if (open) device->EndPipelineBatch(nullptr);
+    }
+  } batch{device_};
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
       !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
@@ -206,6 +216,12 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     LoadBrackets();
   }
   step("sky and the rest");
+  batch.open = false;
+  if (!device_->EndPipelineBatch(error)) {
+    *error = "shader: " + *error;
+    return false;
+  }
+  step("shaders compiled");
   fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
 }

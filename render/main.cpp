@@ -107,6 +107,7 @@
 //           the display's size and against a plain stretch, then timed (fsr3_check.cpp); with --vulkan, on the
 //           Vulkan backend; with --screenshot <name>.png, the pictures compared are written as <name>_*.png
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
+// --shader-cache <dir>  the compiled shaders kept in that folder (an empty one: to measure a first start)
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
 // --no-bloom  no glow (World::bloom off: the modern look's glow and the original look's bloom, the game's Bloom Render)
@@ -286,6 +287,7 @@ struct Options {
   bool vulkan = false;                  // --vulkan
   bool fxc = false;                     // --fxc
   bool shaderCache = true;              // --no-shader-cache
+  std::string shaderCacheDir;           // --shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
   bool fsr3Check = false;               // --fsr3-check
@@ -573,6 +575,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--wet") o->wet = static_cast<float>(atof(v));
+    else if (a == "--shader-cache") o->shaderCacheDir = v;
     else if (a == "--find") o->find = v;
     else if (a == "--shots") o->shots = atoi(v);
     else if (a == "--shot-light") o->shotLight = static_cast<float>(atof(v));  // how strong the light of shots in flight is (0: none; below 0: on and off by turns of 30 frames, to compare)
@@ -699,6 +702,7 @@ int main(int argc, char** argv) {
   dd.backend = opt.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
   dd.oldShaderCompiler = opt.fxc;
   if (!opt.shaderCache) dd.shaderCache = "-";
+  else if (!opt.shaderCacheDir.empty()) dd.shaderCache = opt.shaderCacheDir;
   auto device = gfx::Device::Create(dd, &error);
   if (device && opt.vulkanClear) {  // --vulkan-clear: the backend's first step alone: frames cleared, shown and read back
     printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());

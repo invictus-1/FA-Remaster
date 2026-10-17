@@ -316,13 +316,21 @@ Asked "anything else?", Chris took six of the renderer's ideas ("I want our proj
 beautiful and plays extremely well"; HDR output not, "most hdr monitors are kinda ass"). Each a player's option
 where it changes the look, off by default, measured like the rest. In the order they are taken up:
 
-1. **Shader cache: the first opening fast too.** Measured: the compiled shaders are already kept between runs
-   (`%LOCALAPPDATA%\FA Remastered\shaders`, both backends), and with them kept every pipeline of a map is made in
-   0.06-0.11 s, ray tracing's too (the driver keeps its own compiled pipelines). What is slow is the first
-   opening after the shaders change (every renderer update): then they are compiled anew, the Vulkan ray-tracing
-   ones in about 4 s. So: compile them on several cores at once, and give a release a cache made beforehand
-   (read beside the user's own), so a player's very first start is quick. And look at the rest of the opening
-   (about 5 s for a map with the viewer, most of it not shaders).
+1. **Shader cache: the first opening fast too (done, 2026-10-17).** Measured first: the compiled shaders were
+   already kept between runs (`%LOCALAPPDATA%\FA Remastered\shaders`, both backends), and with them kept every
+   pipeline of a map is made in 0.06-0.11 s, ray tracing's too (the driver keeps its own compiled pipelines).
+   What was slow is the first opening after the shaders change (every renderer update, and a player's first
+   start): then they were compiled one after another, about 8 s on Direct3D 12 and 10.5 s on Vulkan (4 s more
+   with ray tracing). Now a world's opening is a pipeline batch (gfx `BeginPipelineBatch` / `EndPipelineBatch`):
+   the pipelines asked for are given their handles at once and made at the end, their shaders first compiled
+   on all the processor's cores into the cache (`PrewarmDxil` / `PrewarmSpirv`, a compiler for each thread, the
+   same shader asked for twice compiled once), then made from it as before; one used before the end is made
+   then, and what fails is compiled again the old way with its messages (and Direct3D's own compiler where DXC
+   cannot). A first opening's compiling: 0.56-0.75 s on Direct3D 12, 0.7 s on Vulkan, ray tracing's included
+   (the processor half busy with other work meanwhile). Pictures identical. Viewer `--shader-cache <dir>`: the
+   cache in that folder (an empty one, to measure a first start). Left: shaders made after the opening (the ray
+   scene's, lit rain's, splashes') are made one at a time as before (each under 30 ms here); a cache made for a
+   release beforehand is not needed now.
 2. **Lightning inside the clouds (done, first version: in the clouds' section above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
    through their depth (clouds.cpp's march takes the flash as a light at the bolt).
 3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader

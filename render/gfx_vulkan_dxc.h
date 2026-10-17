@@ -6,8 +6,11 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "gfx.h"
 
 namespace render::gfx {
 
@@ -43,5 +46,60 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
 // is not there or cannot sign.
 bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
                  std::string* error, bool* missing);
+
+// A shader a pipeline will want: its source, entry and stage ("vs", "ps" or "cs").
+struct ShaderJob {
+  std::string source, entry, stage;
+};
+// Those of `jobs` the cache (`cacheDir`) lacks, compiled on several threads at once and kept there, as CompileSpirv
+// and CompileDxil keep them; they then find them. (What fails here they compile again, and give its messages.)
+void PrewarmSpirv(const std::vector<ShaderJob>& jobs, const std::string& cacheDir);
+void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir);
+
+// A pipeline asked for in a batch (Device::BeginPipelineBatch) and not made yet: what it is to be made from, its
+// texts owned (the desc's views and names point into them). Both backends keep one in their pipeline's record.
+struct PendingPipeline {
+  bool compute = false;
+  PipelineDesc desc;
+  ComputeDesc computeDesc;
+  std::string name, vertexSource, pixelSource, vertexEntry, pixelEntry, source, entry;
+
+  static std::shared_ptr<PendingPipeline> Of(const PipelineDesc& d) {
+    auto p = std::make_shared<PendingPipeline>();
+    p->desc = d;
+    p->name = d.name;
+    p->vertexSource = d.vertexSource;
+    p->pixelSource = d.pixelSource;
+    p->vertexEntry = d.vertexEntry;
+    p->pixelEntry = d.pixelEntry;
+    p->desc.name = p->name.c_str();
+    p->desc.vertexSource = p->vertexSource;
+    p->desc.pixelSource = p->pixelSource;
+    p->desc.vertexEntry = p->vertexEntry.c_str();
+    p->desc.pixelEntry = p->pixelEntry.c_str();
+    return p;
+  }
+  static std::shared_ptr<PendingPipeline> Of(const ComputeDesc& d) {
+    auto p = std::make_shared<PendingPipeline>();
+    p->compute = true;
+    p->computeDesc = d;
+    p->name = d.name;
+    p->source = d.source;
+    p->entry = d.entry;
+    p->computeDesc.name = p->name.c_str();
+    p->computeDesc.source = p->source;
+    p->computeDesc.entry = p->entry.c_str();
+    return p;
+  }
+  // its shaders, for Prewarm
+  void Jobs(std::vector<ShaderJob>* out) const {
+    if (compute) {
+      out->push_back({source, entry, "cs"});
+      return;
+    }
+    out->push_back({vertexSource, vertexEntry, "vs"});
+    if (!pixelSource.empty()) out->push_back({pixelSource, pixelEntry, "ps"});
+  }
+};
 
 }  // namespace render::gfx

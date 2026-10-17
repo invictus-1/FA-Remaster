@@ -266,6 +266,13 @@ class Device {
   virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;
   virtual Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) = 0;
+  // Pipelines asked for between these two (a world's opening) are made together at the end: first their shaders
+  // compiled on several cores at once into the shader cache (where it lacks them: the first start, or after the
+  // shaders changed), then the pipelines from it. Their handles are given at once; one used before the end is made
+  // then. EndPipelineBatch: false with the first one's error that could not be made. (Where there is no shader
+  // cache, or no DXC, each is made at once, as outside a batch.)
+  virtual void BeginPipelineBatch() {}
+  virtual bool EndPipelineBatch(std::string* error) { (void)error; return true; }
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
