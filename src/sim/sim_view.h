@@ -62,6 +62,19 @@ struct UnitView {
   int layer = 0;
   bool attached = false;
   int attachedCount = 0;
+  // ui request 36 (how the interface's GetAttachedUnitsList, SelectUnits and GetAssistingUnitsList use these:
+  // docs/engine-answers.md "ui 36"). Entity ids, 0xffffffff = none (not 0: 0 is army 1's first unit).
+  // parent: the entity it hangs on, as EntityView::parent: the original's SSTIEntityVariableData+0x64
+  // (Entity::SyncInterface 0x67a2b6 from the parent weak pointer, entity+0x18c), what the user side's
+  // GetAttachmentParent 0x838030 looks up. attachedUnits: the units hanging on it, in the order they were
+  // attached: the original's children list (+0x68; Entity::AttachTo 0x679550 appends, DetachFrom 0x6796f0 keeps
+  // the others' order) less what is not a unit; a killed unit not yet destroyed is still in it.
+  // creator: the unit that made it (its factory or engineer, or Unit:SetCreator: a pod's station or commander), the
+  // same as UnitStateView::creator: the original's SSTIUnitVariableData+0x0 (Unit::Sync 0x6abcf7), the user side's
+  // UserUnit+0x3c0 (its GetCreator 0x8c4a00).
+  uint32_t parent = 0xffffffff;
+  std::vector<uint32_t> attachedUnits;
+  uint32_t creator = 0xffffffff;
   // the mesh blueprint its script set on it with SetMesh (a personal shield's, a build mesh's); "" = its own
   std::string mesh;
   // A shield: hasShield while a shield entity hangs on the unit (a generator's bubble, a personal shield; the

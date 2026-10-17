@@ -338,6 +338,11 @@ class Sim {
   const std::vector<Unit*>& ArmyStageOrder();
   void ResumeCommandThread(Unit* u);
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
+  // The stamp of a unit that takes a new parent (Unit::attachSeq). The original keeps a parent's children in a list
+  // (entity+0x17c): Entity::AttachTo 0x679550 appends the child (0x6795d5..0x67961c), Entity::DetachFrom 0x6796f0
+  // takes it out and moves the rest down (0x679725..0x67974f), so the list is in attach order; Entity::SyncInterface
+  // 0x67a290 sends it to the user side (SSTIEntityVariableData+0x68). Here only UnitViews sorts by the stamp.
+  uint64_t NextAttachSeq() { return ++attachSeqNext_; }
   // Units within [x0,x1] x [z0,z1] by position (a 16-unit grid rebuilt when units moved, were
   // created or destroyed); calls f(unit) in id order within each cell row-major - callers that
   // need id order sort.
@@ -441,6 +446,7 @@ class Sim {
   bool cmdOrderDirty_ = true;
   std::vector<Unit*> motionOrder_;
   uint64_t entSeqNext_ = 0;
+  uint64_t attachSeqNext_ = 0;
   bool motionOrderDirty_ = true;
   std::vector<Unit*> armyOrder_;
   bool armyOrderDirty_ = true;
