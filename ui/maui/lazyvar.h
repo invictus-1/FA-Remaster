@@ -9,6 +9,11 @@
 
 namespace moho::ui {
 
+// What the engine is looking at while it reads LazyVars (a control being hit-tested or drawn): named in
+// the warning of an evaluation that fails, so that a broken layout can be found. Set and cleared by the
+// reader (LazyVarContext); nullptr: nothing.
+void SetLazyVarContext(const class Control* control);
+
 class LazyVar {
  public:
   LazyVar() = default;
@@ -31,9 +36,12 @@ class LazyVar {
   bool TryGet(float* out) const;
   // lazyvar:SetValue(v): the script side tells everything that depends on it.
   void Set(float v);
+  // The control it belongs to (named in the warning of an evaluation that fails).
+  void SetOwner(const class Control* control) { owner_ = control; }
 
  private:
   lua_State* L_ = nullptr;  // the main state
+  const class Control* owner_ = nullptr;
   int ref_ = LUA_NOREF;
 };
 

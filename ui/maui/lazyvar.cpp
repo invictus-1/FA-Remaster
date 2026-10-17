@@ -1,9 +1,16 @@
 #include "maui/lazyvar.h"
 
+#include <string>
+
 #include "core/log.h"
+#include "maui/control.h"
 #include "script/script_state.h"
 
 namespace moho::ui {
+namespace {
+const Control* g_lazyContext = nullptr;
+}  // namespace
+void SetLazyVarContext(const Control* control) { g_lazyContext = control; }
 
 bool LazyVar::Create(lua_State* L, float initial) {
   Release();
@@ -48,7 +55,21 @@ float LazyVar::Get() const {
     lua_pop(L, 1);
     lua_pushvalue(L, -1);
     if (lua_pcall(L, 0, 1, 0) != 0) {
-      Logf(LogLevel::Warning, "Evaluating LazyVar failed: %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+      std::string where;
+      if (const Control* c = owner_ ? owner_ : g_lazyContext) {  // (its control: kind, name and what it shows)
+        where = std::string(" [of the control ") + c->ClassName() + (c->name.empty() ? "" : " \"" + c->name + "\"");
+        std::string shows;
+        c->Describe(shows);
+        if (!shows.empty()) where += ": " + shows.substr(0, 80);
+        for (const Control* p = c->parent(); p; p = p->parent()) {  // (and where it hangs: its parents' kinds and names)
+          where += std::string(" < ") + p->ClassName() + (p->name.empty() ? "" : " \"" + p->name + "\"");
+          std::string theirs;
+          p->Describe(theirs);
+          if (!theirs.empty()) where += " (" + theirs.substr(0, 60) + ")";
+        }
+        where += "]";
+      }
+      Logf(LogLevel::Warning, "Evaluating LazyVar failed: %s%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?", where.c_str());
       lua_pop(L, 1);
       lua_pushnumber(L, 0);
       lua_rawseti(L, top + 1, 1);  // it reads as 0 from now on, until a script sets it again

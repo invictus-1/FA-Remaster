@@ -13,6 +13,7 @@ namespace moho::ui {
 
 void Control::AddLazyVar(lua_State* L, LazyVar& var, const char* field) {
   var.Create(L, 0.0f);
+  var.SetOwner(this);
   PushObject(L, this);
   lua_pushstring(L, field);
   var.Push(L);
@@ -34,6 +35,7 @@ void Control::Create(lua_State* L, int luaObj, Control* parent) {
   }
   static const char* const kFields[] = {"Left", "Right", "Top", "Bottom", "Width", "Height", "Depth"};
   for (int i = 0; i < 7; ++i) {
+    vars[i]->SetOwner(this);
     lua_pushstring(L, kFields[i]);
     vars[i]->Push(L);
     lua_rawset(L, luaObj);

@@ -199,7 +199,8 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
   if (!profile) {
     for (auto& [depth, c] : order)
-      if (!c->dead()) c->Draw(L, target);
+      if (!c->dead()) SetLazyVarContext(c), c->Draw(L, target);
+    SetLazyVarContext(nullptr);
     return;
   }
   ++g_renders;

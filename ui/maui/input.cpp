@@ -180,7 +180,11 @@ Control* TopmostIn(Control* root, float x, float y) {
   Control* best = nullptr;
   float bestDepth = 0;
   for (Control* c : all) {
-    if (c->dead() || c->IsHidden() || c->IsHitTestDisabled() || !c->HitTest(x, y)) continue;
+    if (c->dead() || c->IsHidden() || c->IsHitTestDisabled()) continue;
+    SetLazyVarContext(c);
+    const bool in = c->HitTest(x, y);
+    SetLazyVarContext(nullptr);
+    if (!in) continue;
     float d = c->depth.Get();  // the original compares the depths of the last drawn frame
     if (!best || d > bestDepth) best = c, bestDepth = d;
   }
