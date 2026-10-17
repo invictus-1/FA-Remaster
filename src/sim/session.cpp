@@ -504,4 +504,38 @@ bool PushGameConfigFile(lua_State* L, const std::string& hostPath, std::string* 
   return true;
 }
 
+std::string MapFolderOf(const std::string& path) {
+  const size_t slash = path.find_last_of("/\\");
+  return slash == std::string::npos ? std::string() : path.substr(0, slash);
+}
+
+std::string SessionMapFolder(const ReplayHeader& header) {
+  std::string scenarioFile;
+  if (lua_State* L = lua_open()) {  // (a state of its own, as ScenarioMarksFixes reads the scenario info)
+    if (PushSerializedLua(L, header.scenario) && lua_istable(L, -1)) {
+      lua_pushstring(L, "Options");
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "ScenarioFile");
+        lua_rawget(L, -2);
+        if (lua_type(L, -1) == LUA_TSTRING) scenarioFile = lua_tostring(L, -1);
+      }
+    }
+    lua_close(L);
+  }
+  return MapFolderOf(scenarioFile.empty() ? header.map : scenarioFile);
+}
+
+std::string PreGameDataPrefs(const std::string& mapFolder) {
+  if (mapFolder.empty()) return "PreGameData = { }\n";
+  std::string quoted;  // a Lua string in single quotes, as the preferences writer quotes one
+  for (char c : mapFolder) {
+    if (c == '\\' || c == '\'') quoted += '\\';
+    if (c == '\n') quoted += "\\n";
+    else if (c == '\r') quoted += "\\r";
+    else quoted += c;
+  }
+  return "PreGameData = {\n    CurrentMapDir = '" + quoted + "'\n}\n";
+}
+
 }  // namespace moho

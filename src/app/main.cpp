@@ -707,6 +707,12 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
 int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids,
              const SessionDescription& launched, const std::string* stream) {
   SessionDescription session = launched;
+  // The session's PreGameData into this run's own Game.prefs (mounted in main before the init file), before the
+  // rules load: the map folder whose own blueprints they load, from the session (a replay: its own scenario), as
+  // the lobby would have written it (sim/session.h SessionMapFolder)
+  const std::string mapFolder = SessionMapFolder(session.header);
+  vfs.SetMemoryFile(kGamePrefsPath, PreGameDataPrefs(mapFolder));
+  Logf(LogLevel::Info, "moho64: PreGameData.CurrentMapDir '%s'", mapFolder.c_str());
   if (o.hasFocus) {
     session.focusArmy = o.focus >= 1 && o.focus <= static_cast<int>(session.header.armies.size()) ? o.focus - 1 : -1;
     Logf(LogLevel::Info, "moho64: --focus: the session looks through army %d", session.focusArmy == -1 ? -1 : session.focusArmy + 1);
@@ -980,6 +986,11 @@ int main(int argc, char** argv) {
     return 2;
   }
   Vfs vfs;
+  // The game's preferences file (sim/session.h kGamePrefsPath): this run's own, held in memory and mounted before
+  // the init file mounts the original's preferences folder at /preferences, so the rules never read the
+  // original's Game.prefs (in the lab: the PreGameData of the last game played in FAF); the folder's other files
+  // stay visible. No map folder until a session sets its own (RunTimes).
+  vfs.MountMemoryFile(kGamePrefsPath, PreGameDataPrefs(""));
   std::vector<std::string> hookDirs;
   if (!MountFromInitFile(o.init, o.folders, vfs, hookDirs)) return 1;
   // --maps <folder> (may be given more than once): more map folders beside the game's own at /maps, as the

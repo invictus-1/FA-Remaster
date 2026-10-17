@@ -32,6 +32,15 @@ class Vfs {
   // Returns false when the host path does not exist.
   bool Mount(const std::string& hostPath, const std::string& mountPoint);
 
+  // Add a search path that holds one file, `vpath`, whose bytes the host keeps in memory: nothing is written to
+  // disk, so programs running side by side each see their own. It takes its place in the search order as Mount
+  // does: mounted before the init file's paths, it wins over a file of the same path in them, and the other files
+  // of their folder stay visible. Returns false when an earlier search path already provides `vpath`.
+  bool MountMemoryFile(std::string_view vpath, std::string text);
+  // Replace the bytes of a file MountMemoryFile mounted; false when `vpath` is no such file. Not while another
+  // thread may read that file.
+  bool SetMemoryFile(std::string_view vpath, std::string text);
+
   bool Exists(std::string_view vpath) const;
   bool IsFolder(std::string_view vpath) const;
   std::optional<FileInfo> GetFileInfo(std::string_view vpath) const;
@@ -51,10 +60,12 @@ class Vfs {
 
  private:
   struct MountPoint {
-    std::string display;     // "c:\users\...\lua.nx2"
+    std::string display;     // "c:\users\...\lua.nx2" (empty for a memory file)
     std::string hostPath;    // resolved host path
     std::string mountPoint;  // "/" or "/mods/x/"
     std::unique_ptr<ZipArchive> zip;
+    bool memory = false;     // MountMemoryFile: the one file's bytes are `text`
+    std::string text;
   };
   struct FileRef {
     uint32_t mount = 0;

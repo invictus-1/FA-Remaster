@@ -81,6 +81,30 @@ bool Vfs::Mount(const std::string& hostPath, const std::string& mountPoint) {
   return true;
 }
 
+bool Vfs::MountMemoryFile(std::string_view vpath, std::string text) {
+  const std::string p = Normalize(vpath);
+  if (files_.count(p)) return false;  // an earlier search path provides it: this one would not be seen
+  Logf(LogLevel::Info, "DISK: AddSearchPath: a file in memory, mounted as '%s'", p.c_str());
+  MountPoint m;
+  m.mountPoint = p.substr(0, p.rfind('/') + 1);
+  m.memory = true;
+  m.text = std::move(text);
+  FileRef ref;
+  ref.mount = static_cast<uint32_t>(mounts_.size());
+  ref.size = m.text.size();
+  mounts_.push_back(std::move(m));
+  AddFile(p, std::move(ref));
+  return true;
+}
+
+bool Vfs::SetMemoryFile(std::string_view vpath, std::string text) {
+  auto it = files_.find(Normalize(vpath));
+  if (it == files_.end() || !mounts_[it->second.mount].memory) return false;
+  it->second.size = text.size();
+  mounts_[it->second.mount].text = std::move(text);
+  return true;
+}
+
 namespace {
 // The original resolves only rooted virtual paths: "mods/x/y.sca" is not found.
 bool IsRooted(std::string_view p) { return !p.empty() && (p[0] == '/' || p[0] == '\\'); }
@@ -114,6 +138,7 @@ std::optional<std::string> Vfs::ReadFile(std::string_view vpath) const {
   auto it = files_.find(Normalize(vpath));
   if (it == files_.end()) return std::nullopt;
   const MountPoint& m = mounts_[it->second.mount];
+  if (m.memory) return m.text;
   if (m.zip) return m.zip->Read(m.zip->Entries()[it->second.entry]);
   return hostfs::ReadFile(m.hostPath + "/" + it->second.relHost);
 }
@@ -136,6 +161,7 @@ std::string Vfs::ToLocal(std::string_view path) const {
   if (!p.empty() && p[0] == '@') p.erase(0, 1);
   std::string display = hostfs::DisplayPath(p);
   for (const auto& m : mounts_) {
+    if (m.memory) continue;  // (no host path)
     if (display.size() > m.display.size() && display.compare(0, m.display.size(), m.display) == 0 &&
         display[m.display.size()] == '\\') {
       std::string rel = display.substr(m.display.size() + 1);
@@ -151,6 +177,7 @@ std::string Vfs::ChunkName(std::string_view vpath) const {
   auto it = files_.find(p);
   if (it == files_.end()) return "@" + p;
   const MountPoint& m = mounts_[it->second.mount];
+  if (m.memory) return "@" + p;  // (no host path to show)
   std::string rel = p.substr(m.mountPoint.size());
   std::replace(rel.begin(), rel.end(), '/', '\\');
   return "@" + m.display + "\\" + rel;

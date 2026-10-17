@@ -76,4 +76,34 @@ bool PushGameConfigFile(lua_State* L, const std::string& hostPath, std::string* 
 // 4 table ... 5. Values of other types are written as nil; a table entry with such a key or value is left out.
 void SerializeLua(lua_State* L, int idx, std::string* out);
 
+// The game's preferences file as the rules read it. FAF's Blueprints.lua (LoadPreGameData, line 126) runs the
+// first /preferences/Game.prefs and takes its PreGameData; the rules then load every *.bp under
+// PreGameData.CurrentMapDir, "Blueprints from current map" (line 1233), before the mods' own. In the original that
+// file is the program's own preferences file, whose PreGameData the lobby set for the game being launched
+// (lobby.lua 2449: CurrentMapDir = Dirname(GameOptions.ScenarioFile)) and which DoPreload (0x88bee0 ->
+// USER_SavePreferences 0x8c91a0) saved before the rules load. The lab's init file mounts the original's
+// preferences folder at /preferences, whose Game.prefs names the map of the last game played in FAF: an outside
+// input to the blueprint set. So the hosts mount a Game.prefs of their own there first, held in memory
+// (Vfs::MountMemoryFile before the init file runs, Vfs::SetMemoryFile once the session is known), with the
+// session's map folder (ui/REQUESTS.md 40). The folder's other files stay visible.
+inline constexpr char kGamePrefsPath[] = "/preferences/Game.prefs";
+
+// The folder of a scenario file or a map file ("/maps/x/x_scenario.lua" -> "/maps/x"): what precedes the last '/'
+// or '\', as the engine's Dirname gives it to the lobby; empty when there is none.
+std::string MapFolderOf(const std::string& scenarioOrMapPath);
+
+// The session's map folder as the lobby writes it into PreGameData: the folder of the scenario info's
+// Options.ScenarioFile (header.scenario: a lobby's game, a replay of one, a campaign launch all carry it); without
+// that option the folder of the map file (header.map, beside which every scenario file lies). For a replay this
+// is the replay's own scenario.
+std::string SessionMapFolder(const ReplayHeader& header);
+
+// The text of a Game.prefs that holds only PreGameData with that CurrentMapDir, in the form the original's
+// preferences writer gives it (Lua 5.0 GPG dialect):
+//   PreGameData = {
+//       CurrentMapDir = '/maps/x'
+//   }
+// With an empty mapFolder the table is empty: no map's own blueprints load.
+std::string PreGameDataPrefs(const std::string& mapFolder);
+
 }  // namespace moho
