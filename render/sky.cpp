@@ -397,6 +397,16 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach) {
   }
   // the sun's disc: far brighter than anything else, the colour the air leaves it
   s.sunDisc = Reaches(s.body) * 40.0f;
+  // on the clouds, some 3 km up, the sun sets about two degrees later than on the ground: lit in its
+  // last colour (taken from just over the horizon) while it is still above theirs
+  if (s.moon && h < -0.07f) {
+    s.cloudSun = s.color;
+  } else {
+    Vec3 high = s.body;
+    high.y = std::max(high.y, 0.02f);
+    high = Normalize(high);
+    s.cloudSun = Each(against(Reaches(high)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.07f, 0.02f, h);
+  }
   // (a light from the horizon itself would throw shadows without end: it is taken from a little higher)
   Vec3 from = lit;
   from.y = std::max(from.y, 0.2f);
@@ -422,6 +432,7 @@ SkyLight SkyAt(float hours, float cloudCover) {
   // clouds: white in the falling light; the more of them, the more the sky's light is theirs, grey
   s.cover = std::clamp(cloudCover, 0.0f, 1.0f);
   s.cloudLight = s.color * 1.25f;
+  s.cloudSun = s.cloudSun * 1.25f;
   if (s.cover > 0) {
     const float grey = Brightness(s.zenith * 0.5f + s.horizon * 0.5f) + Brightness(s.color) * 0.12f;
     const float share = s.cover * s.cover * 0.9f;

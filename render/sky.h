@@ -41,6 +41,9 @@ struct SkyLight {
   float faint = 0;       // how much of the night's own faint light there is (0 by day, 1 from dusk to dawn)
   float cover = 0;       // how much of the sky the clouds cover, 0..1
   Vec3 cloudLight;       // the falling light on the clouds
+  // The sun's (or moon's) light on the volumetric clouds (clouds.h): at their height the sun is still up
+  // a little after it has set for the ground, in the colour its long way through the air leaves it.
+  Vec3 cloudSun;
 };
 
 // The light at that hour (0..24; 6 sunrise, 12 noon, 18 sunset). The sun rises in the east (+x)

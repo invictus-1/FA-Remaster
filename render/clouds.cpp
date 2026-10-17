@@ -365,9 +365,9 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   k.size[1] = static_cast<float>(height_);
   k.size[3] = haveLast_ ? std::clamp(keep, 0.0f, 0.97f) : 0.0f;
   k.lastViewProj = lastViewProj_;
-  k.light[0] = sky.cloudLight.x;
-  k.light[1] = sky.cloudLight.y;
-  k.light[2] = sky.cloudLight.z;
+  k.light[0] = sky.cloudSun.x;
+  k.light[1] = sky.cloudSun.y;
+  k.light[2] = sky.cloudSun.z;
   device_->SetConstants(0, &c, sizeof c);
   device_->SetConstants(1, &k, sizeof k);
   const int last = now_;
