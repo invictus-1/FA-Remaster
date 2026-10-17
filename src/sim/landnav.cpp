@@ -244,11 +244,13 @@ Vec3 WorldOf(Sim& sim, const Unit* u, const PathCell& c) {
   return {x, y, z};
 }
 
+// ConsumePathPrefix 0x5ad830 (read): m = min(k, the path's length) points go, and the splice count drops by m, not
+// by k (0x5ad848..0x5ad88d: edi = min(esi, size)), clamped to -1. (No gate replay changes with it.)
 void Pop(LandNav& n, int k) {
-  int m = std::min<int>(k, static_cast<int>(n.path.size()));
+  int m = std::max(0, std::min<int>(k, static_cast<int>(n.path.size())));
   if (m > 0) n.path.erase(n.path.begin(), n.path.begin() + m);
   if (n.path.empty()) n.wait = 0;
-  n.spliced -= k;
+  n.spliced -= m;
   if (n.spliced < -1) n.spliced = -1;
 }
 

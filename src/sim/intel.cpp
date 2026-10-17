@@ -413,7 +413,13 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     for (Unit* u : list) {
       if (u->destroyQueued) continue;
       if (!BpInCategory(sim, u->blueprint, "VISIBLETORECON")) continue;
-      uint8_t f = CanDetect(sim, a, u, u->position);
+      // ReconCanDetect at IUnit::GetPosition (0x5c10cb -> 0x6a49b0, entity+0xac): the transform committed at the end of
+      // the last beat. Recon runs before Entity::AdvanceCoords (step 13), so a unit that has had its turn of this
+      // beat's motion is looked at where it stood when the beat began. Seen: MP2 2305, army 0's Cybran build drone
+      // 0x2a crosses into army 1's radar between 2304 and 2305; the original's army 1 sees it only at 2309, with the
+      // engineer beside it, which then holds the lower blip id (0x30000005) that army 1's orders at 2380 name.
+      const Vec3& at = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+      uint8_t f = CanDetect(sim, a, u, at);
       bool inUse = (u->recon[a] & kReconInUse) != 0;
       if (f && !inUse) {
         pending.push_back({u, f, false});
@@ -623,6 +629,18 @@ void AdvanceIntelCoords(Sim& sim) {
       moved = u->lastMoveTick == tick;
       // coming to rest: exact (CUnitMotion::SetMotionHorzEvent Stopped -> Entity::UpdateIntel)
       if (!moved && u->lastMoveTick + 1 == tick) exact = true;
+      // CUnitMotion::MotionTick 0x6b9d10 ends every beat of a mobile unit in CUnitMotion::MoveTo 0x6b92e0, whose
+      // Entity::SetPendingTransform 0x678e90 links the unit on the moved list with no compare: AdvanceCoords then
+      // runs CIntel::ForceUpdate -> UpdatePos for a unit that stands still too, and UpdatePos's 6-tick clock
+      // (lastTick) keeps running while it stands (the circle itself only moves when the position differs). Not
+      // reached: a unit being built (0x6b9d2a), an attached one (motion state 3, 0x6b9ea0), an immobile or stunned
+      // one outside a layer blend (0x6b9eb5 / 0x6b9f19 -> 0x6ba04a), and (ours) a unit with no motion turn. Seen:
+      // MP2, army 1's land scout 0x100018 stands from 2073 and is given a Move at 2186: the original's radar keeps
+      // its clock (2073 + 6k: lastTick 2187, first raster on the move 2193, then 2307), ours restarted it on the
+      // first step (2189, then 2303, 2309), and army 1's radar reached army 0's engineer 4 one recon tick late.
+      if (!moved && !exact && u->lastPosTick == tick && u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt &&
+          !u->parentId && !((u->immobile || u->unitStates.count("Immobile") || u->stunned) && u->motion.layerBlend == 0.0f))
+        moved = true;
     } else {
       IntelHandle* any = nullptr;
       for (int s = 1; s <= 8; ++s)

@@ -809,6 +809,12 @@ LUA_API int lua_getgcthreshold (lua_State *L) {
   return threshold;
 }
 
+/* moho64: the serial the state's next table, userdata, function or thread takes (lobject.h), i.e. how many it has
+** made. Only read (the two-copies fingerprint, src/sim/fingerprint.h). */
+LUA_API unsigned int lua_getnextserial (lua_State *L) {
+  return G(L)->nextserial;
+}
+
 LUA_API int lua_getgccount (lua_State *L) {
   int count;
   lua_lock(L);

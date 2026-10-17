@@ -141,17 +141,6 @@ void PopHead(Unit* u) {
 }
 
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
-// The move-like test Unit::UpdateSpeedThroughStatus asks (0x552c10): Move, FormMove, Attack, FormAttack, Guard,
-// Patrol, FormPatrol (types 2, 4, 10, 11, 15, 16, 18).
-bool SpeedThroughMoveLike(CommandType t) {
-  switch (t) {
-    case CommandType::Move: case CommandType::FormMove: case CommandType::Attack: case CommandType::FormAttack:
-    case CommandType::Guard: case CommandType::Patrol: case CommandType::FormPatrol:
-      return true;
-    default:
-      return false;
-  }
-}
 
 }  // namespace
 
@@ -189,7 +178,13 @@ void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
     }
     const Vec3 goal{cx + fp.sizeX * 0.5f, tp.y, cz + fp.sizeZ * 0.5f};
     u->motion.arrived = u->motion.failed = false;
-    MotionSetGoal(sim, u, std::vector<Vec3>{goal}, NextIsMove(u) && MoveLike(c.type), sim.tick());
+    // (the listener calls the navigator's SetGoal only, no UpdateSpeedThroughStatus 0x6ac940: a land navigator keeps
+    // the speed-through request its steering has, +0x9d. Seen (MP1 825): army 2's engineer 0x20000a on a Move with a
+    // Guard queued behind it (speed-through 1 since the Guard came, both in 0x552c10's set) has its waypoint dragged;
+    // the original's goal waypoint at 827 still has 1; NextIsMove, which leaves Guard out, gave 0 until the per-beat
+    // refresh put it back.)
+    const bool through = u->motion.nav ? u->motion.nav->speedThroughGoal : NextIsMove(u) && MoveLike(c.type);
+    MotionSetGoal(sim, u, std::vector<Vec3>{goal}, through, sim.tick());
     if (u->moveTaskReserved) {
       const int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
       GroundReserveRect(sim, u, r);
@@ -560,6 +555,41 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
   u->unitStates.erase("NeedToTerminateTask");
   u->unitStates.erase("Patrolling");
   u->leashPos = {};
+}
+
+// The patrol task's command listener 0x61c3e0 (attack_move.md 2.8, read): the goal at GetPosition(cmd, unit); the
+// navigator's SetGoal only while the patrol's own goal is issued (not while a child runs); RecomputePatrolSearchBox
+// 0x61b2f0 (S from where the unit stands now). A factory's rally orders are the factory's own command objects,
+// shared with every unit that inherited them (InheritCommandsTo 0x5fa550), so dragging a rally point reaches the
+// units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
+// NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60), a child's walk under way (its
+// CUnitMoveTask listens too, and the wake ends it).
+void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
+  if (!IsPatrolType(c.type) || c.form) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* u : holders) {
+    if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
+    if (u->headState != kRunning || !u->task || !u->task->pdata || !u->motion.bp || !u->motion.bp->mobile()) continue;
+    PatrolData& p = *u->task->pdata;
+    if (p.goalIssued) {
+      const Vec3 goal = TargetPos(sim, c, u);
+      if (u->motion.bp->motionType == kMotionAir) MotionSetGoal(sim, u, std::vector<Vec3>{goal}, u->motion.passThrough, sim.tick());
+      else if (u->motion.nav) LandNavSetGoal(sim, u, goal, u->motion.nav->speedThroughGoal);
+    }
+    PatrolSearchBox(sim, u, p);
+    BuildTask* ch = p.child;
+    if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
+      if (ch->moving) {
+        static bool warned = false;
+        if (!warned) Logf(LogLevel::Info, "moho64: tick %u: a rally order moved under a reclaim child's walk (not modelled)", sim.tick());
+        warned = true;
+      } else {
+        ReclaimTaskCommandEvent(sim, u, *ch, c);
+        p.childFrom = 0;  // (the listener wakes the thread: counter 0)
+      }
+    }
+  }
 }
 
 namespace {
@@ -940,16 +970,11 @@ void CommandStep(Sim& sim, Unit* u) {
     if (!u->commands.empty()) StartHead(sim, u);
     return;
   }
-  // keep "drive through" up to date when moves were queued behind the current one, by Unit::UpdateSpeedThroughStatus's
-  // own rule (0x6acac8..0x6acaef): the head and the next command both move-like for 0x552c10, which counts Attack and
-  // Guard and not the aggressive moves. (Seen: Skirmish 2806, army 7's ACU 0x700000 on a Move with a Guard queued:
-  // the original keeps 1 until the Guard starts; MoveLike, which leaves Guard out, turned it off a beat later.)
-  if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
-    const bool v = u->commands.size() > 1 && SpeedThroughMoveLike(u->commands[0]->type) &&
-                   SpeedThroughMoveLike(u->commands[1]->type);
-    if (u->motion.navDriven) LandNavSetSpeedThrough(u, v);
-    else u->motion.passThrough = v;
-  }
+  // (No per-beat refresh of "drive through": Unit::UpdateSpeedThroughStatus 0x6ac940 runs on events only (the queue's
+  // event 0, the move and patrol tasks' ctors, ...), and a land navigator's SetGoal keeps the steering's request (+0x9d)
+  // in between. The refresh that stood here hid two places that overwrote the request: the Move task's listener
+  // (RetargetMoveTasks) and Lua's navigator:SetGoal. With both keeping it, the 13 replays, MP2 and MP3 come out the
+  // same without it, Skirmish 1225 (army 4's engineer 0x400010) included.)
   // guards and attacks follow a moving target
   if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {
     UnitCommand& c = *u->commands.front();
@@ -1271,8 +1296,14 @@ std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<
 
 std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
                                              bool clear) {
-  // types whose move-task destructor does not abort the move when the next command is one of them (0x618998)
+  // types whose move-task destructor does not abort the move when the next command is one of them (0x618998). The
+  // table covers types 0..31 only: a type above 31 takes the same branch as the table's "keep" entries
+  // (0x6187f4 cmp eax, 0x1f; ja 0x618807), i.e. Sacrifice 32 .. Dock 39 (AggressiveMove 35 among them) keep the move
+  // unless a second queued command says otherwise. Seen: MP2 2198, army 1's two Strikers on a Move get an
+  // AggressiveMove with clear: the original's tanks go on along their spline at full speed through 2200; ours made a
+  // brake spline and jumped.
   auto keepsMove = [](int t) {
+    if (t > 0x1f) return true;
     switch (t) {
       case 2: case 4: case 5: case 6: case 7: case 9: case 10: case 11: case 15: case 16: case 17: case 18:
       case 20: case 22: case 23: case 24: case 25: case 28: case 29:
@@ -1420,6 +1451,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // factory's back, layer 0, CUnitMotion::NotifyDetached 0x6b9570) still has its inherited rally Move undispatched (an
 // attached unit's dispatcher waits, 0x598f91); M28 clears and re-orders it the same beat (m28air.lua 11759). The
 // original's target stays (682.5, 324.5), layer 0; ours was stopped where it was and took the Air layer.
+// That holds for a pod too (no exception: IssueClearCommands 0x6f1950 is ClearCommandQueue 0x6ee2d0 and
+// CAiAttackerImpl::Stop only, and an undispatched head has no task to tear down). Seen (MP1 1063): army 2's Cybran
+// build drone 0x200002 ends its AssistCommander task in the command stage (Kill: a Stop where it is); in the Lua stage
+// SpawnBuildBots clears it and gives it a Guard, and a second IssueClearCommands (effectutilitiesopti.lua 125)
+// finds that Guard not yet dispatched: the original's target stays the drone's place; ours stopped it again a second
+// ahead. (The pod exception had been inferred for bench 294's drones, which EndGuard now stops.)
 // The tasks go top down (CTask::TaskInterruptSubtasks 0x408d70): a load's landing move (its child CUnitMoveTask)
 // is torn down, and aborts its navigator (dtor 0x618700 -> AbortMove 0x5a4f00 -> CUnitMotion::Stop 0x6b8460), BEFORE
 // the load's own dtor 0x624cc0 clears TransportLoading (transport_tasks.md 3.4): so the Stop still finds the
@@ -1455,7 +1492,7 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // place, ours was stopped again one second ahead.
   const bool idle = u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
-  const bool undispatched = !u->isPod && u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
+  const bool undispatched = u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
   const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
   // Nor is a guard that steers itself (its follow goal handed to the navigator directly, no move task): its dtor
@@ -1807,35 +1844,41 @@ int l_GetCommandQueue(lua_State* L) {
   Sim* sim = S(L);
   lua_newtable(L);
   int n = 0;
+  // Each entry is the command's own table as FAF's patch fills it (0x129181d, on the command's LuaObject at cmd+0x20):
+  // commandType (cmd+0x98); x, y, z ALWAYS, from the command's encoded target (cmd+0xa4..+0xac, which
+  // CAiTarget::EncodeToSSTITarget 0x5e27d0 writes at every SetTarget: an entity target encodes as 0, 0, 0, a ground
+  // target as its point, the command's own and not a formation member's slot); targetId (decimal) unless the encoded
+  // id is 0xf0000000 (an entity's id stays when the entity is gone); blueprintId. There is no `target`: FAF's
+  // Unit.GetCommandQueue (sim/Unit.lua 5087) adds it, and the entity's position as x, y, z, only for a live entity from
+  // GetEntityById. Seen (MP1): army 7's DistributeOrders (16254) got an attack order whose entity was gone; ours
+  // handed the dead entity's unbound table as `target` and IssueAttack raised "Invalid target set"; ours also gave a
+  // gone target's id as "0", which FAF's wrapper turns into entity 0, army 0's commander.
   for (auto& c : u->commands) {
     lua_newtable(L);
     lua_pushstring(L, "commandType");
     lua_pushnumber(L, static_cast<int>(c->type));
     lua_rawset(L, -3);
-    Vec3 p = TargetPos(*sim, *c, u);
-    if (c->hasPos || c->targetId) {
-      lua_pushstring(L, "x");
-      lua_pushnumber(L, p.x);
-      lua_rawset(L, -3);
-      lua_pushstring(L, "y");
-      lua_pushnumber(L, p.y);
-      lua_rawset(L, -3);
-      lua_pushstring(L, "z");
-      lua_pushnumber(L, p.z);
-      lua_rawset(L, -3);
-    }
+    const Vec3 p = c->targetId || !c->hasPos ? Vec3{0, 0, 0} : c->pos;
+    lua_pushstring(L, "x");
+    lua_pushnumber(L, p.x);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "y");
+    lua_pushnumber(L, p.y);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "z");
+    lua_pushnumber(L, p.z);
+    lua_rawset(L, -3);
     if (c->targetId) {
-      if (Entity* e = sim->FindEntity(c->targetId)) {
-        lua_pushstring(L, "target");
-        PushObject(L, e);
+      uint32_t id = sim->IdOfRef(c->targetId);
+      if (c->targetViaBlip) {  // (the order named the army's blip: its id is the blip's)
+        Entity* te = sim->FindEntity(c->targetId);
+        if (te && te->kind == Entity::Kind::Unit && static_cast<Unit*>(te)->blip) id = static_cast<Unit*>(te)->blip->id;
+      }
+      if (id != 0xf0000000u) {
+        lua_pushstring(L, "targetId");
+        lua_pushstring(L, std::to_string(id).c_str());
         lua_rawset(L, -3);
       }
-      lua_pushstring(L, "targetId");
-      {
-        Entity* te = S(L)->FindEntity(c->targetId);
-        lua_pushstring(L, std::to_string(te ? te->id : 0u).c_str());
-      }
-      lua_rawset(L, -3);
     }
     if (!c->blueprintId.empty()) {
       lua_pushstring(L, "blueprintId");
@@ -1994,7 +2037,13 @@ int l_nav_SetGoal(lua_State* L) {
   Unit* u = n->unit;
   if (!u->motion.bp || !u->motion.bp->mobile()) return 0;
   Sim* sim = S(L);
-  MotionSetGoal(*sim, u, std::vector<Vec3>{p}, n->speedThroughGoal, sim->tick());
+  // CAiNavigatorLand::SetGoal 0x5a3ed0 takes the goal only: the speed-through request stays the steering's (+0x9d),
+  // as the last Unit::UpdateSpeedThroughStatus 0x6ac940 or navigator:SetSpeedThroughGoal left it. Seen (Skirmish 950):
+  // M28 re-aims army 4's engineer 0x400010 (a Move with a second Move queued: request 1 since its move task's ctor at
+  // 947) through navigator:SetGoal; the original's goal waypoint at 1225 has speed-through 1; ours took the Lua
+  // navigator object's own flag (0) and only the per-beat refresh in CommandStep put it back.
+  const bool through = u->motion.nav ? u->motion.nav->speedThroughGoal : n->speedThroughGoal;
+  MotionSetGoal(*sim, u, std::vector<Vec3>{p}, through, sim->tick());
   return 0;
 }
 int l_nav_SetDestUnit(lua_State* L) {
@@ -2087,7 +2136,10 @@ int l_nav_CanPathToGoal(lua_State* L) {
   return 1;
 }
 int l_nav_SetSpeedThroughGoal(lua_State* L) {
-  N(L)->speedThroughGoal = lua_toboolean(L, 2) != 0;
+  NavigatorObject* n = N(L);
+  n->speedThroughGoal = lua_toboolean(L, 2) != 0;
+  // (a land navigator's SetSpeedThroughGoal 0x5a4240 is the steering's request, CAiSteeringImpl 0x5d2390)
+  if (IsAlive(n->unit) && n->unit->motion.nav) LandNavSetSpeedThrough(n->unit, n->speedThroughGoal);
   return 0;
 }
 int l_nav_IgnoreFormation(lua_State* L) {

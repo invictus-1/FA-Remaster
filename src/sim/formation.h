@@ -84,6 +84,9 @@ bool FormationGoal(Sim& sim, UnitCommand& c, Unit* u, Vec3* out);
 // u's adjusted position in the command's formation (vt+0x18), and moving the formation's centre (vt+0x08).
 bool FormationAdjusted(Sim& sim, UnitCommand& c, Unit* u, float* x, float* z);
 void FormationSetCentre(UnitCommand& c, float x, float z);
+// The same two asked of the formation itself, as the attack task does (no test of the command's unit count).
+bool FormationAdjustedOfForm(UnitCommand& c, Unit* u, float* x, float* z);
+bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out);
 // u's group has reached the goal (FormationAtGoal + IsInFormation(u)).
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u);
 // Per tick: the formation DB update (beat step 11).

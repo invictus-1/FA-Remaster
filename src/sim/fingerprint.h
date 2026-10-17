@@ -21,11 +21,13 @@
 //   rng      the sim's random stream: the session seed and the number of draws (the stream is MT19937 seeded once
 //            and every draw goes through Sim::NextUInt32, so the two give its whole state)
 //   sim      the sim's own: the path searches waiting their turn (unit ids, in order), the next command id, the
-//            command source, the pause, the focus army, the playable rect, the numbers of live commands
-//   lua      (last, and not a hash) <KB>:<KB>: the sim state's Lua heap and its collector threshold
-//            (lua_getgccount / lua_getgcthreshold). Kept out of <total> and of the peer check: when a table keyed
-//            by objects grows depends on where its keys landed, so the heap's size, and the moments the collector
-//            runs, may differ between two copies whose games do not (docs/two-copies.md)
+//            command source, the pause, the playable rect, the numbers of live commands (not the focus army: in a
+//            multiplayer game each player's copy looks through its own)
+//   lua      (last, and not a hash) <KB>:<KB>:<serial>: the sim state's Lua heap and its collector threshold
+//            (lua_getgccount / lua_getgcthreshold) and the serial its next table, userdata, function or thread
+//            takes (lua_getnextserial: how many it has made). Kept out of <total> and of the peer check: copies
+//            that look through different armies make different Sync tables, and a log line may land in one
+//            copy only, so these may differ between two copies whose games do not (docs/two-copies.md)
 //   a<N>     army N (1-based): its economy, statistics, unit cap and count, alliances, platoons and squads
 //   u<N>     army N's units: id, blueprint, position, orientation, health, build fraction, layer, states, flags,
 //            motion velocity, command queue and rally queue, weapons' targets and clocks, economy figures, recon

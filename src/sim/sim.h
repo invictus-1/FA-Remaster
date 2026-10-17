@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <memory>
 #include <random>
@@ -330,6 +331,13 @@ class Sim {
     auto it = byId_.find(id);
     return it == byId_.end() ? nullptr : it->second;
   }
+  // The game id an entity handle (EntityRef) had, also after the entity is gone (units, props and the like; not
+  // projectiles); 0xf0000000 if unknown. (A command keeps its target's id encoded: EncodeToSSTITarget 0x5e27d0.)
+  uint32_t IdOfRef(uint32_t handle) const {
+    if (Entity* e = FindEntity(handle)) return e->id;
+    auto it = goneIds_.find(handle);
+    return it == goneIds_.end() ? 0xf0000000u : it->second;
+  }
   // EntityDB::ReleaseId (the id is quarantined for 99 beats) and the per-beat IdPool::Update.
   void ReleaseId(uint32_t id);
   void UpdateIdPools();
@@ -491,6 +499,7 @@ class Sim {
   };
   std::map<uint32_t, IdPool> idPools_;  // key: id & 0xFFF00000
   std::map<uint32_t, Entity*> byId_;
+  std::unordered_map<uint32_t, uint32_t> goneIds_;  // handle -> id of a removed entity (IdOfRef)
   uint32_t nextHandle_ = 1;
   void AddUnitToLists(Unit* u);
   void RemoveUnitFromLists(Unit* u);

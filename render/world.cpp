@@ -1642,6 +1642,11 @@ void World::Render() {
   }
   Stage("rain, snow");
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow, litRain && look == Look::Modern);
+  if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
+    post.BeginColorOnly();
+    lights.Bind();
+    falling.DrawSplashes(view, camera, rain, post.Depth());
+  }
   Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();

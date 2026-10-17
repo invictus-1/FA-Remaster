@@ -4,7 +4,7 @@
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
-//          [--twice]
+//          [--twice] [--focus N]
 #include <chrono>
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
@@ -77,6 +77,12 @@ struct Options {
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
   bool twice = false;   // --twice: play the session a second time in the same process (RunTimes)
+  // --focus N: the army the session looks through from its launch on (1-based; 0 or -1: none, an observer's view),
+  // in place of the launch's own (a replay: none; a lobby game: the local player's army). Each player's copy of a
+  // multiplayer game runs the simulation with its own focus army (the scripts' Sync and NoteFocusArmyChanged go by
+  // it): tools/twocopies.py gives each copy its own to see whether the game stays the same.
+  bool hasFocus = false;
+  int focus = -1;
   // /map <name or scenario path> [/diff N] [/faction N]: a campaign operation started as the original's command
   // line starts it (FAF SinglePlayerLaunch.StartCommandLineSession -> SetupCampaignSession ->
   // LaunchSinglePlayerSession); --seed N stands in for the original's timer seed
@@ -699,7 +705,12 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
 // record (MOHO64_RECORD + ".2"); both records must be the same bytes. A fingerprint likewise goes to
 // MOHO64_FINGERPRINT + ".2".
 int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids,
-             const SessionDescription& session, const std::string* stream) {
+             const SessionDescription& launched, const std::string* stream) {
+  SessionDescription session = launched;
+  if (o.hasFocus) {
+    session.focusArmy = o.focus >= 1 && o.focus <= static_cast<int>(session.header.armies.size()) ? o.focus - 1 : -1;
+    Logf(LogLevel::Info, "moho64: --focus: the session looks through army %d", session.focusArmy == -1 ? -1 : session.focusArmy + 1);
+  }
   int rc = 0;
   for (int run = 0; run < (o.twice ? 2 : 1); ++run) {  // (one call site: the record's call chains stay the same)
     if (run == 1) {
@@ -949,6 +960,10 @@ int main(int argc, char** argv) {
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else if (a == "--twice") o.twice = true;
+    else if (a == "--focus") {
+      o.focus = std::atoi(next().c_str());
+      o.hasFocus = true;
+    }
     else if (a == "/map") o.spMap = next();
     else if (a == "/diff") o.spDiff = std::atoi(next().c_str());
     else if (a == "/faction") o.spFaction = std::atoi(next().c_str());

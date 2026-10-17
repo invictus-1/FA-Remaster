@@ -270,13 +270,50 @@ Mac", and every ray-traced effect keeps a fallback without it.
      clouds, little changes; snow's flakes are too small to show it. Cost at 1440p (a storm, 16 commanders,
      by the lowest times): 0.016 -> 0.042 ms. Off: pictures identical, pixel for pixel; on, Vulkan as
      Direct3D 12 (mean 0.04).
-     - Open: the drops fill a box as high as the camera is far, so few are low enough to be in a headlight's
-       beam; a layer of drops near the ground round the lamps would show the beams' rain better.
+     - A layer of drops near the ground (2026-10-17): the drops fill a box as high as the camera is far, so
+       few fall low enough to cross a headlight's beam. With `litRain` a second draw puts 6,000 drops (or
+       flakes) in a flat box 12 units high at the ground round the camera's target; they take only the small
+       lights' light and show by how much it outshines the sky's (nothing in the dark). Seen from the game's
+       camera a thin drop in a beam stands against the patch of ground that beam lights and would hardly show,
+       so these send on three times as much, as a glint (a look for Chris to judge): at night the rain
+       sparkles white round lit units. Cost with it, at 1440p in a storm: 0.016 -> 0.051 ms. The unlit rain
+       is unchanged, pixel for pixel.
+   - **Splashes: first version** (2026-10-17): `World::rainSplashes` (viewer `--rain-splashes`; modern look).
+     Where rain meets what faces up (the ground, a unit's top) and the picture shows it, a speck that rises
+     and is gone in a fifth of a second, then comes again somewhere else: 3,000 at full rain, each a place on
+     the picture by its number and the time (an integer hash, so both backends put it in the same place), its
+     depth back to the world, its slope from the depths beside it (nothing on slopes, walls or the sky), lit
+     as the lit drops are (`DropLight`, now a block both shaders take). Drawn into the scene's colour alone
+     after the rain. A real splash is far smaller than a pixel from the game's camera, so these are specks of
+     a pixel or two, faint (a first try at crowns ten pixels high read as tufts of white grass). With the
+     rings on puddles already there, the ground looks hit by the rain. Cost at 1440p in a storm: about
+     +0.012 ms. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.05).
+     - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
+       it, Post::KeepOpaque), so it does not build them up from frames before.
 
 ## The options
 
-All in `World`, off by default, each one's cost measured and written here when it is built:
-`volumetricFog`, `volumetricClouds`, `skyTables`, `screenReflections`, `softShadows`, `contactShadows`,
-ray tracing's `bounceLight` and `rayReflections` (`rayReflections` needs `gRayShaders` set before the world is
-made; ray-traced shadows put off), and the rain and snow upgrades (`litRain` so far). The ui
-chat gets the names and their costs when each is ready.
+Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A
+host sets them on the world (`WorldPicture::world()`) at any time, except reflections (below). Costs at 1440p
+on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections above:
+
+| Option | What it does | Cost a frame | Needs |
+|---|---|---|---|
+| `temporalUpscale` | AMD's FSR 3 (in the game's Video tab already) | at Quality the frame 2.7 -> 1.4-1.9 ms | anti-aliasing off |
+| `volumetricFog` | light in the air: the sun's shafts, the lamps' beams, glowing mist | 0.05-0.09 ms | |
+| `volumetricClouds` | heaped clouds lit through, their shadows on the ground | about 0.4 ms, against 0.63 ms for today's sky with its layer: cheaper | a time of day |
+| `skyTables` | the sky from tables of the atmosphere (the planet's shadow at dusk, many-times scattered light) | about 0.1 ms less | a time of day |
+| `softShadows` | the sun's shadows sharp at the foot, soft farther off | +0.25 ms | |
+| `contactShadows` | small shadows at units' feet and under trees | +0.12 ms | |
+| `bounceLight` | light thrown back by the ground, hills and units | about 0.45 ms | ray tracing |
+| `rayReflections` | smooth surfaces and the water mirror what is off the screen too | about 0.3 ms | ray tracing; `WorldPicture::SetRayReflections` before the map opens |
+| `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
+| `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
+
+Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
+where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
+tracing in them when a map opens (`gRayShaders`), so switching it on takes effect from the next map. Added
+up from the rows, those that cost come to about 1.2 ms a frame and the clouds and the sky from tables save
+about 0.3. All of them on together (FSR 3 aside), measured as one (the sunset water scene with nine
+commanders, 1440p, 4x MSAA, by the lowest times): the frame 1.83 -> 2.99 ms in clear weather, 2.03 -> 3.30 ms
+in rain; about 300 frames a second, against the 60 aimed for. Ray-traced shadows are put off (step 4). Which ones go in the game's settings is Chris's word; the ui chat then puts them there.

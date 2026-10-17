@@ -17,6 +17,11 @@ options:
   --shift N         copy B starts with MOHO64_LAYOUT_SHIFT=N (default 3; 0: no deliberate shift, only what the
                     system's own address randomisation gives)
   --no-peer         the copies do not check each other while running (both run to the end; no detail files)
+  --focus-a SPEC    copy A's focus army, as each player's own copy of a multiplayer game has its own: N (1-based;
+  --focus-b SPEC    -1 = none, an observer's view) from the launch on, then N@BEAT for a switch requested before
+                    that beat (an observer looking through another army), e.g. --focus-b=-1,2@300,-1@900 (with
+                    "=": a value that starts with "-" is otherwise read as an option). Without it a copy keeps
+                    the launch's own (a replay: none; a lobby game: the local player's army)
   --env K=V         one more environment variable for both copies (may be given more than once)
   --show N          at most N differing lines of the detail listing (default 40)
   --timeout S       give up after S seconds (default 3600)
@@ -123,8 +128,15 @@ def report(fa, fb, show, rc_a=0, rc_b=0):
                                              fb, "ended after %s beats" % endB if endB is not None else "no end line"))
     if lua_first is not None:
         A, B = parse_fp(fa)[0], parse_fp(fb)[0]
-        print("twocopies: (the Lua heap and collector threshold, KB, first differ at beat %d: %s / %s; not part of "
-              "the state hash)" % (lua_first, A[lua_first][2].get("lua"), B[lua_first][2].get("lua")))
+        # lua=<heap KB>:<threshold KB>[:<next serial>]: the first beat each of the three differs
+        what = []
+        for i, name in enumerate(("heap", "collector threshold", "object serial")):
+            for b in sorted(set(A) & set(B)):
+                va, vb = A[b][2].get("lua", "").split(":"), B[b][2].get("lua", "").split(":")
+                if i < len(va) and i < len(vb) and va[i] != vb[i]:
+                    what.append("%s at beat %d (%s / %s)" % (name, b, va[i], vb[i]))
+                    break
+        print("twocopies: (the sim state's Lua differs, not part of the state hash: %s)" % "; ".join(what))
     if first is None:
         if n == 0 or (endA is None and endB is None) or rc_a not in (0, 3) or rc_b not in (0, 3):
             print("twocopies: a copy failed (exit %s / %s, %d beats in common)" % (rc_a, rc_b, n))
@@ -177,6 +189,8 @@ def main():
     ap.add_argument("--out", default="twocopies_out")
     ap.add_argument("--shift", type=int, default=3)
     ap.add_argument("--no-peer", action="store_true")
+    ap.add_argument("--focus-a")
+    ap.add_argument("--focus-b")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--show", type=int, default=40)
     ap.add_argument("--timeout", type=float, default=3600)
@@ -218,8 +232,6 @@ def main():
             print("twocopies: give --sim, --marks, --session or --compare")
             return 2
         args += ["--ticks", str(a.ticks if a.ticks is not None else 20000), "--quiet"]
-    if a.orders:
-        args += ["--orders", a.orders]
     args += extra
     for kv in a.env:
         k, v = kv.split("=", 1)
@@ -233,6 +245,29 @@ def main():
                 os.remove(fp[c] + suffix)
     procs = {}
     t0 = time.time()
+    per = {}  # each copy's own arguments: its focus army and orders
+    for c in "ab":
+        spec = getattr(a, "focus_" + c)
+        launch, switches = None, []
+        for item in (spec or "").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if "@" in item:
+                army, beat = item.split("@", 1)
+                switches.append((int(beat), int(army)))
+            else:
+                launch = int(item)
+        per[c] = ["--focus", str(launch)] if launch is not None else []
+        if switches:  # moho64's orders file: "<beat> focus <army>" (before that beat), after the shared orders
+            path = os.path.abspath(os.path.join(a.out, c + ".orders.txt"))
+            with open(path, "w") as f:
+                if a.orders:
+                    f.write(open(a.orders).read().rstrip("\n") + "\n")
+                f.write("".join("%d focus %d\n" % (b, n) for b, n in sorted(switches)))
+            per[c] += ["--orders", path]
+        elif a.orders:
+            per[c] += ["--orders", a.orders]
     for c, other in (("a", "b"), ("b", "a")):
         e = dict(os.environ)
         for k in [k for k in e if k.startswith("MOHO64_")]:
@@ -244,7 +279,7 @@ def main():
         if c == "b" and a.shift > 0:
             e["MOHO64_LAYOUT_SHIFT"] = str(a.shift)
         log = os.path.join(a.out, c + ".log")
-        cmd = [a.moho64] + args + ["--log", log]
+        cmd = [a.moho64] + args + per[c] + ["--log", log]
         with open(os.path.join(a.out, c + ".cmd.txt"), "w") as f:
             f.write(" ".join(shlex.quote(x) for x in cmd) + "\n")
             f.write("".join("%s=%s\n" % (k, v) for k, v in sorted(e.items()) if k.startswith("MOHO64_")))
@@ -259,7 +294,9 @@ def main():
             p.kill()
         print("twocopies: timed out after %.0f s" % a.timeout)
         return 2
-    print("twocopies: %s; %.0f s; exit codes %d / %d" % (" ".join(args), time.time() - t0, rc["a"], rc["b"]))
+    print("twocopies: %s%s%s; %.0f s; exit codes %d / %d" % (
+        " ".join(args), "; A: " + " ".join(per["a"]) if per["a"] else "", "; B: " + " ".join(per["b"]) if per["b"] else "",
+        time.time() - t0, rc["a"], rc["b"]))
     return report(fp["a"], fp["b"], a.show, rc["a"], rc["b"])
 
 

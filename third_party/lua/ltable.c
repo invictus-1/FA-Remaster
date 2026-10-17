@@ -173,7 +173,9 @@ static int luaH_index (lua_State *L, Table *t, StkId key) {
 
 
 int luaH_next (lua_State *L, Table *t, StkId key) {
-  int i = luaH_index(L, t, key);  /* find original element */
+  int i;
+  if (ttisnil(key)) luaH_notewalk(L, t);  /* (moho64: a debugging count, off by default; lwalklog.c) */
+  i = luaH_index(L, t, key);  /* find original element */
   for (i++; i < t->sizearray; i++) {  /* try first array part */
     if (!ttisnil(&t->array[i])) {  /* a non-nil value? */
       setnvalue(key, cast(lua_Number, i+1));
