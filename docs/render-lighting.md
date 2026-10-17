@@ -121,6 +121,15 @@ Mac", and every ray-traced effect keeps a fallback without it.
    - Cost (1440p, RTX 4090, half the view sky): shadows 0.06 ms, clouds 0.21 ms, the sky then 0.14 ms;
      today's sky with its own layer 0.63 ms. Off: pictures as before; on, Vulkan as Direct3D 12.
    - Open: the clouds' shapes are soft at a distance (Chris to judge).
+   - **Lightning inside the clouds** (2026-10-17, Chris: "YES"): a storm's flash lights the volumetric clouds
+     from within, round where the bolt leaves them (`Clouds::boltAt`, `boltReach`, `boltLight`, set by the
+     world while a bolt shows): in the march a light there, fading through the layer (`exp(-1.5 d) / (1 + d^2)`
+     by the distance in reaches), and while it flashes the clouds keep little of the frame before (0.3 against
+     0.85), so its flicker is not smeared. Part of the volumetric clouds (the "Atmosphere" setting). At the
+     flash the clouds over the bolt glow white and the layer brightens round it; the rest of the picture as
+     before. Costs nothing measurable (only while a bolt shows). Without a flash, 28 pixels in a million round
+     differently (the compiler's); Vulkan as Direct3D 12 (mean 0.64 at the flash, 0.58 without: the clouds'
+     own).
    - **Sky from tables: first version done** (2026-10-17): `World::skyTables` (viewer `--sky-tables`; modern
      look with a time of day), after E. Hillaire 2020 on the same air as today's sky (sky.cpp). Two tables
      made once on the processor (on the worker threads, 14 ms) and handed to the card: what comes through
@@ -314,7 +323,7 @@ where it changes the look, off by default, measured like the rest. In the order 
    ones in about 4 s. So: compile them on several cores at once, and give a release a cache made beforehand
    (read beside the user's own), so a player's very first start is quick. And look at the rest of the opening
    (about 5 s for a map with the viewer, most of it not shaders).
-2. **Lightning inside the clouds:** a stroke's flash lights the volumetric clouds from within, round the bolt,
+2. **Lightning inside the clouds (done, first version: step 4 above):** a stroke's flash lights the volumetric clouds from within, round the bolt,
    through their depth (clouds.cpp's march takes the flash as a light at the bolt).
 3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader
    under the water line, by depth and the sun's way), and the beach darker and shinier in a band above the water
