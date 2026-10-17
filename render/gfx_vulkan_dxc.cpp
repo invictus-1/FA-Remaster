@@ -99,13 +99,21 @@ DxcCompiler3* Compiler(std::string* error) {
 // The renderer's registers on Vulkan's descriptor sets (gfx_vulkan.cpp lays them out the same way):
 // set 0: t0-t39 at 16-55, t0-t1 of space1 at 56-57, s0-s5 at 64-69, a compute shader's u0-u15 at 80-95;
 // set 1: b0-b3 at 0-3.
-std::vector<std::wstring> Arguments(const char* entry, const char* stage) {
+// The shader model: 6.0, every card's driver of the last years takes it; 6.5 for a shader that traces rays
+// (RayQuery).
+const wchar_t* ShaderProfile(const char* stage, bool rays) {
+  if (std::strcmp(stage, "vs") == 0) return rays ? L"vs_6_5" : L"vs_6_0";
+  if (std::strcmp(stage, "cs") == 0) return rays ? L"cs_6_5" : L"cs_6_0";
+  return rays ? L"ps_6_5" : L"ps_6_0";
+}
+
+std::vector<std::wstring> Arguments(const char* entry, const char* stage, bool rays) {
   std::vector<std::wstring> a = {L"-spirv", L"-fspv-target-env=vulkan1.3", L"-fvk-use-dx-layout", L"-O3", L"-fspv-reflect",
                                  L"-HV", L"2018",  // (the shaders are written for Direct3D 12's compiler: HLSL before 2021's rules)
                                  L"-E"};
   a.push_back(std::wstring(entry, entry + std::strlen(entry)));
   a.push_back(L"-T");
-  a.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : std::strcmp(stage, "cs") == 0 ? L"cs_6_0" : L"ps_6_0");
+  a.push_back(ShaderProfile(stage, rays));
   if (std::strcmp(stage, "vs") == 0) a.push_back(L"-fvk-invert-y");  // (Vulkan's y runs down the screen)
   // (a pixel's SV_Position.w is the distance's w in Direct3D, 1 / w in Vulkan: particles' soft edges read it)
   if (std::strcmp(stage, "ps") == 0) a.push_back(L"-fvk-use-dx-position-w");
@@ -297,7 +305,7 @@ bool Run(const std::string& source, const std::vector<std::wstring>& args, std::
 
 bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
                   std::string* error) {
-  const std::vector<std::wstring> args = Arguments(entry, stage);
+  const std::vector<std::wstring> args = Arguments(entry, stage, source.find("RayQuery") != std::string::npos);
   // kept from an earlier run when nothing that goes into it has changed
   const std::string cached = CacheFile(cacheDir, "dxc-spirv/2", source, args, "spv");
   std::vector<uint8_t> bytes;
@@ -322,7 +330,7 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
   std::vector<std::wstring> args = {L"-O3", L"-HV", L"2018", L"-E"};  // (HLSL 2018's rules, as for Vulkan)
   args.push_back(std::wstring(entry, entry + std::strlen(entry)));
   args.push_back(L"-T");
-  args.push_back(std::strcmp(stage, "vs") == 0 ? L"vs_6_0" : std::strcmp(stage, "cs") == 0 ? L"cs_6_0" : L"ps_6_0");
+  args.push_back(ShaderProfile(stage, source.find("RayQuery") != std::string::npos));
   // (signed: the container's digest, the 16 bytes after "DXBC", is all nought where nothing signed it, and
   // Direct3D 12 takes no shader that is not; DXC of 2026 signs by itself, older ones through dxil.dll)
   auto isSigned = [](const std::vector<uint8_t>& code) {

@@ -21,6 +21,9 @@
 //  - Compute shaders (CreateCompute, Dispatch) do work on the card that draws nothing (the modern look's
 //    lighting: volumes of light in the air, reflections, light thrown back). They read what draws read and
 //    write storage targets (TargetDesc::storage), registers u0..u15. A dispatch lies between passes.
+//  - Ray tracing, where the card can (Device::RayTracing; Direct3D 12's DXR 1.1, Vulkan's ray queries; never
+//    on macOS): structures over triangles that any shader traces rays through, inline, with RayQuery. A
+//    shader that names RayQuery is compiled for shader model 6.5.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +44,10 @@ struct Texture {
   explicit operator bool() const { return id != 0; }
 };
 struct Pipeline {
+  uint32_t id = 0;
+  explicit operator bool() const { return id != 0; }
+};
+struct Structure {  // a ray tracing structure: a geometry's (bottom level) or a scene's (top level)
   uint32_t id = 0;
   explicit operator bool() const { return id != 0; }
 };
@@ -123,6 +130,24 @@ struct ComputeDesc {
   const char* name = "";  // for error messages
   std::string_view source;
   const char* entry = "CS";
+};
+
+// Ray tracing (Device::RayTracing). A geometry structure is made once over a model's triangles, from parts of
+// its static buffers; the scene's structure is built again every frame over instances of those, each placed by
+// its own matrix. A shader reads the scene as `RaytracingAccelerationStructure scene : register(tN)` (SetScene)
+// and traces with RayQuery.
+struct GeometryPart {
+  Buffer vertices;  // a static vertex buffer: each vertex's position three floats at `positionOffset`
+  uint32_t positionOffset = 0, firstVertex = 0, vertexCount = 0;
+  Buffer indices;   // a static index buffer (its stride says 16 or 32 bits), counted from firstVertex; none: the vertices in threes
+  uint32_t firstIndex = 0, indexCount = 0;
+  bool opaque = true;  // false: a ray meeting one of its triangles leaves it to the shader to take or not (holes, leaves)
+};
+struct SceneInstance {
+  float transform[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};  // a 3x4 matrix's rows: world = transform * (x, y, z, 1)
+  Structure geometry;
+  uint32_t id = 0;      // 24 bits, what a shader reads back of what a ray met (CommittedInstanceID)
+  uint8_t mask = 0xff;  // a ray query sees it when this and its own mask have a bit in common
 };
 
 // What a pass draws into: a colour target, a depth target, or both.
@@ -244,6 +269,19 @@ class Device {
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
+
+  // Ray tracing (above). False: the card or its driver cannot; the calls below then do nothing.
+  virtual bool RayTracing() const { return false; }
+  // A geometry structure over `count` parts, built on the card at the next BuildScene (its buffers must
+  // stay until then). None where it cannot be made.
+  virtual Structure CreateGeometry(const GeometryPart*, int) { return {}; }
+  // The scene's structure over these instances, built again now, after the geometry made since the last
+  // time. Between passes (it ends the pass under way, as Dispatch does); what comes after reads it. `scene`
+  // is made the first time and grows as needed.
+  virtual void BuildScene(Structure*, const SceneInstance*, uint32_t) {}
+  // A scene's structure for the shaders, in a texture slot (none: empty).
+  virtual void SetScene(int, Structure) {}
+  virtual void Destroy(Structure) {}
 
   // Starts the frame and a pass into the window, cleared to that colour.
   virtual void BeginFrame(const float clearColor[4]) = 0;
