@@ -292,6 +292,11 @@ bool Clouds::Size(int width, int height) {
 // (the constants both steps give their shaders: the camera's rays, the layer, the look)
 static void FillConstants(void* to, const View& view, const Camera& camera, const Clouds& c, float under, const float coverAt[2]);
 
+void Clouds::Skip(View* view) {
+  prepared_ = built_ = false;
+  std::fill(std::begin(view->constants.cloudShadow), std::end(view->constants.cloudShadow), 0.0f);
+}
+
 void Clouds::Prepare(View* view, const Camera& camera, bool on) {
   prepared_ = built_ = false;
   ViewConstants& c = view->constants;
