@@ -1861,6 +1861,16 @@ Vec3 Aim(Sim& sim, AimController* c) {
   if (IsMobile(u)) Mpos = Add(Mpos, UnitVelocity(u));  // (vtbl+0x3c)
   Entity* te = TargetEntity(sim, w->target);
   Vec3 tVel = te && !te->dead ? EntityVelocity(te) : Vec3{};
+  // The target's velocity is asked of the CAiTarget's entity (0x6319f5..0x631a2b: target+4, vtable +0x3c), and a
+  // target held through a recon blip (an order's enemy target, or a jammer's fake) IS that blip: its GetVelocity is
+  // Entity::GetVelocity 0x678dc0, its committed place minus its previous one = the unit's move of the beat before,
+  // not the unit's motion velocity (as the shells' lead, projectile.cpp). Seen: MP3 3305, army 3's artillery 0x30002d
+  // (LeadTarget, a HighArc gun) on army 0's commander through its blip: led with the unit's velocity its pitch goal
+  // was 0.9397 for the original's 0.9291 (watch ww lines), it came on target a beat early and fired at 3379 (3380).
+  if (w->target.type == 1 && (w->target.fakeId || (w->target.viaBlip && w->target.blipId)))
+    if (const Entity* b = sim.FindEntity(w->target.fakeId ? w->target.fakeId : w->target.blipId);
+        b && b->kind == Entity::Kind::Blip)
+      tVel = Sub(b->position, static_cast<const ReconBlip*>(b)->prevPos);
   // Unit::GetTargetPoint 0x6ab340: a target bone comes from the unit's pose (0x6aa5c0: where its motion already
   // put it this beat); without target bones it is the blueprint centre on the entity's committed transform
   // (0x679ce0, entity+0x9c), which this beat's motion has not replaced yet (AdvanceCoords is step 13): such a
