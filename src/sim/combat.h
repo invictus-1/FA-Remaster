@@ -248,6 +248,8 @@ void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
 // The aim controllers' muzzles in last beat's pose, once a beat: before the builder arms' step, else UnitAimTick's.
 void AimReadLastPose(Sim& sim, Unit* u);
 void ProjectilesTick(Sim& sim);
+// One projectile's turn in the entity stage (Projectile::MotionTick 0x69bdd0), once per beat.
+void ProjectileStep(Sim& sim, Projectile* p);
 void BeamsTick(Sim& sim);
 void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat
 void WeaponsTick(Sim& sim);

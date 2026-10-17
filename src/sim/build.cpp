@@ -2192,7 +2192,29 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         [[fallthrough]];
       }
       case 2:
-        // NeedToFaceTargetToBuild: turn until dot(forward, toward R) > 0.95 (the turn itself: not yet)
+        // 0x5f9a27..0x5f9b2f: a builder whose blueprint says NeedToFaceTargetToBuild (bp+0x558) first turns to R:
+        // its forward axis (VAxes3 0x4ec590, z axis, y dropped, normalised 0x44f7e0) against the way to R (y dropped,
+        // normalised 0x452af0); a dot above 0.95 (0xe4f99c) clears the motion's facing (0x6b8590 with the zero
+        // vector) and goes on (state 3, return 0); otherwise the facing is that way (0x6b8590) and the task asks
+        // again next beat (return 1). R is the target, or its factory when state 1 ran in this same call. Seen: MP2
+        // 2221, army 0's Mantis (NeedToFaceTargetToBuild) guarding an engineer turns on the spot before its build
+        // beams (CreateCybranBuildBeams' Random) start; ours started them at once.
+        if (u->bpData && u->bpData->needToFaceTargetToBuild) {
+          Vec3 ax[3];
+          BoxAxes(u->orientation, ax);
+          Vec3 f{ax[2].x, 0.0f, ax[2].z};
+          const float fl = std::sqrt(f.x * f.x + f.z * f.z);
+          if (fl > 0.0f) f = {f.x / fl, 0.0f, f.z / fl};
+          Vec3 d{R->position.x - u->position.x, 0.0f, R->position.z - u->position.z};
+          const float dl = std::sqrt(d.x * d.x + d.z * d.z);
+          if (dl > 0.0f) d = {d.x / dl, 0.0f, d.z / dl};
+          const float dot = (f.z * d.z + f.y * d.y) + f.x * d.x;
+          if (!(dot > 0.95f)) {
+            u->motion.faceDir = d;
+            return kTaskRunning;
+          }
+          u->motion.faceDir = {};
+        }
         t.state = 3;
         continue;
       case 3: {
