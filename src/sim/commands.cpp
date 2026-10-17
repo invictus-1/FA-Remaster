@@ -998,6 +998,14 @@ void CommandStep(Sim& sim, Unit* u) {
     PopHead(u);
     u->motion.arrived = u->motion.failed = false;
     SetMoving(u, false);
+    // CUnitFormAndMoveTask's destructor 0x6194e0 (read): after clearing Moving (0x619529) and unlinking its listeners
+    // it calls the navigator's AbortMove (unit+0x54c, vt+0x10 = 0x5a3750, call at 0x6195c2) whatever the navigator is
+    // doing (no command-type table, unlike CUnitMoveTask's 0x618998): a member still rolling toward its own cell when
+    // its group is at goal gets SetSpeedThroughGoal(0) and MakeIdle's SetWaypoints(0, 0), a brake straight along its
+    // hull (CAiPathSpline::Update mode 3). Seen: MP2 4593, army 1's Striker 0x100090 (FormMove ended, 0.27 per beat,
+    // its goal cell three beats ahead) brakes straight to 209.47 255.65 in the original; ours drove on, reached its
+    // cell at 4596, where the navigator's Stop dropped the spline, and coasted to 209.53 255.36.
+    MotionStop(u);
     if (!u->commands.empty()) StartHead(sim, u);
     return;
   }
