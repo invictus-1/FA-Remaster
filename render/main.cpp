@@ -789,6 +789,7 @@ int main(int argc, char** argv) {
     picture.SetFocusArmy(opt.focus);
     picture.SetUpscale(opt.upscale);        // (--fsr)
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
+    picture.SetRayReflections(opt.rayReflections);  // (--ray-reflections)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {

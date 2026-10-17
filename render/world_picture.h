@@ -135,6 +135,13 @@ class WorldPicture {
   // picture's own size, in place of anti-aliasing. Needs anti-aliasing off (gSceneSamples 1 before Open);
   // with it on, FSR 1 stays. Off as at first. A player's option.
   void SetTemporalUpscale(bool on);
+  // Reflections by ray tracing (World::rayReflections): smooth surfaces and the water mirror what their rays meet,
+  // what is off the screen too. The surfaces' shaders are built for it when a map is opened (gRayShaders), so it
+  // takes effect from the next Open; switched off later it stops at once. Only where the device has ray tracing
+  // (Direct3D 12 with DXR 1.1, Vulkan with ray queries; never on the Mac); elsewhere nothing changes. Off as at
+  // first. A player's option. The other lighting options are the world's own switches (world(); their costs in
+  // docs/render-lighting.md, "The options").
+  void SetRayReflections(bool on);
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).
