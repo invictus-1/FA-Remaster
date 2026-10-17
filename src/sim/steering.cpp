@@ -13,6 +13,7 @@
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "script/script_state.h"
+#include "sim/air.h"
 #include "sim/build.h"
 #include "sim/navigation.h"
 #include "sim/combat.h"
@@ -669,7 +670,13 @@ void CheckCollisions(Sim& sim, Unit* u) {
     WorldShape s;
     if (!GetWorldShape(e, &s) || !SphereOverlap(s, u->position, R)) return;
     if (UnitIgnores(u, e, 2)) return;
-    if (!HasSteering(e)) return;
+    // e.steering (+0x550): the Unit ctor makes one (AI_CreateSteering 0x5d3c30 at 0x6a5e4e) for every blueprint with
+    // a Physics.MotionType (1..8, 0x6a5d9f..0x6a5dab), aircraft included. A landed aircraft is therefore a candidate:
+    // no spline, air-capable, so on the 'second' side, and its meeting comes to Resolve's air-capable branch. Seen
+    // (oracle probe mp2_3510): MP2 3499, army 0's land scout 0x67 predicts against the landed interceptor 0x3 in
+    // its way first (a record for 3505), whose resolve and re-prediction lead to the hard brake for engineer 0x5d at
+    // 3509; ours never looked at the interceptor and drove on.
+    if (!e->motion.bp || !e->motion.bp->mobile()) return;
     bool sp = e->motion.hasSpline;
     if (sp && e->motion.splineMode == 2) return;  // side-stepping: not seen
     if (e->army == u->army && !UnitPriority(e, u)) first.push_back(e);  // u has the right of way
@@ -731,7 +738,15 @@ int Resolve(Sim& sim, Unit* Y) {
   Vec3 pY = Y->position, pX = X->position;
   Vec3 vY = UnitVelocity(Y), vX = UnitVelocity(X);  // vtbl+0x3c
   bool Ymoving = Dot(vY, vY) > 0;
-  if (X->motion.bp->canFly) return clear();  // (an air-capable blocker would lift off: not modelled)
+  // 0x596f30: an air-capable blocker (bp Air.CanFly, with a motion) is never braked for: without a transport
+  // interface (+0x55c) and when Y comes at it (Approaching 0x596e00 on the two positions and velocities), its
+  // motion is given its own position on the Air layer (CUnitMotion::SetTarget 0x6b85e0 (pos, no facing, 0x10)) and
+  // it lifts off; the record is cleared either way. Seen: MP2 3525, army 0's interceptor 0x3 standing landed in
+  // the land scout 0x67's way goes up (MovingUp) and lands again at the same spot when its auto-land time is out.
+  if (X->motion.bp->canFly) {
+    if (!X->transport && Approaching(Y, X, pY, vY, pX, vX)) AirSetTargetNow(sim, X, X->position, 0x10);
+    return clear();
+  }
   if (my.hasSpline && my.splineIdx < my.spline.size()) pY = my.spline[my.splineIdx].pos;
   const UnitMotion& mx = X->motion;
   if (mx.hasSpline && mx.splineIdx < mx.spline.size()) pX = mx.spline[mx.splineIdx].pos;
