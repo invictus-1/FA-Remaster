@@ -81,6 +81,22 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
   for (const ShieldEntity* s : sim.shields)
     if (!s->destroyQueued && s->attachParent) parents.push_back(s->attachParent);
   std::sort(parents.begin(), parents.end());
+  // (the units on each parent, in attach order: the original's children list, Sim::NextAttachSeq)
+  struct Kid {
+    uint32_t parent;
+    uint64_t seq;
+    uint32_t id;
+  };
+  std::vector<Kid> kids;
+  for (const Unit* u : sim.units())
+    if (!u->destroyQueued && u->parentId) kids.push_back({u->parentId, u->attachSeq, u->id});
+  std::sort(kids.begin(), kids.end(), [](const Kid& a, const Kid& b) {
+    return a.parent != b.parent ? a.parent < b.parent : a.seq < b.seq;
+  });
+  auto idOf = [&](uint32_t ref) {
+    const Entity* t = ref ? sim.FindEntity(ref) : nullptr;
+    return t ? t->id : 0xffffffffu;
+  };
   auto layerBits = [](const std::string& l) {
     if (l == "Land") return 1;
     if (l == "Seabed") return 2;
@@ -99,7 +115,11 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
       const uint32_t me = EntityRef(u);
       auto r = std::equal_range(parents.begin(), parents.end(), me);
       v.attachedCount = static_cast<int>(r.second - r.first);
+      auto k = std::lower_bound(kids.begin(), kids.end(), me, [](const Kid& a, uint32_t p) { return a.parent < p; });
+      for (; k != kids.end() && k->parent == me; ++k) v.attachedUnits.push_back(k->id);
     }
+    v.parent = idOf(u->parentId);
+    v.creator = idOf(u->creatorId);
     v.hasShield = std::binary_search(shielded.begin(), shielded.end(), EntityRef(u));
     v.shieldRatio = u->shieldRatio;
     v.id = u->id;

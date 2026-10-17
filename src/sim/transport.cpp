@@ -535,6 +535,7 @@ void ClearWaitingFormation(TransportObj& T) {  // vt+0x98: the formation deleted
 // Attaching (Entity::AttachTo / Unit::AttachTo, Unit::DetachFrom)
 
 void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBone) {
+  if (child->parentId != EntityRef(parent)) child->attachSeq = sim.NextAttachSeq();  // (the views' child order)
   child->parentId = EntityRef(parent);
   child->parentBone = parentBone;
   child->ownBone = childBone;

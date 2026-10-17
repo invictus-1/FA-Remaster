@@ -163,6 +163,7 @@ class Unit : public Entity {
   // commands to a factory land here; a finished unit takes them over.
   std::deque<std::shared_ptr<UnitCommand>> factoryCommands;
   uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
+  uint64_t attachSeq = 0;          // when it took that parent (Sim::NextAttachSeq); only the views read it
   uint32_t scriptBits = 0;         // u+0x498: the toggle buttons' state (sim/script_bits.cpp)
   int64_t toggleCaps = -1;         // u+0x48c: live toggle caps (-1 = not yet read from the blueprint)
   int64_t commandCaps = -1;        // u+0x488: live command caps (-1 = still the blueprint's General.CommandCaps)

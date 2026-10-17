@@ -298,7 +298,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   sim.collectSounds = o.view;
   sim.collectProps = o.view;
   size_t propCount[3] = {0, 0, 0}, propMapOnes[3] = {0, 0, 0}, entMax = 0, entShieldMax = 0, unitMeshMax = 0;
-  std::string propSample[3], entSample[2], unitMeshSample;
+  std::string propSample[3], entSample[2], unitMeshSample, carrySample, creatorSample;
+  size_t carryMax = 0;
   std::map<std::string, size_t> entMeshes;
   double propSeconds = 0;
   size_t sndCount[3] = {0, 0, 0};
@@ -504,6 +505,36 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
             }
           }
         unitMeshMax = std::max(unitMeshMax, withMesh);
+        // ui 36: the beat with the most units on units (UnitView::attachedUnits, attach order); each child's
+        // UnitView::parent must name its carrier
+        size_t carried = 0;
+        for (const UnitView& v : uv) carried += v.attachedUnits.size();
+        if (carried > carryMax) {
+          carryMax = carried;
+          for (const UnitView& v : uv)
+            if (v.attachedUnits.size() > 1 || (carrySample.empty() && !v.attachedUnits.empty())) {
+              char cb[200];
+              std::snprintf(cb, sizeof cb, "tick %u unit %#x %s carries %zu (of %zu units on units):", sim.tick(), v.id,
+                            v.blueprint.c_str(), v.attachedUnits.size(), carried);
+              carrySample = cb;
+              for (uint32_t c : v.attachedUnits) {
+                uint32_t p = 0;
+                for (const UnitView& k : uv)
+                  if (k.id == c) p = k.parent;
+                std::snprintf(cb, sizeof cb, " %#x%s", c, p == v.id ? "" : " (parent differs)");
+                carrySample += cb;
+              }
+              if (v.attachedUnits.size() > 1) break;
+            }
+        }
+        for (const UnitView& v : uv)  // a UEF pod and its station or commander (GetAssistingUnitsList goes by it)
+          if (creatorSample.empty() && v.creator != 0xffffffffu &&
+              (v.blueprint == "xea3204" || v.blueprint == "uea0001" || v.blueprint == "uea0003")) {
+            char cb[160];
+            std::snprintf(cb, sizeof cb, "tick %u pod %#x %s: creator %#x, parent %#x", sim.tick(), v.id,
+                          v.blueprint.c_str(), v.creator, v.parent);
+            creatorSample = cb;
+          }
       }
       size_t bones = 0;
       for (const auto& up : poses) bones += up.bones.size();
@@ -561,6 +592,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     for (const std::string& line : entSample)
       if (!line.empty()) Logf(LogLevel::Info, "view: %s", line.c_str());
     if (!unitMeshSample.empty()) Logf(LogLevel::Info, "view: %s", unitMeshSample.c_str());
+    if (!carrySample.empty()) Logf(LogLevel::Info, "view: %s", carrySample.c_str());
+    if (!creatorSample.empty()) Logf(LogLevel::Info, "view: %s", creatorSample.c_str());
   }
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);
