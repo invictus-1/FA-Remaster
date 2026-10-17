@@ -20,6 +20,7 @@
 #include "sim/motion.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
+#include "sim/slot_sort.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -232,8 +233,11 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
     float dx = slots[i].x - slots[0].x, dz = slots[i].z - (slots[0].z + E);
     S[i].key = dx * dx + dz * dz;
   }
-  // 8.4: stable descending sort (the <= 32 insertion-sort path)
-  std::stable_sort(S.begin(), S.end(), [](const SRec& a, const SRec& b) { return a.key > b.key; });
+  // 8.4: the original's sort 0x572350 (sim/slot_sort.h), the larger key first. For up to 32 slots it is stable;
+  // above that equal keys can move. Seen: MP3 4424, a Move for 35 of army 1's units in AttackFormation: two slots of
+  // one key in the stable order gave tanks 0x100073 and 0x100071 each other's slot (the probe mp3_thr: the original's
+  // goals at 4425 are (302, 278) for 0x100071 and (282, 264) for 0x100073), and each drove to the other's cell.
+  slotsort::Sort(S, [](const SRec& a, const SRec& b) { return a.key > b.key; });
   // 8.5: matching
   int order = 1;
   G.speed = kInfF;

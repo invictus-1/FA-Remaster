@@ -37,6 +37,22 @@ def fmt(v):
     return "none" if v is None else str(v)
 
 
+def next_cutoff(d):
+    """the cutoff --update sets: the new first differing draw's tick; when every common draw agrees, the last tick
+    they reach (+1), so that a replay whose random stream matches to the end is gated pair by pair to the end too"""
+    new_cut = d.get("first_tick")
+    if new_cut is None and d.get("agree_through_tick") is not None:
+        new_cut = d["agree_through_tick"] + 1
+    return new_cut
+
+
+class Discard(io.TextIOBase):
+    """the report when there is no --report: dropped as it is printed"""
+
+    def write(self, s):
+        return len(s)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("marks")
@@ -72,18 +88,21 @@ def main():
         print("regress: no recording of ours (--ours or --run)")
         return 2
 
-    A, B = recdiff.load(oracle), recdiff.load(ours)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    # Rec keeps the units on disk (a 4 GB recording compares in well under 1 GB); the report goes straight to its
+    # file (MP1's is 0.8 GB of text), or nowhere without --report
+    A, B = recdiff.Rec(oracle), recdiff.Rec(ours)
+    cutoff = M.get("cutoff", 0)
+    with (open(a.report, "w") if a.report else Discard()) as rep, contextlib.redirect_stdout(rep):
         d = recdiff.compare_draws(A, B, recdiff.ExeNames(a.names), a.moho64, 12) or {}
         e = recdiff.compare_econ(A, B, M.get("tol", 0.001)) or {}
-        r_air = recdiff.compare_air(A, B, M.get("tol", 0.001), 10**9) or {}
-        u = recdiff.compare_units(A, B, M.get("tol", 0.001), 10**9) or {}
-    if a.report:
-        open(a.report, "w").write(buf.getvalue())
+        # only the pairs before the cutoff are gated, and --update moves the cutoff up to new_cut at most: keep no
+        # later ones (MP1 has tens of millions)
+        new_cut = next_cutoff(d)
+        keep = new_cut if new_cut is not None and new_cut > cutoff else cutoff
+        r_air = recdiff.compare_air(A, B, M.get("tol", 0.001), 10**9, pairs_before=keep) or {}
+        u = recdiff.compare_units(A, B, M.get("tol", 0.001), 10**9, pairs_before=keep) or {}
 
     marks = M.setdefault("marks", {})
-    cutoff = M.get("cutoff", 0)
     fails, gains = [], []
 
     def check(name, new, higher_is_better=True):
@@ -141,12 +160,7 @@ def main():
         marks["econ.first_tick"] = e.get("first_tick")
         marks["air.first_tick"] = r_air.get("first_tick")
         marks["units.first_tick"] = u.get("first_tick")
-        # the new first differing draw's tick; when every common draw agrees, the last tick they reach (+1), so
-        # that a replay whose random stream matches to the end is gated pair by pair to the end too
-        new_cut = d.get("first_tick")
-        if new_cut is None and d.get("agree_through_tick") is not None:
-            new_cut = d["agree_through_tick"] + 1
-        if new_cut is not None and new_cut > cutoff:
+        if new_cut is not None and new_cut > cutoff:  # (next_cutoff)
             M["cutoff"] = cutoff = new_cut
             # re-collect the pair lists under the new cutoff
             new_pairs = {k: sorted([t, i, f] for t, i, f in res.get("pairs", []) if t < cutoff)

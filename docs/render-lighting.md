@@ -406,8 +406,25 @@ where it changes the look, off by default, measured like the rest. In the order 
      marks, over the square, the discs of every model drawn that is not scenery and stands on the ground (its
      footprint from its bounds); blades there lie at a tenth of their height. Cost at 1440p: 0.05 ms at a close
      zoom (12 units), 0.16 ms at 30. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.06).
-     - Open: the visuals session's plants (cards, an atlas, her density table) when she makes them; roads, decals
-       and build pads not yet kept clear; one shared wind for grass, trees and weather as it is (the trees').
+     - **The plants: first version, off until Chris has seen them** (2026-10-17; the visuals session's card atlas
+       for SETONS_R, her sections 49 and 50: 16 cells re-rendered as patches - tussocks, weeds, flowers, dry
+       stalks, a fern - with a density table by the map's nine layers in its JSON). The map's entry in remap.json
+       names its `cover` file; `Terrain::ReadCover` reads the table by the layers' names, `Terrain::CoverDensity`
+       blends it by the layers' masks into two pictures over the map (blades, clumps, flowers, stalks; ferns, the
+       dry cells' share, the weeds' share), more ferns and clumps and fewer flowers within 6 units of a tree (5014
+       trees found on SETONS_R, from the props that sway and stand over 1.5 units). With a table the blades take
+       its density too. `GroundCover::SetPlants` / the plants' pass: a cell 0.3 wide a spot or none, by the table
+       (flowers in loose patches by a smooth noise), a spot up to six camera-facing cards of one cell (a clump's),
+       their feet at the cells' bottom middle, leaning back from the camera a little, pressed flat round units,
+       swaying in the trees' wind by the cell's weight, lit as the ground a half toward the cards' normals,
+       alpha-tested at a half. Sizes: the tallest (dry stalks, 0.71 m real) at `plantTallest` 0.24 units (half a
+       small unit's hull: readability), the low plants `plantBoost` 2.75 times their real proportion but none above
+       that cap (at one scale the grass was 4-8 pixels at a close zoom and did not show among the blades). Cost at
+       1440p: +0.025 ms at a close zoom (8 units), +0.05 at 25. `plantDensity` 0 by default (viewer
+       `--plant-density 15`, `--plant-tallest`). Off: pictures identical.
+     - Open: Chris's word on the plants' look (then their density on by default, within Ground Detail); the
+       leafy patches read a little flat from straight above; roads, decals and build pads not yet kept clear; one
+       shared wind for grass, trees and weather as it is (the trees').
 7. **Battle scars (done, first version, 2026-10-17; Chris: "build it up now"; in the "Ground Detail" setting):**
    `World::battleScars` (viewer `--battle-scars`; `Decals::battleScars`). The game already lays scorches and craters
    where things die and shells land (deaths, blasts, artillery, bombs, beams, nukes, teleports), each for a minute

@@ -1419,7 +1419,6 @@ void Sim::ProcessDestroyQueue() {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);
       UnitEconomyRelease(u);
-      ReleaseStructure(*this, u);
       RemoveUnitFromLists(u);
     }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
@@ -1438,6 +1437,10 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ForgetUnitCommands(u);
+      // ~Unit's ReleaseOccupyGround 0x6a7ab0 (0x6a6de3) comes after its queue is cleared (0x6a6c66): a failed upgrade's
+      // dtor re-occupies the builder's cells first (sim/build.cpp), and a builder that still counts as occupying ground
+      // then frees them
+      ReleaseStructure(*this, u);
       // ~Unit's army statistics (0x6a6de8): a finished unit of a blueprint with CapCost > 0 leaves "Units_Active" (its
       // blueprint's value - 1, the item - 1 as an int, 0x6a6e13), a construction leaves "Units_BeingBuilt" (its
       // blueprint's value - 1, 0x6a6e84)

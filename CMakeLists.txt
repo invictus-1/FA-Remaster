@@ -80,6 +80,9 @@ if(MINGW)
   target_link_options(moho64 PRIVATE -static)
 endif()
 
+add_executable(slot_sort_test tests/slot_sort_test.cpp)
+target_include_directories(slot_sort_test PRIVATE src)
+
 add_executable(dialect_test tests/dialect_test.cpp)
 target_include_directories(dialect_test PRIVATE src)
 target_link_libraries(dialect_test PRIVATE gpglua)

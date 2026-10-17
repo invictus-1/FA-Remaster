@@ -314,13 +314,19 @@ bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
 }
 
 // A structure enters / leaves the occupancy grid.
-void OccupyStructure(Sim& sim, Unit* u) {
+// Unit::ExecuteOccupyGround 0x6a7770: the footprint's cells at the unit's place go on in the occupancy grid. It leaves
+// the "occupies ground" byte +0x560 alone (no write to it in 0x6a7770): Unit::Unit sets that after its call (0x6a5f71).
+void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
-  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+}
+void OccupyStructure(Sim& sim, Unit* u) {
+  if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
+  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
+  ExecuteOccupyGround(sim, u);
   u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
@@ -774,12 +780,12 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // engineer walking to a site prop that another took away walks on to its spot in the original.
   if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
   // A walk under way when the command listener 0x620160 set state 0 and woke the thread: the walk's CUnitMoveTask
-  // (NewMoveTask 0x61f4c0 with no command: it does not listen itself) sits on top of the thread, so it is what the
-  // wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears Moving (0x6187bd) and calls the
-  // navigator's AbortMove (0x618886); then this task runs state 0 in the same pass. Seen: MP1 2040, the player drags
-  // army 0's factory rally point while its engineer 0xb walks to a rock for the rally AggressiveMove; at 2041 the
-  // original's engineer is neither Moving nor Reclaiming (the dragged point is in sight: the task ends), ours walked
-  // on and reclaimed the rock from 2041 to 2043.
+  // (NewMoveTask 0x61f4c0; it links the queue's head command itself, probe mp1_2701, and re-goals on the event) sits
+  // on top of the thread, so it is what the wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears
+  // Moving (0x6187bd) and calls the navigator's AbortMove (0x618886); then this task runs state 0 in the same pass.
+  // Seen: MP1 2040, the player drags army 0's factory rally point while its engineer 0xb walks to a rock for the rally
+  // AggressiveMove; at 2041 the original's engineer is neither Moving nor Reclaiming (the dragged point is in sight:
+  // the task ends), ours walked on and reclaimed the rock from 2041 to 2043.
   if (c.moving && c.state == 0) {
     c.moving = false;
     EndWalk(u);
@@ -2209,6 +2215,11 @@ Unit* FactoryOf(Sim& sim, Unit* t) {  // a unit being built inside a factory: th
 
 // TaskTick 0x5f9370. "return 0" (go on in the same dispatch) is the loop; return 1 / 10 wait.
 int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  // a walk under way when the command's event set state 0 (GuardRepairChildrenCommandEvent): the woken move task ends
+  if (t.moving && t.state == 0) {
+    t.moving = false;
+    EndWalk(u);
+  }
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
@@ -2848,6 +2859,38 @@ void RefreshGuardTasks(Sim& sim, UnitCommand& c) {
   }
 }
 
+// The same SetTarget event (0x6e8820 -> 0x6e94a0) reaches the repair child of a guard, which listens to the guard's
+// command too (CUnitRepairTask's OnEvent 0x5f9d60, ids_repair_placement.md 2.4: its work target dropped with
+// OnStopBuild(true), target := the command's target unit, noMove = 0, state 0, the thread woken), and that child's walk
+// (a CUnitMoveTask, which links the queue's head command itself: woken, its TaskTick returns -1 and its dtor aborts the
+// move; TickRepair ends it). Seen (probe mp1_2701): MP1 2701, army 7's engineers guard the upgrading mex 0x700005 on
+// one Guard; when the upgrade is done another engineer's guard retargets the command, and 0x700019's repair walk ends
+// at once (CUnitMoveTask::OnEvent 0x618c40, its dtor's AbortMove 0x618886); the repair task runs state 0 on the
+// finished unit and ends, and the guard, with more Guards queued, ends as well (3 -> 2). Ours walked on.
+void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
+  if (c.type != CommandType::Guard) return;
+  lua_State* L = sim.L();
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* h : holders) {
+    if (h == self || !Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
+    BuildTask* gt = h->task;
+    if (!gt || !gt->gdata || !gt->gdata->child || gt->gdata->child->type != CommandType::Repair) continue;
+    BuildTask& ch = *gt->gdata->child;
+    if (ch.workId) {
+      if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.erase("NoReclaim");
+      h->workProgress = 0;
+      if (ch.started) StopBuild(sim, L, h, ch, true);
+      ch.workId = 0;
+    }
+    Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+    ch.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
+    ch.noMove = false;
+    ch.state = 0;
+    gt->gdata->childFrom = 0;  // (woken: counter 0)
+  }
+}
+
 // CUnitGuardTask::TaskTick 0x6141a0
 int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   (void)L;
@@ -2911,6 +2954,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
           // whose upgrade 0x30004d finished; only the first retargets (one draw, from SetCommandTarget 0x6ee4b3), the
           // two after it already hold 0x30004d. Ours retargeted all three (three draws).
           RefreshGuardTasks(sim, *c);
+          GuardRepairChildrenCommandEvent(sim, *c, U);
         }
   }
   U->unitStates.erase("GuardBusy");
@@ -3300,7 +3344,14 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
-        if (Alive(u)) OccupyStructure(sim, u);
+        // 0x5f85f2..0x5f85f5: the builder's ExecuteOccupyGround has no life test and leaves its +0x560 as it is. So a
+        // builder on its way out whose +0x560 was cleared (TransferUnit, 0x7470a2) keeps its cells held for good: its
+        // queue is cleared in ~Unit (0x6a6c66) before ReleaseOccupyGround (0x6a6de3), which then does nothing. Seen: MP3
+        // 4036, army 3's units go to army 1; the T1 extractor 0x300008, upgrading into 0x300033, becomes 0x1000a2. The
+        // original's cell (442, 69) stays held, and at 4450 army 1's tank 0x10003a cannot take the straight way to
+        // (442, 68) past it (probe mp3_reach: its corridor test to (442, 68) fails, (443, 68) is taken); ours had freed
+        // the cell with the upgrade's release.
+        ExecuteOccupyGround(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }

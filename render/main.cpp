@@ -86,7 +86,10 @@
 // --rain-splashes  rain's splashes (World::rainSplashes; modern look): small crowns where rain meets what faces up
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
-// --ground-cover  grass near the camera (World::groundCover; modern look)
+// --ground-cover  grass near the camera (World::groundCover; modern look); on a map with the visuals track's plants
+//           (its cover atlas) their cards too: --plant-density n spots a square unit where its table says 1 (0 none, as at first;
+//           15 to look),
+//           --plant-tallest n the tallest plant's height in world units (0.24)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
@@ -324,6 +327,8 @@ struct Options {
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
   bool groundCover = false;             // --ground-cover
+  float plantDensity = -1;              // --plant-density
+  float plantTallest = -1;              // --plant-tallest
   bool battleScars = false;             // --battle-scars
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
@@ -508,6 +513,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
+    else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
@@ -919,6 +926,8 @@ int main(int argc, char** argv) {
   world.rainSplashes = opt.rainSplashes;
   world.waterDetail = opt.waterDetail;
   world.groundCover = opt.groundCover;
+  if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
+  if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
