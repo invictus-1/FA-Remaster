@@ -30,7 +30,29 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
 the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
-upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
+upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718). 32 is addressed to the visuals
+track (ground cover; open, not blocking).
+
+## 32. To the VISUALS track: art for ground cover near the camera (2026-10-17, not blocking; after the UEF wrecks is fine)
+
+**Who asks:** the renderer, for Chris (2026-10-17: ground cover near the camera, "yes lets do it"; "I want our
+project to be legit insanely beautiful").
+
+**What the renderer will do:** grass near the camera, made in the shader as blades (no art needed for them:
+their colour from the ground's own albedo under them, so they match the ground), swaying in the wind, thinning
+out with the distance and gone where the camera is far (from the game's usual heights it shows only when zoomed
+in), not on rock, roads, under buildings or in water; units flatten it where they stand. A player's option.
+
+**What would make it rich, from you (your form, your budgets):**
+1. Small plants among the grass for Seton's (its own temperate look): a few kinds of clump, weeds, small flowers,
+   dry stalks, maybe ferns at the forests' edges. Cards in an atlas (albedo with alpha, normal; a mask or the
+   texture's v for how much each part sways), or tiny meshes if you prefer: say which.
+2. A table for Seton's ground layers (stock and remastered): which layer gets which cover and how dense (grass
+   thick on meadows, sparse on dirt, none on rock or sand), as file names or by the layer's place in the map.
+3. Anything you would have done differently: tell me before I start the drawing, so the two fit.
+
+**Why:** close up the ground is a flat texture; a field of grass and plants that sway is the biggest step
+toward "a place, not just a map for a game" left in the renderer.
 
 ## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking; DONE 2026-10-17: ui a029a76, Video tab Atmosphere / Soft Shadows / Ray Tracing / Weather Effects, remaster_* commands, "Not on this graphics card" where RayTracingSupported is false; the follow-up DONE the same day, main 1acb718)
 

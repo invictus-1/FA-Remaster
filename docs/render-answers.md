@@ -4,6 +4,22 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, the wrecks' layout (2026-10-17; her three questions before the pilot)
+
+1. **Space and scale: yes, exactly so.** Build each wreck in the unit's own model space, the same origin and nose
+   direction as its lod0. The game's wreckage script (`CreateWreckage`) makes the prop at the dead unit's place,
+   turns it to the unit's orientation at death and sizes it by the unit blueprint's `Display.UniformScale`; the
+   renderer draws the wreck there with that scale, as it draws the live unit. A wreck built that way lands where
+   the unit stood, at its size.
+2. **Ground: it stays at the unit's death orientation;** the renderer does not tilt it to the ground. A land unit
+   already stands tilted to the slope it was on, so its wreck lies on that slope as the unit did; an aircraft's
+   wreck lies as it came down. So no flattening for the terrain: keep the underside as the unit's own (a little
+   sinking into the ground where it is uneven is fine and looks settled).
+3. **Material: drawn as they are.** Where a unit has its own `<ID>_wreck_lod0.scm`, the renderer draws it with its
+   own textures and no burnt shader on top, no team colour (your spec alpha 0), no glow (spec blue 0), no lamps,
+   no sway. The burnt look stays only for units without a wreck of their own (the fallback, as agreed). The
+   renderer's side of that is made when the first wreck lands (models.cpp, ModelCache::Wreck).
+
 ## To ui, renderer request 29: what the Linux and macOS host hands the Vulkan picture (2026-10-16)
 
 Your suggestion, as you put it: `WorldPicture::UseHostSurface(std::vector<std::string> instanceExtensions,

@@ -301,6 +301,32 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
        it, Post::KeepOpaque), so it does not build them up from frames before.
 
+## The next pieces (Chris, 2026-10-17)
+
+Asked "anything else?", Chris took six of the renderer's ideas ("I want our project to be legit insanely
+beautiful and plays extremely well"; HDR output not, "most hdr monitors are kinda ass"). Each a player's option
+where it changes the look, off by default, measured like the rest. In the order they are taken up:
+
+1. **Shader cache: the first opening fast too.** Measured: the compiled shaders are already kept between runs
+   (`%LOCALAPPDATA%\FA Remastered\shaders`, both backends), and with them kept every pipeline of a map is made in
+   0.06-0.11 s, ray tracing's too (the driver keeps its own compiled pipelines). What is slow is the first
+   opening after the shaders change (every renderer update): then they are compiled anew, the Vulkan ray-tracing
+   ones in about 4 s. So: compile them on several cores at once, and give a release a cache made beforehand
+   (read beside the user's own), so a player's very first start is quick. And look at the rest of the opening
+   (about 5 s for a map with the viewer, most of it not shaders).
+2. **Lightning inside the clouds:** a stroke's flash lights the volumetric clouds from within, round the bolt,
+   through their depth (clouds.cpp's march takes the flash as a light at the bolt).
+3. **Water caustics and wet shorelines:** sunlight rippling on the bed under shallow water (the ground's shader
+   under the water line, by depth and the sun's way), and the beach darker and shinier in a band above the water
+   that the swell has just wetted.
+4. **Sharper reflections with the models' real textures:** the rays read each model's own albedo (its levels'
+   texture coordinates kept for the rays, the albedos in a picture of small copies) instead of one colour a
+   model; the visuals session upgrades what looks grainy.
+5. **FSR 3 frame generation:** AMD's frame interpolation (FidelityFX SDK, MIT, the download Chris approved), a
+   frame made between two drawn ones, for slower cards; with its own frame pacing; a player's option.
+6. **Ground cover near the camera:** grass and small plants that sway, by the ground's layers, near the camera;
+   with the visuals session's art (asked first, so it can be made alongside).
+
 ## The options
 
 Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A
