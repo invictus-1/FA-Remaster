@@ -29,6 +29,10 @@
 #include "sim/units.h"
 
 namespace moho {
+
+namespace combat {
+bool IsEnemy(const Army* a, const Army* b);
+}
 namespace {
 
 Sim* S(lua_State* L) { return Sim::From(L); }
@@ -1149,6 +1153,23 @@ bool RefusesGuard(Sim& sim, lua_State* L, const Unit* u, const Entity* target) {
   return false;
 }
 
+// ProcessUnitCommand, the Repair case (0x6f075e: type 20, index 8 of the type switch 0x6efdc2). The unit does not take
+// the order (0x6efe44)
+// - without a target (0x6f0760);
+// - when it rides a transport and is no POD (GetTransportedBy 0x5e3c30, 0x6f0766..0x6f07d5);
+// - when it is not in REPAIR (0x6f07db..0x6f081e, and again with the rules' category 0x6f0862..0x6f088e);
+// - when the target's army is its enemy (GetAllianceWith 0x579430 == 2, 0x6f0824..0x6f0846);
+// - when the target is the unit itself (0x6f084c..0x6f085c).
+// Seen: MP3 3152 and 3155, the player orders army 0's commander, busy reclaiming, to repair itself: the original's
+// queue does not take it, and the order's target decode (a unit target's draw) is not made; ours queued it and drew.
+bool RefusesRepair(Sim& sim, const Unit* u, const Entity* target) {
+  if (!target) return true;
+  if (u->transportedBy && !BpInCategory(sim, u->blueprint, "POD")) return true;
+  if (!BpInCategory(sim, u->blueprint, "REPAIR")) return true;
+  if (target->army && ::moho::combat::IsEnemy(u->army, target->army)) return true;
+  return target == u;
+}
+
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type,
                                    const Vec3* target = nullptr, const Entity* targetEntity = nullptr) {
   static const long dbgIssue = getenv("MOHO64_DEBUG_ISSUE") ? atol(getenv("MOHO64_DEBUG_ISSUE")) : -1;
@@ -1175,6 +1196,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
     if (RefusesOrderWhileBuilt(*sim, u)) continue;
     if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
+    if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
     u->commands.push_back(c);
     c->units.insert(u);
@@ -1395,6 +1417,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (RefusesOrderWhileBuilt(sim, u)) continue;  // (the being-built rule, above)
     if (sameOrderAgain(u)) continue;
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
+    if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
