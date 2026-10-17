@@ -252,13 +252,31 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - Open: the probes keep 0.97 of their light each frame, so an explosion's bounced share comes in over
        about half a second and lingers as long (the flash itself lights at once); faster blending where the
        light changes much (as DDGI does) risks flicker from 64 rays a probe: left for when it shows.
+   - **Ray-traced shadows: put off** (2026-10-17, the renderer's judgement). The sun's shadow maps already
+     cover all the game's camera sees (each cascade 3.2 times the last, the farthest about 18 times the
+     camera's distance), and with soft and contact shadows their edges are right. The rays see each model by
+     its coarsest solid level and leaves by chance, so their shadows would be blockier and noisier than the
+     maps'. Worth it only with the drawn levels in the ray scene and leaves tested against their textures;
+     to take up again if Chris wants it.
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
-   ripples on puddles and water, snow gathering on the ground and on units.
+   ripples on puddles and water, snow gathering on the ground and on units. (Already there before this
+   project: wet and snowy ground and units, puddles, rings on puddles and on the water, snow trodden.)
+   - **Lit where they fall: first version** (2026-10-17): `World::litRain` (viewer `--lit-rain`; modern
+     look). Each drop or flake takes, where it is, the sun through its shadow and the clouds' and the small
+     lights (a lamp's beam through the lamp's shadow), sent on mostly forward (Henyey-Greenstein, g 0.6: a
+     drop between the eye and a light shines), on top of the sky's light it had (weather.cpp `DropLight`,
+     worked out at each corner; a second pipeline with the lighting block, made the first time it is
+     wanted). At night the rain round lit units catches their lamps; in daytime rain and storms, under their
+     clouds, little changes; snow's flakes are too small to show it. Cost at 1440p (a storm, 16 commanders,
+     by the lowest times): 0.016 -> 0.042 ms. Off: pictures identical, pixel for pixel; on, Vulkan as
+     Direct3D 12 (mean 0.04).
+     - Open: the drops fill a box as high as the camera is far, so few are low enough to be in a headlight's
+       beam; a layer of drops near the ground round the lamps would show the beams' rain better.
 
 ## The options
 
 All in `World`, off by default, each one's cost measured and written here when it is built:
 `volumetricFog`, `volumetricClouds`, `skyTables`, `screenReflections`, `softShadows`, `contactShadows`,
-ray tracing's `bounceLight` and `rayReflections` (built so far; ray-traced shadows to come; `rayReflections`
-needs `gRayShaders` set before the world is made), and the rain and snow upgrades. The ui
+ray tracing's `bounceLight` and `rayReflections` (`rayReflections` needs `gRayShaders` set before the world is
+made; ray-traced shadows put off), and the rain and snow upgrades (`litRain` so far). The ui
 chat gets the names and their costs when each is ready.
