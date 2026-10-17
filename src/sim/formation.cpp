@@ -56,7 +56,11 @@ float TopSpeed(Sim& sim, const Unit* u) {
 bool QuatZero(const Formation& f) { return f.qw == 0 && f.qx == 0 && f.qy == 0 && f.qz == 0; }
 bool AssignZero(const Formation& f) { return f.aw == 0 && f.ax == 0 && f.ay == 0 && f.az == 0; }
 // MultQuadVec with (w, x, y, z)
-Vec3 RotW(float w, float x, float y, float z, Vec3 v) { return vm::Rotate(Quat{x, y, z, w}, v); }
+// Every rotation of the formation code is MultQuadVec 0x452d40 (formations.md: the layout's 0x452d40 at 0x59b6d9 and the
+// assignment's): through the quaternion's matrix (QuatToMatrix 0x452fd0) and its row sums ((0 + x m0) + y m1) + z m2,
+// not the quaternion product, which rounds the last bit differently. Seen: MP1 2372, the guard formation slot of army
+// 1's interceptor 0x100018 one float step off in x (130.686478 for the original's 130.686493).
+Vec3 RotW(float w, float x, float y, float z, Vec3 v) { return vm::RotateM(Quat{x, y, z, w}, v); }
 float Wrap(float a) {
   if (a > 3.14159274f) a -= 6.28318548f;
   else if (a < -3.14159274f) a += 6.28318548f;
@@ -643,11 +647,15 @@ void Update(Formation& F) {
         }
       }
       float lax = T.x - L->position.x, laz = T.z - L->position.z;
-      float ll = std::sqrt(lax * lax + laz * laz);
+      float ll = std::sqrt(laz * laz + lax * lax);
       if (ll > 0) {
-        float s = std::min(ll, 20.0f) / ll;
-        lax *= s;
-        laz *= s;
+        // 0x59b0c6..0x59b11b: normalised by the reciprocal (1 / |la|, then times it), then scaled by min(|la|, 20); not
+        // by the one factor min / |la|. For a look-ahead under 20 the two differ in the last bit (the length's sum is
+        // z*z + x*x). Seen in MP1: with this the air units' first difference moves from 2731 to 2923.
+        const float m = std::min(20.0f, ll);
+        const float inv = 1.0f / ll;
+        lax = m * (lax * inv);
+        laz = m * (laz * inv);
       }
       // how far the leader is from its own slot cell
       Vec3 lc = FormationCell(F, L, &g);
@@ -700,8 +708,15 @@ void Update(Formation& F) {
           if (n.angleSet) {
             const Quat& q = L->orientation;
             float hL = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.x * q.x + q.y * q.y));
-            float hF = dmath::Atan2(F.fwd.x, F.fwd.z);
-            float diff = Wrap(hL - hF);
+            // 0x59b5e3..0x59b5ef: the formation's heading (fpatan 0x4e9df0) stays on the x87 stack and is taken from the
+            // leader's heading, which was stored to a float, in extended precision; only the difference is rounded to a
+            // float. Seen: MP1 2372, the guard formation of army 1's transport 0x100025: ours rounded the formation's
+            // heading first, the smoothed angle drifted, and the slot of interceptor 0x100018 came out one float step
+            // off in x (130.686478 for the original's 130.686493); its desired velocity then differed in the last bits
+            // until 2627, where an exact 15.0 against ours's 14.999999 flipped the air damping factor
+            // (CalcAirMovementDampingFactor 0x6bca10: KMove at full length, max speed / length below it).
+            const double hFx = std::atan2(static_cast<double>(F.fwd.x), static_cast<double>(F.fwd.z));
+            float diff = Wrap(static_cast<float>(static_cast<double>(hL) - hFx));
             float t = Dist2D(m->position.x, m->position.z, L->position.x, L->position.z) / maxR * 0.05f + 0.94f;
             a = (1 - t) * diff + n.angle * t;
           }
