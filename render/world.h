@@ -353,8 +353,9 @@ class World {
   // A cut, for the temporal upscaler: the camera jumped (set by the host before the frame; Begin clears it).
   // A camera that moves far in one frame, a map opened and the option just switched on count as one too.
   bool cameraCut = false;
-  // A frame drawn for something else between two of the game's (the minimap's ground): no temporal upscaler
-  // and no motion, and what they keep of the frames before is left for the game's next frame.
+  // A frame drawn for something else between two of the game's (the minimap's ground): no temporal upscaler,
+  // no motion, no light in the air and no volumetric clouds, and what they keep of the frames before is left
+  // for the game's next frame.
   bool sidePicture = false;
   // With it: what is added to the level of detail the textures are read at, beyond log2 of the share drawn
   // (0: the share alone, the textures as fine as at the screen's own size). AMD advises -1 more; measured on

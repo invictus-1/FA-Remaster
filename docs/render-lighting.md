@@ -75,7 +75,7 @@ Mac", and every ray-traced effect keeps a fallback without it.
        pixels, more on a few at the horizon and in the water's mirror of a cloud; the arithmetic is the same.
        The regression script checks MSAA off since.)
      - Open: Chris to look; the ui to wire the option (it needs the anti-aliasing at one sample); the light
-       in the air's and the clouds' own frames before are still disturbed for a frame by the minimap's.
+       in the air and the clouds are skipped in the minimap's frame (Air::Skip, Clouds::Skip), their frames before kept.
 1. **Light in the air** (volumetric fog): a volume over the view (froxels, about 160 x 90 x 64), the sun
    through its shadow cascades and the clouds' shadow, the lamps from the light grid, haze and mist as
    densities; reprojected and blended over frames, then summed toward the eye. Every shader's

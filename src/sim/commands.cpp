@@ -502,6 +502,16 @@ void StartHead(Sim& sim, Unit* u) {
     u->headState = kNotStarted;
     return;
   }
+  // ... nor while the unit is in state BlockCommandQueue (TaskTick 0x598f99: IsUnitState 42 through IUnit vt+0x3c
+  // 0x6a4af0; Unit:SetBlockCommandQueue 0x6c65f0 sets that bit, +0x4a4 0x400). FAF sets it on a HUMAN army's
+  // commander from the start until its warp-in ends (ScenarioUtilities CommanderWarpDelay; WarpInEffectThread clears
+  // it in a Lua thread, after the command stage), and on a factory during its roll-off. Seen (MP3, army 2's ACU):
+  // a build order given during the warp-in waits until the beat after the clear; ours had started it at once and
+  // built two beats early.
+  if (u->unitStates.count("BlockCommandQueue")) {
+    u->headState = kNotStarted;
+    return;
+  }
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     if (c.type == CommandType::Stop) {
@@ -1355,7 +1365,12 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // unload's own AbortMove at 1756; ours was stopped again, now not loading: the Air layer, and it took off.
 void IssueClearCommandsTo(Sim& sim, Unit* u) {
   const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
-  const bool idle = !u->isPod && u->commands.empty();
+  // An empty queue tears nothing down, a pod's included. (Bench 294's drones, whose guard of the finished structure
+  // ended in the command stage, are stopped by that guard's dtor 0x611850, EndGuard: its AbortMove has no goal test.)
+  // Seen (MP3 488): Cybran build drones whose AssistCommander task ended in the command stage (its dtor's Kill: a
+  // Stop where the drone is) are cleared by SpawnBuildBots in the Lua stage; the original's target stays the drone's
+  // place, ours was stopped again one second ahead.
+  const bool idle = u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
   const bool undispatched = !u->isPod && u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
