@@ -9,8 +9,9 @@ int BytesPerPixelOrBlock(Format f) {
   switch (f) {
     case Format::R8: case Format::A8: return 1;
     case Format::RG8: case Format::R16: case Format::R16F: return 2;
-    case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::RG16F: case Format::R32F: case Format::D32: return 4;
+    case Format::RGBA8: case Format::RGBA8_sRGB: case Format::BGRA8: case Format::BGRA8_sRGB: case Format::RG16F: case Format::R32F: case Format::R32UI: case Format::D32: return 4;
     case Format::RGBA16F: return 8;
+    case Format::RGBA32F: return 16;
     case Format::BC1: case Format::BC1_sRGB: case Format::BC4: return 8;
     case Format::BC2: case Format::BC2_sRGB: case Format::BC3: case Format::BC3_sRGB: case Format::BC5: case Format::BC7: return 16;
     default: return 0;

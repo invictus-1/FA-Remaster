@@ -10,7 +10,7 @@
 //   space1 (storage buffers, 48-49) and the six fixed samplers (64-69), one set for each combination used
 //   in a frame (cached, as Direct3D 12's descriptor tables); set 1 holds b0-b3 (uniform buffers at 0-3),
 //   dynamic, pointing into the frame's ring of constants, so a draw only changes four offsets. A compute
-//   shader's storage images (u0-u7) are at 80-87 of set 0; a storage target is in the general layout from
+//   shader's storage images (u0-u15) are at 80-95 of set 0; a storage target is in the general layout from
 //   a dispatch that writes it until a dispatch reads it or a pass begins.
 // - Memory comes from large blocks shared out (a card allows only some thousands of allocations).
 // - Uploads (a new texture's or buffer's contents) gather in a batch sent ahead of the frame, as in
@@ -224,7 +224,7 @@ constexpr int kFrames = 3;
 constexpr int kTexSlots = 32;
 constexpr int kCbSlots = 4;
 constexpr uint32_t kTexBinding = 16, kBufferBinding = 48, kSamplerBinding = 64, kStorageBinding = 80;
-constexpr int kStorageSlots = 8;  // u0-u7
+constexpr int kStorageSlots = 16;  // u0-u15
 // (every set's bindings are seen by the drawing stages and by compute shaders alike)
 constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
 constexpr VkFormat kBackFormat = VK_FORMAT_R8G8B8A8_UNORM;  // our own picture of the window (as Direct3D 12's)
@@ -247,6 +247,8 @@ VkFormat ToVk(Format f) {
     case Format::RG16F: return VK_FORMAT_R16G16_SFLOAT;
     case Format::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::R32F: return VK_FORMAT_R32_SFLOAT;
+    case Format::R32UI: return VK_FORMAT_R32_UINT;
+    case Format::RGBA32F: return VK_FORMAT_R32G32B32A32_SFLOAT;
     case Format::D32: return VK_FORMAT_D32_SFLOAT;
     case Format::BC1: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
     case Format::BC1_sRGB: return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
@@ -1509,13 +1511,13 @@ Texture VulkanDevice::CreateTarget(const TargetDesc& desc) {
     const bool volume = desc.depth > 1;
     int most = 1;  // (the levels it can have)
     for (int s = std::max({desc.width, desc.height, volume ? desc.depth : 1}); s > 1; s >>= 1) ++most;
-    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
-                          desc.format == Format::RGBA16F || desc.format == Format::R32F;
+    const bool writable = desc.format == Format::RGBA8 || desc.format == Format::R8 || desc.format == Format::R16F || desc.format == Format::RG16F ||
+                          desc.format == Format::RGBA16F || desc.format == Format::R32F || desc.format == Format::R32UI || desc.format == Format::RGBA32F;
     VkFormatProperties fp{};
     if (writable) vkGetPhysicalDeviceFormatProperties(physical_, format, &fp);
     if (!writable || !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) || desc.width <= 0 || desc.height <= 0 || desc.depth <= 0 ||
         desc.layers != 1 || desc.samples > 1 || desc.mips <= 0 || desc.mips > most) {
-      fprintf(stderr, "render: Vulkan: a storage target needs RGBA8, R16F, RG16F, RGBA16F or R32F (as the card can write it), one layer, one sample, and levels it can have\n");
+      fprintf(stderr, "render: Vulkan: a storage target needs RGBA8, R8, R16F, RG16F, RGBA16F, R32F, R32UI or RGBA32F (as the card can write it), one layer, one sample, and levels it can have\n");
       return {};
     }
     TextureRec rec;
@@ -1897,7 +1899,7 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     const bool storage = image.kind == SpirvImage::Storage || image.kind == SpirvImage::StorageVolume;
     const uint32_t from = storage ? kStorageBinding : kTexBinding, slots = storage ? kStorageSlots : kTexSlots;
     if (image.binding < from || image.binding + image.count > from + slots) {
-      if (error) *error = std::string(desc.name) + ": a texture outside t0-t31 or u0-u7";
+      if (error) *error = std::string(desc.name) + ": a texture outside t0-t31 or u0-u15";
       return {};
     }
   }

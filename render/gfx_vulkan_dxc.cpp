@@ -97,7 +97,7 @@ DxcCompiler3* Compiler(std::string* error) {
 }
 
 // The renderer's registers on Vulkan's descriptor sets (gfx_vulkan.cpp lays them out the same way):
-// set 0: t0-t31 at 16-47, t0-t1 of space1 at 48-49, s0-s5 at 64-69, a compute shader's u0-u7 at 80-87;
+// set 0: t0-t31 at 16-47, t0-t1 of space1 at 48-49, s0-s5 at 64-69, a compute shader's u0-u15 at 80-95;
 // set 1: b0-b3 at 0-3.
 std::vector<std::wstring> Arguments(const char* entry, const char* stage) {
   std::vector<std::wstring> a = {L"-spirv", L"-fspv-target-env=vulkan1.3", L"-fvk-use-dx-layout", L"-O3", L"-fspv-reflect",
@@ -121,7 +121,7 @@ std::vector<std::wstring> Arguments(const char* entry, const char* stage) {
   for (int i = 0; i < 2; ++i) bind(L"t" + std::to_wstring(i), 1, 48 + i, 0);
   for (int i = 0; i < 6; ++i) bind(L"s" + std::to_wstring(i), 0, 64 + i, 0);
   if (std::strcmp(stage, "cs") == 0)  // (only compute shaders write; the others' arguments stay as they were)
-    for (int i = 0; i < 8; ++i) bind(L"u" + std::to_wstring(i), 0, 80 + i, 0);
+    for (int i = 0; i < 16; ++i) bind(L"u" + std::to_wstring(i), 0, 80 + i, 0);
   return a;
 }
 
