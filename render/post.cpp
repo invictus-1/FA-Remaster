@@ -136,6 +136,24 @@ float4 Blur(VOut i) : SV_Target {
 }
 )hlsl";
 
+// The temporal upscaler's reactive mask (Post::Reactive): where what came after the solid scene (smoke,
+// sparks, beams, the shimmer over heat) changed the picture, and by how much, as FSR's own automatic mask
+// takes it: both pictures brought into 0..1 first, the largest change of a channel, strong changes full.
+const char kReactiveShader[] = R"hlsl(
+Texture2D opaque : register(t0);
+Texture2D finished : register(t1);
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 uv = float2((id << 1) & 2, id & 2);
+  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float3 Squeezed(float3 c) { return c / (1 + max(max(c.r, c.g), c.b)); }
+float PS(float4 position : SV_Position) : SV_Target {
+  float3 a = Squeezed(opaque.Load(int3(position.xy, 0)).rgb * modern.z), b = Squeezed(finished.Load(int3(position.xy, 0)).rgb * modern.z);
+  float change = max(max(abs(a.r - b.r), abs(a.g - b.g)), abs(a.b - b.b));
+  return change > 0.2 ? 0.9 : change * 2;
+}
+)hlsl";
+
 }  // namespace
 
 bool Post::Init(std::string* error) {
@@ -186,6 +204,15 @@ bool Post::Init(std::string* error) {
     bloomBlur_ = device_->CreatePipeline(pd, error);
     if (!bloomBlur_) return false;
   }
+  {  // the temporal upscaler's reactive mask
+    std::string reactive = std::string(kViewShaderBlock) + kReactiveShader;
+    pd.vertexSource = pd.pixelSource = reactive;
+    pd.name = "reactive mask";
+    pd.pixelEntry = "PS";
+    pd.colorFormat = gfx::Format::R8;
+    reactiveMask_ = device_->CreatePipeline(pd, error);
+    if (!reactiveMask_) return false;
+  }
   // a black picture for when there is no glow
   const uint8_t black[4] = {0, 0, 0, 255};
   gfx::TextureDesc td;
@@ -199,19 +226,13 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_})
+    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_, opaque_, reactive_})
       if (t) device_->Destroy(t);
     drawn_ = {};
     behind_ = {};
     ldr_ = {};
-    for (gfx::Texture& t : glowSteps_) {
-      if (t) device_->Destroy(t);
-      t = {};
-    }
-    for (gfx::Texture& t : bloom_) {
-      if (t) device_->Destroy(t);
-      t = {};
-    }
+    opaque_ = {};
+    reactive_ = {};
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
@@ -219,27 +240,6 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
     std::memcpy(td.clearValue, clearColor, sizeof td.clearValue);
     color_ = device_->CreateTarget(td);  // the picture as the last pass reads it
     behind_ = device_->CreateTarget(td);  // a copy taken on the way (CopyBehind)
-    {  // the glow's smaller pictures: a half, a quarter, ... of the picture
-      gfx::TargetDesc small = td;
-      for (int i = 0; i < kGlowSteps; ++i) {
-        small.width = std::max(1, small.width / 2);
-        small.height = std::max(1, small.height / 2);
-        std::fill(small.clearValue, small.clearValue + 4, 0.0f);
-        glowSteps_[i] = device_->CreateTarget(small);
-        glowWidth_[i] = small.width;
-        glowHeight_[i] = small.height;
-      }
-    }
-    {  // the original look's bloom: two pictures of 8 bits at half the size
-      gfx::TargetDesc half = td;
-      half.width = std::max(1, width / 2);
-      half.height = std::max(1, height / 2);
-      half.format = gfx::Format::RGBA8;
-      std::fill(half.clearValue, half.clearValue + 4, 0.0f);
-      for (gfx::Texture& t : bloom_) t = device_->CreateTarget(half);
-      bloomWidth_ = half.width;
-      bloomHeight_ = half.height;
-    }
     td.samples = gSceneSamples;
     if (gSceneSamples > 1) drawn_ = device_->CreateTarget(td);  // what is drawn into, several samples a pixel
     td.format = gfx::Format::D32;
@@ -281,6 +281,87 @@ bool Post::CopyBehind() {
   return true;
 }
 
+void Post::KeepOpaque() {
+  keptOpaque_ = false;
+  if (drawn_ || !copy_) return;  // (one sample a pixel only)
+  if (!opaque_) {
+    gfx::TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = kSceneFormat;
+    opaque_ = device_->CreateTarget(td);
+    if (!opaque_) return;
+  }
+  gfx::PassDesc pass;
+  pass.color = opaque_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  device_->SetPipeline(copy_);
+  device_->SetTexture(0, color_);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
+  keptOpaque_ = true;
+}
+
+gfx::Texture Post::Reactive() {
+  if (!keptOpaque_ || !reactiveMask_) return {};
+  if (!reactive_) {
+    gfx::TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = gfx::Format::R8;
+    reactive_ = device_->CreateTarget(td);
+    if (!reactive_) return {};
+  }
+  gfx::PassDesc pass;
+  pass.color = reactive_;
+  device_->BeginPass(pass);
+  device_->SetPipeline(reactiveMask_);
+  device_->SetTexture(0, opaque_);
+  device_->SetTexture(1, color_);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
+  device_->SetTexture(1, {});
+  keptOpaque_ = false;
+  return reactive_;
+}
+
+void Post::SizeFinishing(int width, int height) {
+  if (width == finishWidth_ && height == finishHeight_ && glowSteps_[0]) return;
+  for (gfx::Texture& t : glowSteps_) {
+    if (t) device_->Destroy(t);
+    t = {};
+  }
+  for (gfx::Texture& t : bloom_) {
+    if (t) device_->Destroy(t);
+    t = {};
+  }
+  {  // the glow's smaller pictures: a half, a quarter, ... of the picture
+    gfx::TargetDesc small;
+    small.width = width;
+    small.height = height;
+    small.format = kSceneFormat;
+    for (int i = 0; i < kGlowSteps; ++i) {
+      small.width = std::max(1, small.width / 2);
+      small.height = std::max(1, small.height / 2);
+      glowSteps_[i] = device_->CreateTarget(small);
+      glowWidth_[i] = small.width;
+      glowHeight_[i] = small.height;
+    }
+  }
+  {  // the original look's bloom: two pictures of 8 bits at half the size
+    gfx::TargetDesc half;
+    half.width = std::max(1, width / 2);
+    half.height = std::max(1, height / 2);
+    half.format = gfx::Format::RGBA8;
+    for (gfx::Texture& t : bloom_) t = device_->CreateTarget(half);
+    bloomWidth_ = half.width;
+    bloomHeight_ = half.height;
+  }
+  finishWidth_ = width;
+  finishHeight_ = height;
+}
+
 void Post::BeginColorOnly() {
   gfx::PassDesc pass;
   pass.color = drawn_ ? drawn_ : color_;
@@ -291,6 +372,8 @@ void Post::BeginColorOnly() {
 void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int screenHeight) {
   if (drawn_) device_->Resolve(drawn_, color_);
   const gfx::Texture picture = shown ? shown : color_;
+  const int pictureWidth = width_, pictureHeight = height_;
+  SizeFinishing(pictureWidth, pictureHeight);
   // the glow (modern look): smaller and smaller, then laid back over each other into the first
   const bool glowing = view.constants.look > 0.5f && glow > 0 && glowSteps_[0];
   if (glowing) {
@@ -299,7 +382,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
       gfx::PassDesc step;
       step.color = glowSteps_[i];
       device_->BeginPass(step);
-      const int w = i ? glowWidth_[i - 1] : width_, h = i ? glowHeight_[i - 1] : height_;
+      const int w = i ? glowWidth_[i - 1] : pictureWidth, h = i ? glowHeight_[i - 1] : pictureHeight;
       const float c[4] = {0.5f / static_cast<float>(w), 0.5f / static_cast<float>(h), i ? 0.0f : 1.0f, i ? 1.0f : glow / static_cast<float>(kGlowSteps)};
       device_->SetPipeline(glowDown_);
       device_->SetConstants(0, &view.constants, sizeof view.constants);

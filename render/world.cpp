@@ -1501,6 +1501,7 @@ void World::Render() {
   if (meshes.motion) {
     Stage("motion");
     motion.Build(view, post.Depth(), motionView == 4 ? nullptr : &meshes);  // (4: for checking, the camera's part alone)
+    post.KeepOpaque();  // (the solid scene and the water, for the upscaler's reactive mask)
     post.ContinueScene();
     lights.Bind();
   }
