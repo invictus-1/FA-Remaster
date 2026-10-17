@@ -132,6 +132,7 @@ typedef struct global_State {
   void *extra[4];
   TString *cobjkey;
   unsigned int randseed;  /* math.random's state, per lua_State (lmathlib.c) */
+  lu_hash nextserial;  /* serial of the next table, udata, function or thread (lobject.h) */
 } global_State;
 
 
@@ -140,6 +141,7 @@ typedef struct global_State {
 */
 struct lua_State {
   CommonHeader;
+  lu_hash serial;  /* hash as a table key (moho64, lobject.h) */
   StkId top;  /* first free slot in the stack */
   StkId base;  /* base of current function */
   global_State *l_G;

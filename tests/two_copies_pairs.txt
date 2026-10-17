@@ -1,6 +1,12 @@
-# tools/twocopies.py's own test (docs/two-copies.md): an --orders file for moho64.
-# pairs() over a table whose keys are tables goes in the order of the keys' addresses, and two copies of the game
-# have their tables at different addresses. Before beat 101 this makes 16 fresh tables the keys of a table; army 1's
-# first unit loses as much health as the number of the key pairs() yields first. Two copies must then differ at beat
-# 101, in part u1 (and the detail shows that unit's health), unless they happen to pick the same key (1 in 16).
-100 lua local t = {} for i = 1, 16 do t[{}] = i end local _, first = next(t) local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: the first of 16 table keys in pairs order is number ', first) u:SetHealth(u, u:GetHealth() - first)
+# tools/twocopies.py's test of pairs() over keys that are objects (docs/two-copies.md): an --orders file for moho64.
+# Before beat 101 16 fresh tables become the keys of a table, before beat 111 16 functions, before beat 121 16
+# threads, before beat 131 every unit (a table) and its _c_object (a userdata). Each time army 1's first unit loses as
+# much health as a signature of the order pairs() gives the keys in (the sum of each key's number times its place,
+# modulo 1000). Our Lua hashes such keys by a serial number given in the order the objects are made
+# (third_party/lua/ltable.c luaH_mainposition), so the two copies must agree on every beat: "twocopies: identical".
+# (While it hashed them by their address, the copies differed at beat 101, in part u1.)
+# tests/two_copies_tostring.txt is the test that such a difference shows.
+100 lua local t = {} for i = 1, 16 do t[{}] = i end local s, j = 0, 0 for _, i in t do j = j + 1 s = s + i * j end local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: 16 table keys, order signature ', s) u:SetHealth(u, u:GetHealth() - math.mod(s, 1000))
+110 lua local t = {} for i = 1, 16 do t[function() return i end] = i end local s, j = 0, 0 for _, i in t do j = j + 1 s = s + i * j end local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: 16 function keys, order signature ', s) u:SetHealth(u, u:GetHealth() - math.mod(s, 1000))
+120 lua local t = {} for i = 1, 16 do t[coroutine.create(function() end)] = i end local s, j = 0, 0 for _, i in t do j = j + 1 s = s + i * j end local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: 16 thread keys, order signature ', s) u:SetHealth(u, u:GetHealth() - math.mod(s, 1000))
+130 lua local t, n = {}, 0 for _, b in ArmyBrains do for _, x in b:GetListOfUnits(categories.ALLUNITS, false) do n = n + 1 t[x] = n n = n + 1 t[rawget(x, '_c_object')] = n end end local s, j = 0, 0 for _, i in t do j = j + 1 s = s + i * j end local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('pairs test: ', n, ' keys, the units and their userdata, order signature ', s) u:SetHealth(u, u:GetHealth() - math.mod(s, 1000))

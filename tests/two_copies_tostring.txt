@@ -1,0 +1,7 @@
+# tools/twocopies.py's own test (docs/two-copies.md): a script that decides by a memory address must split the two
+# copies. tostring() of a table gives its address ("table: 0000057C9CDAD600"), and strings hash by their content, so a
+# table keyed by such strings walks in an order that follows the addresses. Before beat 101 16 such keys; army 1's
+# first unit loses as much health as a signature of the order pairs() gives them in (the sum of each key's number
+# times its place, modulo 1000). Copy B starts at other addresses (twocopies.py's --shift), so the copies must differ
+# at beat 101, in part u1 (unless both orders happen to give the same signature, a few in a thousand).
+100 lua local t = {} for i = 1, 16 do t[tostring({})] = i end local s, j = 0, 0 for _, i in t do j = j + 1 s = s + i * j end local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] LOG('tostring test: 16 address keys, order signature ', s) u:SetHealth(u, u:GetHealth() - math.mod(s, 1000))

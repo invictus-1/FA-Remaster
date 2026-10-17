@@ -95,6 +95,19 @@ static Node *hashnum (const Table *t, lua_Number n) {
 /*
 ** returns the `main' position of an element in a table (that is, the index
 ** of its hash value)
+**
+** moho64: a table, userdata, function or thread key hashes by its serial
+** number (lobject.h), not by its address as in stock Lua 5.0. The main
+** positions decide the order `next' walks the nodes in and, in a table
+** that also loses keys (a dead key's node is reused only as a main
+** position), when it runs out of free nodes and grows. Two copies of a game
+** in lockstep must agree on both, and every copy (every run, every machine)
+** has its objects at other addresses; the same scripts make the same objects
+** in the same order, and every state counts from 0, so they get the same
+** serials. The original game hashes by address too (inferred, not read);
+** that only agrees between machines because its 32-bit allocator gives the
+** same addresses on every machine (inferred). Light userdata are C
+** pointers, not objects of the state: they keep hashing by their value.
 */
 Node *luaH_mainposition (const Table *t, const TObject *key) {
   switch (ttype(key)) {
@@ -106,7 +119,16 @@ Node *luaH_mainposition (const Table *t, const TObject *key) {
       return hashboolean(t, bvalue(key));
     case LUA_TLIGHTUSERDATA:
       return hashpointer(t, pvalue(key));
-    default:
+    case LUA_TTABLE:
+      return hashmod(t, hvalue(key)->serial);
+    case LUA_TFUNCTION:
+      return hashmod(t, clvalue(key)->c.serial);
+    case LUA_TUSERDATA:
+      return hashmod(t, uvalue(key)->uv.serial);
+    case LUA_TTHREAD:
+      return hashmod(t, thvalue(key)->serial);
+    default:  /* (no other type can be a key) */
+      lua_assert(0);
       return hashpointer(t, gcvalue(key));
   }
 }
@@ -327,6 +349,7 @@ static void rehash (lua_State *L, Table *t) {
 Table *luaH_new (lua_State *L, int narray, int lnhash) {
   Table *t = luaM_new(L, Table);
   luaC_link(L, valtogco(t), LUA_TTABLE);
+  t->serial = G(L)->nextserial++;
   t->metatable = hvalue(defaultmeta(L));
   t->flags = cast(lu_byte, ~0);
   /* temporary values (kept only if some malloc fails) */

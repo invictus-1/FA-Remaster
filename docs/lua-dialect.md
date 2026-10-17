@@ -24,7 +24,7 @@ binaries and is covered by `tests/dialect_test.lua`.
 ## Operators
 - Bitwise `&`, `|`, `<<`, `>>`. All four bind tighter than `*` and `/`: their priority is 8, against 7 for `*` and `/`.
 - `^` is bitwise **xor**, not power. There is no global `__pow`; use `math.pow`.
-- Bitwise operands must be numbers; strings are not converted. Each operand is rounded to the nearest integer, with ties going to the even neighbour: `2.5 ^ 0 == 2` and `3.5 ^ 0 == 4`. The operation runs on 32 bits, and the result reads back as an unsigned integer: `-1 & -1 == 4294967295`.
+- Bitwise operands must be numbers; strings are not converted. Each operand is truncated toward zero (the original sets the x87 rounding to chop, `third_party/lua/lvm.c`): `2.5 ^ 0 == 2` and `3.5 ^ 0 == 3`. The operation runs on 32 bits, and the result reads back as an unsigned integer: `-1 & -1 == 4294967295`.
 - Comparing values of different types does not raise an error. The values are ordered by their type tag: nil < boolean < light userdata < number < string < table < function < userdata < thread. So `nil < 0` is `true`.
 
 ## Default metatables

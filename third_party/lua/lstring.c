@@ -93,6 +93,7 @@ Udata *luaS_newudata (lua_State *L, size_t s) {
   u->uv.marked = (1<<1);  /* is not finalized */
   u->uv.tt = LUA_TUSERDATA;
   u->uv.len = s;
+  u->uv.serial = G(L)->nextserial++;
   u->uv.metatable = hvalue(defaultmeta(L));
   /* chain it on udata list */
   u->uv.next = G(L)->rootudata;

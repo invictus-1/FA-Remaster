@@ -192,10 +192,19 @@ typedef union TString {
 
 
 
+/*
+** moho64: tables, userdata, functions and threads carry a serial number,
+** given in the order they are made (`nextserial' in global_State), and
+** hash by it as table keys instead of by their address (ltable.c,
+** luaH_mainposition). On 64 bits it sits in the padding after the header,
+** so no object grows.
+*/
+
 typedef union Udata {
   L_Umaxalign dummy;  /* ensures maximum alignment for `local' udata */
   struct {
     CommonHeader;
+    lu_hash serial;  /* hash as a table key (moho64) */
     struct Table *metatable;
     size_t len;
   } uv;
@@ -255,7 +264,8 @@ typedef struct UpVal {
 */
 
 #define ClosureHeader \
-	CommonHeader; lu_byte isC; lu_byte nupvalues; GCObject *gclist
+	CommonHeader; lu_byte isC; lu_byte nupvalues; lu_hash serial; \
+	GCObject *gclist
 
 typedef struct CClosure {
   ClosureHeader;
@@ -297,6 +307,7 @@ typedef struct Table {
   CommonHeader;
   lu_byte flags;  /* 1<<p means tagmethod(p) is not present */ 
   lu_byte lsizenode;  /* log2 of size of `node' array */
+  lu_hash serial;  /* hash as a table key (moho64) */
   struct Table *metatable;
   TObject *array;  /* array part */
   Node *node;

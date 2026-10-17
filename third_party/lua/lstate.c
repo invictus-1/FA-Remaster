@@ -93,6 +93,8 @@ static void f_luaopen (lua_State *L, void *ud) {
   if (g == NULL) luaD_throw(L, LUA_ERRMEM);
   L->l_G = g;
   g->mainthread = L;
+  g->nextserial = 0;  /* every state numbers its objects from the same start */
+  L->serial = g->nextserial++;
   g->GCthreshold = 0;  /* mark it as unfinished state */
   g->strt.size = 0;
   g->strt.nuse = 0;
@@ -172,6 +174,7 @@ static void close_state (lua_State *L) {
 lua_State *luaE_newthread (lua_State *L) {
   lua_State *L1 = mallocstate(L);
   luaC_link(L, valtogco(L1), LUA_TTHREAD);
+  L1->serial = G(L)->nextserial++;
   preinit_state(L1);
   L1->l_G = L->l_G;
   stack_init(L1, L);  /* init stack */

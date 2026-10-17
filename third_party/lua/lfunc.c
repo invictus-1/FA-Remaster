@@ -31,6 +31,7 @@ Closure *luaF_newCclosure (lua_State *L, int nelems) {
   luaC_link(L, valtogco(c), LUA_TFUNCTION);
   c->c.isC = 1;
   c->c.nupvalues = cast(lu_byte, nelems);
+  c->c.serial = G(L)->nextserial++;
   return c;
 }
 
@@ -41,6 +42,7 @@ Closure *luaF_newLclosure (lua_State *L, int nelems, TObject *e) {
   c->l.isC = 0;
   c->l.g = *e;
   c->l.nupvalues = cast(lu_byte, nelems);
+  c->l.serial = G(L)->nextserial++;
   return c;
 }
 

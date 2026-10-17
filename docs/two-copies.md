@@ -2,7 +2,8 @@
 
 **For:** the engine track; the interface track when its multiplayer stage comes (ui-roadmap stage 9).
 **Status:** first version, 2026-10-16. `tools/twocopies.py`, `src/sim/fingerprint.*`, `MOHO64_LAYOUT_SHIFT` in
-`src/app/main.cpp`. Nothing in it changes what the simulation computes.
+`src/app/main.cpp`. Nothing in it changes what the simulation computes. Since 2026-10-17 Lua hashes keys that are
+objects by a serial number, not by their address ("Keys that are objects" below).
 
 ## Why
 
@@ -74,19 +75,24 @@ deliberate shift), `--no-peer` (both run to the end, compared afterwards), `-- <
 The last line says `twocopies: identical <n> beats` or `twocopies: DIFFERS at beat <b> (tick <t>): <parts>`;
 the exit code is 0, 1 (differs) or 2 (a copy failed).
 
-The test that it works, `tests/two_copies_pairs.txt` (a table with 16 tables as keys; the first key pairs()
-gives decides how much health army 1's first unit loses before beat 101):
+The test that it works, `tests/two_copies_tostring.txt`: before beat 101 a table gets 16 keys made by tostring() of
+fresh tables (their addresses), and a signature of the order pairs() gives them in decides how much health army 1's
+first unit loses. It must split the copies:
 
 ```
-py -I -X utf8 fa-remaster\tools\twocopies.py --session _scratch\ui\session_ai.lua --seed 7 --ticks 300 --orders fa-remaster\tests\two_copies_pairs.txt
+py -I -X utf8 fa-remaster\tools\twocopies.py --session _scratch\ui\session_ai.lua --seed 7 --ticks 300 --orders fa-remaster\tests\two_copies_tostring.txt
 twocopies: DIFFERS at beat 101 (tick 101): u1
   detail: 1 lines differ (unit 1)
-  A: unit 0 uel0001 a1 p 672.5 18.6796875 346.5 q 0 0.375587851 0 -0.92678684 hp 11987/12000 ...
-  B: unit 0 uel0001 a1 p 672.5 18.6796875 346.5 q 0 0.375587851 0 -0.92678684 hp 11989/12000 ...
+  A: unit 0 uel0001 a1 p 672.5 18.6796875 346.5 q 0 0.375587851 0 -0.92678684 hp 11941/12000 ...
+  B: unit 0 uel0001 a1 p 672.5 18.6796875 346.5 q 0 0.375587851 0 -0.92678684 hp 11602/12000 ...
 ```
 
-Run three times without the shift (`--shift 0`), the two copies took keys 9 and 12, 10 and 7, 14 and 4: the
-system's own address randomisation is enough to split them. The same test with units as keys
+Its twin, `tests/two_copies_pairs.txt`, does the same with keys that are objects (tables, functions, threads, and
+every unit with its userdata, before beats 101, 111, 121 and 131). Since our Lua hashes such keys by a serial
+number (below, "Keys that are objects"), the copies must agree: `twocopies: identical 301 beats` (2026-10-17: 5 of 5
+runs, 2 of them with `--shift 0`; the tostring test split them in 4 of 4). Before that change the pairs test split
+them in every run, the shift or not: with only its first key deciding, three runs without the shift took keys 9 and
+12, 10 and 7, 14 and 4, so the system's own address randomisation is enough. The same test with units as keys
 (every unit of a four-army game at beat 1500) split the copies at beat 1501 twice in three runs; once both happened
 to take the same unit first. A single identical run therefore proves little about such a loop; many runs do.
 
@@ -113,11 +119,12 @@ No difference in the state in any of them. What did differ:
    The collector then starts from a slightly different heap: in the eight-army M28 game it ran at the same 12
    beats in both copies, with thresholds 1 to 2 KB apart from beat 3366 on. That is harmless as long as no
    script can see the moment the collector runs (a weak table it walks, a finaliser): none of the runs showed
-   it, but it is the same root as item 2 and goes away with option (a) below.
+   it, but it is the same root as item 2 and goes away with option (a) below. Gone since 2026-10-17, with
+   option (a): "Keys that are objects" below.
 2. **pairs() over tables whose keys are objects** (tables, units, userdata, functions): the order follows the
    keys' addresses. The test above shows it; FINDINGS.md ("PARKED FOR THE TWO-COPIES / MULTIPLAYER PHASE")
    has a mod's script whose order came out three ways with one seed. No script in the runs above did
-   it in a way that reached the state. See the options below.
+   it in a way that reached the state. See the options below. Gone since 2026-10-17 (option (a)).
 
 Found by reading the source (the work for the next rounds, with item 2):
 
@@ -144,7 +151,7 @@ Not a problem: the file listings the scripts see (`DiskFindFiles`) come sorted f
 system (`core/vfs.cpp`, `core/hostfs.cpp`), and the C++ caches keyed by blueprint or table address are only
 looked up, never walked.
 
-## pairs() over keys that are objects: the options (not built)
+## pairs() over keys that are objects: the options ((a) built 2026-10-17)
 
 Lua 5.0 puts a key that is a table, userdata, function or thread at node `address mod (nodes - 1 | 1)`
 (`ltable.c` hashpointer), and next() walks the nodes in order. The original very likely does the same (its
@@ -162,7 +169,7 @@ of desyncs in FAF.
   on that order (inferred; the gate decides). It changes our order relative to the original's, but no
   replay of the original can depend on an order we could reproduce anyway. Cost: one load in place of a
   pointer cast in the hash. The change is in `third_party/lua` (lobject.h, lstate.h, lgc.c, lstring.c,
-  lstate.c, ltable.c), small. This is the one to build.
+  lstate.c, ltable.c), small. This is the one to build. Built: the next section.
 - **(b) Only the walking order made fixed.** Keep the address hash, but let next() go in insertion order
   (a second index per node, as Python's dict does). More memory per node, more work in the VM's busiest
   structure, and the tables would still grow at address-dependent moments (item 1 stays). Not worth it.
@@ -173,6 +180,46 @@ of desyncs in FAF.
   may be taken on another system. Good for an experiment, not as the answer.
 - **(d) Leave Lua alone and fix the scripts** (sort the keys first) behind `Sim::fixes`, as the check finds
   them. Every new mod is a new risk; it does not scale.
+
+## Keys that are objects (option (a), built 2026-10-17)
+
+Table, Udata, Closure and lua_State have a `serial` (`third_party/lua/lobject.h`, lstate.h), taken from
+`global_State::nextserial` when the object is made (luaH_new, luaS_newudata, luaF_newCclosure / newLclosure,
+luaE_newthread, and the main thread in f_luaopen). Every state counts from 0. luaH_mainposition hashes a key of
+those four types by its serial (the same odd modulus as before); light userdata keep their pointer; strings,
+numbers and booleans are as before. On 64 bits the field sits in the padding after the common header, at offset 12:
+the sizes stay 64, 32, 48 / 56 and 160 bytes (checked with zig for x86_64-windows, x86_64-linux and aarch64-macos;
+a 32-bit build would grow them by 4 to 8 bytes, and no target is 32-bit).
+
+Why that is enough. next() walks the array part, then the nodes in index order; the same keys inserted in the same
+order at the same main positions fill the same nodes. A Lua 5.0 table grows only when every node holds a key, live
+or dead (`firstfree` stops only at a node whose key is nil), so a table that only gains keys grows at the same count
+whatever its hash; the hash moves the moment only in a table that also loses keys, as a dead key's node is reused
+only as a main position. The engine's tables keyed by light userdata (the registry's fixed keys, `moho64.values`
+keyed by the C++ object, the blueprint copier's `seen`) only gain keys and are never walked, so they stay alike.
+
+What it gave (2026-10-17, main 322392e with the change):
+
+| Check | Main | With the change |
+|---|---|---|
+| `tests/dialect_test.lua` run in two states at once (`tests/dialect_test.cpp`) | the orders differ | same order; the new table checks pass |
+| `tests/two_copies_pairs.txt` | differs at beat 101 (or 121), 9 of 9 runs (3 with `--shift 0`) | identical, 11 of 11 (4 with `--shift 0`) |
+| `tests/two_copies_tostring.txt` | differs | differs, 4 of 4 |
+| the 13 gate replays and MP2, MP3: the state | identical | identical, all 15 |
+| M28 x8 (seeds 424242, 1), AI: Normal x4 (seeds 7, 11), session_ai, replay_newcommander, units as keys x2: the state | identical | identical, all 8 |
+| the Lua heap | differs in 6 of 10 inputs run once: AIR, Economy, LAND, AI: Normal x4 by 1 KB, MP2 and MP3 by 80 KB (M28 x8, Skirmish, Naval, Transports agreed that time) | agrees in all 23 but Missiles (below) |
+
+The Missiles replay's heap still differs by 1 KB now and then between beats 480 and 1100, in about half the runs,
+and not by an address. FAF's `SimCallbacks.DoCallback` (lua/SimCallbacks.lua:59-83) times every callback with the
+clock (item 4) and SPEWs a line only when one took longer than 5 ms; the two copies' logs show copy A writing one
+such line (CheatSpawnUnit, 0.007 s) that copy B did not. The string is garbage that stays until a collection, and
+the Missiles replay never collects (its threshold is 440 MB), so A's heap is that line larger. Harmless unless a
+collection's moment becomes visible to a script.
+
+`tostring()` still prints the address (item 5). FAF's and M28's Lua use no tostring() of an object as a key; three
+sim-side uses put an address into data: `factory-manager.lua:386` names a platoon "FactoryManager - table: ...",
+`ChatBrainComponent.lua:118` stamps a chat message's Id, `utilities.lua` SerializableDeepCopy marks a repeated table
+(the last two only travel to the interface).
 
 ## Orders from other players (designed, not built)
 
