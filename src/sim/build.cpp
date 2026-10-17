@@ -2812,7 +2812,11 @@ void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
   if (g.childMove) U->unitStates.erase("Moving");
   SetGuardedUnit(sim, U, nullptr);
   if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
-  if (U->motion.bp && Moved(U) && U->motion.hasGoal) MotionStop(U);
+  // 0x611947..0x611972: the navigator (unit+0x54c) is told AbortMove (vt+0x10) when the unit moved this beat
+  // (+0xb4 != +0xd0, 0x4f0a50). No goal test: an aircraft re-targets the point one second ahead. Seen (MP3 487):
+  // Cybran build drones (POD) circling a finished mex; their guard ends and the original's targets jump to the
+  // 1-s-ahead point while ours, without a goal, flew on to the old one.
+  if (U->motion.bp && U->motion.bp->mobile() && Moved(U)) MotionStop(U);
   AirSpeedThroughEvent(sim, U);
 }
 
