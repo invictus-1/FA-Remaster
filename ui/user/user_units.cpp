@@ -85,6 +85,10 @@ struct UnitStore : UserState::Extra {
   // the selection's marks without selecting them (AddToSessionExtraSelectList).
   BuildTemplate buildTemplate;
   std::vector<uint32_t> extraSelect;
+  // The simulation's category sets the weapons' views name (CategorySets: taken after each beat; the
+  // table only grows), and the blueprints' Physics.MotionType as the original numbers it, as looked up.
+  std::vector<std::vector<uint64_t>> categorySets;
+  std::map<std::string, int> motionTypes;
 };
 
 UnitStore& Store(lua_State* L) {
@@ -226,28 +230,11 @@ int l_GetSelectedUnits(lua_State* L) {
 // state UnSelectable, not in SELECTABLE, being built and neither a FACTORY nor a CQUEMOV, or a POD
 // that moves and hangs on something (a docked drone). Used by the scripts' SelectUnits and
 // AddSelectUnits, and through CanSelectUnit by the mouse.
+bool Moves(lua_State* L, const UserUnit* u);  // (below: its blueprint's motion type one of the eight of moving)
 bool IsSelectable(lua_State* L, const UserUnit* u) {
   if (u->gone || u->view.dead || !u->view.selectable || !InCategory(L, u, "SELECTABLE")) return false;
   if (u->view.beingBuilt && !InCategory(L, u, "FACTORY") && !InCategory(L, u, "CQUEMOV")) return false;
-  if ((u->view.attached || u->view.parent != 0xffffffffu) && InCategory(L, u, "POD")) {
-    // (moves: its Physics.MotionType one of the eight kinds of moving, RULEUMT_Land .. RULEUMT_AmphibiousFloating)
-    bool moves = false;
-    PushBlueprint(L, u->view.blueprint);
-    if (lua_istable(L, -1)) {
-      lua_pushstring(L, "Physics");
-      lua_rawget(L, -2);
-      if (lua_istable(L, -1)) {
-        lua_pushstring(L, "MotionType");
-        lua_rawget(L, -2);
-        const char* type = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-        moves = std::strncmp(type, "RULEUMT_", 8) == 0 && std::strcmp(type, "RULEUMT_None") != 0 && std::strcmp(type, "RULEUMT_Special") != 0;
-        lua_pop(L, 1);
-      }
-      lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    if (moves) return false;
-  }
+  if ((u->view.attached || u->view.parent != 0xffffffffu) && InCategory(L, u, "POD") && Moves(L, u)) return false;
   return true;
 }
 // What the mouse may select (CWldSession::CanSelectUnit 0x865830, read 2026-10-16; notes in the ui
@@ -258,6 +245,108 @@ bool CanSelectUnit(lua_State* L, const UserUnit* u) {
   Sim* sim = TheSim(L);
   return sim && IsSelectable(L, u) && u->view.army == sim->focusArmy + 1;
 }
+// A blueprint's Physics.MotionType as the original numbers it (FA exe 0x51fb40: None 0, Land 1, Air 2, Water 3,
+// Biped 4, SurfacingSub 5, Amphibious 6, Hover 7, AmphibiousFloating 8, Special 9), looked up once per blueprint;
+// a unit "moves" (UserUnit::IsMobile 0x8c04e0) with one of 1 .. 8.
+int MotionTypeOf(lua_State* L, const std::string& blueprint) {
+  UnitStore& store = Store(L);
+  auto it = store.motionTypes.find(blueprint);
+  if (it != store.motionTypes.end()) return it->second;
+  static const char* const kNames[] = {"RULEUMT_None", "RULEUMT_Land", "RULEUMT_Air", "RULEUMT_Water", "RULEUMT_Biped",
+                                       "RULEUMT_SurfacingSub", "RULEUMT_Amphibious", "RULEUMT_Hover",
+                                       "RULEUMT_AmphibiousFloating", "RULEUMT_Special"};
+  int type = 0;
+  PushBlueprint(L, blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "Physics");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "MotionType");
+      lua_rawget(L, -2);
+      if (lua_isstring(L, -1))
+        for (int i = 0; i < 10; ++i)
+          if (std::strcmp(lua_tostring(L, -1), kNames[i]) == 0) type = i;
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  store.motionTypes[blueprint] = type;
+  return type;
+}
+bool Moves(lua_State* L, const UserUnit* u) {
+  const int type = MotionTypeOf(L, u->view.blueprint);
+  return type >= 1 && type <= 8;
+}
+
+// Whether the simulation's category set `set` (-1: none) holds the blueprint with that category index (the
+// beat's copy of the table; bit i & 63 of word i >> 6, as CategorySets gives them).
+bool SetHas(const UnitStore& store, int set, int index) {
+  if (set < 0 || index < 0 || static_cast<size_t>(set) >= store.categorySets.size()) return false;
+  const std::vector<uint64_t>& words = store.categorySets[static_cast<size_t>(set)];
+  const size_t w = static_cast<size_t>(index) >> 6;
+  return w < words.size() && ((words[w] >> (index & 63)) & 1u) != 0;
+}
+
+// UserUnit::CanAttackTarget (FA exe 0x8c0d30; read 2026-10-16 by the ui chat's helper and the engine track,
+// docs/engine-answers.md "ui 37"): whether `s` can attack `t`, by its weapons as the simulation last set them
+// (UnitView::weapons: the layers the scripts gave each, its ranges, its target restrictions).
+// - No target (nullptr: the place under the mouse): with checkRange a unit that moves can; one that does not
+//   if the place is strictly within some weapon's ranges (2D). Without checkRange: no.
+// - A unit that moves, with auto-surface on: an OVERLAYANTIAIR one at a target in the air, an OVERLAYDIRECTFIRE
+//   one at one on land; on land, an amphibious one (MotionType 6 or 8) with OVERLAYANTINAVY at one under water
+//   or on the seabed; on the seabed, an amphibious one (6) with OVERLAYDIRECTFIRE at one on land.
+// - Else a weapon that fires at the target's layer, whose restrictions do not keep the target out: for a unit
+//   that moves (or without checkRange) that is enough; one that does not needs the target within that weapon's
+//   ranges (2D, the ends counted), else the next weapon is asked.
+bool CanAttackTarget(lua_State* L, const UserUnit* s, const UserUnit* t, bool checkRange) {
+  const int motion = MotionTypeOf(L, s->view.blueprint);
+  const bool mobile = motion >= 1 && motion <= 8;
+  const std::vector<WeaponView>& weapons = s->view.weapons;
+  if (!t) {
+    if (!checkRange) return false;
+    if (mobile) return true;
+    float at[3];
+    if (!MouseWorldPlace(L, at)) return false;
+    const float dx = at[0] - s->view.position[0], dz = at[2] - s->view.position[2];
+    const float d = std::sqrt(dx * dx + dz * dz);
+    for (const WeaponView& w : weapons)
+      if (w.minRadius < d && d < w.maxRadius) return true;
+    return false;
+  }
+  const int tl = t->view.layer, sl = s->view.layer;
+  if (mobile) {
+    if (s->view.autoSurfaceMode) {
+      if (tl == 16 && InCategory(L, s, "OVERLAYANTIAIR")) return true;
+      if (tl == 1 && InCategory(L, s, "OVERLAYDIRECTFIRE")) return true;
+    }
+    if (sl == 1 && (tl == 4 || tl == 2) && (motion == 6 || motion == 8) && InCategory(L, s, "OVERLAYANTINAVY")) return true;
+    if (sl == 2 && tl == 1 && motion == 6 && InCategory(L, s, "OVERLAYDIRECTFIRE")) return true;
+  }
+  const UnitStore& store = Store(L);
+  float d = 0;
+  if (checkRange) {
+    const float dx = t->view.position[0] - s->view.position[0], dz = t->view.position[2] - s->view.position[2];
+    d = std::sqrt(dx * dx + dz * dz);
+  }
+  for (const WeaponView& w : weapons) {
+    if (!(w.layerCaps & tl)) continue;
+    if (SetHas(store, w.disallow, t->view.categoryIndex)) continue;
+    if (w.onlyAllow >= 0 && !SetHas(store, w.onlyAllow, t->view.categoryIndex)) continue;
+    if (mobile || !checkRange) return true;
+    if (w.minRadius <= d && d <= w.maxRadius) return true;
+  }
+  return false;
+}
+// Whether any of these units can attack `t` (FA exe 0x81d080, the right click's test): not when there is no
+// target, it is dead, or it is gone.
+bool AnyCanAttack(lua_State* L, const std::vector<UserUnit*>& units, const UserUnit* t) {
+  if (!t || t->gone || t->view.dead) return false;
+  for (const UserUnit* s : units)
+    if (CanAttackTarget(L, s, t, true)) return true;
+  return false;
+}
+
 void DropUnselectable(lua_State* L, std::vector<UserUnit*>* list) {
   list->erase(std::remove_if(list->begin(), list->end(), [L](const UserUnit* u) { return !IsSelectable(L, u); }), list->end());
 }
@@ -761,6 +850,32 @@ int l_GetUnitId(lua_State* L) {
 }
 int l_GetBlueprint(lua_State* L) {
   PushBlueprint(L, CheckUnit(L, 1)->view.blueprint);
+  return 1;
+}
+// UserUnit:CanAttackTarget(target, rangeCheck) (FA exe 0x8c2090): CanAttackTarget above; the target a unit
+// (an error otherwise), rangeCheck true or false (nil: false).
+int l_CanAttackTarget(lua_State* L) {
+  if (lua_gettop(L) != 3)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "UserUnit:CanAttackTarget(target, rangeCheck)", 3, lua_gettop(L));
+  UserUnit* s = CheckUnit(L, 1);
+  UserUnit* t = CheckUnit(L, 2);
+  lua_pushboolean(L, !t->gone && CanAttackTarget(L, s, t, lua_toboolean(L, 3) != 0));
+  return 1;
+}
+// GetValidAttackingUnits() (FA exe 0x8bd410 / CWldSession::GetValidAttackingUnits 0x896090): the selected units
+// that can attack the unit under the mouse (none there: the place under it), checking range; nil for none.
+int l_GetValidAttackingUnits(lua_State* L) {
+  if (!TheSim(L)) return 0;
+  if (lua_gettop(L) != 0)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "table GetValidAttackingUnits() - return a table of the currently selected units", 0, lua_gettop(L));
+  UnitStore& store = Store(L);
+  const uint32_t under = UnitUnderMouse(L);
+  auto it = under == 0xffffffffu ? store.units.end() : store.units.find(under);
+  const UserUnit* t = it != store.units.end() && !it->second->gone ? it->second.get() : nullptr;
+  std::vector<UserUnit*> valid;
+  for (UserUnit* s : store.selection)
+    if (!s->gone && CanAttackTarget(L, s, t, true)) valid.push_back(s);
+  PushUnitList(L, valid, true);
   return 1;
 }
 // GetBlueprint(unit) (FA exe 0x8c59b0, the user state's own): one unit, its blueprint's table.
@@ -1433,14 +1548,18 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
     if (v.index == e->view.army && e->view.army != army && army <= static_cast<int>(v.alliance.size()))
       stance = v.alliance[static_cast<size_t>(army - 1)];
   bool enemy = stance == 0, ally = stance == 2, noArmy = e->view.army <= 0;
-  if (enemy && (caps & kAttack) && !e->view.dead) return "RULEUCC_Attack";
+  // (An enemy: Attack when any of the selection can attack it, by its weapons (FA exe 0x81d080).)
+  if (enemy && (caps & kAttack) && AnyCanAttack(L, own, e)) return "RULEUCC_Attack";
   UnitStateView target;
   StateOf(L, e, &target);
   // (The unit's own switch, SetReclaimable, on top of the original's test: a unit a script has
   // made unreclaimable is not offered for reclaim. Inferred, not read.)
   bool reclaimable = (InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt) && target.reclaimable;
   if ((enemy || noArmy || InCategory(L, e, "RECLAIMFRIENDLY")) && reclaimable && (caps & kReclaim)) return "RULEUCC_Reclaim";
-  if (enemy) return move;
+  // (An enemy none of the selection can attack nor reclaim: with the Attack order among the selection's, the
+  // invalid attack (the script's attack-invalid cursor), and a right click gives no order (GetRightMouseButtonAction
+  // 0x81ec00, step 4); else a move.)
+  if (enemy) return (caps & kAttack) ? "RULEUCC_Invalid" : move;
   if ((caps & kRepair) && e->view.beingBuilt &&
       (InCategory(L, e, "MOBILE") || !(InCategory(L, e, "FACTORY") || InCategory(L, e, "SILO"))))
     return "RULEUCC_Repair";
@@ -2835,6 +2954,7 @@ void RefreshUserUnits(lua_State* L) {
   UnitStore& store = Store(L);
   std::vector<UnitView> views;
   UnitViews(*sim, &views);
+  CategorySets(*sim, store.categorySets.size(), &store.categorySets);  // (only the new ones: the table only grows)
   for (auto& [id, u] : store.units) u->gone = true;
   for (const UnitView& v : views) {
     auto& slot = store.units[v.id];
@@ -2915,6 +3035,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetIsAutoSurfaceMode", l_ListSwitch<&UnitStateView::autoSurfaceMode>);
   SetGlobal(L, "GetAttachedUnitsList", l_GetAttachedUnitsList);
   SetGlobal(L, "GetBlueprint", l_GetBlueprintGlobal);
+  SetGlobal(L, "GetValidAttackingUnits", l_GetValidAttackingUnits);
   SetGlobal(L, "GetAssistingUnitsList", l_GetAssistingUnitsList);
 
   const char* cls = "UserUnit";
@@ -2944,9 +3065,10 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetMethod(L, cls, "GetCommandQueue", l_UnitEmptyTable);
   for (const char* name : {"GetFocus", "GetCreator", "GetGuardedEntity"}) SetMethod(L, cls, name, l_UnitNil);
   for (const char* name : {"IsAutoMode", "IsAutoSurfaceMode", "IsOverchargePaused", "IsRepeatQueue", "IsStunned",
-                           "HasUnloadCommandQueuedUp", "CanAttackTarget"})
+                           "HasUnloadCommandQueuedUp"})
     SetMethod(L, cls, name, l_UnitFalse);
   SetMethod(L, cls, "ProcessInfo", l_UnitProcessInfo);
+  SetMethod(L, cls, "CanAttackTarget", l_CanAttackTarget);
 
   // The unit's state from the simulation.
   SetMethod(L, cls, "GetCommandQueue", l_GetCommandQueue);

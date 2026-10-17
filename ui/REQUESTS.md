@@ -963,6 +963,10 @@ are the same for every unit of a blueprint unless a script changes them, so a sh
 an index per weapon would keep the per-beat copy small; your choice of form. The target's current layer I
 already have (UnitView::layer), and the shooter's auto-surface mode too (UnitStateView, or UnitView if cheap:
 the original's shortcut reads it for every selected unit each frame).
+DONE (engine, cedf989; answer f07de52, "ui 37"): UnitView::weapons (layerCaps, effective radii, disallow /
+onlyAllow as set indices), categoryIndex, autoSurfaceMode; CategorySets. Used: CanAttackTarget (user_units.cpp, the
+sets copied after each beat), UserUnit:CanAttackTarget, GetValidAttackingUnits, the right click's Attack / Invalid;
+checks in ui/tests/dock.lua.
 
 ## To the renderer track
 

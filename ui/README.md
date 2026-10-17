@@ -345,7 +345,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   drone station made (not the units assisting, despite the name: read by the engine track, 0x8bc820;
   within one unit by entity id, where the original goes by its map of places). The scripts'
   `SelectUnits` takes a transport in place of a unit in it that may not be selected, and both it and
-  `AddSelectUnits` use the original's whole test of what may be selected (0x8c0500). With the
+  `AddSelectUnits` use the original's whole test of what may be selected (0x8c0500).
+  `UserUnit:CanAttackTarget`, `GetValidAttackingUnits` and the right click's attack follow the
+  original's test (0x8c0d30, read by the ui and engine tracks): each weapon as the simulation last set it
+  (the layers the scripts gave it for the unit's layer, its ranges, its target restrictions), a few
+  shortcuts for amphibious and surfacing units; an enemy that none of the selection can attack nor
+  reclaim gives the attack-invalid cursor and no order (a tank over a plane in the air). With the
   commander selected the game's orders panel, its construction panel with the build icons and the
   commander's avatar come up. Orders are written with the engine's command writer and applied
   before the next beat; the game script hears of each (`commandmode.OnCommandIssued`). A right

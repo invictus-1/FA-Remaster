@@ -81,5 +81,33 @@ ForkThread(function()
     UISelectionByCategory("BOMBER", false, false, false, true)
     local idle = GetSelectedUnits()
     LOG("TEST note: idle bombers selected " .. tostring(idle and table.getn(idle) or 0) .. " after " .. waited .. " s")
+    -- UserUnit:CanAttackTarget (FA exe 0x8c0d30) by each unit's weapons as the simulation set them (the layers
+    -- the scripts gave each weapon): a tank (UEL0201) and the air staging platform (no weapons), against the
+    -- commander and each other (the test does not ask whose a target is). (FAF's anti-air UEL0104 has a
+    -- weapon of no damage whose layers include land, so it counts as able to attack land, in the original too.)
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {p[1] + 12, p[2], p[3] - 12}, bpId = "uel0104", count = 1, yaw = 0}})
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {p[1] + 18, p[2], p[3] - 12}, bpId = "uel0201", count = 1, yaw = 0}})
+    WaitSeconds(1.5)
+    UISelectionByCategory("MOBILE", false, false, false, false)
+    local aa, tank = ownOf("uel0104")[1], ownOf("uel0201")[1]
+    check("the anti-air unit and the tank are made", aa ~= nil and tank ~= nil, true)
+    if aa and tank and pad then
+        check("CanAttackTarget: a tank can attack a unit on land", tank:CanAttackTarget(aa, false), true)
+        check("the commander can attack the tank", cdr:CanAttackTarget(tank, true), true)
+        check("a unit without weapons cannot", pad:CanAttackTarget(tank, false), false)
+        check("three arguments, no fewer", pcall(tank.CanAttackTarget, tank, aa), false)
+        check("a tank cannot attack a bomber in the air (its weapon fires at land and water only)", tank:CanAttackTarget(bombers[1], false), false)
+        check("the anti-air unit can", aa:CanAttackTarget(bombers[1], false), true)
+        -- GetValidAttackingUnits (0x8bd410): of the selection, those that can attack the unit under the mouse
+        local view = import("/lua/ui/game/worldview.lua").viewLeft
+        SelectUnits({tank, pad})
+        local at = view:Project(cdr:GetPosition())
+        moho64ui_MouseMove(at.x, at.y)
+        WaitSeconds(0.3)
+        local valid = GetValidAttackingUnits()
+        check("GetValidAttackingUnits: of the tank and the platform, the tank", valid ~= nil and table.getn(valid) == 1 and valid[1] == tank, true)
+        SelectUnits({pad})
+        check("none: nil", GetValidAttackingUnits(), nil)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)
