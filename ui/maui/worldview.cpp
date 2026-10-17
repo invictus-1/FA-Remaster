@@ -1370,28 +1370,29 @@ class WorldView : public Control {
       ClickSelect(L, UnitUnder(L, e.x, e.y), e.shift, e.ctrl);
       return;
     }
-    {
-      if (EnsurePicture(L)) {
-        WorldSource* source = UserState::From(L)->config().world;
-        Rect r;
-        GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-        source->UnitsIn(std::min(pressX_, e.x) - r.x0, std::min(pressY_, e.y) - r.y0, std::max(pressX_, e.x) - r.x0,
-                        std::max(pressY_, e.y) - r.y0, &ids);
-      } else {
-        // (Without a picture: the units whose place, by the plain view from above, lies in the box.)
-        std::vector<uint32_t> all;
-        UserUnitIds(L, false, &all);
-        for (uint32_t id : all) {
-          std::string blueprint;
-          float place[3], sx = 0, sy = 0;
-          int army = 0;
-          if (!UserUnitFacts(L, id, &blueprint, place, &army)) continue;
-          ProjectPoint(L, place, &sx, &sy);
-          if (sx >= std::min(pressX_, e.x) && sx <= std::max(pressX_, e.x) && sy >= std::min(pressY_, e.y) && sy <= std::max(pressY_, e.y)) ids.push_back(id);
-        }
-      }
-    }
+    UnitsInScreenRect(L, std::min(pressX_, e.x), std::min(pressY_, e.y), std::max(pressX_, e.x), std::max(pressY_, e.y), &ids);
     BoxSelect(L, ids, e.shift);
+  }
+
+  // The units in a rectangle of the screen: the picture's answer. (Without a picture: the units
+  // whose place, by the plain view from above, lies in it.)
+  void UnitsInScreenRect(lua_State* L, float x0, float y0, float x1, float y1, std::vector<uint32_t>* ids) {
+    if (EnsurePicture(L)) {
+      Rect r;
+      GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+      UserState::From(L)->config().world->UnitsIn(x0 - r.x0, y0 - r.y0, x1 - r.x0, y1 - r.y0, ids);
+      return;
+    }
+    std::vector<uint32_t> all;
+    UserUnitIds(L, false, &all);
+    for (uint32_t id : all) {
+      std::string blueprint;
+      float place[3], sx = 0, sy = 0;
+      int army = 0;
+      if (!UserUnitFacts(L, id, &blueprint, place, &army)) continue;
+      ProjectPoint(L, place, &sx, &sy);
+      if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) ids->push_back(id);
+    }
   }
 
   // The unit under a point of the screen (its entity id; 0xffffffff: none). Without a picture:
@@ -1534,7 +1535,7 @@ class WorldView : public Control {
         Rect r;
         GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
         std::vector<uint32_t> onScreen;
-        if (EnsurePicture(L)) UserState::From(L)->config().world->UnitsIn(0, 0, r.x1 - r.x0, r.y1 - r.y0, &onScreen);
+        UnitsInScreenRect(L, r.x0, r.y0, r.x1, r.y1, &onScreen);
         if (DoubleClickSelect(L, under, onScreen)) return true;
       }
     }
