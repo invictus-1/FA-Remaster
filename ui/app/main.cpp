@@ -364,6 +364,7 @@ int main(int argc, char** argv) {
   cfg.launchReplay = [&session](lua_State* L, const std::string& file, std::string* why) { return session.LaunchReplay(L, file, why); };
   cfg.currentReplay = [&session]() { return session.currentReplay; };
   cfg.worldLoading = [&session]() { return session.Loading(); };
+  cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
@@ -522,6 +523,7 @@ int main(int argc, char** argv) {
     if (session.LoadDue()) {
       if (backdrop) backdrop->Stop();  // (nothing else draws a world while one loads)
       cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+      ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
       if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
       session.BeginLoad();
       loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();
@@ -602,6 +604,7 @@ int main(int argc, char** argv) {
     if (!request || !session.running()) return;
     session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
     cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now)
+    if (game) ui::SavePreferencesOf(game->L());  // (what the game changed: the next front end reads the file)
     shown = front.get();
     game.reset();
     sounds.StopAll();
@@ -687,6 +690,7 @@ int main(int argc, char** argv) {
     }
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
+  ui::SavePreferencesOf(shown->L());  // (the program closes: CScApp::Destroy writes the preferences)
   for (const auto& line : session.Status()) Logf(LogLevel::Info, "moho64ui: session: %s", line.c_str());
   if (dumpUi) shown->ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture

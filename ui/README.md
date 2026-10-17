@@ -210,7 +210,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The log names every engine function a script called that is not built yet (`moho64ui: stub <name>`)
   and counts the calls at exit. `--list-bindings` lists all of them as `built` or `stub`.
 - Preferences are ours: the file named by `--prefs` (the original's `Game.prefs` form), or memory only.
-  The original game's own preferences are never read or written.
+  The original game's own preferences are never read or written. The file is written when a script
+  asks (`SavePreferences()`) and, as the original writes it, when a game is launched and when the
+  program closes (func_DoPreload 0x88bee0 and CScApp::Destroy 0x8d0f20 call USER_SavePreferences);
+  also when a game's interface state goes, since each of our states keeps its own copy. So what a
+  script sets without saving (the lobby's "changelog seen", for one) is kept: the changelog comes up
+  once per version, as in the original. Tests and probes must run on a COPY of a preferences file.
 - `py ui/tools/scan_binding_use.py <gamedata folder>` counts how many of the game's scripts call each
   engine function: the work list, most used first.
 

@@ -255,23 +255,27 @@ void WriteValue(lua_State* L, int idx, int indent, std::string& out) {
 }
 
 int l_SavePreferences(lua_State* L) {
+  SavePreferencesOf(L);
+  return 0;
+}
+
+}  // namespace
+
+void SavePreferencesOf(lua_State* L) {
   UserState* us = UserState::From(L);
   const std::string& file = us->config().prefsFile;
   if (file.empty()) {
     static bool said = false;
     if (!said) Logf(LogLevel::Debug, "moho64ui: SavePreferences: no preferences file, kept in memory");
     said = true;
-    return 0;
+    return;
   }
   std::string out;
   PushPrefs(L);
   WriteFields(L, -1, 0, true, out);
   lua_pop(L, 1);
   if (!hostfs::WriteFile(file, out)) Logf(LogLevel::Warning, "moho64ui: cannot write preferences to %s", file.c_str());
-  return 0;
 }
-
-}  // namespace
 
 // The file is a chunk of top-level assignments: run it with a new table as its environment, and
 // that table is the preferences. The chunk can reach nothing else (no globals).

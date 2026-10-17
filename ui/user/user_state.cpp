@@ -1,5 +1,6 @@
 #include "user/user_state.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 
@@ -188,8 +189,15 @@ bool UserState::StartFrontEnd() {
   return CallUiMain("StartFrontEndUI");
 }
 
+double UserState::clockNow() const {
+  if (!config_.liveClock) return now_;
+  const double real = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return now_ + std::clamp(real - frameBegan_, 0.0, 0.25);
+}
+
 void UserState::Frame(double seconds) {
   now_ += seconds;
+  frameBegan_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   ++frame_;
   AdvanceTickFraction(seconds);  // (the game's clock first, as the original's SessionFrame)
   ui_->Update(state_->L(), static_cast<float>(seconds));

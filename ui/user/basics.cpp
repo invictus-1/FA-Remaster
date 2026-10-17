@@ -36,8 +36,10 @@ namespace {
 // (time::GetSystemTimer 0x955730) runs from the program's start; ours from the state's, so a game's state
 // starts again at 0. The scripts use differences; counting over all states shifted the restarted game's
 // opening (the commander no longer selected; not found why, 2026-10-16), so it stays per state.
+// In a live window it also runs on while a frame's scripts run, as the original's (UserState::clockNow): the
+// lobby's CPU benchmark times a loop with it.
 int l_CurrentTime(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(UserState::From(L)->now()));
+  lua_pushnumber(L, static_cast<lua_Number>(UserState::From(L)->clockNow()));
   return 1;
 }
 
@@ -202,7 +204,7 @@ int l_ExitApplication(lua_State*) {
 int l_GetSystemTime(lua_State* L) {
   if (lua_gettop(L) != 0)
     return luaL_error(L, "%s\n  expected %d args, but got %d", "string GetSystemTime() - returns a formatted string displaying the System time", 0, lua_gettop(L));
-  const long seconds = static_cast<long>(UserState::From(L)->now());
+  const long seconds = static_cast<long>(UserState::From(L)->clockNow());
   char text[48];
   std::snprintf(text, sizeof text, "%02ld:%02ld:%02ld", seconds / 3600, seconds / 60 % 60, seconds % 60);
   lua_pushstring(L, text);

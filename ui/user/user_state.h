@@ -62,6 +62,10 @@ class UserState {
     std::function<std::string()> currentReplay;
     // Whether a launched game is loading (the front end's WorldIsLoading(); unset: never).
     std::function<bool()> worldLoading;
+    // The scripts' clock (CurrentTime, GetSystemTimeSeconds) runs on while a frame's scripts run, as the
+    // original's GetSystemTimer does (FA exe 0x955730, which both read): on in a live window; off in a test
+    // run, whose clock goes in fixed frame steps.
+    bool liveClock = false;
     int width = 1920, height = 1080;    // the head's size in pixels
     // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
     // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
@@ -191,7 +195,10 @@ class UserState {
   std::vector<ArmyView> armiesCopy;  // ArmyViews (GetArmiesTable)
   bool economyCopied = false;  // (these copies are there: one beat's sync came)
   void CopyFromSimulation();
-  double now() const { return now_; }      // seconds since the state was created
+  double now() const { return now_; }      // seconds since the state was created, as of this frame
+  // now() and, with Config::liveClock, the real time since this frame began (at most a frame's longest
+  // step, 0.25 s: the clock never runs back when the next frame starts).
+  double clockNow() const;
   uint32_t frame() const { return frame_; }
   const std::string& uiState() const { return uiState_; }  // GetCurrentUIState(): none, splash, frontend, game
 
@@ -203,6 +210,7 @@ class UserState {
   std::unique_ptr<ThreadScheduler> threads_;
   std::unique_ptr<UiManager> ui_;
   double now_ = 0;
+  double frameBegan_ = 0;  // (steady clock seconds when this frame began: clockNow)
   uint32_t frame_ = 0;
   std::string uiState_ = "none";
 };
@@ -210,6 +218,12 @@ class UserState {
 // Preferences: GetPreference / SetPreference / SavePreferences (prefs.cpp).
 void RegisterPrefsBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
+// Write that state's preferences to the host's file (SavePreferences() from the engine's side). The
+// original keeps one store for every state and also writes it when a game is launched
+// (func_DoPreload 0x88bee0, USER_SavePreferences 0x8c91a0) and when the program closes
+// (CScApp::Destroy 0x8d0f20); our states each keep a copy, so the host writes at those moments
+// and when a game's state goes (what it changed would be lost with it).
+void SavePreferencesOf(lua_State* L);
 // Time, command line, interface state, front-end data, Random (basics.cpp).
 void RegisterBasicBindings(lua_State* L);
 // A script has asked for the program to end (ExitApplication): the host's loops stop after the
