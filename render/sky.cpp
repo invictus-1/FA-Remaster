@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <vector>
 
+#include "jobs.h"
 #include "post.h"
 
 namespace render {
@@ -36,6 +39,9 @@ cbuffer SkyPicture : register(b1) {
   float4 cloudLight;  // the falling light on the clouds; w: 1 = volumetric clouds (cloudPicture) in place of the layer
 };
 Texture2D cloudPicture : register(t1);  // (clouds.h: rgb their light, a what comes through)
+#if SKY_TABLES
+Texture3D skyView : register(t2);  // (Sky::BuildTables: the sky's view; three slices, its shader says what they hold)
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -140,6 +146,22 @@ float3 Stars(float3 d, float cells, float share, float brightest) {
   return tint * (bright * shape * shape * twinkle);
 }
 
+#if SKY_TABLES
+// The sky from tables (Sky::BuildTables): where a direction lies in the sky's view (round from +x; from
+// overhead through the horizon, at the view's middle, to straight down), and the haze's glow round a body.
+float2 SkyViewUv(float3 d) {
+  const float r = 6360e3 + 500, rho = sqrt(500.0 * (2 * 6360e3 + 500.0));
+  float beta = acos(rho / r), horizon = 3.14159265 - beta;
+  float zenith = acos(clamp(d.y, -1, 1));
+  float v = zenith < horizon ? 0.5 * (1 - sqrt(saturate(1 - zenith / horizon))) : 0.5 + 0.5 * sqrt(saturate((zenith - horizon) / beta));
+  return float2(atan2(d.z, d.x) / (2 * 3.14159265), 0.5 / 108 + v * (1 - 1.0 / 108));
+}
+float HazeGlow(float mu) {
+  const float g = 0.76;
+  return 3.0 / (8.0 * 3.14159265) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
+}
+#endif
+
 TextureCube mapSky : register(t29);
 
 float4 PS(VOut i) : SV_Target {
@@ -153,8 +175,17 @@ float4 PS(VOut i) : SV_Target {
   float3 sun = skyBody.xyz, moon = moonPlace.xyz;
   // the air's light: the sun's until it is well below the horizon, the moon's while it is up
   float3 c = 0;
+#if SKY_TABLES
+  {  // from the tables: the smooth part, and the haze's glow round each body taken here
+    float2 uv = SkyViewUv(d);
+    c += skyView.SampleLevel(samplerLinear, float3(uv, 0.5 / 3), 0).rgb;
+    c += skyView.SampleLevel(samplerLinear, float3(uv, 1.5 / 3), 0).rgb * HazeGlow(dot(d, sun));
+    c += skyView.SampleLevel(samplerLinear, float3(uv, 2.5 / 3), 0).rgb * HazeGlow(dot(d, moon));
+  }
+#else
   [branch] if (sun.y > -0.33) c += Scatter(d, sun, 1) * sunSky.rgb;
   [branch] if (moon.y > -0.1) c += Scatter(d, moon, moonSky.w) * moonSky.rgb;
+#endif
   float overHorizon = saturate(d.y * 80 + 0.6);
 
   float night = skyHorizon.w;
@@ -253,6 +284,101 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
+const char kViewTableShader[] = R"hlsl(
+// The sky's view from the eye, summed from the tables (Sky::BuildTables): for each direction round the horizon
+// (192, the turn from +x) and from overhead to straight down (108, closer together near the horizon, as
+// Hillaire maps them), the sun's and the moon's light scattered toward the eye, as Scatter but read from the
+// tables, with the planet's shadow and light scattered many times over. Three slices: what is smooth (the
+// molecules' share with its phase taken at the texel, and the light scattered many times over), and the
+// haze's for the sun and for the moon without their phase, which the sky pass takes per pixel (the glow round
+// a body is sharper than the table's texels).
+cbuffer SkyTables : register(b1) {
+  float4 sunToward;     // xyz toward the sun
+  float4 moonToward;    // xyz toward the moon; w the share of the haze's glow round it that is kept
+  float4 sunStrength;   // rgb the sun's light in the air (SkyLight::sunSky)
+  float4 moonStrength;  // rgb the moon's
+};
+Texture2D throughTable : register(t0);
+Texture2D manyTable : register(t1);
+RWTexture3D<float4> skyView : register(u0);
+
+static const float3 kMolecules = float3(5.8e-6, 13.5e-6, 33.1e-6);
+static const float kHaze = 21e-6;
+static const float3 kOzone = float3(0.65e-6, 1.881e-6, 0.085e-6);
+static const float kGround = 6360e3, kTop = 6420e3, kEyeR = 6360e3 + 500;
+static const float kPi = 3.14159265;
+
+float3 AirThickness(float height) {  // (sky.cpp's Air)
+  return float3(exp(-height / 8000.0), exp(-height / 1200.0), saturate(1 - abs(height - 25000.0) / 15000.0));
+}
+float DistanceOut(float r, float mu) { return max(-r * mu + sqrt(max(r * r * mu * mu + (kTop - r) * (kTop + r), 0)), 0); }
+bool MeetsGround(float r, float mu) { return mu < 0 && r * r * mu * mu - (r - kGround) * (r + kGround) >= 0; }
+float DistanceDown(float r, float mu) { return max(-r * mu - sqrt(max(r * r * mu * mu - (r - kGround) * (r + kGround), 0)), 0); }
+float3 Through(float r, float mu) {
+  if (MeetsGround(r, mu)) return 0;
+  const float span = sqrt((kTop - kGround) * (kTop + kGround));
+  float rho = sqrt(max((r - kGround) * (r + kGround), 0));
+  float d = DistanceOut(r, mu), dMin = kTop - r, dMax = rho + span;
+  float xMu = dMax - dMin > 1e-3 ? (d - dMin) / (dMax - dMin) : 0, xR = rho / span;
+  float2 uv = float2(0.5 / 256 + saturate(xMu) * (1 - 1.0 / 256), 0.5 / 64 + saturate(xR) * (1 - 1.0 / 64));
+  return throughTable.SampleLevel(samplerLinearClamp, uv, 0).rgb;
+}
+float3 Many(float r, float muS) {
+  float2 uv = float2(0.5 / 32 + saturate(muS * 0.5 + 0.5) * (1 - 1.0 / 32), 0.5 / 32 + saturate((r - kGround) / (kTop - kGround)) * (1 - 1.0 / 32));
+  return manyTable.SampleLevel(samplerLinearClamp, uv, 0).rgb;
+}
+float MoleculePhase(float mu) { return 3.0 / (16.0 * kPi) * (1 + mu * mu); }
+
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  if (id.x >= 192 || id.y >= 108) return;
+  // the direction: round from +x, and from overhead (v 0) through the horizon (v 0.5) to straight down
+  const float rho = sqrt(500.0 * (2 * kGround + 500.0));
+  float beta = acos(rho / kEyeR), horizon = kPi - beta;
+  float v = id.y / 107.0, zenith;
+  if (v < 0.5) {
+    float c = 1 - 2 * v;
+    zenith = horizon * (1 - c * c);
+  } else {
+    float c = 2 * v - 1;
+    zenith = horizon + beta * c * c;
+  }
+  float turn = (id.x + 0.5) / 192 * 2 * kPi;
+  float3 d = float3(cos(turn) * sin(zenith), cos(zenith), sin(turn) * sin(zenith));
+  float r0 = kEyeR;
+  bool ground = MeetsGround(r0, d.y);
+  float far = ground ? DistanceDown(r0, d.y) : DistanceOut(r0, d.y);
+  float3 through = 1, sunMolecules = 0, sunHaze = 0, sunMany = 0, moonMolecules = 0, moonHaze = 0, moonMany = 0;
+  const int steps = 32;
+  for (int i = 0; i < steps; ++i) {
+    float f0 = i / (float)steps, f1 = (i + 1) / (float)steps;
+    float t0 = far * f0 * f0, t1 = far * f1 * f1, dt = t1 - t0, t = (t0 + t1) * 0.5;
+    float3 p = float3(0, r0, 0) + d * t;
+    float rp = length(p);
+    float height = rp - kGround;
+    float3 air = AirThickness(height);
+    float3 byM = kMolecules * air.x;
+    float byH = kHaze * air.y;
+    float3 takes = max(kMolecules * air.x + kHaze * 1.1 * air.y + kOzone * air.z, 1e-12);
+    float3 stepThrough = exp(-takes * dt);
+    float3 share = through * (1 - stepThrough) / takes;
+    float muSun = dot(p, sunToward.xyz) / rp, muMoon = dot(p, moonToward.xyz) / rp;
+    float3 toSun = Through(rp, muSun), toMoon = Through(rp, muMoon);
+    sunMolecules += share * byM * toSun;
+    sunHaze += share * byH * toSun;
+    sunMany += share * (byM + byH) * Many(rp, muSun);
+    moonMolecules += share * byM * toMoon;
+    moonHaze += share * byH * toMoon;
+    moonMany += share * (byM + byH) * Many(rp, muMoon);
+    through *= stepThrough;
+  }
+  float3 smooth = sunStrength.rgb * (MoleculePhase(dot(d, sunToward.xyz)) * sunMolecules + sunMany) +
+                  moonStrength.rgb * (MoleculePhase(dot(d, moonToward.xyz)) * moonMolecules + moonMany);
+  skyView[uint3(id.xy, 0)] = float4(smooth, 1);
+  skyView[uint3(id.xy, 1)] = float4(sunStrength.rgb * sunHaze, 1);
+  skyView[uint3(id.xy, 2)] = float4(moonStrength.rgb * moonHaze * moonToward.w, 1);
+}
+)hlsl";
+
 struct PictureConstants {
   float forward[4], right[4], up[4], sunSky[4], moonSky[4], sunDisc[4], moonPlace[4], starAxis[4], cloudLight[4];
 };
@@ -327,6 +453,210 @@ Vec3 Reaches(Vec3 light) {
   return Left(AirToward({0, kGround + kEye, 0}, Normalize(light), 24));
 }
 
+// ---- The sky from tables (SkyAt's `tables`, Sky::BuildTables; the lighting upgrade) ----
+// After E. Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique" (2020), on the
+// same air as above. Two tables are worked out once, here on the processor, and handed to the card as they
+// are, so that the sky drawn and the light fitted to it here read the same numbers:
+//  - what comes through: of a light from a place at a height toward a direction, what the air leaves of it
+//    on its way out (transmittance; E. Bruneton's mapping of the height and the direction);
+//  - light scattered many times over: what a place at a height gets of a body's light from the second
+//    scattering on, as if from all sides (Hillaire's approximation: the second order gathered from 64
+//    directions, and the share each scattering passes on summed as a geometric series; the ground under it
+//    gives back 0.3 of its light).
+// The sky's view from the eye is then summed from those two every frame on the card (BuildTables), and here
+// for the few directions the fitted sky needs (ScatterTables). It knows the planet's shadow: a body's light
+// does not reach a place the ground stands between, so the sky's light below the horizon needs no letting go
+// by hand, and light scattered again and again keeps dusk lit after the sun is down.
+constexpr int kThroughW = 256, kThroughH = 64, kManyW = 32, kManyH = 32;
+constexpr int kViewW = 192, kViewH = 108;  // the sky's view: round the horizon, from overhead to straight down
+constexpr double kGroundAlbedo = 0.3;
+
+struct Dir {  // (a direction in doubles: the planet's size wants them on the processor)
+  double x, y, z;
+};
+double DotD(Dir a, Dir b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+// (from inside the air: the distance along cosine-of-zenith mu to its top; whether the way meets the ground,
+// and how far it is)
+double DistanceOut(double r, double mu) { return std::max(-r * mu + std::sqrt(std::max(r * r * mu * mu + (kTop - r) * (kTop + r), 0.0)), 0.0); }
+bool MeetsGround(double r, double mu) { return mu < 0 && r * r * mu * mu - (r - kGround) * (r + kGround) >= 0; }
+double DistanceDown(double r, double mu) { return std::max(-r * mu - std::sqrt(std::max(r * r * mu * mu - (r - kGround) * (r + kGround), 0.0)), 0.0); }
+Vec3 ExtinctionAt(float height) {  // what a metre of air takes away there
+  const Air3 a = AirAt(height);
+  return {kMolecules[0] * a.molecules + kHaze * 1.1f * a.haze + kOzone[0] * a.ozone, kMolecules[1] * a.molecules + kHaze * 1.1f * a.haze + kOzone[1] * a.ozone,
+          kMolecules[2] * a.molecules + kHaze * 1.1f * a.haze + kOzone[2] * a.ozone};
+}
+Vec3 ExpOf(Vec3 v) { return {std::exp(v.x), std::exp(v.y), std::exp(v.z)}; }
+
+const double kSpan = std::sqrt((double(kTop) - kGround) * (double(kTop) + kGround));  // to the top's horizon from the ground
+// The transmittance table's place for a height (as the radius r) and a direction, in its 0..1 (texel middles
+// at both ends).
+void ThroughUv(double r, double mu, float* u, float* v) {
+  const double rho = std::sqrt(std::max((r - kGround) * (r + kGround), 0.0));
+  const double d = DistanceOut(r, mu), dMin = kTop - r, dMax = rho + kSpan;
+  const double xMu = dMax - dMin > 1e-3 ? (d - dMin) / (dMax - dMin) : 0, xR = rho / kSpan;
+  *u = static_cast<float>(0.5 / kThroughW + std::clamp(xMu, 0.0, 1.0) * (1 - 1.0 / kThroughW));
+  *v = static_cast<float>(0.5 / kThroughH + std::clamp(xR, 0.0, 1.0) * (1 - 1.0 / kThroughH));
+}
+void ManyUv(double r, double muS, float* u, float* v) {
+  *u = static_cast<float>(0.5 / kManyW + std::clamp(muS * 0.5 + 0.5, 0.0, 1.0) * (1 - 1.0 / kManyW));
+  *v = static_cast<float>(0.5 / kManyH + std::clamp((r - kGround) / (kTop - kGround), 0.0, 1.0) * (1 - 1.0 / kManyH));
+}
+Vec3 Bilinear(const std::vector<float>& t, int w, int h, float u, float v) {
+  const float x = std::clamp(u * static_cast<float>(w) - 0.5f, 0.0f, static_cast<float>(w - 1));
+  const float y = std::clamp(v * static_cast<float>(h) - 0.5f, 0.0f, static_cast<float>(h - 1));
+  const int x0 = static_cast<int>(x), y0 = static_cast<int>(y), x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, h - 1);
+  const float fx = x - static_cast<float>(x0), fy = y - static_cast<float>(y0);
+  auto at = [&](int i, int j) {
+    const float* p = &t[(static_cast<size_t>(j) * static_cast<size_t>(w) + static_cast<size_t>(i)) * 4];
+    return Vec3{p[0], p[1], p[2]};
+  };
+  return (at(x0, y0) * (1 - fx) + at(x1, y0) * fx) * (1 - fy) + (at(x0, y1) * (1 - fx) + at(x1, y1) * fx) * fy;
+}
+// The two tables (RGBA, a row for each height from the ground up), each made the first time it is asked for.
+const std::vector<float>& ThroughTable();
+const std::vector<float>& ManyTable();
+// What comes through from radius r toward mu, to the top; none where the ground stands in the way.
+Vec3 ThroughAt(double r, double mu) {
+  if (MeetsGround(r, mu)) return {0, 0, 0};
+  float u, v;
+  ThroughUv(r, mu, &u, &v);
+  return Bilinear(ThroughTable(), kThroughW, kThroughH, u, v);
+}
+Vec3 ManyAt(double r, double muS) {
+  float u, v;
+  ManyUv(r, muS, &u, &v);
+  return Bilinear(ManyTable(), kManyW, kManyH, u, v);
+}
+// (the table's own sum: what comes through, marched)
+Vec3 ThroughMarched(double r, double mu) {
+  const int steps = 40;
+  const double length = DistanceOut(r, mu), step = length / steps;
+  const double s = std::sqrt(std::max(1 - mu * mu, 0.0));
+  Vec3 depth{0, 0, 0};
+  for (int i = 0; i < steps; ++i) {
+    const double t = step * (i + 0.5);
+    const double x = s * t, y = r + mu * t;
+    depth += ExtinctionAt(static_cast<float>(std::sqrt(x * x + y * y) - kGround)) * static_cast<float>(step);
+  }
+  return ExpOf(depth * -1.0f);
+}
+// (the multiple scattering table's own sum, for a place at radius r and a body at mu_s)
+Vec3 ManyGathered(double r, double muS) {
+  const Dir sun{std::sqrt(std::max(1 - muS * muS, 0.0)), muS, 0};
+  const Vec3 molecules{kMolecules[0], kMolecules[1], kMolecules[2]};
+  Vec3 light{0, 0, 0}, passed{0, 0, 0};
+  const int across = 8, steps = 20;
+  for (int a = 0; a < across; ++a)
+    for (int b = 0; b < across; ++b) {
+      const double turn = 2 * kPi * (a + 0.5) / across, down = std::acos(1 - 2 * (b + 0.5) / across);
+      const Dir d{std::cos(turn) * std::sin(down), std::cos(down), std::sin(turn) * std::sin(down)};
+      const bool ground = MeetsGround(r, d.y);
+      const double far = ground ? DistanceDown(r, d.y) : DistanceOut(r, d.y), dt = far / steps;
+      Vec3 through{1, 1, 1};
+      for (int i = 0; i < steps; ++i) {
+        const double t = dt * (i + 0.5);
+        const Dir p{d.x * t, r + d.y * t, d.z * t};
+        const double rp = std::sqrt(DotD(p, p));
+        const float height = static_cast<float>(rp - kGround);
+        const Air3 air = AirAt(height);
+        const Vec3 scatters = molecules * air.molecules + Vec3{1, 1, 1} * (kHaze * air.haze);
+        const Vec3 takes = ExtinctionAt(height);
+        const Vec3 stepThrough = ExpOf(takes * static_cast<float>(-dt));
+        const Vec3 share{(1 - stepThrough.x) / std::max(takes.x, 1e-12f), (1 - stepThrough.y) / std::max(takes.y, 1e-12f), (1 - stepThrough.z) / std::max(takes.z, 1e-12f)};
+        const Vec3 toSun = ThroughAt(rp, DotD(p, sun) / rp);
+        light += Each(Each(through, Each(scatters, toSun)), share) * static_cast<float>(1 / (4 * kPi));
+        passed += Each(Each(through, scatters), share);
+        through = Each(through, stepThrough);
+      }
+      if (ground) {  // (the ground where the way ends gives back some of the light that falls on it)
+        const Dir p{d.x * far, r + d.y * far, d.z * far};
+        const double muG = DotD(p, sun) / std::sqrt(DotD(p, p));
+        if (muG > 0) light += Each(through, ThroughAt(kGround, muG)) * static_cast<float>(muG * kGroundAlbedo / kPi);
+      }
+    }
+  const float n = 1.0f / (across * across);
+  light = light * n;
+  passed = passed * n;
+  return {light.x / (1 - passed.x), light.y / (1 - passed.y), light.z / (1 - passed.z)};
+}
+const std::vector<float>& ThroughTable() {
+  static const std::vector<float> table = [] {
+    std::vector<float> t(static_cast<size_t>(kThroughW) * kThroughH * 4, 1.0f);
+    Jobs::Shared().Run(kThroughH, [&](int j) {  // (a row each, on the worker threads)
+      for (int i = 0; i < kThroughW; ++i) {
+        const double xMu = static_cast<double>(i) / (kThroughW - 1), xR = static_cast<double>(j) / (kThroughH - 1);
+        const double rho = kSpan * xR, r = std::sqrt(rho * rho + double(kGround) * kGround);
+        const double dMin = kTop - r, dMax = rho + kSpan, d = dMin + xMu * (dMax - dMin);
+        const double mu = d < 1e-3 ? 1.0 : std::clamp((kSpan * kSpan - rho * rho - d * d) / (2 * r * d), -1.0, 1.0);
+        const Vec3 c = ThroughMarched(r, mu);
+        float* p = &t[(static_cast<size_t>(j) * kThroughW + static_cast<size_t>(i)) * 4];
+        p[0] = c.x, p[1] = c.y, p[2] = c.z;
+      }
+    });
+    return t;
+  }();
+  return table;
+}
+const std::vector<float>& ManyTable() {
+  static const std::vector<float> table = [] {  // (it reads the first through ThroughAt: made before it)
+    ThroughTable();
+    std::vector<float> t(static_cast<size_t>(kManyW) * kManyH * 4, 1.0f);
+    Jobs::Shared().Run(kManyH, [&](int j) {  // (a row each, on the worker threads)
+      for (int i = 0; i < kManyW; ++i) {
+        const double muS = 2.0 * i / (kManyW - 1) - 1, r = kGround + (double(kTop) - kGround) * j / (kManyH - 1);
+        const Vec3 c = ManyGathered(r, muS);
+        float* p = &t[(static_cast<size_t>(j) * kManyW + static_cast<size_t>(i)) * 4];
+        p[0] = c.x, p[1] = c.y, p[2] = c.z;
+      }
+    });
+    return t;
+  }();
+  return table;
+}
+float MoleculePhase(float mu) { return 3 / (16 * kPi) * (1 + mu * mu); }
+float HazePhase(float mu) {
+  const float g = kHazeForward;
+  return 3 / (8 * kPi) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * std::pow(1 + g * g - 2 * g * mu, 1.5f));
+}
+// As Scatter, from the tables: the light of a body of strength 1 toward `light` that the air sends toward the
+// eye along `d`, scattered once (with `hazeShare` of the haze's glow round the body) and many times over.
+Vec3 ScatterTables(Vec3 d, Vec3 light, float hazeShare = 1) {
+  const double r0 = kGround + kEye, mu = d.y;
+  const bool ground = MeetsGround(r0, mu);
+  const double far = ground ? DistanceDown(r0, mu) : DistanceOut(r0, mu);
+  const Vec3 molecules{kMolecules[0], kMolecules[1], kMolecules[2]};
+  const Dir body{light.x, light.y, light.z};
+  Vec3 through{1, 1, 1}, byMolecules{0, 0, 0}, byHaze{0, 0, 0}, many{0, 0, 0};
+  const int steps = 32;
+  for (int i = 0; i < steps; ++i) {
+    const double f0 = static_cast<double>(i) / steps, f1 = static_cast<double>(i + 1) / steps;
+    const double t0 = far * f0 * f0, t1 = far * f1 * f1, dt = t1 - t0, t = (t0 + t1) * 0.5;
+    const Dir p{d.x * t, r0 + d.y * t, d.z * t};
+    const double rp = std::sqrt(DotD(p, p));
+    const float height = static_cast<float>(rp - kGround);
+    const Air3 air = AirAt(height);
+    const Vec3 byM = molecules * air.molecules;
+    const float byH = kHaze * air.haze;
+    const Vec3 takes = ExtinctionAt(height);
+    const Vec3 stepThrough = ExpOf(takes * static_cast<float>(-dt));
+    const Vec3 share = Each(through, {(1 - stepThrough.x) / std::max(takes.x, 1e-12f), (1 - stepThrough.y) / std::max(takes.y, 1e-12f), (1 - stepThrough.z) / std::max(takes.z, 1e-12f)});
+    const double muS = DotD(p, body) / rp;
+    const Vec3 toBody = ThroughAt(rp, muS);
+    byMolecules += Each(share, Each(byM, toBody));
+    byHaze += Each(share, toBody) * byH;
+    many += Each(share, Each(byM + Vec3{byH, byH, byH}, ManyAt(rp, muS)));
+    through = Each(through, stepThrough);
+  }
+  const float m = Dot(d, light);
+  return byMolecules * MoleculePhase(m) + byHaze * (HazePhase(m) * hazeShare) + many;
+}
+// What of a body's light reaches the ground from where it stands, from the table.
+Vec3 ReachesTables(Vec3 light) {
+  light.y = std::max(light.y, 0.0f);
+  return ThroughAt(kGround + kEye, Normalize(light).y);
+}
+Vec3 ReachOf(Vec3 light, bool tables) { return tables ? ReachesTables(light) : Reaches(light); }
+
 // Where a body stands that goes round once a day in a circle tilted from overhead.
 Vec3 OnCircle(float angle, float tiltDegrees) {
   const float tilt = tiltDegrees * kPi / 180;
@@ -344,7 +674,7 @@ constexpr float kMoonHaze = 0.2f;  // of the glow the haze would make around the
 // Everything of the light at that hour but how bright it is against noon. `strength`: what the
 // air's light is multiplied by so that the sky has the brightness the rest of the picture is made
 // for. `noonReach`: what the air leaves of the noon sun.
-SkyLight Parts(float hours, float strength, Vec3 noonReach) {
+SkyLight Parts(float hours, float strength, Vec3 noonReach, bool tables = false) {
   const float a = (hours - 6) / 12 * kPi;
   SkyLight s;
   s.body = OnCircle(a, kSunTilt);
@@ -355,17 +685,17 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach) {
   // each body's light in the air; the moon's by how much of it is lit as seen from here
   const float moonLit = (1 - Dot(s.body, s.moonPlace)) * 0.5f;
   // (the sun's light in the air is let go as the sun sinks far below the horizon: the sum here knows
-  // no shadow of the planet and would leave a brown glow all night)
-  s.sunSky = Vec3{1, 1, 1} * (strength * Smooth(-0.30f, -0.08f, h));
+  // no shadow of the planet and would leave a brown glow all night; the tables know it)
+  s.sunSky = Vec3{1, 1, 1} * (strength * (tables ? 1.0f : Smooth(-0.30f, -0.08f, h)));
   s.moonSky = kMoonTint * (strength * kMoonLight * moonLit);
   s.night = Smooth(-0.05f, -0.27f, h);
 
   // the fitted sky: overhead, low all around away from the body, and what there is more near the body
-  const bool sunInAir = h > -0.33f, moonInAir = s.moonPlace.y > -0.1f;
+  const bool sunInAir = tables || h > -0.33f, moonInAir = tables || s.moonPlace.y > -0.1f;
   auto sky = [&](Vec3 d) {
     Vec3 c{0, 0, 0};
-    if (sunInAir) c += Scatter(d, s.body) * s.sunSky.x;
-    if (moonInAir) c += Each(Scatter(d, s.moonPlace, kMoonHaze), s.moonSky);
+    if (sunInAir) c += (tables ? ScatterTables(d, s.body) : Scatter(d, s.body)) * s.sunSky.x;
+    if (moonInAir) c += Each(tables ? ScatterTables(d, s.moonPlace, kMoonHaze) : Scatter(d, s.moonPlace, kMoonHaze), s.moonSky);
     return c;
   };
   s.moon = h < -0.01f;
@@ -391,12 +721,12 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach) {
   auto against = [&](Vec3 reach) { return Vec3{reach.x / noonReach.x, reach.y / noonReach.y, reach.z / noonReach.z}; };
   if (s.moon) {
     const float up = Smooth(-0.03f, 0.05f, s.moonPlace.y);
-    s.color = Each(against(Reaches(s.moonPlace)), kMoonTint) * (kMoonLight * moonLit * up);
+    s.color = Each(against(ReachOf(s.moonPlace, tables)), kMoonTint) * (kMoonLight * moonLit * up);
   } else {
-    s.color = Each(against(Reaches(s.body)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.02f, 0.03f, h);
+    s.color = Each(against(ReachOf(s.body, tables)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.02f, 0.03f, h);
   }
   // the sun's disc: far brighter than anything else, the colour the air leaves it
-  s.sunDisc = Reaches(s.body) * 40.0f;
+  s.sunDisc = ReachOf(s.body, tables) * 40.0f;
   // on the clouds, some 3 km up, the sun sets about two degrees later than on the ground: lit in its
   // last colour (taken from just over the horizon) while it is still above theirs
   if (s.moon && h < -0.07f) {
@@ -405,7 +735,7 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach) {
     Vec3 high = s.body;
     high.y = std::max(high.y, 0.02f);
     high = Normalize(high);
-    s.cloudSun = Each(against(Reaches(high)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.07f, 0.02f, h);
+    s.cloudSun = Each(against(ReachOf(high, tables)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.07f, 0.02f, h);
   }
   // (a light from the horizon itself would throw shadows without end: it is taken from a little higher)
   Vec3 from = lit;
@@ -421,14 +751,24 @@ float GroundLight(const SkyLight& s) {
 
 }  // namespace
 
-SkyLight SkyAt(float hours, float cloudCover) {
+SkyLight SkyAt(float hours, float cloudCover, bool tables) {
   // once: the strength at which the noon sky overhead is as bright as the picture is made for, what
   // the air leaves of the noon sun, and how much light there is at noon
   static const Vec3 noonSun = OnCircle(kPi * 0.5f, kSunTilt);
   static const float strength = 0.27f / Brightness(Scatter({0, 1, 0}, noonSun));
   static const Vec3 noonReach = Reaches(noonSun);
   static const float noon = GroundLight(Parts(12, strength, noonReach));
-  SkyLight s = Parts(hours, strength, noonReach);
+  float strengthNow = strength, noonNow = noon;
+  Vec3 reachNow = noonReach;
+  if (tables) {  // (the same, from the tables: the noon sky overhead as bright as without them)
+    static const float strengthTables = 0.27f / Brightness(ScatterTables({0, 1, 0}, noonSun));
+    static const Vec3 noonReachTables = ReachesTables(noonSun);
+    static const float noonTables = GroundLight(Parts(12, strengthTables, noonReachTables, true));
+    strengthNow = strengthTables;
+    reachNow = noonReachTables;
+    noonNow = noonTables;
+  }
+  SkyLight s = Parts(hours, strengthNow, reachNow, tables);
   // clouds: white in the falling light; the more of them, the more the sky's light is theirs, grey
   s.cover = std::clamp(cloudCover, 0.0f, 1.0f);
   s.cloudLight = s.color * 1.25f;
@@ -439,7 +779,7 @@ SkyLight SkyAt(float hours, float cloudCover) {
     s.zenith = s.zenith * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
     s.horizon = s.horizon * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
   }
-  s.daylight = std::clamp(GroundLight(s) / noon, 0.0f, 1.0f);
+  s.daylight = std::clamp(GroundLight(s) / noonNow, 0.0f, 1.0f);
   // the eye opens as the light goes, but not all the way: dusk and night stay darker than day
   s.exposure = std::pow(1 / std::max(s.daylight, kDarkest), 0.72f);
   return s;
@@ -484,7 +824,69 @@ bool Sky::Init(std::string* error) {
   pd.samples = gSceneSamples;
   pd.alphaWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
-  return static_cast<bool>(pipeline_);
+  if (!pipeline_) return false;
+  {  // the sky from tables (BuildTables): the same pass reading the sky's view, and that view's sum
+    std::string why;
+    const std::string tables = std::string("#define SKY_TABLES 1\n") + kViewShaderBlock + kShader;
+    pd.name = "sky, from tables";
+    pd.vertexSource = pd.pixelSource = tables;
+    tablesPipeline_ = device_->CreatePipeline(pd, &why);
+    const std::string view = std::string(kViewShaderBlock) + kViewTableShader;
+    gfx::ComputeDesc cd;
+    cd.source = view;
+    cd.name = "sky: its view from the tables";
+    cd.entry = "CS";
+    if (tablesPipeline_) viewTable_ = device_->CreateCompute(cd, &why);
+    if (!tablesPipeline_ || !viewTable_) fprintf(stderr, "render: the sky from tables cannot be used (%s)\n", why.c_str());
+  }
+  return true;
+}
+
+bool Sky::BuildTables(const View& view, const SkyLight& sky) {
+  tablesNow_ = false;
+  if (!viewTable_ || !tablesPipeline_) return false;
+  if (!skyView_) {  // the air's tables, once (on the processor), and the target of the sky's view
+    const std::vector<float>& through = ThroughTable();
+    const std::vector<float>& many = ManyTable();
+    gfx::TextureDesc td;
+    td.format = gfx::Format::RGBA32F;
+    td.width = kThroughW;
+    td.height = kThroughH;
+    td.data = through.data();
+    td.dataSize = through.size() * sizeof(float);
+    through_ = device_->CreateTexture(td);
+    td.width = kManyW;
+    td.height = kManyH;
+    td.data = many.data();
+    td.dataSize = many.size() * sizeof(float);
+    many_ = device_->CreateTexture(td);
+    gfx::TargetDesc vd;
+    vd.width = kViewW;
+    vd.height = kViewH;
+    vd.depth = 3;
+    vd.format = gfx::Format::RGBA16F;
+    vd.storage = true;
+    skyView_ = device_->CreateTarget(vd);
+    if (!through_ || !many_ || !skyView_) return false;
+  }
+  struct {
+    float sun[4], moon[4], sunStrength[4], moonStrength[4];
+  } k = {{sky.body.x, sky.body.y, sky.body.z, 0},
+         {sky.moonPlace.x, sky.moonPlace.y, sky.moonPlace.z, kMoonHaze},
+         {sky.sunSky.x, sky.sunSky.y, sky.sunSky.z, 0},
+         {sky.moonSky.x, sky.moonSky.y, sky.moonSky.z, 0}};
+  device_->SetPipeline(viewTable_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, &k, sizeof k);
+  device_->SetTexture(0, through_);
+  device_->SetTexture(1, many_);
+  device_->SetStorage(0, skyView_);
+  device_->Dispatch((kViewW + 7) / 8, (kViewH + 7) / 8, 1);
+  device_->SetStorage(0, {});
+  device_->SetTexture(0, {});
+  device_->SetTexture(1, {});
+  tablesNow_ = true;
+  return true;
 }
 
 void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky, gfx::Texture clouds) {
@@ -521,13 +923,18 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   four(pc.moonPlace, sky.moonPlace, 0);
   four(pc.starAxis, axis, 0);
   four(pc.cloudLight, sky.cloudLight, clouds ? 1.0f : 0.0f);
-  device_->SetPipeline(pipeline_);
+  // (the sky from tables when they were built this frame for a computed sky)
+  const bool fromTables = tablesNow_ && view.constants.skyZenith[3] > 0.5f;
+  tablesNow_ = false;
+  device_->SetPipeline(fromTables ? tablesPipeline_ : pipeline_);
+  if (fromTables) device_->SetTexture(2, skyView_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &pc, sizeof pc);
   if (mapSky) device_->SetTexture(kEnvironmentSlot, mapSky);
   device_->SetTexture(1, clouds);
   device_->Draw(3);
   device_->SetTexture(1, {});
+  if (fromTables) device_->SetTexture(2, {});
 }
 
 }  // namespace render
