@@ -314,13 +314,19 @@ bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
 }
 
 // A structure enters / leaves the occupancy grid.
-void OccupyStructure(Sim& sim, Unit* u) {
+// Unit::ExecuteOccupyGround 0x6a7770: the footprint's cells at the unit's place go on in the occupancy grid. It leaves
+// the "occupies ground" byte +0x560 alone (no write to it in 0x6a7770): Unit::Unit sets that after its call (0x6a5f71).
+void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
-  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+}
+void OccupyStructure(Sim& sim, Unit* u) {
+  if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
+  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
+  ExecuteOccupyGround(sim, u);
   u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
@@ -3338,7 +3344,14 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
-        if (Alive(u)) OccupyStructure(sim, u);
+        // 0x5f85f2..0x5f85f5: the builder's ExecuteOccupyGround has no life test and leaves its +0x560 as it is. So a
+        // builder on its way out whose +0x560 was cleared (TransferUnit, 0x7470a2) keeps its cells held for good: its
+        // queue is cleared in ~Unit (0x6a6c66) before ReleaseOccupyGround (0x6a6de3), which then does nothing. Seen: MP3
+        // 4036, army 3's units go to army 1; the T1 extractor 0x300008, upgrading into 0x300033, becomes 0x1000a2. The
+        // original's cell (442, 69) stays held, and at 4450 army 1's tank 0x10003a cannot take the straight way to
+        // (442, 68) past it (probe mp3_reach: its corridor test to (442, 68) fails, (443, 68) is taken); ours had freed
+        // the cell with the upgrade's release.
+        ExecuteOccupyGround(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
