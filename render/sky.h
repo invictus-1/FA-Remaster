@@ -44,6 +44,9 @@ struct SkyLight {
   // The sun's (or moon's) light on the volumetric clouds (clouds.h): at their height the sun is still up
   // a little after it has set for the ground, in the colour its long way through the air leaves it.
   Vec3 cloudSun;
+  // The clouds' grey the fitted sky is taken toward (its brightness, and how much of the sky it takes), for
+  // the sky from tables to grey its view as the fit is (view.h, ComputedSky).
+  float grey = 0, greyShare = 0;
 };
 
 // The light at that hour (0..24; 6 sunrise, 12 noon, 18 sunset). The sun rises in the east (+x)
@@ -73,6 +76,8 @@ class Sky {
   // the air itself are made the first time (on the processor). False where it cannot be done (Draw then
   // works the sky out as without it).
   bool BuildTables(const View& view, const SkyLight& sky);
+  // That view (three slices, view.h's SkyFromTable reads it at kSkyTableSlot); none before BuildTables.
+  gfx::Texture SkyView() const { return skyView_; }
 
  private:
   gfx::Device* device_;
