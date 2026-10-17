@@ -218,6 +218,9 @@ class Unit : public Entity {
   std::vector<class BuilderArm*> builderArms;
   // formation (Unit::UpdateInfoCache, formations.md 2.5)
   struct Formation* form = nullptr;  // u+0x580
+  // keeps u+0x580's formation alive until UpdateInfoCache writes the field again: the formation of a command the unit
+  // let go of lives on with the command object (deleted at a beat's end), and u+0x580 still points at it
+  std::shared_ptr<struct Formation> formHold;
   int formPathDelay = 1;             // u+0x58c
   uint32_t formLeader = 0;           // u+0x584 (entity handle)
   Vec3 formSlot;                     // u+0x59c

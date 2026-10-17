@@ -912,7 +912,10 @@ void FormationRemoveUnit(UnitCommand& c, Unit* u) {
     }
   uint32_t h = EntityRef(u);
   F.units.erase(std::remove(F.units.begin(), F.units.end(), h), F.units.end());
-  if (u->form == &F) u->form = nullptr;
+  // (u->form, u+0x580, stays: only Unit::UpdateInfoCache 0x6a9810 writes it, in the unit's MotionTick. Seen (MP1 1778):
+  // army 6's four engineers on a Guard with a formation get a Move with clear from the command stream; the
+  // original's record of that beat already lists the Move but still has u+0x580 set; it is null from the next
+  // beat, after their UpdateInfoCache. Ours had cleared it with the queue. u->formHold keeps the object alive.)
   if (F.units.empty()) {
     F.released = true;
     c.form.reset();
@@ -968,19 +971,25 @@ bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
   return g && g->atGoal;
 }
 
-Formation* GetFormation(Sim& sim, Unit* u) {
-  // Unit::GetFormation 0x6a9720: an ENGINEER (u+0x689) skips the guard branch and has its command's formation
-  // only: a commander walking to the factory it assists is not in that factory's guard formation
-  if (u->guardedId && !u->isEngineer) {  // the guarded unit's guard formation (G+0x520), not while GuardBusy
+namespace {
+// Unit::GetFormation 0x6a9720 (read): a guarding unit that is not an ENGINEER (u+0x689) has the guarded unit's guard
+// formation (G+0x520; none while GuardBusy, IsUnitState 0x1f); anything else its head command's formation (cmd+0x118)
+// when that holds it (vt+0x40(u, 1)). So a commander walking to the factory it assists is not in that factory's guard
+// formation.
+std::shared_ptr<Formation> FormationOf(Sim& sim, Unit* u) {
+  if (u->guardedId && !u->isEngineer) {
     if (u->unitStates.count("GuardBusy")) return nullptr;
     Unit* G = UnitOf(sim, u->guardedId);
-    return G && G->guardForm ? G->guardForm.get() : nullptr;
+    return G ? G->guardForm : nullptr;
   }
   if (u->commands.empty()) return nullptr;
   UnitCommand& c = *u->commands.front();
-  if (c.form && Contains(*c.form, u, true)) return c.form.get();
+  if (c.form && Contains(*c.form, u, true)) return c.form;
   return nullptr;
 }
+}  // namespace
+
+Formation* GetFormation(Sim& sim, Unit* u) { return FormationOf(sim, u).get(); }
 
 int FormationPathDelay(Sim& sim, Unit* u) {
   Formation* F = GetFormation(sim, u);
@@ -1009,11 +1018,13 @@ void FormationsTick(Sim& sim) {
 
 void UpdateInfoCache(Sim& sim, Unit* u) {
   if (!Mobile(u)) return;
-  Formation* F = GetFormation(sim, u);
+  std::shared_ptr<Formation> Fs = FormationOf(sim, u);
+  Formation* F = Fs.get();
   FormGroup* g = nullptr;
   if (F && FormationIsForm(*F) && Contains(*F, u, false)) {
     g = GroupOf(*F, u);
     u->form = F;
+    u->formHold = Fs;
     auto it = g->nodes.find(u->id);
     u->formPathDelay = 1;
     if (!u->guardedId && it != g->nodes.end() && it->second.row > 0)
@@ -1028,6 +1039,7 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
     u->formAllAtGoal = all;
   } else {
     u->form = nullptr;
+    u->formHold.reset();
     u->formPathDelay = 1;
     u->formLeader = 0;
     u->formSlot = u->position;
