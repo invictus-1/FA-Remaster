@@ -1477,6 +1477,7 @@ void World::Render() {
   }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
     Stage("bounce light");
+    lights.Bind();  // (what the rays meet takes the small lights too)
     bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
   }
   CpuTimes::Part("particles and bands moved");
@@ -1660,6 +1661,7 @@ void World::Render() {
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
     Stage("ray tracing check view");
+    lights.Bind();
     post.shown = rays.Check(view, terrain.NormalMap(), terrain.GroundColours());
   }
   if (temporalNow_ && !post.shown) {  // FSR 3: up to the screen's size from this frame and the ones before

@@ -36,6 +36,10 @@ RaytracingAccelerationStructure scene : register(t33);
 Texture2D rayInstances : register(t37);
 Texture2D rayGroundNormals : register(t38);
 Texture2D rayGroundColours : register(t39);
+#ifndef SMALL_LIGHTS_DECLARED
+#define SMALL_LIGHTS_DECLARED 1
+StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
+#endif
 float3 RayLinear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLinear)
 float4 RayInstance(uint i) { return rayInstances.Load(int3(i % 1024, i / 1024, 0)); }
 uint RayHash(uint x) {
@@ -106,10 +110,45 @@ void RaySurfaceAt(uint instance, float3 p, float3 d, float2 map, out float3 albe
 }
 // The sun's light as the lit surfaces take it (lighting.h: the map's colour and multiplier, the sun's strength).
 float3 RaySunLight() { return RayLinear(sunColor) * (lightMultiplier * modern.x); }
+// The small lights (lights.h) on what a ray met, as lighting.h's SmallLights lights a surface without its highlights:
+// those of the square of ground it is over (the first `most` of them), a lamp's beam by its cone (not by the lamp's
+// shadow map). Times the albedo.
+float3 RaySmallLights(float3 p, float3 n, uint most) {
+  float3 small = 0;
+  [branch] if (lightGrid.w > 0.5) {
+    float2 g = (p.xz - lightGrid.xy) * lightGrid.z;
+    [branch] if (all(g >= 0) && all(g < lightGridSize.xy)) {
+      float4 square = lightData[uint(g.y) * uint(lightGridSize.x) + uint(g.x)];
+      uint first = uint(square.x), count = min(uint(square.y), most);
+      for (uint s = 0; s < count; ++s) {
+        uint at = first + s;
+        uint light = uint(lightData[at >> 2][at & 3]);
+        float4 where = lightData[uint(lightGridSize.z) + light * 4];
+        float3 toLight = where.xyz - p;
+        float far2 = dot(toLight, toLight) / (where.w * where.w);
+        if (far2 >= 1) continue;
+        float3 l = normalize(toLight);
+        float nl = saturate(dot(n, l));
+        float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        float4 tint = lightData[uint(lightGridSize.z) + light * 4 + 1];
+        float4 beam = lightData[uint(lightGridSize.z) + light * 4 + 2];
+        if (beam.w > -1.5) {
+          float off = sqrt(saturate((1 - dot(-l, beam.xyz)) / max(1 - beam.w, 1e-4)));
+          float inside = 1 - smoothstep(0.7, 1.0, off);
+          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside + fade * tint.w * saturate(1 - far2 * 25);
+          nl = saturate(dot(n, l) + 0.6 * inside);
+        }
+        small += tint.rgb * (nl * fade);
+      }
+    }
+  }
+  return small;
+}
 // What a ray met there, lit as the surfaces light themselves (lighting.h's ModernLight, without its highlights): the sun
 // by a ray toward it, round about by the probes (bounce.h, where they are on and reach) or else the sky's fitted light,
-// and the map's fill light.
-float3 RayLitAt(float3 p, float3 n, float3 albedo, uint seed) {
+// the map's fill light and the small lights (`mostLights` of a square's at most: lighting.h takes 48; reflections 8,
+// each pixel's ray loops over them: in a crowd of 16 lit units at night at 1440p, 8 cost 0.05 ms a frame, all 0.28).
+float3 RayLitAt(float3 p, float3 n, float3 albedo, uint seed, uint mostLights) {
   float3 around = SkyAmbient(n);
   [branch] if (bounce.x > 0.5) {
     float inside;
@@ -117,7 +156,8 @@ float3 RayLitAt(float3 p, float3 n, float3 albedo, uint seed) {
     around = lerp(around, gathered / max(modern.y, 1e-4), inside);
   }
   float3 fill = RayLinear(shadowFill) * 0.5;
-  return albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + (around + fill) * modern.y);
+  return albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + (around + fill) * modern.y +
+                   RaySmallLights(p, n, mostLights));
 }
 )hlsl";
 

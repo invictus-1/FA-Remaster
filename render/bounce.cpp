@@ -55,7 +55,7 @@ RWTexture2D<float4> rayResults : register(u0);
   } else if (hit) {
     float3 p = from + d * t, albedo, n;
     RaySurfaceAt(instance, p, d, map.xy, albedo, n);
-    radiance = RayLitAt(p, n, albedo, seed);  // (round about by the probes of the frame before: light bounces again)
+    radiance = RayLitAt(p, n, albedo, seed, 48);  // (round about by the probes of the frame before: light bounces again)
   } else {
     t = map.w;
     radiance = (skyZenith.w > 0.5 ? ComputedSky(d) : RayLinear(mapSkyCube.SampleLevel(samplerLinear, d, 3).rgb)) * modern.y;

@@ -351,7 +351,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       if (RayTrace(i.world + float3(0, 0.05, 0), calm, 0.05, rayEffects.y, 0x01, seed + ray, t, instance)) {
         float3 hit = i.world + calm * t, hitAlbedo, n;
         RaySurfaceAt(instance, hit, calm, rayEffects.zw, hitAlbedo, n);
-        c = ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + ray), hit);
+        c = ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + ray, 8), hit);  // (8 of the small lights at most: all would be dear)
       }
       mirrored += c * 0.5;
     }

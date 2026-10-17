@@ -216,7 +216,7 @@ Mac", and every ray-traced effect keeps a fallback without it.
        a building, and the places round it all but pass it over. The grid's spacing follows the zoom: 4, 8, 16
        or 32 units for a camera nearer than 30, 60, 120 or farther (each step a fifth past its line), so from
        far out it covers the view.
-     - Open: small lights (explosions, lamps) not yet in what the rays meet; the minimap's frame has none.
+     - Open: the minimap's frame has none. (Small lights in what the rays meet: done, below.)
    - **Reflections: first version done** (2026-10-17): `World::rayReflections` (viewer `--ray-reflections`;
      modern look, where the device has ray tracing). The lit surfaces' shaders (the ground's, the models', the
      water's) are built with ray tracing in them only then (`gRayShaders`, view.h, set before the world is
@@ -241,6 +241,17 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - Open: what the rays meet is coarse (a colour per model, no normals for models, the ground every fourth
        height), fine for water and wet ground, too coarse for a sharp chrome mirror; the minimap's frame has
        none.
+   - **The small lights in what the rays meet** (2026-10-17): explosions, shots and lamps with their beams
+     (`RaySmallLights`, as lighting.h's `SmallLights` without highlights or the lamps' shadow maps), so the
+     probes take in light thrown back from a lamp-lit patch of ground, and reflections show what the lights
+     light. The probes' rays and the check view take all of a square's lights (48 at most); reflections the
+     first 8 (each pixel's ray loops over them). Cost at 1440p, a crowd of 16 lit commanders at night, by the
+     lowest times: the probes +0.01 ms; reflections +0.05 ms (all of the lights would be +0.28). The effect is
+     small, as light thrown back from dark grass is: in that crowd the legs and undersides a little brighter
+     (mean +0.23 in 255); on the water at night nothing to see where the screen's own mirror shows the place.
+     - Open: the probes keep 0.97 of their light each frame, so an explosion's bounced share comes in over
+       about half a second and lingers as long (the flash itself lights at once); faster blending where the
+       light changes much (as DDGI does) risks flicker from 64 rays a probe: left for when it shows.
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units.
 
