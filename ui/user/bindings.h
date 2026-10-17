@@ -33,5 +33,8 @@ void PushUserClassTable(lua_State* L, const char* cppClass);
 void ReportStubCalls();
 // Log every engine function of the user state as `built` or `stub`, and the totals.
 void ListBindings();
+// The engine functions put into a state after its stubs, by the shared script core (the categories'
+// functions with a game's blueprints): counted as built when they are no longer the stub.
+void NoteRealGlobals(lua_State* L);
 
 }  // namespace moho::ui

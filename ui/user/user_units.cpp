@@ -763,6 +763,12 @@ int l_GetBlueprint(lua_State* L) {
   PushBlueprint(L, CheckUnit(L, 1)->view.blueprint);
   return 1;
 }
+// GetBlueprint(unit) (FA exe 0x8c59b0, the user state's own): one unit, its blueprint's table.
+int l_GetBlueprintGlobal(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "blueprint = GetBlueprint()", 1, lua_gettop(L));
+  PushBlueprint(L, CheckUnit(L, 1)->view.blueprint);
+  return 1;
+}
 int l_GetArmy(lua_State* L) {
   lua_pushnumber(L, CheckUnit(L, 1)->view.army);
   return 1;
@@ -2908,6 +2914,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetIsAutoMode", l_ListSwitch<&UnitStateView::autoMode>);
   SetGlobal(L, "GetIsAutoSurfaceMode", l_ListSwitch<&UnitStateView::autoSurfaceMode>);
   SetGlobal(L, "GetAttachedUnitsList", l_GetAttachedUnitsList);
+  SetGlobal(L, "GetBlueprint", l_GetBlueprintGlobal);
   SetGlobal(L, "GetAssistingUnitsList", l_GetAssistingUnitsList);
 
   const char* cls = "UserUnit";

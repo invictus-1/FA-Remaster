@@ -234,6 +234,31 @@ void ReportStubCalls() {
   }
 }
 
+void NoteRealGlobals(lua_State* L) {
+  for (const auto& b : kBindings) {
+    if (*b.cls || Built().count(b.name)) continue;
+    lua_pushstring(L, b.name);
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    if (lua_iscfunction(L, -1) && lua_tocfunction(L, -1) != l_Stub) Built().insert(b.name);
+    else if (lua_isfunction(L, -1) && !lua_iscfunction(L, -1)) Built().insert(b.name);  // (a script's own)
+    lua_pop(L, 1);
+  }
+  // A category's operators are its metatable's, the core's (not moho.EntityCategory's stubs).
+  const int top = lua_gettop(L);
+  lua_pushstring(L, "ParseEntityCategory");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_pushstring(L, "ALLUNITS");
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_getmetatable(L, -1)) {
+    for (const char* op : {"__add", "__mul", "__sub"}) {
+      lua_pushstring(L, op);
+      lua_rawget(L, -2);
+      if (lua_isfunction(L, -1)) Built().insert(std::string("EntityCategory:") + op);
+      lua_pop(L, 1);
+    }
+  }
+  lua_settop(L, top);
+}
+
 void ListBindings() {
   int built = 0, total = 0;
   for (const auto& b : kBindings) {

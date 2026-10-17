@@ -36,6 +36,7 @@
 #include <cstdlib>
 
 #include "sim/sim_view.h"
+#include "user/bindings.h"
 #include "user/user_state.h"
 #include "sound/sound_system.h"
 
@@ -922,6 +923,7 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   interfaceBlueprints_->fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
   interfaceBlueprints_->CopyToSim(R, userState);
   RegisterCategoryBindings(userState, interfaceBlueprints_.get());
+  NoteRealGlobals(userState);
   Logf(LogLevel::Info, "moho64ui: session: %zu blueprints in the interface's state, %.2f s", interfaceBlueprints_->Count(),
        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
   return true;

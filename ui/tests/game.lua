@@ -355,6 +355,7 @@ local function run()
     check("SelectUnits(nil) selects nothing", GetSelectedUnits(), nil)
     check("a skirmish can be restarted (SessionCanRestart, FA exe 0x8981b0)", SessionCanRestart(), true)
     check("GetArmyScore gives nothing, as the original's empty one", GetArmyScore(1), nil)
+    check("GetBlueprint(unit): the unit's blueprint (FA exe 0x8c59b0)", GetBlueprint(cdr) == cdr:GetBlueprint(), true)
     -- clicks in the world: a click on a unit selects it, a double click all of its kind on screen
     here = cdr:GetPosition()
     cam:SnapTo(here, nil, 80)
