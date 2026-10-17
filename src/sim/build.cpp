@@ -1944,10 +1944,18 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
     if (Mobile(G)) return U->position;  // (no formation yet)
   }
   if (auto c = g.cmd.lock()) {
+    // CUnitCommand::GetPosition 0x6e8a30 (called at 0x612428): a command of more than one unit with a formation
+    // (cmd+0x118) gives the unit's own formation cell (the formation's vt+0x1c); otherwise the target's position
+    // (0x5e2a90) in the unit's footprint cell. Then the cell's centre (COORDS_ToWorldPos 0x50b0f0). Seen: MP3 3941,
+    // eleven army-1 engineers guarding one ground point in a formation; the original sends each to its own cell,
+    // ours sent all of them to the point's cell (315, 94).
+    Vec3 p = c->pos;
+    if (!FormationGoal(sim, *c, U, &p) && c->targetId)
+      if (Entity* e = sim.FindEntity(c->targetId)) p = e->position;
     const NamedFootprint& fp = Fp(U);
-    int cx = static_cast<int>(std::nearbyint(c->pos.x - fp.sizeX * 0.5f));
-    int cz = static_cast<int>(std::nearbyint(c->pos.z - fp.sizeZ * 0.5f));
-    return Vec3{cx + fp.sizeX * 0.5f, c->pos.y, cz + fp.sizeZ * 0.5f};
+    int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+    int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+    return Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
   }
   return g.pos;
 }
