@@ -379,7 +379,14 @@ void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
 
 void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   Tables(sim).Cancel(&n.pf);
-  n.path.clear();
+  // (0x5ad9c0 leaves the path vector, +0x14..+0x20, as it is: the cells of the last path stay until a search result
+  // replaces them, and RequestPath's waiting-follower branch 0x5ae06e..0x5ae08b appends its goal corner behind them
+  // (0x5afec0 is push_back). Seen in the oracle (probe mp2_2056): MP2 army 0's Mantis 0x1a, in a guard formation,
+  // still holds the cell (337, 403) of its last move after SetGoal at 2053; RequestPath at 2054 makes it
+  // [(337, 403), (333, 406)] (state 6). With two cells the formation block does not re-path; TryAdvance asks for a
+  // continuation, whose 5 cells are spliced in (+0x5c = 4), so the first real waypoint at 2056 has speed-through
+  // 0 (splice count >= 0). Ours had emptied the path, the follower's one-cell path made it re-path in full (no
+  // splice) and the waypoint had 1.)
   n.state = 0;
   n.wait = 0;
   // 0x5ad9c0: the target is the cell the unit stood in at its last Execute (+0x28 := +0x24)

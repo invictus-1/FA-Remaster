@@ -126,6 +126,9 @@ void AirInit(Sim& sim, Unit* u);
 float AirSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z, float y);
 // One tick (CUnitMotion::MotionTick, air path, then the navigator's arrival test).
 void AirMotionTick(Sim& sim, Unit* u);
+// The air navigator's formation following (UpdateCurrentTargetFromFormation 0x5a4d80), as its Execute runs it in the
+// army stage: in the motion pass before the unit's UpdateInfoCache and MotionTick.
+void AirFormationFollow(Sim& sim, Unit* u);
 // The navigator's SetGoal: fly to the cell of `goal`; takes effect at `tick`. layer 1 (Land) is a
 // landing move (NewMoveTask with goal layer Land): the spot goes through PrepareMove and the
 // aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.
@@ -143,8 +146,9 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
 void AirSetTargetFacing(Sim& sim, Unit* u, Vec3 p, Vec3 dir, int layer);
 // The terrain samples [x0, x1] x [z0, z1] changed (FlattenMapRect): refresh the look-ahead min/max pyramid.
 void AirTerrainChanged(const TerrainMap* map, int x0, int z0, int x1, int z1);
-// Unit::PrepareMove: a free landing spot near *pos (false: none found).
-bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos);
+// Unit::PrepareMove: a free landing spot near *pos (false: none found), its cell outside `excl` (x0, z0, x1, z1;
+// null or empty = none), rings `spacing` cells apart (0 = 2 x the squared footprint).
+bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl = nullptr, int spacing = 0);
 // Unit::PrepareMove for a ground unit (its own footprint): a free spot near *pos whose cell does
 // not overlap `excl` (x0, z0, x1, z1; empty = none). false: none found.
 // Unit::PrepareMove 0x62b780 (air_nav.md 7.1): spacing 0 = 2 x the footprint size; the exclusion test is closed.

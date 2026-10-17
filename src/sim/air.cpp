@@ -659,16 +659,24 @@ bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps
   return NoBlockingUnits(sim, u, x0, z0, x0 + S, z0 + S);
 }
 
-// Unit::PrepareMove 0x62b780 (spacing 0, no exclusion rect)
-bool PrepareMove(Sim& sim, Unit* u, Vec3* pos) {
+// Unit::PrepareMove 0x62b780 for a flyer: the squared footprint, the exclusion rect (closed test on the candidate's
+// 1x1 cell, 0x62b98c..0x62b9e7: it follows the CanFly branch, so a flyer is tested against it as a ground unit is),
+// the ring step `spacing` or 2 x the footprint size (0x62b7c6..0x62b7fd)
+namespace {
+bool Excluded(const float* e, int cx, int cz) {
+  return e && e[2] > e[0] && e[3] > e[1] && static_cast<float>(cx) <= e[2] && e[0] <= static_cast<float>(cx + 1) &&
+         static_cast<float>(cz) <= e[3] && e[1] <= static_cast<float>(cz + 1);
+}
+}  // namespace
+bool PrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl = nullptr, int spacing = 0) {
   const AirBp& b = *A(u).bp;
   int S = std::max(b.footprintX, b.footprintZ);
   int caps = kLand;
   const TerrainMap* map = sim.map();
   if (InCategory(sim, u, "CANLANDONWATER") && Elevation(map, pos->x, pos->z) < WaterOrNone(map)) caps |= kWater;
   int cx = static_cast<int>(std::nearbyint(pos->x - S * 0.5f)), cz = static_cast<int>(std::nearbyint(pos->z - S * 0.5f));
-  if (CanLandAt(sim, u, cx, cz, *pos, S, caps)) return true;
-  int step = 2 * S;
+  if (!Excluded(excl, cx, cz) && CanLandAt(sim, u, cx, cz, *pos, S, caps)) return true;
+  int step = spacing > 0 ? spacing : 2 * S;
   int tested = 0;
   for (int r = 1;; ++r) {
     bool found = false;
@@ -680,7 +688,7 @@ bool PrepareMove(Sim& sim, Unit* u, Vec3* pos) {
         ++tested;
         int x = cx + step * i, z = cz + step * j;
         Vec3 w{x + S * 0.5f, 0.0f, z + S * 0.5f};
-        if (CanLandAt(sim, u, x, z, w, S, caps)) {
+        if (!Excluded(excl, x, z) && CanLandAt(sim, u, x, z, w, S, caps)) {
           float dx = w.x - u->position.x, dy = w.y - u->position.y, dz = w.z - u->position.z;
           float d = (dx * dx + dy * dy) + dz * dz;
           if (d < bestD) {
@@ -2099,9 +2107,9 @@ bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz) {  // as GroundSpotOkImpl
   return c != 0;
 }
 
-bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos) {
+bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl, int spacing) {
   if (!u->motion.air) return false;
-  return PrepareMove(sim, u, pos);
+  return PrepareMove(sim, u, pos, excl, spacing);
 }
 
 void AirStopHere(Sim& sim, Unit* u) {
@@ -2184,6 +2192,36 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   return p;
 }
 
+// CAiNavigatorAir::Execute 0x5a50d0 -> UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while
+// the leader steers. The navigator runs in the army stage, before the command stage gives goals and before the unit's
+// MotionTick: it reads the slot (u+0x59c), the leader (u+0x584) and the formation (u+0x580) as the unit's
+// UpdateInfoCache 0x6a9810 wrote them in its motion turn of the beat before, and a goal given in this beat's command
+// stage (SetGoal 0x5a4c60 sets the motion's target at once) overrides the slot until the next beat. Seen in MP1's
+// oracle: army 6's interceptor 0x60001b in a transport's guard formation has, at 1938, the slot ours wrote at 1937,
+// and at 1937 the guard's re-goal (884, 25.16, 507), the slot only from 1938. Ours ran it in the motion turn, after
+// UpdateInfoCache and after the goal: so the call stands before UpdateInfoCache in the motion pass.
+void AirFormationFollow(Sim& sim, Unit* u) {
+  if (!u->motion.air || u->fractionComplete < 1.0f) return;
+  AirMotion& a = A(u);
+  if (!(a.steering && a.inFormation) || u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation) ||
+      State(u, "Ferrying"))
+    return;
+  Formation* f = GetFormation(sim, u);
+  Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
+  Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
+  if (f && L && L != u) {
+    bool good = L->motion.air ? A(L).steering : LandNavStatus(L) == 2;
+    if (good) {
+      a.curTarget = u->formSlot;
+      SetTarget(sim, u, u->formSlot, Vec3{}, 0);
+    }
+  } else {
+    a.inFormation = false;
+    a.curTarget = a.goal;
+    SetTarget(sim, u, a.goal, Vec3{}, 0);
+  }
+}
+
 void AirMotionTick(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   {
@@ -2199,25 +2237,9 @@ void AirMotionTick(Sim& sim, Unit* u) {
   if (!m.air) AirInit(sim, u);
   AirMotion& a = A(u);
   if (u->fractionComplete < 1.0f) return;
-  // the navigator's SetGoal (steered from this beat's motion on)
+  // the navigator's SetGoal (steered from this beat's motion on; the formation slot of AirFormationFollow, taken
+  // before, gives way to it)
   if (a.pending && sim.tick() >= a.pendingTick) TakePendingGoal(sim, u);
-  // UpdateCurrentTargetFromFormation 0x5a4d80: follow the formation slot while the leader steers
-  if (a.steering && a.inFormation && !(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation)) && !State(u, "Ferrying")) {
-    Formation* f = GetFormation(sim, u);
-    Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
-    Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
-    if (f && L && L != u) {
-      bool good = L->motion.air ? A(L).steering : LandNavStatus(L) == 2;
-      if (good) {
-        a.curTarget = u->formSlot;
-        SetTarget(sim, u, u->formSlot, Vec3{}, 0);
-      }
-    } else {
-      a.inFormation = false;
-      a.curTarget = a.goal;
-      SetTarget(sim, u, a.goal, Vec3{}, 0);
-    }
-  }
   // CAiNavigatorAir::Execute 0x5a50d0, while it steers (status 2): a unit in category TARGETCHASER whose
   // destination entity is mobile and moved in the last beat (its transform against its previous one) takes the
   // entity's position as the motion's target again (UpdateCurrentTargetFromDestinationEntity 0x5a4ea0; the layer
