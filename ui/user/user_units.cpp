@@ -225,8 +225,7 @@ int l_GetSelectedUnits(lua_State* L) {
 // 0x1291519; read by the engine track, docs/engine-answers.md "ui 36"): not if it is dead, in the
 // state UnSelectable, not in SELECTABLE, being built and neither a FACTORY nor a CQUEMOV, or a POD
 // that moves and hangs on something (a docked drone). Used by the scripts' SelectUnits and
-// AddSelectUnits; the click and the box keep their own rules (SelectUnitsById: Chris selects a
-// building under construction in the original).
+// AddSelectUnits, and through CanSelectUnit by the mouse.
 bool IsSelectable(lua_State* L, const UserUnit* u) {
   if (u->gone || u->view.dead || !u->view.selectable || !InCategory(L, u, "SELECTABLE")) return false;
   if (u->view.beingBuilt && !InCategory(L, u, "FACTORY") && !InCategory(L, u, "CQUEMOV")) return false;
@@ -250,6 +249,14 @@ bool IsSelectable(lua_State* L, const UserUnit* u) {
     if (moves) return false;
   }
   return true;
+}
+// What the mouse may select (CWldSession::CanSelectUnit 0x865830, read 2026-10-16; notes in the ui
+// chat's scratchpad helper_selectable\findings.md): the click, the box and the double click all ask
+// it. A unit that may be selected (IsSelectable: so not a building under construction unless it is a
+// factory) and of the player's army. (Not built: its bypass by the console's UI_SelectAnything.)
+bool CanSelectUnit(lua_State* L, const UserUnit* u) {
+  Sim* sim = TheSim(L);
+  return sim && IsSelectable(L, u) && u->view.army == sim->focusArmy + 1;
 }
 void DropUnselectable(lua_State* L, std::vector<UserUnit*>* list) {
   list->erase(std::remove_if(list->begin(), list->end(), [L](const UserUnit* u) { return !IsSelectable(L, u); }), list->end());
@@ -313,10 +320,9 @@ int l_AddSelectUnits(lua_State* L) {
 // is putting up in place of the old one. INFERRED from what the engine's view gives: unfinished,
 // a structure, and made by a structure (a factory's units are mobile).
 bool BeingUpgraded(lua_State* L, Sim* sim, const UserUnit* u) {
-  if (!u->view.beingBuilt || !InCategory(L, u, "STRUCTURE")) return false;
-  UnitStateView s;
-  if (!UnitStateOf(*sim, u->view.id, &s) || s.creator == 0xffffffffu) return false;
-  auto it = Store(L).units.find(s.creator);
+  (void)sim;
+  if (!u->view.beingBuilt || !InCategory(L, u, "STRUCTURE") || u->view.creator == 0xffffffffu) return false;
+  auto it = Store(L).units.find(u->view.creator);
   return it != Store(L).units.end() && !it->second->gone && InCategory(L, it->second.get(), "STRUCTURE");
 }
 
@@ -2369,10 +2375,6 @@ int SelectionPriorityOf(lua_State* L, const UserUnit* u) {
   return priority;
 }
 
-// `byPriority`: of the units named, only those of the best selection priority among them are
-// taken (a box drawn over tanks, engineers and buildings selects the tanks; over engineers, the
-// commander and buildings: the engineers and the commander), as players know it from the
-// original. INFERRED: the original's code for it is not read; the numbers are the blueprints'.
 // (The original, CWldSession::DrawEconomyOverlay 0x858d80: the focus army's units in the camera's
 // view, E = (energyProduced - energyRequested) * 10 and M the same for mass, a unit left out when
 // both are 0. Ours are a second already: produced and consumptionPerSecond, as GetEconData gives
@@ -2400,53 +2402,143 @@ bool UnitPlace(lua_State* L, uint32_t id, float position[3], float orientation[4
   return true;
 }
 
-void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority) {
-  Sim* sim = TheSim(L);
-  if (!sim) return;
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add) {
   UnitStore& store = Store(L);
-  std::vector<UserUnit*> now, found;
+  std::vector<UserUnit*> now;
   if (add) now = store.selection;
   for (uint32_t id : ids) {
     auto it = store.units.find(id);
-    if (it == store.units.end()) continue;
-    UserUnit* u = it->second.get();
-    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
-    // (A unit still being built on something, a factory's unit on its pad, is not taken by a
-    // box or a click: it is selected once it is out, as Chris knows it from the original, 2026-10-13. A
-    // building under construction can be selected. INFERRED: told apart here as "being built and
-    // not a building"; the original's own test is not read.)
-    if (u->view.beingBuilt && !InCategory(L, u, "STRUCTURE")) continue;
-    found.push_back(u);
+    if (it == store.units.end() || !CanSelectUnit(L, it->second.get())) continue;
+    if (std::find(now.begin(), now.end(), it->second.get()) == now.end()) now.push_back(it->second.get());
   }
-  if (byPriority && found.size() > 1) {
-    int best = 1000;
-    std::vector<int> priority;
-    for (UserUnit* u : found) priority.push_back(SelectionPriorityOf(L, u)), best = std::min(best, priority.back());
-    std::vector<UserUnit*> kept;
-    for (size_t i = 0; i < found.size(); ++i)
-      if (priority[i] == best) kept.push_back(found[i]);
-    found.swap(kept);
-  }
-  for (UserUnit* u : found)
-    if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
   SetSelection(L, now);
 }
 
-bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add) {
+namespace {
+UserUnit* LiveUnit(lua_State* L, uint32_t id) {
+  auto it = Store(L).units.find(id);
+  return it == Store(L).units.end() || it->second->gone ? nullptr : it->second.get();
+}
+}  // namespace
+
+// The mouse's selection, as the original's (FA exe; notes: the ui chat's scratchpad
+// helper_selectable\findings.md).
+// A click (CWldSession::ReleaseDrag 0x865920) on the unit under the mouse: one that may not be
+// selected (or nothing) clears the selection, unless Shift or Ctrl is held (then nothing changes).
+// Ctrl: the player's units of its kind across the whole map, finished and alive (no other test);
+// with Shift as well, that kind leaves the selection if the unit is in it, else joins it. Shift:
+// the unit joins the selection or leaves it. Else it alone is selected.
+void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl) {
   Sim* sim = TheSim(L);
-  if (!sim) return false;
+  if (!sim) return;
   UnitStore& store = Store(L);
-  auto it = store.units.find(unit);
-  if (it == store.units.end() || it->second->gone || it->second->view.army != sim->focusArmy + 1) return false;
-  const std::string kind = it->second->view.blueprint;
-  std::vector<uint32_t> same;
-  for (uint32_t id : among) {
-    auto other = store.units.find(id);
-    if (other != store.units.end() && !other->second->gone && other->second->view.blueprint == kind) same.push_back(id);
+  UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
+  if (!u || !CanSelectUnit(L, u)) {
+    if (!shift && !ctrl) SetSelection(L, {});
+    return;
   }
-  if (std::find(same.begin(), same.end(), unit) == same.end()) same.push_back(unit);
-  SelectUnitsById(L, same, add);
+  std::vector<UserUnit*> now = store.selection;
+  const bool selected = std::find(now.begin(), now.end(), u) != now.end();
+  if (ctrl) {
+    std::vector<UserUnit*> kind;
+    for (auto& [id, o] : store.units)
+      if (!o->gone && !o->view.dead && !o->view.beingBuilt && o->view.army == sim->focusArmy + 1 && o->view.blueprint == u->view.blueprint)
+        kind.push_back(o.get());
+    if (!shift) {
+      SetSelection(L, kind);
+    } else if (selected) {
+      now.erase(std::remove_if(now.begin(), now.end(), [&](UserUnit* s) { return s->view.blueprint == u->view.blueprint; }), now.end());
+      SetSelection(L, now);
+    } else {
+      for (UserUnit* k : kind)
+        if (std::find(now.begin(), now.end(), k) == now.end()) now.push_back(k);
+      SetSelection(L, now);
+    }
+    return;
+  }
+  if (shift) {
+    if (selected) now.erase(std::find(now.begin(), now.end(), u));
+    else now.push_back(u);
+    SetSelection(L, now);
+    return;
+  }
+  SetSelection(L, {u});
+}
+
+// A box (CWldSession::DragRelease 0x863870, its pruning 0x863e20): of the units in it, those that
+// may be selected. With Shift they join the selection, or, when all of them are in it already,
+// they leave it. Without: a building being upgraded is passed over, and of the rest only those of
+// the best (lowest) General.SelectionPriority are the selection (FAF's patch 0x12914d1: a unit being
+// built with LOWSELECTPRIO counts as 6); none: the selection is cleared.
+void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift) {
+  Sim* sim = TheSim(L);
+  if (!sim) return;
+  std::vector<UserUnit*> in;
+  for (uint32_t id : ids) {
+    UserUnit* u = LiveUnit(L, id);
+    if (u && CanSelectUnit(L, u) && std::find(in.begin(), in.end(), u) == in.end()) in.push_back(u);
+  }
+  std::vector<UserUnit*> now = Store(L).selection;
+  if (shift) {
+    bool all = true;
+    for (UserUnit* u : in) all = all && std::find(now.begin(), now.end(), u) != now.end();
+    if (all) {
+      now.erase(std::remove_if(now.begin(), now.end(), [&](UserUnit* s) { return std::find(in.begin(), in.end(), s) != in.end(); }), now.end());
+    } else {
+      for (UserUnit* u : in)
+        if (std::find(now.begin(), now.end(), u) == now.end()) now.push_back(u);
+    }
+    SetSelection(L, now);
+    return;
+  }
+  int best = 1 << 30;
+  std::vector<std::pair<UserUnit*, int>> ranked;
+  for (UserUnit* u : in) {
+    if (BeingUpgraded(L, sim, u)) continue;
+    int priority = std::max(1, SelectionPriorityOf(L, u));
+    if (u->view.beingBuilt && InCategory(L, u, "LOWSELECTPRIO")) priority = 6;
+    ranked.push_back({u, priority});
+    best = std::min(best, priority);
+  }
+  std::vector<UserUnit*> chosen;
+  for (const auto& [u, priority] : ranked)
+    if (priority == best) chosen.push_back(u);
+  SetSelection(L, chosen);
+}
+
+// A double click (HandleDoubleClickSelection 0x865e20) on one of the player's units: the units in
+// view of its kind that may be selected, not a building being upgraded, join the selection. False
+// when the unit is not the player's. (A wall too: the test for walls is taken out, FAF's patch.)
+bool DoubleClickSelect(lua_State* L, uint32_t unit, const std::vector<uint32_t>& inView) {
+  Sim* sim = TheSim(L);
+  UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
+  if (!sim || !u || u->view.army != sim->focusArmy + 1) return false;
+  std::vector<UserUnit*> now = Store(L).selection;
+  for (uint32_t id : inView) {
+    UserUnit* o = LiveUnit(L, id);
+    if (!o || o->view.blueprint != u->view.blueprint || !CanSelectUnit(L, o) || BeingUpgraded(L, sim, o)) continue;
+    if (std::find(now.begin(), now.end(), o) == now.end()) now.push_back(o);
+  }
+  SetSelection(L, now);
   return true;
+}
+
+// Which unit the mouse is over, of the one the picture finds under it (UpdateSelection 0x86f520):
+// a unit on a transport or a factory (one being built on its pad) gives its place to that parent;
+// a building being upgraded to the building that upgrades it; one inside a carrier is not there.
+// 0xffffffff: none.
+uint32_t HoverOf(lua_State* L, uint32_t picked) {
+  UserUnit* u = picked == 0xffffffffu ? nullptr : LiveUnit(L, picked);
+  if (!u) return picked;
+  if (u->view.parent != 0xffffffffu) {
+    if (UserUnit* parent = LiveUnit(L, u->view.parent)) {
+      if (InCategory(L, parent, "CARRIER")) return 0xffffffffu;
+      if (InCategory(L, parent, "TRANSPORTATION") || InCategory(L, parent, "FACTORY")) return parent->view.id;
+    }
+  }
+  Sim* sim = TheSim(L);
+  if (sim && BeingUpgraded(L, sim, u)) return u->view.creator;
+  return picked;
 }
 
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ) {

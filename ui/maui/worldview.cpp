@@ -1205,11 +1205,10 @@ class WorldView : public Control {
     world[1] = ground ? ground(world[0], world[2]) : 0.0f;
   }
 
-  // Selecting with the mouse (first version): a left press starts it; let go on the spot, the unit
-  // under the cursor is selected (none: nothing is); let go elsewhere, the units in the rectangle
-  // between the two places are. With Shift they join the selection.
+  // Selecting with the mouse: a left press starts it; let go on the spot, a click on the unit under
+  // the cursor; let go elsewhere, a box over the units in the rectangle between the two places
+  // (ClickSelect, BoxSelect: the original's rules, user_units.cpp).
   float pressX_ = 0, pressY_ = 0;
-  bool pressShift_ = false;
   // Dragging with the middle button moves the view with the mouse: the ground stays under the
   // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
   // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
@@ -1365,12 +1364,13 @@ class WorldView : public Control {
     }
     std::vector<uint32_t> ids;
     selecting_ = false;
-    bool box = false;
-    if (std::fabs(e.x - pressX_) < 4 && std::fabs(e.y - pressY_) < 4) {
-      uint32_t id = UnitUnder(L, e.x, e.y);
-      if (id != 0xffffffffu) ids.push_back(id);
-    } else {
-      box = true;
+    // A click while the mouse stayed within 4 pixels of where the button went down (0xdfe5ac),
+    // else a box; the keys held as the button comes up (the release's own event).
+    if (std::fabs(e.x - pressX_) <= 4 && std::fabs(e.y - pressY_) <= 4) {
+      ClickSelect(L, UnitUnder(L, e.x, e.y), e.shift, e.ctrl);
+      return;
+    }
+    {
       if (EnsurePicture(L)) {
         WorldSource* source = UserState::From(L)->config().world;
         Rect r;
@@ -1391,10 +1391,7 @@ class WorldView : public Control {
         }
       }
     }
-    // (A box takes the units of the best selection priority in it: fighting units before
-    // engineers and commanders, those before buildings. With Shift held it takes everything
-    // in it, as Chris recalls the original, 2026-10-13.)
-    SelectUnitsById(L, ids, pressShift_, box && !pressShift_);
+    BoxSelect(L, ids, e.shift);
   }
 
   // The unit under a point of the screen (its entity id; 0xffffffff: none). Without a picture:
@@ -1406,11 +1403,11 @@ class WorldView : public Control {
     if (!(!fresh && pixels_ && UserState::From(L)->config().world) && !EnsurePicture(L)) {
       float world[3];
       Unproject(L, sx, sy, world);
-      return UnitNearPlace(L, world[0], world[2], 2.0f);
+      return HoverOf(L, UnitNearPlace(L, world[0], world[2], 2.0f));
     }
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    return UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0);
+    return HoverOf(L, UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0));
   }
 
   // So many pixels of the view, in map units at the place the camera looks at.
@@ -1530,18 +1527,18 @@ class WorldView : public Control {
     }
     if (!mode.empty() || miniMap) return false;
     if (e.type == EventType::ButtonDClick) {
-      // A double click on one of the player's units selects all of its kind that are on screen
-      // (with Shift: adds them). As players know it from the original; its code for it is not read.
+      // A double click on one of the player's units: those of its kind in view join the selection
+      // (DoubleClickSelect, as the original's 0x865e20).
       uint32_t under = UnitUnder(L, e.x, e.y);
       if (under != 0xffffffffu) {
         Rect r;
         GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
         std::vector<uint32_t> onScreen;
         if (EnsurePicture(L)) UserState::From(L)->config().world->UnitsIn(0, 0, r.x1 - r.x0, r.y1 - r.y0, &onScreen);
-        if (SelectSameKind(L, under, onScreen, e.shift)) return true;
+        if (DoubleClickSelect(L, under, onScreen)) return true;
       }
     }
-    pressX_ = e.x, pressY_ = e.y, pressShift_ = e.shift;
+    pressX_ = e.x, pressY_ = e.y;
     selecting_ = true, dragX_ = e.x, dragY_ = e.y;
     UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
     return true;

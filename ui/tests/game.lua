@@ -253,6 +253,8 @@ local function run()
     check("a box over the commander and a factory selects the commander", boxOver(overCdr, overFactory), cdr:GetUnitId())
     SelectUnits({})
     check("with Shift the box selects both", boxOver(overCdr, overFactory, "Shift"), table.concat({factory, cdr:GetUnitId()}, " "))
+    -- (the original's DragRelease 0x863870: with Shift, units that are all selected already leave it)
+    check("with Shift again over the same two, they leave the selection", boxOver(overCdr, overFactory, "Shift"), "")
     -- what a commander and a factory can build together: what BOTH can (FA exe 0x840130, the
     -- intersection), here neither the commander's buildings nor the factory's units
     local scout = string.sub(cdr:GetUnitId(), 1, 2) .. "l0101"
@@ -365,6 +367,27 @@ local function run()
     moho64ui_MouseButton("Left", false, s.x, s.y)
     sel = GetSelectedUnits()
     check("a double click selects its kind on screen (here: the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    -- the original's click (CWldSession::ReleaseDrag 0x865920): Shift takes a unit in or out, a click
+    -- on the ground clears the selection unless Shift or Ctrl is held, Ctrl takes the player's units
+    -- of the kind across the map
+    moho64ui_MouseButton("Left", true, s.x, s.y, "Shift")
+    moho64ui_MouseButton("Left", false, s.x, s.y, "Shift")
+    check("Shift and a click on a selected unit takes it out", GetSelectedUnits(), nil)
+    moho64ui_MouseButton("Left", true, s.x, s.y, "Shift")
+    moho64ui_MouseButton("Left", false, s.x, s.y, "Shift")
+    sel = GetSelectedUnits()
+    check("and the same again puts it in", sel ~= nil and sel[1] == cdr, true)
+    local ground = view:Project({here[1], here[2], here[3] - 20})
+    moho64ui_MouseButton("Left", true, ground.x, ground.y, "Shift")
+    moho64ui_MouseButton("Left", false, ground.x, ground.y, "Shift")
+    check("Shift and a click on the ground keeps the selection", GetSelectedUnits() ~= nil, true)
+    moho64ui_MouseButton("Left", true, ground.x, ground.y)
+    moho64ui_MouseButton("Left", false, ground.x, ground.y)
+    check("a click on the ground clears it", GetSelectedUnits(), nil)
+    moho64ui_MouseButton("Left", true, s.x, s.y, "Ctrl")
+    moho64ui_MouseButton("Left", false, s.x, s.y, "Ctrl")
+    sel = GetSelectedUnits()
+    check("Ctrl and a click: the player's units of its kind (the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
     SelectUnits(nil)
     -- FAF's ignore mode (its world view's EnableIgnoreMode: ui_SelectTolerance -1000): a click picks no unit
     ConExecute("ui_SelectTolerance -1000")

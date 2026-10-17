@@ -406,19 +406,23 @@ std::string RightClickOrder(lua_State* L, uint32_t under);
 bool IssueReclaimAtPlace(lua_State* L, const float at[3], float within, bool clear);
 // The same question without the order: would a reclaim there take something? (For the cursor.)
 bool CanReclaimAtPlace(lua_State* L, const float at[3], float within);
-// Select the player's own units among these entity ids (what a click or a box in the world
-// found); with `add` they join the selection instead of replacing it.
-// `byPriority`: only those of the best selection priority among them (a selection by box).
-void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add, bool byPriority = false);
+// Select the player's own units among these entity ids that the mouse may select; with `add` they
+// join the selection instead of replacing it.
+void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
+// The mouse's selection as the original's (user_units.cpp: CWldSession::ReleaseDrag, DragRelease,
+// HandleDoubleClickSelection): a click on a unit (0xffffffff: none) with its modifiers, a box over
+// these units, a double click on a unit with the units in view; and the unit the mouse is over of
+// the one the picture finds (a unit on a factory's pad or on a transport: the parent).
+void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl);
+void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift);
+bool DoubleClickSelect(lua_State* L, uint32_t unit, const std::vector<uint32_t>& inView);
+uint32_t HoverOf(lua_State* L, uint32_t picked);
 // The console commands the game's key map binds its selection keys to (user_units.cpp):
 // UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
 // words> (FA exe 0x866a30) and UI_ExpandCurrentSelection (0x866970: the player's units in view
 // of the kinds that are selected join the selection; no walls, no building being upgraded).
 void SelectByCategoryCommand(lua_State* L, const std::string& arguments);
 void ExpandCurrentSelection(lua_State* L);
-// Select the player's units of the same kind (blueprint) as `unit` among those entity ids; with
-// `add` they join the selection. False when `unit` is not one of the player's.
-bool SelectSameKind(lua_State* L, uint32_t unit, const std::vector<uint32_t>& among, bool add);
 // For the world's picture: the selected units' entity ids, and the lines of their orders (from
 // each unit to where its orders take it, coloured by the kind of order).
 // `ghosts` (may be null): the buildings the player's units, selected or not, have been ordered to
