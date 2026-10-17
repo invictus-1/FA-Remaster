@@ -219,6 +219,30 @@ const std::string& ModelCache::UnitBlueprintPath(const std::string& blueprintId)
   return unitPaths_.emplace(id, path).first->second;
 }
 
+const Model* ModelCache::RemasteredWreck(const std::string& blueprintId) {
+  const std::string id = Lower(blueprintId);
+  const std::string name = "wreck:" + id;
+  auto it = models_.find(name);
+  if (it != models_.end()) return it->second.get();
+  const std::string first = "/preview/" + id + "/" + id + "_wreck_lod0.scm";
+  if (!vfs_->Exists(first)) {
+    models_.emplace(name, nullptr);  // (none: asked once)
+    return nullptr;
+  }
+  // the unit's levels as its blueprint lists them (their distances), the meshes and textures then the wreck's own
+  std::vector<LodSource> sources;
+  float scale = 1;
+  std::string error;
+  if (!ReadSources(UnitBlueprintPath(id), &sources, &scale, &error) || sources.empty()) sources.assign(1, LodSource{});
+  sources[0].mesh = first;  // (its skeleton: the wreck's own, every vertex on its first bone)
+  Model* m = models_.emplace(name, std::make_unique<Model>()).first->second.get();
+  Build(m, name, id, sources, false, false, std::string(), false, id + "_wreck");
+  m->scale = 1;  // (its prop gives its size: the unit's UniformScale)
+  m->lights.clear();
+  for (ModelLod& lod : m->lods) lod.sway = 0;
+  return m;
+}
+
 bool ModelCache::Remastered(const std::string& blueprintId) const {
   const std::string id = Lower(blueprintId);
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
@@ -590,7 +614,7 @@ void ModelCache::PrefetchBlueprints(const std::vector<std::string>& blueprintPat
 // Loads a model's levels from their file names. `merged`: the names come from the simulation's merged
 // blueprints (mods' changes are in them already; every texture has a name, there or not).
 void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
-                       const std::string& faction, bool effect) {
+                       const std::string& faction, bool effect, const std::string& stem) {
   // A remastered model being tried out (the viewer's --preview): its folder, mounted at
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
@@ -610,9 +634,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     if (!mesh.empty() && mesh != base && vfs_->Exists("/preview/" + mesh + "/" + mesh + "_lod0.scm")) own = mesh;
   }
   const std::string preview = "/preview/" + own + "/";
-  const bool previewed = !original && vfs_->Exists(preview + own + "_lod0.scm");
-  // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md)
-  if (!original) {
+  const std::string file = stem.empty() ? own : stem;  // (the files' own name in the folder: a wreck's is "<id>_wreck")
+  const bool previewed = !original && vfs_->Exists(preview + file + "_lod0.scm");
+  // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md); a wreck has none
+  if (!original && stem.empty()) {
     const std::string file = previewed ? preview + own + "_lights.bp" : "/mods/labvisuals/textures/" + base + "/" + base + "_lights.bp";
     auto text = vfs_->Exists(file) ? vfs_->ReadFile(file) : std::nullopt;
     BpValue list;
@@ -651,9 +676,9 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   }
   if (previewed) {
     size_t count = 1;
-    while (count < 8 && vfs_->Exists(preview + own + "_lod" + std::to_string(count) + ".scm")) ++count;
+    while (count < 8 && vfs_->Exists(preview + file + "_lod" + std::to_string(count) + ".scm")) ++count;
     sources.resize(count, sources.empty() ? LodSource{} : sources.back());
-    for (size_t i = 0; i < count; ++i) sources[i].mesh = preview + own + "_lod" + std::to_string(i) + ".scm";
+    for (size_t i = 0; i < count; ++i) sources[i].mesh = preview + file + "_lod" + std::to_string(i) + ".scm";
   }
   for (size_t i = 0; i < sources.size(); ++i) {
     const LodSource& s = sources[i];
@@ -796,7 +821,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     // when the names were read from a .bp file (which does not show what mods' scripts change), the
     // lab's LabVisuals mod's for the finest level, as that mod's script would set them.
     std::string lab;
-    if (previewed) lab = preview + (vfs_->Exists(preview + "textures/" + own + "_lab_albedo.dds") ? "textures/" : "") + own + "_lab_";
+    if (previewed) lab = preview + (vfs_->Exists(preview + "textures/" + file + "_lab_albedo.dds") ? "textures/" : "") + file + "_lab_";
     else if (!merged && !original && i == 0) lab = "/mods/labvisuals/textures/" + base + "/" + base + "_lab_";
     if (!lab.empty() && vfs_->Exists(lab + "albedo.dds")) {
       lod.albedo = textures_->Get(lab + "albedo.dds", lod.albedo);

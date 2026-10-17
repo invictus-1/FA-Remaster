@@ -279,21 +279,26 @@ RWTexture2D<float4> colours : register(u0);
   float4 rawHigh = maskHigh.SampleLevel(samplerLinearClamp, uv, 0) * params.y;
   float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
   #define AVERAGE(n) albedoMaps[n].SampleLevel(samplerLinear, float2(0.5, 0.5), 16)
+  // (and how grassy each layer is, by how green its average is against its red and blue: a meadow's grass, not
+  // dirt, rock or sand; the ground cover reads it in the alpha)
+  #define GRASSY(c) saturate((c.g - max(c.r, c.b)) / max(c.g, 0.05) * 6)
   float4 albedo = AVERAGE(0);
-  albedo = lerp(albedo, AVERAGE(1), low.x);
-  albedo = lerp(albedo, AVERAGE(2), low.y);
-  albedo = lerp(albedo, AVERAGE(3), low.z);
-  albedo = lerp(albedo, AVERAGE(4), low.w);
-  albedo = lerp(albedo, AVERAGE(5), high.x);
-  albedo = lerp(albedo, AVERAGE(6), high.y);
-  albedo = lerp(albedo, AVERAGE(7), high.z);
-  albedo = lerp(albedo, AVERAGE(8), high.w);
+  float grassy = GRASSY(albedo);
+  #define LAYER(n, w) { float4 a = AVERAGE(n); albedo = lerp(albedo, a, w); grassy = lerp(grassy, GRASSY(a), w); }
+  LAYER(1, low.x);
+  LAYER(2, low.y);
+  LAYER(3, low.z);
+  LAYER(4, low.w);
+  LAYER(5, high.x);
+  LAYER(6, high.y);
+  LAYER(7, high.z);
+  LAYER(8, high.w);
   uint tw, th, levels;
   albedoMaps[9].GetDimensions(0, tw, th, levels);
   float across = tw * albedoTile[9].x * mapSize.x / w;  // (the upper layer's texels over one of the picture's)
   float4 upper = albedoMaps[9].SampleLevel(samplerLinear, xz * albedoTile[9].x, max(log2(max(across, 1)), 0));
   albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
-  colours[id.xy] = float4(albedo.rgb, 1);
+  colours[id.xy] = float4(albedo.rgb, grassy);
 }
 )hlsl";
 

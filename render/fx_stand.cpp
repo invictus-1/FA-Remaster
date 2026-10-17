@@ -744,7 +744,9 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     for (const FxEntities::Body& b : entities_->Bodies()) {
       const Model* unit = world.models.Unit(b.unit, b.original);
       if (!unit || !unit->ok) continue;
-      const Model* model = b.wreck ? world.models.Wreck(unit, false) : unit;
+      // (a wreck: the unit's own remastered one where it has one, as the game's props are drawn; else its burnt look)
+      const Model* own = b.wreck && !b.original ? world.models.RemasteredWreck(b.unit) : nullptr;
+      const Model* model = own ? own : b.wreck ? world.models.Wreck(unit, false) : unit;
       Pose pose;
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();
