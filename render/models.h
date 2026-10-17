@@ -59,6 +59,7 @@ struct ModelLod {
   uint32_t serial = 0;
   gfx::Buffer vertices, indices;
   uint32_t indexCount = 0;
+  uint32_t vertexCount = 0;  // (the ray tracing scene's structures need it: ray_scene.h)
   gfx::Texture albedo, normals, specular;
   gfx::Texture secondary;  // remastered units: ambient occlusion in red
   // Remastered units ("LabPBR"): the specular texture holds the material itself - red: metal,

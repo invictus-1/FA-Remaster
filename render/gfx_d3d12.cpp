@@ -204,6 +204,18 @@ struct PipelineRec {
   D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 };
 
+// A ray tracing structure (gfx.h): its buffer, and for a geometry not built yet what it is built from; for a
+// scene, the texture slot its view takes (as a texture's, so SetScene binds it as SetTexture does).
+struct StructureRec {
+  bool used = false;
+  bool scene = false;
+  Com<ID3D12Resource> buffer;
+  uint64_t size = 0;
+  uint32_t texture = 0;
+  std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> parts;
+  uint64_t scratch = 0;
+};
+
 struct TableKey {
   std::array<uint32_t, kTexSlots> t{};
   bool operator==(const TableKey& o) const { return t == o.t; }
@@ -286,8 +298,19 @@ class D3D12Device final : public Device {
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
+  bool RayTracing() const override { return rayTracing_; }
+  Structure CreateGeometry(const GeometryPart* parts, int count) override;
+  void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
+  void SetScene(int slot, Structure scene) override;
+  void Destroy(Structure structure) override;
 
  private:
+  // ray tracing: a buffer on the card for a structure or a build's room; the scratch room grown to `size`; the
+  // geometry made since the last build, built
+  Com<ID3D12Resource> RayBuffer(uint64_t size, D3D12_RESOURCE_STATES state);
+  bool GrowScratch(uint64_t size);
+  void BuildGeometry();
+  StructureRec* Find(Structure s) { return s.id && s.id <= structures_.size() && structures_[s.id - 1].used ? &structures_[s.id - 1] : nullptr; }
   // Direct3D's own compiler (FXC), the shader kept from an earlier run when its source has not changed
   bool CompileFxc(std::string_view source, const char* entry, const char* target, const char* name, Com<ID3DBlob>& out, std::string* error);
   bool CreateTargets();
@@ -414,6 +437,15 @@ class D3D12Device final : public Device {
   bool computePipeline_ = false;  // the pipeline set last is a compute one
   bool computeRoot_ = false;      // the compute root signature set this frame
   bool dispatched_ = false;       // the last thing recorded was a dispatch (the next waits for its writes)
+
+  // ray tracing (DXR 1.1: inline ray queries with shader model 6.5)
+  bool rayTracing_ = false;
+  Com<ID3D12Device5> device5_;
+  Com<ID3D12GraphicsCommandList4> list4_;  // (list_, as the interface that builds the structures)
+  std::vector<StructureRec> structures_;   // id = index + 1
+  std::vector<uint32_t> freeStructures_, pendingGeometry_;
+  Com<ID3D12Resource> scratch_;
+  uint64_t scratchSize_ = 0;
 };
 
 D3D12Device::~D3D12Device() {
@@ -564,6 +596,15 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   }
   hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames_[0].allocator.Get(), nullptr, IID_PPV_ARGS(list_.Put()));
   if (FAILED(hr)) return fail("CreateCommandList", hr);
+  {  // ray tracing: DXR 1.1 (inline ray queries), with DXC's shader model 6.5
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5 = {};
+    D3D12_FEATURE_DATA_SHADER_MODEL m65 = {D3D_SHADER_MODEL_6_5};
+    rayTracing_ = dxil_ && SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof o5)) &&
+                  o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 &&
+                  SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &m65, sizeof m65)) &&
+                  m65.HighestShaderModel >= D3D_SHADER_MODEL_6_5 && SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(device5_.Put()))) &&
+                  SUCCEEDED(list_->QueryInterface(IID_PPV_ARGS(list4_.Put())));
+  }
   list_->Close();
   hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocators_[0].Get(), nullptr, IID_PPV_ARGS(uploadList_.Put()));
   if (FAILED(hr)) return fail("CreateCommandList", hr);
@@ -1781,6 +1822,223 @@ void D3D12Device::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
   }
   list_->Dispatch(x, y, z);
   dispatched_ = true;
+}
+
+Com<ID3D12Resource> D3D12Device::RayBuffer(uint64_t size, D3D12_RESOURCE_STATES state) {
+  D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+  D3D12_RESOURCE_DESC rd = BufferResourceDesc(size);
+  rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  Com<ID3D12Resource> r;
+  const HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr, IID_PPV_ARGS(r.Put()));
+  if (FAILED(hr)) Complain("making a ray tracing structure's buffer", hr);
+  return r;
+}
+
+bool D3D12Device::GrowScratch(uint64_t size) {
+  if (size <= scratchSize_ && scratch_) return true;
+  if (scratch_) Retire(scratch_.Get());  // (a build of a frame still on the card may use it)
+  const uint64_t room = (std::max(size, scratchSize_ + scratchSize_ / 2) + 65535) / 65536 * 65536;
+  scratch_ = RayBuffer(room, D3D12_RESOURCE_STATE_COMMON);  // (a buffer starts in the common state and is promoted)
+  scratchSize_ = scratch_ ? room : 0;
+  return static_cast<bool>(scratch_);
+}
+
+static uint64_t RayAligned(uint64_t n) {
+  const uint64_t a = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT;
+  return (n + a - 1) / a * a;
+}
+
+Structure D3D12Device::CreateGeometry(const GeometryPart* parts, int count) {
+  if (!rayTracing_ || !parts || count <= 0) return {};
+  StructureRec rec;
+  for (int i = 0; i < count; ++i) {
+    const GeometryPart& p = parts[i];
+    const BufferRec* v = Find(p.vertices);
+    if (!v || v->dynamic || v->kind != BufferKind::Vertex || !p.vertexCount) return {};
+    D3D12_RAYTRACING_GEOMETRY_DESC g = {};
+    g.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+    g.Flags = p.opaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
+    g.Triangles.VertexBuffer.StartAddress = v->gpu + static_cast<uint64_t>(p.firstVertex) * v->stride + p.positionOffset;
+    g.Triangles.VertexBuffer.StrideInBytes = v->stride;
+    g.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+    g.Triangles.VertexCount = p.vertexCount;
+    if (p.indices) {
+      const BufferRec* ix = Find(p.indices);
+      if (!ix || ix->dynamic || ix->kind != BufferKind::Index || !p.indexCount) return {};
+      g.Triangles.IndexBuffer = ix->gpu + static_cast<uint64_t>(p.firstIndex) * ix->stride;
+      g.Triangles.IndexFormat = ix->stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+      g.Triangles.IndexCount = p.indexCount;
+    }
+    rec.parts.push_back(g);
+  }
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in = {};
+  in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+  in.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+  in.NumDescs = static_cast<UINT>(rec.parts.size());
+  in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+  in.pGeometryDescs = rec.parts.data();
+  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
+  device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
+  if (!info.ResultDataMaxSizeInBytes) return {};
+  rec.size = RayAligned(info.ResultDataMaxSizeInBytes);
+  rec.scratch = RayAligned(std::max<uint64_t>(info.ScratchDataSizeInBytes, 1));
+  rec.buffer = RayBuffer(rec.size, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+  if (!rec.buffer) return {};
+  rec.used = true;
+  uint32_t index;
+  if (!freeStructures_.empty()) {
+    index = freeStructures_.back();
+    freeStructures_.pop_back();
+    structures_[index] = std::move(rec);
+  } else {
+    index = static_cast<uint32_t>(structures_.size());
+    structures_.push_back(std::move(rec));
+  }
+  pendingGeometry_.push_back(index);
+  return {index + 1};
+}
+
+void D3D12Device::BuildGeometry() {
+  if (pendingGeometry_.empty()) return;
+  // (built side by side in the scratch room, in batches of at most 64 MB of it, each batch waited for)
+  constexpr uint64_t kBatch = 64ull << 20;
+  uint64_t largest = 0;
+  for (uint32_t i : pendingGeometry_)
+    if (structures_[i].used && !structures_[i].parts.empty()) largest = std::max(largest, structures_[i].scratch);
+  if (!largest || !GrowScratch(std::max(largest, std::min<uint64_t>(kBatch, scratchSize_)))) {
+    pendingGeometry_.clear();
+    return;
+  }
+  D3D12_RESOURCE_BARRIER wait = {};
+  wait.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uint64_t at = 0;
+  for (uint32_t i : pendingGeometry_) {
+    StructureRec& s = structures_[i];
+    if (!s.used || s.parts.empty()) continue;
+    if (at + s.scratch > scratchSize_) {
+      list_->ResourceBarrier(1, &wait);
+      at = 0;
+    }
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC b = {};
+    b.DestAccelerationStructureData = s.buffer->GetGPUVirtualAddress();
+    b.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    b.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    b.Inputs.NumDescs = static_cast<UINT>(s.parts.size());
+    b.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    b.Inputs.pGeometryDescs = s.parts.data();
+    b.ScratchAccelerationStructureData = scratch_->GetGPUVirtualAddress() + at;
+    list4_->BuildRaytracingAccelerationStructure(&b, 0, nullptr);
+    at += s.scratch;
+    s.parts.clear();
+    s.parts.shrink_to_fit();
+  }
+  pendingGeometry_.clear();
+  list_->ResourceBarrier(1, &wait);
+}
+
+void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) {
+  if (!rayTracing_ || !inFrame_ || !scene) return;
+  ReleasePassTargets();  // (the pass under way ends)
+  BuildGeometry();
+  // the instances, in this frame's upload memory
+  const Span s = Allocate(sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * std::max<uint32_t>(count, 1), D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT);
+  if (!s.cpu) return;
+  auto* out = reinterpret_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(s.cpu);
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const StructureRec* g = instances ? Find(instances[i].geometry) : nullptr;
+    if (!g || g->scene) continue;
+    D3D12_RAYTRACING_INSTANCE_DESC d = {};
+    std::memcpy(d.Transform, instances[i].transform, sizeof d.Transform);
+    d.InstanceID = instances[i].id & 0xffffffu;
+    d.InstanceMask = instances[i].mask;
+    d.AccelerationStructure = g->buffer->GetGPUVirtualAddress();
+    out[n++] = d;
+  }
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in = {};
+  in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+  in.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+  in.NumDescs = n;
+  in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+  in.InstanceDescs = s.gpu;
+  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
+  device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
+  StructureRec* rec = Find(*scene);
+  if (!rec) {  // (the first time: the scene's record, and its view's slot among the textures')
+    const uint32_t texture = NewTextureIndex();
+    if (!texture) return;
+    textures_[texture] = TextureRec{};
+    textures_[texture].used = true;
+    StructureRec r;
+    r.used = r.scene = true;
+    r.texture = texture;
+    uint32_t index;
+    if (!freeStructures_.empty()) {
+      index = freeStructures_.back();
+      freeStructures_.pop_back();
+      structures_[index] = std::move(r);
+    } else {
+      index = static_cast<uint32_t>(structures_.size());
+      structures_.push_back(std::move(r));
+    }
+    *scene = {index + 1};
+    rec = &structures_[index];
+  }
+  if (!rec->scene) return;
+  const uint64_t need = RayAligned(std::max<uint64_t>(info.ResultDataMaxSizeInBytes, 256));
+  if (rec->size < need) {  // (made, or grown by a half more than it needs)
+    if (rec->buffer) Retire(rec->buffer.Get());
+    const uint64_t room = RayAligned(need + need / 2);
+    rec->buffer = RayBuffer(room, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+    rec->size = rec->buffer ? room : 0;
+    if (!rec->buffer) return;
+    D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
+    v.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+    v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    v.RaytracingAccelerationStructure.Location = rec->buffer->GetGPUVirtualAddress();
+    device_->CreateShaderResourceView(nullptr, &v, StagingHandle(rec->texture));
+    frames_[cur_].tables.clear();  // (tables made this frame hold its view as it was)
+    texturesDirty_ = true;
+  }
+  if (!GrowScratch(RayAligned(std::max<uint64_t>(info.ScratchDataSizeInBytes, 1)))) return;
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC b = {};
+  b.DestAccelerationStructureData = rec->buffer->GetGPUVirtualAddress();
+  b.Inputs = in;
+  b.ScratchAccelerationStructureData = scratch_->GetGPUVirtualAddress();
+  list4_->BuildRaytracingAccelerationStructure(&b, 0, nullptr);
+  D3D12_RESOURCE_BARRIER wait = {};
+  wait.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  list_->ResourceBarrier(1, &wait);
+  // (what was set before is set again: the roots, the textures' table)
+  computeRoot_ = false;
+  texturesDirty_ = true;
+}
+
+void D3D12Device::SetScene(int slot, Structure scene) {
+  if (slot < 0 || slot >= kTexSlots) return;
+  const StructureRec* rec = Find(scene);
+  const uint32_t id = rec && rec->scene && rec->buffer ? rec->texture : 0;
+  if (boundTextures_.t[static_cast<size_t>(slot)] == id) return;
+  boundTextures_.t[static_cast<size_t>(slot)] = id;
+  texturesDirty_ = true;
+}
+
+void D3D12Device::Destroy(Structure structure) {
+  StructureRec* rec = Find(structure);
+  if (!rec) return;
+  Retire(rec->buffer.Get());
+  if (rec->scene && rec->texture) {
+    for (uint32_t& t : boundTextures_.t)
+      if (t == rec->texture) t = 0;
+    textures_[rec->texture] = TextureRec{};
+    device_->CopyDescriptorsSimple(1, StagingHandle(rec->texture), StagingHandle(0), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    freeTextures_.push_back(rec->texture);
+    texturesDirty_ = true;
+  }
+  const uint32_t index = structure.id - 1;
+  pendingGeometry_.erase(std::remove(pendingGeometry_.begin(), pendingGeometry_.end(), index), pendingGeometry_.end());
+  *rec = StructureRec{};
+  freeStructures_.push_back(index);
 }
 
 void D3D12Device::SetVertexBuffer(Buffer buffer) {

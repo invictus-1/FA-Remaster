@@ -87,6 +87,40 @@ float4 PS(float4 position : SV_Position) : SV_Target {
 }
 )hlsl";
 
+// Ray tracing: rays cast straight down (-z) from a row of places over three instances of two geometries, each
+// ray's first hit written (which instance / 16, how far / 16, 1). The lower four rows trace with a mask that
+// leaves out the third instance; the triangle is not opaque, so the shader takes its candidates itself.
+const char kRays[] = R"hlsl(
+RaytracingAccelerationStructure scene : register(t33);
+RWTexture2D<float4> hits : register(u0);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  if (id.x >= 32 || id.y >= 8) return;
+  RayDesc ray;
+  ray.Origin = float3(-4.5 + 9 * (id.x + 0.5) / 32, -1 + 2 * (id.y + 0.5) / 8, 10);
+  ray.Direction = float3(0, 0, -1);
+  ray.TMin = 0.01;
+  ray.TMax = 100;
+  RayQuery<RAY_FLAG_NONE> q;
+  q.TraceRayInline(scene, RAY_FLAG_NONE, id.y < 4 ? 0xff : 0x01, ray);
+  while (q.Proceed())
+    if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) q.CommitNonOpaqueTriangleHit();
+  float4 o = float4(0, 0, 0, 1);
+  if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) o = float4(q.CommittedInstanceID() / 16.0, q.CommittedRayT() / 16.0, 1, 1);
+  hits[id.xy] = o;
+}
+)hlsl";
+const char kShowRays[] = R"hlsl(
+Texture2D hits : register(t0);
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 uv = float2((id << 1) & 2, id & 2);
+  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 PS(float4 position : SV_Position) : SV_Target {
+  int2 p = int2(position.xy);
+  return p.x < 32 && p.y < 8 ? hits.Load(int3(p, 0)) : float4(0, 0, 0, 1);
+}
+)hlsl";
+
 float Half(float v) {  // (what a 16-bit float keeps of it, near enough for these values: 11 bits)
   if (v == 0) return 0;
   const int e = static_cast<int>(std::floor(std::log2(std::fabs(v))));
@@ -94,6 +128,139 @@ float Half(float v) {  // (what a 16-bit float keeps of it, near enough for thes
   return std::round(v / step) * step;
 }
 float Unorm8(float v) { return std::round(std::clamp(v, 0.0f, 1.0f) * 255) / 255; }
+
+// The ray tracing part of the check: true when it is right, or when the device has no ray tracing (said so).
+bool RayCheck(gfx::Device* device, const std::function<void()>& pump) {
+  if (!device->RayTracing()) {
+    printf("render: --gfx-check: ray tracing                                     not on this device or backend\n");
+    return true;
+  }
+  std::string error;
+  gfx::ComputeDesc cd;
+  cd.name = "check: rays";
+  cd.source = kRays;
+  const gfx::Pipeline rays = device->CreateCompute(cd, &error);
+  if (!rays) fprintf(stderr, "render: --gfx-check: %s\n", error.c_str());
+  gfx::PipelineDesc pd;
+  pd.name = "check: show the rays";
+  pd.vertexSource = pd.pixelSource = kShowRays;
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  const gfx::Pipeline show = device->CreatePipeline(pd, &error);
+  if (!rays || !show) {
+    printf("render: --gfx-check: ray tracing                                     WRONG (its pipelines not made)\n");
+    return false;
+  }
+  // a square (indexed, 16 bits) and a triangle (positions after a float of something else, not opaque)
+  const float square[12] = {-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0};
+  const uint16_t corners[6] = {0, 1, 2, 0, 2, 3};
+  const float triangle[12] = {9, -1, -1, 0, 9, 1, -1, 0, 9, 0, 1, 0};
+  gfx::BufferDesc bd;
+  bd.kind = gfx::BufferKind::Vertex;
+  bd.stride = 12;
+  bd.size = sizeof square;
+  bd.data = square;
+  const gfx::Buffer squareVertices = device->CreateBuffer(bd);
+  bd.stride = 16;
+  bd.size = sizeof triangle;
+  bd.data = triangle;
+  const gfx::Buffer triangleVertices = device->CreateBuffer(bd);
+  bd.kind = gfx::BufferKind::Index;
+  bd.stride = 2;
+  bd.size = sizeof corners;
+  bd.data = corners;
+  const gfx::Buffer squareIndices = device->CreateBuffer(bd);
+  gfx::GeometryPart part;
+  part.vertices = squareVertices;
+  part.vertexCount = 4;
+  part.indices = squareIndices;
+  part.indexCount = 6;
+  const gfx::Structure squareGeometry = device->CreateGeometry(&part, 1);
+  part = {};
+  part.vertices = triangleVertices;
+  part.positionOffset = 4;
+  part.vertexCount = 3;
+  part.opaque = false;
+  const gfx::Structure triangleGeometry = device->CreateGeometry(&part, 1);
+  gfx::TargetDesc td;
+  td.storage = true;
+  td.width = 32;
+  td.height = 8;
+  td.format = gfx::Format::RGBA32F;
+  const gfx::Texture hits = device->CreateTarget(td);
+  if (!squareGeometry || !triangleGeometry || !hits) {
+    printf("render: --gfx-check: ray tracing                                     WRONG (its geometry not made)\n");
+    return false;
+  }
+  // the square moved to x -3; the square at half its size, 2 up; the triangle at x 3, on a mask of its own
+  gfx::SceneInstance instances[3];
+  const float moved[12] = {1, 0, 0, -3, 0, 1, 0, 0, 0, 0, 1, 0}, half[12] = {0.5f, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 0.5f, 2},
+              right[12] = {1, 0, 0, 3, 0, 1, 0, 0, 0, 0, 1, 0};
+  std::copy(moved, moved + 12, instances[0].transform);
+  instances[0].geometry = squareGeometry;
+  instances[0].id = 5;
+  std::copy(half, half + 12, instances[1].transform);
+  instances[1].geometry = squareGeometry;
+  instances[1].id = 7;
+  std::copy(right, right + 12, instances[2].transform);
+  instances[2].geometry = triangleGeometry;
+  instances[2].id = 9;
+  instances[2].mask = 0x02;
+  gfx::Structure scene;
+  std::vector<uint8_t> shot;
+  const int frames = 3;  // (built again every frame)
+  for (int frame = 0; frame < frames; ++frame) {
+    pump();
+    const float clear[4] = {0, 0, 0, 1};
+    device->BeginFrame(clear);
+    device->BuildScene(&scene, instances, 3);
+    device->SetPipeline(rays);
+    device->SetScene(33, scene);
+    device->SetStorage(0, hits);
+    device->Dispatch(4, 1);
+    device->SetStorage(0, {});
+    device->SetScene(33, {});
+    gfx::PassDesc pass;
+    pass.window = true;
+    pass.clearColor = false;
+    device->BeginPass(pass);
+    device->SetPipeline(show);
+    device->SetTexture(0, hits);
+    device->Draw(3);
+    device->SetTexture(0, {});
+    device->EndFrame(frame + 1 == frames ? &shot : nullptr);
+  }
+  const int width = device->Width();
+  int bad = 0, worst = 0, hitsSeen = 0;
+  if (shot.size() < static_cast<size_t>(width) * 8 * 4 || width < 32) bad = 1;
+  for (int j = 0; j < 8 && !bad; ++j)
+    for (int i = 0; i < 32; ++i) {
+      const float x = -4.5f + 9 * (static_cast<float>(i) + 0.5f) / 32, y = -1 + 2 * (static_cast<float>(j) + 0.5f) / 8;
+      int want = 0;
+      float t = 0;
+      if (std::fabs(x) <= 0.5f && std::fabs(y) <= 0.5f) want = 7, t = 8;  // (the half square, nearer)
+      else if (x >= -4 && x <= -2) want = 5, t = 10;
+      else if (j < 4 && x >= 2 && x <= 4 && y <= 1 - 2 * std::fabs(x - 3)) want = 9, t = 10;
+      const uint8_t* px = &shot[(static_cast<size_t>(j) * static_cast<size_t>(width) + static_cast<size_t>(i)) * 4];
+      const int got = static_cast<int>(std::lround(px[0] * 16 / 255.0));
+      const float gotT = static_cast<float>(px[1]) * 16 / 255.0f;
+      const bool hit = px[2] > 127;
+      if (hit) ++hitsSeen;
+      const int off = (hit != (want != 0) || got != want) ? 255 : want ? static_cast<int>(std::lround(std::fabs(gotT - t) * 255 / 16)) : 0;
+      worst = std::max(worst, off);
+      if (off > 2) ++bad;
+    }
+  device->Destroy(scene);
+  device->Destroy(squareGeometry);
+  device->Destroy(triangleGeometry);
+  device->Destroy(hits);
+  for (gfx::Buffer b : {squareVertices, triangleVertices, squareIndices}) device->Destroy(b);
+  device->Destroy(rays);
+  device->Destroy(show);
+  printf("render: --gfx-check: %-48s %s (largest difference %d in 255; %d of 256 rays met something)\n",
+         "rays through three instances (ray queries)", bad ? "WRONG" : "right", worst, hitsSeen);
+  return !bad;
+}
 
 }  // namespace
 
@@ -238,6 +405,7 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   }
   for (gfx::Texture t : {plane, volume, level, counts, wide, narrow}) device->Destroy(t);
   for (gfx::Pipeline p : {fill, combine, firstLevel, empty, count, show}) device->Destroy(p);
+  all = RayCheck(device, pump) && all;
   printf("render: --gfx-check on %s: %s\n", device->BackendName(), all ? "all right" : "SOMETHING WRONG");
   return all;
 }

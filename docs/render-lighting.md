@@ -168,6 +168,26 @@ Mac", and every ray-traced effect keeps a fallback without it.
    for metal and wet ground a screen-space pass needs each pixel's normal and roughness, which this
    renderer, drawing each surface whole in one pass, does not keep. Rays cast by the surfaces' own
    shaders need none of that and also see what is off screen.)
+   - **Groundwork done** (2026-10-17): gfx's structures and ray queries (gfx.h: `Structure`, `GeometryPart`,
+     `SceneInstance`; `CreateGeometry`, `BuildScene`, `SetScene`), Direct3D 12 (DXR 1.1, shader model 6.5 for
+     a shader that names RayQuery); `--gfx-check` traces rays through three instances and compares every hit
+     with the processor's answer. Vulkan (VK_KHR_ray_query): a helper's work in progress.
+   - **The scene** (`render/ray_scene.h`, `RayScene`, made the first time it is wanted): the ground as a grid
+     of every fourth height, the water's surface (on a mask of its own: shadow rays pass it), every model the
+     frame draws by its coarsest solid level (a tree's coarsest is a card that faces the camera: the one
+     before it), the scenery's groups included; built again every frame (0.2-0.4 ms on Seton's). For what
+     the rays meet, a colour per model level, worked out once on the card from a small level of its albedo
+     (and its team colour's share; for leaves their coverage instead: leaves are not opaque, a ray takes one
+     of their triangles with that chance, so a canopy lets light through as its holes would). Models keep no
+     normals for the rays (they face the ray); the ground has its own. Check view: `World::rayView`, viewer
+     `--ray-view` (a ray from the camera through each pixel, the sun's shadow by another: 0.3-0.5 ms at 720p).
+   - **Order changed** (2026-10-17, the renderer's proposal): bounce light first, then reflections. What the
+     rays see is coarse (the coarsest levels, a colour per model, units at rest), which soft bounce light
+     hides and a mirror would show; and from the game's camera, looking down on small units, light thrown
+     back from the ground and the hills changes more of the picture than reflections on metal. Next: probes
+     of light over the ground round the camera, updated by rays a few at a time (after DDGI, Majercik et al.
+     2019), read by every lit surface in place of the sky's fitted light; the ground's colour for the rays
+     from its layers' colours and masks.
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units.
 

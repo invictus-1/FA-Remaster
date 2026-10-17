@@ -43,6 +43,7 @@
 #include "models.h"
 #include "particles.h"
 #include "post.h"
+#include "ray_scene.h"
 #include "ribbons.h"
 #include "scmap.h"
 #include "shadows.h"
@@ -326,6 +327,13 @@ class World {
   // times over and the planet's shadow, for the sky drawn and for the light fitted to it. Modern look with a
   // time of day; off by default.
   bool skyTables = false;
+  // Ray tracing (ray_scene.h; the lighting upgrade's step 4), where the device can: the scene the rays go
+  // through, built every frame that something reads it. `rayView`: its check view in place of the picture
+  // (viewer --ray-view).
+  RayScene rays;
+  bool rayView = false;
+  // The ray tracing scene made, the first time it is wanted (false where the device has none).
+  bool RaysReady();
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -519,6 +527,7 @@ class World {
   Vec3 lastEye_{};
   double lastFrameAt_ = -1;
   float frameSeconds_ = 1 / 60.0f;
+  bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
 };
 
 }  // namespace render

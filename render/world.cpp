@@ -32,6 +32,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       ao(device),
       post(device),
       air(device),
+      rays(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -96,6 +97,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     haveMap_ = true;
     temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
+    raysGround_ = false;  // (the ray tracing scene's ground: made again when it is next wanted)
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
@@ -1445,6 +1447,10 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
+  if (rayView && RaysReady()) {  // the ray tracing scene, from the models just prepared
+    Stage("ray tracing scene");
+    rays.Build(meshes);
+  }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
@@ -1622,6 +1628,10 @@ void World::Render() {
   }
   Stage("finishing (exposure, bloom)");
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
+  if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
+    Stage("ray tracing check view");
+    post.shown = rays.Check(view, terrain.NormalMap(), Vec3{0.10f, 0.12f, 0.06f});
+  }
   if (temporalNow_ && !post.shown) {  // FSR 3: up to the screen's size from this frame and the ones before
     Stage("temporal upscale (FSR 3)");
     Fsr3::Inputs in;
@@ -1643,6 +1653,19 @@ void World::Render() {
   icons.showSymbols = iconsOn;
   icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
   CpuTimes::Part(nullptr);
+}
+
+bool World::RaysReady() {
+  if (!raysTried_) {  // (its shaders, the first time: where the device has no ray tracing, never again)
+    raysTried_ = true;
+    std::string why;
+    if (!rays.Init(&why)) fprintf(stderr, "render: ray tracing cannot be used (%s)\n", why.c_str());
+  }
+  if (rays.Available() && !raysGround_ && haveMap_) {
+    rays.SetGround(map);
+    raysGround_ = true;
+  }
+  return rays.Available();
 }
 
 bool World::Project(Vec3 p, float* x, float* y) const {
