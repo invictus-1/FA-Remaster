@@ -1,6 +1,9 @@
 #include "ambient_occlusion.h"
 
+#include <algorithm>
 #include <cmath>
+
+#include "lighting.h"
 
 namespace render {
 namespace {
@@ -10,11 +13,17 @@ namespace {
 // front of the surface (along the normal) shades it, less the further away it is (after McGuire et
 // al., "The Alchemy Screen-Space Ambient Obscurance Algorithm"). The spiral is turned by a pattern
 // that repeats every 4 x 4 pixels, which Apply's 4 x 4 average removes again.
-// Output: red = openness (1 open, 0 shut in), green = distance from the camera.
+// Contact shadows (when on): from the same place a short march toward the sun along the depth; a place
+// the march finds something in front of, just behind it, lies in a shadow too small for the shadow maps.
+// Only where the shadow maps say the sun reaches (else it is in shadow already).
+// Output: red = openness (1 open, 0 shut in), green = distance from the camera, blue = 1 lit, 0 in a
+// contact shadow.
 const char kCompute[] = R"hlsl(
 cbuffer Ao : register(b1) {
   float tanHalfFov, aspect, zNear, radius;
-  float strength; float3 aoPad;
+  float strength, contact, contactLength, contactPad;
+  float4 sunInView;   // xyz: toward the sun in the camera's space
+  float4 axisRight, axisUp, axisBack;  // the camera's, in the world (its space to the world's)
 };
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t0);
@@ -74,7 +83,27 @@ float4 PS(VOut i) : SV_Target {
     sum += max(0, dot(v, N) - bias) / (vv + 0.0001) * inRange;
   }
   float openness = saturate(1 - sum * radius * (1.1 / count));
-  return float4(openness, away, 0, 1);
+  float lit = 1;
+  [branch] if (contact > 0) {
+    float3 world = cameraPosition + axisRight.xyz * P.x + axisUp.xyz * P.y + axisBack.xyz * P.z;
+    float3 worldN = normalize(axisRight.xyz * N.x + axisUp.xyz * N.y + axisBack.xyz * N.z);
+    [branch] if (dot(N, sunInView.xyz) > 0 && SunShadow(world, worldN) > 0.5) {
+      const int steps = 12;
+      float start = (turn[(p.x & 3) + 4 * (p.y & 3)] + 0.5) / 16;
+      for (int k = 0; k < steps; ++k) {
+        float3 q = P + N * (0.02 + 0.001 * away) + sunInView.xyz * (contactLength * (k + start) / steps);
+        float2 ndc = q.xy / (-q.z * tanHalfFov * float2(aspect, 1));
+        int2 at = int2((ndc * float2(0.5, -0.5) + 0.5) * viewport.xy);
+        if (any(at < 0) || any(at >= int2(viewport.xy))) break;
+        float there = -ViewPosition(at).z, mine = -q.z;
+        if (there < mine - 0.01 && mine - there < 0.4 + 0.004 * away) {  // (something just in front of the way: not far in front, a wall far off is not a shadow)
+          lit = saturate(k / float(steps) * 1.5);  // (nearer the place, darker)
+          break;
+        }
+      }
+    }
+  }
+  return float4(openness, away, lit, 1);
 }
 )hlsl";
 
@@ -83,7 +112,7 @@ float4 PS(VOut i) : SV_Target {
 const char kApply[] = R"hlsl(
 cbuffer Ao : register(b1) {
   float tanHalfFov, aspect, zNear, radius;
-  float strength; float3 aoPad;
+  float strength, contact, contactLength, contactPad;
 };
 Texture2D occlusion : register(t0);
 
@@ -101,16 +130,17 @@ float4 PS(VOut i) : SV_Target {
   int2 p = int2(i.position.xy);
   int2 last = int2(viewport.xy) - 1;
   float here = occlusion.Load(int3(p, 0)).g;
-  float sum = 0, weight = 0;
+  float sum = 0, lit = 0, weight = 0;
   for (int y = -2; y < 2; ++y)
     for (int x = -2; x < 2; ++x) {
-      float2 s = occlusion.Load(int3(clamp(p + int2(x, y), int2(0, 0), last), 0)).rg;
+      float3 s = occlusion.Load(int3(clamp(p + int2(x, y), int2(0, 0), last), 0)).rgb;
       float w = abs(s.g - here) < 0.03 * here + 0.05 ? 1 : 0;
       sum += s.r * w;
+      lit += s.b * w;
       weight += w;
     }
   float openness = weight > 0 ? sum / weight : 1;
-  float k = lerp(1, openness, saturate(strength));
+  float k = lerp(1, openness, saturate(strength)) * lerp(1, weight > 0 ? lit / weight : 1, saturate(contact));
   return float4(k, k, k, 1);
 }
 )hlsl";
@@ -118,7 +148,7 @@ float4 PS(VOut i) : SV_Target {
 }  // namespace
 
 bool AmbientOcclusion::Init(std::string* error) {
-  std::string compute = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kCompute;
+  std::string compute = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kLightingShaderBlock + kCompute;
   gfx::PipelineDesc pd;
   pd.name = "ambient occlusion";
   pd.vertexSource = pd.pixelSource = compute;
@@ -157,6 +187,19 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
   constants_.zNear = camera.zNear;
   constants_.radius = radius;
   constants_.strength = strength;
+  constants_.contact = contactShadows;
+  constants_.contactLength = contactLength;
+  {  // the sun in the camera's space, and the camera's axes in the world's
+    Vec3 r, u, b;
+    camera.Axes(&r, &u, &b);
+    const Vec3 sun{view.constants.sunDirection[0], view.constants.sunDirection[1], view.constants.sunDirection[2]};
+    const float in[4] = {Dot(sun, r), Dot(sun, u), Dot(sun, b), 0};
+    std::copy(in, in + 4, constants_.sunInView);
+    const float axes[3][4] = {{r.x, r.y, r.z, 0}, {u.x, u.y, u.z, 0}, {b.x, b.y, b.z, 0}};
+    std::copy(axes[0], axes[0] + 4, constants_.axisRight);
+    std::copy(axes[1], axes[1] + 4, constants_.axisUp);
+    std::copy(axes[2], axes[2] + 4, constants_.axisBack);
+  }
 
   gfx::PassDesc pass;
   pass.color = target_;

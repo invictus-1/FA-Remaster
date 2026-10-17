@@ -73,6 +73,9 @@
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
+// --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
+//           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
+// --contact-shadows  contact shadows (World::contactShadows; modern look): small shadows the sun's maps cannot hold
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
@@ -86,6 +89,9 @@
 // --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
 // --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
 //           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
+// --fsr3-check  AMD's FSR 3 upscaler (fsr3.h) tried on a made-up scene and checked against the scene drawn at
+//           the display's size and against a plain stretch, then timed (fsr3_check.cpp); with --vulkan, on the
+//           Vulkan backend; with --screenshot <name>.png, the pictures compared are written as <name>_*.png
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -211,6 +217,7 @@
 #include "frame.h"
 #include "gfx.h"
 #include "gfx_check.h"
+#include "fsr3_check.h"
 #include "ground.h"
 #include "icons.h"
 #include "lights.h"
@@ -262,7 +269,11 @@ struct Options {
   bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
+  bool fsr3Check = false;               // --fsr3-check
   bool air = false;                     // --air
+  bool softShadows = false;             // --soft-shadows
+  bool contactShadows = false;          // --contact-shadows
+  float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   int motionView = 0;                   // --motion-view
@@ -359,7 +370,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
+    else if (a == "--fsr3-check") o->fsr3Check = true;
     else if (a == "--air") o->air = true;
+    else if (a == "--contact-shadows") o->contactShadows = true;
+    else if (a == "--soft-shadows") {
+      o->softShadows = true;
+      if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
+    }
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--picture-window") o->pictureWindow = true;
@@ -663,6 +680,7 @@ int main(int argc, char** argv) {
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
   if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
+  if (opt.fsr3Check) return Fsr3Check(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
 
   moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
   moho::Vfs vfs;
@@ -780,6 +798,9 @@ int main(int argc, char** argv) {
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
   world.volumetricFog = opt.air;
+  world.softShadows = opt.softShadows;
+  world.contactShadows = opt.contactShadows;
+  if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
   world.motionView = opt.motionView;

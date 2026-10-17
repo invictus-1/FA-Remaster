@@ -323,6 +323,15 @@ class World {
   // volumes, lit by the sun, in place of the sky pass's own. Modern look; off by default.
   bool volumetricClouds = false;
   Clouds clouds;
+  // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
+  // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
+  // `sunSize`: how much wider an edge grows per world unit from its caster (0.02: twice the real sun's).
+  bool softShadows = false;
+  float sunSize = 0.02f;
+  // Contact shadows (ambient_occlusion.h; the lighting upgrade): small shadows in creases and under parts,
+  // too small for the sun's shadow maps, from a short march toward the sun along the scene's depth.
+  // Modern look; off by default.
+  bool contactShadows = false;
   // Motion (motion.h): where each pixel was the frame before, for the temporal upscaler; it needs the
   // scene drawn with one sample a pixel (gSceneSamples 1). `motionView`: a view for checking it (1 the
   // motion as colours, 2 the frame before carried to this one; Motion::Check).

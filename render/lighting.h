@@ -28,6 +28,38 @@ Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
 
+// Soft shadows (the view's softShadows): the sun is not a point, so a shadow's edge is the sharper the
+// nearer what casts it. First what casts it is looked for round the place (taps nearer the sun than
+// it), and how far it stands from the place; the edge is then blurred by that much (taps compared, as
+// the sharp shadow's are, spread over a disc), turned from place to place so that the taps make no
+// pattern. `s`: the place in cascade `i` (x, y in the map, z its depth); `texel` that cascade's texel in
+// world units, `step` in the map's.
+static const float2 kShadowDisc[16] = {
+  float2(-0.942, -0.399), float2(0.946, -0.769), float2(-0.094, -0.929), float2(0.345, 0.294),
+  float2(-0.916, 0.458), float2(-0.815, -0.879), float2(-0.383, 0.276), float2(0.975, 0.756),
+  float2(0.443, -0.975), float2(0.537, -0.474), float2(-0.265, -0.419), float2(0.792, 0.191),
+  float2(-0.242, 0.997), float2(-0.814, 0.914), float2(0.200, 0.786), float2(0.144, -0.141)};
+float SoftSunShadow(float3 s, int i, float texel, float step) {
+  float perDepth = 1 / length(shadowMatrix[i][2].xyz);  // world units one of the map's depth spans
+  float turn = frac(sin(dot(s.xy * 4096, float2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+  float2x2 r = float2x2(cos(turn), -sin(turn), sin(turn), cos(turn));
+  float search = max(softShadows.z / texel, 1.5) * step;
+  float sum = 0, n = 0;
+  [unroll] for (int k = 0; k < 16; ++k) {
+    float d = shadowMaps.SampleLevel(samplerPointClamp, float3(s.xy + mul(r, kShadowDisc[k]) * search, i), 0);
+    if (d > s.z) {  // (reversed depth: nearer the sun is greater)
+      sum += d;
+      n += 1;
+    }
+  }
+  if (n == 0) return 1;
+  float gap = (sum / n - s.z) * perDepth;
+  float spread = clamp(gap * softShadows.y, texel * 1.2, max(softShadows.w, texel * 1.2)) / texel * step;
+  float lit = 0;
+  [unroll] for (int k = 0; k < 16; ++k) lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + mul(r, kShadowDisc[k]) * spread, i), s.z);
+  return lit / 16;
+}
+
 // 1 in sunlight, 0 in shadow. `normal` is the surface's (the lookup is moved a little along it, which
 // keeps a lit surface from shadowing itself).
 float SunShadow(float3 world, float3 normal) {
@@ -41,6 +73,7 @@ float SunShadow(float3 world, float3 normal) {
       uint mapWidth, mapHeight, mapLayers;  // (the maps' size is a setting)
       shadowMaps.GetDimensions(mapWidth, mapHeight, mapLayers);
       float step = 1.0 / float(mapWidth);
+      [branch] if (softShadows.x > 0.5) return SoftSunShadow(s, i, texel, step);
       for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
           lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + float2(x, y) * step, i), s.z);
