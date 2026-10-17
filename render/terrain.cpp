@@ -286,7 +286,7 @@ RWTexture2D<float4> colours : register(u0);
   #define AVERAGE(n) albedoMaps[n].SampleLevel(samplerLinear, float2(0.5, 0.5), 16)
   // (and how grassy each layer is, by how green its average is against its red and blue: a meadow's grass, not
   // dirt, rock or sand; the ground cover reads it in the alpha)
-  #define GRASSY(c) saturate((c.g - max(c.r, c.b)) / max(c.g, 0.05) * 6)
+  #define GRASSY(c) saturate((c.g - max(c.r, c.b)) / max(c.g, 0.05) * 14)
   float4 albedo = AVERAGE(0);
   float grassy = GRASSY(albedo);
   #define LAYER(n, w) { float4 a = AVERAGE(n); albedo = lerp(albedo, a, w); grassy = lerp(grassy, GRASSY(a), w); }

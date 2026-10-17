@@ -1508,6 +1508,32 @@ void World::Render() {
     rays.Build(meshes);
     terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
   }
+  // ground cover: what presses the grass flat (what stands on the ground near the camera: every model drawn that is
+  // not scenery, its footprint from its bounds), then where it lies this frame (its shader made the first time)
+  grassNow_ = false;
+  if (groundCover && look == Look::Modern && !sidePicture && haveMap_) {
+    if (!grassTried_) {
+      grassTried_ = true;
+      std::string why;
+      grassMade_ = grass.Init(&why);
+      if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
+    }
+    if (grassMade_ && camera.distance <= grass.farthest) {
+      std::vector<float> discs;
+      meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
+        if (scenery || !model || discs.size() >= 3 * 1024) return;
+        const float x = row0[3], z = row2[3];
+        const float scale = std::sqrt(row0[0] * row0[0] + row1[0] * row1[0] + row2[0] * row2[0]);
+        if (row1[3] + model->boundsMin.y * scale > GroundHeight(x, z) + 1.5f) return;  // (in the air)
+        const float half = std::max({std::fabs(model->boundsMin.x), std::fabs(model->boundsMax.x), std::fabs(model->boundsMin.z),
+                                     std::fabs(model->boundsMax.z)});
+        discs.insert(discs.end(), {x, z, half * scale * 0.9f + 0.1f});
+      });
+      Stage("ground cover pressed flat");
+      grass.Prepare(view, camera, discs);
+      grassNow_ = true;
+    }
+  }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
     Stage("bounce light");
     lights.Bind();  // (what the rays meet takes the small lights too)
@@ -1570,19 +1596,11 @@ void World::Render() {
       post.ContinueScene();
       lights.Bind();
     }
-    // ground cover near the camera (its shader made the first time it is wanted)
-    if (groundCover && look == Look::Modern && !sidePicture) {
-      if (!grassTried_) {
-        grassTried_ = true;
-        std::string why;
-        grassMade_ = grass.Init(&why);
-        if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
-      }
-      if (grassMade_) {
-        Stage("ground cover");
-        grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
-                   static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
-      }
+    // ground cover near the camera (prepared before the pass)
+    if (grassNow_) {
+      Stage("ground cover");
+      grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
+                 static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)

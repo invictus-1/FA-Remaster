@@ -46,7 +46,7 @@
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
 // --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
-//           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, with commas between
+//           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail, with commas between
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -828,6 +828,7 @@ int main(int argc, char** argv) {
         picture.SetSoftShadows(s.find(",soft-shadows,") != std::string::npos);
         picture.SetRayTracing(s.find(",ray-tracing,") != std::string::npos);
         picture.SetWeatherEffects(s.find(",weather-effects,") != std::string::npos);
+        picture.SetGroundDetail(s.find(",ground-detail,") != std::string::npos);
       }
       if (!picture.Open(&vfs, opt.map, &error)) {
         fprintf(stderr, "render: --picture: %s\n", error.c_str());
