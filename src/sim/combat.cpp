@@ -2782,6 +2782,24 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       return 0;
     }
     case 3: {  // chase
+      // 0x5f391d..0x5f3993: a member of a FormAttack's formation (the task holds it, +0x58, and is coordinated, +0x8d)
+      // that is not the formation's leader (u+0x584; also none) does not chase: it stays with the formation, asking
+      // every beat (return 1) whether the leader's attacker has its desired target (0x5f2fb0: leader +0x544 vt+0x24,
+      // HasTarget 0x5e2a10); then it lets go of the formation (+0x58 = 0, +0x8d = 0, the navigator's
+      // IgnoreFormation(true)) and goes for the target itself (Update 0x5f3020). Seen: MP1 2600, army 5's FormAttack
+      // of three interceptors on a blip: the original's 0x500023, 20 from the target, keeps the formation's speed
+      // cap at 2601 and flies to its slot by the leader 0x500028 from 2603; ours took the in-range branch at once.
+      if (d.coordinated && AttackFormationCommand(sim, u, t) && u->formLeader != EntityRef(u)) {
+        Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
+        Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
+        if (L && !L->weapons.empty() && HasTarget(sim, L->desiredTarget)) {
+          d.formation = false;
+          d.coordinated = false;
+          u->navIgnoreFormation = true;
+          AttackUpdate(sim, u, t, target);
+        }
+        return 1;
+      }
       bool has = TaskHasTarget(sim, target);
       bool busy = u->motion.hasGoal;
       if (!has || TaskTargetLost(sim, target)) {  // 0x5f3994: EntityLost 0x5e2db0, then HasTarget 0x5e2a10
