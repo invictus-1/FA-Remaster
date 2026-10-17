@@ -331,6 +331,9 @@ struct LookSettings {
   // (bounce light and reflections, the reflections from the next map loaded; only where the card can) and
   // Weather Effects (lit rain and snow, rain's splashes). Off as at first.
   bool atmosphere = false, softShadows = false, rayTracing = false, weatherEffects = false;
+  // Ground Detail (the renderer's request 33): grass near the camera, pressed flat round units and buildings; later
+  // the remastered ground's decals and battle scars. Off as at first.
+  bool groundDetail = false;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;

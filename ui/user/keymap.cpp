@@ -301,7 +301,8 @@ const std::vector<const char*>& ConsoleNames() {
         // ours (the Video options' and the statistics overlay's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
-        "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects"};
+        "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
+        "remaster_ground_detail"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -373,12 +374,12 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[11] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
-                           "atmosphere", "softShadows", "rayTracing", "weatherEffects"};
-  const bool values[11] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+  const char* names[12] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+                           "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail"};
+  const bool values[12] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
-                           looks.weatherEffects};
-  for (int i = 0; i < 11; ++i) {
+                           looks.weatherEffects, looks.groundDetail};
+  for (int i = 0; i < 12; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -790,11 +791,12 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       return;
     }
     if (key == "REMASTER_ATMOSPHERE" || key == "REMASTER_SOFT_SHADOWS" || key == "REMASTER_RAY_TRACING" ||
-        key == "REMASTER_WEATHER_EFFECTS") {  // (the lighting upgrade's switches: 0 off, 1 on)
-      bool& on = key == "REMASTER_ATMOSPHERE"     ? looks.atmosphere
-                 : key == "REMASTER_SOFT_SHADOWS" ? looks.softShadows
-                 : key == "REMASTER_RAY_TRACING"  ? looks.rayTracing
-                                                  : looks.weatherEffects;
+        key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL") {  // (the renderer's switches: 0 off, 1 on)
+      bool& on = key == "REMASTER_ATMOSPHERE"       ? looks.atmosphere
+                 : key == "REMASTER_SOFT_SHADOWS"   ? looks.softShadows
+                 : key == "REMASTER_RAY_TRACING"    ? looks.rayTracing
+                 : key == "REMASTER_GROUND_DETAIL"  ? looks.groundDetail
+                                                    : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
     }

@@ -144,6 +144,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`remaster_weather_effects`: lit rain and snow, rain's splashes). Where the graphics card cannot ray
   trace (the renderer says so after its first picture, the menu's or a game's:
   `moho64ui_RayTracingSupported()`), Ray Tracing offers one state, greyed out, when the dialog opens.
+  A fifth, Ground Detail (`remaster_ground_detail`, the renderer's request 33, off by default): grass near the
+  camera, pressed flat round units and buildings (later the remastered ground's decals and battle scars).
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'

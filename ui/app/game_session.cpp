@@ -202,6 +202,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.softShadows != lookNow.softShadows) picture.SetSoftShadows(looks.softShadows);
     if (!lookApplied || looks.rayTracing != lookNow.rayTracing) picture.SetRayTracing(looks.rayTracing);
     if (!lookApplied || looks.weatherEffects != lookNow.weatherEffects) picture.SetWeatherEffects(looks.weatherEffects);
+    if (!lookApplied || looks.groundDetail != lookNow.groundDetail) picture.SetGroundDetail(looks.groundDetail);  // (request 33)
     if (render::World* w = picture.world()) {
       w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;

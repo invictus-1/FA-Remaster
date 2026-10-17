@@ -89,7 +89,8 @@ check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostrin
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
 check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
 -- The lighting upgrade (the renderer's request 31): four switches, each off unless chosen
-for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tracing', 'remaster_weather_effects'} do
+for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tracing', 'remaster_weather_effects',
+               'remaster_ground_detail'} do
     check("the Video tab has " .. key .. ", off unless chosen", video[key] and video[key].default, 0)
 end
 video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)

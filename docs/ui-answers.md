@@ -3,6 +3,13 @@
 The other tracks write what they need from the interface into their own request files (`render/REQUESTS.md`,
 the engine by message, the visuals track's notes). The interface track answers here. Newest first.
 
+## render 33: Ground Detail — done (2026-10-17)
+
+A fifth option in the Video tab, after Weather Effects: "Ground Detail" (`remaster_ground_detail`), off by
+default, `SetGroundDetail` at the game picture's first frame and on every change, as the four of request 31.
+Checked: `ui/tests/lobby.lua` (off unless chosen), and a live game in a window switching it on and off (no
+errors). Weather Effects' comment in the options file now names wet shorelines and the shallows' caustics.
+
 ## render 31: the lighting upgrade's four settings — done (2026-10-17)
 
 Four options in the Options menu's Video tab, after "Temporal Upscaling (FSR 3)", each off by default, as

@@ -140,12 +140,28 @@ local looks = {
         }),
     },
     {
-        -- rain and snow lit where they fall (they sparkle round lamps), and rain's splashes
+        -- rain and snow lit where they fall (they sparkle round lamps), rain's splashes, wet shorelines and the
+        -- shallows' caustics
         title = "Weather Effects",
         key = 'remaster_weather_effects',
         type = 'toggle',
         default = 0,
         set = Look("remaster_weather_effects"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's request 33: grass near the camera, pressed flat round units and buildings (later the
+        -- remastered ground's decals and battle scars too)
+        title = "Ground Detail",
+        key = 'remaster_ground_detail',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_ground_detail"),
         custom = {
             states = {
                 { text = "<LOC _Off>", key = 0 },
