@@ -74,6 +74,12 @@ bool TransportAssignSlotFor(Sim& sim, Unit* transport, Unit* cargo, int requeste
 void TransportRemoveReservationFor(Sim& sim, Unit* transport, const Unit* cargo);
 // The factory hand-off: append TransportLoadUnits(T) to u if the issue path accepts it.
 bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T);
+// TransportReverseLoadUnits (23, the interface's "selected transport, right click on a unit"; no Lua binding) at
+// issue time. UNIT_IssueCommand 0x6f12c0 -> 0x6ef660: the units the order goes to become {the best transport of
+// `units` for the target, the target} (ascending id; empty: nobody gets it). ProcessUnitCommand 0x6ef9e0, case 23
+// (0x6f0f53): whether u of that set refuses it (it may call a transport's OnTransportReject).
+std::vector<Unit*> ReverseLoadIssueSet(Sim& sim, const std::vector<Unit*>& units, Entity* target);
+bool RefusesReverseLoad(Sim& sim, Unit* u, const std::vector<Unit*>& set, Entity* target);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
 BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
@@ -89,7 +95,8 @@ uint32_t CommandCapsOfValue(lua_State* L, int idx);
 uint32_t LiveCommandCaps(lua_State* L, const Unit* u);
 
 // Command dispatch (sim/build.cpp StartBuildTask/TickBuildTask/EndBuildTask call these).
-// TransportLoadUnits (22) and Dock (39) share one case of the dispatch; the unload types (24, 25) and Ferry (17).
+// TransportLoadUnits (22) and Dock (39) share one case of the dispatch; TransportReverseLoadUnits (23), the unload
+// types (24, 25) and Ferry (17).
 BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c);
 // The transport orders DispatchTask carries out without a task: DetachFromTransport (26), an unload order a
 // teleporter gets on an entity (its destination), a carrier's Dock on itself. true: done (the order is popped).

@@ -95,7 +95,8 @@ struct StreamIssueData {
 };
 // UNIT_IssueCommand 0x6f12c0 for a command-stream order: one command for every unit that accepts it (units in
 // ascending entity id), created at the first; clear empties each accepting unit's queue first. nullptr if no
-// unit took it.
+// unit took it. (A TransportReverseLoadUnits goes to its target and the transport chosen for it instead:
+// transport.h ReverseLoadIssueSet.)
 std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
                                              bool clear);
 // UNIT_IssueFactoryCommand 0x6f14d0 for a command-stream order: into the rally queues of the factories among

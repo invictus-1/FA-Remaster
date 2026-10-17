@@ -2815,6 +2815,66 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       Callback(sim, u, "OnStartTransportLoading");
       t->order = "LoadUnits";
     }
+  } else if (c.type == CommandType::TransportReverseLoadUnits) {
+    // DispatchTask case 23 0x609f8a (the jump table 0x60a3e8, entry 23; read 2026-10-17): the order's target
+    // (CUnitCommand::GetTarget 0x5f55f0) is the unit to be picked up. The issue path gave the order to it and to the
+    // transport chosen for it (ReverseLoadIssueSet), so each of the two makes the task of its own side, as for a
+    // TransportLoadUnits, and the two meet through the one command they share.
+    if (target == u) {
+      // 0x609f99..0x609fc8: X = the first unit of the command's set (cmd+0xf8..+0xfc, ascending id) that is not
+      // the unit itself; none: no task
+      Unit* X = nullptr;
+      for (Unit* o : c.units)
+        if (o && o != u && (!X || o->id < X->id)) X = o;
+      if (!X) return nullptr;
+      if (InCat(sim, X, "CARRIER")) {  // 0x60a016: IssueCarrierLandTask 0x606d80 (none for a dead carrier)
+        if (X->dead || !X->transport) return nullptr;
+        d->kind = kCarrierLand;
+        d->transport = EntityRef(X);
+        SetState(u, "TransportLoading", true);
+        u->focusId = EntityRef(X);
+        Callback(sim, u, "OnAssignedFocusEntity");
+        t->order = "CarrierLand";
+      } else if (InCat(sim, X, "AIRSTAGINGPLATFORM")) {
+        // 0x60a07a: IssueCallAirStagingPlatformTask 0x601ce0 -> CUnitCallAirStagingPlatform (air_staging.md 2): not
+        // built (nor the platform's side, below)
+        return nullptr;
+      } else if (InCat(sim, X, "TELEPORTATION")) {  // 0x60a0d4: IssueCallTeleportTask 0x6012b0
+        if (X->dead) return nullptr;
+        d->kind = kCallTeleport;
+        d->transport = EntityRef(X);
+        SetState(u, "TransportLoading", true);
+        t->order = "CallTeleport";
+      } else if (IsAirUnit(sim, X)) {
+        // 0x60a0f7: NewCallTransportCommand 0x5ffbb0: no task for a dead X (vt+0x28, 0x5ffbd7) nor for one without
+        // a transport (0x5ffbdd: the warning "Attepted to call illegal transport %s"); else CUnitCallTransport
+        if (X->dead || !X->transport) return nullptr;
+        d->kind = kCall;
+        d->transport = EntityRef(X);
+        SetState(u, "TransportLoading", true);
+        t->order = "CallTransport";
+      } else {
+        return nullptr;  // 0x609f80: IssueCallLandTransportTask 0x6007c0, CUnitCallLandTransport: not built
+      }
+    } else {
+      // 0x60a101..0x60a1e7: a unit with a transport (+0x55c) and a target: the cargo is that one unit (a set made
+      // here, EntitySet::Add 0x57ddd0); a CARRIER retrieves it (CUnitCarrierRetrieve 0x606450), any other loads it
+      // (CUnitLoadUnits::operator new 0x6250b0, the same task a TransportLoadUnits gives the transport). Unlike that
+      // case nothing is filtered: no test of the target's transport (GetTransportedBy) nor of an AIRSTAGINGPLATFORM.
+      if (!u->transport || !target) return nullptr;
+      if (InCat(sim, u, "CARRIER")) {
+        d = NewRetrieve(sim, u, {EntityRef(target)});
+        t->order = "CarrierRetrieve";
+      } else if (u->transport->isAirStaging) {
+        return nullptr;  // (CUnitLoadUnits with the staging flag: its states 3 and 4 are not built)
+      } else {
+        d->kind = kLoad;
+        d->cargo.push_back(EntityRef(target));
+        SetState(u, "TransportLoading", true);  // the ctor 0x624b70
+        Callback(sim, u, "OnStartTransportLoading");
+        t->order = "LoadUnits";
+      }
+    }
   } else if ((c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) &&
              u->transport && u->transport->isAirStaging && InCat(sim, u, "CARRIER")) {
     // (a teleporter's unload on an entity never gets here: TransportOrderOnTheSpot)
@@ -3318,6 +3378,68 @@ bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T) {
   c->pos = T->position;
   c->hasPos = true;
   Append(u, c);
+  return true;
+}
+
+// TransportReverseLoadUnits at issue time (read 2026-10-17). UNIT_IssueCommand 0x6f12c0 calls 0x6ef660(data, its copy
+// of the units) before anything else (0x6f1315); for type 23 (0x6ef687) that empties the copy (0x6ef6c7..0x6ef6fc)
+// and fills it again with two units, or none:
+// - the target: the entity of the issue data's entity id (data+0x14, std::map_EntId_Entity::find 0x6856c0, whatever
+//   the target's type) as a unit (vt+0x10), alive (vt+0x28) and mobile (vt+0x30); else nobody gets the order;
+// - the transport: of the given units (ascending id) the ones alive and not being built (vt+0x28, vt+0x34), in
+//   TRANSPORTATION, AIRSTAGINGPLATFORM or TELEPORTATION (0x6ef7b3..0x6ef8a6), with a transport (+0x55c) that has
+//   room for the target's blueprint (TransportHasSpaceFor vt+0x28, 0x6ef8c6); the nearest in 2D (the root of
+//   dz*dz + dx*dx, 0x40eaf0), its distance halved (0xe4f724 = 0.5) when it is idle (Unit::IsIdleState 0x6a7d60, its
+//   queue as it was before this order); strictly nearer wins (0x6ef93c, from +inf: the global 0x10b7fd0, set from
+//   0xf3f7d0 by 0xbd9080), so of equals the lowest id. None: nobody gets the order.
+// Both go in with EntitySet::Add 0x57ddd0 (ascending id). No army is tested: the target need not be a unit the
+// order's source may command (the interface offers the order only on the player's own units).
+std::vector<Unit*> ReverseLoadIssueSet(Sim& sim, const std::vector<Unit*>& units, Entity* target) {
+  Unit* T = target && target->kind == Entity::Kind::Unit ? static_cast<Unit*>(target) : nullptr;
+  if (!T || T->dead || !(T->motion.bp && T->motion.bp->mobile())) return {};
+  float best = std::numeric_limits<float>::infinity();
+  Unit* carrier = nullptr;
+  for (Unit* X : units) {
+    if (!X || X->dead || X->beingBuilt) continue;
+    if (!InCat(sim, X, "TRANSPORTATION") && !InCat(sim, X, "AIRSTAGINGPLATFORM") && !InCat(sim, X, "TELEPORTATION"))
+      continue;
+    if (!X->transport || !HasSpaceFor(sim, *X->transport, *T->blueprint)) continue;
+    const float dz = X->position.z - T->position.z, dx = X->position.x - T->position.x;
+    float d = std::sqrt(dz * dz + dx * dx);
+    if (X->commands.empty()) d *= 0.5f;
+    if (best > d) {
+      best = d;
+      carrier = X;
+    }
+  }
+  if (!carrier) return {};
+  if (carrier->id < T->id) return {carrier, T};
+  return {T, carrier};
+}
+
+// ProcessUnitCommand 0x6ef9e0, the case of type 23 (0x6f0f53; the type switch 0x6efdc2), for u of the set above. The
+// unit refuses the order
+// - when it is neither mobile (vt+0x30) nor an AIRSTAGINGPLATFORM (0x6f0f53..0x6f0fc8);
+// - when it rides a transport (Unit::GetTransportedBy 0x5e3c30) or is a PODS unit (0x6f0fce..0x6f1039);
+// - unless a unit X of the set (ascending id; alive, not being built, with a transport: 0x6f1055..0x6f1081) can carry
+//   the order's target (TransportCanCarryUnit vt+0x24, 0x6f10a4): the first such X decides, and refuses on the Seabed
+//   layer (0x6f10e6). Without a target unit the search stops at the first X with a transport. When none could carry
+//   it, the last X looked at hears of it, X:OnTransportReject() (CScriptObject::RunScript 0x581aa0, 0x6f10c6), unless
+//   X is u itself.
+// No command cap is tested: the target needs no CallTransport cap.
+bool RefusesReverseLoad(Sim& sim, Unit* u, const std::vector<Unit*>& set, Entity* target) {
+  if (!(u->motion.bp && u->motion.bp->mobile()) && !InCat(sim, u, "AIRSTAGINGPLATFORM")) return true;
+  if (u->transportedBy || InCat(sim, u, "PODS")) return true;
+  Unit* T = target && target->kind == Entity::Kind::Unit ? static_cast<Unit*>(target) : nullptr;
+  Unit* last = nullptr;
+  for (Unit* X : set) {
+    if (!X || X->dead || X->beingBuilt || !X->transport) continue;
+    last = X;
+    if (!T) break;
+    if (CanCarryUnit(sim, *X->transport, T)) return X->layer == "Seabed";
+  }
+  if (!last || last == u) return true;
+  sim.CallMethod(sim.L(), last, "OnTransportReject", 0);
   return true;
 }
 

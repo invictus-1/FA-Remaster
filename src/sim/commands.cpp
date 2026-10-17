@@ -1299,8 +1299,15 @@ std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<
   return c;
 }
 
-std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
+std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& given, const StreamIssueData& d,
                                              bool clear) {
+  // 0x6ef660 (0x6f1315), before anything else: a TransportReverseLoadUnits goes to the transport chosen for its target
+  // and to the target, not to the units it was given (transport.cpp ReverseLoadIssueSet). Every test below sees that
+  // set, ProcessUnitCommand's "units of this message" included (it gets a copy of it, 0x6f137b).
+  const bool reverseLoad = d.type == static_cast<int>(CommandType::TransportReverseLoadUnits);
+  Entity* const reverseTarget = reverseLoad ? sim.FindEntityById(d.target.entity) : nullptr;
+  const std::vector<Unit*> reverseSet = reverseLoad ? ReverseLoadIssueSet(sim, given, reverseTarget) : std::vector<Unit*>{};
+  const std::vector<Unit*>& units = reverseLoad ? reverseSet : given;
   // types whose move-task destructor does not abort the move when the next command is one of them (0x618998). The
   // table covers types 0..31 only: a type above 31 takes the same branch as the table's "keep" entries
   // (0x6187f4 cmp eax, 0x1f; ja 0x618807), i.e. Sacrifice 32 .. Dock 39 (AggressiveMove 35 among them) keep the move
@@ -1367,6 +1374,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (sameOrderAgain(u)) continue;
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
+    if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
     if (d.insertBefore != -1) {

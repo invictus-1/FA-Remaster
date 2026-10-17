@@ -2993,6 +2993,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       return StartScriptTask(sim, u, c);
     case CommandType::TransportLoadUnits:
     case CommandType::Dock:  // (DispatchTask 0x609ac6: one case for both)
+    case CommandType::TransportReverseLoadUnits:  // (0x609f8a)
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
     case CommandType::Ferry:
@@ -3081,6 +3082,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
     case CommandType::Script: r = TickScriptTask(sim, L, u, t); break;
     case CommandType::TransportLoadUnits:
     case CommandType::Dock:
+    case CommandType::TransportReverseLoadUnits:
     case CommandType::TransportUnloadUnits:
     case CommandType::TransportUnloadSpecificUnits:
     case CommandType::Ferry: r = TickTransportTask(sim, u, t); break;

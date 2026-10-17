@@ -1,0 +1,19 @@
+# TransportReverseLoadUnits (23): a transport told to pick up one of its army's units (the interface's right click with
+# a transport selected, over the unit; no Lua binding). An --orders file for moho64 on a session whose army 1 is the
+# player's and gets no units before beat 10 (ids 0 = its commander, then 1, 2, 3 for the units made here), e.g.
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 320
+#          --orders fa-remaster\tests\transport_reverse_load.txt --log out.log
+# The log's "TEST ok" / "TEST FAIL" lines and "TEST done: <n> failed" give the result (ui/tests' form).
+# 1. A T1 air transport (1) and a tank (2) 25 apart: the order goes to both (the issue path chooses the transport and
+#    adds the target: 0x6ef660); the transport flies to the tank, the tank gets on board (seen: attached at beat 62).
+10 lua _rl = {failed = 0} function _rl.check(what, ok, got) if ok then LOG('TEST ok   ' .. what) else _rl.failed = _rl.failed + 1 LOG('TEST FAIL ' .. what .. ': got ' .. tostring(got)) end end local p = ArmyBrains[1]:GetListOfUnits(categories.COMMAND, false)[1]:GetPosition() local t = CreateUnitHPR('uea0107', 1, p[1] + 20, p[2], p[3] + 20, 0, 0, 0) local k = CreateUnitHPR('uel0201', 1, p[1] + 40, p[2], p[3] + 35, 0, 0, 0) _rl.check('a transport and a tank are made as units 1 and 2', t:GetEntityId() == '1' and k:GetEntityId() == '2', t:GetEntityId() .. ' ' .. k:GetEntityId()) _rl.tank = k:GetPosition()
+20 issue 23 1 @2
+21 lua local q1, q2 = table.getn(GetUnitById(1):GetCommandQueue()), table.getn(GetUnitById(2):GetCommandQueue()) _rl.check('the transport and the tank both hold the order', q1 == 1 and q2 == 1, q1 .. ' ' .. q2) _rl.check('the transport is loading', GetUnitById(1):IsUnitState('TransportLoading'), false)
+120 lua local t, k = GetUnitById(1), GetUnitById(2) local a = t:GetPosition() local dx, dz = a[1] - _rl.tank[1], a[3] - _rl.tank[3] _rl.check('the tank is on board', table.getn(t:GetCargo()) == 1 and k:IsUnitState('Attached'), table.getn(t:GetCargo())) _rl.check('the transport went to where the tank stood', dx * dx + dz * dz < 4, string.format('%.2f %.2f', a[1], a[3])) _rl.check('both orders are done', table.getn(t:GetCommandQueue()) == 0 and not t:IsUnitState('TransportLoading'), table.getn(t:GetCommandQueue()))
+# 2. A second tank (3) near the loaded transport: picked up as well.
+130 lua local w = GetUnitById(1):GetPosition() local k = CreateUnitHPR('uel0201', 1, w[1] + 10, w[2], w[3] + 10, 0, 0, 0) _rl.check('a second tank is made as unit 3', k:GetEntityId() == '3', k:GetEntityId())
+140 issue 23 1 @3
+# 3. The commander as the target: a T1 transport cannot carry it, so nobody gets the order (the load under way goes on).
+150 issue 23 1 @0
+151 lua local q = table.getn(GetUnitById(0):GetCommandQueue()) _rl.check('the commander did not get the order', q == 0, q)
+300 lua local t = GetUnitById(1) _rl.check('both tanks are on board', table.getn(t:GetCargo()) == 2 and GetUnitById(3):IsUnitState('Attached'), table.getn(t:GetCargo())) LOG('TEST done: ' .. _rl.failed .. ' failed')
