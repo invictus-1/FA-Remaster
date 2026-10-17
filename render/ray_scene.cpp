@@ -54,6 +54,34 @@ cbuffer Entry : register(b1) {
 }
 )hlsl";
 
+// What each instance is, for every shader that traces (kRayShaderBlock's t37), from its data and its level's colour:
+// rgb its albedo (linear; a unit's team colour in by its share), a 0..1 for leaves (their coverage), 2 something
+// solid, 3 the ground, 4 the water. A thread for each instance.
+const char kResolve[] = R"hlsl(
+Texture2D colours : register(t0);
+StructuredBuffer<uint4> instanceData : register(t0, space1);
+RWTexture2D<float4> picture : register(u0);
+cbuffer Count : register(b1) {
+  uint4 count;  // x: how many instances
+};
+float3 Lin(float3 c) { return pow(max(c, 0), 2.2); }
+[numthreads(64, 1, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint i = id.x;
+  if (i >= count.x) return;
+  uint4 info = instanceData[i];
+  float4 o;
+  if (info.y & 1) o = float4(0, 0, 0, 3);
+  else if (info.y & 2) o = float4(0.02, 0.05, 0.08, 4);
+  else {
+    float4 e = colours.Load(int3(info.x % 1024, info.x / 1024, 0));
+    float3 team = float3(info.z & 255, (info.z >> 8) & 255, (info.z >> 16) & 255) / 255.0;
+    o.rgb = lerp(Lin(e.rgb), Lin(team), info.y & 12 ? 0 : e.a);
+    o.a = info.y & 8 ? saturate(e.a) : 2;
+  }
+  picture[uint2(i % 1024, i / 1024)] = o;
+}
+)hlsl";
+
 // The check view (RayScene::Check): a ray from the camera through each pixel; what it meets lit by the sun,
 // whose shadow another ray finds, and by the sky. The ground by its own normals (the terrain's normal map) and a
 // colour of its own; a model by its colour, facing the ray (no normals are kept for models).
@@ -75,7 +103,7 @@ cbuffer RayCheck : register(b1) {
   if (RayTrace(from, d, 0, 1e6, 0xff, seed, t, instance)) {
     float3 p = from + d * t, albedo, n;
     RaySurfaceAt(instance, p, d, size.zw, albedo, n);
-    c = albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + SkyAmbient(n) * modern.y);
+    c = RayLitAt(p, n, albedo, seed);
   } else {
     c = skyZenith.w > 0.5 ? ComputedSky(d) : float3(0.4, 0.5, 0.65);
   }
@@ -95,6 +123,7 @@ uint32_t Pack(const float* c) {
 }
 
 constexpr int kColoursWide = 1024, kColoursHigh = 64;  // (65,536 levels' colours)
+constexpr uint32_t kMostInstances = 1024 * 128;          // (what each instance is: 131,072 at most)
 
 }  // namespace
 
@@ -102,8 +131,8 @@ RayScene::~RayScene() {
   for (auto& [serial, level] : levels_) device_->Destroy(level.structure);
   for (gfx::Structure s : {scene_, ground_, water_}) device_->Destroy(s);
   for (gfx::Buffer b : {groundVertices_, groundIndices_, waterVertices_, instanceData_}) device_->Destroy(b);
-  for (gfx::Texture t : {colours_, picture_}) device_->Destroy(t);
-  for (gfx::Pipeline p : {average_, check_}) device_->Destroy(p);
+  for (gfx::Texture t : {colours_, picture_, instancesPicture_}) device_->Destroy(t);
+  for (gfx::Pipeline p : {average_, check_, resolve_}) device_->Destroy(p);
 }
 
 bool RayScene::Init(std::string* error) {
@@ -120,17 +149,25 @@ bool RayScene::Init(std::string* error) {
   cd.name = "rays: the check view";
   cd.source = check;
   if (average_) check_ = device_->CreateCompute(cd, error);
+  const std::string resolve = std::string(kViewShaderBlock) + kResolve;
+  cd.name = "rays: what each instance is";
+  cd.source = resolve;
+  if (check_) resolve_ = device_->CreateCompute(cd, error);
   gfx::TargetDesc td;
   td.storage = true;
   td.width = kColoursWide;
   td.height = kColoursHigh;
   td.format = gfx::Format::RGBA8;
-  if (check_) colours_ = device_->CreateTarget(td);
+  if (resolve_) colours_ = device_->CreateTarget(td);
+  td.width = 1024;
+  td.height = kMostInstances / 1024;
+  td.format = gfx::Format::RGBA32F;
+  if (colours_) instancesPicture_ = device_->CreateTarget(td);
   gfx::BufferDesc bd;
   bd.kind = gfx::BufferKind::Shader;
   bd.dynamic = true;
   bd.stride = 16;
-  if (colours_) instanceData_ = device_->CreateBuffer(bd);
+  if (instancesPicture_) instanceData_ = device_->CreateBuffer(bd);
   available_ = static_cast<bool>(instanceData_);
   return available_;
 }
@@ -257,7 +294,22 @@ void RayScene::Build(const MeshRenderer& meshes) {
     device_->SetTexture(0, {});
     device_->SetTexture(1, {});
   }
-  if (!info_.empty()) device_->UpdateBuffer(instanceData_, info_.data(), static_cast<uint32_t>(info_.size() * sizeof(uint32_t)));
+  if (instances_.size() > kMostInstances) {  // (what is past the picture's room is left out of the scene)
+    instances_.resize(kMostInstances);
+    info_.resize(static_cast<size_t>(kMostInstances) * 4);
+  }
+  if (!info_.empty()) {  // what each instance is, as the shaders that trace read it
+    device_->UpdateBuffer(instanceData_, info_.data(), static_cast<uint32_t>(info_.size() * sizeof(uint32_t)));
+    const uint32_t count[4] = {static_cast<uint32_t>(instances_.size()), 0, 0, 0};
+    device_->SetPipeline(resolve_);
+    device_->SetConstants(1, count, sizeof count);
+    device_->SetTexture(0, colours_);
+    device_->SetShaderBuffer(instanceData_, 0);
+    device_->SetStorage(0, instancesPicture_);
+    device_->Dispatch((count[0] + 63) / 64, 1, 1);
+    device_->SetStorage(0, {});
+    device_->SetTexture(0, {});
+  }
   device_->BuildScene(&scene_, instances_.data(), static_cast<uint32_t>(instances_.size()));
 }
 
@@ -296,16 +348,15 @@ gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, gfx::
 }
 
 void RayScene::Bind(gfx::Texture groundNormals, gfx::Texture groundColours) {
-  device_->SetScene(kSceneSlot, scene_);
-  device_->SetTexture(0, colours_);
-  device_->SetTexture(1, groundNormals);
-  device_->SetTexture(2, groundColours);
-  device_->SetShaderBuffer(instanceData_, 0);
+  device_->SetScene(kRaySceneSlot, scene_);
+  device_->SetTexture(kRayInstancesSlot, instancesPicture_);
+  device_->SetTexture(kRayGroundSlot, groundNormals);
+  device_->SetTexture(kRayGroundSlot + 1, groundColours);
 }
 
 void RayScene::Unbind() {
-  for (int i = 0; i < 3; ++i) device_->SetTexture(i, {});
-  device_->SetScene(kSceneSlot, {});
+  for (int slot : {kRayInstancesSlot, kRayGroundSlot, kRayGroundSlot + 1}) device_->SetTexture(slot, {});
+  device_->SetScene(kRaySceneSlot, {});
 }
 
 }  // namespace render

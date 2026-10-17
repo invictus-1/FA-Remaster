@@ -479,6 +479,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // reflections by ray tracing (where the shaders were built for it)
+  reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
+  if (reflectNow_) {
+    c.rayEffects[0] = 1;
+    c.rayEffects[1] = 1000;
+    c.rayEffects[2] = static_cast<float>(map.width);
+    c.rayEffects[3] = static_cast<float>(map.height);
+  }
   // bounce light: its probes placed round the camera's target (their shaders made the first time it is wanted)
   bounceNow_ = false;
   if (bounceLight && look == Look::Modern && haveMap_ && !sidePicture && RaysReady()) {
@@ -1462,9 +1470,10 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
-  if ((rayView || bounceNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
+  if ((rayView || bounceNow_ || reflectNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
+    terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
   }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
     Stage("bounce light");
@@ -1513,6 +1522,7 @@ void World::Render() {
   device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
   if (bounceNow_) bounce.Bind();
+  if (reflectNow_) rays.Bind(terrain.NormalMap(), terrain.GroundColours());  // (for the surfaces that trace)
   lights.Bind();
   if (haveMap_) {
     Stage("ground");

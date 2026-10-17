@@ -49,16 +49,13 @@ RWTexture2D<float4> rayResults : register(u0);
   bool front;
   float3 radiance;
   bool hit = RayTraceFacing(from, d, 0.05, map.w, 0xff, seed, t, instance, front);
-  if (hit && !front && !(rayInstances[instance].y & 8)) {
+  if (hit && !front && RayInstance(instance).a > 1.5) {
     radiance = 0;  // (the back of something, not a leaf: the probe may be inside it; its distance told as negative)
     t = -t;
   } else if (hit) {
     float3 p = from + d * t, albedo, n;
     RaySurfaceAt(instance, p, d, map.xy, albedo, n);
-    float inside;
-    float3 again = BounceAt(p, n, inside);
-    float3 sky = SkyAmbient(n) * modern.y;
-    radiance = albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + lerp(sky, again, inside));
+    radiance = RayLitAt(p, n, albedo, seed);  // (round about by the probes of the frame before: light bounces again)
   } else {
     t = map.w;
     radiance = (skyZenith.w > 0.5 ? ComputedSky(d) : RayLinear(mapSkyCube.SampleLevel(samplerLinear, d, 3).rgb)) * modern.y;

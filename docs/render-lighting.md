@@ -194,7 +194,8 @@ Mac", and every ray-traced effect keeps a fallback without it.
    - The ground's colour for the rays (`Terrain::GroundColours`): the layers' blend with each layer's average,
      over the whole map at half its size, made once a map.
    - **Bounce light: first version done** (2026-10-17): `render/bounce.h/.cpp`, `World::bounceLight` (viewer
-     `--bounce`; modern look, where the device has ray tracing). 32 x 32 columns 8 world units apart round the
+     `--bounce`; modern look, where the device has ray tracing). 32 x 32 columns (8 world units apart at first; now
+     following the zoom, below) round the
      camera's target (moved in whole columns; a column that comes in starts afresh), four probes in each at
      1.5, 5, 12 and 26 over the ground under it. Every frame each probe casts 64 rays (spherical Fibonacci,
      turned anew each frame); what they meet is lit by the sun (a shadow ray) and by the probes' light of the
@@ -210,9 +211,36 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - Cost at 1440p (Direct3D 12): the scene 0.15 ms, the probes 0.15 ms, reading them about 0.15 ms more
        on the ground and the models. Off: pictures identical, pixel for pixel, on both backends; on, Vulkan
        as Direct3D 12 (mean 0.02).
-     - Open: probes inside hills or buildings are not moved out yet (they see dark); the grid is fixed at 8
-       units (a camera far out sees beyond it: today's fitted light there); small lights (explosions,
-       lamps) not yet in what the rays meet; the minimap's frame has none.
+     - Probes inside things (2026-10-17): a ray that meets the back of a triangle (not a leaf) brings no
+       light and its distance counts a fifth; a probe more than a quarter of whose rays do is inside a rock or
+       a building, and the places round it all but pass it over. The grid's spacing follows the zoom: 4, 8, 16
+       or 32 units for a camera nearer than 30, 60, 120 or farther (each step a fifth past its line), so from
+       far out it covers the view.
+     - Open: small lights (explosions, lamps) not yet in what the rays meet; the minimap's frame has none.
+   - **Reflections: first version done** (2026-10-17): `World::rayReflections` (viewer `--ray-reflections`;
+     modern look, where the device has ray tracing). The lit surfaces' shaders (the ground's, the models', the
+     water's) are built with ray tracing in them only then (`gRayShaders`, view.h, set before the world is
+     made; `RayShaders()` puts `RAYS` and the ray block after the view's block), so with it off nothing of
+     them changes. The ray scene's resources moved to view-wide slots for that (t33 the scene; t37 what each
+     instance is, a picture a small pass makes each frame from the instances' data and the levels' colours;
+     t38, t39 the ground's normals and colours). What a ray meets is lit as the surfaces light themselves
+     (`RayLitAt`: the sun by a shadow ray, round about by the probes or the sky's fitted light, the map's fill
+     light); the check view and the probes' rays use it too.
+     - Smooth surfaces (lighting.h, roughness under 0.5: metal, wet ground, puddles): the mirrored ray in
+       place of the sky's reflection, fading back to it as the surface gets rougher. On Seton's it shows on
+       wet ground and smooth metal only a little (they are rough enough to blur it into the sky's light).
+     - The water: it mirrored the picture by a march in screen space and the sky beyond it; now what is off
+       the screen or hidden comes from rays (the march still has the last word where the picture shows the
+       place, as it is sharper). Two rays a pixel from calmer surfaces than the waves' (their tilt kept at
+       45% and at 15%), averaged: one ray off every small wave broke an island's mirror image into hard black
+       dashes. At dusk an island's reflection is dark: the mirror sees its side away from the sun.
+     - Viewer `--wet <0..1>`: the ground starts that wet (puddles at once, for trying this).
+     - Cost at 1440p (Direct3D 12, the sunset water scene): the scene 0.12 ms, the water +0.09, the ground
+       +0.09, the models about nothing; about 0.3 ms in all. Off: pictures identical, pixel for pixel, on both
+       backends; on, Vulkan as Direct3D 12 (mean 0.37 in 255: leaves taken by chance).
+     - Open: what the rays meet is coarse (a colour per model, no normals for models, the ground every fourth
+       height), fine for water and wet ground, too coarse for a sharp chrome mirror; the minimap's frame has
+       none.
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units.
 
@@ -220,5 +248,6 @@ Mac", and every ray-traced effect keeps a fallback without it.
 
 All in `World`, off by default, each one's cost measured and written here when it is built:
 `volumetricFog`, `volumetricClouds`, `skyTables`, `screenReflections`, `softShadows`, `contactShadows`,
-`rayTracing` (with `rtReflections`, `rtBounceLight`, `rtShadows`), and the rain and snow upgrades. The ui
+ray tracing's `bounceLight` and `rayReflections` (built so far; ray-traced shadows to come; `rayReflections`
+needs `gRayShaders` set before the world is made), and the rain and snow upgrades. The ui
 chat gets the names and their costs when each is ready.

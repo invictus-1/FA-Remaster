@@ -76,6 +76,8 @@
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
 // --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
 //           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
+// --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
+//           device has ray tracing): smooth surfaces mirror what their rays meet
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -181,6 +183,7 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --mist <0..1>  with a time of day: how much mist lies on low ground and over water (unless given: by the
 //           hour and the weather, most at daybreak)
+// --wet <0..1>  the ground starts that wet (World::wet; then it follows the weather): puddles at once
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
 // --find shield|wreck|<unit id>  with a game: once it is where --tick asks, the camera goes to the first shield's bubble,
@@ -287,6 +290,7 @@ struct Options {
   bool skyTables = false;               // --sky-tables
   bool rayView = false;                 // --ray-view
   bool bounce = false;                  // --bounce
+  bool rayReflections = false;          // --ray-reflections
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -298,6 +302,7 @@ struct Options {
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
+  float wet = 0;                        // --wet
   bool fsr3 = false;                    // --fsr3
   float fsr3Bias = 0;                   // --fsr3-bias
   int shadowSize = 2048;                // --shadow-size
@@ -393,6 +398,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sky-tables") o->skyTables = true;
     else if (a == "--ray-view") o->rayView = true;
     else if (a == "--bounce") o->bounce = true;
+    else if (a == "--ray-reflections") o->rayReflections = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
@@ -555,6 +561,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--weather") o->weather = v;
+    else if (a == "--wet") o->wet = static_cast<float>(atof(v));
     else if (a == "--find") o->find = v;
     else if (a == "--shots") o->shots = atoi(v);
     else if (a == "--shot-light") o->shotLight = static_cast<float>(atof(v));  // how strong the light of shots in flight is (0: none; below 0: on and off by turns of 30 frames, to compare)
@@ -799,7 +806,8 @@ int main(int argc, char** argv) {
     live.Start();
   }
 
-  // the world's picture: the map and everything drawn on it
+  // the world's picture: the map and everything drawn on it (with --ray-reflections, its shaders built to trace rays)
+  gRayShaders = opt.rayReflections && device->RayTracing();
   World world(device.get(), &vfs);
   {
     World::Options wo;
@@ -826,6 +834,7 @@ int main(int argc, char** argv) {
   world.skyTables = opt.skyTables;
   world.rayView = opt.rayView;
   world.bounceLight = opt.bounce;
+  world.rayReflections = opt.rayReflections;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
@@ -857,6 +866,7 @@ int main(int argc, char** argv) {
   world.sky = opt.sky;
   world.exposure = opt.exposure;
   world.timeOfDay = opt.timeOfDay;
+  world.wet = opt.wet;
   world.cloudCover = opt.clouds;
   world.mist = opt.mist;
   world.borders = opt.border;

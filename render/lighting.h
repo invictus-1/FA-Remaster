@@ -317,6 +317,23 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     skySpecular = ToLinear(environmentSky.SampleLevel(samplerLinear, R, roughness * levels).rgb);
   }
   float3 fill = ToLinear(shadowFill) * 0.5;
+#if RAYS
+  [branch] if (rayEffects.x > 0.5 && roughness < 0.5) {
+    // reflections by ray tracing (ray_scene.h): what the mirrored ray meets, lit as the probes light it (bounce.h)
+    // or by the sky's fitted light, the sun by a ray toward it; the sky where it meets nothing. Rougher, the more
+    // of the sky's reflection as before.
+    uint seed = RayHash(asuint(world.x * 37.0) ^ RayHash(asuint(world.z * 53.0) + asuint(world.y)));
+    float t;
+    uint instance;
+    float3 traced = skySpecular;
+    if (RayTrace(world + N * 0.05, R, 0.02, rayEffects.y, 0xff, seed, t, instance)) {
+      float3 p = world + R * t, hitAlbedo, n;
+      RaySurfaceAt(instance, p, R, rayEffects.zw, hitAlbedo, n);
+      traced = RayLitAt(p, n, hitAlbedo, seed) / max(modern.y, 1e-4);
+    }
+    skySpecular = lerp(traced, skySpecular, saturate(roughness * 2));
+  }
+#endif
   [branch] if (bounce.x > 0.5) {  // bounce light (bounce.h): the probes' light in place of the sky's fitted light, which stays outside their grid
     float inside;
     float3 gathered = BounceAt(world, N, inside);

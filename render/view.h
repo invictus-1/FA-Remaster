@@ -12,6 +12,10 @@ inline constexpr gfx::Format kSceneFormat = gfx::Format::RGBA16F;
 // Samples per pixel of the scene's picture (anti-aliasing: 1 off, 2, 4, 8). Set before any renderer
 // builds its pipelines; every pipeline that draws into the scene is built for it.
 inline int gSceneSamples = 4;
+// The lit surfaces' shaders (the ground's, the models') built with ray tracing in them (RAYS, ray_scene.h's block),
+// for reflections (World::rayReflections). As gSceneSamples, set before the world is made; only where the device
+// has ray tracing.
+inline bool gRayShaders = false;
 // Texture registers every scene shader may read; the frame code binds them, the renderers leave them alone.
 inline constexpr int kLampShadowSlot = 27;   // the lamps' shadow maps (lights.h), one array layer per lamp
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade
@@ -22,6 +26,9 @@ inline constexpr int kSkyTableSlot = 32;     // the sky from tables (sky.h, Sky:
 inline constexpr int kBounceLightSlot = 34;   // bounce light (bounce.h): the probes' light from every side
 inline constexpr int kBounceSightSlot = 35;   // how far each probe sees every way
 inline constexpr int kBounceColumnsSlot = 36; // the ground's height under each column of probes
+inline constexpr int kRaySceneSlot = 33;      // ray tracing (ray_scene.h): the scene's structure
+inline constexpr int kRayInstancesSlot = 37;  // what each of its instances is
+inline constexpr int kRayGroundSlot = 38;     // the ground's normals (39: its colours)
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -113,6 +120,9 @@ struct ViewConstants {
   // c * spacing). bounceLayers: the probes' heights over the ground in each column.
   float bounce[4];
   float bounceLayers[4];
+  // Reflections by ray tracing (World::rayReflections; shaders built with RAYS): x 1 = on; y how far a mirrored ray
+  // looks; z, w the map's width and height.
+  float rayEffects[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -155,6 +165,7 @@ cbuffer View : register(b0) {
   float4 skyExtra;        // rgb: lightning's light for a moment
   float4 bounce;          // bounce light: x 1 = on; y the columns' spacing; z, w the grid's first column across x and z
   float4 bounceLayers;    // the probes' heights over the ground
+  float4 rayEffects;      // reflections by ray tracing: x 1 = on; y how far a ray looks; z, w the map's size
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
