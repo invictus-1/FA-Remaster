@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "lighting.h"
+#include "ray_scene.h"
 
 namespace render {
 namespace {
@@ -329,6 +330,34 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   R.y = max(R.y, 0.02);
   R = normalize(R);
   float3 mirror = skyZenith.w > 0.5 ? ComputedSky(R) : ToLinear(sky.Sample(samplerLinear, R).rgb) * (lightMultiplier * modern.x * 0.5);
+#if RAYS
+  [branch] if (rayEffects.x > 0.5) {
+    // by ray tracing (ray_scene.h): what the mirrored ray meets (not the water itself: mask 1), lit as the rays light
+    // it (the sun by a ray toward it; round about by the probes, bounce.h, or the sky's fitted light) and seen through
+    // the air; the picture's march below still has the last word where the picture shows it
+    // (from calmer surfaces than the waves': one ray a pixel off every small wave would break what it mirrors into
+    // flickering streaks; a still lake's mirror image, rippled, is what the eye takes it for. Two rays, the waves'
+    // tilt kept at 45% and at 15%, averaged: where one meets the shore and the other the sky, a half step, as the
+    // many facets of real ripples give, not a hard dash.)
+    uint seed = RayHash(asuint(i.world.x * 37.0) ^ RayHash(asuint(i.world.z * 53.0)));
+    float3 mirrored = 0;
+    for (int ray = 0; ray < 2; ++ray) {
+      float3 calm = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), ray == 0 ? 0.55 : 0.85)));
+      calm.y = max(calm.y, 0.02);
+      calm = normalize(calm);
+      float t;
+      uint instance;
+      float3 c = mirror;
+      if (RayTrace(i.world + float3(0, 0.05, 0), calm, 0.05, rayEffects.y, 0x01, seed + ray, t, instance)) {
+        float3 hit = i.world + calm * t, hitAlbedo, n;
+        RaySurfaceAt(instance, hit, calm, rayEffects.zw, hitAlbedo, n);
+        c = ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + ray), hit);
+      }
+      mirrored += c * 0.5;
+    }
+    mirror = mirrored;
+  }
+#endif
   {
     float3 p = i.world;
     float stride = 1.2;
@@ -403,7 +432,8 @@ bool Water::Load(const MapData* map, std::string* error) {
     vertices_ = device_->CreateBuffer(bd);
     // the modern look's water (it reads the scene's depth: several samples a pixel, or one)
     {
-      std::string modern = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + kModernShader;
+      std::string modern = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                           kModernShader;
       pd.name = "water, modern";
       pd.vertexSource = pd.pixelSource = modern;
       pd.blend = gfx::Blend::Opaque;

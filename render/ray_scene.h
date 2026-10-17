@@ -27,17 +27,17 @@
 
 namespace render {
 
-// What a shader that traces the scene shares (the check view, the bounce light): after the view's block (view.h),
-// the scene at t33, the levels' colours at t0, the ground's normals and colours at t1, t2 (Terrain::NormalMap,
-// GroundColours), the instances' data at t0 of space1 (RayScene binds them: Bind).
+// What a shader that traces the scene shares (the check view, the bounce light, reflections): after the view's
+// block (view.h), in its slots (RayScene binds them: Bind) the scene (t33), what each instance is (t37: rgb its
+// albedo, linear, its team colour in; a 0..1 leaves with that coverage, 2 something solid, 3 the ground, 4 the
+// water), the ground's normals and colours (t38, t39: Terrain::NormalMap, GroundColours).
 inline const char kRayShaderBlock[] = R"hlsl(
 RaytracingAccelerationStructure scene : register(t33);
-Texture2D rayColours : register(t0);
-Texture2D rayGroundNormals : register(t1);
-Texture2D rayGroundColours : register(t2);
-StructuredBuffer<uint4> rayInstances : register(t0, space1);
+Texture2D rayInstances : register(t37);
+Texture2D rayGroundNormals : register(t38);
+Texture2D rayGroundColours : register(t39);
 float3 RayLinear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLinear)
-float3 RayUnpack(uint c) { return float3(c & 255, (c >> 8) & 255, (c >> 16) & 255) / 255.0; }
+float4 RayInstance(uint i) { return rayInstances.Load(int3(i % 1024, i / 1024, 0)); }
 uint RayHash(uint x) {
   x ^= x >> 16;
   x *= 0x7feb352d;
@@ -46,16 +46,15 @@ uint RayHash(uint x) {
   x ^= x >> 16;
   return x;
 }
-// Leaves (flag 8) are not opaque: a ray takes one of their triangles with the chance their coverage says, by a
-// number from the ray's own seed and the triangle.
+// Leaves are not opaque: a ray takes one of their triangles with the chance their coverage says, by a number from
+// the ray's own seed and the triangle.
 bool RayTakesLeaf(uint instance, uint primitive, uint seed) {
-  uint entry = rayInstances[instance].x;
-  float coverage = rayColours.Load(int3(entry % 1024, entry / 1024, 0)).a;
-  return (RayHash(seed ^ RayHash(primitive * 9781 + instance * 6271)) & 0xffff) < coverage * 65535;
+  return (RayHash(seed ^ RayHash(primitive * 9781 + instance * 6271)) & 0xffff) < saturate(RayInstance(instance).a) * 65535;
 }
 // The first thing a ray meets (mask: 0xff everything, 0x01 not the water): whether it met something, how far,
 // which instance.
-bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance) {
+// (and whether it met the front of a triangle: the side its corners go round anticlockwise, as the passes draw them)
+bool RayTraceFacing(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance, out bool front) {
   RayDesc ray;
   ray.Origin = from;
   ray.Direction = d;
@@ -67,7 +66,12 @@ bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint see
     if (RayTakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) q.CommitNonOpaqueTriangleHit();
   t = q.CommittedRayT();
   instance = q.CommittedInstanceID();
+  front = q.CommittedTriangleFrontFace();
   return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance) {
+  bool front;
+  return RayTraceFacing(from, d, tMin, tMax, mask, seed, t, instance, front);
 }
 // Whether the sun reaches a place (1) or something stands between (0); the water lets it through.
 float RaySunLit(float3 p, float3 n, uint seed) {
@@ -86,24 +90,40 @@ float RaySunLit(float3 p, float3 n, uint seed) {
 // and colours, the water dark and facing up, a model by its level's colour (and team colour), facing the ray (no
 // normals are kept for models). `map`: the map's width and height.
 void RaySurfaceAt(uint instance, float3 p, float3 d, float2 map, out float3 albedo, out float3 n) {
-  uint4 info = rayInstances[instance];
-  if (info.y & 1) {
+  float4 info = RayInstance(instance);
+  if (info.a > 2.5 && info.a < 3.5) {
     float4 stored = rayGroundNormals.SampleLevel(samplerLinearClamp, p.xz / map, 0);
     n.xz = stored.ag * 2 - 1;
     n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
     albedo = RayLinear(rayGroundColours.SampleLevel(samplerLinearClamp, p.xz / map, 0).rgb);
-  } else if (info.y & 2) {
+  } else if (info.a > 3.5) {
     n = float3(0, 1, 0);
     albedo = float3(0.02, 0.05, 0.08);
   } else {
-    float4 e = rayColours.Load(int3(info.x % 1024, info.x / 1024, 0));
-    albedo = lerp(RayLinear(e.rgb), RayLinear(RayUnpack(info.z)), info.y & 12 ? 0 : e.a);
+    albedo = info.rgb;
     n = -d;
   }
 }
 // The sun's light as the lit surfaces take it (lighting.h: the map's colour and multiplier, the sun's strength).
 float3 RaySunLight() { return RayLinear(sunColor) * (lightMultiplier * modern.x); }
+// What a ray met there, lit as the surfaces light themselves (lighting.h's ModernLight, without its highlights): the sun
+// by a ray toward it, round about by the probes (bounce.h, where they are on and reach) or else the sky's fitted light,
+// and the map's fill light.
+float3 RayLitAt(float3 p, float3 n, float3 albedo, uint seed) {
+  float3 around = SkyAmbient(n);
+  [branch] if (bounce.x > 0.5) {
+    float inside;
+    float3 gathered = BounceAt(p, n, inside);
+    around = lerp(around, gathered / max(modern.y, 1e-4), inside);
+  }
+  float3 fill = RayLinear(shadowFill) * 0.5;
+  return albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + (around + fill) * modern.y);
+}
 )hlsl";
+
+// What a lit surface's shader starts with after the view's block: with gRayShaders, RAYS and the block above (else
+// nothing), so that lighting.h's ray-traced parts are built in.
+inline std::string RayShaders() { return gRayShaders ? std::string("#define RAYS 1\n") + kRayShaderBlock : std::string(); }
 
 class MeshRenderer;
 struct MapData;
@@ -124,6 +144,7 @@ class RayScene {
   gfx::Structure Scene() const { return scene_; }
   gfx::Texture Colours() const { return colours_; }
   gfx::Buffer InstanceData() const { return instanceData_; }
+  gfx::Texture InstancesPicture() const { return instancesPicture_; }  // (kRayShaderBlock's t37)
   int Instances() const { return static_cast<int>(info_.size()); }
   // The check view, for a scene `view` (one sample a pixel): the picture to show in place of the scene's
   // (none where it cannot be made). The terrain's normal map and its colours (Terrain::GroundColours).
@@ -144,7 +165,8 @@ class RayScene {
   };
   gfx::Device* device_;
   bool available_ = false;
-  gfx::Pipeline average_, check_;
+  gfx::Pipeline average_, check_, resolve_;
+  gfx::Texture instancesPicture_;  // (each frame: what each instance is, kRayShaderBlock's t37)
   gfx::Structure scene_, ground_, water_;
   gfx::Buffer groundVertices_, groundIndices_, waterVertices_;
   float mapWidth_ = 1, mapHeight_ = 1;
