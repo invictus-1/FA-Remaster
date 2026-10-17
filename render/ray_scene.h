@@ -48,8 +48,8 @@ class RayScene {
   gfx::Buffer InstanceData() const { return instanceData_; }
   int Instances() const { return static_cast<int>(info_.size()); }
   // The check view, for a scene `view` (one sample a pixel): the picture to show in place of the scene's
-  // (none where it cannot be made). `groundNormals`: the terrain's normal map; `groundColor` linear.
-  gfx::Texture Check(const View& view, gfx::Texture groundNormals, Vec3 groundColor);
+  // (none where it cannot be made). The terrain's normal map and its colours (Terrain::GroundColours).
+  gfx::Texture Check(const View& view, gfx::Texture groundNormals, gfx::Texture groundColours);
   static constexpr int kSceneSlot = 33;  // where shaders find the scene (t33)
 
  private:

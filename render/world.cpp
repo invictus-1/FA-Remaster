@@ -1630,7 +1630,7 @@ void World::Render() {
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
     Stage("ray tracing check view");
-    post.shown = rays.Check(view, terrain.NormalMap(), Vec3{0.10f, 0.12f, 0.06f});
+    post.shown = rays.Check(view, terrain.NormalMap(), terrain.GroundColours());
   }
   if (temporalNow_ && !post.shown) {  // FSR 3: up to the screen's size from this frame and the ones before
     Stage("temporal upscale (FSR 3)");

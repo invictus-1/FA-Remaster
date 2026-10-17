@@ -61,12 +61,12 @@ const char kCheck[] = R"hlsl(
 RaytracingAccelerationStructure scene : register(t33);
 Texture2D colours : register(t0);
 Texture2D groundNormals : register(t1);
+Texture2D groundColours : register(t2);  // (Terrain::GroundColours: as stored)
 StructuredBuffer<uint4> instanceData : register(t0, space1);
 RWTexture2D<float4> picture : register(u0);
 cbuffer RayCheck : register(b1) {
   row_major float4x4 back;  // the picture's -1..1 and depth to the world (the inverse of the view's matrix)
   float4 size;              // x, y the picture's width and height; z, w the map's
-  float4 ground;            // rgb the ground's colour, linear
 };
 float3 Unpack(uint c) { return float3(c & 255, (c >> 8) & 255, (c >> 16) & 255) / 255.0; }
 // Leaves (flag 8) are not opaque: a ray takes one of their triangles with the chance their coverage says, by a
@@ -108,7 +108,7 @@ float3 Linear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLine
       float4 stored = groundNormals.SampleLevel(samplerLinearClamp, p.xz / size.zw, 0);
       n.xz = stored.ag * 2 - 1;
       n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
-      albedo = ground.rgb;
+      albedo = Linear(groundColours.SampleLevel(samplerLinearClamp, p.xz / size.zw, 0).rgb);
     } else if (info.y & 2) {  // (the water: dark, facing up)
       n = float3(0, 1, 0);
       albedo = float3(0.02, 0.05, 0.08);
@@ -314,7 +314,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
   device_->BuildScene(&scene_, instances_.data(), static_cast<uint32_t>(instances_.size()));
 }
 
-gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, Vec3 groundColor) {
+gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, gfx::Texture groundColours) {
   if (!available_ || !scene_ || view.width <= 0 || view.height <= 0) return {};
   if (!picture_ || pictureWidth_ != view.width || pictureHeight_ != view.height) {
     device_->Destroy(picture_);
@@ -330,29 +330,27 @@ gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, Vec3 
   }
   struct {
     Mat4 back;
-    float size[4], ground[4];
+    float size[4];
   } k;
   k.back = Inverse(view.constants.viewProj);
   k.size[0] = static_cast<float>(view.width);
   k.size[1] = static_cast<float>(view.height);
   k.size[2] = mapWidth_;
   k.size[3] = mapHeight_;
-  k.ground[0] = groundColor.x;
-  k.ground[1] = groundColor.y;
-  k.ground[2] = groundColor.z;
-  k.ground[3] = 0;
   device_->SetPipeline(check_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetScene(kSceneSlot, scene_);
   device_->SetTexture(0, colours_);
   device_->SetTexture(1, groundNormals);
+  device_->SetTexture(2, groundColours);
   device_->SetShaderBuffer(instanceData_, 0);
   device_->SetStorage(0, picture_);
   device_->Dispatch(static_cast<uint32_t>((view.width + 7) / 8), static_cast<uint32_t>((view.height + 7) / 8), 1);
   device_->SetStorage(0, {});
   device_->SetTexture(0, {});
   device_->SetTexture(1, {});
+  device_->SetTexture(2, {});
   device_->SetScene(kSceneSlot, {});
   return picture_;
 }
