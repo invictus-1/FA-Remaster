@@ -89,6 +89,9 @@
 // --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
 // --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
 //           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
+// --fsr3-check  AMD's FSR 3 upscaler (fsr3.h) tried on a made-up scene and checked against the scene drawn at
+//           the display's size and against a plain stretch, then timed (fsr3_check.cpp); with --vulkan, on the
+//           Vulkan backend; with --screenshot <name>.png, the pictures compared are written as <name>_*.png
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -214,6 +217,7 @@
 #include "frame.h"
 #include "gfx.h"
 #include "gfx_check.h"
+#include "fsr3_check.h"
 #include "ground.h"
 #include "icons.h"
 #include "lights.h"
@@ -265,6 +269,7 @@ struct Options {
   bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
+  bool fsr3Check = false;               // --fsr3-check
   bool air = false;                     // --air
   bool softShadows = false;             // --soft-shadows
   bool contactShadows = false;          // --contact-shadows
@@ -365,6 +370,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
+    else if (a == "--fsr3-check") o->fsr3Check = true;
     else if (a == "--air") o->air = true;
     else if (a == "--contact-shadows") o->contactShadows = true;
     else if (a == "--soft-shadows") {
@@ -674,6 +680,7 @@ int main(int argc, char** argv) {
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
   if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
+  if (opt.fsr3Check) return Fsr3Check(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
 
   moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
   moho::Vfs vfs;
