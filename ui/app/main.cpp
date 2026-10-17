@@ -473,7 +473,9 @@ int main(int argc, char** argv) {
     }
     lua_settop(L, top);
   }
-  if (ok && o.stage == "frontend" && commandLineMap.empty()) ok = front->StartFrontEnd();
+  // (A game started at once, by --session as by /map, has no front end first: its loading screen
+  // would destroy a main menu still opening, whose scripts then touch what is gone.)
+  if (ok && o.stage == "frontend" && commandLineMap.empty() && sessionIn.empty()) ok = front->StartFrontEnd();
   if (!o.luaFile.empty()) {  // debugging aid: a Lua file of your own, run before the frames (it may fork threads)
     if (auto code = hostfs::ReadFile(o.luaFile)) front->RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
@@ -531,6 +533,7 @@ int main(int argc, char** argv) {
       std::string why;
       if (!session.FinishLoad(&why)) {  // (the original: "map %s failed. aborting session.", back to the front end)
         Logf(LogLevel::Error, "moho64ui: the game did not load: %s; back to the front end", why.c_str());
+        if (!sessionIn.empty() || !commandLineMap.empty()) ok = false;  // (the run's own game: its exit code says so)
         session.End();
         freshFrontEnd();
         return;
@@ -594,6 +597,7 @@ int main(int argc, char** argv) {
   // end comes up with its main menu, as after the program's start. Starting over: the same
   // launch again; its interface comes up as it did the first time.
   auto leaveOrRestart = [&]() {
+    if (session.Loading()) return;  // (asked while a launch loads: kept until its game runs)
     int request = ui::TakeSessionRequest();
     if (!request || !session.running()) return;
     session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
@@ -602,6 +606,11 @@ int main(int argc, char** argv) {
     game.reset();
     sounds.StopAll();
     if (request == 2) {
+      // (The loading screen comes up in a front end's state made anew: the old one stood still
+      // through the game, its first loading screen's script threads asleep in it, and at the
+      // size the window had then.)
+      auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
+      if (fresh->Boot() && fresh->StartMainScript()) front = std::move(fresh), shown = front.get();
       std::string why;
       if (session.Relaunch(&why)) {
         Logf(LogLevel::Info, "moho64ui: the game starts over");
@@ -639,7 +648,7 @@ int main(int argc, char** argv) {
       // from copies taken between beats, the rest waits for the beat (UserState::LiveSim;
       // MOHO64UI_BEAT_LOG=1 names each wait). MOHO64UI_SHOW_ONLY_DURING_BEATS=1: frames during a
       // beat only show the picture, as before.
-      if (std::getenv("MOHO64UI_SHOW_ONLY_DURING_BEATS") != nullptr) hooks.busy = [&]() { return session.BeatRunning(); };
+      if (std::getenv("MOHO64UI_SHOW_ONLY_DURING_BEATS") != nullptr) hooks.busy = [&]() { return session.running() && session.BeatRunning(); };
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };

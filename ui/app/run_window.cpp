@@ -157,7 +157,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   const int warmUp = maxFrames >= 600 ? 300 : 0;
   int statsFrom = 0;
   int frames = 0;
-  int steadyFrames = 0;  // frames since the host stopped running ahead (--fast-forward)
+  int steadyFrames = 0;  // frames since the host stopped running ahead (--fast-forward) or another state was shown
+  const UserState* countedState = nullptr;
   // The interface is drawn only where it changed (draw/recorder.h); MOHO64UI_FULL_REDRAW=1: all
   // of it every frame, as before. MOHO64UI_DIRTY_CHECK=1 compares each frame with a full redraw.
   const bool incremental = std::getenv("MOHO64UI_FULL_REDRAW") == nullptr;
@@ -253,7 +254,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const auto te = Clock::now();
       target->ResetTouched();
       if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
-      if (Overlay().on) stats.Draw(*target, hooks, user.L());
+      if (Overlay().on) stats.Draw(*target, hooks, current().L());  // (eachFrame may have replaced the state shown)
       changed = changed.Union(target->Touched());
       hostDrawn = target->Touched();  // (painted over by the interface again next frame)
       hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
@@ -271,6 +272,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     }
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
     else ++steadyFrames;
+    if (&current() != countedState) countedState = &current(), steadyFrames = 0;  // (a new state shown: its warm-up again)
     if (warmUp && steadyFrames == warmUp) {
       start = Clock::now();
       drawSeconds = presentSeconds = frameSeconds = renderSeconds = hostSeconds = 0;

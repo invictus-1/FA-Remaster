@@ -105,7 +105,8 @@ class UserState {
   bool StartMainScript();  // the root frames, then uimain.SetupUI()
   bool StartFrontEnd();    // uimain.StartFrontEndUI()
   // The game's loading screen in the front end's own state, as the original's DoPreload shows it
-  // (FA exe 0x88bee0, the frame after a launch): its root frames cleared, uimain.SetupUI and
+  // (FA exe 0x88bee0, the frame after a launch): its root frames' controls destroyed (the original
+  // makes new root frames there, 0x84cc50; ours stay, emptied), uimain.SetupUI and
   // uimain.StartGameUI (the game script's provider) again, then provider:StartLoadingDialog().
   // EndLoadingScreen: the game's own state takes over (DoInitializing 0x88c4ad); the loading
   // screen's controls go, and this state's provider with them (the session's replaces it, 0x86aa12).

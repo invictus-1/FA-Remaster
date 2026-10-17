@@ -11,6 +11,9 @@
 #include <filesystem>
 #include <mutex>
 #include <thread>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 #include "core/crash.h"
 #include "core/hostfs.h"
@@ -248,17 +251,18 @@ struct GameSession::Picture : WorldSource {
 #endif
 };
 
-// The beats' own thread: one job at a time (a beat), asked for and waited on from the main thread.
+// The beats' own thread: one job at a time (a beat, or a launch's load), asked for and waited on
+// from the main thread.
 class GameSession::BeatWorker {
  public:
-  BeatWorker() : thread_([this] { Run(); }) {}
+  BeatWorker() { StartThread(); }
   ~BeatWorker() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       quit_ = true;
     }
     wake_.notify_all();
-    thread_.join();
+    JoinThread();
   }
   void Start(std::function<void()> job) {
     {
@@ -298,7 +302,32 @@ class GameSession::BeatWorker {
   std::function<void()> job_;
   std::atomic<bool> running_{false};
   bool quit_ = false;
-  std::thread thread_;  // (last: it starts once the rest is made)
+#if defined(__APPLE__)
+  // (macOS gives a new thread 512 KB of stack; the simulation's start and its beats run deep Lua:
+  // the main thread's 8 MB here too)
+  pthread_t thread_{};
+  void StartThread() {
+    void* (*run)(void*) = [](void* self) -> void* {
+      static_cast<BeatWorker*>(self)->Run();
+      return nullptr;
+    };
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 8u << 20);
+    int made = pthread_create(&thread_, &attr, run, this);
+    pthread_attr_destroy(&attr);
+    if (made != 0) made = pthread_create(&thread_, nullptr, run, this);  // (the system's own stack size)
+    if (made != 0) {
+      Logf(LogLevel::Error, "moho64ui: the beats' thread could not be made (%d)", made);
+      std::abort();
+    }
+  }
+  void JoinThread() { pthread_join(thread_, nullptr); }
+#else
+  std::thread thread_;
+  void StartThread() { thread_ = std::thread([this] { Run(); }); }
+  void JoinThread() { thread_.join(); }
+#endif
 };
 
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
@@ -666,6 +695,7 @@ void GameSession::PrepareSession(const SessionDescription& session, const std::v
 void GameSession::BeginLoad() {
   if (load_ != Load::Due) return;
   load_ = Load::Running;
+  g_crashTick = 0;  // (a crash while it loads names no beat of the game before)
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   worker_->Start([this] {
     auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };

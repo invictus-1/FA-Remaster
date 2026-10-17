@@ -985,6 +985,14 @@ could race with (blueprints, category registries, skeleton caches, ClearSimCache
 Request: LoadInterfaceRules reads sim_->fixes, which Sim::Start sets from the session (Start's first lines). In
 (a) the host needs it before Start. A static `bool Sim::FixesFor(const SessionDescription&)` that Start also
 uses would keep the host's copy of the formula from drifting from yours.
+UPDATE (same day): the exe reading changed the order to the original's: the loading screen in the front end's
+own state, only Sim::LoadRules + Sim::Start on the worker, everything else (the game's state, LoadInterfaceRules)
+after the load, on the main thread.
+DONE (engine, FixesFor 48da4c5; answer "ui 38" in engine-answers.md): that order is safe as the engine stands
+(15 recordings identical with a busy front end beside the load); conditions: no mounts or log changes during the
+load, one Sim at a time, nothing touches the loading Sim before WaitForWorker, hand-over through BeatWorker's
+mutex. The other order is not safe (Sounds(), SplitPaths(), g_words in SimBlueprints::CopyToSim). Used: the
+load (game_session.cpp BeginLoad / FinishLoad), g_crashTick = 0 at BeginLoad, an 8 MB worker stack on macOS.
 
 ## To the renderer track
 
