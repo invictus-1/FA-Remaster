@@ -75,6 +75,12 @@ class Terrain {
   gfx::Buffer gridVertices_, gridIndices_;
   uint32_t gridIndexCount_ = 0;
   gfx::Texture heightTexture_, normalMap_, maskLow_, maskHigh_, waterMap_, waterRamp_;
+
+ public:
+  // The ground's normals (x in alpha, z in green, as the terrain's shader reads them), for others (ray_scene.h).
+  gfx::Texture NormalMap() const { return normalMap_; }
+
+ private:
   gfx::Texture albedo_[10], normal_[9];
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all

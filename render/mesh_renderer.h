@@ -108,6 +108,16 @@ class MeshRenderer {
   int shadowTriangles = 0;        // summed over the shadow passes since the last scene pass
   int posedInstances = 0;         // of the drawn ones: those with bones away from rest
   float prepareMs = 0;            // what Prepare took on the processor, averaged over the last frames
+  // Every model added this frame, the listed groups' scenery included, for what goes through them besides the
+  // passes (the ray tracing scene, ray_scene.h): f(model, the world matrix's top three rows, its team colour (rgb;
+  // w how far it is built), whether it is scenery).
+  template <class F>
+  void ForEachAdded(F&& f) const {
+    for (uint32_t g : groupsListed_)
+      if (g < groups_.size())
+        for (const Entry& e : groups_[g].entries) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, true);
+    for (const Entry& e : entries_) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);
+  }
 
  private:
   struct Instance {
