@@ -1371,7 +1371,7 @@ class WorldView : public Control {
     // A click while the mouse stayed within 4 pixels of where the button went down (0xdfe5ac),
     // else a box; the keys held as the button comes up (the release's own event).
     if (std::fabs(e.x - pressX_) <= 4 && std::fabs(e.y - pressY_) <= 4) {  // (0xdfe5ac: a drag beyond 4.0)
-      ClickSelect(L, UnitUnder(L, e.x, e.y), e.shift, e.ctrl);
+      ClickSelect(L, UnitUnder(L, e.x, e.y), e.shift, e.ctrl, e.alt);
       return;
     }
     UnitsInScreenRect(L, std::min(pressX_, e.x), std::min(pressY_, e.y), std::max(pressX_, e.x), std::max(pressY_, e.y), &ids);

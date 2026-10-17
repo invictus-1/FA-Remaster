@@ -298,6 +298,10 @@ struct LookSettings {
   // SC_AntiAliasingSamples (the scene's samples 1 / 2 / 4, from the next picture made),
   // SC_CameraScaleLOD 0..2 (model detail 0.5 / 0.75 / 1). Until told: today's full look.
   int fidelity = 2, shadows = 3, sceneSamples = 4;
+  // The original's two debugging switches of the mouse's selection (console variables, CWldSession::CanSelectUnit
+  // 0x865830 and ReleaseDrag 0x865920): with UI_SelectAnything and cheats on, the mouse selects any unit, the
+  // player's or not; with ui_DebugAltClick, Alt and a click on another army's unit looks through that army.
+  bool selectAnything = false, debugAltClick = false;
   // The samples a pixel the scene is drawn with: the player's Anti-Aliasing, or 1 under FSR 3.
   int SceneSamples() const { return temporalUpscale ? 1 : sceneSamples; }
   float meshDetail = 1.0f;
@@ -420,7 +424,7 @@ void SelectUnitsById(lua_State* L, const std::vector<uint32_t>& ids, bool add);
 // HandleDoubleClickSelection): a click on a unit (0xffffffff: none) with its modifiers, a box over
 // these units, a double click on a unit with the units in view; and the unit the mouse is over of
 // the one the picture finds (a unit on a factory's pad or on a transport: the parent).
-void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl);
+void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl, bool alt = false);
 void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift);
 bool DoubleClickSelect(lua_State* L, uint32_t unit, const std::vector<uint32_t>& inView);
 uint32_t HoverOf(lua_State* L, uint32_t picked);

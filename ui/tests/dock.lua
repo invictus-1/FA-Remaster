@@ -2,7 +2,7 @@
 -- selection: aircraft made by the game's cheat callback, docked at an air staging platform. Then
 -- what hangs on the platform (GetAttachedUnitsList) and the drones of a commander
 -- (GetAssistingUnitsList).
--- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 2400.
+-- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 4200.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -138,6 +138,29 @@ ForkThread(function()
             SelectUnits({tank})
             WaitSeconds(0.2)
             check("the tank over it: an attack", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+            -- the original's two debugging switches (CanSelectUnit 0x865830, ReleaseDrag 0x865920): with
+            -- UI_SelectAnything and cheats on a click selects the enemy's generator; with ui_DebugAltClick, Alt and
+            -- a click on it looks through the enemy's army
+            moho64ui_MouseButton("Left", true, g.x, g.y)
+            moho64ui_MouseButton("Left", false, g.x, g.y)
+            check("a click on the enemy's generator selects nothing", GetSelectedUnits(), nil)
+            ConExecute("UI_SelectAnything 1")
+            moho64ui_MouseButton("Left", true, g.x, g.y)
+            moho64ui_MouseButton("Left", false, g.x, g.y)
+            local picked = GetSelectedUnits()
+            check("with UI_SelectAnything (and cheats) it selects it", picked ~= nil and picked[1]:GetUnitId(), "ueb1101")
+            ConExecute("UI_SelectAnything 0")
+            SelectUnits(nil)
+            local mine = GetFocusArmy()
+            ConExecute("ui_DebugAltClick 1")
+            moho64ui_MouseButton("Left", true, g.x, g.y, "Alt")
+            moho64ui_MouseButton("Left", false, g.x, g.y, "Alt")
+            WaitSeconds(0.5)
+            check("with ui_DebugAltClick, Alt and a click on it: the enemy's view", GetFocusArmy(), enemy)
+            ConExecute("ui_DebugAltClick 0")
+            SetFocusArmy(mine)
+            WaitSeconds(0.5)
+            check("and back to the player's own", GetFocusArmy(), mine)
         end
     end
     LOG("TEST done: " .. failed .. " failed")

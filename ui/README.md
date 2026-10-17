@@ -405,7 +405,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   selection priority in it (fighting units before engineers and commanders before buildings), with
   Shift adds them all, or removes them when all are selected already. The unit under the mouse is the
   transport or factory a unit hangs on (a unit being built on a factory's pad gives the factory),
-  and the old building for one being upgraded. The camera follows the original's rules,
+  and the old building for one being upgraded. The original's two debugging switches are there too: with
+  `UI_SelectAnything` (and cheats on) the mouse selects any unit, the player's or not; with
+  `ui_DebugAltClick`, Alt and a click on another army's unit looks through that army. The camera follows the original's rules,
   read from its code: its zoom is the width of world the view shows (the eye stands at zoom /
   (2 tan(fov / 2))); it starts as far out as it goes (the map takes 1 / 1.4 of the view: 0.7083
   of the height here, 0.7087 on a screenshot of the original), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its

@@ -781,6 +781,11 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) looks.bloomIntensity = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
       return;
     }
+    if (key == "UI_SELECTANYTHING" || key == "UI_DEBUGALTCLICK") {  // (the selection's debugging switches; none: toggles)
+      bool& on = key == "UI_SELECTANYTHING" ? looks.selectAnything : looks.debugAltClick;
+      on = value.empty() ? !on : (value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0);
+      return;
+    }
     if (key == "REMASTER_TEMPORAL_UPSCALE") {  // (FSR 3: 0 off, 1 on)
       if (!value.empty()) looks.temporalUpscale = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;

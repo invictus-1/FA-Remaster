@@ -249,7 +249,26 @@ int FocusArmyNow(lua_State* L) {
   Sim* sim = user->HasSim() ? TheSim(L) : nullptr;
   return sim ? sim->focusArmy : -1;
 }
+// Whether the game was started with cheats on (its Options.CheatsEnabled; INFERRED to be the session's byte
+// +0x4d4 the original asks beside UI_SelectAnything).
+bool CheatsOn(lua_State* L) {
+  bool cheats = false;
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "SessionGetScenarioInfo");
+  if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "Options");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "CheatsEnabled");
+      lua_gettable(L, -2);
+      cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
+    }
+  }
+  lua_settop(L, top);
+  return cheats;
+}
 bool CanSelectUnit(lua_State* L, const UserUnit* u) {
+  if (Looks().selectAnything && !u->gone && CheatsOn(L)) return true;  // (the console's UI_SelectAnything, with cheats)
   const int focus = FocusArmyNow(L);
   return focus >= 0 && IsSelectable(L, u) && u->view.army == focus + 1;
 }
@@ -2560,11 +2579,16 @@ UserUnit* LiveUnit(lua_State* L, uint32_t id) {
 // Ctrl: the player's units of its kind across the whole map, finished and alive (no other test);
 // with Shift as well, that kind leaves the selection if the unit is in it, else joins it. Shift:
 // the unit joins the selection or leaves it. Else it alone is selected.
-void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl) {
+void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl, bool alt) {
   if (!UserState::From(L)->HasSim()) return;
   const int focus = FocusArmyNow(L);
   UnitStore& store = Store(L);
   UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
+  // (ui_DebugAltClick and Alt on another army's unit: the player looks through that army, ReleaseDrag's first step)
+  if (alt && u && Looks().debugAltClick && u->view.army != focus + 1) {
+    if (Sim* sim = TheSim(L)) sim->RequestFocusArmy(u->view.army - 1);
+    return;
+  }
   if (!u || !CanSelectUnit(L, u)) {
     if (!shift && !ctrl) SetSelection(L, {});
     return;
