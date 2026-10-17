@@ -248,7 +248,9 @@ Mac", and every ray-traced effect keeps a fallback without it.
        backends; on, Vulkan as Direct3D 12 (mean 0.37 in 255: leaves taken by chance).
      - Open: what the rays meet is coarse (a colour per model, no normals for models, the ground every fourth
        height), fine for water and wet ground, too coarse for a sharp chrome mirror; the minimap's frame has
-       none.
+       none. With it on, a game's picture opens in about 1.46 s against 0.5 s (the surfaces' shaders built
+       with ray tracing in them, measured by the ui chat): a shader cache would take that away (for the
+       optimisation phase).
    - **The small lights in what the rays meet** (2026-10-17): explosions, shots and lamps with their beams
      (`RaySmallLights`, as lighting.h's `SmallLights` without highlights or the lamps' shadow maps), so the
      probes take in light thrown back from a lamp-lit patch of ground, and reflections show what the lights
