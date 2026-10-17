@@ -30,9 +30,16 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
 the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
-upgrade's four settings; open).
+upgrade's four settings; done 2026-10-17, ui a029a76; one follow-up open: SetRayTracing before Open).
 
-## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking)
+## 31. To the INTERFACE track: the lighting upgrade's four settings (2026-10-17, not blocking; DONE 2026-10-17: ui a029a76, Video tab Atmosphere / Soft Shadows / Ray Tracing / Weather Effects, remaster_* commands, "Not on this graphics card" where RayTracingSupported is false; FOLLOW-UP open, below)
+
+**Follow-up (2026-10-17):** `GameSession::OpenPicture` makes a new picture for each game and calls the looks'
+setters at its first frame, after `Open`. That is right for three of them and for bounce light, but the
+reflections of "Ray Tracing" need it before `Open` (the surfaces' shaders are built for them when the map
+opens), so in a game they never come on. Wanted: `pic->picture.SetRayTracing(Looks().rayTracing)` before
+`pic->picture.Open(...)`, beside `SetVulkan` and `SetTextureDetail` (the first frame's call may stay; it is
+harmless).
 
 **Who asks:** the renderer, for Chris (2026-10-17: "just put them all in and if some can be bundled together
 then do so that way it lessens clutter").
