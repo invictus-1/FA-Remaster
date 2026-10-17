@@ -572,9 +572,17 @@ void SnapUnit(const Sim& csim, Unit* u) {
   // levelled by its roll; it does not ride the surface under its four corners. Seen (Naval 843): a Salem let go by
   // its factory beside a beach, one corner over land 0.145 above the sea: the original stays level at 17.5, ours
   // lifted it by a quarter of that and tilted it for two beats.
-  const bool waterCalc = b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub ||
-                         (b.motionType == kMotionAmphibiousFloating && !u->motion.snapTerrain && u->layer != "Land" &&
-                          u->layer != "Seabed");
+  // The same holds for a Water or SurfacingSub unit: one in the Land layer runs CalcMoveLand and SnapToGround,
+  // which takes the ground under its corners whatever the motion type (0x6c18e7, only MotionType 7 reads the
+  // surface), and the Water -> Land blend's end is SnapToGround too (UpdateCurrentLayer 0x6c378d). A ship created
+  // on land starts in the Land layer (Entity::GetStartingLayer 0x62ad30) and UpdateCurrentLayer never takes a
+  // MotionType Water unit out of it (0x6c37c1..0x6c37de: Land -> Water is for Hover and AmphibiousFloating only),
+  // so it sits on the ground, tilted, and on the bottom where it drives into the sea. (Ours took the motion type
+  // here: battleships spawned on land in the interface host, SETONS_R, floated 0.25 above the ground, level, and
+  // rode the surface once in the sea. Their drive over the land is the original's: pathfinding.md 7.)
+  const bool waterCalc = (b.motionType == kMotionWater || b.motionType == kMotionSurfacingSub ||
+                          b.motionType == kMotionAmphibiousFloating) &&
+                         !u->motion.snapTerrain && u->layer != "Land" && u->layer != "Seabed";
   if (waterCalc) {
     // SnapToWater 0x6c1cb0: at water + depth, but never closer than 0.25 to the bottom; a submerged unit stays
     // under the surface and its depth follows the bottom
@@ -582,11 +590,8 @@ void SnapUnit(const Sim& csim, Unit* u) {
     // SnapToWater's first call is CalcRollHack 0x6c1350 (0x6c1cea), its last COORDS_Tilt 0x50b820 (0x6c1e06): the
     // transform's up axis is turned onto the roll's and the dive's up vector (level (0, 1, 0) for a ship that
     // neither rolls nor dives). Seen: a surfacing T2 submarine standing still (Subs, unit 8 at 1136-1205) pitched
-    // its bow up by up to 19 degrees, and down when it dived again (1231-1300); ours stayed level. (Not for the
-    // ground end of a layer blend, which SnapToGround makes in the original.)
-    const bool tilt = !m.snapTerrain && u->layer != "Land" && u->layer != "Seabed";
-    Vec3 up{};
-    if (tilt) up = RollHack(u);
+    // its bow up by up to 19 degrees, and down when it dived again (1231-1300); ours stayed level.
+    const Vec3 up = RollHack(u);
     const float water = map->hasWater ? map->waterElevation : -10000.0f;
     float y = map->TerrainHeight(u->position.x, u->position.z) + 0.25f;
     if (water + m.depth > y) y = water + m.depth;
@@ -595,7 +600,7 @@ void SnapUnit(const Sim& csim, Unit* u) {
       m.depth = y - water;
     }
     u->position.y = y;
-    if (tilt) AlignUp(u->orientation, up);
+    AlignUp(u->orientation, up);
     return;
   }
   if (b.motionType == kMotionAir) return;
