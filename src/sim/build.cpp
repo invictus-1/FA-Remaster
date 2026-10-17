@@ -3015,11 +3015,17 @@ void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
     EndBuildTask(sim, U, *g.child, false);
     g.child = nullptr;
   }
-  if (!Alive(U)) return;
+  // The dtor has no test of the unit's life: GuardBusy and Guarding are cleared and SetGuardedUnit(U, null) is
+  // called (0x611881..0x6118b6) for a unit that dies too. Seen: MP3 3754, army 3's 0x30003b, guarding its commander
+  // 0x300000, is killed; the original's dying unit leaves the commander's guard formation (in formation 0, its own
+  // top speed 3.8), ours kept the link and the dead unit took a slot in it (2.7455) from 3755.
+  // (The rest of the dtor is kept to living units here: the ogrid rect, the AbortMove and the speed-through status
+  // also run for a dying unit in the original, 0x611929..0x611977; not modelled.)
   U->unitStates.erase("GuardBusy");
   U->unitStates.erase("Guarding");
-  if (g.childMove) U->unitStates.erase("Moving");
   SetGuardedUnit(sim, U, nullptr);
+  if (!Alive(U)) return;
+  if (g.childMove) U->unitStates.erase("Moving");
   if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
   // 0x611947..0x611972: the navigator (unit+0x54c) is told AbortMove (vt+0x10) when the unit moved this beat
   // (+0xb4 != +0xd0, 0x4f0a50). No goal test: an aircraft re-targets the point one second ahead. Seen (MP3 487):
