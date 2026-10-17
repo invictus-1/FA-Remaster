@@ -113,6 +113,8 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
 void RetargetMoveTasks(Sim& sim, UnitCommand& c);
 // CUnitPatrolTask's listener 0x61c3e0 (and its reclaim child's 0x620160) for a retargeted patrol command
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c);
+// CUnitGuardTask::OnEvent 0x6147b0: the guard tasks of a retargeted command take its target again (Refresh 0x611a40)
+void RefreshGuardTasks(Sim& sim, UnitCommand& c);
 // RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
 // What IssueClearCommands (0x6f1950) does to one unit: ClearCommandQueue 0x6ee2d0 and its attacker's Stop

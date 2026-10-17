@@ -2823,6 +2823,23 @@ BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   return r;
 }
 
+// CUnitGuardTask::OnEvent 0x6147b0, the guard task's listener on its command (task+0x34, linked into cmd+0x34 by the
+// ctor): on any event of the command (CUnitCommand::SetTarget 0x6e8820 raises event 0 through 0x6e94a0 at once, for
+// every listener) it copies the command's target (cmd+0x11c -> task+0x54, 0x5d5670: no new pick, no draw) and runs
+// RefreshGuardedUnitFromTarget 0x611a40: G (+0x7c) and Unit::SetGuardedUnit 0x6a76a0. The listeners are told in the
+// command's listener order; ours goes by unit id (inferred).
+void RefreshGuardTasks(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::Guard) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* h : holders) {
+    if (h->dead || !h->task || h->task->type != CommandType::Guard || !h->task->gdata) continue;
+    GuardData& hg = *h->task->gdata;
+    if (hg.cmd.lock().get() != &c) continue;
+    Refresh(sim, h, hg, c);
+  }
+}
+
 // CUnitGuardTask::TaskTick 0x6141a0
 int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   (void)L;
@@ -2880,6 +2897,12 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         if (std::find(U->commands.begin(), U->commands.end(), c) != U->commands.end() && !nG->dead) {
           c->targetPoint = TargetPointDraw(sim, nG);
           c->targetId = g.G;
+          // SetTarget tells the command's listeners at once (0x6e94a0): every guard task of a shared Guard order takes
+          // the new unit now, so the others find G == U+0x4e0 in their own turn and neither retarget nor draw.
+          // Seen (probe mp3_tpoint): MP3 3581, army 3's engineers 0x300015, 0x300019 and 0x300012 guard a structure
+          // whose upgrade 0x30004d finished; only the first retargets (one draw, from SetCommandTarget 0x6ee4b3), the
+          // two after it already hold 0x30004d. Ours retargeted all three (three draws).
+          RefreshGuardTasks(sim, *c);
         }
   }
   U->unitStates.erase("GuardBusy");
