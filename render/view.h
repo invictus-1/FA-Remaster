@@ -123,6 +123,9 @@ struct ViewConstants {
   // Reflections by ray tracing (World::rayReflections; shaders built with RAYS): x 1 = on; y how far a mirrored ray
   // looks; z, w the map's width and height.
   float rayEffects[4];
+  // Wet shorelines and caustics (World::waterDetail): x 1 = on; y the water's level (world y); z the height of the
+  // band over it the waves have wetted; w how strong the bright net on a shallow bed is.
+  float shore[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -166,6 +169,7 @@ cbuffer View : register(b0) {
   float4 bounce;          // bounce light: x 1 = on; y the columns' spacing; z, w the grid's first column across x and z
   float4 bounceLayers;    // the probes' heights over the ground
   float4 rayEffects;      // reflections by ray tracing: x 1 = on; y how far a ray looks; z, w the map's size
+  float4 shore;           // wet shorelines: x 1 = on; y the water's level; z the wet band's height; w the caustics' strength
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

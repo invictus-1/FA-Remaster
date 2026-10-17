@@ -351,6 +351,10 @@ class World {
   // Rain's splashes (weather.h): where rain meets what faces up (the ground, a unit's top) and the picture shows it,
   // small crowns that rise and fade. Modern look; off by default.
   bool rainSplashes = false;
+  // Wet shorelines and caustics (terrain.cpp, water.cpp): the ground just above the water darker and shinier where
+  // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. Modern look, a map
+  // with water; off by default.
+  bool waterDetail = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.

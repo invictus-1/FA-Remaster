@@ -295,7 +295,14 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float n1 = CloudNoise(float3(q * 1.3 + time * 0.30, time * 0.25));
   float n2 = CloudNoise(float3(q * 1.3 - time * 0.25 + 7, time * 0.20 + 3));
   float net = pow(saturate(1 - abs(n1 - n2) * 5), 4);
-  under *= 1 + net * 0.6 * saturate(deepBent * 3) * exp(-deepBent * 0.35) * shadow * saturate(sunDirection.y * 3);
+  float netStrength = 0.6;
+  [branch] if (shore.x > 0.5) {  // (World::waterDetail: a sharper net, a finer one over it, stronger)
+    float n3 = CloudNoise(float3(q * 3.1 + time * 0.45 + 13, time * 0.35 + 5));
+    float n4 = CloudNoise(float3(q * 3.1 - time * 0.40 + 29, time * 0.30 + 9));
+    net = pow(saturate(1 - abs(n1 - n2) * 7), 3) + 0.5 * pow(saturate(1 - abs(n3 - n4) * 7), 3);
+    netStrength = shore.w;
+  }
+  under *= 1 + net * netStrength * saturate(deepBent * 3) * exp(-deepBent * 0.35) * shadow * saturate(sunDirection.y * 3);
 
   // what the water takes from it, and the water's own colour in its place. The numbers are the
   // depth colours Chris chose on the remastered Seton's (the visuals track's water ramp, put on
