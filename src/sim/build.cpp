@@ -3106,6 +3106,10 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     sim.CallMethod(L, u, "OnStopReclaim", 1);
     t.reclaimStarted = false;
   }
+  // CUnitMobileBuildTask's dtor (0x5f6b16) and CFactoryBuildTask's (0x5fa05e) take Building off (unit+0x4a0 &= ~0x20)
+  // with no test of the unit's life: a builder killed at work (Unit::Kill empties its queue) is no longer Building.
+  // (Seen: Skirmish 2810, army 0's engineer 0x11 killed while building: the original's states lose Building.)
+  if (t.type == CommandType::BuildMobile || t.type == CommandType::BuildFactory) u->unitStates.erase("Building");
   if (Alive(u)) {
     u->unitStates.erase("Reclaiming");
     if (t.type == CommandType::Reclaim && u->focusId == t.goalId) u->focusId = 0;

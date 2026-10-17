@@ -793,8 +793,13 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       SteeringStop(m);
       if (unused) CheckCollisions(sim, u);
     }
-    float v = std::sqrt(m.vel.x * m.vel.x + m.vel.z * m.vel.z);
-    if (v < m.bp->maxSpeed * m.speedMult * 0.01f) {
+    // 0x5d2c7c..0x5d2cc4: the unit's velocity (GetVelocity, vt+0x3c) as a 3-D length, (x^2 + y^2) + z^2, against the
+    // blueprint's MaxSpeed (bp+0x2a0) x 0.01, no speed multiplier. (Seen: Skirmish 2839, army 5's 0x50002a pushed by an
+    // engineer it caught up with: its velocity (0.0268, -0.0124, -0.0193) is 0.0353 long in 3-D, over the 0.034, so
+    // the push goes on and the original stands; on x and z alone it was 0.0330 and ours drove off a beat early.)
+    const Vec3& uv = UnitVelocity(u);
+    float v = std::sqrt((uv.x * uv.x + uv.y * uv.y) + uv.z * uv.z);
+    if (m.bp->maxSpeed * 0.01f > v) {
       m.pushed = false;
       if (m.wasMoving) {
         m.wasMoving = false;

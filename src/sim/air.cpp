@@ -1628,8 +1628,11 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       if (c2 < 0.0f) c2 = 0.0f;
       float f = (look - c2) / look;
       if (0.2f >= f) f = 0.2f;
-      d.x = d.x * f * f;
-      d.z = d.z * f * f;
+      // 0x6bf94c: the square first, then each component times it (d.x * f * f rounds twice on d.x: a last bit
+      // off, which grows over the flight)
+      const float f2 = f * f;
+      d.x = d.x * f2;
+      d.z = d.z * f2;
     }
     float step = b.liftFactor * 0.1f;
     if (maxT < a.curTerrain && !landing) step = step * 0.5f;

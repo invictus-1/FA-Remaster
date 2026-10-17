@@ -33,6 +33,7 @@
 #include "sim/build.h"
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
+#include "sim/landnav.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/luautil.h"
@@ -316,12 +317,18 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   TransportOnKillEnd(sim, L, u);  // steps 8 and 11: attach callbacks, a transport's cargo
   u->killCleanup = true;
   if (!u->beingBuilt) AdjacencyLost(sim, L, u);
+  const bool hadCommands = !u->commands.empty();
   ForgetUnitCommands(u);
   // the emptied queue's event (Unit::UpdateSpeedThroughStatus 0x6ac940) reaches a killed aircraft too: with nothing
   // queued its speed-through flag goes (seen: five patrolling aircraft killed in one beat, each 1 -> 0)
   if (u->motion.air) {
     u->motion.airSpeedThrough = false;
     u->motion.air->fullSpeed = false;
+  } else if (hadCommands && u->motion.nav) {
+    // and a ground unit's: IAiCommandDispatchImpl::OnEvent 0x599030 (event 0) -> UpdateSpeedThroughStatus, whose
+    // empty queue gives navigator->SetSpeedThroughGoal(false) (0x6acaf1, vt+0x18) -> CAiSteeringImpl 0x5d2390
+    // (seen: Skirmish 2764, two engineers 0xd / 0x15 killed on a move with another queued, each 1 -> 0)
+    LandNavSetSpeedThrough(u, false);
   }
   u->unitStates.erase("Moving");  // (the move task goes with the queue: a unit killed on its way is not "Moving")
   u->unitStates.erase("Patrolling");  // (nor "Patrolling": the patrol task goes the same way)

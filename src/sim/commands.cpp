@@ -133,6 +133,17 @@ void PopHead(Unit* u) {
 }
 
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
+// The move-like test Unit::UpdateSpeedThroughStatus asks (0x552c10): Move, FormMove, Attack, FormAttack, Guard,
+// Patrol, FormPatrol (types 2, 4, 10, 11, 15, 16, 18).
+bool SpeedThroughMoveLike(CommandType t) {
+  switch (t) {
+    case CommandType::Move: case CommandType::FormMove: case CommandType::Attack: case CommandType::FormAttack:
+    case CommandType::Guard: case CommandType::Patrol: case CommandType::FormPatrol:
+      return true;
+    default:
+      return false;
+  }
+}
 
 void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
@@ -805,10 +816,15 @@ void CommandStep(Sim& sim, Unit* u) {
     if (!u->commands.empty()) StartHead(sim, u);
     return;
   }
-  // keep "drive through" up to date when moves were queued behind the current one
+  // keep "drive through" up to date when moves were queued behind the current one, by Unit::UpdateSpeedThroughStatus's
+  // own rule (0x6acac8..0x6acaef): the head and the next command both move-like for 0x552c10, which counts Attack and
+  // Guard and not the aggressive moves. (Seen: Skirmish 2806, army 7's ACU 0x700000 on a Move with a Guard queued:
+  // the original keeps 1 until the Guard starts; MoveLike, which leaves Guard out, turned it off a beat later.)
   if (st == kRunning && u->motion.hasGoal && !u->commands.empty() && MoveLike(u->commands.front()->type)) {
-    if (u->motion.navDriven) LandNavSetSpeedThrough(u, NextIsMove(u));
-    else u->motion.passThrough = NextIsMove(u);
+    const bool v = u->commands.size() > 1 && SpeedThroughMoveLike(u->commands[0]->type) &&
+                   SpeedThroughMoveLike(u->commands[1]->type);
+    if (u->motion.navDriven) LandNavSetSpeedThrough(u, v);
+    else u->motion.passThrough = v;
   }
   // guards and attacks follow a moving target
   if (st == kRunning && !u->commands.empty() && ApproachLike(u->commands.front()->type)) {
