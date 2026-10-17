@@ -677,6 +677,14 @@ void AdvanceIntelCoords(Sim& sim) {
       if (!moved && !exact && u->lastPosTick == tick && u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt &&
           !u->parentId && !((u->immobile || u->unitStates.count("Immobile") || u->stunned) && u->motion.layerBlend == 0.0f))
         moved = true;
+      // Entity::TaskTick 0x679c40: an attached entity whose parent has had its turn takes its transform from the
+      // parent's bone (0x67a020) and links itself on the moved list (SetPendingTransform 0x678e90, no compare) in
+      // every beat, so Sim::AdvanceBeat (0x74a255) runs its AdvanceCoords and the 6-tick clock keeps running, a unit
+      // being built on a factory's bone included. Seen (oracle probe): MP3, army 1's interceptor 0x100028, built in
+      // an air factory from 2365 and released at 2615: the original's vision clock ran 2365 + 6k all through
+      // (lastTick 2599, 2605, 2611, 2617, ... 2785, 2791), ours started on release (2615 + 6k), and army 1's recon at
+      // 2791 saw army 2's aircraft from the circle raster of 2789 (the original's of 2785 did not reach it).
+      if (!moved && !exact && u->parentId && u->lastPosTick == tick) moved = true;
     } else {
       IntelHandle* any = nullptr;
       for (int s = 1; s <= 8; ++s)
