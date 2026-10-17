@@ -93,7 +93,7 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t);
 void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 void StopMovingIfTask(Unit* u, const BuildTask& t);
 // The unit's command thread sleeps on a walking child of its head task (a clear of its queue wakes it: re-linked).
-bool TaskThreadAsleepOnMove(const Unit* u);
+bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from = nullptr);  // from: the task to start at (u->task)
 // The head task is a guard (CUnitGuardTask) with no child task of its own: whatever goal its navigator has, the guard
 // set itself (UpdateGuardFollowMoveGoal 0x613c40: no move task).
 bool GuardSteersItself(const Unit* u);

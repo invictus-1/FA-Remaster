@@ -3404,9 +3404,9 @@ bool GuardSteersItself(const Unit* u) {
   return t && t->gdata && !t->gdata->child && !t->gdata->childMove;
 }
 
-bool TaskThreadAsleepOnMove(const Unit* u) {
+bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from) {
   if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
-  for (const BuildTask* t = u->task; t;) {
+  for (const BuildTask* t = from ? from : u->task; t;) {
     if (t->moving) return true;
     if (t->sub) {
       t = t->sub;

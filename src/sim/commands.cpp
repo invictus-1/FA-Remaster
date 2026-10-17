@@ -803,6 +803,16 @@ static bool HeadTaskStopsMotion(const Unit* u) {
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (u->commands.front()->type == CommandType::Move) return true;
+  // a patrol whose repair / reclaim child walks: the child's CUnitMoveTask suspended the thread (ctor 0x6186d6, the
+  // same listener NavEventWakesCommandThread has for it), and the clear wakes it to the run list's end. Seen: MP3
+  // 3109, army 0's engineer 0xf, its patrol's child walking, gets a BuildMobile with clear together with the idle 0x2e
+  // and 0x2f, and the three reclaim the site prop 0x2ff010e3. In the original 0xf leaves Reclaiming at 3117 and 0x2e
+  // at 3118: 0x2e takes the last step and 0xf, after it in the run list, ends at once (the order is inferred from
+  // those states). Ours kept 0xf first (its last re-link 2875): 0xf took the last step and 0x2e ended at once.
+  if (IsPatrolType(u->commands.front()->type)) {
+    const BuildTask* c = u->task && u->task->pdata ? u->task->pdata->child : nullptr;
+    return c && TaskThreadAsleepOnMove(u, c);
+  }
   return TaskThreadAsleepOnMove(u);  // (the head task's walking child, or its guard child's: build.cpp)
 }
 
