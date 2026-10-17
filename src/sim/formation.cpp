@@ -653,23 +653,28 @@ void Update(Formation& F) {
       Vec3 lc = FormationCell(F, L, &g);
       int dcx = CellOfX(L, lc.x) - CellOfX(L, L->position.x), dcz = CellOfZ(L, lc.z) - CellOfZ(L, L->position.z);
       bool formed = std::sqrt(static_cast<float>(dcx * dcx + dcz * dcz)) < 5.0f && F.type != 15;
-      // reference point
+      // reference point: the members' formation CELLS (GetFormationCell vt+0x1c gives the int16 cell, 0x59b2a7;
+      // each converted and added in single precision, 0x59b2a9..0x59b2cd), times 1 / count (0x59b328..0x59b34b):
+      // the cells' corners, not their centres. Seen: MP2 1768, army 1's tank 0x10001a guarding engineer 0x100019 (a
+      // one-unit GuardFormation): the original's slot is 0.5 further on both axes than ours was.
       float maxR = 0.001f;
-      double scx = 0, scz = 0;
+      float scx = 0, scz = 0;
       int cnt = 0;
       for (auto& [id, n] : g.nodes) {
         Unit* m = UnitOf(sim, n.ref);
         if (!m) continue;
         maxR = std::max(maxR, Dist2D(m->position.x, m->position.z, L->position.x, L->position.z));
-        Vec3 c = FormationCell(F, m, &g);
-        scx += c.x;
-        scz += c.z;
+        float ax, az;
+        AdjustedPosition(F, m, &g, &ax, &az);
+        scx = static_cast<float>(CellOfX(m, ax)) + scx;
+        scz = static_cast<float>(CellOfZ(m, az)) + scz;
         ++cnt;
       }
       float Cx, Cz;
       if (F.type == 15) {
-        Cx = cnt ? static_cast<float>(scx / cnt) : L->position.x;
-        Cz = cnt ? static_cast<float>(scz / cnt) : L->position.z;
+        const float inv = cnt ? 1.0f / static_cast<float>(cnt) : 0.0f;
+        Cx = cnt ? inv * scx : L->position.x;
+        Cz = cnt ? inv * scz : L->position.z;
       } else {
         RawPosition(F, L, &g, &Cx, &Cz);
       }

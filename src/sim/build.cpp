@@ -199,7 +199,12 @@ Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p) {
   const NamedFootprint& fp = Footprint(bp);
   int ox = RoundEven(p.x - fp.sizeX * 0.5f), oz = RoundEven(p.z - fp.sizeZ * 0.5f);
   Vec3 r{ox + fp.sizeX * 0.5f, p.y, oz + fp.sizeZ * 0.5f};
-  if (sim.map()) r.y = sim.map()->SurfaceHeight(r.x, r.z);
+  // COORDS_ToWorldPos 0x50b0f0 (the mobile build task's ctor snaps its site with it, 0x5f6749, with the blueprint's
+  // Footprint.OccupancyCaps bp+0xda): the height of the ground (0x44fb90), or of the water above it, but not when
+  // the footprint may occupy the Seabed (caps bit 2, 0x50b151): then the sea bottom. Seen: MP2 1321, army 1's UEF
+  // mass extractor under water at (245.5, 20.5): the original's stands on the bottom (y 50.7656, unturned); ours
+  // was made at the surface (56.0), and FAF's StructureUnit OnCreate then turned it to the "slope" below it.
+  if (sim.map()) r.y = (fp.caps & 2) ? sim.map()->TerrainHeight(r.x, r.z) : sim.map()->SurfaceHeight(r.x, r.z);
   return r;
 }
 
@@ -2231,7 +2236,12 @@ BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
     if (Entity* s = sim.FindEntity(c->focusId)) shieldDamaged = s->maxHealth > s->health;
   if (c->maxHealth > c->health || c->unitStates.count("Enhancing") || shieldDamaged ||
       c->unitStates.count("SiloBuildingAmmo")) {
-    if (!U->bpData || !U->bpData->hasBuilder) return nullptr;
+    // 0x613a80: new CUnitRepairTask for any guard in REPAIR (the selection's test, 0x613110), with or without a
+    // CAiBuilder (unit+0x554, made only for a blueprint with Economy.BuildableCategory or a REBUILDER, Unit ctor
+    // 0x6a600f..0x6a60c2); the repair task asks for the builder only to aim it (0x5f99d5, 0x5f9b37). Seen: MP2 1972,
+    // army 0's Mantis 0x1a (REPAIR, no BuildableCategory) guarding engineer 0x9 walks off to help build (Moving at
+    // 1978); ours started nothing and stood.
+    if (!U->bpData) return nullptr;
     BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
     InitRepair(sim, U, *t, c, c->unitStates.count("SiloBuildingAmmo") != 0);
     return t;
