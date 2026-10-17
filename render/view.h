@@ -18,6 +18,7 @@ inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array
 inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip levels (blurrier going down)
 inline constexpr int kAirSlot = 30;          // light in the air (air.h), a volume over the view, when it is on
 inline constexpr int kCloudShadowSlot = 31;  // the volumetric clouds' shadows (clouds.h), when they are on
+inline constexpr int kSkyTableSlot = 32;     // the sky from tables (sky.h, Sky::SkyView): its view from the eye, when on
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -99,6 +100,11 @@ struct ViewConstants {
   // surface texture is read at (Sample, below), negative: read as for the screen's size and finer, since the
   // frames laid over each other see between the pixels drawn (0 without it).
   float temporal[4];
+  // The sky from tables (sky.h, World::skyTables): x 1 when ComputedSky reads the sky's view table (kSkyTableSlot)
+  // in place of the three fitted colours; y how much of it the clouds' grey takes, z that grey's brightness, w
+  // how much of the night's own faint light there is. skyExtra: rgb what lightning adds for a moment.
+  float skyTable[4];
+  float skyExtra[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -137,6 +143,8 @@ cbuffer View : register(b0) {
   float4 cloudShadow;     // the volumetric clouds' shadows (clouds.h): x their underside (0: none); y, z the picture's middle; w 1 / its width
   float4 softShadows;     // x 1 = soft shadows; y an edge's growth per world unit from the caster; z the search for casters, w the widest edge (world units)
   float4 temporal;        // the temporal upscaler: x the textures' level of detail bias (0 without it)
+  float4 skyTable;        // the sky from tables: x 1 = ComputedSky reads its view; y the clouds' grey share, z its brightness; w the night's faint light
+  float4 skyExtra;        // rgb: lightning's light for a moment
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -148,8 +156,38 @@ SamplerState samplerLinear : register(s3);       // trilinear, wrap
 SamplerState samplerPoint : register(s4);        // point, wrap
 SamplerComparisonState samplerShadow : register(s5);
 
-// The computed sky's light from a direction (without the sun's and the moon's own disc).
+// The sky from tables (sky.h, Sky::BuildTables): its view from the eye, three slices (the smooth part; the haze's
+// light for the sun and for the moon, whose glow round the body is taken per pixel). Where a direction lies in
+// it (round from +x; from overhead through the horizon, at the middle, to straight down, as Hillaire maps it
+// for an eye 500 m up), and the haze's glow round a body.
+Texture3D skyViewTable : register(t32);
+float2 SkyTableUv(float3 d) {
+  const float r = 6360e3 + 500, rho = sqrt(500.0 * (2 * 6360e3 + 500.0));
+  float beta = acos(rho / r), horizon = 3.14159265 - beta;
+  float zenith = acos(clamp(d.y, -1, 1));
+  float v = zenith < horizon ? 0.5 * (1 - sqrt(saturate(1 - zenith / horizon))) : 0.5 + 0.5 * sqrt(saturate((zenith - horizon) / beta));
+  return float2(atan2(d.z, d.x) / (2 * 3.14159265), 0.5 / 108 + v * (1 - 1.0 / 108));
+}
+float SkyHazeGlow(float mu) {
+  const float g = 0.76;
+  return 3.0 / (8.0 * 3.14159265) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
+}
+// The air's light from a direction as the table has it (no clouds, no night glow: the sky's pass adds its own).
+float3 SkyFromTable(float3 d) {
+  float2 uv = SkyTableUv(d);
+  return skyViewTable.SampleLevel(samplerLinear, float3(uv, 0.5 / 3), 0).rgb +
+         skyViewTable.SampleLevel(samplerLinear, float3(uv, 1.5 / 3), 0).rgb * SkyHazeGlow(dot(d, skyBody.xyz)) +
+         skyViewTable.SampleLevel(samplerLinear, float3(uv, 2.5 / 3), 0).rgb * SkyHazeGlow(dot(d, skyMoon.xyz));
+}
+
+// The computed sky's light from a direction (without the sun's and the moon's own disc). With the sky from
+// tables: the table's, greyed by the clouds and lit by the night's faint light and lightning as the fit is.
 float3 ComputedSky(float3 d) {
+  [branch] if (skyTable.x > 0.5) {
+    float3 t = SkyFromTable(d) + float3(0.012, 0.016, 0.028) * skyTable.w;
+    t = lerp(t, float3(0.92, 0.96, 1.0) * skyTable.z, skyTable.y) + skyExtra.rgb;
+    return lerp(t, skyHorizon.rgb * 0.3, saturate(-d.y * 5));  // below the horizon: the ground far away
+  }
   float3 c = lerp(skyHorizon.rgb, skyZenith.rgb, pow(saturate(d.y), 0.5));
   float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
   float s = saturate(dot(d, body));

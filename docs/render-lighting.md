@@ -137,9 +137,15 @@ Mac", and every ray-traced effect keeps a fallback without it.
        every hour.
      - Cost at 1440p: the sky pass 0.54 -> 0.31 ms, its view 0.05 ms (Vulkan 0.07), so about 0.18 ms less.
        Off: pictures identical, pixel for pixel, on both backends; on, Vulkan as Direct3D 12 (mean 0.04).
-     - Open: Chris to judge the sunset; surfaces still mirror the three-colour fit (`ComputedSky`), not the
-       table (next: reflections of the sky as it is); the haze far off (`ThroughAir`) is still today's
-       formula.
+     - Mirrored (2026-10-17): with it on, `ComputedSky` (view.h) reads the same table (`SkyFromTable`, at
+       `kSkyTableSlot` t32), greyed by the clouds, lit by the night's faint light and by lightning as the fit
+       is, so water, metal, wet ground and the far haze mirror the sky as it is: at dusk the water is deep blue
+       where it mirrors the sky overhead and bright toward the horizon, where the fit made it a flat grey. The
+       sky pass reads the table through the same helpers. +0.07 ms at 1440p (water, ground and models), while
+       the sky pass saves 0.2. For it the graphics layer has forty texture slots now (t0..t39; Vulkan's images
+       at 16-55, space1's buffers moved to 56-57): the ground's shader filled all thirty-two. Off: pictures
+       identical on both backends; `--gfx-check` passes on both.
+     - Open: Chris to judge the sunset; the haze far off (`ThroughAir`) is still today's formula.
 3. **Soft shadows** (the sun's penumbra wider with distance from the caster) and **contact shadows** (a
    short march along the depth toward the light, for the small creases the shadow maps cannot hold).
    - **First version done** (2026-10-16): `World::softShadows` (viewer `--soft-shadows [size]`): what casts a
