@@ -36,6 +36,9 @@ class Clouds {
   // the air then read (`view`'s cloudShadow, kCloudShadowSlot). Off (or no computed sky, or no clouds):
   // nothing, the view's cloudShadow left 0.
   void Prepare(View* view, const Camera& camera, bool on);
+  // In place of Prepare for a frame drawn for something else (World::sidePicture): none this frame (Build
+  // then does nothing), and what they hold of the frames before is kept.
+  void Skip(View* view);
   gfx::Texture Shadows() const { return prepared_ ? shadow_ : gfx::Texture{}; }
   // After the scene's solid surfaces and the water, before the sky: the clouds where the sky shows.
   // `depth`: the scene's depth (any number of samples). It dispatches: begin the scene's pass again after.

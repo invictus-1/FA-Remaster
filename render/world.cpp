@@ -1456,10 +1456,12 @@ void World::Render() {
   }
   // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
   Stage("clouds' shadows");
-  clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
+  if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
+  else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // light in the air: its volume, between the shadow maps and the scene that reads it
   Stage("light in the air");
-  air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
+  if (sidePicture) air.Skip(&view);
+  else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());

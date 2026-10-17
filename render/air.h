@@ -34,6 +34,9 @@ class Air {
   // it lies between passes. When off it only clears the view's `air`.
   // `floor`: the height the haze and dust thin above (the map's usual ground).
   void Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::Texture lampShadows, Lights* lights, bool on, float floor);
+  // In place of Build for a frame drawn for something else (World::sidePicture): none this frame, and what
+  // it holds of the frames before is kept for the next Build.
+  void Skip(View* view);
   // The summed volume, for the scene's shaders (kAirSlot); none while it is off.
   gfx::Texture Volume() const { return built_ ? summed_ : gfx::Texture{}; }
 

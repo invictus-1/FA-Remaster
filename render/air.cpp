@@ -222,6 +222,11 @@ bool Air::Size(int width, int height) {
   return cells_[0] && cells_[1] && summed_;
 }
 
+void Air::Skip(View* view) {
+  std::fill(std::begin(view->constants.air), std::end(view->constants.air), 0.0f);
+  built_ = false;
+}
+
 void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::Texture lampShadows, Lights* lights, bool on, float floor) {
   ViewConstants& c = view->constants;
   std::fill(std::begin(c.air), std::end(c.air), 0.0f);
