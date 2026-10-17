@@ -5,6 +5,18 @@
 #include <cstring>
 
 namespace moho::ui::sound {
+namespace {
+float Linear(float decibels) { return decibels <= -95.0f ? 0.0f : std::pow(10.0f, decibels / 20.0f); }
+const int kEnvelopeFrames = 64;  // what the curves give is worked out this often, straight between
+}  // namespace
+
+float TimeCurves::Decibels(float attackMs, float releasingMs) const {
+  float decibels = 0;
+  for (const Curve& c : attack) decibels += c.At(attackMs);
+  if (releasingMs >= 0)
+    for (const Curve& c : release) decibels += c.At(releasingMs);
+  return decibels;
+}
 
 void MemoryWave::Read(int64_t frame, int count, int16_t* out) {
   int64_t have = std::max<int64_t>(0, std::min<int64_t>(count, frames - frame));
@@ -66,7 +78,29 @@ void Mixer::Start(int voice) {
     if (v.id == voice) v.started = true;
 }
 
+void Mixer::SetTimeCurves(int voice, std::shared_ptr<const TimeCurves> curves) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (Voice& v : voices_)
+    if (v.id == voice) {
+      v.curves = std::move(curves);
+      v.envelope = v.curves ? Linear(v.curves->Decibels(0, -1)) : 1.0f;
+      v.envelopeLeft = 0;
+    }
+}
+
 void Mixer::Stop(int voice, bool immediate) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (Voice& v : voices_) {
+      if (v.id != voice || immediate || !v.curves || v.curves->releaseMs <= 0 || !v.started || v.delay > 0) continue;
+      if (v.releasing < 0) v.releasing = 0, v.envelopeLeft = 0;  // its release, by its curves
+      return;
+    }
+  }
+  FadeOut(voice, immediate ? 5.0f : 100.0f);
+}
+
+void Mixer::FadeOut(int voice, float ms) {
   std::lock_guard<std::mutex> lock(mutex_);
   for (size_t i = 0; i < voices_.size(); ++i) {
     Voice& v = voices_[i];
@@ -75,8 +109,15 @@ void Mixer::Stop(int voice, bool immediate) {
       voices_.erase(voices_.begin() + static_cast<long>(i));  // it never sounded
       return;
     }
-    v.fadeStep = 1.0f / (kRate * (immediate ? 0.005f : 0.1f));
+    v.fadeStep = std::max(v.fadeStep, 1.0f / (kRate * std::max(0.005f, ms / 1000.0f)));
   }
+}
+
+// What a voice's curves give `ahead` frames from now.
+float Mixer::EnvelopeAt(const Voice& v, int64_t ahead) const {
+  const float ms = 1000.0f / kRate;
+  return Linear(v.curves->Decibels(static_cast<float>(v.sounded + ahead) * ms,
+                                   v.releasing < 0 ? -1.0f : static_cast<float>(v.releasing + ahead) * ms));
 }
 
 void Mixer::StopAll() {
@@ -113,7 +154,7 @@ int Mixer::CountOf(int category, int* oldest) {
   int n = 0;
   if (oldest) *oldest = 0;
   for (const Voice& v : voices_) {
-    if (v.category != category || v.fadeStep > 0) continue;
+    if (v.category != category || v.fadeStep > 0 || v.releasing >= 0) continue;
     if (n++ == 0 && oldest) *oldest = v.id;
   }
   return n;
@@ -126,10 +167,20 @@ std::string Mixer::Describe() {
   for (const Voice& v : voices_) {
     size_t cat = static_cast<size_t>(v.category);
     float c = v.category >= 0 && cat < gains_.size() ? gains_[cat] : 1.0f;
-    std::snprintf(line, sizeof line, "voice %d category %d own %.3f category's %.3f place %.3f %.3f loops %d at %.1f of %.1f s%s\n", v.id,
+    std::snprintf(line, sizeof line, "voice %d category %d own %.3f category's %.3f place %.3f %.3f loops %d at %.1f of %.1f s%s", v.id,
                   v.category, v.gain, c, v.left, v.right, v.loops, v.position / v.wave->rate, static_cast<double>(v.wave->frames) / v.wave->rate,
                   v.started ? "" : " (waiting)");
     out += line;
+    if (v.curves) {  // what its curves by time give now, and how far into its release it is
+      std::snprintf(line, sizeof line, " curves %.3f", v.envelope);
+      out += line;
+      if (v.releasing >= 0) {
+        std::snprintf(line, sizeof line, " releasing %.0f of %.0f ms", static_cast<double>(v.releasing) * 1000.0 / kRate,
+                      static_cast<double>(v.curves->releaseMs));
+        out += line;
+      }
+    }
+    out += "\n";
   }
   return out;
 }
@@ -187,12 +238,26 @@ void Mixer::Mix(int16_t* out, int frames) {
             g = 0;
           }
         }
+        if (v.curves) {
+          if (v.envelopeLeft == 0) {
+            v.envelopeStep = (EnvelopeAt(v, kEnvelopeFrames) - v.envelope) / kEnvelopeFrames;
+            v.envelopeLeft = kEnvelopeFrames;
+          }
+          g *= v.envelope;
+          v.envelope = std::max(0.0f, v.envelope + v.envelopeStep);
+          --v.envelopeLeft;
+          ++v.sounded;
+          if (v.releasing >= 0 && ++v.releasing >= static_cast<int64_t>(v.curves->releaseMs * kRate / 1000.0f)) {
+            v.fade = 0;  // its release has run its length: it ends
+            n = i + 1;
+          }
+        }
         sum_[static_cast<size_t>(at + i) * 2] += l * g * v.left;
         sum_[static_cast<size_t>(at + i) * 2 + 1] += r * g * v.right;
       }
       v.position += v.step * n;
       at += n;
-      if (v.fadeStep > 0 && v.fade <= 0) {
+      if ((v.fadeStep > 0 || v.releasing >= 0) && v.fade <= 0) {
         v.wave.reset();
         break;
       }

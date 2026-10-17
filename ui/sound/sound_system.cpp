@@ -282,15 +282,42 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
          category >= 0 ? categories_[static_cast<size_t>(category)].name.c_str() : "-");
   if (position && heard < kHeardFrom) return 0;
 
-  // A category that is full: the new sound takes the oldest one's place, or is not played.
+  // A category that is full: the new sound takes the oldest one's place, or is not played. The
+  // old one goes over the category's fade out (the music's 200 ms; none: at once). (The new one's
+  // fade in is not built: only the Ambient category has one, and it has no limit.)
   if (category >= 0) {
     const Category& cat = categories_[static_cast<size_t>(category)];
     int oldest = 0;
     if (cat.maxInstances < 255 && mixer_.CountOf(category, &oldest) >= cat.maxInstances) {
       if (!cat.replaceOldest) return 0;
-      mixer_.Stop(oldest, false);
+      mixer_.FadeOut(oldest, static_cast<float>(cat.fadeOutMs));
     }
   }
+
+  // The sound's loudness by time (see TimeCurves): its own curves by "AttackTime" and
+  // "ReleaseTime" and its tracks'. A soft stop lasts until the furthest end of its tracks' release
+  // curves (the music's 6.06 s), for all of its tracks.
+  float releaseMs = 0;
+  for (const PlayEvent& e : sound.events)
+    for (uint32_t offset : e.curves) {
+      auto c = curves_.find(offset);
+      if (c != curves_.end() && c->second.parameter == 0 && c->second.variable == "ReleaseTime" && !c->second.points.empty())
+        releaseMs = std::max(releaseMs, std::floor(c->second.points.back().first));
+    }
+  auto timeCurves = [&](const PlayEvent& e) -> std::shared_ptr<const TimeCurves> {
+    auto t = std::make_shared<TimeCurves>();
+    t->releaseMs = releaseMs;
+    auto add = [&](uint32_t offset) {
+      auto c = curves_.find(offset);
+      if (c == curves_.end() || c->second.parameter != 0) return;
+      if (c->second.variable == "AttackTime") t->attack.push_back(c->second);
+      else if (c->second.variable == "ReleaseTime") t->release.push_back(c->second);
+    };
+    for (uint32_t offset : sound.curves) add(offset);
+    for (uint32_t offset : e.curves) add(offset);
+    if (t->attack.empty() && t->release.empty() && t->releaseMs <= 0) return nullptr;
+    return t;
+  };
 
   std::vector<int> voices;
   for (const PlayEvent& e : sound.events) {
@@ -309,6 +336,7 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
     float cents = static_cast<float>(sound.pitch) + between(static_cast<float>(e.pitchMin), static_cast<float>(e.pitchMax));
     int voice = mixer_.Add(wave, Linear(decibels), std::pow(2.0f, cents / 1200.0f), e.loops == 255 ? -1 : e.loops, category, e.timeMs);
     if (!voice) continue;
+    if (auto t = timeCurves(e)) mixer_.SetTimeCurves(voice, std::move(t));
     if (position) mixer_.Place(voice, left, right);
     voices.push_back(voice);
     lastWave_ = waves->info.name + "#" + std::to_string(choice.wave);

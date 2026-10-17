@@ -174,15 +174,27 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
       e.waves.push_back(w);
       def.events.push_back(e);
     }
-    if (flags & 0x0e) {  // the block of curves: its length, then (bit 1) a count and the sound's curves
+    // The block of curves: its length, then (bit 1) a count and the sound's curves, then (bit 2)
+    // for each track (one for a sound of one wave) a count and the track's own curves.
+    std::vector<std::vector<uint32_t>> trackCurves;
+    if (flags & 0x0e) {
       size_t mark = s.o;
       size_t length = s.U16();
       if (flags & 0x02) {
         int n = s.U8();
         for (int j = 0; j < n && !s.bad; ++j) def.curves.push_back(s.U32());
       }
+      if (flags & 0x04) {
+        for (int t = 0; t < std::max(tracks, 1) && !s.bad; ++t) {
+          trackCurves.emplace_back();
+          int n = s.U8();
+          for (int j = 0; j < n && !s.bad; ++j) trackCurves.back().push_back(s.U32());
+        }
+        if (s.o != mark + length) trackCurves.clear();  // (not as read: none, rather than wrong ones)
+      }
       s.o = mark + length;
     }
+    if (!(flags & 1) && !trackCurves.empty()) def.events.back().curves = trackCurves[0];
     if (flags & 0x10) {
       size_t mark = s.o;
       s.o = mark + s.U16();
@@ -192,7 +204,8 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
       float volume = VolumeByteToDecibels(s.U8());
       trackList.push_back({volume, s.U32()});
     }
-    for (const auto& track : trackList) {
+    for (size_t ti = 0; ti < trackList.size(); ++ti) {
+      const auto& track = trackList[ti];
       Reader t(data, size, track.second);
       int events = t.U8();
       for (int k = 0; k < events && !t.bad; ++k) {
@@ -202,6 +215,7 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
         PlayEvent e;
         e.timeMs = static_cast<int>((info >> 5) & 0xffff);
         e.volumeMin = e.volumeMax = track.first;
+        if (ti < trackCurves.size()) e.curves = trackCurves[ti];
         if (type == 0) {
           t.U8();
           continue;
@@ -317,8 +331,8 @@ bool ParseSoundBank(const uint8_t* data, size_t size, SoundBankInfo* out, std::s
 
 // "XGSF", version, tool version, checksum, time, platform; counts (categories, variables, two
 // more, curves, two for effects); offsets (categories, variables, two more, ..., the categories'
-// names seventh). A category: instance limit, fade in, fade out, a flags byte, parent, volume
-// byte, one more byte.
+// names seventh). A category: instance limit, fade in, fade out (milliseconds), a flags byte,
+// parent, volume byte, one more byte.
 bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>* out) {
   if (size < 0x4d || std::memcmp(data, "XGSF", 4) != 0) return false;
   Reader r(data, size, 4 + 2 + 2 + 2 + 8 + 1);
@@ -333,7 +347,8 @@ bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>
     Reader c(data, size, offsets[0] + 10 * static_cast<size_t>(i));
     Category cat;
     cat.maxInstances = c.U8();
-    c.U16(), c.U16();
+    cat.fadeInMs = c.U16();
+    cat.fadeOutMs = c.U16();
     cat.replaceOldest = (c.U8() & 1) != 0;
     cat.parent = c.S16();
     cat.volume = VolumeByteToDecibels(c.U8());

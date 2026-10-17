@@ -45,6 +45,8 @@ struct PlayEvent {
   int timeMs = 0;  // after the sound's start
   int pitchMin = 0, pitchMax = 0;
   float volumeMin = 0, volumeMax = 0;
+  std::vector<uint32_t> curves;  // its track's own curves (offsets in the global settings): the
+                                 // fades by "AttackTime" and "ReleaseTime" of the units' loops and the music
 };
 struct SoundDef {
   int category = 0;
@@ -73,6 +75,7 @@ struct Category {
   float volume = 0;  // decibels
   int maxInstances = 255;      // sounds of it at a time (255: no limit)
   bool replaceOldest = false;  // at the limit a new sound takes the oldest one's place (else it is not played)
+  int fadeInMs = 0, fadeOutMs = 0;  // over how long the new one comes in and the old one goes when it takes its place
 };
 bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>* out);
 

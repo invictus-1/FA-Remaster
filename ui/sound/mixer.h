@@ -8,7 +8,25 @@
 #include <string>
 #include <vector>
 
+#include "sound/xact.h"
+
 namespace moho::ui::sound {
+
+// A voice's loudness by time, as the sound files give it with curves by two variables of a playing
+// sound: "AttackTime", the milliseconds since it began to sound (the units' running sounds come in
+// over half a second or a second), and "ReleaseTime", the milliseconds since it was stopped softly
+// (the music goes out over 6 s, the units' loops over 1 or 3). Several curves add (decibels). A
+// voice stopped softly goes on until `releaseMs`, the furthest end of the sound's release curves;
+// without them a soft stop is a short fade (ours, see Mixer::Stop).
+// As the sound library does it (the game's own program hands this to it; read in FNA's FACT, a
+// reimplementation of that library, 2026-10-16: the release's length the furthest last point of
+// the release curves of the sound's tracks; the attack timed from the track's first event; all
+// volume curves added in decibels).
+struct TimeCurves {
+  std::vector<Curve> attack, release;
+  float releaseMs = 0;
+  float Decibels(float attackMs, float releaseMs /* below 0: not stopped */) const;
+};
 
 // A wave's samples (16 bits, channels interleaved).
 class WaveData {
@@ -49,16 +67,23 @@ class Mixer {
   // `delayMs` how long after its start it begins to sound. Returns its number (never 0).
   int Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs);
   void Start(int voice);
-  // Fading out over a moment (a tenth of a second), or at once (still a few milliseconds, so that
-  // nothing clicks).
+  // A voice's curves by time (TimeCurves); set before it is started.
+  void SetTimeCurves(int voice, std::shared_ptr<const TimeCurves> curves);
+  // Stopped softly: through its release curves when it has them, else fading out over a moment (a
+  // tenth of a second: ours; the sound library ends it at once). Or at once (still a few
+  // milliseconds, so that nothing clicks).
   void Stop(int voice, bool immediate);
+  // Fading out over `ms` (at least the few milliseconds of an immediate stop): a sound whose place
+  // a new one of its category takes.
+  void FadeOut(int voice, float ms);
   void StopAll();
   bool Alive(int voice);
   // A voice's place among the listener's ears: a factor for the left and one for the right, on
   // top of its own loudness (a sound of the world, as the listener moves; 1 and 1 at first).
   void Place(int voice, float left, float right);
   bool PlaceOf(int voice, float* left, float* right);  // (false: no such voice)
-  // How many voices of a category sound or wait, and the oldest of them (0: none).
+  // How many voices of a category sound or wait, and the oldest of them (0: none). Those being
+  // stopped are not counted.
   int CountOf(int category, int* oldest);
 
   // The loudness and the pause of each category, as the sound system worked them out.
@@ -81,7 +106,13 @@ class Mixer {
     bool started = false;
     float fade = 1, fadeStep = 0;  // going down to 0 when it is being stopped
     float left = 1, right = 1;     // its place (Place)
+    std::shared_ptr<const TimeCurves> curves;  // (none: always 1)
+    int64_t sounded = 0;     // output frames it has sounded
+    int64_t releasing = -1;  // output frames since its release began (-1: not stopped softly)
+    float envelope = 1, envelopeStep = 0;  // what its curves give now, and how that moves per frame
+    int envelopeLeft = 0;    // frames until it is worked out again
   };
+  float EnvelopeAt(const Voice& v, int64_t ahead) const;
   std::mutex mutex_;
   std::vector<Voice> voices_;
   std::vector<float> gains_;

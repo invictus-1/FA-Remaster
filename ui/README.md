@@ -466,6 +466,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   sonar stays silent, so a sound gives away no more than the picture should.
   `MOHO64UI_SOUND_LOG=1` logs every sound of the world, and once for each cue the curves it
   follows.
+  Fades by time, as the files give them: a sound's tracks name curves by "AttackTime" (since it
+  began) and "ReleaseTime" (since it was stopped softly). The units' running sounds (engines,
+  construction) come in over half a second or a second and go out over one or three; the menu's
+  ambient loop comes in over half a second; the music, stopped softly, goes out over 6 s by its
+  own curve, and the game's music script waits for that before the next piece (`UserMusic.lua`:
+  `StopSound`, then `WaitFor`). A soft stop lasts as long as the furthest end of the sound's
+  release curves; one without them fades over a tenth of a second (ours: the sound library ends
+  it at once). A category at its limit fades the sound it replaces over its own fade-out (the
+  music's 200 ms). As the sound library does it (the game's program hands this to it; its rules
+  read in FNA's FACT, a reimplementation of that library: the release's length, the attack's
+  start, curves added in decibels). Every sound's tracks were looked through: they name no
+  other curves, so the distance curves are all the sounds' own (`ui/tests/sound.lua`).
   Ducking, read from the original's sound manager (FA exe, `CUserSoundManager`): a voice played
   with `PlayVoice(params, true)` (the simulation's alerts, the mission's talking heads, the
   lobby's countdown) takes the other sounds down while it plays. The game moves one variable of

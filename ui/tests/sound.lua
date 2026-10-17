@@ -69,6 +69,48 @@ StopSound(battle, true)
 moho64ui_SoundMix(50)
 check("the first had made room for it: silent once the second is stopped", moho64ui_SoundMix(100), 0)
 
+-- the files' fades by time (the sound library's curves by "AttackTime" and "ReleaseTime"). The
+-- music stopped softly goes out over its tracks' release curve (Music.xsb: 0 dB, -2.4 at 1.6 s,
+-- -7.2 at 3 s, -20 at 4.7 s, -96 at 6.06 s), which the game's music script waits for before the
+-- next piece (UserMusic.lua: StopSound, then WaitFor).
+local function curves()  -- what the curves of the one voice playing give now
+    return tonumber(string.match(moho64ui_SoundVoices(), "curves ([%d%.]+)")) or -1
+end
+local function between(x, a, b) return x > a and x < b end
+local piece = PlaySound(Sound({Bank = "Music", Cue = "Main_Menu"}))
+moho64ui_SoundMix(500)
+check("the music has no attack: its curves give 1", curves(), 1)
+StopSound(piece)
+moho64ui_SoundMix(1000)
+check("stopped softly: a second into its release, 1.5 dB down", between(curves(), 0.80, 0.88), true)
+check("the release lasts as long as its curve", string.find(moho64ui_SoundVoices(), "of 6061 ms") ~= nil, true)
+moho64ui_SoundMix(3700)
+check("4.7 s in: 20 dB down", between(curves(), 0.08, 0.12), true)
+check("and still playing (WaitFor waits for it)", moho64ui_SoundPlace(piece) ~= nil, true)
+moho64ui_SoundMix(1500)
+check("ended at its curve's end", moho64ui_SoundPlace(piece), nil)
+check("silent", moho64ui_SoundMix(100), 0)
+-- the menu's ambient loop comes in over half a second and goes over one (AttackTime and
+-- ReleaseTime curves of its track, as the units' running sounds have)
+local loop = PlaySound(Sound({Bank = "AmbientTest", Cue = "AMB_Menu_Loop"}))
+moho64ui_SoundMix(100)
+check("a loop's attack: 0.1 s in, 14 dB down", between(curves(), 0.15, 0.25), true)
+moho64ui_SoundMix(500)
+check("full after half a second", between(curves(), 0.99, 1.01), true)
+StopSound(loop)
+moho64ui_SoundMix(500)
+check("stopped softly: half a second into its release, nearly gone", between(curves(), 0, 0.01), true)
+check("still playing", moho64ui_SoundPlace(loop) ~= nil, true)
+moho64ui_SoundMix(600)
+check("ended after its release's second", moho64ui_SoundPlace(loop), nil)
+local again = PlaySound(Sound({Bank = "AmbientTest", Cue = "AMB_Menu_Loop"}))
+moho64ui_SoundMix(700)
+StopSound(again)
+moho64ui_SoundMix(100)
+StopSound(again, true)
+moho64ui_SoundMix(20)
+check("stopped at once while it goes out: ended at once", moho64ui_SoundPlace(again), nil)
+
 -- a voice: its bank is among the voices of the language
 local voice = PlayVoice(Sound({Bank = "XGG", Cue = "XGG_Computer_CV01_04765"}))
 check("PlayVoice finds a voice bank", voice ~= nil and string.sub(moho64ui_SoundInfo().wave, 1, 4), "XGG#")
