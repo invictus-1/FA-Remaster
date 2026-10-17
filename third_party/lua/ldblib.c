@@ -248,9 +248,12 @@ static int errorfb (lua_State *L) {
     }
     lua_pushliteral(L, "\n\t");
     lua_getinfo(L, "Snl", &ar);
-    lua_pushfstring(L, "%s:", ar.short_src);
+    /* GPG: "file(line):" (exe 0x9135e3..0x91360a: the source, "(%d)" at 0xd45a74 when the line is known,
+       then ":"), so a frame reads "\tfile(12): in function `f'" and a C one "\t[C]: in function `g'" */
+    lua_pushstring(L, ar.short_src);
     if (ar.currentline > 0)
-      lua_pushfstring(L, "%d:", ar.currentline);
+      lua_pushfstring(L, "(%d)", ar.currentline);
+    lua_pushliteral(L, ":");
     switch (*ar.namewhat) {
       case 'g':  /* global */ 
       case 'l':  /* local */

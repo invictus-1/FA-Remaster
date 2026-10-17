@@ -220,6 +220,10 @@ void ThreadScheduler::Step(Thread& t) {
   if (rc != 0) {
     if (g_threadError.empty())  // an error that did not pass luaG_errormsg (memory, ...)
       g_threadError = lua_isstring(t.co, -1) ? lua_tostring(t.co, -1) : "(error object is not a string)";
+    // CLuaTask::Execute 0x4c9700 logs the failed resume with Warnf: "Error running lua script: %s" (0xe09354), or,
+    // when the thread was destroyed during this run (the flag the task points at, ebp-0x11), "Error running lua
+    // script from destroyed thread: %s" (0xe09320). Step runs only live threads, so t.dead here = killed itself.
+    g_threadError.insert(0, t.dead ? "Error running lua script from destroyed thread: " : "Error running lua script: ");
     for (size_t a = 0, b; a <= g_threadError.size(); a = b + 1) {
       b = g_threadError.find('\n', a);
       if (b == std::string::npos) b = g_threadError.size();

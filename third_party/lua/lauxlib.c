@@ -76,7 +76,8 @@ LUALIB_API void luaL_where (lua_State *L, int level) {
   if (lua_getstack(L, level, &ar)) {  /* check function at level */
     lua_getinfo(L, "Snl", &ar);  /* get info about it */
     if (ar.currentline > 0) {  /* is there info? */
-      lua_pushfstring(L, "%s:%d: ", ar.short_src, ar.currentline);
+      /* GPG: "file(line): ", not "file:line: " (exe luaL_where 0x90dbc0, format at 0xd44fc8) */
+      lua_pushfstring(L, "%s(%d): ", ar.short_src, ar.currentline);
       return;
     }
   }

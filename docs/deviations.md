@@ -159,6 +159,17 @@ personality would send M28 down a path it has never run. M28 is to be replaced l
 
 Data of a mod, the same in the original. Not ours to change.
 
+### FAF base AI: `BaseManagersDistressAI` after its army's defeat (platoon.lua:1555)
+
+When a FAF base AI ("AI: Normal" and its kin) is defeated, the defeat runs `DefeatForArmy` → `OnDefeat` →
+`DisableAI` (SimUtils.lua 1430-1495), which sets every base's `EngineerManager` to nil. The distress loop
+was forked on the ArmyPool platoon (base-ai.lua:396), and that platoon is never disbanded (the original's
+`CArmyImpl::DisbandPlatoon` 0x700540 refuses "ArmyPool"). So within 7 s the loop logs
+``platoon.lua:1555: attempt to call method `GetLocationCoords' (a nil value)``, once, and its thread ends.
+The original does the same, word for word: indexing nil gives nil in GPG's Lua, and the call fails. A defeated
+army's thread dying has no effect on the game, so this stays. If it is ever wanted, the fix is a hook that
+ends the loop when `aiBrain:IsDefeated()`, behind `Sim::fixes`.
+
 ## Where the FAF exe itself departs from the stock game (we follow the FAF exe)
 
 ### A transport's load factor is always 1 (0x6a8b30)

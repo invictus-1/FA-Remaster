@@ -86,4 +86,10 @@ check(("a" < 1) == false and (1 < "a") == true and (1 <= {}) == true, "number < 
 check(string.format("%02s", "9") == "09", "MSVC: %02s pads with zeros")
 check(string.format("%5.2e", 12345) == "1.23e+004", "MSVC: three exponent digits: " .. string.format("%5.2e", 12345))
 check(tostring(1e20) == "1.0000000200409e+020", "tostring exponent: " .. tostring(1e20))
+local ok, e = pcall(function() error("boom") end)
+check(not ok and string.find(e, "%(%d+%): boom$") ~= nil, "error() puts file(line): before the message: " .. tostring(e))
+ok, e = pcall(function() local f = nil; f() end)
+check(not ok and string.find(e, "%(%d+%): attempt to call local `f' %(a nil value%)$") ~= nil, "runtime errors say file(line): " .. tostring(e))
+ok, e = pcall(function() return nothing.EngineerManager:GetLocationCoords() end)
+check(not ok and string.find(e, "attempt to call method `GetLocationCoords' %(a nil value%)$") ~= nil, "a method through a nil field: the index gives nil, the call fails: " .. tostring(e))
 return "ok"

@@ -44,6 +44,10 @@ binaries and is covered by `tests/dialect_test.lua`.
 ## Library differences
 - `type(f)` returns `"cfunction"` for C functions.
 - `io.dir(pattern)` lists names that match a Win32 wildcard, including `.` and `..`.
+- Error positions read `file(12): message`, not `file:12: message`: runtime errors, `error()` and
+  `luaL_error`, and the frames of `debug.traceback` (`file(12): in function ...`). Together with
+  indexing nil, a method call through a nil field fails at the call:
+  ``attempt to call method `GetLocationCoords' (a nil value)``.
 
 ## Engine behaviour around scripts (not the VM)
 - `doscript(name)` loads the file, then appends every hook file into **one chunk**, so hooks can
