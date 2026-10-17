@@ -830,15 +830,20 @@ void ProjectilesTick(Sim& sim) {
   // Projectile::MotionTick 0x69bdd0 looks at the flag, and the entity is only taken away when the beat's destroy
   // queue runs. Seen: a missile that a script thread killed in the Lua stage (FAF's flare, 10 beats after it
   // turned the missile) still made its zig-zag draws in that beat's entity stage.
-  for (size_t i = 0; i < sim.projectiles.size(); ++i) {
-    Projectile* p = sim.projectiles[i];
-    if (!p->HasLuaObject()) continue;
-    PurgeShooters(sim, p);
-    sim.HoldShape(p);
-    p->heldVel = EntityVelocity(p);
-    sim.steppingProjectile = p;
-    MotionTick(sim, p);
-  }
+  // (The projectiles made before a unit have taken their step between the units already: ProjectileStep.)
+  for (size_t i = 0; i < sim.projectiles.size(); ++i) ProjectileStep(sim, sim.projectiles[i]);
+}
+
+void ProjectileStep(Sim& sim, Projectile* p) {
+  if (!p->HasLuaObject() || p->steppedTick == sim.tick()) return;
+  p->steppedTick = sim.tick();
+  PurgeShooters(sim, p);
+  sim.HoldShape(p);
+  p->heldVel = EntityVelocity(p);
+  sim.steppingProjectile = p;
+  const bool queued = p->destroyQueued;
+  MotionTick(sim, p);
+  if (!queued && p->destroyQueued) p->queuedInStepTick = sim.tick();
   sim.steppingProjectile = nullptr;
 }
 

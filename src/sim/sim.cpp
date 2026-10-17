@@ -1818,9 +1818,21 @@ void Sim::Tick() {
     while (entityBeamAt < entityBeams.size() && entityBeams[entityBeamAt]->handle < handle)
       BeamTick(*this, entityBeams[entityBeamAt++]);
   };
+  // The projectiles take their turn in the same pass, by creation handle (beat_order.md 2.3 (f): Projectile::
+  // MotionTick 0x69bdd0 is an entity task of stage sim+0x930 like a unit's): a shell made before a unit steps before
+  // it; the ones made after every unit of the pass, and those made during it, step at its end (ProjectilesTick).
+  // Seen: MP2 2215, a tank's debris (made at 2174) lands between two Cybran build drones' turns (made before and
+  // after it): its OnImpact's four Random draws come between the drones' circling draws in the original; ours drew
+  // them after both drones, and the second drone circled the other way.
+  size_t entityProjAt = 0;
+  auto projectilesBefore = [&](uint32_t handle) {
+    while (entityProjAt < projectiles.size() && projectiles[entityProjAt]->handle < handle)
+      ProjectileStep(*this, projectiles[entityProjAt++]);
+  };
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     beamsBefore(u->handle);
+    projectilesBefore(u->orderHandle ? u->orderHandle : u->handle);
     // Entity::TaskTick 0x679c40, step 1 (0x679c51): the texture scroller, before the attached test below, so a
     // unit sent to the pass's end takes that step twice in that beat. It reads the committed transform and the
     // one before it: here the unit's transform before this turn's motion and lastPosition / lastOrientation, which
@@ -1902,7 +1914,12 @@ void Sim::Tick() {
     }
     if (u->parentId && attachParent) {  // attached (a factory's product): held at the parent's bone
       Entity* p = attachParent;
-      if (p && !p->destroyQueued) {  // the child takes the bone's transform (Entity attach)
+      // (a parent shell whose own step of this pass queued its Destroy still holds the child in this beat: the
+      // shells step between the units now, and a sinking wreck took the shell's last place when every shell
+      // stepped after every unit, as the gate's sinking wrecks show)
+      const bool queuedInStep = p && p->kind == Entity::Kind::Projectile &&
+                                static_cast<const Projectile*>(p)->queuedInStepTick == tick_;
+      if (p && (!p->destroyQueued || queuedInStep)) {  // the child takes the bone's transform (Entity attach)
         Vec3 bp;
         Quat bq;
         BoneWorld(p, u->parentBone, &bp, &bq);
