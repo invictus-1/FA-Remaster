@@ -944,6 +944,9 @@ void GameSession::OpenPicture() {
     }
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
+    // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
+    // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
+    pic->picture.SetRayTracing(Looks().rayTracing);
     if (window) UseGameWindow(pic->picture, window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {
