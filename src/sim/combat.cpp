@@ -1861,6 +1861,16 @@ Vec3 Aim(Sim& sim, AimController* c) {
   if (IsMobile(u)) Mpos = Add(Mpos, UnitVelocity(u));  // (vtbl+0x3c)
   Entity* te = TargetEntity(sim, w->target);
   Vec3 tVel = te && !te->dead ? EntityVelocity(te) : Vec3{};
+  // The target's velocity is asked of the CAiTarget's entity (0x6319f5..0x631a2b: target+4, vtable +0x3c), and a
+  // target held through a recon blip (an order's enemy target, or a jammer's fake) IS that blip: its GetVelocity is
+  // Entity::GetVelocity 0x678dc0, its committed place minus its previous one = the unit's move of the beat before,
+  // not the unit's motion velocity (as the shells' lead, projectile.cpp). Seen: MP3 3305, army 3's artillery 0x30002d
+  // (LeadTarget, a HighArc gun) on army 0's commander through its blip: led with the unit's velocity its pitch goal
+  // was 0.9397 for the original's 0.9291 (watch ww lines), it came on target a beat early and fired at 3379 (3380).
+  if (w->target.type == 1 && (w->target.fakeId || (w->target.viaBlip && w->target.blipId)))
+    if (const Entity* b = sim.FindEntity(w->target.fakeId ? w->target.fakeId : w->target.blipId);
+        b && b->kind == Entity::Kind::Blip)
+      tVel = Sub(b->position, static_cast<const ReconBlip*>(b)->prevPos);
   // Unit::GetTargetPoint 0x6ab340: a target bone comes from the unit's pose (0x6aa5c0: where its motion already
   // put it this beat); without target bones it is the blueprint centre on the entity's committed transform
   // (0x679ce0, entity+0x9c), which this beat's motion has not replaced yet (AdvanceCoords is step 13): such a
@@ -2782,6 +2792,24 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       return 0;
     }
     case 3: {  // chase
+      // 0x5f391d..0x5f3993: a member of a FormAttack's formation (the task holds it, +0x58, and is coordinated, +0x8d)
+      // that is not the formation's leader (u+0x584; also none) does not chase: it stays with the formation, asking
+      // every beat (return 1) whether the leader's attacker has its desired target (0x5f2fb0: leader +0x544 vt+0x24,
+      // HasTarget 0x5e2a10); then it lets go of the formation (+0x58 = 0, +0x8d = 0, the navigator's
+      // IgnoreFormation(true)) and goes for the target itself (Update 0x5f3020). Seen: MP1 2600, army 5's FormAttack
+      // of three interceptors on a blip: the original's 0x500023, 20 from the target, keeps the formation's speed
+      // cap at 2601 and flies to its slot by the leader 0x500028 from 2603; ours took the in-range branch at once.
+      if (d.coordinated && AttackFormationCommand(sim, u, t) && u->formLeader != EntityRef(u)) {
+        Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
+        Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
+        if (L && !L->weapons.empty() && HasTarget(sim, L->desiredTarget)) {
+          d.formation = false;
+          d.coordinated = false;
+          u->navIgnoreFormation = true;
+          AttackUpdate(sim, u, t, target);
+        }
+        return 1;
+      }
       bool has = TaskHasTarget(sim, target);
       bool busy = u->motion.hasGoal;
       if (!has || TaskTargetLost(sim, target)) {  // 0x5f3994: EntityLost 0x5e2db0, then HasTarget 0x5e2a10
