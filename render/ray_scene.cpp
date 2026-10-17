@@ -103,7 +103,7 @@ cbuffer RayCheck : register(b1) {
   if (RayTrace(from, d, 0, 1e6, 0xff, seed, t, instance)) {
     float3 p = from + d * t, albedo, n;
     RaySurfaceAt(instance, p, d, size.zw, albedo, n);
-    c = RayLitAt(p, n, albedo, seed);
+    c = RayLitAt(p, n, albedo, seed, 48);
   } else {
     c = skyZenith.w > 0.5 ? ComputedSky(d) : float3(0.4, 0.5, 0.65);
   }
