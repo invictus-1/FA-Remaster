@@ -35,10 +35,9 @@ Local play (a skirmish against AI) comes first. Multiplayer comes after it (see 
 
 ## Where it stands (October 2026)
 
-Twelve of the thirteen test replays play out **identically to the original, to their last beat**:
-every unit on every beat, every army's economy, and every random draw in the same order. The
-thirteenth, a five-minute skirmish against seven M28 AIs, agrees in every random draw, every army's
-economy and every aircraft to its end, and in every unit to beat 3,041 of 3,121.
+All thirteen test replays play out **identically to the original, to their last beat**: every unit
+on every beat, every army's economy, and every random draw in the same order. The last of them, a
+five-minute skirmish against seven M28 AIs with mods, got there on 16 October 2026.
 
 A skirmish can be started from the game's own main menu and lobby. It runs in the new simulation, is
 drawn by the new renderer inside the game's own interface, and can be played: select, order, build,
@@ -52,7 +51,7 @@ The work runs in three tracks that share this repository, plus one outside it:
 
 | Track | Folder | Program | State |
 |---|---|---|---|
-| Simulation | `src/` | `moho64` | Plays whole AI games headless; 12 of 13 replays identical to the original to the last beat, the 13th nearly |
+| Simulation | `src/` | `moho64` | Plays whole AI games headless; 13 of 13 replays identical to the original to the last beat |
 | Renderer | `render/` | `moho64view` | Direct3D 12 and Vulkan; ground, water, units, effects, shadows; day and night, weather, lamps on units |
 | Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays; 494 of the original's 531 interface engine functions built |
 | Remastered art | not in this repository | – | Remade unit models and a remade Seton's Clutch, made separately |
@@ -171,7 +170,7 @@ not accepted as it is.
 | Land battle | 2,019 | **identical to the end** |
 | Economy | 6,263 | **identical to the end** |
 | Naval battle | 972 | **identical to the end** |
-| Skirmish against seven M28 AIs | 3,121 | random draws, economy and aircraft identical to the end; every unit to beat 3,041 |
+| Skirmish against seven M28 AIs | 3,121 | **identical to the end** |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
 order. More replays follow, among them real multiplayer games.
