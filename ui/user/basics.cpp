@@ -31,14 +31,13 @@ extern char** environ;
 namespace moho::ui {
 namespace {
 
-// The seconds since the program started (the original's system timer, time::GetSystemTimer 0x955730, is
-// started at start-up), the same for every script state: a game's own state starts later.
-const std::chrono::steady_clock::time_point kProgramStart = std::chrono::steady_clock::now();
-double ProgramSeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - kProgramStart).count(); }
-
-// CurrentTime() / GetSystemTimeSeconds(): seconds since the application started.
+// CurrentTime() / GetSystemTimeSeconds(): the seconds of the host's clock (real time in a window, fixed frame
+// steps in a test run; the game's WaitSeconds counts by it). DEVIATION: the original's system timer
+// (time::GetSystemTimer 0x955730) runs from the program's start; ours from the state's, so a game's state
+// starts again at 0. The scripts use differences; counting over all states shifted the restarted game's
+// opening (the commander no longer selected; not found why, 2026-10-16), so it stays per state.
 int l_CurrentTime(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(ProgramSeconds()));
+  lua_pushnumber(L, static_cast<lua_Number>(UserState::From(L)->now()));
   return 1;
 }
 
@@ -197,13 +196,13 @@ int l_ExitApplication(lua_State*) {
   return 0;
 }
 
-// GetSystemTime() (FA exe 0x843500): not the clock on the wall but the time since the program
-// started (the clock GetSystemTimeSeconds gives), as hours:minutes:seconds, the hours counted on
-// past 24 ("01:23:45").
+// GetSystemTime() (FA exe 0x843500): not the clock on the wall but the clock GetSystemTimeSeconds gives
+// (the original's: since the program started; ours: since the state's, see l_CurrentTime), as
+// hours:minutes:seconds, the hours counted on past 24 ("01:23:45").
 int l_GetSystemTime(lua_State* L) {
   if (lua_gettop(L) != 0)
     return luaL_error(L, "%s\n  expected %d args, but got %d", "string GetSystemTime() - returns a formatted string displaying the System time", 0, lua_gettop(L));
-  const long seconds = static_cast<long>(ProgramSeconds());
+  const long seconds = static_cast<long>(UserState::From(L)->now());
   char text[48];
   std::snprintf(text, sizeof text, "%02ld:%02ld:%02ld", seconds / 3600, seconds / 60 % 60, seconds % 60);
   lua_pushstring(L, text);
