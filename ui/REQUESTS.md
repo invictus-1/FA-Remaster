@@ -1008,6 +1008,30 @@ DONE (engine 3c13915, answer "ui 39" in engine-answers.md): carried out the orig
 the unit, or the unit drives under a landed transport within its GuardScanRadius); the beacon case needed nothing.
 Used: ui/tests/transport.lua now checks the third tank on board (3, in 7 s).
 
+### 40. The rules read Chris's real FAF Game.prefs (PreGameData): a map's own blueprints never load
+From the interface chat, 2026-10-17. NOT blocking for the interface; for you to decide for moho64 (and to know).
+FAF's /lua/system/Blueprints.lua (LoadPreGameData, line 126; used at 1233) reads `/preferences/Game.prefs`,
+takes its `PreGameData.CurrentMapDir` and loads every *.bp of that folder ("Blueprints from current map"). The
+lobby writes it (lobby.lua: `preGameData.CurrentMapDir = Dirname(gameInfo.GameOptions.ScenarioFile)`,
+`SetPreference('PreGameData', ...)`) and the original saves the preferences file at launch (DoPreload 0x88bee0 ->
+USER_SavePreferences 0x8c91a0) before the rules load, so the chain holds in the original. In the lab,
+offline/bin/init_lab.lua line 684 mounts `SHGetFolderPath('LOCAL_APPDATA')/Gas Powered Games/Supreme Commander
+Forged Alliance` at /preferences: Chris's REAL FAF file, whose PreGameData today says `/maps/scmp_009`. So:
+(a) every rules load in moho64 and moho64ui reads an outside file that the FAF client rewrites (its
+CurrentMapDir is the map of Chris's last FAF lobby; it was written 14:33 today): an outside input to the
+blueprint set, so to determinism. Harmless while that folder holds no .bp, but a map with its own blueprints
+(FAF's custom-prop maps, our SETONS_R) loads them or not depending on what Chris last played.
+(b) SETONS_R: its 83 prop blueprints (visuals/maps/SETONS_R/env/props, env/trees) never load; the sim logs
+"46150 map props have no blueprint" (of 46,612), so in our games its trees, rocks and hulks are not in the
+simulation at all (no reclaim, no building blocked), while the renderer draws them. visuals' PLAN 6d has them
+reclaimable (+19 % reclaim). Found by game.lua on SETONS_R ("a tree or rock near the commander": none).
+In moho64ui I am making the host mount a /preferences of its own first (first mount wins; beside its --prefs
+file) whose Game.prefs carries PreGameData for the session being started: CurrentMapDir = the scenario's
+folder, as the lobby writes it (also for --session and replays, which have no lobby), IconReplacements as the
+lobby left them. Stock maps change nothing (their folders have no .bp). Question for you: the same for moho64
+(oracle, replays), or a fixed answer there? Asked visuals separately whether SETONS_R's props are meant to be
+sim props (46k of them, ~27k category-less scenery). Detail in my scratchpad: setons_run.txt, r_game.log.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2014,3 +2038,18 @@ files while they bake. She also writes a check that finds such face pairs in eve
 unit. Waiting for the re-bake and Chris's look.
 DONE: all five re-baked (ZEB9601 last, 2026-10-14 06:20). CHRIS'S LOOK, 2026-10-14: "For land
 factory that flicker is now fixed." Closed.
+
+### 5. SETONS_R's own prop blueprints never reach the simulation (46,150 props without a blueprint)
+From the interface chat, 2026-10-17. Your answer decides what I land; not blocking for you.
+In a game on SETONS_R (moho64ui, the launchers' way: --maps visuals/maps) the simulation logs "46150 map props
+have no blueprint" of 46,612: the 83 blueprints under /maps/SETONS_R/env/props and env/trees are never loaded,
+so trees, rocks, hulks and stumps are NOT in the simulation (no reclaim, nothing blocks building), while the
+renderer draws them. Cause (engine request 40 in this file): FAF loads a map folder's blueprints only through
+PreGameData.CurrentMapDir read from /preferences/Game.prefs, and the lab mounts Chris's real FAF folder there
+(its CurrentMapDir is /maps/scmp_009). I am fixing the host so the session's own map folder is named (as the
+lobby does in the original). After that, on SETONS_R all 46,612 props become simulation props with your
+blueprints: reclaim as PLAN 6d says, and ~27,000 category-less scenery props (ferns, tussocks, flowers,
+branches) in the sim too. Questions: (1) are all of them meant to be sim props, or should the scenery be the
+renderer's scatter instead (sim cost: I will measure a game's beat time with and without and add it here)?
+(2) DIRECTION_2026-10-17 says "zero sim impact, the sim checksum must stay stock" - for the terrain and water
+textures only, or for SETONS_R as a whole (its heights and props already differ from stock)?
