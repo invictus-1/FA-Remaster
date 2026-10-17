@@ -267,10 +267,13 @@ void DeleteEntry(Sim& sim, lua_State* L, int a, Unit* u) {
   u->recon[a] = 0;
 }
 
-// ReconBlip::DestroyIfUnused 0x5bf6f0
+// ReconBlip::DestroyIfUnused 0x5bf6f0: kept while its source still exists and is not dead (0x5bf6f0..0x5bf727: the
+// source's weak pointer, IUnit vt+0x28, blip+0x294), whether or not a Destroy is pending (Entity+0x1b9); else kept while
+// some army's entry is in use, else destroyed. Only the recon database calls it (ReconTick, UpdateBlips, DeleteBlip(s),
+// Flush), never the unit's own destruction.
 void DestroyIfUnused(Sim& sim, ReconBlip* b) {
   Unit* u = b->source;
-  if (u && !u->dead && !u->destroyQueued) return;
+  if (u && !u->dead) return;
   if (u)
     for (int a = 0; a < 16; ++a)
       if (u->recon[a] & kReconInUse) return;
@@ -372,6 +375,34 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       if (b) DestroyIfUnused(sim, b);
     } else {
       u->recon[a] |= 0x40;
+    }
+  }
+  // ... and the units whose Destroy is pending but not yet carried out (the map loop's test 0x5c0e75: the source's
+  // Entity+0x1b9, set by Entity::Destroy 0x679b0f): the same gone path, now. Their DestroyIfUnused keeps the blip (the
+  // source still exists and is not dead), and nothing asks again once the unit is gone: the blip and its id stay.
+  // Seen (probe mp3_dyunused): MP3, army 1's Cybran build drone 0x100002 (blip 0x30100002) is destroyed by FAF's
+  // ReturnBotsThread in beat 1383, which is army 3's recon beat: the original's army 3 lets the entry go then, the
+  // blip is kept and its id never comes back, so every later army-1 blip id is one higher than ours; army 0's Attack
+  // at 2791 on 0x30100021 is then on the interceptor 0x100020, not the Mantis 0x100021.
+  {
+    const Army* us = sim.armies()[static_cast<size_t>(a)].get();
+    for (const auto& army : sim.armies()) {
+      if (army.get() == us) continue;
+      const std::vector<Unit*> list = army->units;
+      for (Unit* u : list) {
+        if (!u->destroyQueued || !(u->recon[a] & kReconInUse)) continue;
+        ReconBlip* b = u->blip;
+        bool mobile = b ? b->mobile : true;
+        bool allied = u->army && combat::Relation(u->army, us) == 2;
+        Vec3 p = b ? b->position : u->position;
+        if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p) & 8)) {
+          if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);
+          DeleteEntry(sim, L, a, u);
+          if (b) DestroyIfUnused(sim, b);
+        } else {
+          u->recon[a] |= 0x40;
+        }
+      }
     }
   }
   g_goneUnits.erase(std::remove_if(g_goneUnits.begin(), g_goneUnits.end(),
@@ -590,8 +621,13 @@ void ReleaseEntityIntel(Sim& sim, Entity* e) {
     Unit* u = static_cast<Unit*>(e);
     bool any = !u->fakeBlips.empty();
     for (int a = 0; a < 16; ++a) any = any || (u->recon[a] & kReconInUse);
-    if (any) g_goneUnits.push_back(u);
-    else if (u->blip) DestroyIfUnused(sim, u->blip);
+    if (any) {
+      g_goneUnits.push_back(u);
+    } else if (u->blip) {
+      // (no army holds it: nothing destroys it any more; its weak pointer to the unit goes empty)
+      u->blip->source = nullptr;
+      u->blip = nullptr;
+    }
   }
 }
 
