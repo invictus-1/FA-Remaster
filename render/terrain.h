@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gfx.h"
+#include "json.h"
 #include "scmap.h"
 #include "textures.h"
 #include "view.h"
@@ -92,6 +93,17 @@ class Terrain {
   gfx::Texture GroundColours();
   // The ground's heights as the shader reads them (one per grid point), and the world units of their largest value.
   gfx::Texture HeightTexture() const { return heightTexture_; }
+  // The visuals track's plants for this map's ground (remap.json: the map's entry names its "cover", the card atlas's
+  // JSON with its density table by the map's layers): the JSON (null where the map has none), its files' paths
+  // below kRemasteredTerrain.
+  const JsonValue* Cover() const { return hasCover_ ? &cover_ : nullptr; }
+  // Where the plants grow, over the whole map at half its size, by the cover's table blended as the layers are:
+  // `a` RGBA8 (blades, clumps, flowers, dry stalks), `b` RGBA8 (ferns, the share of a clump taken from the dry cells,
+  // the share of clumps that are weeds, 0); near trees (`trees`: R8 over the whole map, 1 within the table's radius
+  // of a tree) as its near_trees says, not on the layers it names. Made the first time it is asked for once a map is
+  // loaded (it dispatches: between passes). False where the map has no cover.
+  bool CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b);
+  float CoverTreeRadius() const { return coverTreeRadius_; }  // (the table's near_trees radius, world units)
   float HeightUnit() const { return map_ ? 65535.0f * map_->heightScale : 1.0f; }
 
  private:
@@ -100,6 +112,13 @@ class Terrain {
   bool normalUp_[9] = {};    // (a remastered material's normal: +y up in its texture, the stock layers' turned)
   int remasteredLayers_ = 0;
   void Remaster(const MapData& map, std::vector<std::string>* arh);
+  void ReadCover(const MapData& map, const std::string& path);
+  JsonValue cover_;
+  bool hasCover_ = false;
+  float coverA_[10][4] = {}, coverB_[10][4] = {};  // (each layer's row of the table: as the two pictures hold it)
+  float coverNear_[4] = {1, 1, 1, 1}, coverFern_ = 0, coverTreeRadius_ = 6;
+  gfx::Pipeline coverPass_;
+  gfx::Texture coverA_tex_, coverB_tex_;
   gfx::Pipeline groundColoursPass_;
   gfx::Texture groundColours_;  // (GroundColours, made again for each map)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what

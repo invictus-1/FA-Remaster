@@ -12,6 +12,8 @@
 
 #include "camera.h"
 #include "gfx.h"
+#include "json.h"
+#include "textures.h"
 #include "view.h"
 
 namespace render {
@@ -27,9 +29,30 @@ class GroundCover {
   void Prepare(const View& view, const Camera& camera, const std::vector<float>& discs);
   // Into the scene's pass, after the ground. `heights`: the ground's heights (Terrain::HeightTexture), `heightUnit`
   // world units of its largest value; `cover`: Terrain::GroundColours; `normals`: Terrain::NormalMap; the map's
-  // size; `waterLevel`: none at or under it (a map without water: very low).
+  // size; `waterLevel`: none at or under it (a map without water: very low). `densityA`, `densityB`: where the
+  // plants grow (Terrain::CoverDensity; none: the blades by how grassy the ground is, no plants).
   void Draw(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover, gfx::Texture normals,
-            float mapWidth, float mapHeight, float waterLevel);
+            float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA = {}, gfx::Texture densityB = {});
+
+  // The plants on cards beside the blades (the visuals track's atlas for the map, Terrain::Cover: its cells, each
+  // a plant drawn side on, its foot at the cell's bottom middle, its size in metres, how it sways, how many make a
+  // clump, its group): each cell of a square a little coarser than the blades' a clump of grass or weeds, a flower,
+  // dry stalks, a fern or nothing, by the map's table (Terrain::CoverDensity: the layers' rows, flowers in loose
+  // patches, more or fewer near trees); each plant cards facing the camera, leaning back from it a little, scaled
+  // so the tallest is `plantTallest` (no taller than half a small unit: readability) and the low ones `plantBoost`
+  // times their real proportion to it, up to that cap (else they would be too small to read from the game's camera),
+  // pressed flat round units as the blades are, swaying in the same wind (more toward the top), lit as the ground
+  // a half toward the card's own normals. `folder`: what the atlas's paths are below (kRemasteredTerrain). False
+  // where the cover has no usable cells (then no plants).
+  bool SetPlants(const JsonValue& cover, TextureCache* textures, const std::string& folder);
+  float plantCell = 0.3f;     // one spot (a clump, a flower, ...) or none in a cell this wide
+  float plantTallest = 0.24f; // world units: the tallest plant's height
+  // spots a square world unit where the table says 1: 0 (none) until Chris has seen them (2026-10-17: at the size the
+  // readability rule allows the atlas's plants barely show among the blades; viewer --plant-density 15 to look)
+  float plantDensity = 0;
+  float plantLean = 0.35f;    // how far a card leans back from the camera (its face up toward it)
+  float plantBoost = 2.75f;   // the low plants this many times their real proportion to the tallest, up to the cap
+  int drawnPlants = 0;        // (the last Draw: spots gone through)
 
   float bladeHeight = 0.22f;  // the tallest blade, world units
   float bladeWidth = 0.025f;  // at its foot
@@ -40,6 +63,19 @@ class GroundCover {
   int drawnBlades = 0;  // (the last Draw: cells gone through)
 
  private:
+  // (the plants' constants as the shader reads them, kept from SetPlants: per cell its uv rectangle; its frame, low
+  // and high height, height (metres); its sway, clump's least and most, group; the cells by group, and per group
+  // where its list starts and how long it is: 0 grass, 1 dry grass, 2 weeds, 3 flowers, 4 stalks, 5 ferns)
+  struct PlantData {
+    float cells[16][3][4] = {};
+    float order[4][4] = {};
+    float groups[6][4] = {};
+    float tallest = 1;  // the tallest plant's real height (metres)
+    float patchScale = 12, patchCover = 0.35f;
+    int count = 0;
+  } plants_;
+  gfx::Texture atlas_, atlasNormals_;
+  gfx::Pipeline plantPipeline_;
   gfx::Device* device_;
   gfx::Pipeline pipeline_, trample_;
   gfx::Texture trampled_;  // (how flat the grass is pressed over its square: 1 flat)

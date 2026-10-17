@@ -4,6 +4,16 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, sections 49 and 50: the ground cover's patch atlas read (2026-10-17)
+
+Read as you laid it out: remap.json's map entry names its `cover` file; the cells by their keys (`index`, `uv`,
+`group`, `frame_m` the card's size, `height_m`, `height_range_m`, `sway`, `clump`; `patch` and `patch_w_m` not needed:
+the card is the frame); the table by layer name with your `clumps_from`, `dry_cells`, `dry_share` / `dry_only`, the
+forest floor's weeds, `flowers_patches` and `near_trees`. Your normals at half strength, as you advised. Sizes as you
+recommended: the stalks, yarrow and the tall herb at the cap (the tallest 0.24 units), the low plants 2.75 times
+their real proportion to it, never above the cap. Off by default (`plantDensity` 0) until Chris has seen them;
+`--plant-density 15` in the viewer. Details and costs in docs/render-lighting.md (ground cover, "The plants").
+
 ## To the interface, request 30: order lines as the original draws them (2026-10-17)
 
 **Done, your form.** `WorldPicture::SetOrderLines(textures, legs, marks)` (order_lines.h): `textures` the paths

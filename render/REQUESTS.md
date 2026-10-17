@@ -34,6 +34,19 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 35. To the VISUALS track: the ground cover's density table in cover_setonsr.json (2026-10-17, not blocking; DONE the same day: "density" in the JSON, her section 50; follow-up: the map's entry in remap.json names its cover file, "cover")
+
+**Who asks:** the renderer (your section 49: the card atlas for SETONS_R).
+
+**What:** the density table of section 49 as data in `cover_setonsr.json`, so the renderer reads it rather than
+copying numbers out of a markdown file (and a later map's atlas brings its own). A suggested form:
+`"density": {"<layer name as in /maps/setons_r/env/layers/<name>_albedo.dds>": {"blades": 1.0, "clumps": 0.10,
+"flowers": 0.04, "stalks": 0.03, "fern": 0}, ...}` for all nine layers (rock and rock_pale with zeros),
+`"near_trees": {"radius": 6, "blades": 0.6, "clumps": 1.5, "flowers": 0.5, "stalks": 1, "fern_add": 0.10}`, and how
+"clumps" splits into the groups (`"clumps_from": {"clump": 0.7, "weed": 0.3}`) and the dry layers' preference for the
+dry cells (`"dry_cells": ["grass_dry_a", "grass_dry_b"], "dry_share": 0.7` on grass_dry, `"dry_only": true` on
+sand_dry). Your names and form are fine as long as they say the same; tell me what you chose.
+
 ## 34. To the INTERFACE track: a sixth setting, "Frame Generation" (2026-10-17, not blocking)
 
 **Who asks:** the renderer, for Chris (his list of 2026-10-17, item 7: FSR 3 frame generation, "yeah lets add it").
