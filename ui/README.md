@@ -136,6 +136,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   sample a pixel, so it takes Anti-Aliasing's place, from the next map loaded as that setting
   (`LookSettings::SceneSamples`); a camera that jumps (a snap, a minimap click) tells it to start afresh
   (`world()->cameraCut`).
+  The lighting upgrade (the renderer's request 31; Chris, 2026-10-17: all of it in, bundled), four
+  switches after it, each off by default and each one `WorldPicture` call: Atmosphere (`remaster_atmosphere`:
+  light in the air, volumetric clouds, the sky from the atmosphere's tables; with the lobby's Time of Day),
+  Soft Shadows (`remaster_soft_shadows`, with contact shadows), Ray Tracing (`remaster_ray_tracing`: bounce
+  light and reflections, the reflections from the next map loaded) and Weather Effects
+  (`remaster_weather_effects`: lit rain and snow, rain's splashes). Where the graphics card cannot ray
+  trace (the renderer says so after its first picture, the menu's or a game's:
+  `moho64ui_RayTracingSupported()`), Ray Tracing offers one state, greyed out, when the dialog opens.
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'

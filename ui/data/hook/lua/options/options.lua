@@ -89,6 +89,70 @@ local looks = {
             },
         },
     },
+    -- The lighting upgrade (the renderer's request 31; Chris, 2026-10-17: all of it in, bundled to keep the
+    -- menu short), each off unless chosen. Costs at 1440p in docs/render-lighting.md, "The options".
+    {
+        -- light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds, the sky from the
+        -- atmosphere's tables; with the lobby's Time of Day
+        title = "Atmosphere",
+        key = 'remaster_atmosphere',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_atmosphere"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the sun's shadows sharp at the foot and soft farther off; small contact shadows at units' feet
+        title = "Soft Shadows",
+        key = 'remaster_soft_shadows',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_soft_shadows"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- bounce light and reflections (the reflections from the next map loaded). Only where the graphics
+        -- card can ray trace: elsewhere one state, greyed out (the dialog reads the states when it opens; the
+        -- renderer says after its first picture whether the card can)
+        title = "Ray Tracing",
+        key = 'remaster_ray_tracing',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_ray_tracing"),
+        custom = setmetatable({}, {
+            __index = function(t, k)
+                if k ~= 'states' then return nil end
+                if moho64ui_RayTracingSupported() == false then
+                    return { { text = "Not on this graphics card", key = 0 } }
+                end
+                return { { text = "<LOC _Off>", key = 0 }, { text = "<LOC _On>", key = 1 } }
+            end,
+        }),
+    },
+    {
+        -- rain and snow lit where they fall (they sparkle round lamps), and rain's splashes
+        title = "Weather Effects",
+        key = 'remaster_weather_effects',
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_weather_effects"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
     {
         title = "Remastered Effects",
         key = 'remaster_effects',

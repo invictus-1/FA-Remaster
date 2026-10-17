@@ -88,6 +88,20 @@ video.remaster_temporal_upscale.set('remaster_temporal_upscale', 1, false)
 check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostring(moho64ui_Looks().temporalUpscale) .. " " .. moho64ui_Looks().samplesDrawn, "true 1")
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
 check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
+-- The lighting upgrade (the renderer's request 31): four switches, each off unless chosen
+for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tracing', 'remaster_weather_effects'} do
+    check("the Video tab has " .. key .. ", off unless chosen", video[key] and video[key].default, 0)
+end
+video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)
+video.remaster_weather_effects.set('remaster_weather_effects', 1, false)
+check("switched on in the menu: Soft Shadows and Weather Effects, nothing else", tostring(moho64ui_Looks().softShadows) .. " " ..
+    tostring(moho64ui_Looks().weatherEffects) .. " " .. tostring(moho64ui_Looks().atmosphere) .. " " .. tostring(moho64ui_Looks().rayTracing),
+    "true true false false")
+video.remaster_soft_shadows.set('remaster_soft_shadows', 0, false)
+video.remaster_weather_effects.set('remaster_weather_effects', 0, false)
+-- (no picture here says whether the card can ray trace: both states; where it cannot, one, greyed out)
+check("Ray Tracing offers Off and On until the renderer says the card cannot",
+    tostring(moho64ui_RayTracingSupported()) .. " " .. table.getn(video.remaster_ray_tracing.custom.states), "nil 2")
 -- The game's own graphics settings drive the renderer and mean what they say; a player who has
 -- never chosen starts at the full look.
 check("Fidelity is High unless chosen", video.fidelity and video.fidelity.default, 2)

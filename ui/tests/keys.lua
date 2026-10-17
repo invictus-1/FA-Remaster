@@ -230,7 +230,7 @@ check("the case not counting, in the registry's order", names(ConTextMatches("UI
 local ai = ConTextMatches("ai")
 check("'_' comes before letters: the ai_ names, then Air...", ai[table.getn(ai)], "AirLookAheadMult")
 check("no text, no names", table.getn(ConTextMatches("")), 0)
-check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_snow_tracks remaster_stats")
+check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_snow_tracks remaster_soft_shadows remaster_stats")
 check("one argument, no more", pcall(ConTextMatches), false)
 
 parent:Destroy()

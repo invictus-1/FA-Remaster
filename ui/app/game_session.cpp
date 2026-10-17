@@ -197,6 +197,11 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
     if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);
     if (!lookApplied || looks.temporalUpscale != lookNow.temporalUpscale) picture.SetTemporalUpscale(looks.temporalUpscale);
+    // (the lighting upgrade's switches, the renderer's request 31)
+    if (!lookApplied || looks.atmosphere != lookNow.atmosphere) picture.SetAtmosphere(looks.atmosphere);
+    if (!lookApplied || looks.softShadows != lookNow.softShadows) picture.SetSoftShadows(looks.softShadows);
+    if (!lookApplied || looks.rayTracing != lookNow.rayTracing) picture.SetRayTracing(looks.rayTracing);
+    if (!lookApplied || looks.weatherEffects != lookNow.weatherEffects) picture.SetWeatherEffects(looks.weatherEffects);
     if (render::World* w = picture.world()) {
       w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;
@@ -866,6 +871,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
         Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
         return;
       }
+      Looks().rayTracingSupported = menu->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
       menuPicture_ = std::move(menu);
     }
     MenuPicture& menu = *menuPicture_;
@@ -941,6 +947,7 @@ void GameSession::OpenPicture() {
     if (window) UseGameWindow(pic->picture, window), pic->direct = true;
     std::string error;
     if (pic->picture.Open(vfs_, map_, &error)) {
+      Looks().rayTracingSupported = pic->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
       pic->picture.GameStarted(*sim_);
       // The picture is the player's: other armies' units show as the player's army knows them.
       pic->picture.SetFocusArmy(sim_->focusArmy + 1);

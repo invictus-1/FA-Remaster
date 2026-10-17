@@ -323,6 +323,15 @@ struct LookSettings {
   // request 30). It needs one sample a pixel: on, the Anti-Aliasing gives way (SceneSamples), from the next
   // map loaded as that setting. Off as at first.
   bool temporalUpscale = false;
+  // The lighting upgrade's four switches (the renderer's request 31; Chris, 2026-10-17: all of it in, bundled
+  // to keep the menu short), each one WorldPicture call: Atmosphere (light in the air, volumetric clouds, the
+  // sky from the atmosphere's tables; needs a time of day), Soft Shadows (with contact shadows), Ray Tracing
+  // (bounce light and reflections, the reflections from the next map loaded; only where the card can) and
+  // Weather Effects (lit rain and snow, rain's splashes). Off as at first.
+  bool atmosphere = false, softShadows = false, rayTracing = false, weatherEffects = false;
+  // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
+  // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
+  int rayTracingSupported = -1;
   // The game's own graphics settings (its Video tab; Chris, 2026-10-15: they drive the renderer's
   // switches and mean what they say): graphics_Fidelity 0..2 (Low: no ambient occlusion, plain
   // ground), shadow_Fidelity 0..3 (Off: none; Low, Medium: the sun's; High: the lamps' too),
