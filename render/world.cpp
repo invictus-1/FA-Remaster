@@ -33,6 +33,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       post(device),
       air(device),
       rays(device),
+      bounce(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -478,6 +479,20 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // bounce light: its probes placed round the camera's target (their shaders made the first time it is wanted)
+  bounceNow_ = false;
+  if (bounceLight && look == Look::Modern && haveMap_ && !sidePicture && RaysReady()) {
+    if (!bounceTried_) {
+      bounceTried_ = true;
+      std::string why;
+      bounceMade_ = bounce.Init(&why);
+      if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str());
+    }
+    if (bounceMade_) {
+      bounce.Place(camera.target, [this](float x, float z) { return GroundHeight(x, z); }, &c);
+      bounceNow_ = true;
+    }
+  }
   if (temporalNow_)  // (the temporal upscaler: textures read for the screen's size and finer)
     c.temporal[0] = std::log2(static_cast<float>(sceneWidth) / static_cast<float>(width)) + temporalMipBias;
   if (softShadows && look == Look::Modern) {  // (soft shadows: on, how the edges grow, how far casters are looked for, the widest edge)
@@ -1447,9 +1462,13 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
-  if (rayView && RaysReady()) {  // the ray tracing scene, from the models just prepared
+  if ((rayView || bounceNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
+  }
+  if (bounceNow_) {  // bounce light: the probes' rays and their blending
+    Stage("bounce light");
+    bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
   }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
@@ -1493,6 +1512,7 @@ void World::Render() {
   device_->SetTexture(kAirSlot, air.Volume());
   device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
+  if (bounceNow_) bounce.Bind();
   lights.Bind();
   if (haveMap_) {
     Stage("ground");

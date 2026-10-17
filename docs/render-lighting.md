@@ -188,6 +188,31 @@ Mac", and every ray-traced effect keeps a fallback without it.
      of light over the ground round the camera, updated by rays a few at a time (after DDGI, Majercik et al.
      2019), read by every lit surface in place of the sky's fitted light; the ground's colour for the rays
      from its layers' colours and masks.
+   - Vulkan's ray tracing done (2026-10-17, a helper's port: VK_KHR_acceleration_structure, ray queries,
+     buffers' device addresses; MoltenVK has none and nothing changes there): `--gfx-check --vulkan` right,
+     the check view identical to Direct3D 12's. No Vulkan validation layer is installed here to try it under.
+   - The ground's colour for the rays (`Terrain::GroundColours`): the layers' blend with each layer's average,
+     over the whole map at half its size, made once a map.
+   - **Bounce light: first version done** (2026-10-17): `render/bounce.h/.cpp`, `World::bounceLight` (viewer
+     `--bounce`; modern look, where the device has ray tracing). 32 x 32 columns 8 world units apart round the
+     camera's target (moved in whole columns; a column that comes in starts afresh), four probes in each at
+     1.5, 5, 12 and 26 over the ground under it. Every frame each probe casts 64 rays (spherical Fibonacci,
+     turned anew each frame); what they meet is lit by the sun (a shadow ray) and by the probes' light of the
+     frame before (so light bounces again over frames), the sky where they meet nothing. Each probe keeps its
+     light (octahedral 6 x 6 + border, RGBA16F) and sight (mean distance and its square, 14 x 14 + border)
+     blended at 0.97. Every lit surface (ModernLight) reads the eight probes round it (view.h `BounceAt`:
+     trilinear, by how much they face it, Chebyshev's bound on whether they see it) in place of the sky's
+     fitted light, fading back to it over the grid's outer columns. `--inspect ambient`: the light that comes
+     in from round about, on a white surface.
+     - What it does on Seton's at midday: little on open ground facing up (it sees the sky, as the fit says);
+       forests darker inside (the canopy hides the sky), the undersides and lower halves of units and trees
+       lit by the grass rather than the sky. Mean change of the ambient light 4.6 in 255.
+     - Cost at 1440p (Direct3D 12): the scene 0.15 ms, the probes 0.15 ms, reading them about 0.15 ms more
+       on the ground and the models. Off: pictures identical, pixel for pixel, on both backends; on, Vulkan
+       as Direct3D 12 (mean 0.02).
+     - Open: probes inside hills or buildings are not moved out yet (they see dark); the grid is fixed at 8
+       units (a camera far out sees beyond it: today's fitted light there); small lights (explosions,
+       lamps) not yet in what the rays meet; the minimap's frame has none.
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units.
 
