@@ -111,6 +111,10 @@ StopSound(again, true)
 moho64ui_SoundMix(20)
 check("stopped at once while it goes out: ended at once", moho64ui_SoundPlace(again), nil)
 
+-- GetCueBank (in every state of the original): a sound's cue and bank
+local cue, bank = GetCueBank(Sound({Bank = "Interface", Cue = "UI_Menu_MouseDown"}))
+check("GetCueBank gives the cue and the bank", tostring(cue) .. " " .. tostring(bank), "UI_Menu_MouseDown Interface")
+
 -- a voice: its bank is among the voices of the language
 local voice = PlayVoice(Sound({Bank = "XGG", Cue = "XGG_Computer_CV01_04765"}))
 check("PlayVoice finds a voice bank", voice ~= nil and string.sub(moho64ui_SoundInfo().wave, 1, 4), "XGG#")

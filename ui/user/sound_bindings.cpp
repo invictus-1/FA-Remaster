@@ -223,6 +223,8 @@ void RegisterSoundBindings(lua_State* L) {
   luaL_newmetatable(L, kHandle);
   lua_pop(L, 1);
   SetGlobal(L, "PlaySound", l_PlaySound);
+  // GetCueBank(sound) -> cue, bank (the original's is in every state, FA exe 0x4e0090): the engine's, as the sim has it.
+  SetGlobal(L, "GetCueBank", moho::l_GetCueBank);
   SetGlobal(L, "PlayVoice", l_PlayVoice);
   SetGlobal(L, "PlayTutorialVO", l_PlayTutorialVO);
   SetGlobal(L, "SoundIsPrepared", l_SoundIsPrepared);
