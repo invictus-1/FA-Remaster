@@ -2894,7 +2894,11 @@ BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
 }
 
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
-  if (u->weapons.empty()) return nullptr;
+  // DispatchTask's Attack case (0x609639 -> CAttackTargetTask::operator new 0x5f2750 -> ctor 0x5f2980) makes the task
+  // for any unit, weapons or not; a unit with no weapon for the target ends it in its first tick (TaskTick 0x5f34c0,
+  // AttackStep's "no weapon" return), in the beat it was dispatched. Seen (MP3 2003): army 1's air scout 0x10001e
+  // (a DummyWeapon only) is ordered with a bomber to attack a blip: the original's queue is empty the next beat; ours
+  // made no task and flew at the target as an approach.
   auto t = std::make_unique<BuildTask>();
   t->type = c.type;
   t->order = "Attack";

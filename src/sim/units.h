@@ -149,6 +149,9 @@ class Unit : public Entity {
   // set while the queue is cleared for a new order under which CUnitMoveTask's destructor (0x618700, the table
   // 0x618998) does NOT abort the navigator: a task whose move child is torn down then leaves the move running
   bool clearKeepsMove = false;
+  // the head Move task reserved its spot in the o-grid (CUnitMoveTask +0x92: a factory's rally Move put through
+  // PrepareMove, ctor 0x618622); its dtor frees it (0x618891)
+  bool moveTaskReserved = false;
   bool isFactoryBuilder = false;
   uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id
   std::vector<uint64_t> buildAllowed;  // per-unit build restrictions removed from "all"

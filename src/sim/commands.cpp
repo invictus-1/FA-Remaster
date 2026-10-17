@@ -118,8 +118,16 @@ void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
   c.beaconRef = 0;
 }
 
+// CUnitMoveTask's dtor 0x618700: the o-grid rect its ctor reserved (+0x92) is freed (FreeOgridRect 0x6ab760)
+void EndMoveTaskRect(Unit* u) {
+  if (!u->moveTaskReserved) return;
+  u->moveTaskReserved = false;
+  GroundFreeRect(*Sim::From(u->luaState()), u);
+}
+
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
+  EndMoveTaskRect(u);
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
     EndBuildTask(*Sim::From(u->luaState()), u, *u->task, true);
@@ -145,19 +153,20 @@ bool SpeedThroughMoveLike(CommandType t) {
   }
 }
 
-void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/);
-
 }  // namespace
 
 // CUnitMoveTask::OnEvent 0x618c40 (read): a move task listens to its command, and on any event of it (CUnitCommand::
 // SetTarget 0x6e8820 broadcasts event 0 through 0x6e94a0 after storing the new target) it hands its navigator the
-// command's position again: SNavGoal(CUnitCommand::GetPosition 0x6e8a30, the unit's footprint cell at the target)
-// through the navigator's SetGoal (vt+8). The PrepareMove variant (task+0x95, set by the ctor for a factory's rally
-// Move) puts that cell through PrepareMove again; RunPathSearch below re-asks the ctor's question instead (inferred
-// to come out the same: no replay retargets a rally Move). Only the head's task exists, so a queued command just
-// keeps its new target for later. Seen (MP3 758): a player drags the waypoint of army 0's commander's running Move
-// (SetCommandTarget at beat 757); the original's navigator plans again from the commander's place (its target its
-// own cell while it thinks, speed-through 0, a new first waypoint at 759); ours drove on to the old path's waypoint.
+// command's position again: the unit's footprint cell at the target (CUnitCommand::GetPosition 0x6e8a30), as an
+// SNavGoal, through the navigator's SetGoal (vt+8). The PrepareMove variant (task+0x95, which the ctor set for a
+// factory's rally Move it put through PrepareMove; ours: moveTaskReserved) takes that cell's centre (COORDS_ToWorldPos
+// 0x50b1a0), not the rounded target the ctor took, puts it through PrepareMove (spacing 0, 0x618d20), hands the
+// navigator the cell found and moves its o-grid reservation there (+0x92: FreeOgridRect 0x6ab760, ReserveOgridRect
+// 0x6ab6f0). Only the head's task exists, so a queued command just keeps its new target for later.
+// Seen: MP3 758, a player drags the waypoint of army 0's commander's running Move: the original's navigator plans
+// again from the commander's place; ours drove on to the old path's waypoint. MP1 804, the rally Move of army 5's
+// 0x500008 is dragged to (331.77, 854.30): cell (331, 854), taken; the original's goal is (333, 856), the ring two
+// footprints out (ours, from the rounded target, looked around (332, 854)).
 // The listeners are told in the command's listener order; ours goes by unit id (inferred: the same for one unit).
 void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
   if (c.type != CommandType::Move || c.form) return;
@@ -166,7 +175,25 @@ void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || u->task || !u->motion.bp || !u->motion.bp->mobile()) continue;
-    RunPathSearch(sim, u, true);
+    const Vec3 tp = TargetPos(sim, c, u);
+    const NamedFootprint& fp = UnitFootprint(u);
+    int cx = static_cast<int>(std::nearbyint(tp.x - fp.sizeX * 0.5f));
+    int cz = static_cast<int>(std::nearbyint(tp.z - fp.sizeZ * 0.5f));
+    if (u->moveTaskReserved) {
+      Vec3 p{cx + fp.sizeX * 0.5f, tp.y, cz + fp.sizeZ * 0.5f};
+      const float none[4] = {0, 0, 0, 0};
+      if (u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+      else GroundPrepareMove(sim, u, &p, none, 0);
+      cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+      cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+    }
+    const Vec3 goal{cx + fp.sizeX * 0.5f, tp.y, cz + fp.sizeZ * 0.5f};
+    u->motion.arrived = u->motion.failed = false;
+    MotionSetGoal(sim, u, std::vector<Vec3>{goal}, NextIsMove(u) && MoveLike(c.type), sim.tick());
+    if (u->moveTaskReserved) {
+      const int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
+      GroundReserveRect(sim, u, r);
+    }
   }
 }
 
@@ -189,6 +216,16 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
       if (u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
       else GroundPrepareMove(sim, u, &p, none, 0);
       goal = {p.x, goal.y, p.z};
+      // ... and the ctor reserves the footprint rect there (0x618613..0x618631: 0x50b010, ReserveOgridRect 0x6ab6f0,
+      // +0x92 = 1) until the task ends. So the next unit out of the factory with the same rally point finds the
+      // spot taken and goes to the ring two footprints out. Seen (MP3 1508): army 0's engineer 0x17 takes (188, 418)
+      // in the original's navigator lines, as 0x12 (rallied at 1359, still on its way) holds (190, 416).
+      const NamedFootprint& fp = UnitFootprint(u);
+      const int x0 = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+      const int z0 = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+      const int r[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
+      GroundReserveRect(sim, u, r);
+      u->moveTaskReserved = true;
     }
   }
   std::vector<Vec3> path;
@@ -267,14 +304,31 @@ bool IsPatrolType(CommandType t) {
 
 // RecomputePatrolSearchBox 0x61b2f0: the leg from the previous patrol point (or the unit) to the goal,
 // widened by GuardScanRadius
+// (0x61b397 / 0x61b406: a patrol point is CUnitCommand::GetPosition 0x6e8a30, the unit's footprint-origin cell at the
+// order's target, and back through COORDS_ToWorldPos 0x50b0f0: the cell's footprint centre at the height of the ground,
+// or of the water unless the footprint may stand on the seabed. Only the unit's own place is taken as it is. Seen
+// (MP3 1567): army 0's engineer 2 on a three-point patrol; a cactus 0.25 outside the box built from the raw points is
+// inside the original's, which sends the engineer to it.)
+Vec3 PatrolPoint(Sim& sim, const UnitCommand& c, Unit* u) {
+  const Vec3 t = TargetPos(sim, c, u);
+  const NamedFootprint& f = UnitFootprint(u);
+  const int cx = static_cast<int>(std::nearbyint(t.x - f.sizeX * 0.5f));
+  const int cz = static_cast<int>(std::nearbyint(t.z - f.sizeZ * 0.5f));
+  const float x = static_cast<float>(cx) + f.sizeX * 0.5f, z = static_cast<float>(cz) + f.sizeZ * 0.5f;
+  const TerrainMap* map = sim.map();
+  float y = map ? map->TerrainHeight(x, z) : 0.0f;
+  if (map && map->hasWater && map->waterElevation > y && !(f.caps & kLayerSeabed)) y = map->waterElevation;
+  return {x, y, z};
+}
+
 void PatrolSearchBox(Sim& sim, Unit* u, PatrolData& p) {
   if (u->commands.empty()) return;
   const UnitCommand& cur = *u->commands.front();
   const UnitCommand& last = *u->commands.back();
-  Vec3 E = TargetPos(sim, cur, u);
+  Vec3 E = PatrolPoint(sim, cur, u);
   Vec3 S = u->position;
   if (&last != &cur && (last.type == CommandType::Patrol || last.type == CommandType::FormPatrol))
-    S = TargetPos(sim, last, u);
+    S = PatrolPoint(sim, last, u);
   float dx = E.x - S.x, dz = E.z - S.z, len = std::sqrt(dx * dx + dz * dz);
   float r = GuardScanRadiusOf(u);
   p.box.cx = (E.x + S.x) * 0.5f;
@@ -746,6 +800,7 @@ bool NavEventWakesCommandThread(const Unit* u) {
 }
 
 void ForgetUnitCommands(Unit* u) {
+  EndMoveTaskRect(u);
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
     EndBuildTask(*Sim::From(u->luaState()), u, *u->task, false);
@@ -1130,6 +1185,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   std::shared_ptr<UnitCommand> keep = q[i];
   if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
     const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
+    EndMoveTaskRect(u);
     if (u->engageId) ClearEngagement(sim, u);
     if (u->task) {
       EndBuildTask(sim, u, *u->task, false);
