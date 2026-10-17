@@ -270,8 +270,14 @@ Mac", and every ray-traced effect keeps a fallback without it.
      clouds, little changes; snow's flakes are too small to show it. Cost at 1440p (a storm, 16 commanders,
      by the lowest times): 0.016 -> 0.042 ms. Off: pictures identical, pixel for pixel; on, Vulkan as
      Direct3D 12 (mean 0.04).
-     - Open: the drops fill a box as high as the camera is far, so few are low enough to be in a headlight's
-       beam; a layer of drops near the ground round the lamps would show the beams' rain better.
+     - A layer of drops near the ground (2026-10-17): the drops fill a box as high as the camera is far, so
+       few fall low enough to cross a headlight's beam. With `litRain` a second draw puts 6,000 drops (or
+       flakes) in a flat box 12 units high at the ground round the camera's target; they take only the small
+       lights' light and show by how much it outshines the sky's (nothing in the dark). Seen from the game's
+       camera a thin drop in a beam stands against the patch of ground that beam lights and would hardly show,
+       so these send on three times as much, as a glint (a look for Chris to judge): at night the rain
+       sparkles white round lit units. Cost with it, at 1440p in a storm: 0.016 -> 0.051 ms. The unlit rain
+       is unchanged, pixel for pixel.
 
 ## The options
 

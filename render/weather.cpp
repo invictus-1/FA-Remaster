@@ -18,9 +18,15 @@ cbuffer Fall : register(b1) {
   float4 shape;     // x: half its width in pixels; y: world units per pixel at distance 1; z: how see-through; w: how much it sways
   float4 tint;      // its colour, linear
 #if LIT
-  float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`)
+  float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`); y 1: the
+                    // layer near the ground, seen only where the small lights light it; z: that layer's height
 #endif
 };
+#if LIT
+#define BOX_SIZE (lit.z > 0 ? float3(box.w, lit.z, box.w) : box.www)  // (the layer near the ground: flat)
+#else
+#define BOX_SIZE box.w
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -28,6 +34,7 @@ struct VOut {
   float fade : TEXCOORD1;
 #if LIT
   float3 light : TEXCOORD2;  // its colour, lit where it is
+  float cover : TEXCOORD3;   // how much of it shows (the layer near the ground: by how lit it is)
 #endif
 };
 
@@ -38,11 +45,12 @@ float DropPhase(float3 along, float3 toEye) {
   const float g = 0.6;
   return (1 - g * g) / pow(max(1 + g * g - 2 * g * dot(along, toEye), 1e-4), 1.5);
 }
-// The light on a drop or flake where it is (lighting.h): the sun's through its shadow and the clouds', the small
-// lights' (lights.h: as SmallLights, a lamp's beam through the lamp's shadow), each scattered toward the eye; then
-// the share it sends on, on top of the sky's light it has unlit.
-float3 DropLight(float3 p, float3 toEye) {
+// The light on a drop or flake where it is (lighting.h): the sun's through its shadow and the clouds' (returned), the
+// small lights' (`small`; lights.h: as SmallLights, a lamp's beam through the lamp's shadow), each scattered toward
+// the eye.
+float3 DropLight(float3 p, float3 toEye, out float3 small) {
   const float3 up = float3(0, 1, 0);
+  small = 0;
   float3 light = ToLinear(sunColor) * (lightMultiplier * modern.x) * (SunShadow(p, up) * CloudShadow(p) * DropPhase(-sunDirection, toEye));
   [branch] if (lightGrid.w > 0.5) {
     float2 g = (p.xz - lightGrid.xy) * lightGrid.z;
@@ -68,11 +76,11 @@ float3 DropLight(float3 p, float3 toEye) {
           [branch] if (map > -0.5 && inside > 0) reaches *= LampShadow(p, l, uint(map));
           fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * colour.w * saturate(1 - far2 * 25);
         }
-        light += colour.rgb * (fade * DropPhase(-l, toEye));
+        small += colour.rgb * (fade * DropPhase(-l, toEye));
       }
     }
   }
-  return tint.rgb + light * lit.x;
+  return light;
 }
 #endif
 
@@ -81,12 +89,12 @@ float Hash1(float n) { return frac(sin(n * 12.9898) * 43758.5453); }
 VOut VS(uint id : SV_VertexID) {
   uint drop = id / 6, corner = id % 6;
   float n = float(drop);
-  float3 start = float3(Hash1(n + 0.13), Hash1(n * 1.7 + 4.1), Hash1(n * 2.3 + 9.7)) * box.w;
+  float3 start = float3(Hash1(n + 0.13), Hash1(n * 1.7 + 4.1), Hash1(n * 2.3 + 9.7)) * BOX_SIZE;
   float3 moved = start + velocity.xyz * (time * (0.8 + 0.4 * Hash1(n + 7.7)));
   // a flake wanders sideways as it falls
   moved.xz += shape.w * float2(sin(time * (0.7 + Hash1(n + 2.2)) + n), cos(time * (0.6 + Hash1(n + 3.3)) + n * 1.3));
-  float3 local = frac((moved - box.xyz) / box.w + 0.5);
-  float3 p = box.xyz + (local - 0.5) * box.w;
+  float3 local = frac((moved - box.xyz) / BOX_SIZE + 0.5);
+  float3 p = box.xyz + (local - 0.5) * BOX_SIZE;
 
   float2 uv = corner == 0 ? float2(-1, 0) : corner == 1 ? float2(1, 0) : corner == 2 ? float2(1, 1)
             : corner == 3 ? float2(-1, 0) : corner == 4 ? float2(1, 1) : float2(-1, 1);
@@ -109,7 +117,15 @@ VOut VS(uint id : SV_VertexID) {
   float3 edge = abs(local - 0.5) * 2;
   o.fade = saturate((1 - max(edge.x, max(edge.y, edge.z))) * 6) * (0.5 + 0.5 * Hash1(n + 5.5));
 #if LIT
-  o.light = DropLight(p, toEye);
+  float3 small;
+  float3 sun = DropLight(p, toEye, small);
+  if (lit.y > 0.5) {  // the layer near the ground: only the small lights' light, shown by how much it outshines the sky's
+    o.light = small * lit.x;
+    o.cover = saturate(dot(o.light, float3(0.3, 0.6, 0.1)) / max(dot(tint.rgb, float3(0.3, 0.6, 0.1)) * 4, 1e-5));
+  } else {  // on top of the sky's light it had
+    o.light = tint.rgb + (sun + small) * lit.x;
+    o.cover = 1;
+  }
 #endif
   return o;
 }
@@ -118,12 +134,14 @@ float4 PS(VOut i) : SV_Target {
   float soft = velocity.w > 0 ? (1 - abs(i.across.x)) * saturate(i.across.y * 4) * saturate((1 - i.across.y) * 1.5)
                               : saturate(1 - length(float2(i.across.x, i.across.y * 2 - 1)));
 #if LIT
-  return float4(i.light, tint.a * shape.z * i.fade * soft);
+  return float4(i.light, tint.a * shape.z * i.fade * soft * i.cover);
 #else
   return float4(tint.rgb, tint.a * shape.z * i.fade * soft);
 #endif
 }
 )hlsl";
+
+constexpr float kLowLayer = 12;  // (lit drops: how high their layer near the ground is, world units)
 
 struct FallConstants {
   float box[4], velocity[4], shape[4], tint[4];
@@ -253,12 +271,13 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height);
   device_->SetPipeline(lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
-  auto draw = [&](float amount, bool flakes) {
+  // `low`: the lit drops' layer near the ground (seen only where the small lights light it)
+  auto draw = [&](float amount, bool flakes, bool low) {
     FallConstants f{};
     f.box[0] = camera.target.x;
-    f.box[1] = camera.target.y + edge * 0.25f;
+    f.box[1] = low ? camera.target.y + kLowLayer * 0.5f : camera.target.y + edge * 0.25f;
     f.box[2] = camera.target.z;
-    f.box[3] = edge;
+    f.box[3] = low ? std::clamp(edge * 0.5f, 30.0f, 200.0f) : edge;
     // (the fall is as fast as the box is large: seen from far it would otherwise stand still)
     const float speed = flakes ? std::max(1.2f, edge * 0.05f) : std::max(9.0f, edge * 0.55f);
     f.velocity[0] = speed * (flakes ? 0.25f : 0.18f);
@@ -274,13 +293,19 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
     f.tint[1] = light[1] * bright;
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
-    f.lit[0] = flakes ? 1.0f : 0.6f;  // (how much of the light on it goes on to the eye: snow is white)
+    // how much of the light on it goes on to the eye (snow is white); near the ground three times that, as a glint: a
+    // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris to judge)
+    f.lit[0] = (flakes ? 1.0f : 0.6f) * (low ? 3.0f : 1.0f);
+    f.lit[1] = low ? 1.0f : 0.0f;
+    f.lit[2] = low ? kLowLayer : 0.0f;
     device_->SetConstants(1, &f, sizeof f);
-    const uint32_t drops = static_cast<uint32_t>((flakes ? 12000.0f : 14000.0f) * std::clamp(amount, 0.0f, 1.0f));
+    const uint32_t drops = static_cast<uint32_t>((low ? 6000.0f : flakes ? 12000.0f : 14000.0f) * std::clamp(amount, 0.0f, 1.0f));
     if (drops) device_->Draw(drops * 6);
   };
-  if (rain > 0) draw(rain, false);
-  if (snow > 0) draw(snow, true);
+  if (rain > 0) draw(rain, false, false);
+  if (snow > 0) draw(snow, true, false);
+  if (lit && rain > 0) draw(rain, false, true);
+  if (lit && snow > 0) draw(snow, true, true);
 }
 
 }  // namespace render
