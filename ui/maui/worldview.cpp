@@ -1093,7 +1093,7 @@ class WorldView : public Control {
     DrawEconomyOverlay(L, target, r);
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
-    if (selecting_ && (std::fabs(dragX_ - pressX_) >= 4 || std::fabs(dragY_ - pressY_) >= 4)) {
+    if (selecting_ && (std::fabs(dragX_ - pressX_) > 4 || std::fabs(dragY_ - pressY_) > 4)) {
       const float x0 = std::floor(std::min(pressX_, dragX_)), x1 = std::floor(std::max(pressX_, dragX_));
       const float y0 = std::floor(std::min(pressY_, dragY_)), y1 = std::floor(std::max(pressY_, dragY_));
       target.SetClip(r);
@@ -1366,7 +1366,7 @@ class WorldView : public Control {
     selecting_ = false;
     // A click while the mouse stayed within 4 pixels of where the button went down (0xdfe5ac),
     // else a box; the keys held as the button comes up (the release's own event).
-    if (std::fabs(e.x - pressX_) <= 4 && std::fabs(e.y - pressY_) <= 4) {
+    if (std::fabs(e.x - pressX_) <= 4 && std::fabs(e.y - pressY_) <= 4) {  // (0xdfe5ac: a drag beyond 4.0)
       ClickSelect(L, UnitUnder(L, e.x, e.y), e.shift, e.ctrl);
       return;
     }

@@ -169,7 +169,7 @@ class AlphaScaledTarget : public DrawTarget {
  private:
   uint32_t Scaled(uint32_t color) const {
     const float a = static_cast<float>(color >> 24) * factor_;
-    const uint32_t alpha = a <= 0 ? 0u : a >= 255 ? 255u : static_cast<uint32_t>(a + 0.5f);
+    const uint32_t alpha = !(a > 0) ? 0u : a >= 255 ? 255u : static_cast<uint32_t>(a + 0.5f);  // (NaN: 0)
     return (color & 0x00ffffffu) | (alpha << 24);
   }
   DrawTarget& to_;

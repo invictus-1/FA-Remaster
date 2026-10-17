@@ -241,9 +241,17 @@ bool IsSelectable(lua_State* L, const UserUnit* u) {
 // chat's scratchpad helper_selectable\findings.md): the click, the box and the double click all ask
 // it. A unit that may be selected (IsSelectable: so not a building under construction unless it is a
 // factory) and of the player's army. (Not built: its bypass by the console's UI_SelectAnything.)
+// The player's army (0-based, -1: none) without waiting for a beat that runs on its own thread: the beat's
+// copy once there is one (as GetFocusArmy). The mouse's paths ask it every frame.
+int FocusArmyNow(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (user->economyCopied) return user->focusArmyCopy;
+  Sim* sim = user->HasSim() ? TheSim(L) : nullptr;
+  return sim ? sim->focusArmy : -1;
+}
 bool CanSelectUnit(lua_State* L, const UserUnit* u) {
-  Sim* sim = TheSim(L);
-  return sim && IsSelectable(L, u) && u->view.army == sim->focusArmy + 1;
+  const int focus = FocusArmyNow(L);
+  return focus >= 0 && IsSelectable(L, u) && u->view.army == focus + 1;
 }
 // A blueprint's Physics.MotionType as the original numbers it (FA exe 0x51fb40: None 0, Land 1, Air 2, Water 3,
 // Biped 4, SurfacingSub 5, Amphibious 6, Hover 7, AmphibiousFloating 8, Special 9), looked up once per blueprint;
@@ -865,7 +873,7 @@ int l_CanAttackTarget(lua_State* L) {
 // GetValidAttackingUnits() (FA exe 0x8bd410 / CWldSession::GetValidAttackingUnits 0x896090): the selected units
 // that can attack the unit under the mouse (none there: the place under it), checking range; nil for none.
 int l_GetValidAttackingUnits(lua_State* L) {
-  if (!TheSim(L)) return 0;
+  if (!UserState::From(L)->HasSim()) return 0;
   if (lua_gettop(L) != 0)
     return luaL_error(L, "%s\n  expected %d args, but got %d", "table GetValidAttackingUnits() - return a table of the currently selected units", 0, lua_gettop(L));
   UnitStore& store = Store(L);
@@ -1520,8 +1528,7 @@ int l_ReclaimableAtForTests(lua_State* L) {
 //   else Move.
 // Left out so far: Capture (the original asks a flag of the unit, +0x69 of its attributes, that
 // the simulation's view does not give; without it engineers reclaim, as players know it), the
-// transport and ferry cases (0x81d280, 0x81d660, 0x81da20), whether the selection's weapons reach
-// the target's layer (CanAttackTarget 0x8c0d30: when they do not, the original gives no order),
+// transport and ferry cases (0x81d280, 0x81d660, 0x81da20),
 // an attack order's marker under the cursor, the option "switch_right_click_behavior". Things that
 // are not units (wreckage, trees, rocks) are the world view's to ask for: IssueReclaimAtPlace.
 std::string RightClickOrder(lua_State* L, uint32_t under) {
@@ -2554,8 +2561,8 @@ UserUnit* LiveUnit(lua_State* L, uint32_t id) {
 // with Shift as well, that kind leaves the selection if the unit is in it, else joins it. Shift:
 // the unit joins the selection or leaves it. Else it alone is selected.
 void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl) {
-  Sim* sim = TheSim(L);
-  if (!sim) return;
+  if (!UserState::From(L)->HasSim()) return;
+  const int focus = FocusArmyNow(L);
   UnitStore& store = Store(L);
   UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
   if (!u || !CanSelectUnit(L, u)) {
@@ -2567,7 +2574,7 @@ void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl) {
   if (ctrl) {
     std::vector<UserUnit*> kind;
     for (auto& [id, o] : store.units)
-      if (!o->gone && !o->view.dead && !o->view.beingBuilt && o->view.army == sim->focusArmy + 1 && o->view.blueprint == u->view.blueprint)
+      if (!o->gone && !o->view.dead && !o->view.beingBuilt && o->view.army == focus + 1 && o->view.blueprint == u->view.blueprint)
         kind.push_back(o.get());
     if (!shift) {
       SetSelection(L, kind);
@@ -2596,8 +2603,8 @@ void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl) {
 // the best (lowest) General.SelectionPriority are the selection (FAF's patch 0x12914d1: a unit being
 // built with LOWSELECTPRIO counts as 6); none: the selection is cleared.
 void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift) {
-  Sim* sim = TheSim(L);
-  if (!sim) return;
+  if (!UserState::From(L)->HasSim()) return;
+  Sim* const sim = nullptr;  // (BeingUpgraded reads the views only)
   std::vector<UserUnit*> in;
   for (uint32_t id : ids) {
     UserUnit* u = LiveUnit(L, id);
@@ -2635,9 +2642,9 @@ void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift) {
 // view of its kind that may be selected, not a building being upgraded, join the selection. False
 // when the unit is not the player's. (A wall too: the test for walls is taken out, FAF's patch.)
 bool DoubleClickSelect(lua_State* L, uint32_t unit, const std::vector<uint32_t>& inView) {
-  Sim* sim = TheSim(L);
+  Sim* const sim = nullptr;  // (BeingUpgraded reads the views only)
   UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
-  if (!sim || !u || u->view.army != sim->focusArmy + 1) return false;
+  if (!UserState::From(L)->HasSim() || !u || u->view.army != FocusArmyNow(L) + 1) return false;
   std::vector<UserUnit*> now = Store(L).selection;
   for (uint32_t id : inView) {
     UserUnit* o = LiveUnit(L, id);
@@ -2661,8 +2668,7 @@ uint32_t HoverOf(lua_State* L, uint32_t picked) {
       if (InCategory(L, parent, "TRANSPORTATION") || InCategory(L, parent, "FACTORY")) return parent->view.id;
     }
   }
-  Sim* sim = TheSim(L);
-  if (sim && BeingUpgraded(L, sim, u)) return u->view.creator;
+  if (BeingUpgraded(L, nullptr, u)) return u->view.creator;  // (from the views: no wait for a running beat)
   return picked;
 }
 
@@ -2956,11 +2962,14 @@ void RefreshUserUnits(lua_State* L) {
   UnitViews(*sim, &views);
   CategorySets(*sim, store.categorySets.size(), &store.categorySets);  // (only the new ones: the table only grows)
   for (auto& [id, u] : store.units) u->gone = true;
+  // (A unit whose id went to another unit is kept aside until the selection has let go of it: the
+  // selection holds the units themselves.)
+  std::vector<std::unique_ptr<UserUnit>> retired;
   for (const UnitView& v : views) {
     auto& slot = store.units[v.id];
     if (slot && slot->view.blueprint != v.blueprint) {  // the id went to another unit
-      slot->UnbindLua();
-      slot.reset();
+      slot->gone = true;
+      retired.push_back(std::move(slot));
     }
     if (!slot) {
       slot = std::make_unique<UserUnit>();
@@ -2975,6 +2984,8 @@ void RefreshUserUnits(lua_State* L) {
   for (UserUnit* u : store.selection)
     if (!u->gone && !u->view.dead) kept.push_back(u);
   SetSelection(L, kept);
+  for (auto& old : retired) old->UnbindLua();
+  retired.clear();
   for (auto it = store.units.begin(); it != store.units.end();) {
     if (it->second->gone) {
       it->second->UnbindLua();

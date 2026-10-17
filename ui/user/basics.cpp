@@ -1,6 +1,7 @@
 // Small engine functions of the user state that need no control tree: time, the command line,
 // the interface state, front-end data, random numbers.
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <map>
 #include <random>
@@ -23,15 +24,21 @@
 #else
 #include <spawn.h>
 #include <sys/wait.h>
+#include <thread>
 extern char** environ;
 #endif
 
 namespace moho::ui {
 namespace {
 
+// The seconds since the program started (the original's system timer, time::GetSystemTimer 0x955730, is
+// started at start-up), the same for every script state: a game's own state starts later.
+const std::chrono::steady_clock::time_point kProgramStart = std::chrono::steady_clock::now();
+double ProgramSeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - kProgramStart).count(); }
+
 // CurrentTime() / GetSystemTimeSeconds(): seconds since the application started.
 int l_CurrentTime(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(UserState::From(L)->now()));
+  lua_pushnumber(L, static_cast<lua_Number>(ProgramSeconds()));
   return 1;
 }
 
@@ -196,7 +203,7 @@ int l_ExitApplication(lua_State*) {
 int l_GetSystemTime(lua_State* L) {
   if (lua_gettop(L) != 0)
     return luaL_error(L, "%s\n  expected %d args, but got %d", "string GetSystemTime() - returns a formatted string displaying the System time", 0, lua_gettop(L));
-  const long seconds = static_cast<long>(UserState::From(L)->now());
+  const long seconds = static_cast<long>(ProgramSeconds());
   char text[48];
   std::snprintf(text, sizeof text, "%02ld:%02ld:%02ld", seconds / 3600, seconds / 60 % 60, seconds % 60);
   lua_pushstring(L, text);
@@ -249,7 +256,8 @@ void OpenWithSystem(const std::string& url) {
 #endif
   char* argv[] = {const_cast<char*>(opener), const_cast<char*>(url.c_str()), nullptr};
   pid_t pid = 0;
-  if (posix_spawnp(&pid, opener, nullptr, nullptr, argv, environ) == 0) waitpid(pid, nullptr, WNOHANG);
+  if (posix_spawnp(&pid, opener, nullptr, nullptr, argv, environ) == 0)
+    std::thread([pid] { waitpid(pid, nullptr, 0); }).detach();  // (reaped when it ends: no zombie left)
 #endif
 }
 int l_OpenURL(lua_State* L) {

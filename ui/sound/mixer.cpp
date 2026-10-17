@@ -247,10 +247,10 @@ void Mixer::Mix(int16_t* out, int frames) {
           v.envelope = std::max(0.0f, v.envelope + v.envelopeStep);
           --v.envelopeLeft;
           ++v.sounded;
-          if (v.releasing >= 0 && ++v.releasing >= static_cast<int64_t>(v.curves->releaseMs * kRate / 1000.0f)) {
-            v.fade = 0;  // its release has run its length: it ends
-            n = i + 1;
-          }
+          // (its release has run its length: it ends, over the few milliseconds of an immediate stop so that
+          // nothing clicks, as a track without release curves of its own is still at full loudness then)
+          if (v.releasing >= 0 && ++v.releasing >= static_cast<int64_t>(v.curves->releaseMs * kRate / 1000.0f) && v.fadeStep <= 0)
+            v.fadeStep = 1.0f / (kRate * 0.005f);
         }
         sum_[static_cast<size_t>(at + i) * 2] += l * g * v.left;
         sum_[static_cast<size_t>(at + i) * 2 + 1] += r * g * v.right;

@@ -217,10 +217,18 @@ int l_Stop(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
+// A script's number as an int, cut toward zero as the original's cvttss2si; out of range or NaN held to
+// the int's ends (no undefined cast).
+int ToInt(double d) {
+  if (d != d) return 0;
+  if (d <= -2147483648.0) return -2147483647 - 1;
+  if (d >= 2147483647.0) return 2147483647;
+  return static_cast<int>(d);
+}
 // SetFrame(n): a place in the pattern (0-based), held inside it. GetNumFrames: the pattern's
 // length, not the textures' count. SetFrameRate(fps): a step every 1/fps seconds.
 int l_SetFrame(lua_State* L) {
-  CheckControl<Bitmap>(L, 1)->SetFrame(static_cast<int>(luaL_checknumber(L, 2)));
+  CheckControl<Bitmap>(L, 1)->SetFrame(ToInt(luaL_checknumber(L, 2)));
   return 0;
 }
 int l_GetFrame(lua_State* L) {
@@ -255,7 +263,7 @@ int l_SetFramePattern(lua_State* L) {
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
     if (!lua_isnumber(L, -1)) return luaL_error(L, "get as int");
-    int v = static_cast<int>(lua_tonumber(L, -1));
+    int v = ToInt(lua_tonumber(L, -1));
     lua_pop(L, 1);
     if (v < 0) Logf(LogLevel::Warning, "Bitmap:SetFramePattern - Negative frame index %d found in frame pattern.", v);
     else if (v > textures - 1)

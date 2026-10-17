@@ -295,8 +295,9 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
   }
 
   // The sound's loudness by time (see TimeCurves): its own curves by "AttackTime" and
-  // "ReleaseTime" and its tracks'. A soft stop lasts until the furthest end of its tracks' release
-  // curves (the music's 6.06 s), for all of its tracks.
+  // "ReleaseTime" and its tracks'. A soft stop lasts until the furthest end of its TRACKS' release
+  // curves (the music's 6.06 s), for all of its tracks; the sound's own release curves count for the
+  // loudness but not for the length (FACT reads only the tracks' for it).
   float releaseMs = 0;
   for (const PlayEvent& e : sound.events)
     for (uint32_t offset : e.curves) {
