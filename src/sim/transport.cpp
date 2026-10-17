@@ -3147,11 +3147,11 @@ void Append(Unit* u, const std::shared_ptr<UnitCommand>& c) {
   AirSpeedThroughEvent(*Sim::From(u->luaState()), u);  // queue event 0
 }
 
-// IssueTransportLoad(units, transport) 0x6f7250
-// ValidateIssue 0x6ef9e0 for a TransportLoadUnits(T) on u, and the "same command already last" and
-// queue-length tests of the issue path.
-bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
-  if (u->dead || u->transportedBy || InCat(sim, u, "PODS")) return false;
+// ProcessUnitCommand 0x6ef9e0, the case of type 22 (0x6f0bf3; the type switch 0x6efdc2), read: whether u takes a
+// TransportLoadUnits(T). The issue path's other tests (dead, the same command already last, the queue's length) are
+// the caller's.
+bool LoadCaseAccepts(Sim& sim, lua_State* L, Unit* u, Unit* T) {
+  if (u->transportedBy || InCat(sim, u, "PODS")) return false;
   if (T) {
     if ((T != u && !(LiveCommandCaps(L, u) & kCapCallTransport)) || T->layer == "Seabed") return false;
     bool special = InCat(sim, T, "FERRYBEACON") ||
@@ -3167,6 +3167,14 @@ bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
       }
     }
   }
+  return true;
+}
+
+// IssueTransportLoad(units, transport) 0x6f7250
+// ValidateIssue 0x6ef9e0 for a TransportLoadUnits(T) on u, and the "same command already last" and
+// queue-length tests of the issue path.
+bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
+  if (u->dead || !LoadCaseAccepts(sim, L, u, T)) return false;
   if (!u->commands.empty() && u->commands.back()->type == CommandType::TransportLoadUnits &&
       u->commands.back()->targetId == (T ? EntityRef(T) : 0u))
     return false;  // the same command is already last
@@ -3381,6 +3389,25 @@ bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T) {
   c->hasPos = true;
   Append(u, c);
   return true;
+}
+
+// A TransportLoadUnits from the command stream: the same case of ProcessUnitCommand (0x6f0bf3) as for
+// IssueTransportLoad. Its target is the order's entity when that is a unit (Entity vt+0x10; no unit: accepted). A
+// unit without the RULEUCC_CallTransport cap (unit attributes +0x60 & 0x200, 0x6f0c98) refuses a load into another
+// unit. Seen: MP2 4327, army 1's player orders seven units, two of them T1 power generators, into the transport
+// 0x100084: the original's generators get no command; ours queued it on them (TransportLoading).
+bool RefusesLoadOrder(Sim& sim, Unit* u, const Entity* target) {
+  Unit* T = target && target->kind == Entity::Kind::Unit ? const_cast<Unit*>(static_cast<const Unit*>(target)) : nullptr;
+  return !LoadCaseAccepts(sim, sim.L(), u, T);
+}
+
+bool TransportTaskAsleepOnMove(const BuildTask* t) {
+  for (int depth = 0; t && t->tdata && depth < 8; ++depth) {
+    const TransportTaskData& d = *t->tdata;
+    if (d.moving || d.childMove) return true;
+    t = d.child.get();
+  }
+  return false;
 }
 
 // TransportReverseLoadUnits at issue time (read 2026-10-17). UNIT_IssueCommand 0x6f12c0 calls 0x6ef660(data, its copy

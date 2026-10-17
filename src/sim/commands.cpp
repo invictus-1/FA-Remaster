@@ -1397,6 +1397,8 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
+    if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
+      continue;  // (its case, 0x6f0bf3)
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
     if (d.insertBefore != -1) {

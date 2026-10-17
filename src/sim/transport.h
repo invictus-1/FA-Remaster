@@ -80,6 +80,11 @@ bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T);
 // (0x6f0f53): whether u of that set refuses it (it may call a transport's OnTransportReject).
 std::vector<Unit*> ReverseLoadIssueSet(Sim& sim, const std::vector<Unit*>& units, Entity* target);
 bool RefusesReverseLoad(Sim& sim, Unit* u, const std::vector<Unit*>& set, Entity* target);
+// TransportLoadUnits (22) at issue time from the command stream: ProcessUnitCommand's case 0x6f0bf3 for u.
+bool RefusesLoadOrder(Sim& sim, Unit* u, const Entity* target);
+// A transport task (load, unload, call-transport, ...) whose innermost step is a pushed move task: the unit's command
+// thread sleeps in that move task (TaskThreadAsleepOnMove).
+bool TransportTaskAsleepOnMove(const BuildTask* t);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
 BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
