@@ -21,8 +21,7 @@ remastered ground comes out brighter, more saturated and, from mid zoom, more co
 close (18 units) luminance 0.249 -> 0.323, saturation 0.41 -> 0.52, contrast 0.040 -> 0.045; mid zoom (90 units)
 luminance 0.194 -> 0.256, saturation 0.44 -> 0.52, contrast 0.057 -> 0.086. Chris's rule (the ground a little lower
 in contrast than the units) may want the grass a touch darker and less saturated and the dirt patches softer against
-it; the scale_mul looks right at both zooms. Your call; pictures in `_scratch\render\review\terrain\` (T_18, T_30,
-T_90; flip.jpg the normals' check).
+it; the scale_mul looks right at both zooms. Your call; the pictures went to you by message.
 
 ## To visuals, sections 37 and 38: the Seton's terrain formats, and ground cover (2026-10-17)
 
