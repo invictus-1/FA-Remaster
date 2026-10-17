@@ -135,7 +135,7 @@ std::vector<std::wstring> Arguments(const char* entry, const char* stage, bool r
 
 // SPIR-V: the vertex inputs' semantics and locations read (DXC's -fspv-reflect decorations), then those
 // decorations and their extensions taken out again (not every driver takes them); and the textures of
-// set 0 with how many each binding holds.
+// set 0 (and the ray tracing scenes there) with how many each binding holds.
 bool Reflect(const std::vector<uint32_t>& in, SpirvShader* out) {
   if (in.size() < 5 || in[0] != 0x07230203u) return false;
   std::vector<std::pair<uint32_t, uint32_t>> locations;      // id, location
@@ -179,6 +179,7 @@ bool Reflect(const std::vector<uint32_t>& in, SpirvShader* out) {
                            : in[at + 5]    ? SpirvImage::Array
                                            : SpirvImage::Plain;
     }
+    if (op == 5341 && count >= 2) images[in[at + 1]] = SpirvImage::Scene;  // OpTypeAccelerationStructureKHR (a scene, RayQuery's)
     if (op == 5632 || op == 5633) {  // OpDecorateString, OpMemberDecorateString (UserSemantic, UserTypeGOOGLE)
       if (op == 5632 && count >= 4 && in[at + 2] == 5635) {
         std::string s = text(at + 3);

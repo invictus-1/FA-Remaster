@@ -243,6 +243,48 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
+// The ground's colour for the ray tracing scene (Terrain::GroundColours): the shader's blend of the layers, each
+// by its texture's average (its smallest level), the upper one read at a level whose texels are about the
+// picture's.
+const char kGroundColours[] = R"hlsl(
+cbuffer TerrainConstants : register(b1) {
+  float4 mapSize;
+  float4 params;
+  float4 specularColor;
+  float4 albedoTile[10];
+};
+Texture2D maskLow : register(t2);
+Texture2D maskHigh : register(t3);
+Texture2D albedoMaps[10] : register(t6);
+RWTexture2D<float4> colours : register(u0);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint w, h;
+  colours.GetDimensions(w, h);
+  if (id.x >= w || id.y >= h) return;
+  float2 xz = (id.xy + 0.5) / float2(w, h) * mapSize.xy;
+  float2 uv = xz * mapSize.zw;
+  float4 rawLow = maskLow.SampleLevel(samplerLinearClamp, uv, 0);
+  float4 rawHigh = maskHigh.SampleLevel(samplerLinearClamp, uv, 0) * params.y;
+  float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
+  #define AVERAGE(n) albedoMaps[n].SampleLevel(samplerLinear, float2(0.5, 0.5), 16)
+  float4 albedo = AVERAGE(0);
+  albedo = lerp(albedo, AVERAGE(1), low.x);
+  albedo = lerp(albedo, AVERAGE(2), low.y);
+  albedo = lerp(albedo, AVERAGE(3), low.z);
+  albedo = lerp(albedo, AVERAGE(4), low.w);
+  albedo = lerp(albedo, AVERAGE(5), high.x);
+  albedo = lerp(albedo, AVERAGE(6), high.y);
+  albedo = lerp(albedo, AVERAGE(7), high.z);
+  albedo = lerp(albedo, AVERAGE(8), high.w);
+  uint tw, th, levels;
+  albedoMaps[9].GetDimensions(0, tw, th, levels);
+  float across = tw * albedoTile[9].x * mapSize.x / w;  // (the upper layer's texels over one of the picture's)
+  float4 upper = albedoMaps[9].SampleLevel(samplerLinear, xz * albedoTile[9].x, max(log2(max(across, 1)), 0));
+  albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
+  colours[id.xy] = float4(albedo.rgb, 1);
+}
+)hlsl";
+
 struct TerrainConstants {
   float mapSize[4];
   float params[4];
@@ -268,8 +310,51 @@ int Terrain::MaterialLayers() const {
   return n;
 }
 
+gfx::Texture Terrain::GroundColours() {
+  if (groundColours_ || !map_ || map_->width <= 0 || map_->height <= 0 || !maskLow_) return groundColours_;
+  if (!groundColoursPass_) {
+    const std::string source = std::string(kViewShaderBlock) + kGroundColours;
+    gfx::ComputeDesc cd;
+    cd.name = "terrain: the ground's colour for the rays";
+    cd.source = source;
+    std::string error;
+    groundColoursPass_ = device_->CreateCompute(cd, &error);
+    if (!groundColoursPass_) {
+      fprintf(stderr, "render: %s\n", error.c_str());
+      return {};
+    }
+  }
+  gfx::TargetDesc td;
+  td.storage = true;
+  td.width = std::max(map_->width / 2, 1);
+  td.height = std::max(map_->height / 2, 1);
+  td.format = gfx::Format::RGBA8;
+  groundColours_ = device_->CreateTarget(td);
+  if (!groundColours_) return {};
+  const MapData& m = *map_;
+  TerrainConstants c = {};
+  c.mapSize[0] = static_cast<float>(m.width);
+  c.mapSize[1] = static_cast<float>(m.height);
+  c.mapSize[2] = 1.0f / static_cast<float>(m.width);
+  c.mapSize[3] = 1.0f / static_cast<float>(m.height);
+  c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
+  for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = m.albedo[i].scale > 0 ? 1.0f / m.albedo[i].scale : 0;
+  device_->SetPipeline(groundColoursPass_);
+  device_->SetConstants(1, &c, sizeof c);
+  device_->SetTexture(2, maskLow_);
+  device_->SetTexture(3, maskHigh_);
+  for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
+  device_->SetStorage(0, groundColours_);
+  device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
+  device_->SetStorage(0, {});
+  for (int i = 0; i < 16; ++i) device_->SetTexture(i, {});
+  return groundColours_;
+}
+
 bool Terrain::Load(const MapData* map, std::string* error) {
   map_ = map;
+  if (groundColours_) device_->Destroy(groundColours_);  // (GroundColours: made again for this map when asked for)
+  groundColours_ = {};
   const int w = map->width, h = map->height;
 
   if (!pipeline_) {

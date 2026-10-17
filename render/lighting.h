@@ -317,6 +317,12 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     skySpecular = ToLinear(environmentSky.SampleLevel(samplerLinear, R, roughness * levels).rgb);
   }
   float3 fill = ToLinear(shadowFill) * 0.5;
+  [branch] if (bounce.x > 0.5) {  // bounce light (bounce.h): the probes' light in place of the sky's fitted light, which stays outside their grid
+    float inside;
+    float3 gathered = BounceAt(world, N, inside);
+    skyDiffuse = lerp(skyDiffuse, gathered / max(modern.y, 1e-4), inside);
+  }
+  if (inspect.x > 9.5 && inspect.x < 10.5) return (skyDiffuse + fill) * modern.y;  // (the view of it: on a white surface)
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no
   // occlusion of their own, and at full strength every metal turns into a pale mirror of the clouds)
   color += (diffuseColor * (skyDiffuse + fill) + skySpecular * EnvironmentBrdf(f0, roughness, nDotV) * modern.w) * (modern.y * occlusion);

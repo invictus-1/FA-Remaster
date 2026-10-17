@@ -44,6 +44,7 @@
 #include "particles.h"
 #include "post.h"
 #include "ray_scene.h"
+#include "bounce.h"
 #include "ribbons.h"
 #include "scmap.h"
 #include "shadows.h"
@@ -334,6 +335,11 @@ class World {
   bool rayView = false;
   // The ray tracing scene made, the first time it is wanted (false where the device has none).
   bool RaysReady();
+  // Bounce light (bounce.h; the lighting upgrade, ray tracing): the light the ground, the hills and what stands on
+  // them throw back, from probes over the ground round the camera, in place of the sky's fitted light. Modern look,
+  // where the device has ray tracing; off by default.
+  bool bounceLight = false;
+  BounceLight bounce;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -528,6 +534,7 @@ class World {
   double lastFrameAt_ = -1;
   float frameSeconds_ = 1 / 60.0f;
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
+  bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
 };
 
 }  // namespace render

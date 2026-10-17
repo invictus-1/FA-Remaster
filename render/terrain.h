@@ -79,9 +79,16 @@ class Terrain {
  public:
   // The ground's normals (x in alpha, z in green, as the terrain's shader reads them), for others (ray_scene.h).
   gfx::Texture NormalMap() const { return normalMap_; }
+  // The ground's colour for what does not draw it (the ray tracing scene, ray_scene.h): over the whole map at half
+  // its size (RGBA8, as stored: the shaders make it linear), each layer by its texture's average laid over the
+  // others as the shader lays them, the upper layer at a level that suits the picture. Made the first time it is
+  // asked for once a map is loaded (it dispatches: between passes).
+  gfx::Texture GroundColours();
 
  private:
   gfx::Texture albedo_[10], normal_[9];
+  gfx::Pipeline groundColoursPass_;
+  gfx::Texture groundColours_;  // (GroundColours, made again for each map)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.

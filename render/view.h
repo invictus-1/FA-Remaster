@@ -19,6 +19,9 @@ inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip l
 inline constexpr int kAirSlot = 30;          // light in the air (air.h), a volume over the view, when it is on
 inline constexpr int kCloudShadowSlot = 31;  // the volumetric clouds' shadows (clouds.h), when they are on
 inline constexpr int kSkyTableSlot = 32;     // the sky from tables (sky.h, Sky::SkyView): its view from the eye, when on
+inline constexpr int kBounceLightSlot = 34;   // bounce light (bounce.h): the probes' light from every side
+inline constexpr int kBounceSightSlot = 35;   // how far each probe sees every way
+inline constexpr int kBounceColumnsSlot = 36; // the ground's height under each column of probes
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -105,6 +108,11 @@ struct ViewConstants {
   // how much of the night's own faint light there is. skyExtra: rgb what lightning adds for a moment.
   float skyTable[4];
   float skyExtra[4];
+  // Bounce light (bounce.h): x 1 = every lit surface takes the probes' light in place of the sky's fitted light; y
+  // the columns' spacing (world units); z, w the grid's first column's number across x and z (column c stands at
+  // c * spacing). bounceLayers: the probes' heights over the ground in each column.
+  float bounce[4];
+  float bounceLayers[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -145,6 +153,8 @@ cbuffer View : register(b0) {
   float4 temporal;        // the temporal upscaler: x the textures' level of detail bias (0 without it)
   float4 skyTable;        // the sky from tables: x 1 = ComputedSky reads its view; y the clouds' grey share, z its brightness; w the night's faint light
   float4 skyExtra;        // rgb: lightning's light for a moment
+  float4 bounce;          // bounce light: x 1 = on; y the columns' spacing; z, w the grid's first column across x and z
+  float4 bounceLayers;    // the probes' heights over the ground
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -178,6 +188,77 @@ float3 SkyFromTable(float3 d) {
   return skyViewTable.SampleLevel(samplerLinear, float3(uv, 0.5 / 3), 0).rgb +
          skyViewTable.SampleLevel(samplerLinear, float3(uv, 1.5 / 3), 0).rgb * SkyHazeGlow(dot(d, skyBody.xyz)) +
          skyViewTable.SampleLevel(samplerLinear, float3(uv, 2.5 / 3), 0).rgb * SkyHazeGlow(dot(d, skyMoon.xyz));
+}
+
+// Bounce light (bounce.h): 32 x 32 columns of probes from column (bounce.z, bounce.w) on, `bounce.y` apart, four
+// probes in each at bounceLayers over the ground (bounceColumns: its height, by the column's number mod 32, as the
+// probes' places in the pictures are). Each probe's light from every side (octahedral, 6 x 6 with a border) and
+// how far it sees (the mean distance and its square, 14 x 14 with a border).
+Texture2D bounceLight : register(t34);
+Texture2D bounceSight : register(t35);
+Texture2D<float> bounceColumns : register(t36);
+float2 BounceOct(float3 n) {  // a direction to the octahedral square's -1..1 (y up)
+  n /= abs(n.x) + abs(n.y) + abs(n.z);
+  float2 o = n.xz;
+  if (n.y < 0) o = (1 - abs(o.yx)) * float2(o.x >= 0 ? 1 : -1, o.y >= 0 ? 1 : -1);
+  return o;
+}
+float3 BounceDir(float2 o) {  // and back
+  float3 n = float3(o.x, 1 - abs(o.x) - abs(o.y), o.y);
+  if (n.y < 0) n.xz = (1 - abs(n.zx)) * float2(n.x >= 0 ? 1 : -1, n.z >= 0 ? 1 : -1);
+  return normalize(n);
+}
+int2 BounceTile(int2 column) { return ((column % 32) + 32) % 32; }
+float BounceBase(int2 column) { return bounceColumns.Load(int3(BounceTile(column), 0)); }
+float3 BounceProbe(int2 column, int layer) {
+  return float3(column.x * bounce.y, BounceBase(column) + bounceLayers[layer], column.y * bounce.y);
+}
+float3 BounceLightOf(int2 column, int layer, float3 n) {
+  int2 tile = BounceTile(column) + int2(0, layer * 32);
+  return bounceLight.SampleLevel(samplerLinearClamp, (tile * 8 + 1 + (BounceOct(n) * 0.5 + 0.5) * 6) / float2(256, 1024), 0).rgb;
+}
+float2 BounceSightOf(int2 column, int layer, float3 d) {
+  int2 tile = BounceTile(column) + int2(0, layer * 32);
+  return bounceSight.SampleLevel(samplerLinearClamp, (tile * 16 + 1 + (BounceOct(d) * 0.5 + 0.5) * 14) / float2(512, 2048), 0).rg;
+}
+// The light coming in at P (facing N) from round about, as the eight probes round it have it (each by how near it
+// is, how much it faces the place, and whether it sees it); `inside`: 1 well within the grid, fading to 0 over its
+// outer columns.
+float3 BounceAt(float3 P, float3 N, out float inside) {
+  float2 g = P.xz / bounce.y - bounce.zw;
+  inside = saturate(min(min(g.x, g.y), min(31 - g.x, 31 - g.y)) * 0.5);
+  if (inside <= 0) return 0;
+  int2 i0 = int2(clamp(floor(g), 0, 30));
+  float2 f = saturate(g - i0);
+  int2 c0 = i0 + int2(bounce.zw);
+  float base = lerp(lerp(BounceBase(c0), BounceBase(c0 + int2(1, 0)), f.x), lerp(BounceBase(c0 + int2(0, 1)), BounceBase(c0 + int2(1, 1)), f.x), f.y);
+  float h = P.y - base;
+  int k = h < bounceLayers.y ? 0 : h < bounceLayers.z ? 1 : 2;
+  float t = saturate((h - bounceLayers[k]) / (bounceLayers[k + 1] - bounceLayers[k]));
+  float3 biased = P + N * 0.3;
+  float3 sum = 0;
+  float weights = 0;
+  [unroll] for (int i = 0; i < 8; ++i) {
+    int2 o = int2(i & 1, (i >> 1) & 1);
+    int up = i >> 2, layer = k + up;
+    int2 column = c0 + o;
+    float3 toProbe = BounceProbe(column, layer) - biased;
+    float distance = length(toProbe);
+    float3 dir = toProbe / max(distance, 1e-4);
+    float w = (o.x ? f.x : 1 - f.x) * (o.y ? f.y : 1 - f.y) * (up ? t : 1 - t);
+    float facing = (dot(dir, N) + 1) * 0.5;
+    w *= facing * facing + 0.2;
+    float2 seen = BounceSightOf(column, layer, -dir);
+    if (distance > seen.x) {  // (the probe sees something nearer that way: Chebyshev's bound on how likely it sees the place)
+      float variance = abs(seen.y - seen.x * seen.x), d = distance - seen.x;
+      float chance = variance / (variance + d * d);
+      w *= max(chance * chance * chance, 0.05);
+    }
+    w = max(w, 1e-6);
+    sum += BounceLightOf(column, layer, N) * w;
+    weights += w;
+  }
+  return sum / weights;
 }
 
 // The computed sky's light from a direction (without the sun's and the moon's own disc). With the sky from

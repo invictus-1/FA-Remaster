@@ -58,77 +58,24 @@ cbuffer Entry : register(b1) {
 // whose shadow another ray finds, and by the sky. The ground by its own normals (the terrain's normal map) and a
 // colour of its own; a model by its colour, facing the ray (no normals are kept for models).
 const char kCheck[] = R"hlsl(
-RaytracingAccelerationStructure scene : register(t33);
-Texture2D colours : register(t0);
-Texture2D groundNormals : register(t1);
-StructuredBuffer<uint4> instanceData : register(t0, space1);
 RWTexture2D<float4> picture : register(u0);
 cbuffer RayCheck : register(b1) {
   row_major float4x4 back;  // the picture's -1..1 and depth to the world (the inverse of the view's matrix)
   float4 size;              // x, y the picture's width and height; z, w the map's
-  float4 ground;            // rgb the ground's colour, linear
 };
-float3 Unpack(uint c) { return float3(c & 255, (c >> 8) & 255, (c >> 16) & 255) / 255.0; }
-// Leaves (flag 8) are not opaque: a ray takes one of their triangles with the chance their coverage says, by a
-// number from the ray's own seed and the triangle.
-uint Hash(uint x) {
-  x ^= x >> 16;
-  x *= 0x7feb352d;
-  x ^= x >> 15;
-  x *= 0x846ca68b;
-  x ^= x >> 16;
-  return x;
-}
-bool TakesLeaf(uint instance, uint primitive, uint seed) {
-  float coverage = colours.Load(int3(instanceData[instance].x % 1024, instanceData[instance].x / 1024, 0)).a;
-  return (Hash(seed ^ Hash(primitive * 9781 + instance * 6271)) & 0xffff) < coverage * 65535;
-}
-float3 Linear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLinear)
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
   if (id.x >= (uint)size.x || id.y >= (uint)size.y) return;
   float2 ndc = (id.xy + 0.5) / size.xy * float2(2, -2) + float2(-1, 1);
   float4 a = mul(back, float4(ndc, 1, 1)), b = mul(back, float4(ndc, 0.5, 1));
   float3 from = a.xyz / a.w, d = normalize(b.xyz / b.w - from);
-  RayDesc ray;
-  ray.Origin = from;
-  ray.Direction = d;
-  ray.TMin = 0;
-  ray.TMax = 1e6;
-  const uint seed = Hash(id.x * 1973 + id.y * 9277 + 1);
-  RayQuery<RAY_FLAG_NONE> q;
-  q.TraceRayInline(scene, RAY_FLAG_NONE, 0xff, ray);
-  while (q.Proceed())
-    if (TakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) q.CommitNonOpaqueTriangleHit();
+  const uint seed = RayHash(id.x * 1973 + id.y * 9277 + 1);
+  float t;
+  uint instance;
   float3 c;
-  if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-    float3 p = from + d * q.CommittedRayT();
-    uint4 info = instanceData[q.CommittedInstanceID()];
-    float3 albedo, n;
-    if (info.y & 1) {
-      float4 stored = groundNormals.SampleLevel(samplerLinearClamp, p.xz / size.zw, 0);
-      n.xz = stored.ag * 2 - 1;
-      n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
-      albedo = ground.rgb;
-    } else if (info.y & 2) {  // (the water: dark, facing up)
-      n = float3(0, 1, 0);
-      albedo = float3(0.02, 0.05, 0.08);
-    } else {
-      float4 e = colours.Load(int3(info.x % 1024, info.x / 1024, 0));
-      albedo = lerp(Linear(e.rgb), Linear(Unpack(info.z)), info.y & 12 ? 0 : e.a);
-      n = -d;
-    }
-    RayDesc toSun;
-    toSun.Origin = p + n * 0.05;
-    toSun.Direction = sunDirection;
-    toSun.TMin = 0.01;
-    toSun.TMax = 1e5;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> s;
-    s.TraceRayInline(scene, RAY_FLAG_NONE, 0x01, toSun);  // (mask 1: not the water)
-    while (s.Proceed())
-      if (TakesLeaf(s.CandidateInstanceID(), s.CandidatePrimitiveIndex(), seed ^ 0x5bd1e995)) s.CommitNonOpaqueTriangleHit();
-    float lit = s.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : 1;
-    float3 sunLight = Linear(sunColor) * (lightMultiplier * modern.x);
-    c = albedo * (sunLight * (saturate(dot(n, sunDirection)) * lit) + SkyAmbient(n) * modern.y);
+  if (RayTrace(from, d, 0, 1e6, 0xff, seed, t, instance)) {
+    float3 p = from + d * t, albedo, n;
+    RaySurfaceAt(instance, p, d, size.zw, albedo, n);
+    c = albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + SkyAmbient(n) * modern.y);
   } else {
     c = skyZenith.w > 0.5 ? ComputedSky(d) : float3(0.4, 0.5, 0.65);
   }
@@ -165,7 +112,7 @@ bool RayScene::Init(std::string* error) {
     if (error) *error = "no ray tracing on this device or backend";
     return false;
   }
-  const std::string average = std::string(kViewShaderBlock) + kAverage, check = std::string(kViewShaderBlock) + kCheck;
+  const std::string average = std::string(kViewShaderBlock) + kAverage, check = std::string(kViewShaderBlock) + kRayShaderBlock + kCheck;
   gfx::ComputeDesc cd;
   cd.name = "rays: a level's colour";
   cd.source = average;
@@ -314,7 +261,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
   device_->BuildScene(&scene_, instances_.data(), static_cast<uint32_t>(instances_.size()));
 }
 
-gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, Vec3 groundColor) {
+gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, gfx::Texture groundColours) {
   if (!available_ || !scene_ || view.width <= 0 || view.height <= 0) return {};
   if (!picture_ || pictureWidth_ != view.width || pictureHeight_ != view.height) {
     device_->Destroy(picture_);
@@ -330,31 +277,35 @@ gfx::Texture RayScene::Check(const View& view, gfx::Texture groundNormals, Vec3 
   }
   struct {
     Mat4 back;
-    float size[4], ground[4];
+    float size[4];
   } k;
   k.back = Inverse(view.constants.viewProj);
   k.size[0] = static_cast<float>(view.width);
   k.size[1] = static_cast<float>(view.height);
   k.size[2] = mapWidth_;
   k.size[3] = mapHeight_;
-  k.ground[0] = groundColor.x;
-  k.ground[1] = groundColor.y;
-  k.ground[2] = groundColor.z;
-  k.ground[3] = 0;
   device_->SetPipeline(check_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
-  device_->SetScene(kSceneSlot, scene_);
-  device_->SetTexture(0, colours_);
-  device_->SetTexture(1, groundNormals);
-  device_->SetShaderBuffer(instanceData_, 0);
+  Bind(groundNormals, groundColours);
   device_->SetStorage(0, picture_);
   device_->Dispatch(static_cast<uint32_t>((view.width + 7) / 8), static_cast<uint32_t>((view.height + 7) / 8), 1);
   device_->SetStorage(0, {});
-  device_->SetTexture(0, {});
-  device_->SetTexture(1, {});
-  device_->SetScene(kSceneSlot, {});
+  Unbind();
   return picture_;
+}
+
+void RayScene::Bind(gfx::Texture groundNormals, gfx::Texture groundColours) {
+  device_->SetScene(kSceneSlot, scene_);
+  device_->SetTexture(0, colours_);
+  device_->SetTexture(1, groundNormals);
+  device_->SetTexture(2, groundColours);
+  device_->SetShaderBuffer(instanceData_, 0);
+}
+
+void RayScene::Unbind() {
+  for (int i = 0; i < 3; ++i) device_->SetTexture(i, {});
+  device_->SetScene(kSceneSlot, {});
 }
 
 }  // namespace render
