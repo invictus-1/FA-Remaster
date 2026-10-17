@@ -59,6 +59,7 @@ struct WorldPicture::Impl {
   float effectsQuality = 1;            // SetEffectsQuality
   float upscale = 1;                   // SetUpscale
   bool temporalUpscale = false;        // SetTemporalUpscale
+  bool rayReflections = false;         // SetRayReflections
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
@@ -147,8 +148,11 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   }
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.HostShows() && mapPath.empty()) return true;
+  // (the surfaces' shaders built to trace rays, for reflections, where the device can: World::rayReflections)
+  gRayShaders = m.rayReflections && m.device->RayTracing();
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
+  m.world->rayReflections = m.rayReflections;
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
   return true;
@@ -460,6 +464,11 @@ void WorldPicture::SetEffectsQuality(float share) { impl_->effectsQuality = shar
 void WorldPicture::SetUpscale(float share) { impl_->upscale = share; }
 
 void WorldPicture::SetTemporalUpscale(bool on) { impl_->temporalUpscale = on; }
+
+void WorldPicture::SetRayReflections(bool on) {
+  impl_->rayReflections = on;
+  if (impl_->world) impl_->world->rayReflections = on;  // (on: only where this map's shaders were built for it)
+}
 
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 
