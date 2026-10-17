@@ -386,7 +386,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
   the unit under the cursor and the units in a rectangle are the picture's own answers, so a
   left click selects a unit and dragging selects a box; a double click on one of the player's
-  units selects all of its kind on screen. The camera follows the original's rules,
+  units adds all of its kind on screen. The rules are the original's (read 2026-10-16,
+  CWldSession::CanSelectUnit / ReleaseDrag / DragRelease / HandleDoubleClickSelection): only what
+  the game lets be selected (so not a building under construction, unless it is a factory), and
+  only the player's own; a click on the ground clears the selection unless Shift or Ctrl is held;
+  Shift and a click takes a unit in or out; Ctrl and a click selects the player's units of that
+  kind across the map (with Shift: adds or removes that kind); a box takes the units of the best
+  selection priority in it (fighting units before engineers and commanders before buildings), with
+  Shift adds them all, or removes them when all are selected already. The unit under the mouse is the
+  transport or factory a unit hangs on (a unit being built on a factory's pad gives the factory),
+  and the old building for one being upgraded. The camera follows the original's rules,
   read from its code: its zoom is the width of world the view shows (the eye stands at zoom /
   (2 tan(fov / 2))); it starts as far out as it goes (the map takes 1 / 1.4 of the view: 0.7083
   of the height here, 0.7087 on a screenshot of the original), north up; by the zoom's logarithm it leans from straight down to 40 degrees and its
@@ -748,7 +757,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   selection's mark without being selected), `HasLocalizedVO` (whether the game has the
   folder `/sounds/voice/<language>`, 0x8ae300), `AddConsoleOutputReciever` /
   `RemoveConsoleOutputReciever` (the receivers are kept; no built console command prints a
-  line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host).
+  line yet, so they hear nothing so far), `FlushEvents` (nothing to do in this host),
+  `ConTextMatches` (the console's list above its edit line: the names that begin with what is typed,
+  the case not counting, in the original's order, read from its exe 0x83db10; its 435 console
+  names, `ui/user/console_names.inc`, read from the exe by a helper, and our `remaster_*` ones; a
+  name listed there that ours does not have says so in the log when it is run).
   CAMERA SHAKE: big blasts and heavy footsteps shake the camera (the simulation's
   Entity:ShakeCamera calls, the engine's ShakeEvents, handed to the cameras by
   `PostCameraShake`; `ui/maui/worldview.cpp` ShakeStep). Read from the original: a new shake

@@ -281,6 +281,51 @@ int l_ConExecute(lua_State* L) {
   return 0;
 }
 
+// ConTextMatches(text) (FA exe 0x83db10, its CON_GetFindTextMatches 0x41c770; read 2026-10-16): the
+// console's names that begin with the text, the case of letters not counting, in the order of the
+// original's registry (a map ordered by _stricmp: A-Z folded to a-z, so '_' comes before letters);
+// none for an empty text. The game's console lists them above its edit line. The names: the
+// original's (console_names.inc) and our own options' commands.
+bool ConNameLess(const char* a, const char* b) {
+  for (;; ++a, ++b) {
+    unsigned char x = static_cast<unsigned char>(*a), y = static_cast<unsigned char>(*b);
+    if (x >= 'A' && x <= 'Z') x = static_cast<unsigned char>(x - 'A' + 'a');
+    if (y >= 'A' && y <= 'Z') y = static_cast<unsigned char>(y - 'A' + 'a');
+    if (x != y || !x) return x < y;
+  }
+}
+const std::vector<const char*>& ConsoleNames() {
+  static const std::vector<const char*> names = [] {
+    std::vector<const char*> all = {
+#include "user/console_names.inc"
+        // ours (the Video options' and the statistics overlay's)
+        "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
+        "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_tracers", "remaster_upscale"};
+    std::sort(all.begin(), all.end(), ConNameLess);
+    return all;
+  }();
+  return names;
+}
+int l_ConTextMatches(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "strings ContextMatches(string)", 1, lua_gettop(L));
+  const std::string text = luaL_checkstring(L, 1);
+  lua_newtable(L);
+  if (text.empty()) return 1;
+  const auto& names = ConsoleNames();
+  int n = 0;
+  for (auto it = std::lower_bound(names.begin(), names.end(), text.c_str(), ConNameLess); it != names.end(); ++it) {
+    bool prefix = true;
+    for (size_t i = 0; i < text.size() && prefix; ++i) {
+      unsigned char x = static_cast<unsigned char>(text[i]), y = static_cast<unsigned char>((*it)[i]);
+      prefix = y != 0 && std::tolower(x) == std::tolower(y);
+    }
+    if (!prefix) break;
+    lua_pushstring(L, *it);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 // AddConsoleOutputReciever(function(text)) -> handle, RemoveConsoleOutputReciever(handle) (FA
 // exe 0x41eb80, 0x41ed80; the spelling is the game's): the functions that hear each line the
 // console prints (the console window's list, the echo on the game's screen). They are kept in
@@ -867,6 +912,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   SetGlobal(L, "KeycodeMSWToMaui", l_KeycodeMSWToMaui);
   SetGlobal(L, "KeycodeMauiToMSW", l_KeycodeMauiToMSW);
   SetGlobal(L, "ConExecute", l_ConExecute);
+  SetGlobal(L, "ConTextMatches", l_ConTextMatches);
   SetGlobal(L, "ConExecuteSave", l_ConExecute);
   SetGlobal(L, "AddConsoleOutputReciever", l_AddConsoleOutputReciever);
   SetGlobal(L, "RemoveConsoleOutputReciever", l_RemoveConsoleOutputReciever);

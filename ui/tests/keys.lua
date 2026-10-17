@@ -217,6 +217,22 @@ check("key codes: Windows to the engine's", KeycodeMSWToMaui(35) .. " " .. Keyco
 check("key codes: the engine's to Windows", KeycodeMauiToMSW(314) .. " " .. KeycodeMauiToMSW(127) .. " " .. KeycodeMauiToMSW(342) .. " " .. KeycodeMauiToMSW(65), "35 46 112 65")
 rawset(_G, "keyRan", nil)
 
+-- ConTextMatches (FA exe 0x83db10): the console's names that begin with the text, the case not
+-- counting, in the order of the original's registry ('_' before letters); none for no text
+local function names(t)
+    local out = {}
+    for _, n in t do table.insert(out, n) end
+    return table.concat(out, " ")
+end
+check("ConTextMatches: the names that begin so", names(ConTextMatches("wld_g")), "WLD_GameSpeed")
+check("the case not counting, in the registry's order", names(ConTextMatches("UI_SELECT")),
+    "UI_SelectAnything UI_SelectByCategory ui_SelectionSetNamesColor ui_SelectTolerance")
+local ai = ConTextMatches("ai")
+check("'_' comes before letters: the ai_ names, then Air...", ai[table.getn(ai)], "AirLookAheadMult")
+check("no text, no names", table.getn(ConTextMatches("")), 0)
+check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_snow_tracks remaster_stats")
+check("one argument, no more", pcall(ConTextMatches), false)
+
 parent:Destroy()
 edit:Destroy()
 LOG("TEST done: " .. failed .. " failed")
