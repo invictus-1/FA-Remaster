@@ -67,6 +67,9 @@
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
 //           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
+// --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
+//           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
+//           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
@@ -253,6 +256,9 @@ struct Options {
   bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
+  bool air = false;                     // --air
+  float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
+  int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
@@ -343,6 +349,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
+    else if (a == "--air") o->air = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -394,6 +401,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
     else if (a == "--picture") o->picture = v;
+    else if (a == "--air-dust") o->airDust = static_cast<float>(atof(v));
+    else if (a == "--air-sun") o->airSun = static_cast<float>(atof(v));
+    else if (a == "--air-lamps") o->airLamps = static_cast<float>(atof(v));
+    else if (a == "--air-cells") {
+      if (sscanf(v, "%d,%d", &o->airAcross, &o->airDeep) != 2) return false;
+    }
     else if (a == "--lights") o->testLights = atoi(v);
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
@@ -750,6 +763,12 @@ int main(int argc, char** argv) {
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
+  world.volumetricFog = opt.air;
+  if (opt.airDust >= 0) world.air.dust = opt.airDust;
+  if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
+  if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;
+  if (opt.airAcross > 0) world.air.across = opt.airAcross;
+  if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;

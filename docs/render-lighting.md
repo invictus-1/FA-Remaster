@@ -45,6 +45,21 @@ Mac", and every ray-traced effect keeps a fallback without it.
    densities; reprojected and blended over frames, then summed toward the eye. Every shader's
    `ThroughAirTo` reads it in place of today's formulas when it is on, so particles and water get it too.
    Lamp shafts then come out of the volume itself.
+   - **First version done** (2026-10-16): `render/air.h/.cpp`, `World::volumetricFog` (viewer `--air`;
+     tuning `--air-dust`, `--air-sun`, `--air-lamps`, `--air-cells across,deep`). 160 x 90 x 64 cells
+     (RGBA16F), sampled at another depth in each cell every frame and blended with last frame's (0.9).
+     Haze and the air's own dust thin over 300 units above the map's middle height (else the sky, seen
+     through the whole volume, went grey); the mist as the formulas had it. The lamps' beams are
+     strengthened 150 times on the clear air's dust alone (mist and fog scatter them as they are), the
+     other small lights (explosions' flashes, glows) 15 times, a beam's glow to all sides a quarter
+     (all of it made coloured halos). The sky is seen through the whole volume; particles, trails and
+     the water through their own place in it.
+   - Cost (`--timings`, 1440p, RTX 4090, Seton's at night): the volume 0.05-0.09 ms; the frame 2.78 ->
+     2.85 ms on average (the median within noise). Finer cells are affordable (to try: 240 x 128).
+   - Off: pictures identical to the build before, pixel for pixel, on both backends. On: Vulkan as
+     Direct3D 12 (mean difference 0.07-0.19 in 255).
+   - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
+     sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
 2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a
    quarter of the pixels and filled in over frames), their shadows on the ground from the same clouds; the
    sky from tables of the atmosphere computed when the time of day changes (transmittance, multiple
