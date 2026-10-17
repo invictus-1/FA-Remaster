@@ -69,6 +69,7 @@ struct UnitStore : UserState::Extra {
   // What the game's table says of how each kind of order is drawn (commandgraphparams.lua), as
   // looked up so far: key "UNITCOMMAND_Move/orderline_selected_color" -> its text ("" for none).
   std::map<std::string, std::string> graphParams;
+  std::map<std::string, bool> canFly;  // Air.CanFly by blueprint (CanFlyOf)
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
   std::vector<WorldGhost> ordered;
@@ -1469,6 +1470,60 @@ uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius) {
   return best;
 }
 
+// The right click's transport orders, issued as the original issues them:
+// - "CallTransport" (FA exe 0x820e01): TransportLoadUnits aimed at the hovered unit, the factories among the
+//   selection (RALLYPOINT, split by 0x81e610) as their factory order, the rest as theirs; the hovered transport
+//   is added to the units ordered (INFERRED: so that it comes to meet them) unless it is an air staging platform
+//   or a ferry beacon that is no carrier.
+// - "Transport" (0x821014): a teleport beacon with a TELEPORTATION unit selected: TransportUnloadUnits aimed at
+//   the beacon; else TransportReverseLoadUnits aimed at the hovered unit, for the whole selection.
+// The queue is cleared unless Shift is held.
+bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t entity, bool clear) {
+  Sim* sim = TheSim(L);
+  if (!sim) return false;
+  UnitStore& store = Store(L);
+  auto it = store.units.find(entity);
+  if (it == store.units.end() || it->second->gone) return false;
+  UserUnit* hover = it->second.get();
+  std::vector<UserUnit*> units;
+  for (UserUnit* u : store.selection)
+    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) units.push_back(u);
+  if (units.empty()) return false;
+  StreamIssueData d;
+  d.target.type = 1;
+  d.target.entity = entity;
+  d.target.pos.x = hover->view.position[0], d.target.pos.y = hover->view.position[1], d.target.pos.z = hover->view.position[2];
+  std::vector<uint32_t> factories, others;
+  const char* name = nullptr;
+  if (order == "CallTransport") {
+    d.type = static_cast<int>(CommandType::TransportLoadUnits);
+    name = "TransportLoadUnits";
+    for (UserUnit* u : units) (InCategory(L, u, "RALLYPOINT") ? factories : others).push_back(u->view.id);
+    const bool joins = !InCategory(L, hover, "AIRSTAGINGPLATFORM") &&
+                       !(InCategory(L, hover, "FERRYBEACON") && !InCategory(L, hover, "CARRIER"));
+    if (joins && std::find(others.begin(), others.end(), entity) == others.end()) others.push_back(entity);
+  } else if (order == "Transport") {
+    bool teleporter = false;
+    for (UserUnit* u : units) teleporter = teleporter || InCategory(L, u, "TELEPORTATION");
+    if (InCategory(L, hover, "TELEPORTBEACON") && teleporter) {
+      d.type = static_cast<int>(CommandType::TransportUnloadUnits);
+      name = "TransportUnloadUnits";
+    } else if (hover->view.commandCaps & 0x200) {
+      d.type = static_cast<int>(CommandType::TransportReverseLoadUnits);
+      name = "TransportReverseLoadUnits";
+    } else {
+      return false;
+    }
+    for (UserUnit* u : units) others.push_back(u->view.id);
+  } else {
+    return false;
+  }
+  if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
+  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, d, clear);
+  ReportCommandIssued(L, name, units, d.target.pos.x, d.target.pos.y, d.target.pos.z, clear, std::string(), entity);
+  return true;
+}
+
 bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear) {
   UnitStore& store = Store(L);
   auto it = store.units.find(entity);
@@ -1550,6 +1605,71 @@ int l_ReclaimableAtForTests(lua_State* L) {
 // transport and ferry cases (0x81d280, 0x81d660, 0x81da20),
 // an attack order's marker under the cursor, the option "switch_right_click_behavior". Things that
 // are not units (wreckage, trees, rocks) are the world view's to ask for: IssueReclaimAtPlace.
+// The blueprint's Air.CanFly (bp +0x368, the Air block's first field), kept by blueprint.
+bool CanFlyOf(lua_State* L, const UserUnit* u) {
+  UnitStore& store = Store(L);
+  auto it = store.canFly.find(u->view.blueprint);
+  if (it != store.canFly.end()) return it->second;
+  bool fly = false;
+  const int top = lua_gettop(L);
+  PushBlueprint(L, u->view.blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "Air");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "CanFly");
+      lua_rawget(L, -2);
+      fly = lua_toboolean(L, -1) && !(lua_isnumber(L, -1) && lua_tonumber(L, -1) == 0);
+    }
+  }
+  lua_settop(L, top);
+  store.canFly[u->view.blueprint] = fly;
+  return fly;
+}
+
+// The selection gets on the hovered transport (FA exe 0x81d280): it lives, is not on the seabed and is not
+// being built; one selected unit that lives and is finished qualifies (a commander only for a transport of
+// CANTRANSPORTCOMMANDER or a ferry beacon): one that cannot fly for a TRANSPORTATION, TELEPORTATION or
+// FERRYBEACON, one that flies (and may use air staging) for an AIRSTAGINGPLATFORM. Neither cargo nor free
+// room is asked.
+bool CanBoard(lua_State* L, const std::vector<UserUnit*>& selection, const UserUnit* hover) {
+  if (!hover || hover->view.dead || hover->view.layer == 2 || hover->view.beingBuilt) return false;
+  const bool carrier = InCategory(L, hover, "TRANSPORTATION") || InCategory(L, hover, "TELEPORTATION") ||
+                       InCategory(L, hover, "FERRYBEACON");
+  const bool staging = InCategory(L, hover, "AIRSTAGINGPLATFORM");
+  const bool takesCommander = InCategory(L, hover, "CANTRANSPORTCOMMANDER") || InCategory(L, hover, "FERRYBEACON");
+  for (const UserUnit* u : selection) {
+    if (u->view.dead || u->view.beingBuilt) continue;
+    if (InCategory(L, u, "COMMAND") && !takesCommander) continue;
+    if (carrier && !CanFlyOf(L, u)) return true;
+    if (!carrier && staging && CanFlyOf(L, u) && !InCategory(L, u, "CANNOTUSEAIRSTAGING")) return true;
+  }
+  return false;
+}
+
+// A selected transport picks up the hovered unit (FA exe 0x81d660): the hovered unit lives and is finished
+// and is no experimental; a selected unit qualifies that is TRANSPORTFOCUS, not TELEPORTATION, not on the
+// seabed (and CANTRANSPORTCOMMANDER for a commander): a TRANSPORTATION or FERRYBEACON for a unit that cannot
+// fly, an AIRSTAGINGPLATFORM for one that flies.
+bool CanPickUp(lua_State* L, const UserUnit* hover, const std::vector<UserUnit*>& selection) {
+  if (!hover || hover->view.dead || hover->view.beingBuilt || InCategory(L, hover, "EXPERIMENTAL")) return false;
+  const bool commander = InCategory(L, hover, "COMMAND");
+  for (const UserUnit* s : selection) {
+    if (InCategory(L, s, "TELEPORTATION") || s->view.layer == 2 || !InCategory(L, s, "TRANSPORTFOCUS")) continue;
+    if (commander && !InCategory(L, s, "CANTRANSPORTCOMMANDER")) continue;
+    if ((InCategory(L, s, "TRANSPORTATION") || InCategory(L, s, "FERRYBEACON")) && !CanFlyOf(L, hover)) return true;
+    if (InCategory(L, s, "AIRSTAGINGPLATFORM") && CanFlyOf(L, hover)) return true;
+  }
+  return false;
+}
+
+// Every selected unit is a factory (FA exe 0x81da20: the blueprint's FACTORY bit).
+bool AllFactories(lua_State* L, const std::vector<UserUnit*>& selection) {
+  for (const UserUnit* u : selection)
+    if (!InCategory(L, u, "FACTORY")) return false;
+  return !selection.empty();
+}
+
 std::string RightClickOrder(lua_State* L, uint32_t under) {
   Sim* sim = TheSim(L);
   if (!sim) return std::string();
@@ -1573,15 +1693,32 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
   for (const ArmyView& v : ArmyViews(*sim))
     if (v.index == e->view.army && e->view.army != army && army <= static_cast<int>(v.alliance.size()))
       stance = v.alliance[static_cast<size_t>(army - 1)];
-  bool enemy = stance == 0, ally = stance == 2, noArmy = e->view.army <= 0;
+  // (IsEnemy 0x5d5540 and IsAlly 0x5bd630 are both false when either army is missing; one's own army counts as an ally.)
+  bool noArmy = e->view.army <= 0, enemy = stance == 0 && !noArmy, ally = stance == 2 && !noArmy;
   // (An enemy: Attack when any of the selection can attack it, by its weapons (FA exe 0x81d080).)
   if (enemy && (caps & kAttack) && AnyCanAttack(L, own, e)) return "RULEUCC_Attack";
   UnitStateView target;
   StateOf(L, e, &target);
+  // (A unit that hangs on another (loaded, docked) can be neither captured nor reclaimed: the original
+  // clears both when SSTIUnitVariableData+0xA is set, 0x81ec00.)
+  // Capture (0x81ec00, before Reclaim): not an ally (so not one's own), not being built, the unit's own
+  // switch (Unit:SetCapturable, attributes +0x69; on unless a script turned it off), and the selection can
+  // capture (RULEUCC_Capture 0x80). A neutral unit qualifies.
+  const uint32_t kCapture = 0x80;
+  if (!ally && !e->view.beingBuilt && target.capturable && !e->view.attached && (caps & kCapture)) return "RULEUCC_Capture";
   // (The unit's own switch, SetReclaimable, on top of the original's test: a unit a script has
   // made unreclaimable is not offered for reclaim. Inferred, not read.)
-  bool reclaimable = (InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt) && target.reclaimable;
+  bool reclaimable = (InCategory(L, e, "RECLAIMABLE") || e->view.beingBuilt) && target.reclaimable && !e->view.attached;
   if ((enemy || noArmy || InCategory(L, e, "RECLAIMFRIENDLY")) && reclaimable && (caps & kReclaim)) return "RULEUCC_Reclaim";
+  // The transports (0x81ec00, only for a unit of the player's own army, not an ally's): the selection gets
+  // on the hovered transport (0x81d280), a selected transport picks up the hovered unit (0x81d660), or
+  // factories send what they build onto a ferry beacon (0x81da20).
+  if (e->view.army == army) {
+    const uint32_t kCallTransport = 0x200;
+    if ((caps & kCallTransport) && CanBoard(L, own, e)) return "RULEUCC_CallTransport";
+    if ((e->view.commandCaps & kCallTransport) && CanPickUp(L, e, own)) return "RULEUCC_Transport";
+    if (InCategory(L, e, "FERRYBEACON") && AllFactories(L, own)) return "RULEUCC_CallTransport";
+  }
   // (An enemy none of the selection can attack nor reclaim: with the Attack order among the selection's, the
   // invalid attack (the script's attack-invalid cursor), and a right click gives no order (GetRightMouseButtonAction
   // 0x81ec00, step 4); else a move.)

@@ -380,9 +380,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   click in the world view gives the selected units the order that fits what is under the cursor,
   by the original's rule (read from its code): attack an enemy, reclaim what can be reclaimed,
   repair a unit being built, guard (help) another unit of one's own, else move there;
-  `GetRightMouseButtonOrder` gives the script the same answer for the cursor. Left out of that
-  rule so far: capture, loading into transports and ferries, and whether the weapons can reach
-  the target. A tree, a rock or a wreck is reclaimed too: the simulation names the reclaimable
+  `GetRightMouseButtonOrder` gives the script the same answer for the cursor. Capture and the
+  transports follow the original's rule too (2026-10-17, GetRightMouseButtonAction 0x81ec00 and its
+  0x81d280 / 0x81d660 / 0x81da20): a unit not one's own nor an ally's, finished, capturable (the
+  unit's own switch) and not loaded, is captured by a selection that can capture, before reclaim (an
+  engineer over an enemy's building); over one's own transport (or teleporter, ferry beacon, air staging
+  platform for aircraft) units that can get on are told TransportLoadUnits, and the transport is told too
+  so that it comes to meet them; a selected transport over one's own unit it can carry is told
+  TransportReverseLoadUnits (the game's skin shows the unload cursor for it, as in the original);
+  factories over a ferry beacon send what they build there. Cargo and free room are not asked, as in the
+  original. A right click on the ground never unloads: a loaded transport moves (unloading is the
+  order button's). Test: `ui/tests/transport.lua` (the simulation does not carry out
+  TransportReverseLoadUnits yet: engine request 39). A tree, a rock or a wreck is reclaimed too: the simulation names the reclaimable
   thing at a place (`ReclaimableAt`), and a right click right on one, with a unit selected that
   can reclaim, or the Reclaim button's click near one, sends the order on it (which thing the
   original's cursor takes is not read; `GetRightMouseButtonOrder` answers Reclaim there too, so

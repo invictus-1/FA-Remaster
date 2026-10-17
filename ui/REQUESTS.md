@@ -994,6 +994,17 @@ load, one Sim at a time, nothing touches the loading Sim before WaitForWorker, h
 mutex. The other order is not safe (Sounds(), SplitPaths(), g_words in SimBlueprints::CopyToSim). Used: the
 load (game_session.cpp BeginLoad / FinishLoad), g_crashTick = 0 at BeginLoad, an 8 MB worker stack on macOS.
 
+### 39. TransportReverseLoadUnits: a transport picking up a unit
+From the interface chat, 2026-10-17. Not blocking. The right click now gives the original's transport orders
+(GetRightMouseButtonAction 0x81ec00, read by my helper, notes in my scratchpad helper_transport\findings.md).
+TransportLoadUnits works end to end: tanks right-clicked onto a transport get on board within 6 s. The other one
+does not: a selected transport right-clicked on one of our units gets UNITCOMMAND_TransportReverseLoadUnits (0x17)
+aimed at that unit (0x821014), and the simulation logs "command TransportReverseLoadUnits is not carried out yet
+(finished at once)". Could the sim carry it out: the transport goes to the unit and loads it, as
+TransportLoadUnits does from the other side? Also, while you're there: a teleport beacon right-clicked with a
+TELEPORTATION unit selected gives TransportUnloadUnits aimed at the beacon. Test: ui/tests/transport.lua logs "on
+board after the pick-up order" (2 today, 3 once it works).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

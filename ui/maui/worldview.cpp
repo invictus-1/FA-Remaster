@@ -1478,6 +1478,7 @@ class WorldView : public Control {
       if (order.rfind("RULEUCC_", 0) != 0) return false;
       order = order.substr(8);
       if (order == "Invalid") return true;  // (an enemy the selection cannot attack: no order, FA exe 0x821a24)
+      if ((order == "CallTransport" || order == "Transport") && IssueTransportOrderAt(L, order, under, !e.shift)) return true;
       // (With Alt held, a right click that would be a move is FAF's attack-move.)
       if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
       if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
