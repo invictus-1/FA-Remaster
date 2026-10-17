@@ -168,5 +168,18 @@ ForkThread(function()
         check("the tank it builds is in group 7 too", built and table.concat(built:GetSelectionSets() or {}, " ") or "no tank", "7")
         check("and its creator is the factory", built and built:GetCreator() == factory, true)
     end
+    -- stepping through idle engineers one by one (FAF's key action AddNearestIdleEngineersSeq, on GetIdleEngineers
+    -- and GetMouseWorldPos): each press adds the next nearest idle one
+    spawn("uel0105", {spot[1] + 25, spot[2], spot[3] + 15}, 2)
+    WaitSeconds(2)
+    local keys = import("/lua/keymap/misckeyactions.lua")
+    SelectUnits(nil)
+    local counts = {}
+    for i = 1, 2 do
+        keys.AddNearestIdleEngineersSeq()
+        WaitSeconds(0.2)
+        table.insert(counts, tostring(table.getn(GetSelectedUnits() or {})))
+    end
+    check("each press of the idle-engineer key adds one more", table.concat(counts, " "), "1 2")
     LOG("TEST done: " .. failed .. " failed")
 end)
