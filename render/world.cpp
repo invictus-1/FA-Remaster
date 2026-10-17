@@ -38,6 +38,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       motion(device),
       upscaler(device),
       fsr3(device),
+      framegen(device),
       skyDraw(device),
       falling(device),
       grass(device),
@@ -50,6 +51,10 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       shadows(device),
       device_(device),
       vfs_(vfs) {}
+
+World::~World() {
+  if (framegenAsked_) device_->SetFrameGeneration({});
+}
 
 bool World::Open(const std::string& mapPath, const Options& options, std::string* error) {
   // (how long each step of opening takes, for the log: loading is measured like the frames)
@@ -442,7 +447,7 @@ float World::GroundHeight(float x, float z) const {
 
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
-  particles.remastered = ribbons.remastered = effectsLook == EffectsLook::Remastered;
+  particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   particles.quality = effectsQuality;
   camera = cam;
   time_ = time;
@@ -466,6 +471,27 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     }
     temporalNow_ = fsr3State_ > 0;
   }
+  // frame generation: its passes made the first time it is asked for, the device asked to call MakeBetween at
+  // each frame's end (or no longer); on for this frame where the device draws the window into its own picture
+  if (!sidePicture) {
+    const bool wanted = frameGeneration && gSceneSamples == 1 && motionView <= 0;
+    if (wanted && framegenState_ == 0) {
+      std::string error;
+      framegenState_ = framegen.Init(&error) ? 1 : -1;
+      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str());
+    }
+    const bool ask = wanted && framegenState_ > 0;
+    if (ask != framegenAsked_) {
+      if (ask && !device_->SetFrameGeneration([this] { return MakeBetween(); })) {
+        fprintf(stderr, "render: this device cannot show frames made between; frame generation is off\n");
+        framegenState_ = -1;
+      }
+      if (!ask) device_->SetFrameGeneration({});
+      framegenAsked_ = ask && framegenState_ > 0;
+    }
+    framegenNow_ = framegenAsked_ && device_->FrameGenerating() && device_->WindowPicture();
+    framegenReady_ = false;
+  }
   if (!sidePicture) {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     frameSeconds_ = lastFrameAt_ > 0 ? static_cast<float>(std::clamp(now - lastFrameAt_, 0.001, 0.25)) : 1 / 60.0f;
@@ -473,15 +499,18 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   // motion: the view without its jitter kept, this frame's and the frame before's; with the temporal
   // upscaler, the view shifted by this frame's jitter
-  const bool moving = (motionOn || motionView > 0 || temporalNow_) && gSceneSamples == 1 && !sidePicture;
+  const bool moving = (motionOn || motionView > 0 || temporalNow_ || framegenNow_) && gSceneSamples == 1 && !sidePicture;
   meshes.motion = moving;
   meshes.keepLast = sidePicture;
   if (!sidePicture) {
     const Vec3 eye = camera.Eye();
-    temporalCut_ = cameraCut || !temporalBefore_ || Length(eye - lastEye_) > 0.3f * std::max(camera.distance, 10.0f);
+    const bool jumped = cameraCut || Length(eye - lastEye_) > 0.3f * std::max(camera.distance, 10.0f);
+    temporalCut_ = jumped || !temporalBefore_;
+    framegenCut_ = jumped || !framegenBefore_;
     cameraCut = false;
     lastEye_ = eye;
     temporalBefore_ = temporalNow_;
+    framegenBefore_ = framegenNow_;
   }
   if (moving) {
     float jx = 0, jy = 0;
@@ -1751,10 +1780,41 @@ void World::Render() {
     Stage("finishing at the screen's size (exposure, bloom)");
   }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
+  if (framegenNow_ && !sidePicture) {  // frame generation: the finished picture kept before the icons and the interface, and the rest
+    Stage("frame generation: the finished picture kept");
+    framegenIn_ = FrameGeneration::Inputs{};
+    framegenIn_.hudless = post.KeepFinished(device_->WindowPicture(), device_->Width(), device_->Height());
+    framegenIn_.depth = post.Depth();
+    framegenIn_.motion = motion.Texture();
+    framegenIn_.renderWidth = view.width;
+    framegenIn_.renderHeight = view.height;
+    framegenIn_.jitterX = temporalNow_ ? motion.jitterX : 0;
+    framegenIn_.jitterY = temporalNow_ ? motion.jitterY : 0;
+    framegenIn_.cameraNear = camera.zNear;
+    framegenIn_.fovY = camera.fovY;
+    framegenIn_.frameSeconds = frameSeconds_;
+    framegenIn_.reset = framegenCut_;
+    framegenReady_ = framegenIn_.hudless && framegenIn_.depth && framegenIn_.motion;
+  }
   Stage("icons, bars");
   icons.showSymbols = iconsOn;
   icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
   CpuTimes::Part(nullptr);
+}
+
+// At the frame's end (the device calls it, gfx.h): the picture between the frame before and this one, from what
+// Render kept and the window's finished picture with the icons and the interface on it. False: the frame is shown
+// alone (no world drawn this frame, or a cut).
+bool World::MakeBetween() {
+  if (!framegenReady_) return false;
+  framegenReady_ = false;
+  const gfx::Texture between = device_->BetweenPicture();
+  if (!between) return false;
+  FrameGeneration::Inputs in = framegenIn_;
+  in.present = device_->WindowPicture();
+  device_->Mark("frame generation");
+  framegen.Run(in, between, device_->Width(), device_->Height());
+  return !in.reset;
 }
 
 bool World::RaysReady() {

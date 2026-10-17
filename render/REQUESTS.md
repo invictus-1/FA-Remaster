@@ -34,7 +34,20 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 33. To the INTERFACE track: a fifth setting, "Ground Detail" (2026-10-17, not blocking)
+## 34. To the INTERFACE track: a sixth setting, "Frame Generation" (2026-10-17, not blocking)
+
+**Who asks:** the renderer, for Chris (his list of 2026-10-17, item 7: FSR 3 frame generation, "yeah lets add it").
+
+**What:** one more option in the Video tab, off by default: "Frame Generation", `WorldPicture::SetFrameGeneration(bool)`
+(before or after Open; it takes effect from the next frame). A picture made between each two frames and shown between
+them, evenly paced: twice the frames on the screen, for a little more than half a frame's delay; the icons and the
+interface stay sharp (taken from the frame after). About 1.1-1.4 ms of the card a frame drawn at 1440p. Like FSR 3's
+upscaler it needs anti-aliasing off (gSceneSamples 1 before Open): with MSAA on it does nothing, so grey it out or say
+so in its tooltip the way you do for FSR 3. A tooltip suggestion: "Shows a frame made between each two drawn ones:
+twice the frames, a little more delay. Best when the game already runs at 60 or more. Needs anti-aliasing off." It
+goes well with FSR 3 (its anti-aliasing makes the made-up frames sharper). Vertical sync can stay as the player has it.
+
+## 33. To the INTERFACE track: a fifth setting, "Ground Detail" (2026-10-17, not blocking; DONE the same day: the Video tab's "Ground Detail" after Weather Effects, console `remaster_ground_detail`, off by default; all five options carry a tooltip)
 
 **Who asks:** the renderer, for Chris (his list of 2026-10-17: ground cover near the camera; all the new looks in the
 settings, bundled).

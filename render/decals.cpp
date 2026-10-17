@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "core/vfs.h"
+#include "effect_files.h"
 #include "lighting.h"
 
 namespace render {
@@ -23,7 +24,7 @@ struct Instance {
   float4 options;  // x: how much of it is there (fading), y: a light's age (0..1 of its time; a plain mark: how much of the lying snow covers it),
                    // z: 1 = a light (texture x ramp, added), 2 a normal decal, 3 a mark, 4 a "Water Albedo" decal
                    // where the ground is above the water, 5 the same on the water where the ground is under it;
-                   // w: the modern look's brightness of a light
+                   // w: the modern look's brightness of a light; a picture's 1 when it has its own relief (t5)
 };
 cbuffer DecalCamera : register(b1) {
   float4 cameraRight;  // w: tan(half the field of view)
@@ -38,6 +39,7 @@ Texture2D decalTexture : register(t0);
 Texture2D rampTexture : register(t2);
 Texture2D waterMap : register(t3);
 Texture2D waterRamp : register(t4);
+Texture2D reliefTexture : register(t5);  // a remastered picture's relief: x in alpha, y in green (BC5 read as the game's DXT5), y up the picture
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
@@ -126,6 +128,12 @@ float4 PS(VOut i) : SV_Target {
   // lit as the ground it lies on: the ground's slope from how its place changes from pixel to pixel
   float3 N = normalize(cross(ddy(world), ddx(world)));
   if (N.y < 0) N = -N;
+  if (i.options.w > 0.5) {  // a remastered picture's own relief, tilting the ground's slope as a normal decal does
+    float2 t = reliefTexture.Sample(samplerAniso, local * 0.5 + 0.5).ag * 2 - 1;
+    float3 inDecal = float3(t.x, sqrt(saturate(1 - dot(t, t))), -t.y);  // (its y up the picture: toward the decal's -z)
+    float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
+    N = normalize(N + turned - float3(0, 1, 0));
+  }
   float shadow = SunShadow(world, N);
   // under water: tinted toward the water ramp's colour by depth, as the ground is (terrain.cpp)
   float4 tint = 0;
@@ -198,15 +206,32 @@ bool Decals::Init(std::string* error) {
   return static_cast<bool>(cube_);
 }
 
-gfx::Texture Decals::Resolve(const std::string& texture) {
+gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief) {
+  if (relief) *relief = {};
   if (texture.empty()) return {};
   // (a path begins with a slash; a script's short name may have a folder in it: "Tarmacs/Tar12x_01_albedo")
-  if (texture[0] == '/') return vfs_->Exists(texture) ? textures_->Get(texture) : gfx::Texture{};
-  for (const char* folder : {"/env/common/decals/", "/env/common/splats/"}) {
-    const std::string path = std::string(folder) + texture + ".dds";
-    if (vfs_->Exists(path)) return textures_->Get(path);
+  std::string path;
+  if (texture[0] == '/') {
+    if (vfs_->Exists(texture)) path = texture;
+  } else {
+    for (const char* folder : {"/env/common/decals/", "/env/common/splats/"})
+      if (path.empty() && vfs_->Exists(std::string(folder) + texture + ".dds")) path = std::string(folder) + texture + ".dds";
   }
-  return {};
+  if (path.empty()) return {};
+  if (remastered) {  // the visuals track's picture of it, and the relief beside it ("x_albedo.dds", "x_normals.dds")
+    const std::string ours = EffectFile(*vfs_, path, true);
+    if (ours != path) {
+      path = ours;
+      std::string low = ours;
+      for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const std::string tail = "_albedo.dds";
+      if (relief && low.size() > tail.size() && low.compare(low.size() - tail.size(), tail.size(), tail) == 0) {
+        const std::string normals = ours.substr(0, ours.size() - tail.size()) + "_normals.dds";
+        if (vfs_->Exists(normals)) *relief = textures_->Get(normals);
+      }
+    }
+  }
+  return textures_->Get(path);
 }
 
 bool Decals::IsDepositMark(const std::string& texture, bool* hydrocarbon) {
@@ -222,13 +247,15 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
     bool hydrocarbon = false;
     if (IsDepositMark(texture, &hydrocarbon) && seconds <= 0 && deposits_.size() < 4096) deposits_.push_back({centre, hydrocarbon, cutoff});
   }
-  const gfx::Texture t = Resolve(texture);
+  gfx::Texture relief;
+  const gfx::Texture t = Resolve(texture, &relief);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
   if (groundHeight) {  // (given far from the ground, beyond what its box reaches: on the ground)
     const float ground = groundHeight(centre.x, centre.z);
     if (std::fabs(centre.y - ground) > std::max(std::fabs(sizeX), std::fabs(sizeZ)) * 0.5f) centre.y = ground;
   }
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
+  decals_.back().relief = relief;
   decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
   decals_.back().id = lastId_ = nextId_++;
   return true;
@@ -317,15 +344,16 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.light = d.water ? (overWater ? 5.0f : 4.0f) : d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
     // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
     if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
-    n.glow = glow;
-    visible_.push_back({d.texture.id, d.ramp.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
+    n.glow = d.ramp ? glow : d.relief && !d.normal && !d.mark && !d.water ? 1.0f : 0.0f;  // (a picture's: its own relief)
+    visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
   }
   if (!overWater) marks_.clear();
   if (visible_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
   std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
     if (a.kind != b.kind) return a.kind < b.kind;
-    return a.texture != b.texture ? a.texture < b.texture : a.ramp < b.ramp;
+    if (a.texture != b.texture) return a.texture < b.texture;
+    return a.ramp != b.ramp ? a.ramp < b.ramp : a.relief < b.relief;
   });
 
   Vec3 right, up, back;
@@ -337,11 +365,11 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
                                      water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f};
   int bound = -1;
   for (size_t at = 0; at < visible_.size();) {
-    const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp;
+    const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp, relief = visible_[at].relief;
     const int kind = visible_[at].kind;
     size_t n = 0;
-    while (at + n < visible_.size() && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && visible_[at + n].kind == kind &&
-           n < kMaxInstances) {
+    while (at + n < visible_.size() && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && visible_[at + n].relief == relief &&
+           visible_[at + n].kind == kind && n < kMaxInstances) {
       batch_[n] = visible_[at + n].instance;
       ++n;
     }
@@ -357,6 +385,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
     device_->SetTexture(0, gfx::Texture{texture});
     device_->SetTexture(2, ramp ? gfx::Texture{ramp} : textures_->White());
+    device_->SetTexture(5, relief ? gfx::Texture{relief} : textures_->FlatNormal());
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->Draw(36, 0, static_cast<uint32_t>(n));
     drawn += static_cast<int>(n);

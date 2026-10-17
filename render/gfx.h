@@ -323,6 +323,23 @@ class Device {
   // `present` false: the frame is drawn (and read back with `capture`) but not shown; the next frame
   // draws into the same picture.
   virtual void EndFrame(std::vector<uint8_t>* capture = nullptr, bool present = true) = 0;
+
+  // Frame generation (render/frame_generation.h makes the pictures): every frame shown twice over, first a
+  // picture made between the frame before and this one, then the frame itself, evenly apart in time (a thread
+  // of the device's own shows them, half the time between frames apart: gfx_pacing.h). While it is on, the
+  // window a frame draws into is a target of the device's own, this frame's (WindowPicture: readable as a
+  // texture once a pass into the window has ended), and EndFrame, after the frame's last pass, calls `make`
+  // (it may dispatch and draw): true when it wrote BetweenPicture (a storage target of the window's size,
+  // RGBA8, this frame's own), false to show the frame alone (a cut, or nothing to make one from). Empty: off.
+  // `make` is replaced at once (one given before is never called after); switching on or off happens at once
+  // between frames, else at the next BeginFrame, and waits for the card. False where the device cannot (it
+  // stays off); FrameGenerating says whether it is on for the frame under way.
+  virtual bool SetFrameGeneration(std::function<bool()> make) { return !make; }
+  virtual bool FrameGenerating() const { return false; }
+  virtual Texture WindowPicture() { return {}; }
+  virtual Texture BetweenPicture() { return {}; }
+  // (checks) EndFrame's capture reads the picture made between, when there is one, instead of the frame
+  bool captureBetween = false;
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;

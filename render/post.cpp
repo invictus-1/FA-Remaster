@@ -174,6 +174,10 @@ bool Post::Init(std::string* error) {
   pd.colorFormat = kSceneFormat;
   copy_ = device_->CreatePipeline(pd, error);
   if (!copy_) return false;
+  pd.name = "finished picture copied";
+  pd.colorFormat = gfx::Format::RGBA8;
+  copyFinished_ = device_->CreatePipeline(pd, error);
+  if (!copyFinished_) return false;
   pd.pixelEntry = "PS";
   pd.colorFormat = gfx::Format::RGBA8;
   pd.depthTarget = true;
@@ -486,6 +490,34 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
   device_->Draw(3);
   if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
+}
+
+gfx::Texture Post::KeepFinished(gfx::Texture window, int width, int height) {
+  if (!window || !copyFinished_ || width <= 0 || height <= 0) return {};
+  if (!finished_ || finishedWidth_ != width || finishedHeight_ != height) {
+    if (finished_) device_->Destroy(finished_);
+    gfx::TargetDesc td;
+    td.width = width;
+    td.height = height;
+    td.format = gfx::Format::RGBA8;
+    finished_ = device_->CreateTarget(td);
+    finishedWidth_ = width;
+    finishedHeight_ = height;
+    if (!finished_) return {};
+  }
+  gfx::PassDesc pass;
+  pass.color = finished_;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  device_->SetPipeline(copyFinished_);
+  device_->SetTexture(0, window);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
+  gfx::PassDesc back;  // (as Present's own: the window's colour kept, its depth cleared)
+  back.window = true;
+  back.clearColor = false;
+  device_->BeginPass(back);
+  return finished_;
 }
 
 }  // namespace render

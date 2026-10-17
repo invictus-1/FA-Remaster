@@ -46,9 +46,14 @@ class Decals {
   // and new snowfall covers it in about a minute and a half of heavy fall; a mark that was there
   // before the snow lies under it like the ground.
   float snowLying = 0, snowing = 0;
+  // The remastered effects look (World::effectsLook; set by the world each frame, so the map's own decals, laid
+  // when it opens, stay the game's): a script's decal is read from the visuals track's own picture of it where it
+  // has made one (/remastered, effect_files.h), and lit over the relief beside it where there is one (its
+  // "_albedo" named "_normals": a two-channel normal map, x in red, y in green pointing up the picture, OpenGL's).
+  bool remastered = false;
   // The picture a script's mark is named by (a path, or a short name looked up in the game's two
   // folders of them); none: not there.
-  gfx::Texture Picture(const std::string& texture) { return Resolve(texture); }
+  gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr); }
   Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
@@ -116,13 +121,16 @@ class Decals {
     bool water = false;  // a "Water Albedo" decal
     uint32_t id = 0;     // (laid by Add: from 1)
     float snowAtBirth = 0;  // snowFallen_ when it was laid (see `snowLying`)
+    gfx::Texture relief;    // a remastered picture's own relief (`remastered`), or none
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
     float halfX, halfZ, cosHeading, sinHeading;
-    float alpha, age, light, glow;  // age: 0..1 of a light's time; light: 1 = adds its light, 2 = a normal decal
+    float alpha, age, light, glow;  // age: 0..1 of a light's time; light: 1 = adds its light, 2 = a normal decal;
+                                    // glow: a light's brightness, a picture's 1 when it has its own relief
   };
-  gfx::Texture Resolve(const std::string& texture);
+  // The picture a decal is named by (none: not there), and with `remastered` its relief where there is one.
+  gfx::Texture Resolve(const std::string& texture, gfx::Texture* relief);
   float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
   double snowClock_ = -1;   // when it was last moved on
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old
@@ -140,7 +148,7 @@ class Decals {
   std::vector<Deposit> deposits_;
   std::vector<Decal> marks_;  // this frame's
   struct Visible {
-    uint32_t texture, ramp;
+    uint32_t texture, ramp, relief;
     int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights, 3 marks
     Instance instance;
   };

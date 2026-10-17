@@ -93,6 +93,11 @@ struct FxStandSetup {
   std::vector<std::string> fireWeapons, manual;
   float fireAt = 1, holdAt = 0;
   bool toGiven = false;
+  // decals as a script lays them (CreateDecal's names, "scorch_001_albedo", or paths), `decalSize` units across,
+  // laid for good at the start in a row through `at` along the camera's view (with `compare`: the remastered
+  // pictures and their relief on the left, the game's on the right)
+  std::vector<std::string> decals;
+  float decalSize = 4;
 };
 
 class FxStand {
@@ -137,6 +142,7 @@ class FxStand {
     bool killed = false;
     uint32_t built = 0;  // --fx-build: the unit being built
     bool ordered = false, held = false;  // --fx-fire: its weapons given their orders, and their targets taken again
+    bool decalsLaid = false;             // --fx-decal
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;

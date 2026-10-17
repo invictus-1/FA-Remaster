@@ -46,7 +46,8 @@
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
 // --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
-//           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail, with commas between
+//           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail,
+//           frame-generation, with commas between
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -86,6 +87,9 @@
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look)
+// --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
+//           between each two frames, shown between them (twice the frames shown); --capture-between: what
+//           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
@@ -110,6 +114,9 @@
 // --fsr3-check  AMD's FSR 3 upscaler (fsr3.h) tried on a made-up scene and checked against the scene drawn at
 //           the display's size and against a plain stretch, then timed (fsr3_check.cpp); with --vulkan, on the
 //           Vulkan backend; with --screenshot <name>.png, the pictures compared are written as <name>_*.png
+// --framegen-check  AMD's FSR 3 frame generation (frame_generation.h) tried on a made-up scene: the frame it makes
+//           between two checked against the scene drawn at the time halfway, then timed (framegen_check.cpp); with
+//           --vulkan, on the Vulkan backend; with --screenshot <name>.png, the pictures are written as <name>_*.png
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --shader-cache <dir>  the compiled shaders kept in that folder (an empty one: to measure a first start)
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
@@ -171,6 +178,9 @@
 // --fx-manual <label>  with --fx-fire: that manual-fire weapon (a tactical or strategic missile, a commander's
 //           overcharge, a scripted main gun) fired at the point once each play as a player's order fires it,
 //           through the weapon's own script (a play is 14 s unless --fx-repeat); may be given several times
+// --fx-decal <names>  decals as a script lays them (CreateDecal's names, "scorch_001_albedo", or paths; commas
+//           between, or given again), laid at --fx-at in a row along the view, --fx-decal-size units across (4);
+//           with --fx-compare the remastered pictures and their relief on the left, the game's on the right
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
@@ -242,6 +252,7 @@
 #include "gfx.h"
 #include "gfx_check.h"
 #include "fsr3_check.h"
+#include "framegen_check.h"
 #include "ground.h"
 #include "icons.h"
 #include "lights.h"
@@ -295,6 +306,7 @@ struct Options {
   bool vulkanClear = false;             // --vulkan-clear
   bool gfxCheck = false;                // --gfx-check
   bool fsr3Check = false;               // --fsr3-check
+  bool framegenCheck = false;           // --framegen-check
   bool air = false;                     // --air
   bool softShadows = false;             // --soft-shadows
   bool contactShadows = false;          // --contact-shadows
@@ -306,6 +318,8 @@ struct Options {
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
   bool groundCover = false;             // --ground-cover
+  bool frameGeneration = false;         // --frame-generation
+  bool captureBetween = false;          // --capture-between
   bool terrainDespiteHold = false;      // --terrain-despite-hold
   bool groundUltra = false;             // --ground-ultra
   float sunSize = -1;                   // (its size, when given)
@@ -410,6 +424,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
     else if (a == "--fsr3-check") o->fsr3Check = true;
+    else if (a == "--framegen-check") o->framegenCheck = true;
     else if (a == "--fsr3") o->fsr3 = true;
     else if (a == "--air") o->air = true;
     else if (a == "--contact-shadows") o->contactShadows = true;
@@ -421,6 +436,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--frame-generation") o->frameGeneration = true;
+    else if (a == "--capture-between") o->captureBetween = true;
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
     else if (a == "--ground-ultra") o->groundUltra = true;
     else if (a == "--soft-shadows") {
@@ -479,6 +496,14 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--fx-decal") {  // (names with commas between, or the option given again)
+      for (std::string all = v; !all.empty();) {
+        const size_t comma = all.find(',');
+        if (comma != 0) o->fx.decals.push_back(all.substr(0, comma));
+        all = comma == std::string::npos ? std::string() : all.substr(comma + 1);
+      }
+    }
+    else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--settings") o->settings = v;
     else if (a == "--motion-view") o->motionView = atoi(v);
@@ -736,6 +761,7 @@ int main(int argc, char** argv) {
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
   if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
   if (opt.fsr3Check) return Fsr3Check(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
+  if (opt.framegenCheck) return FramegenCheck(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
 
   moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
   moho::Vfs vfs;
@@ -829,6 +855,7 @@ int main(int argc, char** argv) {
         picture.SetRayTracing(s.find(",ray-tracing,") != std::string::npos);
         picture.SetWeatherEffects(s.find(",weather-effects,") != std::string::npos);
         picture.SetGroundDetail(s.find(",ground-detail,") != std::string::npos);
+        picture.SetFrameGeneration(s.find(",frame-generation,") != std::string::npos);
       }
       if (!picture.Open(&vfs, opt.map, &error)) {
         fprintf(stderr, "render: --picture: %s\n", error.c_str());
@@ -877,6 +904,8 @@ int main(int argc, char** argv) {
   world.rainSplashes = opt.rainSplashes;
   world.waterDetail = opt.waterDetail;
   world.groundCover = opt.groundCover;
+  world.frameGeneration = opt.frameGeneration;
+  device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
@@ -1246,7 +1275,8 @@ int main(int argc, char** argv) {
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
   if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||
-      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty()) {
+      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty() || !opt.fx.decals.empty()) {
+    if (!opt.fx.decals.empty() && !opt.fx.spacingGiven) opt.fx.spacing = opt.fx.decalSize * 1.4f;  // (--fx-decal: the two rows apart)
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
     if (!opt.fxRepeat && !opt.fx.death.empty()) opt.fx.repeat = 12;  // (a death's smoke and debris, a ship's sinking, take their time)

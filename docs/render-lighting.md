@@ -347,8 +347,50 @@ where it changes the look, off by default, measured like the rest. In the order 
 4. **Sharper reflections with the models' real textures:** the rays read each model's own albedo (its levels'
    texture coordinates kept for the rays, the albedos in a picture of small copies) instead of one colour a
    model; the visuals session upgrades what looks grainy.
-5. **FSR 3 frame generation:** AMD's frame interpolation (FidelityFX SDK, MIT, the download Chris approved), a
-   frame made between two drawn ones, for slower cards; with its own frame pacing; a player's option.
+5. **FSR 3 frame generation (done, first version, 2026-10-17):** `World::frameGeneration` (viewer
+   `--frame-generation`, with `--msaa 1` or `--fsr3`; `WorldPicture::SetFrameGeneration`, a sixth setting asked of
+   the ui). Each frame is shown twice over: first a picture made between the frame before and this one, then the
+   frame itself, evenly apart, so the screen shows twice the frames the card draws, for a little more than half a
+   frame's delay. Two halves:
+   - **The made-up picture** (`render/frame_generation.h/.cpp`, ported by a helper the way the upscaler was: AMD's
+     FidelityFX SDK v2.3.0 frame generation, MIT, its 17 compute passes embedded from `render/third_party/fsr3/`
+     by `embed_fsr3.py` into `fsr3_framegen_source.cpp`, AMD's processor side redone over gfx.h; the changes to
+     AMD's files listed in that folder's README). Its optical flow follows how the finished picture itself moves;
+     the frame interpolation carries the frame before and this one halfway along the game's motion (the same
+     motion and depth as FSR 3's upscaler, drawn at the size drawn) and the optical flow's, fills what comes out
+     from behind something from round it, and lays this frame's icons and interface over the result unmoved:
+     the World keeps the finished picture before the icons are drawn (`Post::KeepFinished`, a copy of the
+     window's picture: 0.01 ms) and hands AMD both, its "HUD-less" mode. `--framegen-check`: a made-up scene
+     whose state halfway is known, checked on both backends (the helper's numbers: the picture halfway within 1.5
+     of 255 on average where a blend of the two frames is 42 off; the interface exact; a cut gives the frame
+     itself).
+   - **Showing it** (gfx.h `Device::SetFrameGeneration`, gfx_pacing.h): while it is on, the window a frame draws
+     into is a picture of the device's own for each frame slot, and at the frame's end the device calls the
+     World (`World::MakeBetween`) to make the picture between into a second picture of the slot's. A thread of
+     the device's own shows the two from a queue of its own: Direct3D 12 copies them into the swap chain on a
+     second queue (the swap chain is made on it while frame generation is on, so that the showing is not held up
+     behind the next frame's work); Vulkan copies them into the chain's images within the frame's own commands
+     and shows them from a second queue (a second one of the drawing family, or another family that can show
+     in the window; none: not offered). The pacing is AMD's (its swap chain's interpolation thread): the time
+     between frames being ready, averaged over ten, halved, less a tenth of its spread and 0.1 ms; the wait
+     sleeps on a high-resolution timer and spins only its last 1.5 ms (AMD's spins the whole wait). Switching it
+     on or off makes the swap chain again (at the next frame when asked during one).
+   - **Measured** on SETONS_R at 1280x720, the camera panning 0.3 units a frame: the picture made between is 3.1
+     of 255 off one drawn at the halfway time (71 % of pixels within 2), where the frame before or after is 11.7
+     off and a blend of them 9.8; Vulkan the same (3.07; within 0.41 of Direct3D 12's). Same brightness; softer
+     than a drawn frame (pixel-to-pixel contrast 3.7 against 5.4: two frames without anti-aliasing met halfway
+     between pixels; with FSR 3's anti-aliasing less so). Strategic icons come through sharp, from the frame
+     after. On a 240 Hz screen with vertical sync, on a quiet machine: 240 pictures a second (120 drawn), gaps
+     4.15 ms, spread 0.04-0.23 ms, largest 4.4-4.8 ms (Direct3D 12); Vulkan's spread was larger in the runs made
+     (1.5-1.8 ms, the machine busy with the engine's replays): to measure again quiet. Cost at 1440p by the
+     lowest times: 1.42 ms at the screen's own size, 1.10 ms with FSR 3 Quality (drawn at 1707 x 960); the
+     helper's check 0.96 / 1.35 ms on Direct3D 12, 1.13 / 1.55 on Vulkan (its bounds checks, off Direct3D 12, about
+     0.1 ms). Off: pictures identical (both backends).
+   - Open: the made-up picture's softness (a light sharpening after it, measured, if Chris finds it soft); the
+     optical flow's search counts on waves of 32 or 64 lanes (AMD's code: Intel's 8- or 16-wide would give wrong
+     vectors: to check where it can be, or to leave off there); Vulkan's validation layer is not installed here;
+     about 130 MB of the card's memory at 1440p (its luma as R32UI, AMD's R8: later); no Anti-Lag (AMD's own, for
+     the delay); with anti-aliasing (MSAA) on it does nothing, as FSR 3's upscaler.
 6. **Ground cover near the camera:** grass and small plants that sway, by the ground's layers, near the camera;
    with the visuals session's art (asked first, so it can be made alongside).
    - **The blades: first version** (2026-10-17): `World::groundCover` (viewer `--ground-cover`; `WorldPicture::
@@ -385,6 +427,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rayReflections` | smooth surfaces and the water mirror what is off the screen too | about 0.3 ms | ray tracing; `WorldPicture::SetRayReflections` before the map opens |
 | `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
+| `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -404,6 +447,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
 | `SetGroundDetail` | `groundCover` (later the remastered ground's decals and battle scars) | +0.05 to 0.16 ms zoomed in, nothing far out |
+| `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings
