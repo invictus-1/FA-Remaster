@@ -42,6 +42,7 @@
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/transport.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
@@ -745,6 +746,40 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // test below, runs again only when the move has ended (mobile_build.md 8.4). Seen in the bench at 492: an
   // engineer walking to a site prop that another took away walks on to its spot in the original.
   if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
+  // A task without an entity (+0x4c, ReclaimTaskCommandEvent). Every Execute first asks the army's recon
+  // (0x61f02e..0x61f087: IArmy vt+0x20 GetReconDB, its vt+0x10 ReconCanDetect 0x5c1850 with LOSNow 8; under water by
+  // the map's water height): a place in sight ends it (result 2; OnStopReclaim if started). Out of sight the place
+  // stands for the target with a 2x2 footprint (0x61f1cc, 0x61f218..0x61f2e5); state 0 (0x61f3af..0x61f4c8) walks
+  // next to it as for a prop (gap > MaxBuildDistance or nearer than 1: PrepareMove beside the 2x2 rect, spacing 1,
+  // NewMoveTask); state 1 then ends it (0x61f4e6..0x61f4ef: result 2).
+  if (c.reclaimAtPoint) {
+    if (c.moving) {
+      c.moving = false;
+      StopMoving(u);
+      GroundFreeRect(sim, u);
+    }
+    const TerrainMap* m = sim.map();
+    const bool under = m && m->hasWater && m->waterElevation > c.site.y;
+    const int a = u->army ? u->army->index - 1 : -1;
+    if (ReconAtPoint(sim, a, c.site, under ? 2 : 0) & 8) return kTaskFailed;
+    if (c.state != 0) return kTaskFailed;
+    const float dx = u->position.x - c.site.x, dz = u->position.z - c.site.z;
+    const float dist = std::sqrt(dx * dx + dz * dz);
+    const NamedFootprint& ufp = Footprint(*u->blueprint);
+    const float gap = dist - static_cast<float>(std::max(ufp.sizeX, ufp.sizeZ)) - 2.0f;
+    c.state = 1;
+    if (!(gap > u->bpData->maxBuildDistance || dist < 1.0f) || !CanMove(u)) return kTaskFailed;
+    const int px0 = RoundEven(c.site.x - 1.0f), pz0 = RoundEven(c.site.z - 1.0f);
+    const float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + 2.0f,
+                           static_cast<float>(pz0) + 2.0f};
+    Vec3 a2 = c.site;
+    PrepareMoveFor(sim, u, &a2, excl, 1);
+    const int x0 = static_cast<int>(std::nearbyint(a2.x - ufp.sizeX * 0.5f));
+    const int z0 = static_cast<int>(std::nearbyint(a2.z - ufp.sizeZ * 0.5f));
+    MoveTaskWalk(sim, u, Vec3{x0 + ufp.sizeX * 0.5f, a2.y, z0 + ufp.sizeZ * 0.5f});  // NewMoveTask 0x61f4c0
+    c.moving = true;
+    return kTaskRunning;
+  }
   Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
   if (!e || e->destroyQueued) return kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
@@ -1443,10 +1478,11 @@ int TickAssistLegacy(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 // resource fraction) and yields that share of its value to the army's income and reclaim stat;
 // a unit loses that share of its maximum health. At nothing left the target's OnReclaimed runs.
 int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
-  // (CUnitReclaimTask::Execute 0x61f02e has a first case for a task "created without an entity" (task+0x4c, the
-  // place at +0x50: the place in the army's sight -> result 2, else on to the body). It is never reached: the ctor
-  // 0x61eb60 sets +0x4c only for a null entity (0x61ecf2..0x61ed0a), and its one caller, IssueReclaimTask 0x61ef60
-  // (0x61efc0), makes the task only for a live one. An order without an entity ends in the dispatcher (StartHead).)
+  // (CUnitReclaimTask::Execute 0x61f02e has a first case for a task without an entity (task+0x4c, the place at
+  // +0x50: the place in the army's sight -> result 2, else on to the body). The ctor 0x61eb60 sets +0x4c only for a
+  // null entity (0x61ecf2..0x61ed0a), and its one caller, IssueReclaimTask 0x61ef60 (0x61efc0), makes the task only
+  // for a live one; but the task's command listener 0x620160 sets it when its command's new target names a place
+  // (ReclaimTaskCommandEvent): TickPropReclaim takes that case.)
   // The original's task, state by state (above). (MOHO64_OLD_RECLAIM=1: the shorter form this had before, kept
   // for comparing the two on a replay.)
   static const bool oldForm = getenv("MOHO64_OLD_RECLAIM") != nullptr;
@@ -1456,6 +1492,7 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   // both orders (3 took the third at 2632); ours dropped the order at once and turned to the third
   if (!oldForm && t.moving && t.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed)
     return kTaskRunning;
+  if (!oldForm && t.reclaimAtPoint) return TickPropReclaim(sim, L, u, t);
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
   if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
@@ -3238,6 +3275,33 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
 
 bool TaskCanMove(const Unit* u) { return CanMove(u); }
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
+
+// CUnitReclaimTask's command listener 0x620160 (read). The task listens to the queue's current command (its ctor
+// 0x61eb60, 0x61ec82..0x61ecdb: +0x40 = the queue's first command, its listener linked into cmd+0x34). When that
+// command's target changes: OnStopReclaim if started (0x62016e); the target (+0x44) := the command's target entity
+// (cmd+0x120), the place (+0x50) := its GetTargetPosGun (cmd+0x11c); the builder's focus := that target
+// (OnAssignedFocusEntity when there is one, 0x6201fe); +0x68e = 1; workProgress = 0; +0x4c := no entity; state 0;
+// the thread woken (0x620235..0x62026d). Seen (MP1 1152): the player drags army 1's factory rally point (the rally
+// AggressiveMove its fresh engineer 0x10000a is still on) while the engineer reclaims a rock for the patrol; the
+// original's reclaim ends there (Reclaiming off at 1152, no more mass from 1154, the rock still there for the
+// player's own Reclaim at 1161); ours went on.
+void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd) {
+  lua_State* L = sim.L();
+  if (c.reclaimStarted) {
+    c.reclaimStarted = false;
+    PushObject(L, c.goalId ? sim.FindEntity(c.goalId) : nullptr);
+    sim.CallMethod(L, u, "OnStopReclaim", 1);
+    if (!Alive(u)) return;
+  }
+  Entity* e = cmd.targetId ? sim.FindEntity(cmd.targetId) : nullptr;
+  c.goalId = e ? EntityRef(e) : 0;
+  c.site = e ? e->position : cmd.pos;
+  c.reclaimAtPoint = e == nullptr;
+  u->focusId = c.goalId;
+  if (e) sim.CallMethod(L, u, "OnAssignedFocusEntity", 0);
+  u->workProgress = 0;
+  c.state = 0;
+}
 void TaskStopMoving(Unit* u) { StopMoving(u); }
 
 // The motion's part of a build-like task's teardown. None of these tasks' own dtors touches the navigator or the

@@ -40,6 +40,7 @@ struct BuildTask : public ScriptObject {
   // reclaim: the fraction taken per tick and the resources it yields per tick
   float reclaimStep = 0, reclaimPerTick[2] = {0, 0};
   bool reclaimStarted = false;
+  bool reclaimAtPoint = false;  // CUnitReclaimTask+0x4c: no entity (its command named a place); site = the place
   // script tasks: the Lua task object is this object's table
   bool scriptTask = false;
   uint32_t unitId = 0;
@@ -99,6 +100,8 @@ bool GuardSteersItself(const Unit* u);
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
+// CUnitReclaimTask's command listener 0x620160: the target of the command it listens to changed.
+void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd);
 void TaskStopMoving(Unit* u);
 
 // Factories (factory_handoff.md): the rally queue (Unit::factoryCommands, CAiBuilderImpl+0x24) and
