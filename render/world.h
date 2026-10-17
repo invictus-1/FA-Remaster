@@ -42,6 +42,7 @@
 #include "lights.h"
 #include "linalg.h"
 #include "mesh_renderer.h"
+#include "order_lines.h"
 #include "models.h"
 #include "particles.h"
 #include "post.h"
@@ -361,6 +362,9 @@ class World {
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;
+  // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
+  // weathering, up to a most for cost. Off by default (the game's own times).
+  bool battleScars = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -435,6 +439,7 @@ class World {
   Wakes wakes;            // the foam behind what moves on the water
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
+  OrderLines orders;        // the order lines while Shift is held (order_lines.h: the host sets orders.legs, marks)
   SkyLight skyLight;  // of this frame, when a time of day is set
   Shadows shadows;
   View view;       // this frame's

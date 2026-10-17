@@ -87,6 +87,12 @@
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look)
+// --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
+//           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
+//           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
+//           and time the build-up
+// --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
+//           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
 //           between each two frames, shown between them (twice the frames shown); --capture-between: what
 //           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
@@ -318,6 +324,10 @@ struct Options {
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
   bool groundCover = false;             // --ground-cover
+  bool battleScars = false;             // --battle-scars
+  int scarTest = 0;                     // --scar-test
+  bool orderTest = false;               // --order-test
+  float scarRadius = 40;
   bool frameGeneration = false;         // --frame-generation
   bool captureBetween = false;          // --capture-between
   bool terrainDespiteHold = false;      // --terrain-despite-hold
@@ -436,6 +446,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--battle-scars") o->battleScars = true;
+    else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
@@ -496,6 +508,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--scar-test") {
+      if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
+    }
     else if (a == "--fx-decal") {  // (names with commas between, or the option given again)
       for (std::string all = v; !all.empty();) {
         const size_t comma = all.find(',');
@@ -904,6 +919,7 @@ int main(int argc, char** argv) {
   world.rainSplashes = opt.rainSplashes;
   world.waterDetail = opt.waterDetail;
   world.groundCover = opt.groundCover;
+  world.battleScars = opt.battleScars;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1272,6 +1288,48 @@ int main(int argc, char** argv) {
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
+  if (opt.scarTest > 0) {  // --scar-test: the game's scorches laid at random round where the camera starts
+    world.decals.battleScars = world.battleScars;
+    world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
+    uint32_t r = 12345;
+    auto next = [&r]() {
+      r = r * 1664525u + 1013904223u;
+      return static_cast<float>(r >> 8) / 16777216.0f;
+    };
+    int laid = 0;
+    for (int i = 0; i < opt.scarTest; ++i) {
+      char name[32];
+      snprintf(name, sizeof name, "scorch_%03d_albedo", 1 + static_cast<int>(next() * 10) % 10);
+      const float a = next() * 6.2831853f, d = opt.scarRadius * std::sqrt(next()), size = 2 + next() * 6;
+      const Vec3 at{camera.target.x + std::cos(a) * d, 0, camera.target.z + std::sin(a) * d};
+      if (world.decals.Add(name, at, size, size, next() * 6.2831853f, 400, -1200.0 * next(), 60)) ++laid;  // (laid over the last 20 minutes)
+    }
+    printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
+  }
+  if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
+    const std::string dir = "/textures/ui/common/game/";
+    world.orders.textures = {dir + "orderline/orderline_generic.dds", dir + "orderline/orderline_arrow02.dds",
+                             dir + "waypoints/move_btn_up.dds", dir + "waypoints/patrol_btn_up.dds", dir + "waypoints/attack_btn_up.dds"};
+    const Vec3 c = camera.target;
+    auto at = [&](float dx, float dz) { return Vec3{c.x + dx, groundHeight(c.x + dx, c.z + dz) + 0.1f, c.z + dz}; };
+    // (each node's direction: its legs in and out added, as the original's)
+    auto chain = [&](const std::vector<Vec3>& nodes, bool loop, uint32_t color, int texture, int mark, float aspect, float rate, float units) {
+      const size_t n = nodes.size();
+      auto dir = [&](size_t i) {
+        Vec3 d{};
+        if (i > 0 || loop) d = d + Normalize(nodes[i] - nodes[(i + n - 1) % n]);
+        if (i + 1 < n || loop) d = d + Normalize(nodes[(i + 1) % n] - nodes[i]);
+        return Length(d) > 1e-4f ? Normalize(d) : Vec3{};
+      };
+      for (size_t i = 0; i + 1 < n || (loop && i < n); ++i)
+        world.orders.legs.push_back({nodes[i], nodes[(i + 1) % n], dir(i), dir((i + 1) % n), std::min(std::sqrt(units), 10.0f), color, texture, aspect, rate});
+      for (size_t i = 1; i < n || (loop && i == n); ++i) world.orders.marks.push_back({nodes[i % n], mark, 0xffffffffu, std::sqrt(units)});
+    };
+    chain({at(-20, 10), at(-8, 2), at(4, 8), at(14, -4)}, false, 0xdd00ffffu, 0, 2, 1, 0, 1);        // move, selected
+    chain({at(-6, -10), at(6, -14), at(10, -26), at(-4, -24)}, true, 0xdd00ffffu, 1, 3, 0.2f, 0.25f, 4);  // patrol, 4 units
+    chain({at(14, -4), at(24, 6)}, false, 0x33ff0000u, 0, 4, 1, 0, 1);                                // attack, not selected
+    printf("render: --order-test: %zu legs, %zu marks\n", world.orders.legs.size(), world.orders.marks.size());
+  }
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
   if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||

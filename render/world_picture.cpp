@@ -70,7 +70,7 @@ struct WorldPicture::Impl {
     if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
-    if (groundDetail >= 0) world->groundCover = groundDetail > 0;
+    if (groundDetail >= 0) world->groundCover = world->battleScars = groundDetail > 0;
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
   }
   int textureDetail = 0;               // SetTextureDetail
@@ -577,6 +577,27 @@ void WorldPicture::SetShapes(const std::vector<Line>& lines, const std::vector<R
   w.rings.clear();
   for (const Line& l : lines) w.lines.push_back({{l.a[0], l.a[1], l.a[2]}, {l.b[0], l.b[1], l.b[2]}, l.color, l.width});
   for (const Ring& r : rings) w.rings.push_back({{r.centre[0], r.centre[1], r.centre[2]}, r.radius, r.color});
+}
+
+void WorldPicture::SetOrderLines(const std::vector<std::string>& textures, const std::vector<OrderLeg>& legs, const std::vector<OrderMark>& marks) {
+  if (!impl_->world) return;
+  OrderLines& o = impl_->world->orders;
+  o.textures = textures;
+  o.legs.clear();
+  o.marks.clear();
+  auto v = [](const float* f) { return Vec3{f[0], f[1], f[2]}; };
+  for (const OrderLeg& l : legs) o.legs.push_back({v(l.a), v(l.b), v(l.ta), v(l.tb), l.baseWidth, l.color, l.texture, l.uvAspect, l.animRate});
+  for (const OrderMark& m : marks) o.marks.push_back({v(m.position), m.texture, m.color, m.size});
+}
+
+void WorldPicture::SetOrderLineSettings(float lineScale, float curveSmoothness, int curveSegments, float markMinPixels, float markMaxPixels) {
+  if (!impl_->world) return;
+  OrderLines& o = impl_->world->orders;
+  o.lineScale = lineScale;
+  o.curveSmoothness = curveSmoothness;
+  o.curveSegments = curveSegments;
+  o.markMinPixels = markMinPixels;
+  o.markMaxPixels = markMaxPixels;
 }
 
 void WorldPicture::SetRanges(const std::vector<RangeGroup>& groups, float zoomNear, float zoomFar) {

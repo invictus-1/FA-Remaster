@@ -408,6 +408,19 @@ where it changes the look, off by default, measured like the rest. In the order 
      zoom (12 units), 0.16 ms at 30. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.06).
      - Open: the visuals session's plants (cards, an atlas, her density table) when she makes them; roads, decals
        and build pads not yet kept clear; one shared wind for grass, trees and weather as it is (the trees').
+7. **Battle scars (done, first version, 2026-10-17; Chris: "build it up now"; in the "Ground Detail" setting):**
+   `World::battleScars` (viewer `--battle-scars`; `Decals::battleScars`). The game already lays scorches and craters
+   where things die and shells land (deaths, blasts, artillery, bombs, beams, nukes, teleports), each for a minute
+   or two. With it on, a decal a script lays whose name has "scorch" or "crater" in it (the visuals session's list:
+   `scorch_*`, `scorch_generic_*`, `nuke_scorch_*`, `crater*`; tread marks and footprints are not scars) stays past
+   that time, weathering over the next ten minutes to half its strength, so a battlefield keeps the marks of the
+   fighting; past 2000 of them the oldest fades out over ten seconds. The map's own decals are never scars (they
+   are laid for good). The pictures are the visuals session's remastered scorches with their relief in the
+   remastered effects look (visuals 45), the game's otherwise. Viewer `--scar-test n[,radius]`: n of the game's
+   scorches laid round the camera as if over the last twenty minutes. Cost: 2000 in view at once, overlapping in a
+   circle 60 units across (the worst case), 0.56 ms at 1440p by the lowest times; spread over a map, far fewer are
+   in view. Off: as the game, pictures identical. Open: craters' relief from the visuals session's batch 2 (the
+   same rule covers it); scars under water or on the water are not kept apart (the game lays none there).
 
 ## The options
 
@@ -446,7 +459,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
-| `SetGroundDetail` | `groundCover` (later the remastered ground's decals and battle scars) | +0.05 to 0.16 ms zoomed in, nothing far out |
+| `SetGroundDetail` | `groundCover`, `battleScars` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
