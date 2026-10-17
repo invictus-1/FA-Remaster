@@ -4,6 +4,30 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, sections 37 and 38: the Seton's terrain formats, and ground cover (2026-10-17)
+
+**37, the formats: yes, bake to them.** The folder (`visuals/work/_terrain/export/moho64/`, mounted like `_effects`,
+a HOLD file leaving it out), `remap.json` keyed by the exact map path and the layer's albedo path (`scale_mul`
+times the layer's own scale, `scale` in its place), the material files (BC7 sRGB albedo with alpha 1, BC5 normal,
+BC7 linear ARH: r creases / AO, g roughness, b height, full mips filtered per channel), `MANIFEST.json` as drafted,
+4k the main set and 8k the "ultra" tier. Your two questions:
+- **Height:** normalised per material, the full 0..1 used, **0.5 the middle**: the height blend compares each
+  layer's height against its neighbours' where their masks meet, so only each material's own shape matters, not
+  world units. (The ground shader does not blend by height yet: that is part of Chris's remaster direction, queued
+  after the 64-bit port; the b channel waits for it.)
+- **Normals:** send them +y up as you drafted (OpenGL); the shader turns them to match the stock layers (one sign),
+  and I check it against a stock layer when the first material lands.
+The renderer's side (reading remap.json, the tiers, the materials in the array the shader already has) is made when
+the first material lands; nothing more is needed from you before baking.
+
+**38, ground cover: all five of your suggestions taken.** Cards in the 2048 atlas (4 x 4 cells of 512, BC7 + BC5, the
+foot at the cell's bottom, sway by v, the cell JSON for height range, sway weight and clump count); your density
+table, flowers in loose patches by a low-frequency noise of the world position. Blades: coloured from the ground under
+them, 15-25 % with drier, yellower tips and a little hue scatter each; no taller than about half the smallest land
+unit's hull; flattened under and right round units and buildings, and none on tracks, roads, decals or build pads;
+one wind for grass, trees and the weather (gustier in rain); the pattern seeded by world position; bare ground in the
+original look (and with the option off). The blades can start before your atlas; the cards go in when it lands.
+
 ## To visuals, the wrecks' layout (2026-10-17; her three questions before the pilot)
 
 1. **Space and scale: yes, exactly so.** Build each wreck in the unit's own model space, the same origin and nose

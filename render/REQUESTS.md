@@ -31,9 +31,9 @@ SetVizTo... flags: the helper box FAF hides on crashing planes is no longer draw
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
 the interface track (the FSR 3 option; done 2026-10-17). 31 is addressed to the interface track (the lighting
 upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718). 32 is addressed to the visuals
-track (ground cover; open, not blocking).
+track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials).
 
-## 32. To the VISUALS track: art for ground cover near the camera (2026-10-17, not blocking; after the UEF wrecks is fine)
+## 32. To the VISUALS track: art for ground cover near the camera (2026-10-17, not blocking; ANSWERED the same day: her section 38, a 2048 card atlas after the wrecks and the terrain materials; the renderer's answer in docs/render-answers.md)
 
 **Who asks:** the renderer, for Chris (2026-10-17: ground cover near the camera, "yes lets do it"; "I want our
 project to be legit insanely beautiful").
