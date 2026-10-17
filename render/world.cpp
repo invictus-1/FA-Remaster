@@ -12,6 +12,7 @@
 
 #include "core/vfs.h"
 #include "effect_files.h"
+#include "remasters.h"
 #include "ground.h"
 
 namespace render {
@@ -203,6 +204,42 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
     textures.DropFetched();
     step("props listed by squares");
+    // the plants of the map's ground cover, where the visuals track has made them for it (its card atlas and table),
+    // and where its trees stand (within the table's radius of each: more ferns and clumps, fewer flowers)
+    plantsReady_ = false;
+    if (treeMask_) device_->Destroy(treeMask_);
+    treeMask_ = {};
+    coverA_ = coverB_ = {};
+    if (const JsonValue* cover = terrain.Cover()) {
+      plantsReady_ = grass.SetPlants(*cover, &textures, kRemasteredTerrain);
+      const int w = std::max(map.width / 2, 1), h = std::max(map.height / 2, 1);  // (as the density's pictures)
+      std::vector<uint8_t> near(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
+      const float radius = terrain.CoverTreeRadius(), texel = static_cast<float>(map.width) / static_cast<float>(w);
+      const int reach = static_cast<int>(std::ceil(radius / texel));
+      int trees = 0;
+      for (const PlacedProp& p : props_) {
+        if (!p.model || p.model->lods.empty() || p.model->lods[0].sway <= 0) continue;
+        const float scale = std::sqrt(p.world.m[0][0] * p.world.m[0][0] + p.world.m[1][0] * p.world.m[1][0] + p.world.m[2][0] * p.world.m[2][0]);
+        if ((p.model->boundsMax.y - p.model->boundsMin.y) * scale < 1.5f) continue;  // (a tree, not the undergrowth)
+        ++trees;
+        const float x = p.world.m[0][3] / texel, z = p.world.m[2][3] / texel;
+        for (int dz = -reach; dz <= reach; ++dz)
+          for (int dx = -reach; dx <= reach; ++dx) {
+            const int tx = static_cast<int>(x) + dx, tz = static_cast<int>(z) + dz;
+            if (tx < 0 || tz < 0 || tx >= w || tz >= h) continue;
+            const float ex = (static_cast<float>(tx) + 0.5f - x) * texel, ez = (static_cast<float>(tz) + 0.5f - z) * texel;
+            if (ex * ex + ez * ez <= radius * radius) near[static_cast<size_t>(tz) * static_cast<size_t>(w) + static_cast<size_t>(tx)] = 255;
+          }
+      }
+      gfx::TextureDesc td;
+      td.width = w;
+      td.height = h;
+      td.format = gfx::Format::R8;
+      td.data = near.data();
+      td.dataSize = near.size();
+      treeMask_ = device_->CreateTexture(td);
+      if (plantsReady_) printf("render: the ground cover's plants: %d trees near which they change\n", trees);
+    }
   }
   sky_ = textures.SkyCube(haveMap_ ? map.skyCubemap : std::string());
   {  // the ring under a selected unit: a thin white circle, soft at both edges
@@ -1561,6 +1598,8 @@ void World::Render() {
         discs.insert(discs.end(), {x, z, half * scale * 0.9f + 0.1f});
       });
       Stage("ground cover pressed flat");
+      // (and where the plants grow, made the first time: it dispatches, so before the scene's pass)
+      if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
       grass.Prepare(view, camera, discs);
       grassNow_ = true;
     }
@@ -1631,7 +1670,8 @@ void World::Render() {
     if (grassNow_) {
       Stage("ground cover");
       grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
-                 static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
+                 static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f,
+                 plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{});
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)

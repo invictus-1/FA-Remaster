@@ -580,6 +580,9 @@ class World {
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
+  // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)
+  bool plantsReady_ = false;
+  gfx::Texture treeMask_, coverA_, coverB_;
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
 };
 

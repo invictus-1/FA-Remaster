@@ -49,6 +49,11 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
   setup_ = setup;
   Engine& e = *engine_;
   // (the simulation's own view of the files; used here before its thread starts, by that thread after)
+  // The game's preferences file (sim/session.h kGamePrefsPath): this run's own, held in memory and mounted before the
+  // init file mounts the original's preferences folder, so the rules never read the original's Game.prefs (the
+  // PreGameData of the last game played in FAF); its map folder set below once the session is known (as the engine's
+  // own program does, src/app/main.cpp)
+  e.vfs.MountMemoryFile(moho::kGamePrefsPath, moho::PreGameDataPrefs(""));
   if (!moho::MountFromInitFile(setup_.initFile, {}, e.vfs, e.hookDirs)) {
     *error = "the init file " + setup_.initFile + " could not be run";
     return false;
@@ -92,6 +97,7 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
       }
     }
     mapPath_ = e.session.header.map;
+    e.vfs.SetMemoryFile(moho::kGamePrefsPath, moho::PreGameDataPrefs(moho::SessionMapFolder(e.session.header)));
     return true;
   }
   auto data = moho::hostfs::ReadFile(setup.replay);
@@ -109,6 +115,8 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
   engine_->session.header = *header;
   engine_->session.replay = true;
   mapPath_ = header->map;
+  // (the map folder whose own blueprints the rules load: the replay's own scenario's, as the lobby wrote it)
+  e.vfs.SetMemoryFile(moho::kGamePrefsPath, moho::PreGameDataPrefs(moho::SessionMapFolder(engine_->session.header)));
   return true;
 }
 

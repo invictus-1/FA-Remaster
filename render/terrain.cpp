@@ -307,6 +307,54 @@ RWTexture2D<float4> colours : register(u0);
 }
 )hlsl";
 
+// Where the plants grow (Terrain::CoverDensity): the cover table's rows blended by the layers' masks as the
+// shader blends the layers, then more or fewer near trees.
+const char kCoverDensity[] = R"hlsl(
+cbuffer CoverConstants : register(b1) {
+  float4 mapSize;
+  float4 params;
+  float4 coverA[10];  // per layer: blades, clumps, flowers, dry stalks
+  float4 coverB[10];  // per layer: ferns, dry cells' share, weeds' share, 1 where near trees counts
+  float4 nearTrees;   // near a tree: blades, clumps, flowers, stalks times these
+  float4 nearFern;    // x: and this many more ferns
+};
+Texture2D maskLow : register(t2);
+Texture2D maskHigh : register(t3);
+Texture2D<float> trees : register(t4);
+RWTexture2D<float4> outA : register(u0);
+RWTexture2D<float4> outB : register(u1);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint w, h;
+  outA.GetDimensions(w, h);
+  if (id.x >= w || id.y >= h) return;
+  float2 uv = (id.xy + 0.5) / float2(w, h);
+  float4 rawLow = maskLow.SampleLevel(samplerLinearClamp, uv, 0);
+  float4 rawHigh = maskHigh.SampleLevel(samplerLinearClamp, uv, 0) * params.y;
+  float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
+  float4 a = coverA[0], b = coverB[0];
+  #define LAYER(n, w) { a = lerp(a, coverA[n], w); b = lerp(b, coverB[n], w); }
+  LAYER(1, low.x);
+  LAYER(2, low.y);
+  LAYER(3, low.z);
+  LAYER(4, low.w);
+  LAYER(5, high.x);
+  LAYER(6, high.y);
+  LAYER(7, high.z);
+  LAYER(8, high.w);
+  float near = trees.SampleLevel(samplerLinearClamp, uv, 0) * b.w;
+  a *= lerp(1, nearTrees, near);
+  b.x += nearFern.x * near;
+  outA[id.xy] = saturate(a);
+  outB[id.xy] = float4(saturate(b.xyz), 0);
+}
+)hlsl";
+
+struct CoverConstants {
+  float mapSize[4], params[4];
+  float coverA[10][4], coverB[10][4];
+  float nearTrees[4], nearFern[4];
+};
+
 struct TerrainConstants {
   float mapSize[4];
   float params[4];
@@ -393,6 +441,9 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   }
   const JsonValue& layers = remap["maps"][lower(mapPath)];
   if (layers.kind != JsonValue::Object) return;
+  // the plants' card atlas and table, where the map's entry names one
+  const std::string coverPath = layers["cover"].StringOr(std::string());
+  if (!coverPath.empty()) ReadCover(m, folder + coverPath);
   const char* tier = ultraGround ? "8k" : "4k";
   for (int i = 0; i < 10; ++i) {
     const JsonValue& entry = layers[lower(m.albedo[i].texture)];
@@ -418,8 +469,111 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   if (remasteredLayers_) printf("render: %d of the map's ground layers remastered (%s)\n", remasteredLayers_, tier);
 }
 
+void Terrain::ReadCover(const MapData& m, const std::string& path) {
+  auto file = textures_->ReadFile(path);
+  std::string why;
+  if (!file || !ReadJson(*file, &cover_, &why)) {
+    fprintf(stderr, "render: the ground cover's %s cannot be read%s%s\n", path.c_str(), why.empty() ? "" : ": ", why.c_str());
+    return;
+  }
+  const JsonValue& density = cover_["density"];
+  const JsonValue& table = density["layers"];
+  if (table.kind != JsonValue::Object) {
+    fprintf(stderr, "render: the ground cover's %s has no density table\n", path.c_str());
+    return;
+  }
+  const double weedShare = density["clumps_from"]["weed"].NumberOr(0.3);
+  const JsonValue& near = density["near_trees"];
+  coverTreeRadius_ = static_cast<float>(near["radius_units"].NumberOr(6));
+  coverNear_[0] = static_cast<float>(near["blades"].NumberOr(1));
+  coverNear_[1] = static_cast<float>(near["clumps"].NumberOr(1));
+  coverNear_[2] = static_cast<float>(near["flowers"].NumberOr(1));
+  coverNear_[3] = static_cast<float>(near["stalks"].NumberOr(1));
+  coverFern_ = static_cast<float>(near["fern_add"].NumberOr(0));
+  int known = 0;
+  for (int i = 0; i < 9; ++i) {  // (each layer by its name: "/maps/x/env/layers/<name>_albedo.dds")
+    std::string name = m.albedo[i].texture;
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    name = name.substr(name.rfind('/') + 1);
+    const size_t tail = name.rfind("_albedo.dds");
+    if (tail != std::string::npos) name = name.substr(0, tail);
+    const JsonValue& row = table[name];
+    if (row.kind != JsonValue::Object) continue;
+    ++known;
+    bool treesApply = true;
+    for (const JsonValue& not_on : near["not_on"].items) treesApply = treesApply && not_on.StringOr(std::string()) != name;
+    const double dry = row["dry_only"].kind == JsonValue::Bool && row["dry_only"].boolean ? 1.0 : row["dry_share"].NumberOr(0);
+    const float a[4] = {static_cast<float>(row["blades"].NumberOr(0)), static_cast<float>(row["clumps"].NumberOr(0)),
+                        static_cast<float>(row["flowers"].NumberOr(0)), static_cast<float>(row["stalks"].NumberOr(0))};
+    const float b[4] = {static_cast<float>(row["fern"].NumberOr(0)), static_cast<float>(dry),
+                        static_cast<float>(row["clumps_from"]["weed"].NumberOr(weedShare)), treesApply ? 1.0f : 0.0f};
+    std::copy(a, a + 4, coverA_[i]);
+    std::copy(b, b + 4, coverB_[i]);
+  }
+  hasCover_ = true;
+  printf("render: the ground cover's plants for %d of the map's layers (%s)\n", known, path.c_str());
+}
+
+bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b) {
+  if (!hasCover_ || !map_ || !maskLow_) return false;
+  if (!coverA_tex_) {
+    if (!coverPass_) {
+      gfx::ComputeDesc cd;
+      cd.name = "terrain: where the plants grow";
+      const std::string source = std::string(kViewShaderBlock) + kCoverDensity;
+      cd.source = source;
+      std::string error;
+      coverPass_ = device_->CreateCompute(cd, &error);
+      if (!coverPass_) {
+        fprintf(stderr, "render: %s\n", error.c_str());
+        hasCover_ = false;
+        return false;
+      }
+    }
+    gfx::TargetDesc td;
+    td.storage = true;
+    td.width = std::max(map_->width / 2, 1);
+    td.height = std::max(map_->height / 2, 1);
+    td.format = gfx::Format::RGBA8;
+    coverA_tex_ = device_->CreateTarget(td);
+    coverB_tex_ = device_->CreateTarget(td);
+    if (!coverA_tex_ || !coverB_tex_) return false;
+    CoverConstants c = {};
+    c.mapSize[0] = static_cast<float>(map_->width);
+    c.mapSize[1] = static_cast<float>(map_->height);
+    c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
+    std::copy(&coverA_[0][0], &coverA_[0][0] + 40, &c.coverA[0][0]);
+    std::copy(&coverB_[0][0], &coverB_[0][0] + 40, &c.coverB[0][0]);
+    std::copy(coverNear_, coverNear_ + 4, c.nearTrees);
+    c.nearFern[0] = coverFern_;
+    device_->SetPipeline(coverPass_);
+    device_->SetConstants(1, &c, sizeof c);
+    device_->SetTexture(2, maskLow_);
+    device_->SetTexture(3, maskHigh_);
+    device_->SetTexture(4, trees ? trees : textures_->Black());
+    device_->SetStorage(0, coverA_tex_);
+    device_->SetStorage(1, coverB_tex_);
+    device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
+    device_->SetStorage(0, {});
+    device_->SetStorage(1, {});
+    for (int i = 2; i < 5; ++i) device_->SetTexture(i, {});
+  }
+  *a = coverA_tex_;
+  *b = coverB_tex_;
+  return true;
+}
+
 bool Terrain::Load(const MapData* map, std::string* error) {
   map_ = map;
+  hasCover_ = false;  // (the map's cover read again by Remaster, its pictures made again when asked for)
+  cover_ = JsonValue{};
+  for (gfx::Texture* t : {&coverA_tex_, &coverB_tex_})
+    if (*t) {
+      device_->Destroy(*t);
+      *t = {};
+    }
+  std::fill(&coverA_[0][0], &coverA_[0][0] + 40, 0.0f);
+  std::fill(&coverB_[0][0], &coverB_[0][0] + 40, 0.0f);
   if (groundColours_) device_->Destroy(groundColours_);  // (GroundColours: made again for this map when asked for)
   groundColours_ = {};
   const int w = map->width, h = map->height;
