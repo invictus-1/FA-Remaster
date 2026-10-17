@@ -340,6 +340,8 @@ Third-party code in this repository, each with its licence beside it:
 - `render/third_party/fsr1/`: AMD FidelityFX Super Resolution 1 (MIT, Copyright (c) 2021 Advanced
   Micro Devices, Inc.), the upscaler offered as a player's option; `render/fsr1_source.cpp` is made
   from it.
+- `render/third_party/fsr3/`: AMD FidelityFX Super Resolution 3.1.5's upscaler shaders (MIT, Copyright
+  (C) 2026 Advanced Micro Devices, Inc.), ported onto the renderer's compute shaders.
 - `render/third_party/vulkan/`: Khronos Vulkan-Headers 1.3.296, C headers only (Apache-2.0 OR MIT).
 - `render/third_party/dxc/`: DirectX Shader Compiler headers `dxcapi.h`, `dxcerrors.h` (University of
   Illinois/NCSA).

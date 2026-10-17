@@ -446,6 +446,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  if (softShadows && look == Look::Modern) {  // (soft shadows: on, how the edges grow, how far casters are looked for, the widest edge)
+    c.softShadows[0] = 1;
+    c.softShadows[1] = sunSize;
+    c.softShadows[2] = 0.8f;
+    c.softShadows[3] = 1.6f;
+  }
   // the world beyond the map's edge: six tenths of the map's shorter side out, then lost in the distance
   terrain.beyondReach = 0;
   if (haveMap_ && worldBeyond && look == Look::Modern) {
@@ -1464,7 +1470,8 @@ void World::Render() {
     draw.Flush(view);
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
-    if (look == Look::Modern && ao.strength > 0) {
+    ao.contactShadows = contactShadows ? 0.8f : 0.0f;
+    if (look == Look::Modern && (ao.strength > 0 || ao.contactShadows > 0)) {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();
       ao.Apply(view);
