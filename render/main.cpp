@@ -178,6 +178,9 @@
 // --fx-manual <label>  with --fx-fire: that manual-fire weapon (a tactical or strategic missile, a commander's
 //           overcharge, a scripted main gun) fired at the point once each play as a player's order fires it,
 //           through the weapon's own script (a play is 14 s unless --fx-repeat); may be given several times
+// --fx-decal <names>  decals as a script lays them (CreateDecal's names, "scorch_001_albedo", or paths; commas
+//           between, or given again), laid at --fx-at in a row along the view, --fx-decal-size units across (4);
+//           with --fx-compare the remastered pictures and their relief on the left, the game's on the right
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
@@ -493,6 +496,14 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
+    else if (a == "--fx-decal") {  // (names with commas between, or the option given again)
+      for (std::string all = v; !all.empty();) {
+        const size_t comma = all.find(',');
+        if (comma != 0) o->fx.decals.push_back(all.substr(0, comma));
+        all = comma == std::string::npos ? std::string() : all.substr(comma + 1);
+      }
+    }
+    else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--settings") o->settings = v;
     else if (a == "--motion-view") o->motionView = atoi(v);
@@ -1264,7 +1275,8 @@ int main(int argc, char** argv) {
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
   if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||
-      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty()) {
+      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty() || !opt.fx.decals.empty()) {
+    if (!opt.fx.decals.empty() && !opt.fx.spacingGiven) opt.fx.spacing = opt.fx.decalSize * 1.4f;  // (--fx-decal: the two rows apart)
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
     if (!opt.fxRepeat && !opt.fx.death.empty()) opt.fx.repeat = 12;  // (a death's smoke and debris, a ship's sinking, take their time)

@@ -368,7 +368,7 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
   }
   if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty() && setup_.move.empty() &&
-      setup_.build.empty() && setup_.fire.empty()) {
+      setup_.build.empty() && setup_.fire.empty() && setup_.decals.empty()) {
     *error = "nothing to play";
     return false;
   }
@@ -403,6 +403,7 @@ std::string FxStand::Describe() const {
     for (const std::string& x : v) s += " " + x;
   };
   list("effect", fxEmitters_);
+  list("decals", setup_.decals);
   if (!projectile_.empty()) {
     char b[64];
     snprintf(b, sizeof b, " (%.0f a second)", speed_);
@@ -499,6 +500,18 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     Side& side = sides_[k];
     side.shift = sides_.size() == 2 ? right * (setup_.spacing * (k == 0 ? -0.5f : 0.5f)) : Vec3{0, 0, 0};
     world.particles.remastered = world.ribbons.remastered = sides_.size() == 2 ? side.remastered : lookRemastered;
+    if (!setup_.decals.empty() && !side.decalsLaid) {  // --fx-decal: laid once, for good, in a row along the view
+      side.decalsLaid = true;
+      const Vec3 along{-right.z, 0, right.x};
+      const float step = setup_.decalSize * 1.25f, first = -0.5f * step * static_cast<float>(setup_.decals.size() - 1);
+      world.decals.remastered = sides_.size() == 2 ? side.remastered : lookRemastered;
+      for (size_t i = 0; i < setup_.decals.size(); ++i) {
+        const Vec3 at = place(setup_.at + along * (first + step * static_cast<float>(i)), side);
+        if (!world.decals.Add(setup_.decals[i], at, setup_.decalSize, setup_.decalSize, 0, 0, now, 0))
+          fprintf(stderr, "render: --fx-decal: no decal %s\n", setup_.decals[i].c_str());
+      }
+      world.decals.remastered = lookRemastered;
+    }
     if (again) {
       // the last round's: looping emitters would play on
       for (uint32_t e : side.emitters) world.particles.Stop(e);
