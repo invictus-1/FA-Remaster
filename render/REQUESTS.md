@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 33. To the INTERFACE track: a fifth setting, "Ground Detail" (2026-10-17, not blocking)
+## 33. To the INTERFACE track: a fifth setting, "Ground Detail" (2026-10-17, not blocking; DONE the same day: the Video tab's "Ground Detail" after Weather Effects, console `remaster_ground_detail`, off by default; all five options carry a tooltip)
 
 **Who asks:** the renderer, for Chris (his list of 2026-10-17: ground cover near the camera; all the new looks in the
 settings, bundled).

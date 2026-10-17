@@ -442,7 +442,7 @@ float World::GroundHeight(float x, float z) const {
 
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
-  particles.remastered = ribbons.remastered = effectsLook == EffectsLook::Remastered;
+  particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   particles.quality = effectsQuality;
   camera = cam;
   time_ = time;

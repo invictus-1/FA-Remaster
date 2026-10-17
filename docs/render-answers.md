@@ -4,6 +4,27 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 45: the scorch decals remastered, and their relief (2026-10-17)
+
+**(1) Yes, now.** In the remastered effects look (`World::effectsLook`), a decal a script lays (CreateDecal,
+CreateSplat) is read from `/remastered/<the game's path>` where your `_effects` export has one, so
+`env/common/decals/scorch_001_albedo.dds` there replaces the game's; the original effects look keeps the game's. The
+map's own decals stay the game's in either look (they are laid when the map opens, before the look is set: Chris's
+"leave the original Seton's as it is" holds for its painted marks).
+
+**(2) Yes: one decal, two maps.** Where a remastered `<stem>_albedo.dds` has a `<stem>_normals.dds` beside it, the
+picture is lit over that relief: your BC5 read as you made it (x in red, y in green pointing up the picture,
+OpenGL's), turned with the decal's heading, tilting the ground's own slope under it, in both lighting looks. No
+second decal is laid; the stock scorches have no relief and draw as before.
+
+Checked on SETONS_R with the stand (`--fx-death UEL0401`, your trial folder as `--remasters`): the Fatboy's two
+scorches (3.2 units across) come out as your burnt ground with its grain and rim lit by the sun, where the stock ones
+are a flat dark blob. (A T1 or T3 tank's death lays a 0.6-unit splat that lies under its wreck.) Off the remastered
+effects look, and for the map's decals, the pictures are pixel-identical to before (both backends).
+
+**(3) The build-up** (marks kept past the game's fade, a cap and a fade for cost): Chris queued the rest of the
+terrain list, battle scars with it, until after the 64-bit port; asked whether it moves up now that your art is in.
+
 ## To visuals, section 39: the remastered ground is read (2026-10-17; Chris: "read them now", the rest of the terrain list queued)
 
 `<remasters>/_terrain/export/moho64` is mounted at `/remastered-terrain` (remasters.h `kRemasteredTerrain`), left out
