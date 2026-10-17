@@ -1296,8 +1296,14 @@ std::shared_ptr<UnitCommand> IssueFactoryFromStream(Sim& sim, const std::vector<
 
 std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>& units, const StreamIssueData& d,
                                              bool clear) {
-  // types whose move-task destructor does not abort the move when the next command is one of them (0x618998)
+  // types whose move-task destructor does not abort the move when the next command is one of them (0x618998). The
+  // table covers types 0..31 only: a type above 31 takes the same branch as the table's "keep" entries
+  // (0x6187f4 cmp eax, 0x1f; ja 0x618807), i.e. Sacrifice 32 .. Dock 39 (AggressiveMove 35 among them) keep the move
+  // unless a second queued command says otherwise. Seen: MP2 2198, army 1's two Strikers on a Move get an
+  // AggressiveMove with clear: the original's tanks go on along their spline at full speed through 2200; ours made a
+  // brake spline and jumped.
   auto keepsMove = [](int t) {
+    if (t > 0x1f) return true;
     switch (t) {
       case 2: case 4: case 5: case 6: case 7: case 9: case 10: case 11: case 15: case 16: case 17: case 18:
       case 20: case 22: case 23: case 24: case 25: case 28: case 29:
