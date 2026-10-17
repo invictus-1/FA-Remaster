@@ -18,6 +18,9 @@ void SteeringStop(UnitMotion& m);
 void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode);
 // Unit::IsAtPosition 0x62cc40: the footprint-origin cells of the unit and of q are equal.
 bool AtPosition(const Unit* u, const Vec3& q);
+// A box primitive against an oriented query box with BoxBox 0x474830's own arithmetic (touching counts).
+struct WorldShape;
+bool BoxPrimitiveMeetsBox(const WorldShape& s, const Vec3& centre, const Vec3 axes[3], const float half[3]);
 // CUnitMotion::AddImpulse 0x6b8ac0 (land): v = v/2 + imp (capped at 0.2 x the max speed); pushed.
 void AddImpulse(Unit* u, const Vec3& imp);
 // CUnitMotion::ProcessSurfaceCollisionFromLastMove 0x6b9020 + Sim::DoCollisionsFor 0x597cd0.

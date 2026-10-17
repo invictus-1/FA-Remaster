@@ -371,6 +371,29 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
   return true;
 }
 
+}  // namespace
+
+// CColPrimitive_Box::CollideBox 0x4ff260 -> BoxBox 0x474830 for an entity's box against an oriented query box, as
+// CollectEntitiesInBox 0x721dc0 asks it (touching counts).
+bool BoxPrimitiveMeetsBox(const WorldShape& s, const Vec3& centre, const Vec3 axes[3], const float half[3]) {
+  Obb a;
+  a.c = s.c;
+  a.ax[0] = s.ax[0];
+  a.ax[1] = s.ax[1];
+  a.ax[2] = s.ax[2];
+  a.h = s.half;
+  Obb b;
+  b.c = centre;
+  b.ax[0] = axes[0];
+  b.ax[1] = axes[1];
+  b.ax[2] = axes[2];
+  b.h = Vec3{half[0], half[1], half[2]};
+  Vec3 n;
+  float d = 0;
+  return BoxBoxSat(a, b, &n, &d);
+}
+
+namespace {
 // The unit box's AABB as COGrid::CollectEntitiesInBox 0x721dc0 takes it (0x4fe2d0: the eight corners; 0xa3ae40: the
 // centre and half size of their bounds; then centre -/+ half size).
 void BoxAabb(const Obb& box, Vec3* mnOut, Vec3* mxOut) {
@@ -873,9 +896,15 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     Resolve(sim, u);
     switch (m.colType) {
       case 0:
-        if (Driving(u) && (!m.hasSpline || m.splineIdx >= m.spline.size()))
-          UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
-        if (Driving(u)) CheckCollisions(sim, u);
+        // 0x5d2f29..0x5d2f76: only while the steering's own target (st+0x90) is not the no-target vector, that is
+        // a waypoint DriveToNextWaypoint took up and no SetWaypoints(0, 0) wrote over since: a fresh batch toward it
+        // when no points are left, then the prediction. A waypoint the navigator handed this beat is not taken up
+        // yet. (Seen: Skirmish 3041, army 3's 0x300046 stopped at 3032 with a record due at 3041, given a Move to
+        // its own cell at 3040: the original stands, ours made a batch toward the old target and stepped 0.028.)
+        if (m.steerValid) {
+          if (!m.hasSpline || m.splineIdx >= m.spline.size()) UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+          CheckCollisions(sim, u);
+        }
         break;
       case 2: {
         Vec3 T = m.sideStep;

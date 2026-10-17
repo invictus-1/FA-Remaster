@@ -192,7 +192,13 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
                        Vec3 mn, mx;
                        ShapeBounds(s, &mn, &mx);
                        if (!GridCellsMeet(boxMn, boxMx, mn, mx)) return;
-                       if (!ShapeOverlapsOBox(s, centre, axes, half)) return;
+                       // (CollectEntitiesInBox's primitive test: a box goes through BoxBox 0x474830, whose interval
+                       // arithmetic is not the plain separation test's to the last bit. Seen: Skirmish 3095, army 4's
+                       // 0x40001b checking its line to (610, 192) past 0x40002e, 4.7e-5 apart by the plain test: the
+                       // original finds it in the way and takes (610, 193); ours took (610, 192), 2 degrees aside.)
+                       if (s.type == ShapeType::Box ? !BoxPrimitiveMeetsBox(s, centre, axes, half)
+                                                    : !ShapeOverlapsOBox(s, centre, axes, half))
+                         return;
                        if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
                            !BlocksFor(u, e, flags))
                          return;
