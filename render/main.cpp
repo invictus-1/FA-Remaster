@@ -83,6 +83,7 @@
 // --lit-rain  rain and snow lit where they fall (World::litRain; modern look): by the sun through its shadow and by the
 //           lamps and their beams through their shadows, sent on mostly forward
 // --rain-splashes  rain's splashes (World::rainSplashes; modern look): small crowns where rain meets what faces up
+// --ground-cover  grass near the camera (World::groundCover; modern look)
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
@@ -302,6 +303,7 @@ struct Options {
   bool litRain = false;                 // --lit-rain
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
+  bool groundCover = false;             // --ground-cover
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -414,6 +416,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--lit-rain") o->litRain = true;
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--water-detail") o->waterDetail = true;
+    else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
@@ -865,6 +868,7 @@ int main(int argc, char** argv) {
   world.litRain = opt.litRain;
   world.rainSplashes = opt.rainSplashes;
   world.waterDetail = opt.waterDetail;
+  world.groundCover = opt.groundCover;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;

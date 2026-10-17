@@ -40,6 +40,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       fsr3(device),
       skyDraw(device),
       falling(device),
+      grass(device),
       sight(device),
       shafts(device),
       tracks(device),
@@ -974,6 +975,7 @@ const Model* World::PropModel(const std::string& blueprint, const std::string& m
     std::string id = low.substr(slash == std::string::npos ? 0 : slash + 1);
     const size_t end = id.rfind("_mesh_wreck");
     if (end != std::string::npos) id.resize(end);
+    if (const Model* own = models.RemasteredWreck(id)) return own;  // (a remastered unit's own wreck, as painted)
     return models.Wreck(models.Unit(id), false);
   }
   const Model* named = vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp")) ? models.Blueprint(mesh + ".bp") : nullptr;
@@ -1566,6 +1568,20 @@ void World::Render() {
       decals.Draw(view, camera, post.Depth(), clock_);
       post.ContinueScene();
       lights.Bind();
+    }
+    // ground cover near the camera (its shader made the first time it is wanted)
+    if (groundCover && look == Look::Modern && !sidePicture) {
+      if (!grassTried_) {
+        grassTried_ = true;
+        std::string why;
+        grassMade_ = grass.Init(&why);
+        if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
+      }
+      if (grassMade_) {
+        Stage("ground cover");
+        grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
+                   static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
+      }
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
