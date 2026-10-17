@@ -572,6 +572,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       skyLight.horizon += bolt * 0.6f;
     }
     lampsOn_ = std::clamp((0.30f - skyLight.daylight) / 0.18f, 0.0f, 1.0f);
+    clouds.boltLight = Vec3{0, 0, 0};  // (the volumetric clouds' flash within: only while a bolt shows, below)
     if (flash > 0.02f) {
       // the bolt itself: from the clouds to the ground somewhere round what the camera looks at (the
       // place and its zigzag follow from which stroke it is, so it stands still while it flashes),
@@ -582,6 +583,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const Vec3 light = Vec3{0.8f, 0.86f, 1.0f} * (flash * 22 / skyLight.exposure);
       const float top = foot.y + 150, wide = std::max(0.3f, camera.distance * 0.009f);
       Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
+      // (the volumetric clouds lit from within where the bolt leaves them, a little up in the layer)
+      clouds.boltAt = Vec3{from.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.thickness * 0.3f, from.z};
+      clouds.boltReach = clouds.thickness * 0.9f;
+      clouds.boltLight = Vec3{0.8f, 0.86f, 1.0f} * (flash * 8 / skyLight.exposure);
       const int pieces = 18;
       for (int k = 1; k <= pieces; ++k) {
         const float t = static_cast<float>(k) / pieces;
