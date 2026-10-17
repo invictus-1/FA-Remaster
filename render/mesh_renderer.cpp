@@ -991,7 +991,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     }
     last_.swap(lastNext_);
     lastRows_.swap(lastRowsNext_);
-  } else if (!last_.empty()) {
+  } else if (!last_.empty() && !keepLast) {
     last_.clear();
     lastRows_.clear();
   }

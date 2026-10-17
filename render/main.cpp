@@ -67,7 +67,8 @@
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
 //           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
-// --motion-view <1|2|3>  motion (motion.h), for checking; needs --msaa 1: 1 shows it as colours, 2 shows the
+// --motion-view <1|2|3|5>  motion (motion.h), for checking; needs --msaa 1 (5: the temporal upscaler's reactive
+//           mask in red, how much a pixel follows its frame alone): 1 shows it as colours, 2 shows the
 //           frame before carried to this frame by it (with a still scene it is this frame, but where something
 //           comes out from behind another), 3 what that misses of this frame (black where the motion is right)
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
@@ -96,6 +97,10 @@
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
 // --no-bloom  no glow (World::bloom off: the modern look's glow and the original look's bloom, the game's Bloom Render)
+// --fsr3    AMD's FSR 3 (fsr3.h, World::temporalUpscale) in place of FSR 1: the scene drawn a little shifted every
+//           frame and brought up to the window's size from the frames before, at --fsr's share (without --fsr:
+//           the edges smoothed at the window's own size); sets --msaa 1. --fsr3-bias <n>: the textures' level of
+//           detail beyond the share's (World::temporalMipBias; 0 at first; AMD advises -1)
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
@@ -284,6 +289,8 @@ struct Options {
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
+  bool fsr3 = false;                    // --fsr3
+  float fsr3Bias = 0;                   // --fsr3-bias
   int shadowSize = 2048;                // --shadow-size
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
@@ -371,6 +378,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
     else if (a == "--fsr3-check") o->fsr3Check = true;
+    else if (a == "--fsr3") o->fsr3 = true;
     else if (a == "--air") o->air = true;
     else if (a == "--contact-shadows") o->contactShadows = true;
     else if (a == "--soft-shadows") {
@@ -462,6 +470,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--shadow-size") o->shadowSize = atoi(v);
     else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
+    else if (a == "--fsr3-bias") o->fsr3Bias = static_cast<float>(atof(v));
     else if (a == "--fsr") {  // FSR 1's modes, or the share itself
       const std::string m = v;
       o->upscale = m == "off" ? 1.0f : m == "ultra" ? 1 / 1.3f : m == "quality" ? 1 / 1.5f : m == "balanced" ? 1 / 1.7f
@@ -639,7 +648,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
-  gSceneSamples = opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;
+  gSceneSamples = opt.fsr3 ? 1 : opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;  // (FSR 3: one sample a pixel)
   std::string error;
   // an automatic run (--frames) must give the same picture whatever the person at the machine is
   // doing: its window stays in the background and what is typed or clicked is not acted on
@@ -752,6 +761,8 @@ int main(int argc, char** argv) {
     live.SetFocusArmy(opt.focus);
     picture.SetVulkan(opt.vulkan);
     picture.SetFocusArmy(opt.focus);
+    picture.SetUpscale(opt.upscale);        // (--fsr)
+    picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
@@ -815,6 +826,8 @@ int main(int argc, char** argv) {
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   world.effectsQuality = opt.effectsQuality;
   world.upscale = opt.upscale;
+  world.temporalUpscale = opt.fsr3;
+  world.temporalMipBias = opt.fsr3Bias;
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;

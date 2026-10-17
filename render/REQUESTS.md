@@ -28,7 +28,27 @@ order from the command stream keeps its table now: a commander's enhancement is 
 when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 21 done and in use (a projectile's
 SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 done and in use (`hasShield` and
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
-bracket). 24 is addressed to the interface track (two launchers to watch big units die).
+bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
+the interface track (the FSR 3 option).
+
+## 30. To the INTERFACE track: the FSR 3 option (2026-10-16, not blocking)
+
+**Who asks:** the renderer, for the lighting upgrade (Chris, 2026-10-15: "FSR only"; every new look a player's
+option, off by default).
+
+**What:** a player's option for AMD's FSR 3, beside today's upscaling setting (`SetUpscale`, FSR 1's share):
+`WorldPicture::SetTemporalUpscale(bool)`, off at first. With it on, the share the scene is drawn at is still
+`SetUpscale`'s (1/1.3 Ultra Quality, 1/1.5 Quality, 1/1.7 Balanced, 1/2 Performance), and at a share of 1 FSR 3
+is the anti-aliasing at the screen's own size. It needs one sample a pixel: with it on, set
+`render::gSceneSamples = 1` before the picture is made (your `Looks().sceneSamples`), so the anti-aliasing
+setting gives way to it (show it as replaced, or greyed out, as you think best). With more samples it does
+nothing and FSR 1 stays. If you have a "camera jumped" moment (a minimap click, a jump to a unit), set
+`world()->cameraCut = true` before that frame; a large jump is found by itself too.
+
+**Why:** FSR 3 builds each frame from the frames before, so at the same share it comes much nearer the picture
+drawn at the screen's size than FSR 1 does, and at the screen's own size its edges are smoother than 4x MSAA's. Measured and described in `docs/render-lighting.md`
+(groundwork, FSR 3). Your minimap frame needs nothing: it already goes through `WorldPicture`, which keeps it
+apart.
 
 ## 29. Entity:GetCollisionExtents is a stub: objective arrows hang too low (2026-10-16, not blocking; DONE the same day: main 45ff67e, as the exe's 0x68ca80)
 

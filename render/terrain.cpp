@@ -107,8 +107,9 @@ float4 Ground(VOut i) {
   float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
 
   // (read with the place's own steps, so that a layer can be skipped where it is not there at all:
-  // inside such a branch the sampler cannot work the steps out itself)
-  float2 stepX = ddx(xz), stepY = ddy(xz);
+  // inside such a branch the sampler cannot work the steps out itself; the temporal upscaler's bias, view.h,
+  // as steps that much smaller)
+  float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
   #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
   #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x))
   // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a

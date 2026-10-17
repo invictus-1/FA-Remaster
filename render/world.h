@@ -334,7 +334,8 @@ class World {
   bool contactShadows = false;
   // Motion (motion.h): where each pixel was the frame before, for the temporal upscaler; it needs the
   // scene drawn with one sample a pixel (gSceneSamples 1). `motionView`: a view for checking it (1 the
-  // motion as colours, 2 the frame before carried to this one; Motion::Check).
+  // motion as colours, 2 the frame before carried to this one; Motion::Check; 5 the temporal upscaler's
+  // reactive mask, Post::Reactive, in red).
   bool motionOn = false;
   int motionView = 0;
   Motion motion;
@@ -343,6 +344,25 @@ class World {
   bool bloom = true;
   float bloomIntensity = 1.5f;
   Upscaler upscaler;
+  // AMD's FSR 3 (fsr3.h; the lighting upgrade's groundwork) in place of FSR 1: the scene drawn a little
+  // shifted every frame and brought up to the screen's size (`upscale`) from what the frames before saw
+  // there; at `upscale` 1 it smooths the edges at the screen's own size (in place of MSAA). Needs one sample
+  // a pixel (gSceneSamples 1); without it, or where its shaders cannot be made (Direct3D's own compiler),
+  // FSR 1 stays. A player's option, off by default. Its shaders are made the first time it is on.
+  bool temporalUpscale = false;
+  // A cut, for the temporal upscaler: the camera jumped (set by the host before the frame; Begin clears it).
+  // A camera that moves far in one frame, a map opened and the option just switched on count as one too.
+  bool cameraCut = false;
+  // A frame drawn for something else between two of the game's (the minimap's ground): no temporal upscaler
+  // and no motion, and what they keep of the frames before is left for the game's next frame.
+  bool sidePicture = false;
+  // With it: what is added to the level of detail the textures are read at, beyond log2 of the share drawn
+  // (0: the share alone, the textures as fine as at the screen's own size). AMD advises -1 more; measured on
+  // Seton's at 1080p from 720p it moves the picture further from today's at the screen's size and flickers
+  // a third more where nothing moves (2026-10-16), so 0.
+  float temporalMipBias = 0;
+  Fsr3 fsr3;
+  bool TemporalNow() const { return temporalNow_; }  // this frame brought up by FSR 3
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
@@ -486,6 +506,14 @@ class World {
   float groundMiddle_ = 0;  // halfway between the map's lowest and highest ground
   float mistFloor_ = 0, mistDepth_ = 3;  // where the mist lies: its floor's height, and over what height it thins to 1/e
   double clock_ = 0;
+  // the temporal upscaler (temporalUpscale): this frame's, whether the frame before had it, its shaders
+  // (0 not made yet, 1 made, -1 they cannot be), the jitter's count, a cut, the camera's eye the frame before,
+  // and the time between frames
+  bool temporalNow_ = false, temporalBefore_ = false, temporalCut_ = false;
+  int fsr3State_ = 0, temporalFrame_ = 0;
+  Vec3 lastEye_{};
+  double lastFrameAt_ = -1;
+  float frameSeconds_ = 1 / 60.0f;
 };
 
 }  // namespace render
