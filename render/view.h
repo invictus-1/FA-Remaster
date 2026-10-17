@@ -213,9 +213,9 @@ float BounceBase(int2 column) { return bounceColumns.Load(int3(BounceTile(column
 float3 BounceProbe(int2 column, int layer) {
   return float3(column.x * bounce.y, BounceBase(column) + bounceLayers[layer], column.y * bounce.y);
 }
-float3 BounceLightOf(int2 column, int layer, float3 n) {
+float4 BounceLightOf(int2 column, int layer, float3 n) {  // (a: 1, or 0 for a probe inside something)
   int2 tile = BounceTile(column) + int2(0, layer * 32);
-  return bounceLight.SampleLevel(samplerLinearClamp, (tile * 8 + 1 + (BounceOct(n) * 0.5 + 0.5) * 6) / float2(256, 1024), 0).rgb;
+  return bounceLight.SampleLevel(samplerLinearClamp, (tile * 8 + 1 + (BounceOct(n) * 0.5 + 0.5) * 6) / float2(256, 1024), 0);
 }
 float2 BounceSightOf(int2 column, int layer, float3 d) {
   int2 tile = BounceTile(column) + int2(0, layer * 32);
@@ -254,8 +254,9 @@ float3 BounceAt(float3 P, float3 N, out float inside) {
       float chance = variance / (variance + d * d);
       w *= max(chance * chance * chance, 0.05);
     }
-    w = max(w, 1e-6);
-    sum += BounceLightOf(column, layer, N) * w;
+    float4 light = BounceLightOf(column, layer, N);
+    w = max(w, 1e-6) * lerp(0.02, 1, light.a);  // (a probe inside something all but passed over)
+    sum += light.rgb * w;
     weights += w;
   }
   return sum / weights;

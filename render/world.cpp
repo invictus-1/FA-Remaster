@@ -489,7 +489,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str());
     }
     if (bounceMade_) {
-      bounce.Place(camera.target, [this](float x, float z) { return GroundHeight(x, z); }, &c);
+      bounce.Place(camera.target, camera.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
       bounceNow_ = true;
     }
   }

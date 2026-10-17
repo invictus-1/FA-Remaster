@@ -55,7 +55,8 @@ bool RayTakesLeaf(uint instance, uint primitive, uint seed) {
 }
 // The first thing a ray meets (mask: 0xff everything, 0x01 not the water): whether it met something, how far,
 // which instance.
-bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance) {
+// (and whether it met the front of a triangle: the side its corners go round anticlockwise, as the passes draw them)
+bool RayTraceFacing(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance, out bool front) {
   RayDesc ray;
   ray.Origin = from;
   ray.Direction = d;
@@ -67,7 +68,12 @@ bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint see
     if (RayTakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) q.CommitNonOpaqueTriangleHit();
   t = q.CommittedRayT();
   instance = q.CommittedInstanceID();
+  front = q.CommittedTriangleFrontFace();
   return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance) {
+  bool front;
+  return RayTraceFacing(from, d, tMin, tMax, mask, seed, t, instance, front);
 }
 // Whether the sun reaches a place (1) or something stands between (0); the water lets it through.
 float RaySunLit(float3 p, float3 n, uint seed) {
