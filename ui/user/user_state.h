@@ -43,6 +43,7 @@ class UserState {
  public:
   struct Config {
     std::vector<std::string> hookDirs;  // the init file's `hook` table
+    std::vector<std::string> protocols;  // the init file's `protocols` table (the schemes OpenURL may open)
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file; empty = preferences live in memory only

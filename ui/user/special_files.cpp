@@ -7,6 +7,7 @@
 // same layout under the player's folder the host names (UserState::Config::userDir: the folder of
 // the preferences file), so a lab's files stay in the lab.
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -70,6 +71,37 @@ void SetField(lua_State* L, const char* key, lua_Number v) {
   lua_pushstring(L, key);
   lua_pushnumber(L, v);
   lua_rawset(L, -3);
+}
+
+// GetSpecialFolder(type) (FA exe 0x844cb0, read 2026-10-16): the folder of a kind of the player's
+// files, a slash at its end: "SaveGame" and "CampaignSave" the saved games' (savegames/), "Replay"
+// the replays' (replays/); "SFT_" before the name may be left out and the case does not count, or
+// the kind's number is given; 2, by its number only, the screenshots' (screenshots/, made when it
+// is not there). Under the player's folder (as FolderOf). Another kind: the original's error.
+int l_GetSpecialFolder(lua_State* L) {
+  if (lua_gettop(L) != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "string GetSpecialFolder(string type)", 1, lua_gettop(L));
+  const std::string type = luaL_checkstring(L, 1);
+  std::string name = type;
+  for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (name.rfind("sft_", 0) == 0) name = name.substr(4);
+  int kind = -1;
+  if (name == "savegame") kind = 0;
+  else if (name == "replay") kind = 1;
+  else if (name == "campaignsave") kind = 3;
+  else if (!name.empty() && name.find_first_not_of("0123456789") == std::string::npos && name.size() < 4) kind = std::stoi(name);
+  if (kind < 0 || kind > 3) return luaL_error(L, "Invalid special file type %s", type.c_str());
+  std::string base = UserState::From(L)->config().userDir;
+  if (base.empty()) base = ".";
+  const char* folder = kind == 1 ? "replays" : kind == 2 ? "screenshots" : "savegames";
+  const std::string dir = hostfs::CleanPath(base + "/" + folder);
+  if (kind == 2) {
+    std::error_code ec;
+    fs::create_directories(PathOf(dir), ec);
+    if (ec) return luaL_error(L, "Unable to create directory %s", dir.c_str());
+  }
+  lua_pushstring(L, (dir + "/").c_str());
+  return 1;
 }
 
 // GetSpecialFiles(type) -> {directory = "<folder>/", extension = "<ext>", files = {[profile] =
@@ -215,6 +247,7 @@ int l_LaunchReplaySession(lua_State* L) {
 
 void RegisterSpecialFileBindings(lua_State* L) {
   SetGlobal(L, "GetSpecialFiles", l_GetSpecialFiles);
+  SetGlobal(L, "GetSpecialFolder", l_GetSpecialFolder);
   SetGlobal(L, "GetSpecialFilePath", l_GetSpecialFilePath);
   SetGlobal(L, "GetSpecialFileInfo", l_GetSpecialFileInfo);
   SetGlobal(L, "RemoveSpecialFile", l_RemoveSpecialFile);

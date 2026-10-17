@@ -188,6 +188,9 @@ class UiManager {
   void Dump() const;
   int CountControls() const;
 
+  // SetUIControlsAlpha (FA exe 0x84df70, CUIManager+0x68): one factor on the alpha of every
+  // control drawn, in every head (1 at first; not held to any range).
+  float controlsAlpha = 1.0f;
   Control* focus = nullptr;                // keyboard focus
   Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
   float mouseX = 0, mouseY = 0;            // where the mouse was last reported

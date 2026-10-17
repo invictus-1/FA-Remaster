@@ -762,6 +762,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the case not counting, in the original's order, read from its exe 0x83db10; its 435 console
   names, `ui/user/console_names.inc`, read from the exe by a helper, and our `remaster_*` ones; a
   name listed there that ours does not have says so in the log when it is run).
+  Seven more read from the exe by a helper (2026-10-16): `GetSystemTime` (not the clock on the wall:
+  the time since the program started, "01:23:45"), `SetUIControlsAlpha` / `GetUIControlsAlpha` (one
+  factor on the alpha of every control drawn), `OpenURL` (as the original: only an http, ftp or file
+  address whose kind the init file's `protocols` names, so https does nothing; then the system's
+  browser), `GetSpecialFolder` (the saved games', replays' or screenshots' folder), `SessionCanRestart`
+  (a single-player game, not a replay) and `GetArmyScore` (empty in the original too: nil).
   CAMERA SHAKE: big blasts and heavy footsteps shake the camera (the simulation's
   Entity:ShakeCamera calls, the engine's ShakeEvents, handed to the cameras by
   `PostCameraShake`; `ui/maui/worldview.cpp` ShakeStep). Read from the original: a new shake

@@ -139,7 +139,7 @@ int l_SHGetFolderPath(lua_State* L) {
 }
 
 // Run the init file in its own state and mount what it lists in `path`.
-bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs) {
+bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std::vector<std::string>& protocols) {
   ScriptState init(ScriptState::Kind::Init, &vfs);
   lua_State* L = init.L();
   std::string dir = o.init;
@@ -192,6 +192,19 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs) {
         break;
       }
       hookDirs.push_back(lua_tostring(L, -1));
+      lua_pop(L, 1);
+    }
+  }
+  lua_pop(L, 1);
+  lua_getglobal(L, "protocols");  // (the schemes OpenURL may open: http, https, mailto, ... in FAF's)
+  if (lua_istable(L, -1)) {
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, -1, i);
+      if (!lua_isstring(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      protocols.push_back(lua_tostring(L, -1));
       lua_pop(L, 1);
     }
   }
@@ -283,7 +296,7 @@ int main(int argc, char** argv) {
   ui::UserState::Config cfg;
   cfg.width = width;
   cfg.height = height;
-  if (!RunInit(o, vfs, cfg.hookDirs)) return 1;
+  if (!RunInit(o, vfs, cfg.hookDirs, cfg.protocols)) return 1;
   for (const std::string& folder : moreMaps) {
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
   }

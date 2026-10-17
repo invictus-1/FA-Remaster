@@ -145,11 +145,49 @@ std::map<std::string, DrawCost>& DrawCosts() {
   return costs;
 }
 long long g_renders = 0;
+
+// The controls' drawing with every colour's alpha multiplied by a factor (SetUIControlsAlpha: the
+// original sets its batcher's AlphaMultiplier for the interface's pass, 0x84d512, and its shader
+// takes color.a times it). The pictures put in whole (the world's, the minimap's, a film's) as they are.
+class AlphaScaledTarget : public DrawTarget {
+ public:
+  AlphaScaledTarget(DrawTarget& to, float factor) : to_(to), factor_(factor) {}
+  int Width() const override { return to_.Width(); }
+  int Height() const override { return to_.Height(); }
+  void SetClip(const Rect& r) override { to_.SetClip(r); }
+  void ClearClip() override { to_.ClearClip(); }
+  void FillRect(const Rect& dst, uint32_t color) override { to_.FillRect(dst, Scaled(color)); }
+  void DrawImage(const Image& image, const Rect& src, const Rect& dst, uint32_t color) override {
+    to_.DrawImage(image, src, dst, Scaled(color));
+  }
+  void DrawImageTiled(const Image& image, const Rect& src, const Rect& dst, uint32_t color) override {
+    to_.DrawImageTiled(image, src, dst, Scaled(color));
+  }
+  void DrawGlyph(const GlyphMask& glyph, int x, int y, uint32_t color) override { to_.DrawGlyph(glyph, x, y, Scaled(color)); }
+  void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) override { to_.DrawPixels(pixels, width, height, x, y); }
+
+ private:
+  uint32_t Scaled(uint32_t color) const {
+    const float a = static_cast<float>(color >> 24) * factor_;
+    const uint32_t alpha = a <= 0 ? 0u : a >= 255 ? 255u : static_cast<uint32_t>(a + 0.5f);
+    return (color & 0x00ffffffu) | (alpha << 24);
+  }
+  DrawTarget& to_;
+  float factor_;
+};
 }  // namespace
 
 void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   Frame* frame = GetFrame(head);
   if (!frame) return;
+  if (controlsAlpha != 1.0f) {
+    AlphaScaledTarget scaled(target, controlsAlpha);
+    const float keep = controlsAlpha;
+    controlsAlpha = 1.0f;  // (once: the scaled target is the target now)
+    Render(L, scaled, head);
+    controlsAlpha = keep;
+    return;
+  }
   static const bool profile = std::getenv("MOHO64UI_DRAW_PROFILE") != nullptr;
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();

@@ -84,6 +84,29 @@ local applied = 0
 g:ApplyFunction(function(control) applied = applied + 1 end)
 check("ApplyFunction visits the control and everything below", applied, 3)
 
+-- small engine functions, as the original's (read from its exe, 2026-10-16)
+check("GetSystemTime: the time since the start as hours:minutes:seconds", string.find(GetSystemTime(), "^%d%d+:%d%d:%d%d$") ~= nil, true)
+check("GetUIControlsAlpha starts at 1", GetUIControlsAlpha(), 1)
+SetUIControlsAlpha(0.5)
+check("SetUIControlsAlpha keeps its factor", GetUIControlsAlpha(), 0.5)
+SetUIControlsAlpha(1)
+local function opened(url)  -- (what OpenURL would open, without opening it)
+    moho64ui_OpenURLDryRun(true)
+    OpenURL(url)
+    local got = moho64ui_OpenedURL()
+    moho64ui_OpenURLDryRun(false)
+    return got
+end
+check("OpenURL opens an http address", opened("http://example.com/x"), "http://example.com/x")
+check("not an https one (the original's library knows http, ftp and file only)", opened("https://example.com/x"), "")
+check("nor ftp, which the init file's protocols do not name", opened("ftp://example.com/x"), "")
+check("nor http without its //", opened("http:example.com"), "")
+check("GetArmyScore without a session: the original's error", pcall(GetArmyScore, 1), false)
+check("SessionCanRestart without a session: an error", pcall(SessionCanRestart), false)
+check("GetSpecialFolder: the replays' folder", string.sub(GetSpecialFolder("SFT_Replay"), -8), "replays/")
+check("the saved games', the case not counting", string.sub(GetSpecialFolder("savegame"), -10), "savegames/")
+check("another kind is an error", pcall(GetSpecialFolder, "Movie"), false)
+
 local frames = 0
 g.OnFrame = function(self, elapsed) frames = frames + 1 end
 g:SetNeedsFrameUpdate(true)

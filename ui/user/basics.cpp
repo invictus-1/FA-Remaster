@@ -1,14 +1,30 @@
 // Small engine functions of the user state that need no control tree: time, the command line,
 // the interface state, front-end data, random numbers.
 #include <cctype>
+#include <cstdio>
 #include <map>
 #include <random>
 #include <string>
 #include <vector>
 
 #include "core/log.h"
+#include "maui/control.h"
+#include "sim/sim.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
+
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>
+#elif defined(MOHO64UI_SDL)
+#include <SDL3/SDL.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
+#endif
 
 namespace moho::ui {
 namespace {
@@ -174,6 +190,114 @@ int l_ExitApplication(lua_State*) {
   return 0;
 }
 
+// GetSystemTime() (FA exe 0x843500): not the clock on the wall but the time since the program
+// started (the clock GetSystemTimeSeconds gives), as hours:minutes:seconds, the hours counted on
+// past 24 ("01:23:45").
+int l_GetSystemTime(lua_State* L) {
+  if (lua_gettop(L) != 0)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "string GetSystemTime() - returns a formatted string displaying the System time", 0, lua_gettop(L));
+  const long seconds = static_cast<long>(UserState::From(L)->now());
+  char text[48];
+  std::snprintf(text, sizeof text, "%02ld:%02ld:%02ld", seconds / 3600, seconds / 60 % 60, seconds % 60);
+  lua_pushstring(L, text);
+  return 1;
+}
+
+// SetUIControlsAlpha(alpha), GetUIControlsAlpha() (FA exe 0x84df70, 0x84e080): the factor on the
+// alpha of every control drawn (UiManager::controlsAlpha).
+int l_SetUIControlsAlpha(lua_State* L) {
+  if (lua_gettop(L) != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "SetUIControlsAlpha(float alpha) -- set the alpha multiplier for 2d UI controls", 1, lua_gettop(L));
+  UserState::From(L)->ui().controlsAlpha = static_cast<float>(luaL_checknumber(L, 1));
+  return 0;
+}
+int l_GetUIControlsAlpha(lua_State* L) {
+  if (lua_gettop(L) != 0)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "float GetUIControlsAlpha() -- get the alpha multiplier for 2d UI controls", 0, lua_gettop(L));
+  lua_pushnumber(L, UserState::From(L)->ui().controlsAlpha);
+  return 1;
+}
+
+// OpenURL(url) (FA exe 0x848050, read 2026-10-16): the text is taken as a web address the way the
+// original's library (wxURL) takes one: the part before the first ':' exactly "http", "ftp" or
+// "file", and "//" after it for the first two (so an https address does nothing: FAF's links.lua
+// sends http for that reason); and that part must be one the init file's `protocols` table names
+// (the case not counting). Then the system opens it (the default browser); otherwise nothing
+// happens, and nothing is said either way. (moho64ui_OpenURLDryRun(true): the tests' way to see what
+// would be opened, moho64ui_OpenedURL(), without opening it.)
+bool g_openDryRun = false;
+std::string g_opened;
+bool SameNoCase(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+void OpenWithSystem(const std::string& url) {
+#if defined(_WIN32)
+  const int n = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
+  std::wstring wide(static_cast<size_t>(n > 0 ? n : 1), L'\0');
+  if (n > 0) MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, wide.data(), n);
+  ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#elif defined(MOHO64UI_SDL)
+  SDL_OpenURL(url.c_str());
+#else
+#if defined(__APPLE__)
+  const char* opener = "open";
+#else
+  const char* opener = "xdg-open";
+#endif
+  char* argv[] = {const_cast<char*>(opener), const_cast<char*>(url.c_str()), nullptr};
+  pid_t pid = 0;
+  if (posix_spawnp(&pid, opener, nullptr, nullptr, argv, environ) == 0) waitpid(pid, nullptr, WNOHANG);
+#endif
+}
+int l_OpenURL(lua_State* L) {
+  if (lua_gettop(L) != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "OpenURL(string) - open the default browser window to the specified URL", 1, lua_gettop(L));
+  const std::string url = luaL_checkstring(L, 1);
+  const size_t colon = url.find(':');
+  if (colon == std::string::npos) return 0;
+  const std::string scheme = url.substr(0, colon);
+  if (scheme != "http" && scheme != "ftp" && scheme != "file") return 0;
+  if (scheme != "file" && url.compare(colon + 1, 2, "//") != 0) return 0;
+  bool listed = false;
+  for (const std::string& p : UserState::From(L)->config().protocols) listed = listed || SameNoCase(p, scheme);
+  if (!listed) return 0;
+  g_opened = url;
+  if (g_openDryRun) Logf(LogLevel::Info, "moho64ui: OpenURL %s (not opened: a test)", url.c_str());
+  else OpenWithSystem(url);
+  return 0;
+}
+int l_OpenURLDryRun(lua_State* L) {
+  g_openDryRun = lua_toboolean(L, 1) != 0;
+  g_opened.clear();
+  return 0;
+}
+int l_OpenedURL(lua_State* L) {
+  lua_pushstring(L, g_opened.c_str());
+  return 1;
+}
+
+// GetArmyScore(army) (FA exe 0x843ed0): the original's is empty: one argument, never read; no session
+// is an error ("No session started."); else nothing comes back (nil).
+int l_GetArmyScore(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "int GetArmyScore(armyIndex)", 1, lua_gettop(L));
+  if (!UserState::From(L)->config().liveSim) return luaL_error(L, "No session started.");
+  return 0;
+}
+// SessionCanRestart() (FA exe 0x8981b0): no session is an error ("no active session."); else
+// whether the session keeps what it was started from, which only a single-player game started anew
+// does (FA exe 0x88c293: not a multiplayer game, not a replay).
+int l_SessionCanRestart(lua_State* L) {
+  if (lua_gettop(L) != 0)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "Return true iff the active session can be restarted.", 0, lua_gettop(L));
+  Sim* sim = UserState::From(L)->LiveSim("SessionCanRestart");
+  if (!sim) return luaL_error(L, "no active session.");
+  lua_pushboolean(L, !sim->isReplay);
+  return 1;
+}
+
 int g_sessionRequest = 0;
 // ExitGame(): the game ends and the front end comes back. RestartSession(): the same game starts
 // over. Both are the host's to do, between two frames.
@@ -201,6 +325,14 @@ void RegisterBasicBindings(lua_State* L) {
   SetGlobal(L, "RestartSession", l_RestartSession);
   SetGlobal(L, "CurrentTime", l_CurrentTime);
   SetGlobal(L, "GetSystemTimeSeconds", l_CurrentTime);
+  SetGlobal(L, "GetSystemTime", l_GetSystemTime);
+  SetGlobal(L, "SetUIControlsAlpha", l_SetUIControlsAlpha);
+  SetGlobal(L, "GetUIControlsAlpha", l_GetUIControlsAlpha);
+  SetGlobal(L, "OpenURL", l_OpenURL);
+  SetGlobal(L, "GetArmyScore", l_GetArmyScore);
+  SetGlobal(L, "SessionCanRestart", l_SessionCanRestart);
+  lua_register(L, "moho64ui_OpenURLDryRun", l_OpenURLDryRun);
+  lua_register(L, "moho64ui_OpenedURL", l_OpenedURL);
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "HasCommandLineArg", l_HasCommandLineArg);
   SetGlobal(L, "GetCommandLineArg", l_GetCommandLineArg);
