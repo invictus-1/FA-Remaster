@@ -285,7 +285,7 @@ Mac", and every ray-traced effect keeps a fallback without it.
        flakes) in a flat box 12 units high at the ground round the camera's target; they take only the small
        lights' light and show by how much it outshines the sky's (nothing in the dark). Seen from the game's
        camera a thin drop in a beam stands against the patch of ground that beam lights and would hardly show,
-       so these send on three times as much, as a glint (a look for Chris to judge): at night the rain
+       so these send on three times as much, as a glint (Chris, 2026-10-17: fine as it is): at night the rain
        sparkles white round lit units. Cost with it, at 1440p in a storm: 0.016 -> 0.051 ms. The unlit rain
        is unchanged, pixel for pixel.
    - **Splashes: first version** (2026-10-17): `World::rainSplashes` (viewer `--rain-splashes`; modern look).
