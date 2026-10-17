@@ -180,6 +180,13 @@ class UserState {
   std::string focusNickname;  // the focus army's player name (GetSessionClients)
   int focusArmyCopy = -1;     // the simulation's focusArmy, 0-based (GetFocusArmy)
   uint32_t tickCopy = 0;      // its tick (GameTick, GameTime, GetGameTimeSeconds, GetGameTime)
+  // The part of a tick the game's clock is past the last sync (0..1), as the original's session keeps
+  // it (CWldSession+0x460, CWldSession::SessionFrame 0x895b40): each frame it grows by the game's speed
+  // times ten times the frame's seconds while the last sync ticked, else it is 1; a sync that ticked
+  // takes its ticks off. GameTime, GetGameTimeSeconds and GetGameTime add it; GameTick does not.
+  double tickFraction = 0;
+  bool lastSyncTicked = true;
+  void AdvanceTickFraction(double seconds);
   bool isReplayCopy = false;  // SessionIsReplay
   std::vector<ArmyView> armiesCopy;  // ArmyViews (GetArmiesTable)
   bool economyCopied = false;  // (these copies are there: one beat's sync came)

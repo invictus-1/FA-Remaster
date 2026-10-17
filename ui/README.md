@@ -828,7 +828,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   to 50) are built. As in the original the speed only changes where the game's option
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
-  beats a frame.
+  beats a frame. The game's clock in seconds (`GameTime`, `GetGameTimeSeconds`, `GetGameTime`)
+  is the last sync's tick plus the part of the next tick gone by since, as the original's session
+  keeps it (CWldSession+0x460, SessionFrame 0x895b40): it runs smoothly between beats, stands a
+  tenth past the last tick while paused, and goes on from there; `GameTick()` is the last sync's
+  tick, the simulation's own number (read 2026-10-17).
 - A launched game loads as the original's does (its session states, WLD_Frame 0x88cae0, read
   2026-10-17). The launch call (the lobby's Launch, `LaunchSinglePlayerSession`,
   `LaunchReplaySession`, a restart) only describes the session. The next frame the game's loading

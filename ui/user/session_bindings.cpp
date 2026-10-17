@@ -7,6 +7,7 @@
 // and the front end's answers stay (no session, tick 0).
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -85,13 +86,20 @@ uint32_t TickNow(lua_State* L) {
   UserState* user = UserState::From(L);
   return user->economyCopied ? user->tickCopy : TheSim(L)->tick();
 }
+// The game's time in seconds as the interface's clock shows it: the tick of the last sync and the part
+// of the next one gone by since (FA exe GameTime 0x8be320, GetGameTimeSeconds 0x843400, GetGameTime
+// 0x843250: (CWldSession+0x458 + +0x460) * 0.1).
+double SecondsNow(lua_State* L) {
+  UserState* user = UserState::From(L);
+  return (static_cast<double>(TickNow(L)) + (user->economyCopied ? user->tickFraction : 0.0)) * 0.1;
+}
 int l_GameTick(lua_State* L) {
   lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)));
   return 1;
 }
 // GetGameTimeSeconds(): the game's time; ten ticks are a second.
 int l_GetGameTimeSeconds(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)) * 0.1f);
+  lua_pushnumber(L, static_cast<lua_Number>(SecondsNow(L)));
   return 1;
 }
 int l_Zero(lua_State* L) {
@@ -361,11 +369,11 @@ std::string TimeText(double seconds) {
   return buf;
 }
 int l_GameTime(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(TickNow(L)) * 0.1f);
+  lua_pushnumber(L, static_cast<lua_Number>(SecondsNow(L)));
   return 1;
 }
 int l_GetGameTime(lua_State* L) {
-  lua_pushstring(L, TimeText(TickNow(L) * 0.1).c_str());
+  lua_pushstring(L, TimeText(SecondsNow(L)).c_str());
   return 1;
 }
 // FormatTime(seconds): hours, minutes and seconds as "HH:MM:SS". (Inferred form.)
@@ -577,6 +585,10 @@ void UserState::CopyFromSimulation() {
     Logf(LogLevel::Info, "moho64ui: the focus army is now %d (0: none)", focusArmyCopy + 1);
     SelectUnitsById(state_->L(), {}, false);
   }
+  // (a sync whose beat ran takes its ticks off the clock's part of a tick; a paused one leaves it)
+  const uint32_t ticks = economyCopied && sim->tick() > tickCopy ? sim->tick() - tickCopy : 0;
+  lastSyncTicked = !economyCopied || ticks > 0;
+  tickFraction = std::clamp(tickFraction - static_cast<double>(ticks), 0.0, 1.0);
   tickCopy = sim->tick();
   isReplayCopy = sim->isReplay;
   armiesCopy = ArmyViews(*sim);
@@ -584,6 +596,17 @@ void UserState::CopyFromSimulation() {
   for (const ArmyView& a : armiesCopy)
     if (a.index == sim->focusArmy + 1) focusNickname = a.nickname;
   economyCopied = true;
+}
+
+void UserState::AdvanceTickFraction(double seconds) {
+  if (!economyCopied) return;
+  if (!lastSyncTicked) {
+    tickFraction = 1.0;
+    return;
+  }
+  const GamePace* pace = config_.pace;
+  const double rate = std::pow(10.0, (pace ? pace->rate : 0) / 10.0);  // (WLD_GetSimRate: the speed asked for)
+  tickFraction = std::min(1.0, tickFraction + rate * seconds * 10.0);
 }
 
 void UserState::DeliverSync(const std::string& blob) {

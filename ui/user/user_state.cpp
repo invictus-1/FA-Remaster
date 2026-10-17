@@ -191,6 +191,7 @@ bool UserState::StartFrontEnd() {
 void UserState::Frame(double seconds) {
   now_ += seconds;
   ++frame_;
+  AdvanceTickFraction(seconds);  // (the game's clock first, as the original's SessionFrame)
   ui_->Update(state_->L(), static_cast<float>(seconds));
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
   DeliverChat(state_->L());
