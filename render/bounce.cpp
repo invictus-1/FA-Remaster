@@ -17,7 +17,7 @@ const char kCommon[] = R"hlsl(
 cbuffer Bounce : register(b1) {
   float4 turn0, turn1, turn2;  // the rays' turn this frame (rows)
   float4 map;                  // x, y: the map's width and height; z: the frame's number; w: how far a ray looks
-  float4 blend;                // x: what a probe keeps of what it held
+  float4 blend;                // x: what a probe keeps of what it held; y: the spacing's step (in a probe's number)
 };
 float3 RayDirection(uint i) {  // ray i of 64: evenly over the sphere (spherical Fibonacci), turned
   float y = 1 - (2 * i + 1) / 64.0, r = sqrt(saturate(1 - y * y)), phi = i * 2.39996323;
@@ -28,7 +28,9 @@ int2 ColumnOfTile(int2 tile) {  // the grid's column a tile holds now
   int2 first = int2(bounce.zw);
   return first + (((tile - first) % 32) + 32) % 32;
 }
-uint Identity(int2 column) { return (uint(column.x) & 0x7fff) | ((uint(column.y) & 0x7fff) << 15) | 0x80000000u; }
+uint Identity(int2 column) {  // (its column and the spacing's step: a probe of another is not the same probe)
+  return (uint(column.x) & 0x3fff) | ((uint(column.y) & 0x3fff) << 14) | ((uint(blend.y) & 3) << 28) | 0x80000000u;
+}
 )hlsl";
 
 // Each probe's rays (a thread each: x the ray, y the probe): what they meet lit by the sun and by the probes' light of
@@ -44,14 +46,16 @@ RWTexture2D<float4> rayResults : register(u0);
   uint seed = RayHash(probe * 64 + ray + uint(map.z) * 7919);
   float t;
   uint instance;
+  bool front;
   float3 radiance;
-  if (RayTrace(from, d, 0.05, map.w, 0xff, seed, t, instance)) {
+  bool hit = RayTraceFacing(from, d, 0.05, map.w, 0xff, seed, t, instance, front);
+  if (hit && !front && RayInstance(instance).a > 1.5) {
+    radiance = 0;  // (the back of something, not a leaf: the probe may be inside it; its distance told as negative)
+    t = -t;
+  } else if (hit) {
     float3 p = from + d * t, albedo, n;
     RaySurfaceAt(instance, p, d, map.xy, albedo, n);
-    float inside;
-    float3 again = BounceAt(p, n, inside);
-    float3 sky = SkyAmbient(n) * modern.y;
-    radiance = albedo * (RaySunLight() * (saturate(dot(n, sunDirection)) * RaySunLit(p, n, seed)) + lerp(sky, again, inside));
+    radiance = RayLitAt(p, n, albedo, seed, 48);  // (round about by the probes of the frame before: light bounces again)
   } else {
     t = map.w;
     radiance = (skyZenith.w > 0.5 ? ComputedSky(d) : RayLinear(mapSkyCube.SampleLevel(samplerLinear, d, 3).rgb)) * modern.y;
@@ -79,13 +83,14 @@ static const uint kInside = 6, kTile = 8;
   uint probe = tile.x + tile.y * 32;
   float3 dir = BounceDir((local + 0.5) / kInside * 2 - 1);
   float3 sum = 0;
-  float weight = 0;
+  float weight = 0, backs = 0;
   for (uint r = 0; r < 64; ++r) {
     float4 got = rayResults.Load(int3(r, probe, 0));
     float facing = max(dot(dir, RayDirection(r)), 0);
+    backs += got.a < 0 ? 1 : 0;
 #ifdef SIGHT
     float w = pow(facing, 50);
-    float d = min(got.a, map.w);
+    float d = min(got.a < 0 ? -got.a * 0.2 : got.a, map.w);  // (a back seen: a wall close by)
     sum += float3(d, d * d, 0) * w;
 #else
     float w = facing;
@@ -93,6 +98,7 @@ static const uint kInside = 6, kTile = 8;
 #endif
     weight += w;
   }
+  float outside = backs > 16 ? 0 : 1;  // (more than a quarter of its rays met backs: the probe is inside something)
   bool fresh = identities.Load(int3(tile, 0)) != Identity(ColumnOfTile(int2(tile.x, tile.y % 32)));
   float keep = fresh ? 0 : blend.x;
   uint2 at = tile * kTile + 1 + local;
@@ -101,7 +107,7 @@ static const uint kInside = 6, kTile = 8;
   atlas[at] = lerp(now, atlas[at], keep);
 #else
   float3 now = weight > 0 ? sum / weight : 0;
-  atlas[at] = float4(lerp(now, atlas[at].rgb, keep), 1);
+  atlas[at] = float4(lerp(now, atlas[at].rgb, keep), outside);
 #endif
 }
 )hlsl";
@@ -217,7 +223,13 @@ bool BounceLight::Init(std::string* error) {
   return rays_ && lightAtlas_ && sightAtlas_ && identities_ && columns_;
 }
 
-void BounceLight::Place(Vec3 target, const std::function<float(float, float)>& groundHeight, ViewConstants* c) {
+void BounceLight::Place(Vec3 target, float distance, const std::function<float(float, float)>& groundHeight, ViewConstants* c) {
+  if (followZoom) {  // (a step taken a fifth past its line, either way)
+    const float lines[3] = {30, 60, 120};
+    while (level_ < 3 && distance > lines[level_] * 1.2f) ++level_;
+    while (level_ > 0 && distance < lines[level_ - 1] / 1.2f) --level_;
+    spacing = 4.0f * static_cast<float>(1 << level_);
+  }
   firstX_ = static_cast<int>(std::floor(target.x / spacing)) - kColumns / 2 + 1;
   firstZ_ = static_cast<int>(std::floor(target.z / spacing)) - kColumns / 2 + 1;
   for (int j = 0; j < kColumns; ++j)
@@ -248,6 +260,7 @@ void BounceLight::Update(const View& view, RayScene& rays, gfx::Texture groundNo
   k.map[2] = static_cast<float>(frame_ & 0xffffff);
   k.map[3] = reach;
   k.blend[0] = keep;
+  k.blend[1] = static_cast<float>(level_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
   // the rays, reading the probes as they were

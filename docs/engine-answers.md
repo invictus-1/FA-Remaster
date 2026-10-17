@@ -3,6 +3,60 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 38: loading a game off the main thread, and Sim::FixesFor — done (FixesFor 48da4c5; no other engine change)
+
+**Your order is safe with the engine as it stands.** It is the original's order:
+1. the loading screen in the front end's own state;
+2. Sim::LoadRules + Sim::Start on the worker, while this thread runs only the front end's frames;
+3. after the worker: the game's state, LoadInterfaceRules, Boot, the sync, CreateGameInterface.
+
+Checked headless: all 13 replays, MP2 and MP3 ran with LoadRules + Start on a second thread while the main thread did a
+front end's work beside it, 15-200 rounds per load:
+- its own Lua state calling DiskFindFiles, DiskGetFileInfo and exists, making and collecting strings, tables and vectors;
+- reads through the shared Vfs, from archives and folders;
+- host path lookups and log lines.
+Every recording equals the gate's, record by record.
+
+**What LoadRules / Start touch beyond their own Sim:**
+- **Vfs:** only Mount writes (vfs.cpp 32-82). Readers are const, with no cache and no lazy index; an archive read opens
+  its own FILE (zip.cpp:121). LoadRules and Start never mount: the fixes are read from disk.
+- **hostfs:** on Windows, Resolve keeps nothing. Elsewhere its cache and mappings are under one mutex.
+- **Log:** LogWrite and LogOpenFile are under its mutex. LogSetEcho is not, but it is used only at start-up.
+- **Lua:** everything is per state.
+  - The process-wide hooks (script_state.cpp:45, threads.cpp:211) are set once by static initializers.
+  - The traceback buffer is per thread, math.random per state, and os.setlocale only reads.
+  - So a ScriptState may be made beside another state's use.
+- **mimalloc:** thread-safe. Results don't change, because object keys hash by serial.
+- **Blueprints and categories:** three process-wide things, all in SimBlueprints::CopyToSim:
+  - Sounds() (bp_reflect.cpp:180);
+  - SplitPaths() (161);
+  - g_words (blueprints.cpp:20).
+  The front end has no blueprint sounds and no categories, so its frames never meet them.
+- **Skeletons:** per Sim.
+- **Animation cache, effect / sound / shake lists, intel / brain / threat / motor tables, SimCaches:** reached only through
+  a Sim, and the front end's TheSim() is null.
+- **ClearSimCaches:** only from ~Sim, under a mutex.
+
+**The conditions** (your working tree meets them):
+1. Nothing mounts into the Vfs, changes hostfs's mappings, or changes the log's file or echo during the load.
+2. The previous Sim is gone before BeginLoad, and only one Sim loads at a time.
+3. Until WaitForWorker, no other thread touches the loading Sim (not even a field), its lists, the sim views, the
+   category sets or a blueprint sound. Also during that time: no LoadInterfaceRules, no SimBlueprints copy, no second
+   Sim, and the session description is not changed.
+4. Results are handed over through BeatWorker's mutex.
+
+Notes:
+- BeatRunning() is now true during a load too, so anything reading sim_ under it tests sim_ first.
+- On macOS a new thread gets 512 KB of stack: give the beat worker more.
+- Optional: set g_crashTick = 0 in BeginLoad.
+
+**The other order (the load beside the game state and its rules) is NOT safe.** Two blueprint copies at once:
+- append to the one Sounds() table from two threads, which corrupts the heap;
+- both fill SplitPaths() in a process's first game;
+- one writes g_words while the other reads it.
+Making it safe needs a lock on the sound table (or one table per SimBlueprints), SplitPaths() built by a static
+initializer, and g_words set once. Not done, because your order doesn't need it.
+
 ## ui 37: each unit's weapons in UnitView, for CanAttackTarget, GetValidAttackingUnits and the right click — done (cedf989)
 
 **New in `UnitView`.**

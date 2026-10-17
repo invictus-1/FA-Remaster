@@ -1140,14 +1140,19 @@ bool Sim::IsWithin(float x, float z, float m, bool wholeMap) const {
          !(x + m > static_cast<float>(playableRect[2])) && !(z + m > static_cast<float>(playableRect[3]));
 }
 
+bool Sim::FixesFor(const SessionDescription& session) {
+  bool on = session.fixes >= 0 ? session.fixes != 0 : !session.replay;
+  // The replay of a game this engine played with the fixes carries their mark (Options.RemasterFixes = "on" in its
+  // scenario): it plays back with them, as it was played. The original's replays have no mark and keep them off.
+  if (session.fixes < 0 && session.replay && ScenarioMarksFixes(session.header.scenario)) on = true;
+  if (const char* f = getenv("MOHO64_FIXES")) on = f[0] == '1';
+  return on;
+}
+
 bool Sim::Start(const SessionDescription& session) {
   focusArmy = session.focusArmy;
   isReplay = session.replay;
-  fixes = session.fixes >= 0 ? session.fixes != 0 : !session.replay;
-  // The replay of a game this engine played with the fixes carries their mark (Options.RemasterFixes = "on" in its
-  // scenario): it plays back with them, as it was played. The original's replays have no mark and keep them off.
-  if (session.fixes < 0 && session.replay && ScenarioMarksFixes(session.header.scenario)) fixes = true;
-  if (const char* f = getenv("MOHO64_FIXES")) fixes = f[0] == '1';
+  fixes = FixesFor(session);
   // A fix made in the blueprints needs the rules state: the hosts load the rules (LoadRules) before the session
   // says whether the fixes are on, so the rules are the original's. With the fixes, and only in a game that has
   // what such a fix is for (today the stock campaign mod's blueprints, deviations.md 4), they are loaded again,

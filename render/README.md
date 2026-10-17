@@ -56,10 +56,13 @@ So: build it against recordings, combine later by swapping the source of the fra
       the sky from tables of the atmosphere (done, first version: `World::skyTables`).
    5. Soft and contact shadows (`World::softShadows`, `contactShadows`): done, first version.
    6. Ray tracing (Direct3D 12 and Vulkan; none on the Mac): groundwork and the scene done (`ray_scene.h`,
-      check view `--ray-view`); bounce light from probes done, first version (`bounce.h`, `--bounce`); then
-      reflections on every surface (a renderer without a G-buffer gets them best from rays its shaders cast)
-      and shadows; each with a fallback.
-   7. Rain and snow, with the visuals session's art.
+      check view `--ray-view`); bounce light from probes done, first version (`bounce.h`, `--bounce`);
+      reflections done, first version (`World::rayReflections`, `--ray-reflections`: smooth surfaces and the
+      water mirror what their rays meet, off the screen too; a renderer without a G-buffer gets them best
+      from rays its shaders cast); ray-traced shadows put off (the shadow maps cover the game's view, and
+      the rays' coarse models would make worse ones); each with a fallback.
+   7. Rain and snow, with the visuals session's art: drops and flakes lit where they fall, first version
+      (`World::litRain`, `--lit-rain`).
 
 ## Build and run
 

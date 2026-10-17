@@ -133,6 +133,10 @@ class Sim {
   // Start the session a lobby launch describes (sim/session.h): the same start, with the launch's focus army.
   // As with a replay, sessionMods must hold the session's mods (description.header.mods) before LoadRules.
   bool Start(const SessionDescription& session);
+  // Whether a session plays with the engine's script fixes, as Start(SessionDescription) decides it (session.fixes,
+  // else on for a new game and off for a replay unless its scenario carries the mark; MOHO64_FIXES overrides). For a
+  // host that needs the answer before Start, e.g. to load its interface rules first (ui REQUESTS 38).
+  static bool FixesFor(const SessionDescription& session);
   // Advance one tick (runs the script threads that are due).
   void Tick();
   // A paused beat (AdvanceBeat steps 15-19 + Sync): destroy queue and id pools only; the game tick stays.

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+
+#include "lighting.h"
 
 namespace render {
 namespace {
@@ -14,13 +17,64 @@ cbuffer Fall : register(b1) {
   float4 velocity;  // xyz: how it falls, world units a second; w: a drop's length in seconds of fall (0: a flake)
   float4 shape;     // x: half its width in pixels; y: world units per pixel at distance 1; z: how see-through; w: how much it sways
   float4 tint;      // its colour, linear
+#if LIT
+  float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`)
+#endif
 };
 
 struct VOut {
   float4 position : SV_Position;
   float2 across : TEXCOORD0;  // x: -1..1 across; y: 0..1 along
   float fade : TEXCOORD1;
+#if LIT
+  float3 light : TEXCOORD2;  // its colour, lit where it is
+#endif
 };
+
+#if LIT
+// How much a drop sends toward the eye of light going `along`, by the angle to the way on to the eye: drops send light
+// mostly onward (Henyey-Greenstein, g 0.6; 1 on average over all ways).
+float DropPhase(float3 along, float3 toEye) {
+  const float g = 0.6;
+  return (1 - g * g) / pow(max(1 + g * g - 2 * g * dot(along, toEye), 1e-4), 1.5);
+}
+// The light on a drop or flake where it is (lighting.h): the sun's through its shadow and the clouds', the small
+// lights' (lights.h: as SmallLights, a lamp's beam through the lamp's shadow), each scattered toward the eye; then
+// the share it sends on, on top of the sky's light it has unlit.
+float3 DropLight(float3 p, float3 toEye) {
+  const float3 up = float3(0, 1, 0);
+  float3 light = ToLinear(sunColor) * (lightMultiplier * modern.x) * (SunShadow(p, up) * CloudShadow(p) * DropPhase(-sunDirection, toEye));
+  [branch] if (lightGrid.w > 0.5) {
+    float2 g = (p.xz - lightGrid.xy) * lightGrid.z;
+    [branch] if (all(g >= 0) && all(g < lightGridSize.xy)) {
+      float4 square = lightData[uint(g.y) * uint(lightGridSize.x) + uint(g.x)];
+      uint first = uint(square.x), count = min(uint(square.y), 48u);
+      for (uint s = 0; s < count; ++s) {
+        uint at = first + s;
+        uint which = uint(lightData[at >> 2][at & 3]);
+        float4 where = lightData[uint(lightGridSize.z) + which * 4];
+        float3 toLight = where.xyz - p;
+        float far2 = dot(toLight, toLight) / (where.w * where.w);
+        if (far2 >= 1) continue;
+        float3 l = normalize(toLight);
+        float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        float4 colour = lightData[uint(lightGridSize.z) + which * 4 + 1];
+        float4 beam = lightData[uint(lightGridSize.z) + which * 4 + 2];
+        if (beam.w > -1.5) {  // a beam: within its cone, through its lamp's shadow (and a share round the lamp)
+          float off = sqrt(saturate((1 - dot(-l, beam.xyz)) / max(1 - beam.w, 1e-4)));
+          float inside = 1 - smoothstep(0.7, 1.0, off);
+          float map = lightData[uint(lightGridSize.z) + which * 4 + 3].x;
+          float reaches = inside;
+          [branch] if (map > -0.5 && inside > 0) reaches *= LampShadow(p, l, uint(map));
+          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * colour.w * saturate(1 - far2 * 25);
+        }
+        light += colour.rgb * (fade * DropPhase(-l, toEye));
+      }
+    }
+  }
+  return tint.rgb + light * lit.x;
+}
+#endif
 
 float Hash1(float n) { return frac(sin(n * 12.9898) * 43758.5453); }
 
@@ -54,18 +108,26 @@ VOut VS(uint id : SV_VertexID) {
   // nothing at the box's sides, so that no drop is seen coming in or going out
   float3 edge = abs(local - 0.5) * 2;
   o.fade = saturate((1 - max(edge.x, max(edge.y, edge.z))) * 6) * (0.5 + 0.5 * Hash1(n + 5.5));
+#if LIT
+  o.light = DropLight(p, toEye);
+#endif
   return o;
 }
 
 float4 PS(VOut i) : SV_Target {
   float soft = velocity.w > 0 ? (1 - abs(i.across.x)) * saturate(i.across.y * 4) * saturate((1 - i.across.y) * 1.5)
                               : saturate(1 - length(float2(i.across.x, i.across.y * 2 - 1)));
+#if LIT
+  return float4(i.light, tint.a * shape.z * i.fade * soft);
+#else
   return float4(tint.rgb, tint.a * shape.z * i.fade * soft);
+#endif
 }
 )hlsl";
 
 struct FallConstants {
   float box[4], velocity[4], shape[4], tint[4];
+  float lit[4];  // (the lit shader's only)
 };
 
 }  // namespace
@@ -155,10 +217,10 @@ float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke) {
   return flash;
 }
 
-bool Precipitation::Init(std::string* error) {
-  std::string source = std::string(kViewShaderBlock) + kShader;
+gfx::Pipeline Precipitation::Make(bool lit, std::string* error) {
+  std::string source = lit ? std::string("#define LIT 1\n") + kViewShaderBlock + kLightingShaderBlock + kShader : std::string(kViewShaderBlock) + kShader;
   gfx::PipelineDesc pd;
-  pd.name = "precipitation";
+  pd.name = lit ? "precipitation, lit where it falls" : "precipitation";
   pd.vertexSource = pd.pixelSource = source;
   pd.cull = gfx::Cull::None;
   pd.depthWrite = false;
@@ -166,19 +228,30 @@ bool Precipitation::Init(std::string* error) {
   pd.colorFormat = kSceneFormat;
   pd.samples = gSceneSamples;
   pd.alphaWrite = false;
-  pipeline_ = device_->CreatePipeline(pd, error);
+  return device_->CreatePipeline(pd, error);
+}
+
+bool Precipitation::Init(std::string* error) {
+  pipeline_ = Make(false, error);
   return static_cast<bool>(pipeline_);
 }
 
-void Precipitation::Draw(const View& view, const Camera& camera, float rain, float snow) {
+void Precipitation::Draw(const View& view, const Camera& camera, float rain, float snow, bool lit) {
   if ((rain <= 0 && snow <= 0) || view.height <= 0) return;
+  if (lit && !litTried_) {  // (the lit shader the first time it is wanted; where it cannot be made, unlit as before)
+    litTried_ = true;
+    std::string why;
+    litPipeline_ = Make(true, &why);
+    if (!litPipeline_) fprintf(stderr, "render: rain and snow lit where they fall cannot be used (%s)\n", why.c_str());
+  }
+  lit = lit && litPipeline_;
   const ViewConstants& c = view.constants;
   // the air's light on what falls: the sky's, and some of the falling light
   const float light[3] = {c.skyZenith[0] * 0.6f + c.skyHorizon[0] * 0.6f, c.skyZenith[1] * 0.6f + c.skyHorizon[1] * 0.6f,
                           c.skyZenith[2] * 0.6f + c.skyHorizon[2] * 0.6f};
   const float edge = std::clamp(camera.distance * 1.6f, 30.0f, 900.0f);
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height);
-  device_->SetPipeline(pipeline_);
+  device_->SetPipeline(lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
   auto draw = [&](float amount, bool flakes) {
     FallConstants f{};
@@ -201,6 +274,7 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
     f.tint[1] = light[1] * bright;
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
+    f.lit[0] = flakes ? 1.0f : 0.6f;  // (how much of the light on it goes on to the eye: snow is white)
     device_->SetConstants(1, &f, sizeof f);
     const uint32_t drops = static_cast<uint32_t>((flakes ? 12000.0f : 14000.0f) * std::clamp(amount, 0.0f, 1.0f));
     if (drops) device_->Draw(drops * 6);

@@ -479,6 +479,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // reflections by ray tracing (where the shaders were built for it)
+  reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
+  if (reflectNow_) {
+    c.rayEffects[0] = 1;
+    c.rayEffects[1] = 1000;
+    c.rayEffects[2] = static_cast<float>(map.width);
+    c.rayEffects[3] = static_cast<float>(map.height);
+  }
   // bounce light: its probes placed round the camera's target (their shaders made the first time it is wanted)
   bounceNow_ = false;
   if (bounceLight && look == Look::Modern && haveMap_ && !sidePicture && RaysReady()) {
@@ -489,7 +497,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str());
     }
     if (bounceMade_) {
-      bounce.Place(camera.target, [this](float x, float z) { return GroundHeight(x, z); }, &c);
+      bounce.Place(camera.target, camera.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
       bounceNow_ = true;
     }
   }
@@ -1462,12 +1470,14 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
-  if ((rayView || bounceNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
+  if ((rayView || bounceNow_ || reflectNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
+    terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
   }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
     Stage("bounce light");
+    lights.Bind();  // (what the rays meet takes the small lights too)
     bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
   }
   CpuTimes::Part("particles and bands moved");
@@ -1513,6 +1523,7 @@ void World::Render() {
   device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
   if (bounceNow_) bounce.Bind();
+  if (reflectNow_) rays.Bind(terrain.NormalMap(), terrain.GroundColours());  // (for the surfaces that trace)
   lights.Bind();
   if (haveMap_) {
     Stage("ground");
@@ -1630,7 +1641,7 @@ void World::Render() {
     lights.Bind();
   }
   Stage("rain, snow");
-  if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow);
+  if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow, litRain && look == Look::Modern);
   Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
     post.BeginColorOnly();
@@ -1650,6 +1661,7 @@ void World::Render() {
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
     Stage("ray tracing check view");
+    lights.Bind();
     post.shown = rays.Check(view, terrain.NormalMap(), terrain.GroundColours());
   }
   if (temporalNow_ && !post.shown) {  // FSR 3: up to the screen's size from this frame and the ones before

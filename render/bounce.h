@@ -11,7 +11,9 @@
 //    the sky's light.
 //  - Each probe keeps the light coming in from every side (an octahedral map, 6 x 6 with a border of one, RGBA16F)
 //    and how far it sees that way (the mean distance and its square, 14 x 14 with a border, RG16F), each blended
-//    with what it held (`keep`), and a probe that sees a wall closer than a place does not light that place.
+//    with what it held (`keep`), and a probe that sees a wall closer than a place does not light that place. A ray
+//    that meets the back of something (not a leaf) brings no light; a probe more than a quarter of whose rays do is
+//    inside something (a rock, a building) and the places round it all but pass it over.
 // Every lit surface of the modern look reads the eight probes round it (view.h, BounceAt) in place of the sky's
 // fitted light, which stays outside the grid. Where the device has no ray tracing nothing of it runs.
 #pragma once
@@ -32,16 +34,20 @@ class BounceLight {
   explicit BounceLight(gfx::Device* device) : device_(device) {}
   ~BounceLight();
   bool Init(std::string* error);
-  // At the frame's start: the grid round `target`, the ground's heights under its columns (`groundHeight` at a
-  // place x, z), and the view's values that say where the probes are (ViewConstants::bounce, bounceLayers).
-  void Place(Vec3 target, const std::function<float(float, float)>& groundHeight, ViewConstants* constants);
+  // At the frame's start: the grid round `target` at a spacing for a camera `distance` away (with `followZoom`), the
+  // ground's heights under its columns (`groundHeight` at a place x, z), and the view's values that say where the
+  // probes are (ViewConstants::bounce, bounceLayers).
+  void Place(Vec3 target, float distance, const std::function<float(float, float)>& groundHeight, ViewConstants* constants);
   // Between passes, the ray tracing scene built: the probes' rays, then their light and sight blended in.
   void Update(const View& view, RayScene& rays, gfx::Texture groundNormals, gfx::Texture groundColours, gfx::Texture mapSky);
   // The probes' pictures where every shader reads them (view.h: kBounceLightSlot, kBounceSightSlot, kBounceColumnsSlot).
   void Bind();
 
   static constexpr int kColumns = 32, kLayers = 4, kRays = 64;
-  float spacing = 8;                       // world units between columns
+  float spacing = 8;                       // world units between columns (with followZoom: Place's choice)
+  // The spacing follows the zoom: 4, 8, 16 or 32 world units for a camera nearer than 30, 60, 120 or farther (each
+  // step taken a fifth past its line, so the grid does not flicker between two); the grid covers 32 of them.
+  bool followZoom = true;
   float layers[kLayers] = {1.5f, 5, 12, 26};  // the probes' heights over the ground
   float keep = 0.97f;                      // what a probe keeps of what it held each frame
   float reach = 300;                       // how far a ray looks (world units)
@@ -52,6 +58,7 @@ class BounceLight {
   gfx::Texture rays_, lightAtlas_, sightAtlas_, columns_, identities_;
   float heights_[kColumns * kColumns] = {};
   int firstX_ = 0, firstZ_ = 0;
+  int level_ = 1;  // (followZoom: the spacing's step, 0 .. 3)
   uint32_t frame_ = 0;
   bool placed_ = false;
 };

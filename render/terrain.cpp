@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "lighting.h"
+#include "ray_scene.h"
 
 namespace render {
 namespace {
@@ -359,7 +360,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
 
   if (!pipeline_) {
     // (the modern look has its own water: water.cpp)
-    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" + kViewShaderBlock + kLightingShaderBlock + kShader;
+    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" + kViewShaderBlock + RayShaders() +
+                         kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
