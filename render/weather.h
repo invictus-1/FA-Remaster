@@ -46,12 +46,18 @@ class Precipitation {
   // where it is, by the sun through its shadow and the clouds' and by the small lights (a lamp's beam through the
   // lamp's shadow), sent on mostly forward (a drop between the eye and a light shines), on top of the sky's light.
   void Draw(const View& view, const Camera& camera, float rain, float snow, bool lit = false);
+  // Rain's splashes (World::rainSplashes): where rain meets what faces up and the picture shows it, small crowns that
+  // rise and fade; found from `sceneDepth` (the scene's, read: a pass into the scene's colour alone).
+  void DrawSplashes(const View& view, const Camera& camera, float rain, gfx::Texture sceneDepth);
 
  private:
   gfx::Pipeline Make(bool lit, std::string* error);
+  gfx::Pipeline MakeSplashes(std::string* error);
   gfx::Device* device_;
   gfx::Pipeline pipeline_, litPipeline_;
   bool litTried_ = false;
+  gfx::Pipeline splashPipeline_;
+  bool splashTried_ = false;
 };
 
 }  // namespace render

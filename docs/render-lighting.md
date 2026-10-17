@@ -278,11 +278,23 @@ Mac", and every ray-traced effect keeps a fallback without it.
        so these send on three times as much, as a glint (a look for Chris to judge): at night the rain
        sparkles white round lit units. Cost with it, at 1440p in a storm: 0.016 -> 0.051 ms. The unlit rain
        is unchanged, pixel for pixel.
+   - **Splashes: first version** (2026-10-17): `World::rainSplashes` (viewer `--rain-splashes`; modern look).
+     Where rain meets what faces up (the ground, a unit's top) and the picture shows it, a speck that rises
+     and is gone in a fifth of a second, then comes again somewhere else: 3,000 at full rain, each a place on
+     the picture by its number and the time (an integer hash, so both backends put it in the same place), its
+     depth back to the world, its slope from the depths beside it (nothing on slopes, walls or the sky), lit
+     as the lit drops are (`DropLight`, now a block both shaders take). Drawn into the scene's colour alone
+     after the rain. A real splash is far smaller than a pixel from the game's camera, so these are specks of
+     a pixel or two, faint (a first try at crowns ten pixels high read as tufts of white grass). With the
+     rings on puddles already there, the ground looks hit by the rain. Cost at 1440p in a storm: about
+     +0.012 ms. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.05).
+     - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
+       it, Post::KeepOpaque), so it does not build them up from frames before.
 
 ## The options
 
 All in `World`, off by default, each one's cost measured and written here when it is built:
 `volumetricFog`, `volumetricClouds`, `skyTables`, `screenReflections`, `softShadows`, `contactShadows`,
 ray tracing's `bounceLight` and `rayReflections` (`rayReflections` needs `gRayShaders` set before the world is
-made; ray-traced shadows put off), and the rain and snow upgrades (`litRain` so far). The ui
+made; ray-traced shadows put off), and the rain and snow upgrades (`litRain`, `rainSplashes` so far). The ui
 chat gets the names and their costs when each is ready.
