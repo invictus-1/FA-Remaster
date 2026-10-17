@@ -13,11 +13,14 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <map>
+#include <set>
+#include <thread>
 
 namespace render::gfx {
 namespace {
@@ -74,6 +77,30 @@ struct Ref {
   }
 };
 
+// DXC's DxcCreateInstance, the library loaded the first time it is asked for (null: not there).
+CreateInstanceFn DxcCreate() {
+  static const CreateInstanceFn create = [] {
+    CreateInstanceFn fn = nullptr;
+#if defined(_WIN32)
+    if (HMODULE lib = LoadLibraryA("dxcompiler.dll")) fn = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
+#elif defined(__APPLE__)
+    if (void* lib = dlopen("libdxcompiler.dylib", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
+#else
+    if (void* lib = dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
+#endif
+    return fn;
+  }();
+  return create;
+}
+
+// A compiler of its own (one is used by one thread at a time; null: DXC is not there).
+DxcCompiler3* NewCompiler() {
+  CreateInstanceFn create = DxcCreate();
+  void* made = nullptr;
+  return create && create(kClsidCompiler, kIidCompiler3, &made) >= 0 ? static_cast<DxcCompiler3*>(made) : nullptr;
+}
+
+// The compiler the backends' own thread uses.
 DxcCompiler3* Compiler(std::string* error) {
   static DxcCompiler3* compiler = nullptr;
   static bool tried = false;
@@ -82,16 +109,7 @@ DxcCompiler3* Compiler(std::string* error) {
     return compiler;
   }
   tried = true;
-  CreateInstanceFn create = nullptr;
-#if defined(_WIN32)
-  if (HMODULE lib = LoadLibraryA("dxcompiler.dll")) create = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
-#elif defined(__APPLE__)
-  if (void* lib = dlopen("libdxcompiler.dylib", RTLD_NOW | RTLD_LOCAL)) create = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
-#else
-  if (void* lib = dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL)) create = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
-#endif
-  void* made = nullptr;
-  if (create && create(kClsidCompiler, kIidCompiler3, &made) >= 0) compiler = static_cast<DxcCompiler3*>(made);
+  compiler = NewCompiler();
   if (!compiler && error) *error = "DXC (the shader compiler, dxcompiler) not found beside the program";
   return compiler;
 }
@@ -265,12 +283,19 @@ void WriteWhole(const std::string& path, const void* data, size_t size) {
 
 // DXC run on `source` with `args`: what it made in `out`, or false with its messages in `error`
 // (`missing`: DXC itself is not there).
+bool RunWith(DxcCompiler3* compiler, const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out,
+             std::string* error);
 bool Run(const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out, std::string* error, bool* missing) {
   DxcCompiler3* compiler = Compiler(error);
   if (!compiler) {
     if (missing) *missing = true;
     return false;
   }
+  return RunWith(compiler, source, args, out, error);
+}
+// (the same with a given compiler)
+bool RunWith(DxcCompiler3* compiler, const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out,
+             std::string* error) {
   std::vector<const wchar_t*> argv;
   for (const std::wstring& a : args) argv.push_back(a.c_str());
   DxcSource src{source.data(), source.size(), 65001};
@@ -326,24 +351,81 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
   return true;
 }
 
-bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
-                 std::string* error, bool* missing) {
+namespace {
+
+std::vector<std::wstring> DxilArguments(const std::string& source, const char* entry, const char* stage) {
   std::vector<std::wstring> args = {L"-O3", L"-HV", L"2018", L"-E"};  // (HLSL 2018's rules, as for Vulkan)
   args.push_back(std::wstring(entry, entry + std::strlen(entry)));
   args.push_back(L"-T");
   args.push_back(ShaderProfile(stage, source.find("RayQuery") != std::string::npos));
-  // (signed: the container's digest, the 16 bytes after "DXBC", is all nought where nothing signed it, and
-  // Direct3D 12 takes no shader that is not; DXC of 2026 signs by itself, older ones through dxil.dll)
-  auto isSigned = [](const std::vector<uint8_t>& code) {
-    if (code.size() < 20 || std::memcmp(code.data(), "DXBC", 4) != 0) return false;
-    for (size_t i = 4; i < 20; ++i)
-      if (code[i]) return true;
-    return false;
+  return args;
+}
+
+// (signed: the container's digest, the 16 bytes after "DXBC", is all nought where nothing signed it, and
+// Direct3D 12 takes no shader that is not; DXC of 2026 signs by itself, older ones through dxil.dll)
+bool IsSigned(const std::vector<uint8_t>& code) {
+  if (code.size() < 20 || std::memcmp(code.data(), "DXBC", 4) != 0) return false;
+  for (size_t i = 4; i < 20; ++i)
+    if (code[i]) return true;
+  return false;
+}
+
+// The jobs the cache lacks, compiled on several threads at once (each with a compiler of its own) and kept, as
+// CompileSpirv (`spirv`) or CompileDxil would keep them. Only to fill the cache: what fails here is compiled again,
+// with its messages, by the caller's own CompileSpirv / CompileDxil.
+void Prewarm(const std::vector<ShaderJob>& jobs, const std::string& cacheDir, bool spirv) {
+  if (cacheDir.empty() || !DxcCreate()) return;
+  struct Work {
+    const ShaderJob* job;
+    std::vector<std::wstring> args;
+    std::string file;
   };
+  std::vector<Work> work;
+  std::set<std::string> seen;  // (the same shader asked for by several pipelines: compiled once)
+  for (const ShaderJob& j : jobs) {
+    Work w{&j, spirv ? Arguments(j.entry.c_str(), j.stage.c_str(), j.source.find("RayQuery") != std::string::npos)
+                     : DxilArguments(j.source, j.entry.c_str(), j.stage.c_str()),
+           {}};
+    w.file = CacheFile(cacheDir, spirv ? "dxc-spirv/2" : "dxc-dxil/1", j.source, w.args, spirv ? "spv" : "dxil");
+    if (w.file.empty() || !seen.insert(w.file).second) continue;
+    if (FILE* f = fopen(w.file.c_str(), "rb")) {  // (kept already)
+      fclose(f);
+      continue;
+    }
+    work.push_back(std::move(w));
+  }
+  if (work.empty()) return;
+  const unsigned threads = std::clamp(std::thread::hardware_concurrency(), 1u, static_cast<unsigned>(work.size()));
+  std::atomic<size_t> next{0};
+  auto run = [&] {
+    DxcCompiler3* compiler = NewCompiler();
+    if (!compiler) return;
+    std::vector<uint8_t> out;
+    std::string error;
+    for (size_t i; (i = next.fetch_add(1)) < work.size();) {
+      const Work& w = work[i];
+      out.clear();
+      if (!RunWith(compiler, w.job->source, w.args, &out, &error)) continue;
+      if (spirv) WriteWhole(w.file, out.data(), out.size() / 4 * 4);
+      else if (IsSigned(out)) WriteWhole(w.file, out.data(), out.size());
+    }
+    compiler->Release();
+  };
+  std::vector<std::thread> pool;
+  for (unsigned t = 1; t < threads; ++t) pool.emplace_back(run);
+  run();
+  for (std::thread& t : pool) t.join();
+}
+
+}  // namespace
+
+bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
+                 std::string* error, bool* missing) {
+  const std::vector<std::wstring> args = DxilArguments(source, entry, stage);
   const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, args, "dxil");
-  if (!cached.empty() && ReadWhole(cached, out) && isSigned(*out)) return true;
+  if (!cached.empty() && ReadWhole(cached, out) && IsSigned(*out)) return true;
   if (!Run(source, args, out, error, missing)) return false;
-  if (!isSigned(*out)) {
+  if (!IsSigned(*out)) {
     if (error) *error = "DXC's shaders come out unsigned (an older DXC needs its dxil.dll beside the program)";
     if (missing) *missing = true;
     return false;
@@ -351,5 +433,8 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
   if (!cached.empty()) WriteWhole(cached, out->data(), out->size());
   return true;
 }
+
+void PrewarmSpirv(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, true); }
+void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, false); }
 
 }  // namespace render::gfx

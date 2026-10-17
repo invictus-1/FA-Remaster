@@ -431,6 +431,7 @@ struct PipelineRec {
   VkPipeline pipeline = VK_NULL_HANDLE;
   const void* layout = nullptr;  // VulkanDevice::Layout
   bool depth = true;  // drawn with a depth attachment (Vulkan wants the pass to match)
+  std::shared_ptr<PendingPipeline> pending;  // (asked for in a batch, not made yet)
 };
 
 // A ray tracing structure (gfx.h): the structure, the buffer it lies in, and its device address (what an
@@ -481,6 +482,8 @@ class VulkanDevice final : public Device {
   Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
   Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
+  void BeginPipelineBatch() override;
+  bool EndPipelineBatch(std::string* error) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -654,6 +657,12 @@ class VulkanDevice final : public Device {
   std::vector<BufferRec> buffers_;     // id = index + 1
   std::vector<TextureRec> textures_;   // id = index; 0 is none
   std::vector<PipelineRec> pipelines_; // id = index + 1
+  bool batching_ = false;   // pipelines asked for are made at EndPipelineBatch
+  std::string batchError_;  // (the first that could not be made, in a batch)
+  bool MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error);
+  bool MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error);
+  Pipeline Keep(const PipelineRec& rec);
+  bool Realize(uint32_t index, std::string* error);
   std::vector<uint32_t> freeBuffers_, freeTextures_, freePipelines_;
 
   // ray tracing (where the card can): the structures, the geometry made since the last scene was built, the
@@ -1800,7 +1809,7 @@ void VulkanDevice::Destroy(Texture texture) {
 void VulkanDevice::Destroy(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec) return;
-  Bin().pipelines.push_back(rec->pipeline);
+  if (rec->pipeline) Bin().pipelines.push_back(rec->pipeline);
   *rec = PipelineRec{};
   freePipelines_.push_back(pipeline.id - 1);
 }
@@ -1838,17 +1847,17 @@ const VulkanDevice::Layout* VulkanDevice::LayoutFor(const std::vector<SpirvImage
   return layouts_.back().get();
 }
 
-Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error) {
   SpirvShader vs, ps;
   std::string why;
   if (!CompileSpirv(std::string(desc.vertexSource), desc.vertexEntry, "vs", shaderCache_, &vs, &why)) {
     if (error) *error = std::string(desc.name) + " (" + desc.vertexEntry + "): " + why;
-    return {};
+    return false;
   }
   const bool hasPixelShader = !desc.pixelSource.empty();
   if (hasPixelShader && !CompileSpirv(std::string(desc.pixelSource), desc.pixelEntry, "ps", shaderCache_, &ps, &why)) {
     if (error) *error = std::string(desc.name) + " (" + desc.pixelEntry + "): " + why;
-    return {};
+    return false;
   }
   VkShaderModule modules[2] = {};
   auto module = [&](const SpirvShader& s, VkShaderModule* out) {
@@ -1861,7 +1870,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     if (error) *error = std::string(desc.name) + ": Vulkan took no shader module";
     for (VkShaderModule m : modules)
       if (m) vkDestroyShaderModule(device_, m, nullptr);
-    return {};
+    return false;
   }
   VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}, {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
   stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1982,7 +1991,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
       if (error) *error = std::string(desc.name) + ": " + wrong;
       for (VkShaderModule m : modules)
         if (m) vkDestroyShaderModule(device_, m, nullptr);
-      return {};
+      return false;
     }
   }
   const Layout* layout = LayoutFor(images);
@@ -1990,7 +1999,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     if (error) *error = std::string(desc.name) + ": Vulkan made no pipeline layout";
     for (VkShaderModule m : modules)
       if (m) vkDestroyShaderModule(device_, m, nullptr);
-    return {};
+    return false;
   }
   pi.layout = layout->pipeline;
   PipelineRec rec;
@@ -2002,26 +2011,18 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     if (m) vkDestroyShaderModule(device_, m, nullptr);
   if (r != VK_SUCCESS) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no pipeline: " + Result(r);
-    return {};
+    return false;
   }
-  uint32_t index;
-  if (!freePipelines_.empty()) {
-    index = freePipelines_.back();
-    freePipelines_.pop_back();
-    pipelines_[index] = rec;
-  } else {
-    index = static_cast<uint32_t>(pipelines_.size());
-    pipelines_.push_back(rec);
-  }
-  return {index + 1};
+  *out = rec;
+  return true;
 }
 
-Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error) {
+bool VulkanDevice::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error) {
   SpirvShader cs;
   std::string why;
   if (!CompileSpirv(std::string(desc.source), desc.entry, "cs", shaderCache_, &cs, &why)) {
     if (error) *error = std::string(desc.name) + " (" + desc.entry + "): " + why;
-    return {};
+    return false;
   }
   std::vector<SpirvImage> images = cs.images;
   std::sort(images.begin(), images.end());
@@ -2030,17 +2031,17 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     const uint32_t from = storage ? kStorageBinding : kTexBinding, slots = storage ? kStorageSlots : kTexSlots;
     if (image.binding < from || image.binding + image.count > from + slots) {
       if (error) *error = std::string(desc.name) + ": a texture outside t0-t39 or u0-u15";
-      return {};
+      return false;
     }
     if (image.kind == SpirvImage::Scene && !rayTracing_) {
       if (error) *error = std::string(desc.name) + ": it traces rays, which this card or its driver cannot";
-      return {};
+      return false;
     }
   }
   const Layout* layout = LayoutFor(images);
   if (!layout) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no pipeline layout";
-    return {};
+    return false;
   }
   VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   mi.codeSize = cs.words.size() * 4;
@@ -2048,7 +2049,7 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
   VkShaderModule module = VK_NULL_HANDLE;
   if (vkCreateShaderModule(device_, &mi, nullptr, &module) != VK_SUCCESS) {
     if (error) *error = std::string(desc.name) + ": Vulkan took no shader module";
-    return {};
+    return false;
   }
   VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
   ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -2063,8 +2064,13 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
   vkDestroyShaderModule(device_, module, nullptr);
   if (r != VK_SUCCESS) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no compute pipeline: " + Result(r);
-    return {};
+    return false;
   }
+  *out = rec;
+  return true;
+}
+
+Pipeline VulkanDevice::Keep(const PipelineRec& rec) {
   uint32_t index;
   if (!freePipelines_.empty()) {
     index = freePipelines_.back();
@@ -2075,6 +2081,60 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     pipelines_.push_back(rec);
   }
   return {index + 1};
+}
+
+Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+  PipelineRec rec;
+  if (batching_) {  // (made at the batch's end, its shaders compiled with the others')
+    rec.used = true;
+    rec.pending = PendingPipeline::Of(desc);
+    return Keep(rec);
+  }
+  if (!MakePipeline(desc, &rec, error)) return {};
+  return Keep(rec);
+}
+
+Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error) {
+  PipelineRec rec;
+  if (batching_) {
+    rec.used = rec.compute = true;
+    rec.pending = PendingPipeline::Of(desc);
+    return Keep(rec);
+  }
+  if (!MakeCompute(desc, &rec, error)) return {};
+  return Keep(rec);
+}
+
+// A pipeline asked for in a batch, made now in its slot (what could not be made leaves the slot empty: its
+// handle then draws nothing).
+bool VulkanDevice::Realize(uint32_t index, std::string* error) {
+  std::shared_ptr<PendingPipeline> p = std::move(pipelines_[index].pending);
+  if (!p) return true;
+  PipelineRec rec;
+  const bool made = p->compute ? MakeCompute(p->computeDesc, &rec, error) : MakePipeline(p->desc, &rec, error);
+  pipelines_[index] = made ? rec : PipelineRec{};
+  return made;
+}
+
+void VulkanDevice::BeginPipelineBatch() {
+  batching_ = !shaderCache_.empty();
+  batchError_.clear();
+}
+
+bool VulkanDevice::EndPipelineBatch(std::string* error) {
+  if (!batching_) return true;
+  batching_ = false;
+  std::vector<ShaderJob> jobs;
+  for (const PipelineRec& r : pipelines_)
+    if (r.pending) r.pending->Jobs(&jobs);
+  PrewarmSpirv(jobs, shaderCache_);  // (the cache's missing shaders, on several cores at once)
+  for (uint32_t i = 0; i < pipelines_.size(); ++i) {
+    std::string why;
+    if (pipelines_[i].pending && !Realize(i, &why) && batchError_.empty()) batchError_ = why;
+  }
+  if (batchError_.empty()) return true;
+  if (error) *error = batchError_;
+  return false;
 }
 
 // --- the frame ---
@@ -2316,7 +2376,12 @@ void VulkanDevice::Resolve(Texture from, Texture to) {
 
 void VulkanDevice::SetPipeline(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
-  if (!rec || !inFrame_) return;
+  if (rec && rec->pending) {  // (asked for in a batch and wanted before its end: made now)
+    std::string why;
+    if (!Realize(pipeline.id - 1, &why) && batchError_.empty()) batchError_ = why;
+    rec = Find(pipeline);
+  }
+  if (!rec || !rec->pipeline || !inFrame_) return;
   if (rec->compute) {  // (its own binding point: the drawing pipeline and its set stay bound)
     computePipeline_ = rec->pipeline;
     computeLayout_ = static_cast<const Layout*>(rec->layout);

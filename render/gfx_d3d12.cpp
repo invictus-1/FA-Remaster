@@ -26,6 +26,7 @@
 #include <dxgi1_6.h>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -202,6 +203,7 @@ struct PipelineRec {
   bool compute = false;
   Com<ID3D12PipelineState> state;
   D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+  std::shared_ptr<PendingPipeline> pending;  // (asked for in a batch, not made yet)
 };
 
 // A ray tracing structure (gfx.h): its buffer, and for a geometry not built yet what it is built from; for a
@@ -277,6 +279,8 @@ class D3D12Device final : public Device {
   Texture CreateTarget(const TargetDesc& desc) override;
   Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) override;
   Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
+  void BeginPipelineBatch() override;
+  bool EndPipelineBatch(std::string* error) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -371,6 +375,12 @@ class D3D12Device final : public Device {
   bool dxil_ = false;  // shaders compiled by DXC (CreatePipeline)
   std::string adapterName_;
   std::string shaderCache_;  // the folder compiled shaders are kept in (empty: none)
+  bool batching_ = false;    // pipelines asked for are made at EndPipelineBatch
+  std::string batchError_;   // (the first that could not be made, in a batch)
+  bool MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error);
+  bool MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error);
+  Pipeline Keep(PipelineRec rec);
+  bool Realize(uint32_t index, std::string* error);
 
   Com<IDXGIFactory4> factory_;
   Com<IDXGIAdapter3> adapter3_;  // (what the system counts of the card's memory this program uses)
@@ -1327,7 +1337,7 @@ bool D3D12Device::CompileFxc(std::string_view source, const char* entry, const c
   return true;
 }
 
-Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+bool D3D12Device::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error) {
   Com<ID3DBlob> vs, ps;
   const bool hasPixelShader = !desc.pixelSource.empty();
   // DXC's DXIL (shader model 6.0) where DXC is beside the program: it compiles the renderer's shaders in
@@ -1359,8 +1369,8 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     }
   }
   if (!compiled) {
-    if (!CompileFxc(desc.vertexSource, desc.vertexEntry, "vs_5_1", desc.name, vs, error)) return {};
-    if (hasPixelShader && !CompileFxc(desc.pixelSource, desc.pixelEntry, "ps_5_1", desc.name, ps, error)) return {};
+    if (!CompileFxc(desc.vertexSource, desc.vertexEntry, "vs_5_1", desc.name, vs, error)) return false;
+    if (hasPixelShader && !CompileFxc(desc.pixelSource, desc.pixelEntry, "ps_5_1", desc.name, ps, error)) return false;
   }
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
@@ -1447,21 +1457,13 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateGraphicsPipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
     if (error) *error = buf;
-    return {};
+    return false;
   }
-  uint32_t index;
-  if (!freePipelines_.empty()) {
-    index = freePipelines_.back();
-    freePipelines_.pop_back();
-    pipelines_[index] = std::move(rec);
-  } else {
-    index = static_cast<uint32_t>(pipelines_.size());
-    pipelines_.push_back(std::move(rec));
-  }
-  return {index + 1};
+  *out = std::move(rec);
+  return true;
 }
 
-Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error) {
+bool D3D12Device::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error) {
   Com<ID3DBlob> cs;
   bool compiled = false;
   if (dxil_) {  // (DXC where it is beside the program, as for the drawing pipelines)
@@ -1478,7 +1480,7 @@ Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error)
       cs.Reset();
     }
   }
-  if (!compiled && !CompileFxc(desc.source, desc.entry, "cs_5_1", desc.name, cs, error)) return {};
+  if (!compiled && !CompileFxc(desc.source, desc.entry, "cs_5_1", desc.name, cs, error)) return false;
   D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
   cd.pRootSignature = rootSignature_.Get();
   cd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
@@ -1489,8 +1491,13 @@ Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error)
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateComputePipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
     if (error) *error = buf;
-    return {};
+    return false;
   }
+  *out = std::move(rec);
+  return true;
+}
+
+Pipeline D3D12Device::Keep(PipelineRec rec) {
   uint32_t index;
   if (!freePipelines_.empty()) {
     index = freePipelines_.back();
@@ -1501,6 +1508,61 @@ Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error)
     pipelines_.push_back(std::move(rec));
   }
   return {index + 1};
+}
+
+Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* error) {
+  PipelineRec rec;
+  if (batching_) {  // (made at the batch's end, its shaders compiled with the others')
+    rec.used = true;
+    rec.topology = desc.topology == Topology::Lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    rec.pending = PendingPipeline::Of(desc);
+    return Keep(std::move(rec));
+  }
+  if (!MakePipeline(desc, &rec, error)) return {};
+  return Keep(std::move(rec));
+}
+
+Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error) {
+  PipelineRec rec;
+  if (batching_) {
+    rec.used = rec.compute = true;
+    rec.pending = PendingPipeline::Of(desc);
+    return Keep(std::move(rec));
+  }
+  if (!MakeCompute(desc, &rec, error)) return {};
+  return Keep(std::move(rec));
+}
+
+// A pipeline asked for in a batch, made now in its slot (what could not be made leaves the slot empty: its
+// handle then draws nothing).
+bool D3D12Device::Realize(uint32_t index, std::string* error) {
+  std::shared_ptr<PendingPipeline> p = std::move(pipelines_[index].pending);
+  if (!p) return true;
+  PipelineRec rec;
+  const bool made = p->compute ? MakeCompute(p->computeDesc, &rec, error) : MakePipeline(p->desc, &rec, error);
+  pipelines_[index] = made ? std::move(rec) : PipelineRec{};
+  return made;
+}
+
+void D3D12Device::BeginPipelineBatch() {
+  batching_ = dxil_ && !shaderCache_.empty();
+  batchError_.clear();
+}
+
+bool D3D12Device::EndPipelineBatch(std::string* error) {
+  if (!batching_) return true;
+  batching_ = false;
+  std::vector<ShaderJob> jobs;
+  for (const PipelineRec& r : pipelines_)
+    if (r.pending) r.pending->Jobs(&jobs);
+  PrewarmDxil(jobs, shaderCache_);  // (the cache's missing shaders, on several cores at once)
+  for (uint32_t i = 0; i < pipelines_.size(); ++i) {
+    std::string why;
+    if (pipelines_[i].pending && !Realize(i, &why) && batchError_.empty()) batchError_ = why;
+  }
+  if (batchError_.empty()) return true;
+  if (error) *error = batchError_;
+  return false;
 }
 
 void D3D12Device::Destroy(Buffer buffer) {
@@ -1535,7 +1597,7 @@ void D3D12Device::Destroy(Texture texture) {
 void D3D12Device::Destroy(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec) return;
-  Retire(rec->state.Get());
+  if (rec->state) Retire(rec->state.Get());
   *rec = PipelineRec{};
   freePipelines_.push_back(pipeline.id - 1);
 }
@@ -1694,7 +1756,12 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
 
 void D3D12Device::SetPipeline(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
-  if (!rec) return;
+  if (rec && rec->pending) {  // (asked for in a batch and wanted before its end: made now)
+    std::string why;
+    if (!Realize(pipeline.id - 1, &why) && batchError_.empty()) batchError_ = why;
+    rec = Find(pipeline);
+  }
+  if (!rec || !rec->state) return;
   list_->SetPipelineState(rec->state.Get());
   computePipeline_ = rec->compute;
   if (!rec->compute) list_->IASetPrimitiveTopology(rec->topology);
