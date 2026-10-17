@@ -539,7 +539,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     decals.snowing = snow;
     if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
-    skyLight = SkyAt(timeOfDay, cover);
+    skyLight = SkyAt(timeOfDay, cover, skyTables && look == Look::Modern);
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
       const Vec3 bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
       skyLight.zenith += bolt;
@@ -1462,6 +1462,11 @@ void World::Render() {
   Stage("light in the air");
   if (sidePicture) air.Skip(&view);
   else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
+  // the sky from tables (when on): its view from the eye this frame, before the sky's pass reads it
+  if (skyTables && look == Look::Modern && view.constants.skyZenith[3] > 0.5f) {
+    Stage("sky's view");
+    skyDraw.BuildTables(view, skyLight);
+  }
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());

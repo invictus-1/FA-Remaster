@@ -51,7 +51,9 @@ struct SkyLight {
 // rises some time after sunset, nearly full. `cloudCover`: how much of the sky a layer of clouds
 // covers (0 none, 1 all): they drift, are lit by the falling light, throw shadows on the ground,
 // and the more there are the greyer the sky's light is.
-SkyLight SkyAt(float hours, float cloudCover = 0);
+// `tables`: from the tables of the atmosphere (Sky::BuildTables; World::skyTables): light scattered many times
+// over and the planet's shadow, for the fitted sky and the falling light as for the sky drawn.
+SkyLight SkyAt(float hours, float cloudCover = 0, bool tables = false);
 // Puts that light into a view's values in place of the map's: the light's direction and colour,
 // the sky's values, the exposure.
 void SetSky(const SkyLight& sky, ViewConstants* constants);
@@ -65,10 +67,19 @@ class Sky {
   // picture `mapSky` (a cube map; none: nothing is drawn, as before). `clouds`: volumetric clouds
   // (clouds.h, Clouds::Picture) laid over it in place of the layer of clouds the pass makes itself.
   void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {}, gfx::Texture clouds = {});
+  // The sky from tables of the atmosphere (the lighting upgrade; World::skyTables), after E. Hillaire: before
+  // the scene's passes (it dispatches), the sky's view from the eye this frame for `sky` (SkyAt with its
+  // tables), which this frame's Draw then reads in place of working the air out for every pixel. The tables of
+  // the air itself are made the first time (on the processor). False where it cannot be done (Draw then
+  // works the sky out as without it).
+  bool BuildTables(const View& view, const SkyLight& sky);
 
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_;
+  gfx::Pipeline tablesPipeline_, viewTable_;  // (the sky from tables: the pass, the sum of its view)
+  gfx::Texture through_, many_, skyView_;
+  bool tablesNow_ = false;  // (BuildTables this frame)
 };
 
 }  // namespace render

@@ -74,8 +74,9 @@ Mac", and every ray-traced effect keeps a fallback without it.
        compiler rounds a few of the shaders made for one sample a pixel differently: 1 in 255 on 6 % of the
        pixels, more on a few at the horizon and in the water's mirror of a cloud; the arithmetic is the same.
        The regression script checks MSAA off since.)
-     - Open: Chris to look; the ui to wire the option (it needs the anti-aliasing at one sample); the light
-       in the air and the clouds are skipped in the minimap's frame (Air::Skip, Clouds::Skip), their frames before kept.
+     - Open: Chris to look; the ui to wire the option (it needs the anti-aliasing at one sample). (The light
+       in the air and the clouds are skipped in the minimap's frame, Air::Skip and Clouds::Skip, their frames
+       before kept.)
 1. **Light in the air** (volumetric fog): a volume over the view (froxels, about 160 x 90 x 64), the sun
    through its shadow cascades and the clouds' shadow, the lamps from the light grid, haze and mist as
    densities; reprojected and blended over frames, then summed toward the eye. Every shader's
@@ -115,8 +116,30 @@ Mac", and every ray-traced effect keeps a fallback without it.
      the ground, so at 18:12 they glow red over a dark dusk.
    - Cost (1440p, RTX 4090, half the view sky): shadows 0.06 ms, clouds 0.21 ms, the sky then 0.14 ms;
      today's sky with its own layer 0.63 ms. Off: pictures as before; on, Vulkan as Direct3D 12.
-   - Open: the sky's tables of the atmosphere (the sky today already scatters per pixel); the clouds'
-     shapes are soft at a distance (Chris to judge).
+   - Open: the clouds' shapes are soft at a distance (Chris to judge).
+   - **Sky from tables: first version done** (2026-10-17): `World::skyTables` (viewer `--sky-tables`; modern
+     look with a time of day), after E. Hillaire 2020 on the same air as today's sky (sky.cpp). Two tables
+     made once on the processor (on the worker threads, 14 ms) and handed to the card: what comes through
+     (transmittance, 256 x 64, Bruneton's mapping) and light scattered many times over (32 x 32, the second
+     order gathered from 64 directions with the ground giving back 0.3, the rest as a geometric series). Each
+     frame a compute pass sums the sky's view from the eye from them (192 x 108, closer together near the
+     horizon; three slices: the smooth part, and the haze's light for the sun and for the moon, whose glow
+     round the body the sky pass works out per pixel). The sky pass reads it through a second pipeline (the
+     same shader with `SKY_TABLES`), so today's is untouched. `SkyAt(..., tables)` fits the scene's light
+     (zenith, horizon, glow, the falling light, the exposure) from the same tables, normalised so the noon sky
+     overhead is as bright as today's.
+     - What changes: the planet's shadow (the light in the air below the horizon needs no letting go by hand,
+       so after sunset the sky facing away from it shows the Earth's shadow with a pink band over it, where
+       today's is orange all round); light scattered many times over keeps dusk lit, makes the horizon paler
+       by day and the night sky a little bluer. Facing the setting sun the orange band is less saturated than
+       today's (blue 150 against 108 in 255 just over it), partly because today's six-step march toward the
+       sun lets about twice too much red through at a grazing angle. The ground's light is nearly the same at
+       every hour.
+     - Cost at 1440p: the sky pass 0.54 -> 0.31 ms, its view 0.05 ms (Vulkan 0.07), so about 0.18 ms less.
+       Off: pictures identical, pixel for pixel, on both backends; on, Vulkan as Direct3D 12 (mean 0.04).
+     - Open: Chris to judge the sunset; surfaces still mirror the three-colour fit (`ComputedSky`), not the
+       table (next: reflections of the sky as it is); the haze far off (`ThroughAir`) is still today's
+       formula.
 3. **Soft shadows** (the sun's penumbra wider with distance from the caster) and **contact shadows** (a
    short march along the depth toward the light, for the small creases the shadow maps cannot hold).
    - **First version done** (2026-10-16): `World::softShadows` (viewer `--soft-shadows [size]`): what casts a

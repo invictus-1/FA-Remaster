@@ -53,7 +53,7 @@ So: build it against recordings, combine later by swapping the source of the fra
    3. Motion (`motion.h`) and AMD's FSR 3 upscaler (`fsr3.h`, `World::temporalUpscale`, viewer `--fsr3`):
       done, first version.
    4. Volumetric clouds (3D noise, lit, their shadows on the ground; done, first version: `clouds.h`),
-      the sky from tables of the atmosphere (to come).
+      the sky from tables of the atmosphere (done, first version: `World::skyTables`).
    5. Soft and contact shadows (`World::softShadows`, `contactShadows`): done, first version.
    6. Ray tracing: reflections on every surface (the water already mirrors in screen space; a renderer
       without a G-buffer gets reflections on metal and wet ground best from rays its shaders cast), bounce
