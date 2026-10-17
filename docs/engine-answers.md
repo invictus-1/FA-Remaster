@@ -3,6 +3,75 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 36: a unit's parent, the units on it and its creator in UnitView; what GetAssistingUnitsList counts — done (b11fa29)
+
+**New in `UnitView`.** All three are entity ids; `0xffffffff` means none, as in EntityView (0 is army 1's first unit).
+- `parent`: the entity the unit hangs on, a unit or a script entity.
+  - In the original: SSTIEntityVariableData+0x64, filled by Entity::SyncInterface 0x67a2b6 from the parent weak
+    pointer. The user side reads it through GetAttachmentParent 0x838030.
+- `attachedUnits`: the units hanging on it, in attach order.
+  - In the original: the children list, +0x68. Entity::AttachTo 0x679550 appends; DetachFrom 0x6796f0 removes and
+    keeps the others' order.
+  - Non-units are left out; `attachedCount` still counts shields and script entities.
+  - A killed unit stays in the list until it is destroyed.
+  - A factory's unit under construction is in it, since the build attaches it.
+- `creator`: its factory or engineer, or whoever Unit:SetCreator named (a pod's station or commander). Same value as
+  `UnitStateView::creator`, so no UnitStateOf call per unit is needed.
+  - In the original: SSTIUnitVariableData+0x0, written by Unit::Sync 0x6abcf7; on the user side UserUnit+0x3c0.
+
+**GetAttachedUnitsList(units)** 0x8bc300:
+- Exactly 1 argument; a non-table gives `{}`.
+- Entries 1..GetCount go through the strict getter: nil, destroyed or wrong type is an error.
+- A dead given unit is skipped.
+- For each given unit, in list order, its children are added in order. A child is skipped if the user side does not
+  hold it, if it is dead, or if it is not a unit.
+- One level only, and no duplicate removal: a unit given twice lists its cargo twice.
+- From the views: `for u in list: if not u.dead: for c in u.attachedUnits: if view[c] and not view[c].dead: append c`.
+
+**SelectUnits(units)** 0x8bd8f0:
+- Opt getter; dead units are skipped.
+- A selectable unit goes in as it is. Otherwise its direct `parent` goes in, if that parent is selectable, a unit,
+  and in TRANSPORTATION (0xe1b654). One level only.
+- The result is a set; then SetSelection is called, and nothing is returned.
+- "Selectable" is UserUnit::IsSelectable 0x8c0500 (with FAF's patch at 0x1291519). A unit is NOT selectable if it is:
+  - attached, mobile (motion type 1..8) and POD;
+  - in unit state 33 (UnSelectable);
+  - dead;
+  - being built and in neither FACTORY nor CQUEMOV;
+  - not in SELECTABLE.
+  Your `selectable` covers only the UnSelectable state.
+
+**GetAssistingUnitsList(units)** 0x8bc820 has nothing to do with guard, focus or assist orders: it lists pods by their
+creator.
+- Exactly 1 argument; a non-table gives `{}`. Opt getter: a destroyed unit is skipped.
+- A given unit counts only if it is not dead, not being built, and in PODSTAGINGPLATFORM or POD (0xe1eea8 / 0xe204a4).
+- For each such unit, in list order, every unit the user side holds is taken if it:
+  - is not dead and not being built;
+  - is in the focus army (UserUnit+0x120 against CWldSession::GetFocusArmy 0x7a6360; an observer gets `{}`);
+  - is in POD;
+  - has the given unit as its creator, or is the given unit itself (a selected pod lists itself).
+- Each unit appears once in the whole call (a set), appended in order.
+- **Order within one given unit:** the user side's spatial-database walk (SpatialDB::Collect 0x503f80, sharded by
+  position). The views cannot reproduce that; entity-id order is the nearest stable stand-in (inferred). It matters:
+  orders.lua 1399-1407 gives DroneL item [1] and DroneR item [2].
+- From the views: `for s in list: if not s.dead and not s.beingBuilt and (POD or PODSTAGINGPLATFORM): for u in
+  UnitViews (id order): if u.army == focus and not u.dead and not u.beingBuilt and POD and (u.creator == s.id or
+  u.id == s.id) and not seen: append u`.
+
+**What the user side reads (read in the exe):**
+- dead: UserEntity+0x71 = SSTIEntityVariableData+0x21.
+- being built: +0x70 = +0x20.
+- parent: +0xb4 = +0x64.
+- children: +0xb8 = +0x68.
+- army: UserEntity+0x120.
+- creator: UserUnit+0x3c0, resolved by UpdateUnitData 0x8c0810.
+
+**Inferred, not read:**
+- the spatial walk order;
+- that our three attach sites (AttachBoneTo, AttachTo, the transport's) cover every Entity::AttachTo on a unit.
+Note: the user side holds only what the sync sent it, but UnitViews lists every unit. A host that hides units the
+focus army cannot see should leave them out of these lists too.
+
 ## ui (FYI, 2026-10-16): the defeat warning, the error format, and the interface's list bindings
 
 **platoon.lua:1555 after the AI's defeat:** FAF's own, and the original does the same, word for word.
