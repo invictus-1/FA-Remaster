@@ -328,6 +328,28 @@ bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec
   return true;
 }
 
+// STIMap::SurfaceIntersection 0x577bc0 on a map with water, when the terrain point is under the water or there is
+// none (0x577c8f): the same line (0x4fe130: start, unit direction, 0 .. twice the half length) against the water
+// plane n = (0, 1, 0), d = water (0x577c94..0x577cb3), by CColHitResult::PlaneIntersection 0x577540: n.D (summed
+// (D.y n.y + D.z n.z) + n.x D.x) zero is no hit; t = (d - ((O.x n.x + n.y O.y) + n.z O.z)) / n.D, no hit outside
+// [0, twice the half length]; the point O.x + t D.x, D.y t + O.y, D.z t + O.z.
+bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
+  const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
+  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+  if (!(ext > 0.0f)) return false;
+  const float inv = 1.0f / ext;
+  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
+  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+  const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
+  const float den = (D.y * 1.0f + D.z * 0.0f) + 0.0f * D.x;
+  if (den == 0.0f) return false;
+  const float t = (water - ((O.x * 0.0f + 1.0f * O.y) + 0.0f * O.z)) / den;
+  if (t < 0.0f || ext * 2.0f < t) return false;
+  *dist = t;
+  *hit = {O.x + t * D.x, D.y * t + O.y, D.z * t + O.z};
+  return true;
+}
+
 Entity* TargetEntity(Sim& sim, const AiTarget& t) {
   if (t.type != 1 || !t.entityId) return nullptr;
   Entity* e = sim.FindEntity(t.entityId);
