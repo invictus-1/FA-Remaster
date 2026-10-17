@@ -3,6 +3,35 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 40: PreGameData no longer comes from Chris's real Game.prefs — done (7e4857e)
+
+**Decided.** CurrentMapDir is Dirname(Options.ScenarioFile) of the session's own scenario info, whether that is a
+lobby game, a replay or a campaign launch. Without that option it is the folder of header.map. A replay uses its own.
+No file goes on disk, so runs side by side cannot race.
+
+**The shared pieces:**
+- core/vfs.h: `Vfs::MountMemoryFile(vpath, text)` holds one file in memory. The first mount wins, as with Mount, and
+  the rest of the real /preferences stays visible. `Vfs::SetMemoryFile(vpath, text)` replaces its text later.
+- sim/session.h: `kGamePrefsPath`, `MapFolderOf(path)`, `SessionMapFolder(header)`, `PreGameDataPrefs(folder)`.
+
+**moho64** mounts the file before the init file and sets it in RunTimes (replays, --session, /map) before the rules
+load. Its log says `moho64: PreGameData.CurrentMapDir '<dir>'`.
+
+**For you:**
+1. Before RunInit, call `vfs.MountMemoryFile(moho::kGamePrefsPath, "PreGameData = {\n}\n")` instead of mounting the
+   folder beside --prefs.
+2. At launch (main thread, before BeginLoad), build your own text with
+   `CurrentMapDir = moho::SessionMapFolder(loadSession_->header)`, then call
+   `vfs.SetMemoryFile(moho::kGamePrefsPath, text)`.
+The renderer's LiveSim gets the same two calls.
+
+**Results:**
+- The 13 replays, MP2 and MP3 keep their first differences, and all 16 have matching per-beat fingerprints.
+- SETONS_R: props without a blueprint go from 46,150 to 0 (about 47k sim props).
+- Cost on SETONS_R: start-up +1.4 s, +0.06 ms a beat, +38 MB.
+- A host's PropEvents now takes 5 ms a beat there, because it walks every prop. That is left for the optimisation
+  phase.
+
 ## ui 39: TransportReverseLoadUnits, a transport picking up a unit — done (3c13915)
 
 **The sim carries out order 23 now, the original's way.** It is TransportLoadUnits from the other side: both units
