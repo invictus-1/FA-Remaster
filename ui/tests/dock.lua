@@ -108,6 +108,37 @@ ForkThread(function()
         check("GetValidAttackingUnits: of the tank and the platform, the tank", valid ~= nil and table.getn(valid) == 1 and valid[1] == tank, true)
         SelectUnits({pad})
         check("none: nil", GetValidAttackingUnits(), nil)
+        -- the right click over an enemy (GetRightMouseButtonAction 0x81ec00): our anti-air turret (UEB2104, a weapon
+        -- that fires at the air only) over an enemy power generator: the invalid attack, and a right click gives
+        -- no order; the tank over it: an attack
+        local enemy
+        for i, army in GetArmiesTable().armiesTable do
+            if i ~= GetFocusArmy() and not army.civilian and not enemy then enemy = i end
+        end
+        local gen = {p[1] - 12, p[2], p[3] + 22}
+        SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {p[1] - 12, p[2], p[3] + 12}, bpId = "ueb2104", count = 1, yaw = 0}})
+        SimCallback({Func = "CheatSpawnUnit", Args = {army = enemy, pos = gen, bpId = "ueb1101", count = 1, yaw = 0}})
+        WaitSeconds(2)
+        UISelectionByCategory("STRUCTURE", false, false, false, false)
+        local turret = ownOf("ueb2104")[1]
+        check("our anti-air turret is made", turret ~= nil, true)
+        if turret and enemy then
+            SelectUnits({turret})
+            GetCamera("WorldCamera"):SnapTo({p[1] - 12, p[2], p[3] + 17}, nil, 80)
+            WaitSeconds(0.5)
+            local g = view:Project(gen)
+            LOG("TEST note: the generator on screen at " .. g.x .. "," .. g.y)
+            moho64ui_MouseMove(g.x, g.y)
+            WaitSeconds(0.3)
+            check("the anti-air turret over an enemy on land: the invalid attack", view:GetRightMouseButtonOrder(), "RULEUCC_Invalid")
+            moho64ui_MouseButton("Right", true, g.x, g.y)
+            moho64ui_MouseButton("Right", false, g.x, g.y)
+            WaitSeconds(0.5)
+            check("and a right click gives it no order", table.getn(turret:GetCommandQueue() or {}), 0)
+            SelectUnits({tank})
+            WaitSeconds(0.2)
+            check("the tank over it: an attack", view:GetRightMouseButtonOrder(), "RULEUCC_Attack")
+        end
     end
     LOG("TEST done: " .. failed .. " failed")
 end)
