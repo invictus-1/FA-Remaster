@@ -29,9 +29,9 @@ when it hangs on an entity without a mesh, and the blueprints' life bar sizes). 
 SetVizTo... flags: the helper box FAF hides on crashing planes is no longer drawn). 22 done and in use (`hasShield` and
 `shieldRatio` in the plain unit view: the shield's bar under the life bar). 23 open (how the original sizes a selection
 bracket). 24 is addressed to the interface track (two launchers to watch big units die). 30 is addressed to
-the interface track (the FSR 3 option).
+the interface track (the FSR 3 option; done 2026-10-17).
 
-## 30. To the INTERFACE track: the FSR 3 option (2026-10-16, not blocking)
+## 30. To the INTERFACE track: the FSR 3 option (2026-10-16, not blocking; DONE 2026-10-17: main a001fb4, ui 6a3f235, Video tab "Temporal Upscaling (FSR 3)", off by default; it replaces Anti-Aliasing from the next map loaded; cameraCut on jumps and minimap clicks)
 
 **Who asks:** the renderer, for the lighting upgrade (Chris, 2026-10-15: "FSR only"; every new look a player's
 option, off by default).

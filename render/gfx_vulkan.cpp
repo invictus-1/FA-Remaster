@@ -6,8 +6,8 @@
 // - The window's picture is drawn into an image of our own (RGBA8, with its depth, as Direct3D 12's back
 //   buffer) and blitted onto the swap chain's image at the frame's end: pipelines need not know the swap
 //   chain's format, and a capture reads our own image.
-// - Bindings as Direct3D 12's root signature has them: set 0 holds t0-t31 (images, at 16-47), t0-t1 of
-//   space1 (storage buffers, 48-49) and the six fixed samplers (64-69), one set for each combination used
+// - Bindings as Direct3D 12's root signature has them: set 0 holds t0-t39 (images, at 16-55), t0-t1 of
+//   space1 (storage buffers, 56-57) and the six fixed samplers (64-69), one set for each combination used
 //   in a frame (cached, as Direct3D 12's descriptor tables); set 1 holds b0-b3 (uniform buffers at 0-3),
 //   dynamic, pointing into the frame's ring of constants, so a draw only changes four offsets. A compute
 //   shader's storage images (u0-u15) are at 80-95 of set 0; a storage target is in the general layout from
@@ -221,9 +221,9 @@ const char* Result(VkResult r) {
 }
 
 constexpr int kFrames = 3;
-constexpr int kTexSlots = 32;
+constexpr int kTexSlots = 40;
 constexpr int kCbSlots = 4;
-constexpr uint32_t kTexBinding = 16, kBufferBinding = 48, kSamplerBinding = 64, kStorageBinding = 80;
+constexpr uint32_t kTexBinding = 16, kBufferBinding = 56, kSamplerBinding = 64, kStorageBinding = 80;
 constexpr int kStorageSlots = 16;  // u0-u15
 // (every set's bindings are seen by the drawing stages and by compute shaders alike)
 constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1850,7 +1850,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
   std::sort(images.begin(), images.end());
   for (const auto& image : images)
     if (image.binding < kTexBinding || image.binding + image.count > kTexBinding + kTexSlots || image.kind >= SpirvImage::Storage) {
-      if (error) *error = std::string(desc.name) + ": a texture outside t0-t31";
+      if (error) *error = std::string(desc.name) + ": a texture outside t0-t39";
       for (VkShaderModule m : modules)
         if (m) vkDestroyShaderModule(device_, m, nullptr);
       return {};
@@ -1899,7 +1899,7 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     const bool storage = image.kind == SpirvImage::Storage || image.kind == SpirvImage::StorageVolume;
     const uint32_t from = storage ? kStorageBinding : kTexBinding, slots = storage ? kStorageSlots : kTexSlots;
     if (image.binding < from || image.binding + image.count > from + slots) {
-      if (error) *error = std::string(desc.name) + ": a texture outside t0-t31 or u0-u15";
+      if (error) *error = std::string(desc.name) + ": a texture outside t0-t39 or u0-u15";
       return {};
     }
   }

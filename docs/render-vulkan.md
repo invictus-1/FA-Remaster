@@ -19,7 +19,7 @@ written with care and said to be untried.
    once the frames that might use them are done.
 3. **Done**: pipelines. HLSL compiled to SPIR-V by DXC (`dxcompiler.dll` loaded at run time,
    `render/gfx_vulkan_dxc.cpp`), kept in the shader cache folder as `.spv`. Registers mapped: set 0 holds
-   t0-t31 (bindings 16-47), t0-t1 of space1 (storage buffers, 48-49) and the six fixed samplers (64-69);
+   t0-t39 (bindings 16-55; t0-t31 at 16-47 until 2026-10-17), t0-t1 of space1 (storage buffers, 56-57) and the six fixed samplers (64-69);
    set 1 holds b0-b3 (dynamic uniform buffers, 0-3) pointing into the frame's pages of constants. Set 0's
    layout is made per arrangement of textures the shaders declare (read from the SPIR-V: an array of
    textures, `Texture2D maps[10] : register(t6)`, is one binding of ten in Vulkan); its sets are cached per

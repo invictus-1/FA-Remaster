@@ -540,8 +540,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover, skyTables && look == Look::Modern);
+    Vec3 bolt{0, 0, 0};
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
-      const Vec3 bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
+      bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
       skyLight.zenith += bolt;
       skyLight.horizon += bolt * 0.6f;
     }
@@ -620,6 +621,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.mist[3] = 0.6f;
     }
     SetSky(skyLight, &c);
+    if (skyTables && look == Look::Modern) {  // the sky from tables: what reads the computed sky reads its view (view.h, ComputedSky)
+      c.skyTable[0] = 1;
+      c.skyTable[1] = skyLight.greyShare;
+      c.skyTable[2] = skyLight.grey;
+      c.skyTable[3] = skyLight.faint;
+      c.skyExtra[0] = bolt.x;
+      c.skyExtra[1] = bolt.y;
+      c.skyExtra[2] = bolt.z;
+    }
     lightDirection = skyLight.direction;
   }
   CpuTimes::Part("sun shadows placed");
@@ -1462,11 +1472,13 @@ void World::Render() {
   Stage("light in the air");
   if (sidePicture) air.Skip(&view);
   else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
-  // the sky from tables (when on): its view from the eye this frame, before the sky's pass reads it
-  if (skyTables && look == Look::Modern && view.constants.skyZenith[3] > 0.5f) {
+  // the sky from tables (when on): its view from the eye this frame, before the sky's pass and the surfaces read it
+  bool skyTable = false;
+  if (view.constants.skyTable[0] > 0.5f && view.constants.skyZenith[3] > 0.5f) {
     Stage("sky's view");
-    skyDraw.BuildTables(view, skyLight);
+    skyTable = skyDraw.BuildTables(view, skyLight);
   }
+  if (!skyTable) view.constants.skyTable[0] = 0;  // (where it cannot be built: the fitted sky, as without it)
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
@@ -1474,6 +1486,7 @@ void World::Render() {
   device_->SetTexture(kEnvironmentSlot, sky_);
   device_->SetTexture(kAirSlot, air.Volume());
   device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
+  device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
   lights.Bind();
   if (haveMap_) {
     Stage("ground");

@@ -39,9 +39,6 @@ cbuffer SkyPicture : register(b1) {
   float4 cloudLight;  // the falling light on the clouds; w: 1 = volumetric clouds (cloudPicture) in place of the layer
 };
 Texture2D cloudPicture : register(t1);  // (clouds.h: rgb their light, a what comes through)
-#if SKY_TABLES
-Texture3D skyView : register(t2);  // (Sky::BuildTables: the sky's view; three slices, its shader says what they hold)
-#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -146,22 +143,6 @@ float3 Stars(float3 d, float cells, float share, float brightest) {
   return tint * (bright * shape * shape * twinkle);
 }
 
-#if SKY_TABLES
-// The sky from tables (Sky::BuildTables): where a direction lies in the sky's view (round from +x; from
-// overhead through the horizon, at the view's middle, to straight down), and the haze's glow round a body.
-float2 SkyViewUv(float3 d) {
-  const float r = 6360e3 + 500, rho = sqrt(500.0 * (2 * 6360e3 + 500.0));
-  float beta = acos(rho / r), horizon = 3.14159265 - beta;
-  float zenith = acos(clamp(d.y, -1, 1));
-  float v = zenith < horizon ? 0.5 * (1 - sqrt(saturate(1 - zenith / horizon))) : 0.5 + 0.5 * sqrt(saturate((zenith - horizon) / beta));
-  return float2(atan2(d.z, d.x) / (2 * 3.14159265), 0.5 / 108 + v * (1 - 1.0 / 108));
-}
-float HazeGlow(float mu) {
-  const float g = 0.76;
-  return 3.0 / (8.0 * 3.14159265) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
-}
-#endif
-
 TextureCube mapSky : register(t29);
 
 float4 PS(VOut i) : SV_Target {
@@ -176,12 +157,7 @@ float4 PS(VOut i) : SV_Target {
   // the air's light: the sun's until it is well below the horizon, the moon's while it is up
   float3 c = 0;
 #if SKY_TABLES
-  {  // from the tables: the smooth part, and the haze's glow round each body taken here
-    float2 uv = SkyViewUv(d);
-    c += skyView.SampleLevel(samplerLinear, float3(uv, 0.5 / 3), 0).rgb;
-    c += skyView.SampleLevel(samplerLinear, float3(uv, 1.5 / 3), 0).rgb * HazeGlow(dot(d, sun));
-    c += skyView.SampleLevel(samplerLinear, float3(uv, 2.5 / 3), 0).rgb * HazeGlow(dot(d, moon));
-  }
+  c += SkyFromTable(d);  // (from the tables: view.h, the sky's view at kSkyTableSlot)
 #else
   [branch] if (sun.y > -0.33) c += Scatter(d, sun, 1) * sunSky.rgb;
   [branch] if (moon.y > -0.1) c += Scatter(d, moon, moonSky.w) * moonSky.rgb;
@@ -778,6 +754,8 @@ SkyLight SkyAt(float hours, float cloudCover, bool tables) {
     const float share = s.cover * s.cover * 0.9f;
     s.zenith = s.zenith * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
     s.horizon = s.horizon * (1 - share) + Vec3{0.92f, 0.96f, 1.0f} * (grey * share);
+    s.grey = grey;
+    s.greyShare = share;
   }
   s.daylight = std::clamp(GroundLight(s) / noonNow, 0.0f, 1.0f);
   // the eye opens as the light goes, but not all the way: dusk and night stay darker than day
@@ -927,14 +905,12 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   const bool fromTables = tablesNow_ && view.constants.skyZenith[3] > 0.5f;
   tablesNow_ = false;
   device_->SetPipeline(fromTables ? tablesPipeline_ : pipeline_);
-  if (fromTables) device_->SetTexture(2, skyView_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &pc, sizeof pc);
   if (mapSky) device_->SetTexture(kEnvironmentSlot, mapSky);
   device_->SetTexture(1, clouds);
   device_->Draw(3);
   device_->SetTexture(1, {});
-  if (fromTables) device_->SetTexture(2, {});
 }
 
 }  // namespace render

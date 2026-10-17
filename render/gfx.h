@@ -7,7 +7,7 @@
 //    32-bit float: together with linalg.h's Perspective this keeps precision at strategic-zoom distances.
 //  - Shaders are HLSL source (model 5.1), compiled when a pipeline is created.
 //    Constant buffers: registers b0..b3, set per draw with SetConstants (the data is copied).
-//    Textures: registers t0..t31. Two buffers of plain data (SetShaderBuffer, slots 0 and 1), read
+//    Textures: registers t0..t39. Two buffers of plain data (SetShaderBuffer, slots 0 and 1), read
 //    in a shader as `StructuredBuffer<T> name : register(t0, space1)` and `register(t1, space1)`.
 //    Samplers are fixed:
 //      s0 anisotropic wrap, s1 trilinear clamp, s2 point clamp, s3 trilinear wrap, s4 point wrap,
@@ -116,7 +116,7 @@ struct TargetDesc {
 };
 
 // A compute shader: HLSL, `[numthreads(x, y, z)] void CS(uint3 id : SV_DispatchThreadID)`. It reads
-// constants (b0..b3), textures (t0..t31; a volume as Texture3D), the shader buffers and the fixed
+// constants (b0..b3), textures (t0..t39; a volume as Texture3D), the shader buffers and the fixed
 // samplers as draws do, and writes the storage targets SetStorage binds: `RWTexture2D<float4> out :
 // register(u0)` (RWTexture3D for a volume), u0..u15.
 struct ComputeDesc {
