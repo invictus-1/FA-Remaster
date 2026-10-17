@@ -378,7 +378,7 @@ std::FILE* OpenForWriting(const std::filesystem::path& file) {
 
 bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   if (config < 0) config = lua_gettop(L) + config + 1;
-  if (sim_) {
+  if (sim_ || Loading()) {
     *why = "a session is running already";
     return false;
   }
@@ -403,7 +403,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   profile_ = ProfileName(L);
   playData_.clear();
   play_.reset();
-  if (!StartSession(session, uids, why)) return false;
+  PrepareSession(session, uids);
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = false;
@@ -413,7 +413,7 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
 
 bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
   if (info < 0) info = lua_gettop(L) + info + 1;
-  if (sim_) {
+  if (sim_ || Loading()) {
     *why = "Can't launch a session while one is already launching or running.";  // (the original's words, 0xe4a3c8)
     return false;
   }
@@ -437,7 +437,7 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
   profile_ = ProfileName(L);
   playData_.clear();
   play_.reset();
-  if (!StartSession(session, uids, why)) return false;
+  PrepareSession(session, uids);
   Logf(LogLevel::Info, "moho64ui: a single-player session: %s, %zu armies%s", session.header.map.c_str(), session.header.armies.size(),
        params.cheats ? ", cheats on (the debug facilities)" : "");
   last_ = std::make_unique<SessionDescription>(session);
@@ -470,7 +470,7 @@ void GameSession::ReadLookOptions(lua_State* L, int options) {
 }
 
 bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::string* why) {
-  if (sim_) {
+  if (sim_ || Loading()) {
     *why = "a session is running already";
     return false;
   }
@@ -517,16 +517,12 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   profile_ = ProfileName(L);
   playData_ = std::move(*data);
   play_.reset();
-  if (!StartSession(session, uids, why)) {
-    playData_.clear();
-    return false;
-  }
+  PrepareSession(session, uids);
   play_ = std::make_unique<CommandStream>(playData_, h->streamOffset);
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;
-  Logf(LogLevel::Info, "moho64ui: playing the replay %s (%zu bytes, %zu armies, %s)", file.c_str(), playData_.size(), h->armies.size(),
-       sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
+  Logf(LogLevel::Info, "moho64ui: playing the replay %s (%zu bytes, %zu armies)", file.c_str(), playData_.size(), h->armies.size());
   return true;
 }
 
@@ -610,6 +606,9 @@ void GameSession::Record(const std::string& bytes) {
 void GameSession::End() {
   if (worker_) worker_->Wait();  // (a beat on its thread ends first; its sounds and sync are dropped)
   beatToFinish_ = false;
+  load_ = Load::None;  // (a launch still loading is dropped)
+  loadSim_.reset();
+  loadSession_.reset();
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   play_.reset();
@@ -636,41 +635,88 @@ bool GameSession::Relaunch(std::string* why) {
   End();
   SessionDescription again = *last_;
   if (lastWasReplay_) {  // a replay starts over from its first beat, with its own seed
-    if (!StartSession(again, lastUids_, why)) return false;
+    PrepareSession(again, lastUids_);
     play_ = std::make_unique<CommandStream>(playData_, again.header.streamOffset);
     return true;
   }
   if (!seedGiven) again.header.seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-  return StartSession(again, lastUids_, why);
+  PrepareSession(again, lastUids_);
+  return true;
 }
 
-bool GameSession::StartSession(const SessionDescription& session, const std::vector<std::string>& uids, std::string* why) {
-  auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
-  auto t0 = std::chrono::steady_clock::now();
+// The launch call's part (the original's WLD_SetupSessionInfo + WLD_BeginSession, 0x88cbc0 /
+// 0x88d060): the session is described and its simulation made, nothing loaded yet.
+void GameSession::PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids) {
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, uids.size());
-  auto sim = std::make_unique<Sim>(vfs_, hookDirs_, uids);
-  sim->sessionMods = h.mods;
-  if (!sim->LoadRules()) {
-    *why = "the game's rules (blueprints) did not load";
-    return false;
-  }
-  auto t1 = std::chrono::steady_clock::now();
-  sim->collectSync = true;
+  loadSession_ = std::make_unique<SessionDescription>(session);
+  loadSim_ = std::make_unique<Sim>(vfs_, hookDirs_, uids);
+  loadSim_->sessionMods = h.mods;
+  loadUids_ = uids;
+  loadOk_ = false;
+  loadWhy_.clear();
+  load_ = Load::Due;
+}
+
+// The rules and the simulation's start on the worker thread (the original: the "Map loader"
+// background task, func_WorldSessionUserLoad 0x885de0, and the Sim thread, ThreadCreateSim
+// 0x73d260). Meanwhile this thread draws only the front end's frames: no Lua state, rules or
+// blueprints are made here until FinishLoad (the engine's rule for work beside a running sim).
+void GameSession::BeginLoad() {
+  if (load_ != Load::Due) return;
+  load_ = Load::Running;
+  if (!worker_) worker_ = std::make_unique<BeatWorker>();
+  worker_->Start([this] {
+    auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+    Sim* sim = loadSim_.get();
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!sim->LoadRules()) {
+      loadWhy_ = "the game's rules (blueprints) did not load";
+      return;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    sim->collectSync = true;
 #ifdef MOHO64UI_WORLD_PICTURE
-  sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
-  sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
-  sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
-  sim->collectShakes = true;               // and the camera shakes they ask for (PostCameraShake)
+    sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
+    sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
+    sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
+    sim->collectShakes = true;               // and the camera shakes they ask for (PostCameraShake)
 #endif
-  if (!sim->Start(session)) {
-    *why = "the simulation did not start";
+    if (!sim->Start(*loadSession_)) {
+      loadWhy_ = "the simulation did not start";
+      return;
+    }
+    loadRulesSeconds_ = secs(t0, t1);
+    loadStartSeconds_ = secs(t1, std::chrono::steady_clock::now());
+    loadOk_ = true;
+  });
+}
+
+bool GameSession::LoadDone() const { return load_ == Load::Running && !BeatRunning(); }
+
+// The load is through (the original's last DoLoading frame, 0x88c000): the session runs.
+bool GameSession::FinishLoad(std::string* why) {
+  if (load_ == Load::Due) BeginLoad();
+  if (load_ != Load::Running) {
+    *why = "no launch is loading";
     return false;
   }
-  auto t2 = std::chrono::steady_clock::now();
-  Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", secs(t0, t1), secs(t1, t2));
-  sim_ = std::move(sim);
+  WaitForWorker();
+  load_ = Load::None;
+  const std::unique_ptr<SessionDescription> described = std::move(loadSession_);
+  if (!loadOk_) {
+    *why = loadWhy_;
+    loadSim_.reset();
+    play_.reset();
+    playData_.clear();
+    return false;
+  }
+  const SessionDescription& session = *described;
+  const ReplayHeader& h = session.header;
+  Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", loadRulesSeconds_, loadStartSeconds_);
+  sim_ = std::move(loadSim_);
+  const std::vector<std::string> uids = std::move(loadUids_);
   heightsChanges_ = ~0ull;
   CopyHeights();
   CopyAllies();
@@ -707,6 +753,9 @@ bool GameSession::StartSession(const SessionDescription& session, const std::vec
     if (waitForWindow && !window) pictureDue_ = true;
     else OpenPicture();
   }
+  if (play_)
+    Logf(LogLevel::Info, "moho64ui: the replay is played %s",
+         sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
   return true;
 }
 

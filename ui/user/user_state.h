@@ -60,6 +60,8 @@ class UserState {
     std::string userDir;
     std::function<bool(lua_State* L, const std::string& file, std::string* why)> launchReplay;
     std::function<std::string()> currentReplay;
+    // Whether a launched game is loading (the front end's WorldIsLoading(); unset: never).
+    std::function<bool()> worldLoading;
     int width = 1920, height = 1080;    // the head's size in pixels
     // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
     // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
@@ -102,11 +104,18 @@ class UserState {
   bool Boot();             // /lua/userInit.lua
   bool StartMainScript();  // the root frames, then uimain.SetupUI()
   bool StartFrontEnd();    // uimain.StartFrontEndUI()
-  // uimain.StartGameUI() in a session's state (FA exe 0x83d240): the game script makes its world
-  // interface provider, which is told at once that loading starts.
+  // The game's loading screen in the front end's own state, as the original's DoPreload shows it
+  // (FA exe 0x88bee0, the frame after a launch): its root frames cleared, uimain.SetupUI and
+  // uimain.StartGameUI (the game script's provider) again, then provider:StartLoadingDialog().
+  // EndLoadingScreen: the game's own state takes over (DoInitializing 0x88c4ad); the loading
+  // screen's controls go, and this state's provider with them (the session's replaces it, 0x86aa12).
+  bool StartLoadingScreen();
+  void EndLoadingScreen();
+  // uimain.StartGameUI() in a session's state (FA exe 0x83d240 from DoInitializing): the game
+  // script makes its world interface provider. (Its loading screen was the front end's.)
   bool StartGame();
-  // The world is there: provider:CreateGameInterface(isReplay), then provider:StopLoadingDialog().
-  // (Inferred: that order, and that nothing lies between them.)
+  // The world is there (after the setup's beat): provider:StopLoadingDialog(), then
+  // provider:CreateGameInterface(isReplay) (DoInitializing 0x88c577, 0x88c5cd).
   void GameLoaded();
   // provider:<fn>(args) with the `nargs` values on top of the stack; nothing happens without a provider.
   void CallProvider(const char* fn, int nargs = 0);

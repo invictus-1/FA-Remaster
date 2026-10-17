@@ -326,8 +326,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The in-game interface comes up on a running game. As in the original, a launched game gets a
   script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
   functions (5,334 blueprints, the categories); the game script makes its world interface
-  provider and is told to start loading, to create the game interface and that loading stopped
-  (`user/session_bindings.cpp`). The session's facts are answered from the simulation (scenario,
+  provider and is told to create the game interface and that loading stopped (its loading screen
+  is the front end's: see below) (`user/session_bindings.cpp`). The session's facts are answered from the simulation (scenario,
   armies, focus army, economy totals, time, pause, clients), every beat's sync table arrives as
   `Sync` with `OnSync()`, and `gamemain.OnBeat()` runs. The game's own set-up of the screen runs
   through without a script error, and the economy bar, the score board with the clock, the tabs
@@ -829,6 +829,25 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `GameSpeed` is "adjustable" ("fast" starts at 4, "normal" stays). `GetSimRate` gives the speed
   asked for, not the speed the simulation manages; at high speeds the host runs at most ten
   beats a frame.
+- A launched game loads as the original's does (its session states, WLD_Frame 0x88cae0, read
+  2026-10-17). The launch call (the lobby's Launch, `LaunchSinglePlayerSession`,
+  `LaunchReplaySession`, a restart) only describes the session. The next frame the game's loading
+  screen comes up in the front end's own state (DoPreload 0x88bee0): its root frames are cleared,
+  `uimain.SetupUI` and `uimain.StartGameUI` run again, then `provider:StartLoadingDialog()`, which
+  is FAF's faction movie, "IN TRANSIT" and the loading tips while `WorldIsLoading()` says so. The
+  simulation's rules and its start then run on the worker thread, as the original's background
+  loader and its Sim thread do, while the front end goes on drawing. Nothing else is made on the
+  main thread meanwhile. Once the load is through, the game's own state is made (its rules,
+  `/lua/SessionInit.lua`, `SetupUI`, `StartGameUI`), the loading screen's controls go, and the
+  setup's beat, `StopLoadingDialog` and `CreateGameInterface` follow (DoInitializing 0x88c3f0).
+  `UpdateLoadingDialog` is never called, as in the original. A load that fails goes back to a new
+  front end, as the original's "map failed" does. Before this the window stood still for about
+  9 s on the lobby. Now the loading screen plays for the whole load (in a window, about 670 frames
+  in 7.5 s), and one frame of about 2 s is left at its end (the world's picture and the
+  interface's rules). Headless runs (the tests) wait for the load at once, and the loading screen
+  gets exactly one frame before the game, so its scripts run in every test
+  (`ui/tests/loading.lua`: WorldIsLoading from the launch call, SetupUI and StartGameUI in the front
+  end's state the frame after, the pointer hidden by FAF's StartLoadingDialog).
 - 494 of the 531 engine functions are built (2026-10-16; about 100 of them, the world view's, the
   cameras' and the units', as a first version); the other 37 are logged stubs, most of them with no
   caller in the game's scripts (multiplayer's, the path debugger, saving games, a few math and

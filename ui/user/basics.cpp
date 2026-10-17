@@ -356,8 +356,15 @@ void RegisterBasicBindings(lua_State* L) {
     return 1;
   };
   static const lua_CFunction kNothing = [](lua_State*) -> int { return 0; };
-  for (const char* name : {"SessionIsActive", "SessionIsReplay", "WorldIsLoading", "WorldIsPlaying", "GpgNetActive"})
+  for (const char* name : {"SessionIsActive", "SessionIsReplay", "WorldIsPlaying", "GpgNetActive"})
     SetGlobal(L, name, kFalse);
+  // WorldIsLoading(): from the launch call until the world is loaded (FA exe 0x88df50: the session
+  // states Preload and Loading); FAF's loading screen shows its tips while it says so.
+  SetGlobal(L, "WorldIsLoading", [](lua_State* S) -> int {
+    const auto& loading = UserState::From(S)->config().worldLoading;
+    lua_pushboolean(S, loading && loading() ? 1 : 0);
+    return 1;
+  });
   SetGlobal(L, "GpgNetSend", kNothing);
   // GetAntiAliasingOptions(): the anti-aliasing sample counts the graphics card offers (the game's
   // Fidelity Presets take the last as Ultra's, the middle one as High's). Here the renderer's:

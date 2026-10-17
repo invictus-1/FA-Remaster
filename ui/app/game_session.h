@@ -141,6 +141,18 @@ class GameSession {
   void CaptureWindow(const std::string& path);
 
   bool running() const { return sim_ != nullptr; }
+  // A launch is loaded the original's way (its session states, WLD_Frame 0x88cae0): the launch call
+  // only takes the session's description (the load is then due: LoadDue); the host shows the game's
+  // loading screen in the front end's own state and calls BeginLoad, which runs the simulation's
+  // rules and its start on the worker thread (the original: its "Map loader" background task and
+  // its Sim thread) while the front end goes on drawing; LoadDone says when that is through, and
+  // FinishLoad makes it the running session (its picture opens) or gives the reason it failed.
+  // Loading(): from the launch call until FinishLoad (the front end's WorldIsLoading()).
+  bool LoadDue() const { return load_ == Load::Due; }
+  bool Loading() const { return load_ != Load::None; }
+  void BeginLoad();
+  bool LoadDone() const;
+  bool FinishLoad(std::string* why);
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
   const std::vector<std::string>& modUids() const { return modUids_; }
@@ -277,7 +289,17 @@ class GameSession {
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;
   Sky skyNow_;  // the running game's (kept for Relaunch)
-  bool StartSession(const SessionDescription& session, const std::vector<std::string>& uids, std::string* why);
+  // The launch being loaded (BeginLoad): its description, its simulation until FinishLoad hands it
+  // to sim_, and what the worker found (written there, read here after it).
+  enum class Load { None, Due, Running };
+  Load load_ = Load::None;
+  std::unique_ptr<SessionDescription> loadSession_;
+  std::unique_ptr<Sim> loadSim_;
+  std::vector<std::string> loadUids_;
+  bool loadOk_ = false;
+  std::string loadWhy_;
+  double loadRulesSeconds_ = 0, loadStartSeconds_ = 0;
+  void PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids);
 };
 
 }  // namespace moho::ui

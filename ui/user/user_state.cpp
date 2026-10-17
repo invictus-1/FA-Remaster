@@ -145,17 +145,26 @@ bool UserState::StartMainScript() {
   return true;
 }
 
-bool UserState::StartGame() {
-  uiState_ = "game";
-  if (!CallUiMain("StartGameUI")) return false;
+bool UserState::StartLoadingScreen() {
+  uiState_ = "game";  // (the original's interface mode 3 from here: GetCurrentUIState() is "game")
+  for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
+  if (!CallUiMain("SetupUI") || !CallUiMain("StartGameUI")) return false;
   CallProvider("StartLoadingDialog");
   return true;
 }
 
-void UserState::GameLoaded() {
-  // The loading screen goes: the script that made it never removes it, so the engine must.
-  // (Inferred: that the root frames are cleared here.)
+void UserState::EndLoadingScreen() {
   for (int h = 0; h < ui_->NumFrames(); ++h) ui_->GetFrame(h)->ClearChildren(state_->L());
+  if (provider) provider->UnbindLua();
+  provider.reset();
+}
+
+bool UserState::StartGame() {
+  uiState_ = "game";
+  return CallUiMain("StartGameUI");
+}
+
+void UserState::GameLoaded() {
   ++syncCount;
   RefreshUserUnits(state_->L());
   CopyFromSimulation();

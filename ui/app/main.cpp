@@ -71,9 +71,10 @@ bool noSound = false;             // --no-sound: a live window without the sound
 // way, the world's picture read back and everything copied to the window.
 bool directWindow = true;
 // --window-capture <prefix>: what the window shows, read back by the renderer (checking):
-// <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left.
+// <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left,
+// <prefix>_loading.png 90 frames into a launch's loading screen.
 std::string windowCapture;
-int capturedFrames = 0, menuFrames = 0;
+int capturedFrames = 0, menuFrames = 0, loadingFrames = 0;
 bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
@@ -362,6 +363,7 @@ int main(int argc, char** argv) {
   session.userDir = cfg.userDir;
   cfg.launchReplay = [&session](lua_State* L, const std::string& file, std::string* why) { return session.LaunchReplay(L, file, why); };
   cfg.currentReplay = [&session]() { return session.currentReplay; };
+  cfg.worldLoading = [&session]() { return session.Loading(); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
@@ -490,8 +492,53 @@ int main(int argc, char** argv) {
   // The front end's state stays as it is and is no longer shown.
   std::unique_ptr<ui::UserState> game;
   ui::UserState* shown = front.get();
+  // A new front end, its main menu up (after a game is left, or when a launch did not load).
+  auto freshFrontEnd = [&]() {
+    if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
+      backdrop.reset();
+      backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
+      cfg.backdrop = backdrop.get();
+      beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
+    }
+    auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
+    if (fresh->Boot() && fresh->StartMainScript() && fresh->StartFrontEnd()) {
+      front = std::move(fresh);
+      shown = front.get();
+    } else {
+      Logf(LogLevel::Error, "moho64ui: the front end did not come up again");
+    }
+  };
+  int loadingDrawn = 0;  // frames the loading screen drew while the world loaded (the window's)
+  auto loadingSince = std::chrono::steady_clock::now();
   auto startGameInterface = [&]() {
-    if (game || !session.running()) return;
+    if (game) return;
+    // A launch loads the original's way (its session states, WLD_Frame 0x88cae0): the
+    // frame after the launch call, the game's loading screen in the front end's own state
+    // (DoPreload 0x88bee0); then the world loads on the worker thread while the front end goes
+    // on drawing it (the faction's movie, the tips). Headless (tests): the load is waited for at
+    // once, and the loading screen has exactly one frame (its scripts run once) before the game.
+    if (session.LoadDue()) {
+      if (backdrop) backdrop->Stop();  // (nothing else draws a world while one loads)
+      cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+      if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
+      session.BeginLoad();
+      loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();
+      if (!windowed) session.WaitForWorker();
+      return;
+    }
+    if (!session.Loading() || !session.LoadDone()) return;
+    {
+      std::string why;
+      if (!session.FinishLoad(&why)) {  // (the original: "map %s failed. aborting session.", back to the front end)
+        Logf(LogLevel::Error, "moho64ui: the game did not load: %s; back to the front end", why.c_str());
+        session.End();
+        freshFrontEnd();
+        return;
+      }
+      Logf(LogLevel::Info, "moho64ui: the world loaded in %.2f s; the loading screen drew %d frames meanwhile",
+           std::chrono::duration<double>(std::chrono::steady_clock::now() - loadingSince).count(), loadingDrawn);
+    }
+    front->EndLoadingScreen();  // (the game's own state takes over: DoInitializing 0x88c4ad)
     session.WaitForWorker();  // (no Lua state is made while a beat runs: the engine's rule)
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
     // (A new state is made for the size the head has NOW: the window may have been resized.)
@@ -564,19 +611,7 @@ int main(int argc, char** argv) {
     }
     session.End();
     Logf(LogLevel::Info, "moho64ui: the game is left: back to the front end");
-    if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
-      backdrop.reset();
-      backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
-      cfg.backdrop = backdrop.get();
-      beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
-    }
-    auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
-    if (fresh->Boot() && fresh->StartMainScript() && fresh->StartFrontEnd()) {
-      front = std::move(fresh);
-      shown = front.get();
-    } else {
-      Logf(LogLevel::Error, "moho64ui: the front end did not come up again");
-    }
+    freshFrontEnd();
   };
   // The world's sounds are heard from where the game's camera is.
   auto listen = [&]() {
@@ -612,9 +647,10 @@ int main(int argc, char** argv) {
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            session.OpenPictureIfDue();
+                           if (session.Loading()) ++loadingDrawn;
                            listen();
                            sounds.Update(static_cast<float>(seconds));
-                           if (!game) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           if (!game && !session.Loading()) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            leaveOrRestart();
                            startGameInterface();
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
@@ -622,6 +658,7 @@ int main(int argc, char** argv) {
                              static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
                              if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
+                             if (!game && session.Loading() && ++loadingFrames == 90) session.CaptureWindow(windowCapture + "_loading.png");
                            }
                            // LAST: a beat it starts on its own thread runs beside nothing more of
                            // this frame that touches the simulation (only the picture is shown).
