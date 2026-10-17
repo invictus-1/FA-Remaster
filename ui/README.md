@@ -334,7 +334,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   of the simulation has a script object (class table `moho.UserUnit`); `SelectUnits` and
   `GetSelectedUnits` keep the selection and tell the game script at once
   (`gamemain.OnSelectionChanged`); `GetUnitCommandData` gives the orders, toggles and buildable
-  category from the blueprints; commanders, idle engineers and factories are found. With the
+  category from the blueprints (the orders and toggles of all the units, what ALL of them can build,
+  as the original: a commander with a tank or a factory has no build menu); commanders, idle
+  engineers and factories are found. The order buttons' states as the original's (read by the
+  engine track, 2026-10-16): the fire state of the units with that toggle, -1 when they differ;
+  automatic modes on when all are, and for no units; a script bit of the units that have it.
+  `ui_SelectTolerance` below 0 (FAF's ignore mode) picks no unit under the mouse. With the
   commander selected the game's orders panel, its construction panel with the build icons and the
   commander's avatar come up. Orders are written with the engine's command writer and applied
   before the next beat; the game script hears of each (`commandmode.OnCommandIssued`). A right
@@ -398,7 +403,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   as the original's: with Space held the mouse turns and leans it (from near only, a zoom under
   125; a full turn for a view's width) and it swings back to north up when Space is let go;
   Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
-  turns the world is not checked against the original. Timed moves are not built. The interface hands the picture what it adds to
+  turns the world is not checked against the original. The interface hands the picture what it adds to
   the world: the selected units (a ring under each), the lines of their orders (while Shift is held, as in the original, in the colours and with the marks of the game's own table `commandgraphparams.lua`, and a blue outline round each queued building's site), the outline of the ground a building being placed takes (green or red), and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent

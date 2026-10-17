@@ -812,7 +812,7 @@ class WorldView : public Control {
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();
-    if (highlight && pixels_ && ControlAt(mouse, 0, mouse.mouseX, mouse.mouseY) == this) {
+    if (highlight && pixels_ && Looks().selectTolerance >= 0 && ControlAt(mouse, 0, mouse.mouseX, mouse.mouseY) == this) {
       uint32_t under = source->UnitAt(mouse.mouseX - r.x0, mouse.mouseY - r.y0);
       int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
       if (kind) scene.hover = under, scene.hoverKind = kind;
@@ -1402,6 +1402,7 @@ class WorldView : public Control {
   // picture last drawn will do (what is on screen), so that asking every frame draws nothing.
   uint32_t UnitUnder(lua_State* L, float sx, float sy, bool fresh = true) {
     if (miniMap) return 0xffffffffu;
+    if (Looks().selectTolerance < 0) return 0xffffffffu;  // (FAF's ignore mode: clicks pick no unit)
     if (!(!fresh && pixels_ && UserState::From(L)->config().world) && !EnsurePicture(L)) {
       float world[3];
       Unproject(L, sx, sy, world);

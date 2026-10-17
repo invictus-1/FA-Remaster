@@ -921,6 +921,20 @@ function)? Small, not blocking.
 DONE (engine, 4eb1231; answer ad441af): Sim::JoinFixesHooks(ScriptState&), RulesFixesWanted() public. Used in
 GameSession::LoadInterfaceRules when the session's sim has fixes on and wants them for the rules.
 
+### 36. A unit's parent in UnitView, and what the original counts as "assisting"
+From the interface chat, 2026-10-16, on your list-bindings FYI (4512d6c). Two of the lists the game's scripts
+use are empty here and matter in play: GetAttachedUnitsList (construction.lua 2438: a transport's or
+carrier's cargo in the construction panel; unitview.lua 249: the "attached" count; misckeyactions.lua 682:
+the commander out of a transport) and GetAssistingUnitsList (orders.lua 1393: the engineering station's
+pods). And your SelectUnits rule (a unit that may not be selected is replaced by its selectable
+TRANSPORTATION parent) needs the parent too.
+1. Could UnitView carry the entity id of the unit it is attached to (as EntityView::parent has it;
+   0xffffffff when none)? Then GetAttachedUnitsList(units) = the units whose parent is one of them.
+2. What does GetAssistingUnitsList (0x8bc820) take as assisting: the units whose guard target
+   (GetGuardedEntity) is one of them, or their focus, or the assist command's target? If it is a field
+   that changes with the queue, UnitView having it too would spare one simulation call per unit.
+Not blocking.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

@@ -80,6 +80,12 @@ local function run()
     -- (units that build nothing still give a category: the game's script asks it without looking)
     local _, _, nothing = GetUnitCommandData({})
     check("what nothing can build is a category too, an empty one", EntityCategoryContains(nothing, factory), false)
+    -- the original's rules for lists (read by the engine track): GetIsAutoMode of no units is true;
+    -- ValidateUnitsList keeps the list's order and a unit given twice; EntityCategoryFilterOut drops
+    -- an id that names no blueprint
+    check("GetIsAutoMode of no units is true", GetIsAutoMode({}), true)
+    check("ValidateUnitsList keeps a unit given twice", table.getn(ValidateUnitsList({cdr, cdr})), 2)
+    check("EntityCategoryFilterOut drops an id that names no blueprint", table.getn(EntityCategoryFilterOut(categories.COMMAND, {"no_such_unit"})), 0)
 
     -- the map's border: the game script names the machinery's mesh for the skin and the map's shape
     local borders = moho64ui_MapBorders()
@@ -247,6 +253,13 @@ local function run()
     check("a box over the commander and a factory selects the commander", boxOver(overCdr, overFactory), cdr:GetUnitId())
     SelectUnits({})
     check("with Shift the box selects both", boxOver(overCdr, overFactory, "Shift"), table.concat({factory, cdr:GetUnitId()}, " "))
+    -- what a commander and a factory can build together: what BOTH can (FA exe 0x840130, the
+    -- intersection), here neither the commander's buildings nor the factory's units
+    local scout = string.sub(cdr:GetUnitId(), 1, 2) .. "l0101"
+    local _, _, both = GetUnitCommandData({cdr, focus})
+    local _, _, alone = GetUnitCommandData({focus})
+    check("a commander and a factory together build neither's", tostring(EntityCategoryContains(both, factory)) .. tostring(EntityCategoryContains(both, scout)), "falsefalse")
+    check("the factory alone builds its land units", EntityCategoryContains(alone, scout), true)
 
     -- a factory's queue shows orders for the same thing that follow one another as one entry
     -- (the factory is not finished: it takes its orders and waits with them)
@@ -352,6 +365,17 @@ local function run()
     moho64ui_MouseButton("Left", false, s.x, s.y)
     sel = GetSelectedUnits()
     check("a double click selects its kind on screen (here: the one commander)", sel ~= nil and table.getn(sel) == 1 and sel[1] == cdr, true)
+    SelectUnits(nil)
+    -- FAF's ignore mode (its world view's EnableIgnoreMode: ui_SelectTolerance -1000): a click picks no unit
+    ConExecute("ui_SelectTolerance -1000")
+    moho64ui_MouseButton("Left", true, s.x, s.y)
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    check("with the selection tolerance below 0 a click on the commander picks nothing", GetSelectedUnits(), nil)
+    ConExecute("ui_SelectTolerance 10")
+    moho64ui_MouseButton("Left", true, s.x, s.y)
+    moho64ui_MouseButton("Left", false, s.x, s.y)
+    sel = GetSelectedUnits()
+    check("and back at 10 it selects it again", sel ~= nil and sel[1] == cdr, true)
     SelectUnits(nil)
     -- turning the camera: Space held and the mouse (a full turn for a view's width, the lean with
     -- the mouse's height); it swings back when Space is let go

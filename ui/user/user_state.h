@@ -317,6 +317,13 @@ struct LookSettings {
   bool strategicIcons = true, selectionMarks = true, worldShown = true;
   bool bloom = true;
   float bloomIntensity = 1.5f;
+  // ui_SelectTolerance (FAF's world view sets it from the options' Selection Threshold, 10 / 10 /
+  // 20 for normal play, reclaim mode and replays, and -1000 in its ignore mode, where clicks pick
+  // no unit) and ui_CommandClickScale (its ignore mode's 0: no waypoint is clicked; waypoints are
+  // not clickable here yet). Below 0 nothing is picked under the mouse; otherwise the renderer's
+  // own margin applies (World::UnitAt: ten pixels, the option's default).
+  float selectTolerance = 10.0f;
+  float commandClickScale = 1.0f;
 };
 LookSettings& Looks();
 // The names players give their units, as the original draws them under the life bars (its console

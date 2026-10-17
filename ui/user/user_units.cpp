@@ -230,10 +230,19 @@ int l_SelectUnits(lua_State* L) {
   SetSelection(L, list);
   return 0;
 }
-// ValidateUnitsList(units): the units of the list that still exist
+// ValidateUnitsList(units) (FA exe 0x8bc5f0): the units of the list that still exist and are not
+// dead, in the list's order, a unit given twice kept twice.
 int l_ValidateUnitsList(lua_State* L) {
   std::vector<UserUnit*> list;
-  ReadUnitList(L, 1, &list);
+  if (lua_istable(L, 1)) {
+    const int n = luaL_getn(L, 1);
+    for (int i = 1; i <= n; ++i) {
+      lua_rawgeti(L, 1, i);
+      UserUnit* u = ToUnit(L, lua_gettop(L));
+      if (u && !u->gone && !u->view.dead) list.push_back(u);
+      lua_pop(L, 1);
+    }
+  }
   PushUnitList(L, list, false);
   return 1;
 }
@@ -475,16 +484,19 @@ int l_GetUnitCommandData(lua_State* L) {
                                          "RULEUTC_IntelToggle", "RULEUTC_ProductionToggle", "RULEUTC_StealthToggle",
                                          "RULEUTC_GenericToggle", "RULEUTC_SpecialToggle", "RULEUTC_CloakToggle"};
   uint32_t masks[4] = {0, 0, 0, 0};  // the bits for the tables at stack index 2 (orders) and 3 (toggles)
+  bool first = true;
   for (UserUnit* u : list) {
+    // What the unit can do right now: its caps as the beat's copy has them (engine ui 26: the
+    // unit's own, no asking the simulation for each unit). The orders and toggles of all the units.
+    masks[2] |= u->view.commandCaps;
+    masks[3] |= u->view.toggleCaps;
     PushBlueprint(L, u->view.blueprint);
     if (!lua_istable(L, -1)) {
       lua_pop(L, 1);
+      std::fill(total.begin(), total.end(), 0);  // (a unit without a blueprint builds nothing)
+      first = false;
       continue;
     }
-    // What the unit can do right now: its caps as the beat's copy has them (engine ui 26: the
-    // unit's own, no asking the simulation for each unit).
-    masks[2] |= u->view.commandCaps;
-    masks[3] |= u->view.toggleCaps;
     // What it can build: the sets its blueprint names, less what the unit itself may not build now
     // (its script's AddBuildRestriction: a commander without its upgrades, a factory before its
     // own; the engine's UnitRestrictedBlueprints).
@@ -515,7 +527,11 @@ int l_GetUnitCommandData(lua_State* L) {
         if (ParseCategory(L, id.c_str(), part))
           for (size_t w = 0; w < mine.size() && w < part.size(); ++w) mine[w] &= ~part[w];
     }
-    for (size_t w = 0; w < total.size(); ++w) total[w] |= mine[w];
+    // What all of them can build (FA exe 0x840130: each unit's set, the first as it is, every later
+    // one intersected with it, BVIntSet::IntersectWith 0x401af0; a unit that builds nothing in the
+    // selection leaves nothing to build, as in the original).
+    for (size_t w = 0; w < total.size(); ++w) total[w] = first ? mine[w] : (total[w] & mine[w]);
+    first = false;
   }
   for (int i = 0, n = 0; i < 24; ++i)
     if (masks[2] & (1u << i)) {
@@ -614,7 +630,12 @@ int FilterUnits(lua_State* L, bool keepMembers) {
     else lua_pushvalue(L, v);
     bool member = lua_pcall(L, 2, 1, 0) == 0 && lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
-    if (member == keepMembers) {
+    // (FA exe 0x8ba2a0: FilterOut drops a blueprint id that names no blueprint, which FilterDown
+    // drops anyway as a member of no category.)
+    bool known = true;
+    if (!keepMembers && lua_type(L, v) == LUA_TSTRING)
+      if (SimBlueprints* bps = SimBlueprints::From(L)) known = bps->Find(lua_tostring(L, v)) != nullptr;
+    if (member == keepMembers && known) {
       lua_pushvalue(L, v);
       lua_rawseti(L, 3, ++n);
     }
@@ -1697,8 +1718,21 @@ int l_ToggleFireState(lua_State* L) {  // the next of the three states
   InfoPair(L, 1, "SetFireState", std::to_string(current < 0 ? 0 : (current + 1) % 3));
   return 0;
 }
+// (FA exe 0x8bbe60: only the units whose toggles have the bit and whose bit is now curState.)
 int l_ToggleScriptBit(lua_State* L) {
-  InfoPair(L, 1, "ToggleScriptBit", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
+  const int bit = static_cast<int>(luaL_checknumber(L, 2));
+  const bool cur = lua_toboolean(L, 3) != 0;
+  std::vector<UserUnit*> list, which;
+  ReadUnitList(L, 1, &list);
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    if (u->view.dead || bit < 0 || bit >= 32 || !(u->view.toggleCaps & (1u << bit)) || !StateOf(L, u, &s)) continue;
+    if (((s.scriptBits >> bit & 1u) != 0) == cur) which.push_back(u);
+  }
+  std::vector<uint32_t> ids;
+  std::vector<UserUnit*> units;
+  OwnIds(L, which, &ids, &units);
+  for (uint32_t id : ids) Writer(L).ProcessInfoPair(id, "ToggleScriptBit", std::to_string(bit));
   return 0;
 }
 
@@ -1947,18 +1981,35 @@ int RolloverInfoNow(lua_State* L) {
   return 1;
 }
 
-// The switches of a list of units, as the order buttons ask. GetFireState(units): the state they
-// share, -1 when they differ. The others: true when any of them has it on.
+// The switches of a list of units, as the order buttons ask (as the original's, read by the engine
+// track, 2026-10-16). GetFireState(units) (FA exe 0x8bb560): the state the units with the Retaliate
+// toggle share; -1 when they differ or none of them has it. GetIsPaused (0x8baa70): true when any
+// is paused. GetIsAutoMode, GetIsAutoSurfaceMode (0x8bac20, 0x8bb1a0): true when all have it on,
+// and for an empty list. GetScriptBit (0x8bbc10): among the units whose toggles have that bit,
+// true when any has it on.
+const uint32_t kRetaliateToggle = 1u << 5;  // (RULEUCC_RetaliateToggle in the units' order bits)
 int l_GetFireStateNow(lua_State* L) {
   std::vector<UserUnit*> list;
   ReadUnitList(L, 1, &list);
   int state = -2;
   for (UserUnit* u : list) {
     UnitStateView s;
-    if (!StateOf(L, u, &s)) continue;
+    if (u->view.dead || !(u->view.commandCaps & kRetaliateToggle) || !StateOf(L, u, &s)) continue;
     state = state == -2 || state == s.fireState ? s.fireState : -1;
   }
-  lua_pushnumber(L, state == -2 ? 0 : state);
+  lua_pushnumber(L, state == -2 ? -1 : state);
+  return 1;
+}
+template <bool UnitStateView::*Field>
+int l_AllSwitch(lua_State* L) {
+  std::vector<UserUnit*> list;
+  ReadUnitList(L, 1, &list);
+  bool all = true;
+  for (UserUnit* u : list) {
+    UnitStateView s;
+    if (!u->view.dead && StateOf(L, u, &s) && !(s.*Field)) all = false;
+  }
+  lua_pushboolean(L, all);
   return 1;
 }
 template <bool UnitStateView::*Field>
@@ -1973,7 +2024,7 @@ int l_AnySwitch(lua_State* L) {
   lua_pushboolean(L, any);
   return 1;
 }
-// GetScriptBit(units, bit): whether any of them has the toggle on
+// GetScriptBit(units, bit): whether any of the units with that toggle has it on
 int l_GetScriptBitNow(lua_State* L) {
   std::vector<UserUnit*> list;
   ReadUnitList(L, 1, &list);
@@ -1981,7 +2032,8 @@ int l_GetScriptBitNow(lua_State* L) {
   bool any = false;
   for (UserUnit* u : list) {
     UnitStateView s;
-    any = any || (StateOf(L, u, &s) && bit >= 0 && bit < 32 && (s.scriptBits >> bit & 1u));
+    if (bit < 0 || bit >= 32 || !(u->view.toggleCaps & (1u << bit))) continue;
+    any = any || (StateOf(L, u, &s) && (s.scriptBits >> bit & 1u));
   }
   lua_pushboolean(L, any);
   return 1;
@@ -2396,11 +2448,13 @@ int l_SetActiveBuildTemplate(lua_State* L) {
   lua_rawgeti(L, 1, 2);
   t.height = static_cast<float>(lua_tonumber(L, -1));
   lua_pop(L, 2);
-  for (int at = 3;; ++at) {
+  const int entries = luaL_getn(L, 1);
+  for (int at = 3; at <= entries; ++at) {
     lua_rawgeti(L, 1, at);
-    if (!lua_istable(L, -1)) {
+    if (!lua_istable(L, -1) || luaL_getn(L, -1) < 4) {
+      Logf(LogLevel::Warning, "Template info error!");
       lua_pop(L, 1);
-      break;
+      continue;
     }
     BuildTemplate::Building b;
     lua_rawgeti(L, -1, 1);
@@ -2414,7 +2468,7 @@ int l_SetActiveBuildTemplate(lua_State* L) {
     lua_pop(L, 5);
     if (!b.blueprint.empty()) t.buildings.push_back(b);
   }
-  Store(L).buildTemplate = std::move(t);
+  if (!t.buildings.empty()) Store(L).buildTemplate = std::move(t);  // (an empty one keeps the old)
   return 0;
 }
 int l_ClearBuildTemplates(lua_State* L) {
@@ -2713,8 +2767,8 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetFireState", l_GetFireStateNow);
   SetGlobal(L, "GetScriptBit", l_GetScriptBitNow);
   SetGlobal(L, "GetIsPaused", l_AnySwitch<&UnitStateView::paused>);
-  SetGlobal(L, "GetIsAutoMode", l_AnySwitch<&UnitStateView::autoMode>);
-  SetGlobal(L, "GetIsAutoSurfaceMode", l_AnySwitch<&UnitStateView::autoSurfaceMode>);
+  SetGlobal(L, "GetIsAutoMode", l_AllSwitch<&UnitStateView::autoMode>);
+  SetGlobal(L, "GetIsAutoSurfaceMode", l_AllSwitch<&UnitStateView::autoSurfaceMode>);
   SetGlobal(L, "SetCurrentFactoryForQueueDisplay", l_SetCurrentFactoryForQueueDisplay);
   SetGlobal(L, "ClearCurrentFactoryForQueueDisplay", l_ClearCurrentFactoryForQueueDisplay);
   SetGlobal(L, "IncreaseBuildCountInQueue", l_IncreaseBuildCountInQueue);
