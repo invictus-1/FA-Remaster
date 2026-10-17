@@ -3536,4 +3536,25 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
   return nullptr;
 }
 
+// CUnitUnloadUnits state 2 makes the landing move with NewMoveTask(goal, 0, +0x80, 0); +0x80 is null for a command's
+// own unload (DispatchTask), and the move task's ctor then links the queue's current command (0x6180e0 step 3:
+// the unload command itself) and listens to it. Its command listener 0x618c40 (air_nav.md 3.3): for a landing move
+// p = COORDS_ToWorldPos(GetPosition(cmd)), PrepareMove, the goal cell of p with the stored layer (Land), SetGoal at
+// once. Seen: MP1 2571, the player drags army 1's unload point for transport 0x100025 to (55.15, 306.24) while it
+// flies in; the original's motion target is (55, 306) from 2572 and it starts down there (within its
+// StartTurnDistance of the new point, inferred); ours kept (55, 304) and went down a beat later.
+void RetargetUnloadMoves(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::TransportUnloadUnits && c.type != CommandType::TransportUnloadSpecificUnits) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* u : holders) {
+    if (!Alive(u) || u->commands.empty() || u->commands.front().get() != &c || !u->task || !u->task->tdata) continue;
+    TransportTaskData& d = *u->task->tdata;
+    if (d.kind != kUnload || u->task->state != 3 || !d.moving || !CanFly(u) || !u->motion.hasGoal) continue;
+    const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+    const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+    LandingMove(sim, u, p);
+  }
+}
+
 }  // namespace moho

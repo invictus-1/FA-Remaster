@@ -17,6 +17,7 @@
 #include "sim/replay.h"
 #include "sim/script_bits.h"
 #include "sim/sim.h"
+#include "sim/transport.h"
 #include "sim/units.h"
 
 namespace moho {
@@ -461,6 +462,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       if (c->form) unhandled("SetCommandTarget of a formation command");
       RetargetMoveTasks(sim, *c);  // CUnitCommand::SetTarget 0x6e8820 -> its listeners (0x6e94a0, event 0)
       RetargetPatrolTasks(sim, *c);
+      RetargetUnloadMoves(sim, *c);
       break;
     }
     case 17: {  // SetCommandType 0x749800

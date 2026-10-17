@@ -1426,9 +1426,16 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0: {
       if (!t.bp) return kTaskFailed;
-      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit)
+      if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit, or paused)
+      u->unitStates.insert("Upgrading");  // (the ctor 0x5f8484: +0x4a0 |= 0x40)
+      // State 1 (0x5f8936): a paused upgrader (unit+0x2a0) returns 10 before anything else: no NoCost, no unit. Seen:
+      // MP1 2660, army 3 orders its mex 0x300018 to upgrade and pauses it in the same beat; the original's record has
+      // no upgrade unit and the mex is Upgrading only (not NoCost) while it stays paused; ours made 0x300033 at 2661.
+      if (u->paused) {
+        t.waitUntil = sim.tick() + 9;  // return 10
+        return kTaskRunning;
+      }
       u->unitStates.insert("NoCost");  // (0x5f89c3, before the unit is made; cleared by the task's dtor 0x5f855a)
-      u->unitStates.insert("Upgrading");
       // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation)
       Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
       if (!nu || !Alive(nu)) {

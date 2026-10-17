@@ -132,4 +132,8 @@ Unit* UnitFerryBeacon(Sim& sim, const Unit* u);
 
 void RegisterTransportBindings(lua_State* L);
 
+// The command listener 0x618c40 of an unload's landing move (the move links the unload command): the command's
+// target changed (SetCommandTarget), so the landing goes to the new place (COORDS_ToWorldPos, PrepareMove, SetGoal).
+void RetargetUnloadMoves(Sim& sim, UnitCommand& c);
+
 }  // namespace moho
