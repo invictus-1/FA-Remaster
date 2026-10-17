@@ -58,8 +58,10 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
    - skip w unless `(w.layerCaps & T.layer) != 0`;
    - skip w if `CategorySetHas(w.disallow, T.categoryIndex)`;
    - skip w if `w.onlyAllow != -1` and not `CategorySetHas(w.onlyAllow, T.categoryIndex)`.
-   - The first w that passes gives true if S is mobile or checkRange is false; otherwise true if
-     `w.minRadius <= d <= w.maxRadius` (inclusive), d the 2-D distance between S and T.
+   - A w that passes gives true if S is mobile or checkRange is false; otherwise true if
+     `w.minRadius <= d <= w.maxRadius` (inclusive), d the 2-D distance between S and T. Out of range, the loop goes
+     on to the next weapon: it does not end there (0x8c11c5 / 0x8c11ce jump to 0x8c11d4; corrected after the ui
+     chat's reading, checked in the exe).
 4. Otherwise false.
 
 **GetValidAttackingUnits** 0x896090 (binding 0x8bd410): T is the entity under the cursor, or none. The result is
