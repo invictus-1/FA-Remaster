@@ -62,7 +62,7 @@ struct WorldPicture::Impl {
   bool rayReflections = false;         // SetRayReflections (and SetRayTracing)
   // the lighting options' bundles (SetAtmosphere, SetSoftShadows, SetRayTracing, SetWeatherEffects): -1 not set
   // (the world's own switches left as they are), else off or on
-  int atmosphere = -1, softShadows = -1, rayTracing = -1, weatherEffects = -1, groundDetail = -1;
+  int atmosphere = -1, softShadows = -1, rayTracing = -1, weatherEffects = -1, groundDetail = -1, frameGeneration = -1;
   void ApplyBundles() {  // (onto the world, where there is one)
     if (!world) return;
     if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = atmosphere > 0;
@@ -71,6 +71,7 @@ struct WorldPicture::Impl {
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
     if (groundDetail >= 0) world->groundCover = groundDetail > 0;
+    if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
   }
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
@@ -505,6 +506,11 @@ void WorldPicture::SetWeatherEffects(bool on) {
 
 void WorldPicture::SetGroundDetail(bool on) {
   impl_->groundDetail = on;
+  impl_->ApplyBundles();
+}
+
+void WorldPicture::SetFrameGeneration(bool on) {
+  impl_->frameGeneration = on;
   impl_->ApplyBundles();
 }
 

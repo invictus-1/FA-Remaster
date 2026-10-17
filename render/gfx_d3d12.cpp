@@ -28,9 +28,16 @@
 #include <algorithm>
 #include <chrono>
 #include <array>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
+
+#include "gfx_pacing.h"
 
 namespace render::gfx {
 
@@ -307,8 +314,29 @@ class D3D12Device final : public Device {
   void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
   void SetScene(int slot, Structure scene) override;
   void Destroy(Structure structure) override;
+  bool SetFrameGeneration(std::function<bool()> make) override;
+  bool FrameGenerating() const override { return generating_; }
+  Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
+  Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
 
  private:
+  // frame generation (gfx.h): the swap chain made on `queue`; each frame slot's window picture and the one made
+  // between; the thread that shows them (Presenter), its start, its end (after what was handed to it), waiting
+  // until it has shown all it was handed and the card has copied it; waiting until a slot's pictures are copied
+  // (before the slot draws into them again); one picture copied into the swap chain and shown (the time just
+  // before it is shown in `at`), the present fence's value once the card has copied it
+  bool SwitchFrameGeneration();  // (to wantGenerating_)
+  bool MakeSwapChain(ID3D12CommandQueue* queue, std::string* error);
+  bool RemakeSwapChain(ID3D12CommandQueue* queue);
+  bool MakeFramePictures();
+  void DropFramePictures();
+  void StartPresenter();
+  void StopPresenter();
+  void DrainPresenter();
+  void Presenter();
+  void WaitPresented(int slot);
+  uint64_t Show(ID3D12Resource* picture, bool vsync, double* at);
+  static void WaitOn(ID3D12Fence* fence, uint64_t value, HANDLE event);
   // ray tracing: a buffer on the card for a structure or a build's room; the scratch room grown to `size`; the
   // geometry made since the last build, built
   Com<ID3D12Resource> RayBuffer(uint64_t size, D3D12_RESOURCE_STATES state);
@@ -456,11 +484,46 @@ class D3D12Device final : public Device {
   std::vector<uint32_t> freeStructures_, pendingGeometry_;
   Com<ID3D12Resource> scratch_;
   uint64_t scratchSize_ = 0;
+
+  // frame generation (gfx.h): while it is on, a frame slot is the frame's number (no longer the swap chain's
+  // buffer, which the presenter alone draws into), and the swap chain is made on a queue of the presenter's
+  // own, so that what it copies and shows is not held up behind the next frame's work on the frame's queue
+  struct PresentJob {
+    int slot = 0;
+    uint64_t fence = 0;                 // the frame's work done on the card
+    ID3D12Resource* between = nullptr;  // the picture made between (none: the frame alone)
+    ID3D12Resource* frame = nullptr;
+    bool vsync = true;
+  };
+  bool generating_ = false, wantGenerating_ = false;
+  std::function<bool()> makeBetween_;
+  Texture windowPictures_[kFrames], betweenPictures_[kFrames];
+  bool handedOver_[kFrames] = {};  // the slot's two pictures left in the copy-source state at its frame's end
+  Com<ID3D12CommandQueue> presentQueue_;
+  Com<ID3D12Fence> presentFence_;  // signalled on the present queue after each picture it copies
+  HANDLE presentEvent_ = nullptr;  // (the presenter thread's, for its own waits)
+  static constexpr int kShowLists = 2 * kFrames;
+  Com<ID3D12CommandAllocator> showAllocators_[kShowLists];
+  uint64_t showFences_[kShowLists] = {};
+  int showNext_ = 0;
+  uint64_t presentNext_ = 1;
+  Com<ID3D12GraphicsCommandList> showList_;
+  std::thread presenter_;
+  std::mutex presentMutex_;  // (over the jobs, presentStop_, slotShowing_ and slotCopied_)
+  std::condition_variable presentWake_, presentDone_;
+  std::deque<PresentJob> presentJobs_;
+  bool presentStop_ = false;
+  bool slotShowing_[kFrames] = {};     // handed to the presenter and not shown yet
+  uint64_t slotCopied_[kFrames] = {};  // the present fence's value once the card has copied the slot's pictures
+  Pacing pacing_;                      // (the presenter's)
+  double lastShown_ = 0;               // (the presenter's: when it last showed a picture)
 };
 
 D3D12Device::~D3D12Device() {
+  if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
   if (fenceEvent_) CloseHandle(fenceEvent_);
+  if (presentEvent_) CloseHandle(presentEvent_);
 }
 
 bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
@@ -541,22 +604,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   hr = device_->CreateCommandQueue(&qd, IID_PPV_ARGS(queue_.Put()));
   if (FAILED(hr)) return fail("CreateCommandQueue", hr);
 
-  DXGI_SWAP_CHAIN_DESC1 sd = {};
-  sd.Width = static_cast<UINT>(width_);
-  sd.Height = static_cast<UINT>(height_);
-  sd.Format = kBackFormat;
-  sd.SampleDesc.Count = 1;
-  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-  sd.BufferCount = kFrames;
-  sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-  sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-  Com<IDXGISwapChain1> sc1;
-  hr = factory_->CreateSwapChainForHwnd(queue_.Get(), hwnd_, &sd, nullptr, nullptr, sc1.Put());
-  if (FAILED(hr)) return fail("CreateSwapChainForHwnd", hr);
-  hr = sc1->QueryInterface(IID_PPV_ARGS(swapChain_.Put()));
-  if (FAILED(hr)) return fail("IDXGISwapChain3", hr);
-  factory_->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
+  if (!MakeSwapChain(queue_.Get(), error)) return false;
 
   auto makeHeap = [&](D3D12_DESCRIPTOR_HEAP_TYPE type, UINT count, bool visible, Com<ID3D12DescriptorHeap>& out) {
     D3D12_DESCRIPTOR_HEAP_DESC hd = {};
@@ -737,6 +785,228 @@ bool D3D12Device::CreateTargets() {
   return true;
 }
 
+bool D3D12Device::MakeSwapChain(ID3D12CommandQueue* queue, std::string* error) {
+  DXGI_SWAP_CHAIN_DESC1 sd = {};
+  sd.Width = static_cast<UINT>(width_);
+  sd.Height = static_cast<UINT>(height_);
+  sd.Format = kBackFormat;
+  sd.SampleDesc.Count = 1;
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.BufferCount = kFrames;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+  sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+  Com<IDXGISwapChain1> sc1;
+  HRESULT hr = factory_->CreateSwapChainForHwnd(queue, hwnd_, &sd, nullptr, nullptr, sc1.Put());
+  if (SUCCEEDED(hr)) hr = sc1->QueryInterface(IID_PPV_ARGS(swapChain_.Put()));
+  if (FAILED(hr)) {
+    char buf[160];
+    snprintf(buf, sizeof buf, "Direct3D 12: making the swap chain failed (0x%08lx)", static_cast<unsigned long>(hr));
+    if (error) *error = buf;
+    return false;
+  }
+  factory_->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
+  return true;
+}
+
+// (between frames, the card idle)
+bool D3D12Device::RemakeSwapChain(ID3D12CommandQueue* queue) {
+  for (FrameSlot& f : frames_) {
+    f.backBuffer.Reset();
+    f.garbage.clear();
+  }
+  depth_.Reset();
+  swapChain_.Reset();  // (the window's old swap chain gone before another is made for it)
+  std::string why;
+  if (!MakeSwapChain(queue, &why)) {
+    fprintf(stderr, "render: %s\n", why.c_str());
+    return false;
+  }
+  return CreateTargets();
+}
+
+// The window's picture and the one made between, for each frame slot (the window's size; RGBA8, the swap chain's
+// format, so that either is copied into it as it is).
+bool D3D12Device::MakeFramePictures() {
+  for (int i = 0; i < kFrames; ++i) {
+    TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = Format::RGBA8;
+    const float worldClear[4] = {0.05f, 0.06f, 0.08f, 1};  // (what a world's frame begins with: World's hosts')
+    std::copy(worldClear, worldClear + 4, td.clearValue);
+    windowPictures_[i] = CreateTarget(td);
+    td.storage = true;
+    betweenPictures_[i] = CreateTarget(td);
+    handedOver_[i] = false;
+    if (!windowPictures_[i] || !betweenPictures_[i]) return false;
+  }
+  return true;
+}
+
+void D3D12Device::DropFramePictures() {
+  for (int i = 0; i < kFrames; ++i) {
+    Destroy(windowPictures_[i]);
+    Destroy(betweenPictures_[i]);
+    windowPictures_[i] = betweenPictures_[i] = {};
+    handedOver_[i] = false;
+  }
+}
+
+// The function at a frame's end replaced at once (a world that goes away is never called after); the window's own
+// pictures and the swap chain switched now when between frames, else at the next BeginFrame.
+bool D3D12Device::SetFrameGeneration(std::function<bool()> make) {
+  wantGenerating_ = static_cast<bool>(make);
+  makeBetween_ = std::move(make);
+  if (inFrame_ || wantGenerating_ == generating_) return true;
+  return SwitchFrameGeneration();
+}
+
+bool D3D12Device::SwitchFrameGeneration() {
+  const bool on = wantGenerating_;
+  if (on && !presentQueue_) {  // the presenter's queue, fence, event and command lists, the first time
+    D3D12_COMMAND_QUEUE_DESC qd = {};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    bool made = SUCCEEDED(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(presentQueue_.Put()))) &&
+                SUCCEEDED(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(presentFence_.Put())));
+    for (auto& a : showAllocators_)
+      made = made && SUCCEEDED(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(a.Put())));
+    made = made && SUCCEEDED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, showAllocators_[0].Get(), nullptr, IID_PPV_ARGS(showList_.Put())));
+    if (made) showList_->Close();
+    if (made) presentEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!made || !presentEvent_) {
+      fprintf(stderr, "render: Direct3D 12: frame generation's queue could not be made\n");
+      presentQueue_ = {};
+      wantGenerating_ = false;
+      return false;
+    }
+  }
+  if (generating_) StopPresenter();
+  WaitIdle();
+  if (on) {
+    if (!MakeFramePictures() || !RemakeSwapChain(presentQueue_.Get())) {
+      fprintf(stderr, "render: Direct3D 12: frame generation could not be switched on\n");
+      DropFramePictures();
+      RemakeSwapChain(queue_.Get());
+      wantGenerating_ = false;
+      return false;
+    }
+    generating_ = true;
+    pacing_.Reset();
+    lastShown_ = 0;
+    StartPresenter();
+  } else {
+    generating_ = false;
+    DropFramePictures();
+    RemakeSwapChain(queue_.Get());
+  }
+  return true;
+}
+
+void D3D12Device::StartPresenter() {
+  presentStop_ = false;
+  for (int i = 0; i < kFrames; ++i) slotShowing_[i] = false;
+  presenter_ = std::thread([this] {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);  // (AMD's presenter's priority)
+    Presenter();
+  });
+}
+
+void D3D12Device::StopPresenter() {
+  {
+    std::lock_guard<std::mutex> lock(presentMutex_);
+    presentStop_ = true;
+  }
+  presentWake_.notify_all();
+  if (presenter_.joinable()) presenter_.join();
+  presentStop_ = false;
+  for (uint64_t v : slotCopied_) WaitOn(presentFence_.Get(), v, fenceEvent_);
+}
+
+void D3D12Device::DrainPresenter() {
+  {
+    std::unique_lock<std::mutex> lock(presentMutex_);
+    presentDone_.wait(lock, [&] { return presentJobs_.empty() && std::none_of(std::begin(slotShowing_), std::end(slotShowing_), [](bool b) { return b; }); });
+  }
+  for (uint64_t v : slotCopied_) WaitOn(presentFence_.Get(), v, fenceEvent_);
+}
+
+void D3D12Device::WaitPresented(int slot) {
+  uint64_t copied = 0;
+  {
+    std::unique_lock<std::mutex> lock(presentMutex_);
+    presentDone_.wait(lock, [&] { return !slotShowing_[slot]; });
+    copied = slotCopied_[slot];
+  }
+  WaitOn(presentFence_.Get(), copied, fenceEvent_);
+}
+
+void D3D12Device::WaitOn(ID3D12Fence* fence, uint64_t value, HANDLE event) {
+  if (!fence || fence->GetCompletedValue() >= value) return;
+  fence->SetEventOnCompletion(value, event);
+  WaitForSingleObject(event, INFINITE);
+}
+
+// The presenter's thread: for each frame handed to it, once the card has finished it, the picture made between
+// and then the frame, each a pacing's spacing after the picture shown before it.
+void D3D12Device::Presenter() {
+  Waiter waiter;
+  ShownRecord record;
+  for (;;) {
+    PresentJob job;
+    {
+      std::unique_lock<std::mutex> lock(presentMutex_);
+      presentWake_.wait(lock, [&] { return presentStop_ || !presentJobs_.empty(); });
+      if (presentJobs_.empty()) {  // (stopped, and all handed to it shown)
+        record.Print("Direct3D 12");
+        return;
+      }
+      job = presentJobs_.front();
+      presentJobs_.pop_front();
+    }
+    WaitOn(fence_.Get(), job.fence, presentEvent_);
+    const double spacing = pacing_.Ready(Now());
+    uint64_t copied = 0;
+    if (job.between) {
+      waiter.Until(lastShown_ + spacing);
+      copied = Show(job.between, job.vsync, &lastShown_);
+      record.Shown(lastShown_, true);
+    }
+    waiter.Until(lastShown_ + spacing);
+    copied = Show(job.frame, job.vsync, &lastShown_);
+    record.Shown(lastShown_, false);
+    {
+      std::lock_guard<std::mutex> lock(presentMutex_);
+      slotShowing_[job.slot] = false;
+      slotCopied_[job.slot] = copied;
+    }
+    presentDone_.notify_all();
+  }
+}
+
+uint64_t D3D12Device::Show(ID3D12Resource* picture, bool vsync, double* at) {
+  const int a = showNext_;
+  showNext_ = (showNext_ + 1) % kShowLists;
+  WaitOn(presentFence_.Get(), showFences_[a], presentEvent_);  // (the card done with that list's last copy)
+  showAllocators_[a]->Reset();
+  showList_->Reset(showAllocators_[a].Get(), nullptr);
+  ID3D12Resource* back = frames_[swapChain_->GetCurrentBackBufferIndex()].backBuffer.Get();
+  D3D12_RESOURCE_BARRIER b = Transition(back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+  showList_->ResourceBarrier(1, &b);
+  showList_->CopyResource(back, picture);
+  b = Transition(back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+  showList_->ResourceBarrier(1, &b);
+  showList_->Close();
+  ID3D12CommandList* lists[] = {showList_.Get()};
+  presentQueue_->ExecuteCommandLists(1, lists);
+  *at = Now();  // (as AMD's: the time just before it is shown, not after Present returns, which may wait)
+  HRESULT hr = swapChain_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
+  if (FAILED(hr)) Complain("Present", hr);
+  showFences_[a] = presentNext_++;
+  presentQueue_->Signal(presentFence_.Get(), showFences_[a]);
+  return showFences_[a];
+}
+
 void D3D12Device::WaitFence(uint64_t value) {
   if (fence_->GetCompletedValue() >= value) return;
   fence_->SetEventOnCompletion(value, fenceEvent_);
@@ -752,7 +1022,9 @@ void D3D12Device::WaitIdle() {
 
 void D3D12Device::Resize(int width, int height) {
   if (width <= 0 || height <= 0 || (width == width_ && height == height_)) return;
+  if (generating_) DrainPresenter();
   WaitIdle();
+  if (generating_) DropFramePictures();  // (let go of at once below: the card is idle)
   for (FrameSlot& f : frames_) {
     f.backBuffer.Reset();
     f.garbage.clear();
@@ -766,6 +1038,13 @@ void D3D12Device::Resize(int width, int height) {
                                          tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
   if (FAILED(hr)) Complain("ResizeBuffers", hr);
   CreateTargets();
+  if (generating_ && !MakeFramePictures()) {  // (frame generation off: the swap chain back on the frame's queue)
+    fprintf(stderr, "render: Direct3D 12: frame generation's pictures could not be made; it is off\n");
+    StopPresenter();
+    DropFramePictures();
+    generating_ = wantGenerating_ = false;
+    RemakeSwapChain(queue_.Get());
+  }
 }
 
 bool D3D12Device::BeginUpload() {
@@ -1603,9 +1882,12 @@ void D3D12Device::Destroy(Pipeline pipeline) {
 }
 
 void D3D12Device::BeginFrame(const float clearColor[4]) {
-  cur_ = static_cast<int>(swapChain_->GetCurrentBackBufferIndex());
+  if (wantGenerating_ != generating_) SwitchFrameGeneration();  // (asked for during the frame before)
+  // (with frame generation, the slots in turn; the presenter done with the slot's pictures)
+  cur_ = generating_ ? static_cast<int>(frameNumber_ % kFrames) : static_cast<int>(swapChain_->GetCurrentBackBufferIndex());
   FrameSlot& f = frames_[cur_];
   WaitFence(f.fence);
+  if (generating_) WaitPresented(cur_);
   if (timeQueries_ && f.marks.size() > 1) {  // the stages' times of this slot's last frame, done now
     void* mapped = nullptr;
     const size_t first = static_cast<size_t>(cur_) * kMarks;
@@ -1635,10 +1917,25 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   f.allocator->Reset();
   list_->Reset(f.allocator.Get(), nullptr);
 
-  D3D12_RESOURCE_BARRIER b = Transition(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-  list_->ResourceBarrier(1, &b);
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvStart_;
-  rtv.ptr += static_cast<SIZE_T>(cur_) * rtvStep_;
+  TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
+  if (window) {  // frame generation: the slot's window picture drawn into (its pictures back from the presenter)
+    const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_BARRIER b[2];
+    UINT n = 0;
+    b[n++] = Transition(window->resource.Get(), handedOver_[cur_] ? D3D12_RESOURCE_STATE_COPY_SOURCE : readable, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (handedOver_[cur_]) {
+      if (TextureRec* between = Find(betweenPictures_[cur_])) b[n++] = Transition(between->resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, readable);
+      handedOver_[cur_] = false;
+    }
+    list_->ResourceBarrier(n, b);
+    window->writable = true;
+    rtv = RtvHandle(window->view);
+  } else {
+    D3D12_RESOURCE_BARRIER b = Transition(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list_->ResourceBarrier(1, &b);
+    rtv.ptr += static_cast<SIZE_T>(cur_) * rtvStep_;
+  }
   list_->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
   list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
   list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
@@ -1649,6 +1946,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   boundTextures_ = TableKey{};
   texturesDirty_ = true;
   passColor_ = passDepth_ = 0;
+  if (window) passColor_ = windowPictures_[cur_].id;  // (readable again once the pass ends, as a target's)
   boundStorage_ = {};
   std::fill(std::begin(constantsAt_), std::end(constantsAt_), D3D12_GPU_VIRTUAL_ADDRESS{0});
   buffersAt_[0] = buffersAt_[1] = 0;
@@ -1713,8 +2011,27 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
   ReleaseUnordered();  // (what dispatches wrote, readable by the pass's draws)
   if (pass.window) {
-    ReleasePassTargets();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(static_cast<uint32_t>(cur_));
+    TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
+    if (window) {  // frame generation: the slot's window picture, as a target (not read while drawn into)
+      const uint32_t id = windowPictures_[cur_].id;
+      if (passColor_ != id || passDepth_) ReleasePassTargets();
+      for (uint32_t& bound : boundTextures_.t)
+        if (bound == id) {
+          bound = 0;
+          texturesDirty_ = true;
+        }
+      if (!window->writable) {
+        D3D12_RESOURCE_BARRIER b = Transition(window->resource.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                              D3D12_RESOURCE_STATE_RENDER_TARGET);
+        list_->ResourceBarrier(1, &b);
+        window->writable = true;
+      }
+      passColor_ = id;
+      rtv = RtvHandle(window->view);
+    } else {
+      ReleasePassTargets();
+    }
     list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
     if (pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
     if (pass.clearDepth) list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
@@ -2180,9 +2497,23 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   FrameSlot& f = frames_[cur_];
   ReleasePassTargets();
   ReleaseUnordered();
+  // frame generation: the picture between this frame and the one before made (it may dispatch and draw); what is
+  // read back is the window's picture (or that one), which is readable now
+  const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
+  TextureRec* between = generating_ ? Find(betweenPictures_[cur_]) : nullptr;
+  const bool made = window && between && makeBetween_ && makeBetween_();
+  if (window) {
+    ReleasePassTargets();
+    ReleaseUnordered();
+    // (found again: what `make` made, its first time, may have moved the texture records)
+    window = Find(windowPictures_[cur_]);
+    between = Find(betweenPictures_[cur_]);
+  }
+  ID3D12Resource* shown = window ? (captureBetween && made ? between : window)->resource.Get() : f.backBuffer.Get();
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
   if (capture) {
-    D3D12_RESOURCE_DESC bd = f.backBuffer->GetDesc();
+    D3D12_RESOURCE_DESC bd = shown->GetDesc();
     UINT64 total = 0;
     device_->GetCopyableFootprints(&bd, 0, 1, 0, &layout, nullptr, nullptr, &total);
     if (!readback_ || readbackSize_ < total) {
@@ -2195,7 +2526,21 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
       if (FAILED(hr)) Complain("creating the read-back buffer", hr);
     }
   }
-  if (capture && readback_) {
+  if (window) {  // both pictures left as copies' sources: the presenter copies them into the swap chain
+    D3D12_RESOURCE_BARRIER b[2] = {Transition(window->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_SOURCE),
+                                   Transition(between->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_SOURCE)};
+    list_->ResourceBarrier(2, b);
+    handedOver_[cur_] = true;
+    if (capture && readback_) {
+      D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
+      to.pResource = readback_.Get();
+      to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+      to.PlacedFootprint = layout;
+      from.pResource = shown;
+      from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      list_->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+    }
+  } else if (capture && readback_) {
     D3D12_RESOURCE_BARRIER b = Transition(f.backBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
     list_->ResourceBarrier(1, &b);
     D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
@@ -2222,7 +2567,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   FlushUploads();  // (what this frame draws with is on the card before it)
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
-  if (present) {
+  if (present && !window) {
     HRESULT hr = swapChain_->Present(vsync_ ? 1 : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
     if (FAILED(hr)) Complain("Present", hr);
   }
@@ -2240,6 +2585,14 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   f.fence = fenceNext_++;
   queue_->Signal(fence_.Get(), f.fence);
   inFrame_ = false;
+  if (present && window) {  // handed to the presenter, which shows it once the card has finished it
+    {
+      std::lock_guard<std::mutex> lock(presentMutex_);
+      slotShowing_[cur_] = true;
+      presentJobs_.push_back({cur_, f.fence, made ? between->resource.Get() : nullptr, window->resource.Get(), vsync_});
+    }
+    presentWake_.notify_one();
+  }
 
   if (capture) {
     capture->clear();

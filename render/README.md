@@ -63,6 +63,11 @@ So: build it against recordings, combine later by swapping the source of the fra
       the rays' coarse models would make worse ones); each with a fallback.
    7. Rain and snow, with the visuals session's art: drops and flakes lit where they fall (`World::litRain`,
       `--lit-rain`) and splashes (`World::rainSplashes`, `--rain-splashes`), first versions.
+   8. Chris's next pieces (2026-10-17): the shader cache filled on all cores (a first opening 8 s -> 0.6 s),
+      lightning inside the clouds, wet shorelines and caustics (`World::waterDetail`), grass near the camera
+      (`World::groundCover`, `grass.h`), and AMD's FSR 3 frame generation (`frame_generation.h`,
+      `World::frameGeneration`, `--frame-generation`; the device shows a frame made between each two drawn
+      ones, paced evenly: gfx.h `SetFrameGeneration`, `gfx_pacing.h`): first versions.
 
 ## Build and run
 

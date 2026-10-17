@@ -52,6 +52,11 @@ class Post {
   // With an `upscaler` and a screen larger than the scene: the picture as a screen shows it, then
   // brought up to the screen's size by FSR 1 (upscale.h).
   void Present(const View& view, Upscaler* upscaler = nullptr, int screenWidth = 0, int screenHeight = 0);
+  // Frame generation (World::frameGeneration): after Present, the finished picture in the window (`window`: the
+  // device's picture of it this frame, gfx.h) copied into a picture of its own (RGBA8, `width` x `height`, the
+  // window's size), before the icons and the interface are drawn over it; the window's pass begun again for them.
+  // The copy (none where it cannot be made), valid until the next call.
+  gfx::Texture KeepFinished(gfx::Texture window, int width, int height);
 
   // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
   // sun on water): how much of it is added; 0: none.
@@ -69,6 +74,9 @@ class Post {
   gfx::Device* device_;
   gfx::Pipeline pipeline_, toTarget_;  // the last pass into the window, or (before FSR) into ldr_
   gfx::Pipeline copy_;  // the picture copied into behind_ (one sample a pixel)
+  gfx::Pipeline copyFinished_;  // (KeepFinished: the window's picture copied, RGBA8)
+  gfx::Texture finished_;
+  int finishedWidth_ = 0, finishedHeight_ = 0;
   gfx::Texture ldr_;  // the picture as a screen shows it, at the scene's size (before FSR)
   gfx::Texture color_, depth_, drawn_, behind_;
   static constexpr int kGlowSteps = 5;

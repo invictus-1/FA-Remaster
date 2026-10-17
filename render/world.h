@@ -36,6 +36,7 @@
 #include "decals.h"
 #include "effects.h"
 #include "frame.h"
+#include "frame_generation.h"
 #include "gfx.h"
 #include "icons.h"
 #include "lights.h"
@@ -77,6 +78,7 @@ class World {
   // `device` and `vfs` (the game's files) must outlive the world. Before the first World is made,
   // gSceneSamples (view.h) must have its final value.
   World(gfx::Device* device, const moho::Vfs* vfs);
+  ~World();  // (frame generation let go of: the device no longer calls this world at a frame's end)
 
   // Builds the shaders and loads the map ("/maps/x/x.scmap"; empty: no map, a test scene).
   bool Open(const std::string& mapPath, const Options& options, std::string* error);
@@ -401,6 +403,16 @@ class World {
   float temporalMipBias = 0;
   Fsr3 fsr3;
   bool TemporalNow() const { return temporalNow_; }  // this frame brought up by FSR 3
+  // AMD's FSR 3 frame generation (frame_generation.h): a picture made between each two frames from the scene's
+  // depth and motion and the finished pictures, and shown between them, evenly apart (gfx.h,
+  // Device::SetFrameGeneration): twice the frames shown for a little more than half a frame's delay. The icons and
+  // the interface are taken from the frame after (the finished picture before them is kept for that,
+  // Post::KeepFinished), so they never smear. Needs one sample a pixel (gSceneSamples 1), as the temporal upscaler,
+  // with or without it; where its shaders or the device cannot, nothing changes. From the frame after it is
+  // switched on. A player's option, off by default.
+  bool frameGeneration = false;
+  FrameGeneration framegen;
+  bool FramesGenerated() const { return framegenNow_; }  // this frame has a picture made before it
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
   GroundCover grass;      // ground cover near the camera (groundCover)
@@ -550,6 +562,13 @@ class World {
   // and the time between frames
   bool temporalNow_ = false, temporalBefore_ = false, temporalCut_ = false;
   int fsr3State_ = 0, temporalFrame_ = 0;
+  // frame generation (frameGeneration): its passes (0 not made yet, 1 made, -1 they cannot be), the device asked
+  // for it (MakeBetween called at each frame's end), on for this frame, on the frame before, this frame a cut, and
+  // what the picture made between needs, kept from this frame's Render (ready: kept this frame)
+  int framegenState_ = 0;
+  bool framegenAsked_ = false, framegenNow_ = false, framegenBefore_ = false, framegenCut_ = false, framegenReady_ = false;
+  FrameGeneration::Inputs framegenIn_;
+  bool MakeBetween();
   Vec3 lastEye_{};
   double lastFrameAt_ = -1;
   float frameSeconds_ = 1 / 60.0f;

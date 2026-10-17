@@ -61,6 +61,15 @@ struct wl_surface;
 #include <unordered_map>
 #include <vector>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
+
+#include "gfx_pacing.h"
 #include "gfx_vulkan_dxc.h"
 
 // (Vulkan's structures are begun with their type alone, the rest zero)
@@ -102,6 +111,7 @@ namespace {
   X(vkDestroyDevice)                    \
   X(vkGetDeviceQueue)                   \
   X(vkDeviceWaitIdle)                   \
+  X(vkQueueWaitIdle)                    \
   X(vkCreateSwapchainKHR)               \
   X(vkDestroySwapchainKHR)              \
   X(vkGetSwapchainImagesKHR)            \
@@ -509,6 +519,10 @@ class VulkanDevice final : public Device {
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override { return memory_.DeviceLocalBytes(); }
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override { *out = lastTimes_; }
+  bool SetFrameGeneration(std::function<bool()> make) override;
+  bool FrameGenerating() const override { return generating_; }
+  Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
+  Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
 
  private:
   struct Image {  // the window's picture and its depth (not texture records)
@@ -519,6 +533,24 @@ class VulkanDevice final : public Device {
   };
   bool CreateSwapchain(std::string* error);
   void DestroySwapchain();
+  // frame generation (gfx.h; as Direct3D 12's, gfx_d3d12.cpp, but the frame's own commands copy the two pictures
+  // into images of the swap chain, and the presenter only shows them, from its queue): the switch (to
+  // wantGenerating_), each slot's window picture and the one made between, the presenter thread, its start, its
+  // end (after what was handed to it), waiting until it has shown all it was handed, or a slot's two; an image of
+  // the chain acquired without waiting long; one shown (the time just before in `at`); a frame's end with it on;
+  // the read-back buffer made large enough for the window
+  bool SwitchFrameGeneration();
+  bool MakeFramePictures();
+  void DropFramePictures();
+  void StartPresenter();
+  void StopPresenter();
+  void DrainPresenter();
+  void WaitPresented(int slot);
+  void Presenter();
+  bool Acquire(VkSemaphore semaphore, uint32_t* image);
+  void Show(uint32_t image, double* at);
+  void EndFrameGenerating(std::vector<uint8_t>* capture, bool present);
+  bool EnsureReadback();
   bool CreateWindowImages(std::string* error);
   bool NextConstantPage();
   bool MakeImage(Image* image, VkFormat format, int width, int height, VkImageUsageFlags usage, VkImageAspectFlags aspect);
@@ -581,9 +613,32 @@ class VulkanDevice final : public Device {
   std::vector<VkImageLayout> swapLayouts_;
   std::vector<VkSemaphore> rendered_;  // per swap chain image: the frame drawn, for its showing to wait on
   bool imageHeld_ = false;             // an image of the chain acquired and not yet shown
-  bool chainStale_ = false;            // the chain no longer fits the window: made again before the next frame
+  std::atomic<bool> chainStale_{false};  // the chain no longer fits the window: made again before the next frame
   VkExtent2D swapExtent_{};
   Image back_, depth_;
+  // frame generation (SetFrameGeneration): the presenter's queue (a second one of the drawing family, or one of
+  // another family that can show in the window; none: frame generation is not offered), whether it is on (and
+  // asked for), the chain made for it (more images; shared with the presenter's family), the function at a
+  // frame's end, each slot's two pictures, and the presenter's thread, jobs and pacing
+  uint32_t presentFamily_ = UINT32_MAX;
+  VkQueue presentQueue_ = VK_NULL_HANDLE;
+  bool generating_ = false, wantGenerating_ = false, chainForFrames_ = false;
+  std::function<bool()> makeBetween_;
+  Texture windowPictures_[kFrames], betweenPictures_[kFrames];
+  struct PresentJob {
+    int slot = 0;
+    VkFence fence = VK_NULL_HANDLE;  // the frame's work (its copies into the chain's images included) done
+    int64_t between = -1, frame = -1;  // the chain's images to show (-1: none)
+  };
+  std::thread presenter_;
+  std::mutex presentMutex_;  // (over the jobs, presentStop_ and slotShowing_)
+  std::mutex swapMutex_;     // (the chain's acquiring and showing, from two threads: Vulkan wants them apart)
+  std::condition_variable presentWake_, presentDone_;
+  std::deque<PresentJob> presentJobs_;
+  bool presentStop_ = false;
+  bool slotShowing_[kFrames] = {};  // handed to the presenter and not shown yet
+  Pacing pacing_;                   // (the presenter's)
+  double lastShown_ = 0;            // (the presenter's)
 
   VkSampler samplers_[6] = {};
   VkDescriptorSetLayout constantsLayout_ = VK_NULL_HANDLE;  // set 1: b0-b3
@@ -605,6 +660,7 @@ class VulkanDevice final : public Device {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence done = VK_NULL_HANDLE;
     VkSemaphore acquired = VK_NULL_HANDLE;
+    VkSemaphore acquired2 = VK_NULL_HANDLE;  // (frame generation: the image the picture made between goes into)
     std::vector<Page> pages;  // dynamic buffers and staging of UpdateTexture
     size_t page = 0;
     VkDeviceSize offset = 0;
@@ -711,6 +767,7 @@ VulkanDevice::~VulkanDevice() {
     if (instance_) vkDestroyInstance(instance_, nullptr);
     return;
   }
+  if (generating_) StopPresenter();
   vkDeviceWaitIdle(device_);
   for (Frame& f : frames_) {
     Collect(f.garbage);
@@ -721,6 +778,7 @@ VulkanDevice::~VulkanDevice() {
     if (f.pool) vkDestroyCommandPool(device_, f.pool, nullptr);
     if (f.done) vkDestroyFence(device_, f.done, nullptr);
     if (f.acquired) vkDestroySemaphore(device_, f.acquired, nullptr);
+    if (f.acquired2) vkDestroySemaphore(device_, f.acquired2, nullptr);
   }
   for (Upload& u : uploads_) {
     for (auto& s : u.staging) vkDestroyBuffer(device_, s.first, nullptr);
@@ -987,11 +1045,29 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   nullDescriptors_ = nullDescriptors_ && haveRobust.nullDescriptor;
   rays = rays && have12.bufferDeviceAddress && haveStructures.accelerationStructure && haveQueries.rayQuery;
   if (!have.features.textureCompressionBC) fprintf(stderr, "render: Vulkan: this card reads no BC textures (most of the game's)\n");
-  float priority = 1;
-  VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-  qci.queueFamilyIndex = queueFamily_;
-  qci.queueCount = 1;
-  qci.pQueuePriorities = &priority;
+  // frame generation's presenter (SetFrameGeneration) shows from a queue of its own: a second one of the drawing
+  // family where it has two, else one of another family that can show in this window; with neither, frame
+  // generation is not offered
+  {
+    uint32_t families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_, &families, nullptr);
+    std::vector<VkQueueFamilyProperties> fam(families);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_, &families, fam.data());
+    if (fam[queueFamily_].queueCount >= 2) presentFamily_ = queueFamily_;
+    for (uint32_t i = 0; i < families && presentFamily_ == UINT32_MAX; ++i) {
+      VkBool32 can = VK_FALSE;
+      if (i != queueFamily_ && fam[i].queueCount) vkGetPhysicalDeviceSurfaceSupportKHR(physical_, i, surface_, &can);
+      if (can) presentFamily_ = i;
+    }
+  }
+  const float priorities[2] = {1, 1};
+  VkDeviceQueueCreateInfo qcis[2] = {{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}, {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}};
+  qcis[0].queueFamilyIndex = queueFamily_;
+  qcis[0].queueCount = presentFamily_ == queueFamily_ ? 2 : 1;
+  qcis[0].pQueuePriorities = priorities;
+  qcis[1].queueFamilyIndex = presentFamily_;
+  qcis[1].queueCount = 1;
+  qcis[1].pQueuePriorities = priorities;
   std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
   VkPhysicalDeviceRobustness2FeaturesEXT robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
   robust.nullDescriptor = VK_TRUE;
@@ -1039,8 +1115,8 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   if (!have.features.shaderStorageImageWriteWithoutFormat) fprintf(stderr, "render: Vulkan: this card's compute shaders cannot write images without a format\n");
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.pNext = &features;
-  dci.queueCreateInfoCount = 1;
-  dci.pQueueCreateInfos = &qci;
+  dci.queueCreateInfoCount = presentFamily_ != UINT32_MAX && presentFamily_ != queueFamily_ ? 2 : 1;
+  dci.pQueueCreateInfos = qcis;
   dci.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
   dci.ppEnabledExtensionNames = deviceExtensions.data();
   r = vkCreateDevice(physical_, &dci, nullptr, &device_);
@@ -1070,6 +1146,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     scratchAlign_ = std::max<VkDeviceSize>(sp.minAccelerationStructureScratchOffsetAlignment, 1);
   }
   vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
+  if (presentFamily_ != UINT32_MAX) vkGetDeviceQueue(device_, presentFamily_, presentFamily_ == queueFamily_ ? 1 : 0, &presentQueue_);
   memory_.Init(device_, memoryProps, rayTracing_);
 
   // the six fixed samplers (as Direct3D 12's static samplers: s0 anisotropic wrap, s1 linear clamp, s2 point
@@ -1118,6 +1195,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     if ((r = vkCreateFence(device_, &fci, nullptr, &f.done)) != VK_SUCCESS) return fail("a fence", r);
     VkSemaphoreCreateInfo smi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     if ((r = vkCreateSemaphore(device_, &smi, nullptr, &f.acquired)) != VK_SUCCESS) return fail("a semaphore", r);
+    if ((r = vkCreateSemaphore(device_, &smi, nullptr, &f.acquired2)) != VK_SUCCESS) return fail("a semaphore", r);
     // the frame's descriptor sets (all let go together each time the frame begins)
     // (the fixed samplers count against the pool too)
     // (with ray tracing, a scene for each set of draws and of dispatches)
@@ -1257,7 +1335,7 @@ bool VulkanDevice::CreateSwapchain(std::string* error) {
   if (extent.width == 0 || extent.height == 0) return true;  // (a minimised window: none until it has a size again)
   VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
   sci.surface = surface_;
-  sci.minImageCount = std::max(caps.minImageCount, 3u);
+  sci.minImageCount = std::max(caps.minImageCount, chainForFrames_ ? 5u : 3u);  // (frame generation: two a frame)
   if (caps.maxImageCount) sci.minImageCount = std::min(sci.minImageCount, caps.maxImageCount);
   sci.imageFormat = chosen.format;
   sci.imageColorSpace = chosen.colorSpace;
@@ -1266,6 +1344,12 @@ bool VulkanDevice::CreateSwapchain(std::string* error) {
   sci.imageArrayLayers = 1;
   sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  const uint32_t sharing[2] = {queueFamily_, presentFamily_};
+  if (chainForFrames_ && presentFamily_ != queueFamily_) {  // (drawn into by one family, shown from another)
+    sci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+    sci.queueFamilyIndexCount = 2;
+    sci.pQueueFamilyIndices = sharing;
+  }
   sci.preTransform = caps.currentTransform;
   sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   sci.presentMode = mode;
@@ -1312,6 +1396,7 @@ void VulkanDevice::DestroySwapchain() {
 
 void VulkanDevice::Resize(int width, int height) {
   if (width <= 0 || height <= 0 || (width == width_ && height == height_)) return;
+  if (generating_) DrainPresenter();
   FlushUploads();
   vkDeviceWaitIdle(device_);
   DestroySwapchain();
@@ -1321,11 +1406,280 @@ void VulkanDevice::Resize(int width, int height) {
   height_ = height;
   std::string error;
   if (!CreateWindowImages(&error) || !CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
+  if (generating_) {  // (the slots' pictures at the new size; none: frame generation off)
+    DropFramePictures();
+    if (!MakeFramePictures()) {
+      fprintf(stderr, "render: Vulkan: frame generation's pictures could not be made; it is off\n");
+      wantGenerating_ = false;
+      SwitchFrameGeneration();
+    }
+  }
+}
+
+// The function at a frame's end replaced at once (a world that goes away is never called after); the slots'
+// pictures and the chain switched now when between frames, else at the next BeginFrame.
+bool VulkanDevice::SetFrameGeneration(std::function<bool()> make) {
+  wantGenerating_ = static_cast<bool>(make);
+  makeBetween_ = std::move(make);
+  if (wantGenerating_ && !presentQueue_) {  // (no queue to show from: not offered)
+    wantGenerating_ = false;
+    makeBetween_ = {};
+    return false;
+  }
+  if (inFrame_ || wantGenerating_ == generating_) return true;
+  return SwitchFrameGeneration();
+}
+
+bool VulkanDevice::SwitchFrameGeneration() {
+  const bool on = wantGenerating_;
+  if (generating_) StopPresenter();
+  FlushUploads();
+  vkDeviceWaitIdle(device_);
+  DropFramePictures();
+  if (on && !MakeFramePictures()) {
+    fprintf(stderr, "render: Vulkan: frame generation could not be switched on\n");
+    DropFramePictures();
+    wantGenerating_ = false;
+    if (!generating_) return false;
+  }
+  generating_ = chainForFrames_ = wantGenerating_;
+  DestroySwapchain();
+  std::string error;
+  if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
+  if (generating_) {
+    pacing_.Reset();
+    lastShown_ = 0;
+    StartPresenter();
+  }
+  return generating_ == on;
+}
+
+// The window's picture and the one made between, for each frame slot (the window's size, RGBA8).
+bool VulkanDevice::MakeFramePictures() {
+  for (int i = 0; i < kFrames; ++i) {
+    TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = Format::RGBA8;
+    windowPictures_[i] = CreateTarget(td);
+    td.storage = true;
+    betweenPictures_[i] = CreateTarget(td);
+    if (!windowPictures_[i] || !betweenPictures_[i]) return false;
+  }
+  return true;
+}
+
+void VulkanDevice::DropFramePictures() {
+  for (int i = 0; i < kFrames; ++i) {
+    Destroy(windowPictures_[i]);
+    Destroy(betweenPictures_[i]);
+    windowPictures_[i] = betweenPictures_[i] = {};
+  }
+}
+
+void VulkanDevice::StartPresenter() {
+  presentStop_ = false;
+  for (bool& s : slotShowing_) s = false;
+  presenter_ = std::thread([this] {
+#if defined(_WIN32)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);  // (AMD's presenter's priority)
+#endif
+    Presenter();
+  });
+}
+
+void VulkanDevice::StopPresenter() {
+  {
+    std::lock_guard<std::mutex> lock(presentMutex_);
+    presentStop_ = true;
+  }
+  presentWake_.notify_all();
+  if (presenter_.joinable()) presenter_.join();
+  presentStop_ = false;
+  if (presentQueue_) vkQueueWaitIdle(presentQueue_);
+}
+
+void VulkanDevice::DrainPresenter() {
+  {
+    std::unique_lock<std::mutex> lock(presentMutex_);
+    presentDone_.wait(lock, [&] { return presentJobs_.empty() && std::none_of(std::begin(slotShowing_), std::end(slotShowing_), [](bool b) { return b; }); });
+  }
+  if (presentQueue_) vkQueueWaitIdle(presentQueue_);
+}
+
+void VulkanDevice::WaitPresented(int slot) {
+  std::unique_lock<std::mutex> lock(presentMutex_);
+  presentDone_.wait(lock, [&] { return !slotShowing_[slot]; });
+}
+
+// The presenter's thread: for each frame handed to it, once the card has finished it (its copies into the chain's
+// images with it), the picture made between and then the frame, each a pacing's spacing after the one before.
+void VulkanDevice::Presenter() {
+  Waiter waiter;
+  ShownRecord record;
+  for (;;) {
+    PresentJob job;
+    {
+      std::unique_lock<std::mutex> lock(presentMutex_);
+      presentWake_.wait(lock, [&] { return presentStop_ || !presentJobs_.empty(); });
+      if (presentJobs_.empty()) {  // (stopped, and all handed to it shown)
+        record.Print("Vulkan");
+        return;
+      }
+      job = presentJobs_.front();
+      presentJobs_.pop_front();
+    }
+    vkWaitForFences(device_, 1, &job.fence, VK_TRUE, UINT64_MAX);
+    const double spacing = pacing_.Ready(Now());
+    if (job.between >= 0) {
+      waiter.Until(lastShown_ + spacing);
+      Show(static_cast<uint32_t>(job.between), &lastShown_);
+      record.Shown(lastShown_, true);
+    }
+    waiter.Until(lastShown_ + spacing);
+    Show(static_cast<uint32_t>(job.frame), &lastShown_);
+    record.Shown(lastShown_, false);
+    {
+      std::lock_guard<std::mutex> lock(presentMutex_);
+      slotShowing_[job.slot] = false;
+    }
+    presentDone_.notify_all();
+  }
+}
+
+void VulkanDevice::Show(uint32_t image, double* at) {
+  VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+  pi.waitSemaphoreCount = 1;
+  pi.pWaitSemaphores = &rendered_[image];
+  pi.swapchainCount = 1;
+  pi.pSwapchains = &swapchain_;
+  pi.pImageIndices = &image;
+  *at = Now();  // (as AMD's: the time just before it is shown, not after the call returns, which may wait)
+  VkResult r;
+  {
+    std::lock_guard<std::mutex> lock(swapMutex_);
+    r = vkQueuePresentKHR(presentQueue_, &pi);
+  }
+  if (r != VK_SUCCESS) chainStale_ = true;  // (out of date or suboptimal: a new chain before the next frame)
+}
+
+// An image of the chain, without holding the chain while it waits (the presenter shows from it meanwhile): tried
+// again until one comes free, which the next showing frees; none after a quarter of a second (a window hidden).
+bool VulkanDevice::Acquire(VkSemaphore semaphore, uint32_t* image) {
+  const double until = Now() + 0.25;
+  for (;;) {
+    VkResult r;
+    {
+      std::lock_guard<std::mutex> lock(swapMutex_);
+      r = vkAcquireNextImageKHR(device_, swapchain_, 0, semaphore, VK_NULL_HANDLE, image);
+    }
+    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+      if (r == VK_SUBOPTIMAL_KHR) chainStale_ = true;
+      return true;
+    }
+    if ((r != VK_NOT_READY && r != VK_TIMEOUT) || Now() > until) {
+      if (r != VK_NOT_READY && r != VK_TIMEOUT) chainStale_ = true;
+      return false;
+    }
+    std::this_thread::yield();  // (not a sleep: Windows' sleeps last a whole timer tick, up to 15.6 ms)
+  }
+}
+
+// A frame's end with frame generation on: the picture between made (it may dispatch and draw), both pictures copied
+// into images of the chain by the frame's own commands, and handed to the presenter.
+void VulkanDevice::EndFrameGenerating(std::vector<uint8_t>* capture, bool present) {
+  Frame& f = frames_[cur_];
+  const bool made = makeBetween_ && makeBetween_();
+  EndRendering();
+  ReleasePassTargets();
+  ReleaseGeneral();
+  TextureRec* window = Find(windowPictures_[cur_]);
+  TextureRec* between = Find(betweenPictures_[cur_]);
+  VkCommandBuffer cmd = f.cmd;
+  if (queries_ && !f.marks.empty()) {  // the frame's end
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries_, static_cast<uint32_t>(cur_) * kMarks + static_cast<uint32_t>(f.marks.size()));
+    f.marks.push_back("(end)");
+  }
+  Transition(window, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  Transition(between, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  if (capture && EnsureReadback()) {
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};
+    vkCmdCopyImageToBuffer(cmd, (captureBetween && made ? between : window)->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback_, 1, &copy);
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};  // (what the copy wrote, for the processor to read)
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &di);
+  }
+  // the chain's images: the frame's first, then the picture made between's (where there is one)
+  int64_t frameImage = -1, betweenImage = -1;
+  uint32_t image = 0;
+  if (present && swapchain_ && !chainStale_) {
+    if (Acquire(f.acquired, &image)) frameImage = image;
+    if (made && frameImage >= 0 && Acquire(f.acquired2, &image)) betweenImage = image;
+  }
+  auto copyInto = [&](TextureRec* from, int64_t into) {  // (a copy that also turns RGBA into the chain's order)
+    const uint32_t i = static_cast<uint32_t>(into);
+    Barrier(cmd, swapImages_[i], swapLayouts_[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageBlit blit{};
+    blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.srcOffsets[1] = {width_, height_, 1};
+    blit.dstOffsets[1] = {static_cast<int32_t>(swapExtent_.width), static_cast<int32_t>(swapExtent_.height), 1};
+    vkCmdBlitImage(cmd, from->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapImages_[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+    Barrier(cmd, swapImages_[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+    swapLayouts_[i] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  };
+  if (frameImage >= 0) copyInto(window, frameImage);
+  if (betweenImage >= 0) copyInto(between, betweenImage);
+  vkEndCommandBuffer(cmd);
+  FlushUploads();  // (what this frame draws with goes to the card ahead of it)
+  VkSemaphore waits[2], signals[2];
+  VkPipelineStageFlags stages[2] = {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT};
+  uint32_t n = 0;
+  if (frameImage >= 0) {
+    waits[n] = f.acquired;
+    signals[n++] = rendered_[static_cast<size_t>(frameImage)];
+  }
+  if (betweenImage >= 0) {
+    waits[n] = f.acquired2;
+    signals[n++] = rendered_[static_cast<size_t>(betweenImage)];
+  }
+  VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  si.waitSemaphoreCount = n;
+  si.pWaitSemaphores = waits;
+  si.pWaitDstStageMask = stages;
+  si.commandBufferCount = 1;
+  si.pCommandBuffers = &cmd;
+  si.signalSemaphoreCount = n;
+  si.pSignalSemaphores = signals;
+  vkQueueSubmit(queue_, 1, &si, f.done);
+  inFrame_ = false;
+  if (frameImage >= 0) {  // handed to the presenter, which shows them once the card has finished the frame
+    {
+      std::lock_guard<std::mutex> lock(presentMutex_);
+      slotShowing_[cur_] = true;
+      presentJobs_.push_back({cur_, f.done, betweenImage, frameImage});
+    }
+    presentWake_.notify_one();
+  }
+  if (capture) {
+    vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+    capture->resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4);
+    std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
+  }
+  cur_ = (cur_ + 1) % kFrames;
 }
 
 void VulkanDevice::SetVsync(bool on) {
   if (on == vsync_) return;
   vsync_ = on;
+  if (generating_) DrainPresenter();
   FlushUploads();
   vkDeviceWaitIdle(device_);
   DestroySwapchain();
@@ -2159,8 +2513,10 @@ void VulkanDevice::ReleaseGeneral() {
 }
 
 void VulkanDevice::BeginFrame(const float clearColor[4]) {
+  if (wantGenerating_ != generating_) SwitchFrameGeneration();  // (asked for during the frame before)
   Frame& f = frames_[cur_];
   vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+  if (generating_) WaitPresented(cur_);  // (the presenter no longer waits on this slot's fence)
   Collect(f.garbage);
   f.garbage = std::move(f.later);  // (what was let go of since: once this frame is done)
   f.later = Garbage{};
@@ -2180,7 +2536,15 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   }
   f.marks.clear();
   waitAcquired_ = false;
-  if (!imageHeld_) {  // (an image held by a frame not shown is drawn into again)
+  if (generating_) {  // (the frame's end acquires the chain's images; a chain anew when it no longer fits)
+    if (chainStale_ || !swapchain_) {
+      DrainPresenter();
+      vkDeviceWaitIdle(device_);
+      DestroySwapchain();
+      std::string error;
+      if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
+    }
+  } else if (!imageHeld_) {  // (an image held by a frame not shown is drawn into again)
     for (int attempt = 0; attempt < 2; ++attempt) {
       if (chainStale_ || !swapchain_) {  // (the window changed, or had no size: a chain anew)
         vkDeviceWaitIdle(device_);
@@ -2239,6 +2603,8 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   std::fill(std::begin(boundScenes_), std::end(boundScenes_), 0u);
   boundBuffers_[0] = boundBuffers_[1] = BoundBuffer{};
   if (rayTracing_ && !emptyScene_) BuildScene(&emptyScene_, nullptr, 0);  // (the first frame, before anything reads it)
+  if (generating_)  // (the slot's two pictures, copies' sources at its last frame's end, readable again)
+    for (Texture t : {windowPictures_[cur_], betweenPictures_[cur_]}) Transition(Find(t), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   PassDesc window;
   window.window = true;
   std::memcpy(window.clearValue, clearColor, sizeof window.clearValue);
@@ -2253,16 +2619,31 @@ void VulkanDevice::BeginPass(const PassDesc& pass) {
   VkImageView colorView = VK_NULL_HANDLE, depthView = VK_NULL_HANDLE;
   int width = width_, height = height_;
   if (pass.window) {
-    ReleasePassTargets();
-    if (back_.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-      Barrier(cmd, back_.image, back_.layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-      back_.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    TextureRec* picture = generating_ ? Find(windowPictures_[cur_]) : nullptr;
+    if (picture) {  // frame generation: the slot's window picture, as a target (not read while drawn into)
+      const uint32_t id = windowPictures_[cur_].id;
+      if (passColor_ != id || passDepth_) ReleasePassTargets();
+      for (uint32_t& bound : boundTextures_)
+        if (bound == id) {
+          bound = 0;
+          setDirty_ = true;
+        }
+      Transition(picture, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+      passColor_ = id;
+      passDepth_ = 0;
+      colorView = picture->attachView;
+    } else {
+      ReleasePassTargets();
+      if (back_.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+        Barrier(cmd, back_.image, back_.layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        back_.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      }
+      colorView = back_.view;
     }
     if (depth_.layout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
       Barrier(cmd, depth_.image, depth_.layout, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
       depth_.layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     }
-    colorView = back_.view;
     depthView = depth_.view;
   } else {
     TextureRec* c = Find(pass.color);
@@ -3045,6 +3426,30 @@ void VulkanDevice::Mark(const char* name) {
   f.marks.push_back(name);
 }
 
+bool VulkanDevice::EnsureReadback() {
+  const VkDeviceSize need = static_cast<VkDeviceSize>(width_) * static_cast<VkDeviceSize>(height_) * 4;
+  if (readbackSize_ < need) {
+    if (readback_) {
+      vkDeviceWaitIdle(device_);
+      vkDestroyBuffer(device_, readback_, nullptr);
+      memory_.Free(readbackMemory_);
+    }
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = need;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    vkCreateBuffer(device_, &bci, nullptr, &readback_);
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device_, readback_, &req);
+    // (memory the processor reads through its cache: from the uncached kind, 15 MB take a tenth of a second)
+    if (!memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, true,
+                     &readbackMemory_))
+      memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &readbackMemory_);
+    vkBindBufferMemory(device_, readback_, readbackMemory_.memory, readbackMemory_.offset);
+    readbackSize_ = need;
+  }
+  return readback_ != VK_NULL_HANDLE;
+}
+
 void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   if (!inFrame_) return;
   drawsLast_ = draws_;
@@ -3053,6 +3458,10 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   EndRendering();
   ReleasePassTargets();
   ReleaseGeneral();
+  if (generating_ && Find(windowPictures_[cur_]) && Find(betweenPictures_[cur_])) {
+    EndFrameGenerating(capture, present);
+    return;
+  }
   VkCommandBuffer cmd = f.cmd;
   if (queries_ && !f.marks.empty()) {  // the frame's end
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries_, static_cast<uint32_t>(cur_) * kMarks + static_cast<uint32_t>(f.marks.size()));
@@ -3062,26 +3471,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   Barrier(cmd, back_.image, back_.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
   back_.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
   if (capture) {
-    const VkDeviceSize need = static_cast<VkDeviceSize>(width_) * static_cast<VkDeviceSize>(height_) * 4;
-    if (readbackSize_ < need) {
-      if (readback_) {
-        vkDeviceWaitIdle(device_);
-        vkDestroyBuffer(device_, readback_, nullptr);
-        memory_.Free(readbackMemory_);
-      }
-      VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-      bci.size = need;
-      bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      vkCreateBuffer(device_, &bci, nullptr, &readback_);
-      VkMemoryRequirements req;
-      vkGetBufferMemoryRequirements(device_, readback_, &req);
-      // (memory the processor reads through its cache: from the uncached kind, 15 MB take a tenth of a second)
-      if (!memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, true,
-                       &readbackMemory_))
-        memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &readbackMemory_);
-      vkBindBufferMemory(device_, readback_, readbackMemory_.memory, readbackMemory_.offset);
-      readbackSize_ = need;
-    }
+    EnsureReadback();
     VkBufferImageCopy copy{};
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.imageExtent = {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), 1};

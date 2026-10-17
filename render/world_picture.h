@@ -160,6 +160,12 @@ class WorldPicture {
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar. (Later the remastered ground's decals and battle scars.)
   void SetGroundDetail(bool on);
+  // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
+  // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and
+  // the interface stay sharp (taken from the frame after). Best where the game already runs at 60 or more. Needs
+  // anti-aliasing off (gSceneSamples 1 before Open), as SetTemporalUpscale; with it on, or where the device
+  // cannot, nothing changes. Set before or after Open (from the next frame). Off as at first. A player's option.
+  void SetFrameGeneration(bool on);
   // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
   // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
   bool RayTracingSupported() const;
