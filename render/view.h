@@ -16,6 +16,7 @@ inline int gSceneSamples = 4;
 inline constexpr int kLampShadowSlot = 27;   // the lamps' shadow maps (lights.h), one array layer per lamp
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade
 inline constexpr int kEnvironmentSlot = 29;  // the sky as a cube map with mip levels (blurrier going down)
+inline constexpr int kAirSlot = 30;          // light in the air (air.h), a volume over the view, when it is on
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -82,6 +83,10 @@ struct ViewConstants {
   // out the land and sea go on before they are lost in the distance (0: the map ends at its
   // edge); w: how much of its light the ground keeps just outside (the playable ground ends there).
   float beyond[4];
+  // Light in the air (air.h): x 1 when its volume is drawn and every surface is seen through it in
+  // place of the haze and mist formulas; y the nearest distance the volume holds; z log(farthest /
+  // nearest); w the most of a far thing the air may hide.
+  float air[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -116,6 +121,7 @@ cbuffer View : register(b0) {
   float4 inspect;         // x: what lit surfaces show instead of their lit colour (0: nothing special; view.h)
   float4 tracksArea;      // the tracks in lying snow: x, y: 1 / the map's width and height; z: 1 = there are tracks
   float4 beyond;          // the world beyond the map's edge: x, y the map's size; z: 1 / how far out it goes (0: not at all); w: the light kept just outside
+  float4 air;             // light in the air (air.h): x 1 = on; y the volume's nearest distance; z log(farthest / nearest); w the most it hides
 };
 SamplerState samplerAniso : register(s0);        // anisotropic, wrap
 SamplerState samplerLinearClamp : register(s1);
@@ -192,8 +198,29 @@ float MistLost(float3 world) {
                                       CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
   return min(1 - exp(-length(world - cameraPosition) * mist.x * mean * banks), mist.w);
 }
+// Light in the air (air.h), when it is on: what the air between the eye and `world` adds to what is
+// seen there (rgb) and what of the light from there still comes through (a). The volume holds, for
+// each cell, the sum from the eye to the cell's far end, its depth spaced by the log of the distance.
+Texture3D airVolume : register(t30);
+float4 AirAt(float3 world) {
+  float4 clip = mul(viewProj, float4(world, 1));
+  float2 uv = clip.w > 1e-4 ? saturate(clip.xy / clip.w * float2(0.5, -0.5) + 0.5) : float2(0.5, 0.5);
+  uint cellsX, cellsY, cellsZ;
+  airVolume.GetDimensions(cellsX, cellsY, cellsZ);
+  float along = log(max(length(world - cameraPosition), air.y) / air.y) / air.z * cellsZ;  // (in cells)
+  float4 a = airVolume.SampleLevel(samplerLinearClamp, float3(uv, max(along - 0.5, 0.5) / cellsZ), 0);
+  if (along < 1) a = lerp(float4(0, 0, 0, 1), a, along);  // (nearer than the first cell's far end)
+  // (never all of a far thing hidden: what is lost is held to the most the air may hide)
+  float kept = max(a.a, 1 - air.w);
+  a.rgb *= (1 - kept) / max(1 - a.a, 1e-4);
+  return float4(a.rgb, kept);
+}
 // A colour at `world` as the eye sees it: through the thick air and through the mist.
 float3 ThroughAirTo(float3 color, float3 world) {
+  [branch] if (air.x > 0.5) {
+    float4 a = AirAt(world);
+    return color * a.a + a.rgb;
+  }
   color = ThroughAir(color, length(world - cameraPosition));
   float lost = MistLost(world);
   return lost > 0 ? lerp(color, MistColor(), lost) : color;

@@ -67,6 +67,9 @@
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
 //           lights alone). Key N steps through them.
 // --noshadows  start without the sun's shadows
+// --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
+//           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
+//           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
@@ -75,6 +78,8 @@
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
 // --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
+// --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
+//           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -199,6 +204,7 @@
 #include "effects.h"
 #include "frame.h"
 #include "gfx.h"
+#include "gfx_check.h"
 #include "ground.h"
 #include "icons.h"
 #include "lights.h"
@@ -249,6 +255,10 @@ struct Options {
   bool fxc = false;                     // --fxc
   bool shaderCache = true;              // --no-shader-cache
   bool vulkanClear = false;             // --vulkan-clear
+  bool gfxCheck = false;                // --gfx-check
+  bool air = false;                     // --air
+  float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
+  int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
@@ -338,6 +348,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
+    else if (a == "--gfx-check") o->gfxCheck = true;
+    else if (a == "--air") o->air = true;
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -389,6 +401,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
     else if (a == "--picture") o->picture = v;
+    else if (a == "--air-dust") o->airDust = static_cast<float>(atof(v));
+    else if (a == "--air-sun") o->airSun = static_cast<float>(atof(v));
+    else if (a == "--air-lamps") o->airLamps = static_cast<float>(atof(v));
+    else if (a == "--air-cells") {
+      if (sscanf(v, "%d,%d", &o->airAcross, &o->airDeep) != 2) return false;
+    }
     else if (a == "--lights") o->testLights = atoi(v);
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
@@ -628,6 +646,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
+  if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
 
   moho::LogSetEcho(false);  // the engine's file layer reports every archive it opens
   moho::Vfs vfs;
@@ -744,6 +763,12 @@ int main(int argc, char** argv) {
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
+  world.volumetricFog = opt.air;
+  if (opt.airDust >= 0) world.air.dust = opt.airDust;
+  if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
+  if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;
+  if (opt.airAcross > 0) world.air.across = opt.airAcross;
+  if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;

@@ -31,6 +31,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       draw(device),
       ao(device),
       post(device),
+      air(device),
       upscaler(device),
       skyDraw(device),
       falling(device),
@@ -56,7 +57,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     stepStart = now;
   };
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -1407,11 +1408,15 @@ void World::Render() {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
   }
+  // light in the air: its volume, between the shadow maps and the scene that reads it
+  Stage("light in the air");
+  air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
   device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
   device_->SetTexture(kEnvironmentSlot, sky_);
+  device_->SetTexture(kAirSlot, air.Volume());
   lights.Bind();
   if (haveMap_) {
     Stage("ground");

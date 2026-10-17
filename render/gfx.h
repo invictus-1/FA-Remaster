@@ -18,6 +18,9 @@
 //  - Handles are plain numbers; 0 means "none". Destroying is deferred until the GPU is done with them.
 //  - Buffers: a static buffer gets its data at creation. A dynamic buffer holds no data of its own:
 //    UpdateBuffer gives it this frame's contents, which last until EndFrame.
+//  - Compute shaders (CreateCompute, Dispatch) do work on the card that draws nothing (the modern look's
+//    lighting: volumes of light in the air, reflections, light thrown back). They read what draws read and
+//    write storage targets (TargetDesc::storage), registers u0..u7. A dispatch lies between passes.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +56,7 @@ enum class Format : uint8_t {
   BGRA8_sRGB,
   R16,
   R16F,
+  RG16F,
   RGBA16F,
   R32F,
   D32,  // depth; only for targets
@@ -101,6 +105,22 @@ struct TargetDesc {
   // Samples per pixel (1, 2, 4 or 8) for anti-aliasing. A target with more than one cannot be read
   // as a texture: draw into it, then Resolve it into an ordinary target of the same size and format.
   int samples = 1;
+  // A storage target: written by compute shaders (SetStorage, Dispatch), never by a pass; read as any
+  // texture. One sample a pixel, one layer, in a format a compute shader can write: RGBA8, R16F, RG16F,
+  // RGBA16F or R32F.
+  bool storage = false;
+  int depth = 1;  // storage: more than 1 makes it a volume of that many slices (Texture3D, RWTexture3D)
+  int mips = 1;   // storage: its levels, each half the one before (SetStorage writes one; a read sees all)
+};
+
+// A compute shader: HLSL, `[numthreads(x, y, z)] void CS(uint3 id : SV_DispatchThreadID)`. It reads
+// constants (b0..b3), textures (t0..t31; a volume as Texture3D), the shader buffers and the fixed
+// samplers as draws do, and writes the storage targets SetStorage binds: `RWTexture2D<float4> out :
+// register(u0)` (RWTexture3D for a volume), u0..u7.
+struct ComputeDesc {
+  const char* name = "";  // for error messages
+  std::string_view source;
+  const char* entry = "CS";
 };
 
 // What a pass draws into: a colour target, a depth target, or both.
@@ -218,6 +238,7 @@ class Device {
   virtual void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) = 0;
   virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;
+  virtual Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) = 0;
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
@@ -230,9 +251,18 @@ class Device {
   // Averages a multi-sample colour target into an ordinary one (same size and format). Ends the
   // current pass; begin another before drawing again.
   virtual void Resolve(Texture from, Texture to) = 0;
+  // A drawing pipeline for the draws after it, or a compute pipeline for the dispatches after it.
+  // Constants, textures and shader buffers set are seen by both kinds.
   virtual void SetPipeline(Pipeline pipeline) = 0;
   virtual void SetConstants(int slot, const void* data, uint32_t size) = 0;
+  // (a texture is not read by a dispatch that also writes it: SetTexture and SetStorage, not both)
   virtual void SetTexture(int slot, Texture texture) = 0;
+  // A storage target for the dispatches to write, at one of its levels, in slot u0..u7 (none: empty).
+  virtual void SetStorage(int slot, Texture texture, int mip = 0) = 0;
+  // Runs the compute pipeline set last over x * y * z groups of its threads. It ends the pass under way,
+  // as Resolve does (its targets become readable; begin another before drawing again). What a dispatch
+  // writes, the dispatches and passes after it read.
+  virtual void Dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1) = 0;
   virtual void SetVertexBuffer(Buffer buffer) = 0;
   virtual void SetIndexBuffer(Buffer buffer) = 0;
   // A buffer shaders read as a StructuredBuffer (a dynamic buffer of kind Shader, updated this

@@ -215,13 +215,18 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       float above = saturate(n.y * 0.5 + 0.5);
       c.rgb *= 0.45 + 0.85 * sunSide * sunTint + 0.25 * above;
     }
-    if (weather.z > 0) {  // thick air between it and the eye: its own light is lost in it, its colour goes to the air's
-      float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
-      c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor() * (options.z > 2.5 ? c.a : 1), lost);
-    }
-    if (mist.x > 0) {  // and the mist on low ground
-      float lost = MistLost(i.world);
-      c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor() * (options.z > 2.5 ? c.a : 1), lost);
+    [branch] if (air.x > 0.5) {  // light in the air (air.h): what comes through of its own, and the air's light before it
+      float4 a = AirAt(i.world);
+      c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * a.a : c.rgb * a.a + a.rgb * (options.z > 2.5 ? c.a : 1);
+    } else {
+      if (weather.z > 0) {  // thick air between it and the eye: its own light is lost in it, its colour goes to the air's
+        float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
+        c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor() * (options.z > 2.5 ? c.a : 1), lost);
+      }
+      if (mist.x > 0) {  // and the mist on low ground
+        float lost = MistLost(i.world);
+        c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor() * (options.z > 2.5 ? c.a : 1), lost);
+      }
     }
   }
   if (options.z > 2.5) c *= meets;  // (premultiplied: the colour carries its alpha)

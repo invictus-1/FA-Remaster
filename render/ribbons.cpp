@@ -62,11 +62,14 @@ float4 PS(VOut i) : SV_Target {
     heat += float3(1.0, 0.95, 0.85) * (6.0 * exp(-age * 45.0));  // (the bead at the shell: white hot)
     c.rgb = dot(c.rgb, float3(0.3, 0.6, 0.1)) * heat;
   }
-  if (look > 0.5 && weather.z > 0) {  // thick air between it and the eye
+  [branch] if (look > 0.5 && air.x > 0.5) {  // light in the air (air.h)
+    float4 a = AirAt(i.world);
+    c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * a.a : c.rgb * a.a + a.rgb;
+  } else if (look > 0.5 && weather.z > 0) {  // thick air between it and the eye
     float lost = min(1 - exp(-i.position.w * weather.z), weather.w);
     c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, AirColor(), lost);
   }
-  if (look > 0.5 && mist.x > 0) {  // and the mist on low ground
+  if (look > 0.5 && mist.x > 0 && air.x < 0.5) {  // and the mist on low ground
     float lost = MistLost(i.world);
     c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor(), lost);
   }
