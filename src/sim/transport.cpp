@@ -3064,22 +3064,7 @@ int l_GetTransportFerryBeacon(lua_State* L) {
   return 1;
 }
 
-std::vector<Unit*> UnitList(lua_State* L, int idx) {
-  std::vector<Unit*> out;
-  if (Unit* u = ToObject<Unit>(L, idx)) {
-    out.push_back(u);
-    return out;
-  }
-  if (!lua_istable(L, idx)) return out;
-  lua_pushnil(L);
-  while (lua_next(L, idx) != 0) {
-    if (Unit* u = ToObject<Unit>(L, -1))
-      if (Alive(u)) out.push_back(u);
-    lua_pop(L, 1);
-  }
-  std::sort(out.begin(), out.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
-  return out;
-}
+std::vector<Unit*> UnitList(lua_State* L, int idx) { return ScriptUnitList(L, idx); }  // func_GetUnitList 0x6eee40
 
 std::shared_ptr<UnitCommand> NewCommand(Sim& sim, CommandType type) {
   auto c = std::make_shared<UnitCommand>();
@@ -3157,11 +3142,12 @@ int IssueUnload(lua_State* L, bool specific) {
   std::vector<Unit*> set;
   for (Unit* u : UnitList(L, 1))
     if (LiveCommandCaps(L, u) & kCapTransport) set.push_back(u);
+  int posArg = specific ? 3 : 2;
+  CheckScriptTarget(L, posArg);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f76b4 / 0x6f7d32)
   if (set.empty()) {
     lua_pushnil(L);
     return 1;
   }
-  int posArg = specific ? 3 : 2;
   auto c = NewCommand(sim, specific ? CommandType::TransportUnloadSpecificUnits : CommandType::TransportUnloadUnits);
   if (Entity* e = ToObject<Entity>(L, posArg)) {
     c->pos = e->position;
@@ -3202,6 +3188,7 @@ int IssueUnload(lua_State* L, bool specific) {
 int l_IssueFerry(lua_State* L) {
   Sim& sim = *S(L);
   if (lua_gettop(L) != 2) return luaL_error(L, "IssueFerry: expected 2 args, but got %d", lua_gettop(L));
+  CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, before the unit list (0x6f58fd)
   Vec3 p;
   uint32_t tid = 0;
   if (Entity* e = ToObject<Entity>(L, 2)) {
@@ -3250,6 +3237,7 @@ int l_IssueTeleportToBeacon(lua_State* L) {
   std::vector<Unit*> set;
   for (Unit* u : UnitList(L, 1))
     if (LiveCommandCaps(L, u) & kCapTransport) set.push_back(u);
+  CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f7964)
   if (set.empty()) return 0;
   auto c = NewCommand(sim, CommandType::TransportUnloadUnits);
   if (Entity* e = ToObject<Entity>(L, 2)) {

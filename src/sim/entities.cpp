@@ -1365,24 +1365,35 @@ void Sim::InitializeArmor(lua_State* L, Unit* u) {
       if (!lua_istable(L, -1)) {
         Logf(LogLevel::Warning, "The armor module didn't define any armors.  Hmm Odd?");
       } else {
+        // ARMOR_GetArmorDefinations 0x564660 walks the rows [1 .. GetCount] (0x564767) for the first whose [1] is the
+        // armor type, then takes its [2 .. GetCount] (0x564803; both read again each pass) as strings. Ours reads every
+        // row once: the first row of a name wins, a row that is no table and an entry that is no string are left out
+        // (each a Lua error of the original's GetByIndex / GetString; the rows are armordefinition.lua's own).
         int defs = lua_gettop(L);
-        for (int i = 1;; ++i) {
+        const int rows = ObjectCount(L, defs);
+        for (int i = 1; i <= rows; ++i) {
           lua_rawgeti(L, defs, i);
-          if (!lua_istable(L, -1)) break;
+          if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            continue;
+          }
           lua_rawgeti(L, -1, 1);
           std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
           lua_pop(L, 1);
+          if (armorTypes_.count(name)) {
+            lua_pop(L, 1);
+            continue;
+          }
           auto& mults = armorTypes_[name];
-          for (int k = 2;; ++k) {
+          const int entries = ObjectCount(L, -1);
+          for (int k = 2; k <= entries; ++k) {
             lua_rawgeti(L, -1, k);
-            if (!lua_isstring(L, -1)) {
-              lua_pop(L, 1);
-              break;
+            if (lua_type(L, -1) == LUA_TSTRING) {
+              std::string entry = lua_tostring(L, -1);  // "DamageType 0.5"
+              size_t sp = entry.find(' ');
+              if (sp != std::string::npos)
+                mults[entry.substr(0, sp)] = static_cast<float>(std::atof(entry.c_str() + sp + 1));
             }
-            std::string entry = lua_tostring(L, -1);  // "DamageType 0.5"
-            size_t sp = entry.find(' ');
-            if (sp != std::string::npos)
-              mults[entry.substr(0, sp)] = static_cast<float>(std::atof(entry.c_str() + sp + 1));
             lua_pop(L, 1);
           }
           lua_pop(L, 1);

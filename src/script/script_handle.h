@@ -64,6 +64,20 @@ T* CheckObject(lua_State* L, int idx) {
   if (!t) luaL_error(L, "Incorrect type of game object.  (Did you call with '.' instead of ':'?)");
   return t;
 }
+// As the original's "Opt" getters (func_GetUnitOpt 0x593970, func_GetCUnitCommandOpt 0x6f8d80): a value that is no
+// game object (a nil hole included) is the error "Expected a game object...", a destroyed one nullptr, one of
+// another class the error "Incorrect type of game object...".
+ScriptObject* OptAnyObject(lua_State* L, int idx);
+template <class T>
+T* OptObject(lua_State* L, int idx) {
+  ScriptObject* o = OptAnyObject(L, idx);
+  if (!o) return nullptr;
+  T* t;
+  if constexpr (ScriptTypeOf<T>::bit != 0) t = (o->typeBits & ScriptTypeOf<T>::bit) ? static_cast<T*>(o) : nullptr;
+  else t = dynamic_cast<T*>(o);
+  if (!t) luaL_error(L, "Incorrect type of game object.  (Did you call with '.' instead of ':'?)");
+  return t;
+}
 template <class T>
 T* ToObject(lua_State* L, int idx) {
   ScriptObject* o = GetObject(L, idx);

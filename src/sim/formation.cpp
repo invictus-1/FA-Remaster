@@ -95,7 +95,7 @@ std::string ScriptName(lua_State* L, int index, const std::vector<Unit*>& units)
     lua_gettable(L, m);
     if (lua_istable(L, -1)) {
       int t = lua_gettop(L);
-      int n = luaL_getn(L, t);
+      int n = luaL_getn(L, t);  // LuaObject::GetN 0x907e50 (luaL_getn), not GetCount
       lua_rawgeti(L, t, index < n ? index + 1 : 1);
       if (lua_isstring(L, -1)) out = lua_tostring(L, -1);
     }
@@ -110,7 +110,9 @@ struct ScriptSlot {
   float row = 0;
 };
 
-// FORMATION_RunScript 0x576690: <name>(units, 0-based); entries {x, z, filter, order, rotate}
+// FORMATION_RunScript 0x576690: <name>(units, 0-based); entries {x, z, filter, order, rotate}. The result is walked
+// with LuaTableIterator (0x457a40 / Next 0x457ba0: lua_next order, every key); a value that is no table or whose
+// GetCount (0x576944) is not 5 is left out with "Error in the formation slot! Either not a table or num params != 5."
 bool RunScript(lua_State* L, const std::string& name, const std::vector<Unit*>& units, std::vector<ScriptSlot>* out,
                bool* rotate) {
   int top = lua_gettop(L);
@@ -139,17 +141,19 @@ bool RunScript(lua_State* L, const std::string& name, const std::vector<Unit*>& 
     return false;
   }
   if (!lua_istable(L, -1)) {
+    Logf(LogLevel::Warning, "Formation script did not retuan a table!");
     lua_settop(L, top);
     return false;
   }
   int r = lua_gettop(L);
-  for (int i = 1;; ++i) {
-    lua_rawgeti(L, r, i);
-    if (lua_isnil(L, -1)) {
-      lua_pop(L, 1);
-      break;
-    }
+  lua_pushnil(L);
+  while (lua_next(L, r)) {
     int e = lua_gettop(L);
+    if (!lua_istable(L, e) || ObjectCount(L, e) != 5) {
+      Logf(LogLevel::Warning, "Error in the formation slot! Either not a table or num params != 5.");
+      lua_pop(L, 1);
+      continue;
+    }
     ScriptSlot s;
     lua_rawgeti(L, e, 1);
     s.x = static_cast<float>(lua_tonumber(L, -1));
@@ -162,7 +166,7 @@ bool RunScript(lua_State* L, const std::string& name, const std::vector<Unit*>& 
     lua_rawgeti(L, e, 5);
     *rotate = lua_toboolean(L, -1) != 0;  // one result-wide byte: the last entry decides
     out->push_back(s);
-    lua_settop(L, r);
+    lua_settop(L, r + 1);  // the key, for lua_next
   }
   lua_settop(L, top);
   return true;
@@ -843,7 +847,7 @@ int FormationScriptIndex(lua_State* L, const std::string& name, const std::vecto
     lua_gettable(L, m);
     if (lua_istable(L, -1)) {
       int t = lua_gettop(L);
-      int n = luaL_getn(L, t);
+      int n = ObjectCount(L, t);  // FORMATION_GetScriptIndex 0x575db0: GetCount 0x575f09, read once; no string skipped
       for (int i = 1; i <= n && idx < 0; ++i) {
         lua_rawgeti(L, t, i);
         if (lua_isstring(L, -1)) {

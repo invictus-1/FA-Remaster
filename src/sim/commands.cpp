@@ -186,6 +186,38 @@ bool IsAlly(const Army* a, const Army* b);
 bool IsEnemy(const Army* a, const Army* b);
 }  // namespace combat
 
+std::vector<Unit*> ScriptUnitList(lua_State* L, int idx) {
+  if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+  if (!lua_istable(L, idx)) {
+    lua_Debug ar;  // the binding's name, as the original passes it (e.g. "IssueMove")
+    const char* fn = (lua_getstack(L, 0, &ar) && lua_getinfo(L, "n", &ar) && ar.name) ? ar.name : "?";
+    luaL_error(L, "Invalid unit set in %s; expected a table but got a %s", fn, lua_typename(L, lua_type(L, idx)));
+  }
+  std::vector<Unit*> out;
+  const int count = ObjectCount(L, idx);
+  for (int i = 1; i <= count; ++i) {
+    lua_rawgeti(L, idx, i);
+    Unit* u = OptObject<Unit>(L, -1);
+    lua_pop(L, 1);
+    if (!u || u->dead) continue;
+    auto at = std::lower_bound(out.begin(), out.end(), u, [](const Unit* a, const Unit* b) { return a->id < b->id; });
+    if (at == out.end() || *at != u) out.insert(at, u);
+  }
+  return out;
+}
+
+void CheckScriptTarget(lua_State* L, int idx) {
+  if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+  if (lua_type(L, idx) == LUA_TNIL) return;
+  if (ToObject<Entity>(L, idx)) return;
+  if (lua_istable(L, idx) && ObjectCount(L, idx) == 3) return;
+  lua_Debug ar;
+  const char* fn = (lua_getstack(L, 0, &ar) && lua_getinfo(L, "n", &ar) && ar.name) ? ar.name : "?";
+  const int t = lua_type(L, idx);
+  luaL_error(L, "Invalid target set in %s; expected an entity or a Vec3 but got a %s", fn,
+             t == LUA_TNONE ? "nil" : lua_typename(L, t));
+}
+
 // ---- CUnitPatrolTask: Patrol 16, FormPatrol 18, AggressiveMove 35, FormAggressiveMove 36 ----------------
 // (engine-ref attack_move.md 2). Runs every 6 ticks; finds enemies in a box along its leg and pushes an
 // attack child; otherwise (re-)issues the navigator goal; ends when the unit is within ceil(speed) cells of
@@ -875,22 +907,7 @@ namespace {
 
 // ---- argument helpers ------------------------------------------------------------------------
 
-std::vector<Unit*> UnitsArg(lua_State* L, int idx) {
-  std::vector<Unit*> out;
-  if (!lua_istable(L, idx)) luaL_error(L, "expected a table of units");
-  // a single unit table also works
-  if (Unit* u = ToObject<Unit>(L, idx)) {
-    out.push_back(u);
-    return out;
-  }
-  lua_pushnil(L);
-  while (lua_next(L, idx) != 0) {
-    if (Unit* u = ToObject<Unit>(L, -1))
-      if (IsAlive(u)) out.push_back(u);
-    lua_pop(L, 1);
-  }
-  return out;
-}
+std::vector<Unit*> UnitsArg(lua_State* L, int idx) { return ScriptUnitList(L, idx); }
 
 bool PosArg(lua_State* L, int idx, Vec3* p) {
   if (!lua_istable(L, idx)) return false;
@@ -1441,10 +1458,19 @@ static bool ReclaimOrderValid(lua_State* L, const Unit* u, Entity* t) {
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
   // SCR_GetTarget 0x6eef60 converts the target first: an entity target picks a target point (one draw,
-  // value unused); the CUnitCommand ctor decodes it again (a second draw) when a command is created
+  // value unused); the CUnitCommand ctor decodes it again (a second draw) when a command is created.
+  // IssueGuard / IssuePatrol / IssueAggressiveMove take it before their unit list (func_GetUnitList 0x6eee40), the
+  // others after it (which of the two errors a script sees). IssueReclaim / Repair / Capture / OverCharge take their
+  // entity without SCR_GetTarget.
+  constexpr bool kGetTarget = T != CommandType::Reclaim && T != CommandType::Repair && T != CommandType::Capture &&
+                              T != CommandType::OverCharge;
+  constexpr bool kTargetFirst = T == CommandType::Guard || T == CommandType::Patrol || T == CommandType::AggressiveMove;
+  std::vector<Unit*> units;
+  if (kGetTarget && !kTargetFirst) units = UnitsArg(L, 1);
+  if (kGetTarget) CheckScriptTarget(L, 2);
   Entity* te = ToObject<Entity>(L, 2);
   TargetPointDraw(*S(L), te);
-  auto units = UnitsArg(L, 1);
+  if (!kGetTarget || kTargetFirst) units = UnitsArg(L, 1);
   if (T == CommandType::Reclaim)
     units.erase(std::remove_if(units.begin(), units.end(), [&](Unit* u) { return !ReclaimOrderValid(L, u, te); }),
                 units.end());
@@ -1594,6 +1620,7 @@ int l_IssueBuildFactory(lua_State* L) {
 // IssueBuildMobile(units, position, blueprintId, table)
 int l_IssueBuildMobile(lua_State* L) {
   auto units = UnitsArg(L, 1);
+  CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f5bfb)
   Vec3 targetAt{};
   const bool hasTarget = PosArg(L, 2, &targetAt);
   auto c = Issue(L, units, CommandType::BuildMobile, hasTarget ? &targetAt : nullptr);

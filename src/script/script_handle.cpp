@@ -58,6 +58,15 @@ ScriptObject* GetObject(lua_State* L, int idx) {
   return box ? static_cast<ScriptObject*>(*box) : nullptr;
 }
 
+ScriptObject* OptAnyObject(lua_State* L, int idx) {
+  if (!lua_istable(L, idx)) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
+  lua_rawgetcobject(L, idx);
+  void** box = static_cast<void**>(lua_touserdata(L, -1));
+  lua_pop(L, 1);
+  if (!box) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
+  return static_cast<ScriptObject*>(*box);
+}
+
 ScriptObject* CheckAnyObject(lua_State* L, int idx) {
   if (!lua_istable(L, idx)) luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
   lua_rawgetcobject(L, idx);

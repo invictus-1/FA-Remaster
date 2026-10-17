@@ -3397,15 +3397,19 @@ int l_w_SetTargetGround(lua_State* L) {
   if (CanAttackTarget(*S(L), w, t)) SetTarget(*S(L), w, t);
   return 0;
 }
+// UnitWeapon:SetTargetingPriorities 0x6da560: the list is emptied, then i = 1 .. GetCount (0x6da64e, read again each
+// pass; nothing here changes the list) through func_GetCObj_EntityCategory 0x5575e0: a value that is no category (a
+// nil hole included) is a Lua error (GetUserData's luaG_typeerror), the categories before it are kept.
 int l_w_SetTargetingPriorities(lua_State* L) {
   UnitWeapon* w = W(L);
-  if (!lua_istable(L, 2)) return luaL_error(L, "SetTargetingPriorities: expected a table");
+  if (!lua_istable(L, 2)) return luaL_error(L, "Passed in an invalid table to priority categories");
   w->priorities.clear();
-  int n = static_cast<int>(luaL_getn(L, 2));
+  const int n = ObjectCount(L, 2);
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
     const uint64_t* c = ToCategory(L, -1);
-    if (c) w->priorities.emplace_back(c, c + CategoryWordCount());
+    if (!c) luaL_error(L, "attempt to get as UserData a %s value", lua_typename(L, lua_type(L, -1)));
+    w->priorities.emplace_back(c, c + CategoryWordCount());
     lua_pop(L, 1);
   }
   return 0;

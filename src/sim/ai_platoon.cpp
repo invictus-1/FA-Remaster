@@ -1100,7 +1100,7 @@ int l_CanFormPlatoon(lua_State* L) {
     luaL_error(L, "Attempted to pass in a non table as a platoon template");
     return 0;
   }
-  const int n = luaL_getn(L, 2);  // LuaObject::GetCount
+  const int n = ObjectCount(L, 2);  // GetCount 0x72d151, read once; an entry that is no table is skipped
   int total = 0;
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
@@ -1155,7 +1155,7 @@ int l_FormPlatoon(lua_State* L) {
   Platoon* pool = P(L);
   Sim* sim = S(L);
   luaL_checktype(L, 2, LUA_TTABLE);
-  const int n = luaL_getn(L, 2);
+  const int n = ObjectCount(L, 2);  // GetCount 0x72d9fa, read once; an entry that is no table is skipped
   const std::string name = EntryStr(L, 2, 1), plan = EntryStr(L, 2, 2);
   Platoon* np = sim->CreatePlatoon(L, pool->army, name, plan);
   if (!np) {
@@ -1225,18 +1225,21 @@ int l_IsPatrolling(lua_State* L) { return StateQuery(L, "CPlatoon:IsPatrolling()
 int l_IsFerrying(lua_State* L) { return StateQuery(L, "CPlatoon:IsFerrying()", "Ferrying"); }
 
 // SetPrioritizedTargetList 0x72e940 (squad, { categories }): the squad's priority list (+0x54), if it has the squad.
+// i = 1 .. GetCount (0x72ea69, read again each pass; nothing here changes the list) through func_GetCObj_EntityCategory
+// 0x5575e0: a value that is no category (a nil hole included) is a Lua error (LuaObject::GetUserData 0x907bc0's
+// luaG_typeerror, or the upcast's).
 int l_SetPrioritizedTargetList(lua_State* L) {
   Args(L, "CPlatoon:SetPrioritizedTargetList()", 3, 3);
   Platoon* p = P(L);
   const int cls = SquadArg(L, 2);
   std::vector<std::vector<uint64_t>> list;
   if (lua_istable(L, 3)) {
-    for (int i = 1; i <= luaL_getn(L, 3); ++i) {
+    const int n = ObjectCount(L, 3);
+    for (int i = 1; i <= n; ++i) {
       lua_rawgeti(L, 3, i);
       const uint64_t* c = ToCategory(L, -1);
-      std::vector<uint64_t> bits(static_cast<size_t>(CategoryWordCount()), 0);
-      if (c) std::copy(c, c + bits.size(), bits.begin());
-      list.push_back(std::move(bits));
+      if (!c) luaL_error(L, "attempt to get as UserData a %s value", lua_typename(L, lua_type(L, -1)));
+      list.emplace_back(c, c + CategoryWordCount());
       lua_pop(L, 1);
     }
     if (Squad* s = SquadOf(p, cls)) s->priorities = std::move(list);
@@ -1453,26 +1456,34 @@ int l_UseTeleporter(lua_State* L) {
   return 1;
 }
 // IsCommandsActive 0x731f80 ({commands}): some command of the list still exists (GetCUnitCommandOpt 0x6f8d80):
-// in ours, a command no unit holds any more is done (IsCommandDone).
+// in ours, a command no unit holds any more is done (IsCommandDone). i = 1 .. GetCount (0x73202a, read again each
+// pass; nothing here changes the list), the first live command answers true; a value that is no command (a nil hole
+// included) is the Opt getter's Lua error.
 int l_IsCommandsActive(lua_State* L) {
   Args(L, "CPlatoon:IsCommandsActive()", 2, 2);
   P(L);
   Sim& sim = *S(L);
   bool active = false;
   if (lua_istable(L, 2)) {
-    const int n = luaL_getn(L, 2);
+    const int n = ObjectCount(L, 2);
     for (int i = 1; i <= n && !active; ++i) {
       lua_rawgeti(L, 2, i);
+      bool isCommand = false;
       if (lua_istable(L, -1)) {
         lua_pushstring(L, "moho64_cmd");
         lua_rawget(L, -2);
         if (lua_isnumber(L, -1)) {
+          isCommand = true;
           const uint32_t id = static_cast<uint32_t>(lua_tonumber(L, -1));
           auto it = sim.commandsById.find(id);
           if (it != sim.commandsById.end())
             if (auto c = it->second.lock()) active = !c->units.empty();
         }
         lua_pop(L, 1);
+      }
+      if (!isCommand) {
+        if (GetObject(L, -1)) luaL_error(L, "Incorrect type of game object.  (Did you call with '.' instead of ':'?)");
+        luaL_error(L, "Expected a game object. (Did you call with '.' instead of ':'?)");
       }
       lua_pop(L, 1);
     }
@@ -1610,7 +1621,7 @@ int l_MakePlatoon(lua_State* L) {
       lua_pushnil(L);
       return 1;
     }
-    const int n = luaL_getn(L, 2);
+    const int n = ObjectCount(L, 2);  // GetCount 0x58d7d3, read once; an entry that is no table is skipped
     const std::string name = EntryStr(L, 2, 1), plan = EntryStr(L, 2, 2);
     Platoon* np = sim->CreatePlatoon(L, a, name, plan);
     if (!np) {
@@ -1671,10 +1682,14 @@ int l_AssignUnitsToPlatoon(lua_State* L) {
   if (!lua_istable(L, 3)) return 0;
   Platoon* p = lua_isstring(L, 2) ? PlatoonByName(b->army, lua_tostring(L, 2)) : CheckObject<Platoon>(L, 2);
   if (!p) return 0;
-  std::vector<Unit*> units;  // sub_5919F0: the table's units as an EntitySet
-  lua_pushnil(L);
-  while (lua_next(L, 3) != 0) {
-    if (Unit* u = ToObject<Unit>(L, -1)) SetAdd(units, u);
+  // sub_5919F0: i = 1 .. GetCount (0x591a1e, read again each pass; nothing here changes the list) through
+  // SCR_FromLua_Unit 0x5936c0 (a nil hole, a destroyed unit or another value is a Lua error), appended in the list's
+  // order (0x591a54: a plain push_back, no sort); the squad's AddRange sorts them.
+  std::vector<Unit*> units;
+  const int n = ObjectCount(L, 3);
+  for (int i = 1; i <= n; ++i) {
+    lua_rawgeti(L, 3, i);
+    units.push_back(CheckObject<Unit>(L, -1));
     lua_pop(L, 1);
   }
   RemoveUnitsFromPlatoons(b->army, units);

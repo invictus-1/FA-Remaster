@@ -112,6 +112,17 @@ bool EqualNoCase(const char* a, const char* b) {  // __stricmp == 0
   }
 }
 
+// The list readers of the original's bindings: LuaObject::operator[](int) 0x9091e0 on a value that is no table, and
+// LuaObject::GetString 0x907a90 on one that is no string (a number neither), are luaG_typeerror 0x9133a0: a Lua error.
+void IndexableArg(lua_State* L, int idx) {
+  if (!lua_istable(L, idx)) luaL_error(L, "attempt to index a %s value", lua_typename(L, lua_type(L, idx)));
+}
+const char* ObjString(lua_State* L, int idx) {
+  if (lua_type(L, idx) != LUA_TSTRING)
+    luaL_error(L, "attempt to get as string a %s value", lua_typename(L, lua_type(L, idx)));
+  return lua_tostring(L, idx);
+}
+
 // EAlliance (0x509e20: Neutral 0, Ally 1, Enemy 2) from SCR_GetEnum 0x4d2550 (the name, with or without the
 // "ALLIANCE_" prefix, case-insensitive; an unknown name raises "Invalid enum value").
 int AllianceEnumArg(lua_State* L, int idx) {
@@ -550,11 +561,12 @@ int l_FindUnit(lua_State* L) {
 }
 
 // FindUpgradeBP(unitName, upgradeList) 0x588c90: the [2] of the first entry whose [1] is the name (any case).
+// i = 1 .. GetCount (0x588d70, read once); an entry that is no table (a nil hole included) is skipped.
 int l_FindUpgradeBP(lua_State* L) {
   Args(L, "brain:FindUpgradeBP(unitName, upgradeList) -- Return an upgrade blueprint for the unit passed in", 3, 3);
   B(L);
   const char* name = StrArg(L, 2);
-  const int n = lua_istable(L, 3) ? luaL_getn(L, 3) : 0;
+  const int n = lua_istable(L, 3) ? ObjectCount(L, 3) : 0;
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 3, i);
     const int e = lua_gettop(L);
@@ -578,11 +590,12 @@ int l_FindUpgradeBP(lua_State* L) {
 // FindUnitToUpgrade(upgradeList) 0x588f30: per entry {from, to} whose two blueprints exist, the first of the army's
 // units (CUnitIterAllArmies 0x6b69d0: the army's id range, ascending) that is not dead or being built, is idle and
 // is a `from` (its blueprint id, any case); returns the unit and the `to` blueprint's id. nil, nil if none.
+// i = 1 .. GetCount (0x588ffb, read once); an entry that is no table (a nil hole included) is skipped.
 int l_FindUnitToUpgrade(lua_State* L) {
   Args(L, "brain:FindUnitToUpgrade(upgradeList) -- Return a unit and it's upgrade blueprint", 2, 2);
   AiBrain* b = B(L);
   Sim& sim = *S(L);
-  const int n = lua_istable(L, 2) ? luaL_getn(L, 2) : 0;
+  const int n = lua_istable(L, 2) ? ObjectCount(L, 2) : 0;
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
     const int e = lua_gettop(L);
@@ -611,33 +624,34 @@ int l_FindUnitToUpgrade(lua_State* L) {
 
 // DecideWhatToBuild(builder, type, buildingTypes) 0x589400: in the first entries whose [1] is the type (any case),
 // the first of [2..] the builder can build (CAiBrain::CanBuildUnit 0x57a6d0: the unit blueprint exists and
-// Unit::CanBuild); the entry's value itself. nil if none (or the list is no table / empty).
+// Unit::CanBuild); the entry's value itself. nil if none (or the list is no table / empty). Both loops run to
+// GetCount (0x58954c / 0x589630, read again each pass; nothing here changes the lists): an entry that is no table, or
+// whose [1] is no string, and a [j] that is no string (a nil hole included) are Lua errors (IndexableArg, ObjString).
 int l_DecideWhatToBuild(lua_State* L) {
   Args(L, "brain:DecideWhatToBuild(builder, type, buildingTypes)", 4, 4);
   B(L);
   Sim& sim = *S(L);
   Unit* builder = CheckObject<Unit>(L, 2);
   const char* type = StrArg(L, 3);
-  if (!lua_istable(L, 4) || luaL_getn(L, 4) < 1) {
+  if (!lua_istable(L, 4) || ObjectCount(L, 4) < 1) {
     lua_pushnil(L);
     return 1;
   }
-  const int n = luaL_getn(L, 4);
+  const int n = ObjectCount(L, 4);
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 4, i);
     const int e = lua_gettop(L);
-    if (lua_istable(L, e)) {  // (a non-table entry would fault the original's GetByIndex)
-      lua_rawgeti(L, e, 1);
-      const bool match = EqualNoCase(lua_tostring(L, -1), type);
-      lua_pop(L, 1);
-      if (match) {
-        const int m = luaL_getn(L, e);
-        for (int j = 2; j <= m; ++j) {
-          lua_rawgeti(L, e, j);
-          const BlueprintInfo* bp = FindUnitBp(sim, lua_tostring(L, -1));
-          if (bp && UnitCanBuild(builder, *bp)) return 1;  // the entry's value
-          lua_pop(L, 1);
-        }
+    IndexableArg(L, e);
+    lua_rawgeti(L, e, 1);
+    const bool match = EqualNoCase(ObjString(L, -1), type);
+    lua_pop(L, 1);
+    if (match) {
+      const int m = ObjectCount(L, e);
+      for (int j = 2; j <= m; ++j) {
+        lua_rawgeti(L, e, j);
+        const BlueprintInfo* bp = FindUnitBp(sim, ObjString(L, -1));
+        if (bp && UnitCanBuild(builder, *bp)) return 1;  // the entry's value
+        lua_pop(L, 1);
       }
     }
     lua_pop(L, 1);
@@ -731,7 +745,10 @@ int l_FindPlaceToBuild(lua_State* L) {
   const int bestIdx = lua_gettop(L);
   const float dy = -0.0f - pos.y;  // 0xe4f748 = -0.0
   const float dy2 = dy * dy;
-  const int nt = luaL_getn(L, 4);
+  // Every loop runs to GetCount (0x58ae19 / 0x58aec9 / 0x58af4d, read again each pass; nothing here changes the
+  // lists): a type name that is no string and a location that is no table (a nil hole included) are Lua errors
+  // (GetString 0x907a90; the original takes GetCount of the location 0x58af96 and indexes it).
+  const int nt = ObjectCount(L, 4);
   for (int i = 1; i <= nt; ++i) {
     lua_rawgeti(L, 4, i);
     const int tmpl = lua_gettop(L);
@@ -740,25 +757,23 @@ int l_FindPlaceToBuild(lua_State* L) {
     const int types = lua_gettop(L);
     if (!lua_istable(L, types)) luaL_error(L, "Error parsing building types. Missing type match lua table!");
     bool match = false;
-    const int nm = luaL_getn(L, types);
+    const int nm = ObjectCount(L, types);
     for (int j = 1; j <= nm && !match; ++j) {
       lua_rawgeti(L, types, j);
-      match = EqualNoCase(lua_tostring(L, -1), type);
+      match = EqualNoCase(ObjString(L, -1), type);
       lua_pop(L, 1);
     }
     if (match) {
-      const int nl = luaL_getn(L, tmpl);
+      const int nl = ObjectCount(L, tmpl);
       for (int k = 2; k <= nl; ++k) {
         lua_rawgeti(L, tmpl, k);
         const int loc = lua_gettop(L);
-        float lz = 0, lx = 0;
-        if (lua_istable(L, loc)) {
-          lua_rawgeti(L, loc, 2);
-          lz = static_cast<float>(lua_tonumber(L, -1));
-          lua_rawgeti(L, loc, 1);
-          lx = static_cast<float>(lua_tonumber(L, -1));
-          lua_pop(L, 2);
-        }
+        IndexableArg(L, loc);
+        lua_rawgeti(L, loc, 2);
+        const float lz = static_cast<float>(lua_tonumber(L, -1));
+        lua_rawgeti(L, loc, 1);
+        const float lx = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 2);
         float x = lx, z = lz;
         if (relative) {
           x = lx + sx;
@@ -851,7 +866,7 @@ int l_BuildStructure(lua_State* L) {
     lua_rawgeti(L, 4, 3);
     angle = static_cast<float>(lua_tonumber(L, -1));
     lua_pop(L, 3);
-    if (luaL_getn(L, 4) > 3) {
+    if (ObjectCount(L, 4) > 3) {  // GetCount 0x58b8a1
       lua_rawgeti(L, 4, 5);
       lua_rawgeti(L, 4, 4);
       end.x = static_cast<float>(lua_tonumber(L, -1));
@@ -911,8 +926,8 @@ int l_BuildPlatoon(lua_State* L) {
   B(L);
   Sim& sim = *S(L);
   if (!lua_istable(L, 2) || !lua_istable(L, 3)) return 0;
-  const int n = luaL_getn(L, 2);
-  const int nf = luaL_getn(L, 3);
+  const int n = ObjectCount(L, 2);  // GetCount 0x58c633 / 0x58c640, both read once
+  const int nf = ObjectCount(L, 3);
   int f = 1;
   static const bool dbg = getenv("MOHO64_DEBUG_AIBUILD") != nullptr;
   for (int i = 1; i <= n; ++i) {
@@ -973,10 +988,12 @@ int l_CanBuildPlatoon(lua_State* L) {
   std::vector<Unit*> suggested;
   if (lua_gettop(L) > 2) {
     if (!lua_istable(L, 3)) luaL_error(L, "Suggested factory list is not a table!");
-    const int n = luaL_getn(L, 3);
+    // i = 1 .. GetCount (0x58c15c, read again each pass; nothing here changes the list) through func_GetUnitOpt
+    // 0x593970: a nil hole or a value that is no game object is a Lua error, a destroyed unit is left out.
+    const int n = ObjectCount(L, 3);
     for (int i = 1; i <= n; ++i) {
       lua_rawgeti(L, 3, i);
-      Unit* u = lua_istable(L, -1) ? ToObject<Unit>(L, -1) : nullptr;  // func_GetUnitOpt 0x593970
+      Unit* u = OptObject<Unit>(L, -1);
       if (u) suggested.push_back(u);
       lua_pop(L, 1);
     }
@@ -986,7 +1003,7 @@ int l_CanBuildPlatoon(lua_State* L) {
     }
   }
   std::vector<Unit*> found;
-  const int n = luaL_getn(L, 2);
+  const int n = ObjectCount(L, 2);  // GetCount 0x58c22f, read once; an entry that is no table is skipped
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
     if (lua_istable(L, -1)) {

@@ -29,26 +29,15 @@ bool EqualNoCase(const char* a, const char* b) {
   return *a == *b;
 }
 
-int ArrayLength(lua_State* L, int idx) {  // table.getn: the number of leading non-nil entries
-  int n = 0;
-  for (;; ++n) {
-    lua_rawgeti(L, idx, n + 1);
-    bool nil = lua_isnil(L, -1);
-    lua_pop(L, 1);
-    if (nil) break;
-  }
-  return n;
-}
-
+// The favourite lists (0x5b81d6 / 0x5b8a02): [1 .. GetCount] (read again each pass), each LuaObject::GetString
+// 0x907a90. (A value that is no string would be the original's Lua error; ReadData runs outside any Lua call here,
+// so ours leaves it out. The lists are aipersonality.lua's own.)
 void ReadStrings(lua_State* L, int idx, std::vector<std::string>* out) {
   if (!lua_istable(L, idx)) return;
-  for (int i = 1;; ++i) {
+  const int n = ObjectCount(L, idx);
+  for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, idx, i);
-    if (!lua_isstring(L, -1)) {
-      lua_pop(L, 1);
-      break;
-    }
-    out->push_back(lua_tostring(L, -1));
+    if (lua_type(L, -1) == LUA_TSTRING) out->push_back(lua_tostring(L, -1));
     lua_pop(L, 1);
   }
 }
@@ -69,12 +58,14 @@ void ReadData(Sim& sim, lua_State* L, AiPersonality* p) {
     return;
   }
   const int templates = lua_gettop(L);
-  const int count = ArrayLength(L, templates);
+  // GetCount 0x5b743e, kept as an unsigned 16-bit number (movzx); a template that is no table, or whose GetCount
+  // (0x5b7481) is not 33, is skipped
+  const int count = ObjectCount(L, templates) & 0xffff;
   for (int i = 1; i <= count; ++i) {
     lua_rawgeti(L, templates, i);
     const int e = lua_gettop(L);
     bool match = false;
-    if (lua_istable(L, e) && ArrayLength(L, e) == kEntries) {
+    if (lua_istable(L, e) && ObjectCount(L, e) == kEntries) {
       lua_rawgeti(L, e, 1);
       match = lua_isstring(L, -1) && EqualNoCase(lua_tostring(L, -1), want);
       lua_pop(L, 1);

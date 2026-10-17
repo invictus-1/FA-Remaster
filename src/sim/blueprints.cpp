@@ -241,32 +241,38 @@ int l_EntityCategoryContains(lua_State* L) {
   return 1;
 }
 
-// The length of a list as the original's bindings take it: LuaPlus::LuaObject::GetCount 0x907f50 -> lua_getn
-// 0x90ad30. That is t.n when it is a number, else the largest numeric key that holds a value (the array part's last
-// non-nil slot, then every numeric key of the hash part), truncated. Unlike table.getn (luaL_getn 0x90e090) it does
-// not stop at the first nil: M28's zone lists keep holes where a unit was taken out ({[1] = a, [3] = b} counts 3).
-int ObjectCount(lua_State* L, int t) {
-  if (t < 0 && t > LUA_REGISTRYINDEX) t = lua_gettop(L) + t + 1;
-  lua_pushstring(L, "n");
-  lua_rawget(L, t);
-  if (lua_type(L, -1) == LUA_TNUMBER) {
-    const int n = static_cast<int>(lua_tonumber(L, -1));
-    lua_pop(L, 1);
-    return n;
+// An element of EntityCategoryFilterDown / Count's list (0x759d6d / 0x75a06a): a string (LuaObject::IsString 0x907370:
+// a string only) names a blueprint, else a live entity gives its own (SCR_FromLuaNoError_Entity 0x5e3800, then the
+// entity's blueprint +0x6c); anything else (a nil hole, a destroyed unit, a number, a blueprint table) has none (-1).
+int ListEntryIndex(lua_State* L, int idx) {
+  if (lua_type(L, idx) == LUA_TSTRING) {
+    const BlueprintInfo* bp = Bps(L)->Find(lua_tostring(L, idx));
+    return bp ? bp->entityIndex : -1;
   }
-  lua_pop(L, 1);
-  lua_Number best = 0;
-  lua_pushnil(L);
-  while (lua_next(L, t)) {
-    if (lua_type(L, -2) == LUA_TNUMBER && lua_tonumber(L, -2) > best) best = lua_tonumber(L, -2);
-    lua_pop(L, 1);
-  }
-  return static_cast<int>(best);
+  if (Entity* e = ToObject<Entity>(L, idx)) return e->blueprint ? e->blueprint->entityIndex : -1;
+  return -1;
 }
 
-// EntityCategoryFilterDown 0x759c50 (and EntityCategoryCount 0x759f70): i = 1 .. GetCount (read again each pass),
-// an element that is not a unit or a blueprint id (a nil hole included) is skipped, the loop goes on.
-int FilterImpl(lua_State* L, bool keep) {
+// EntityCategoryFilterDown 0x759c50 (and EntityCategoryCount 0x759f70): no table is an error; i = 1 .. GetCount
+// (ObjectCount; read again each pass, nothing here changes the list), an element without an entity index is skipped
+// and the loop goes on.
+int l_EntityCategoryFilterDown(lua_State* L) {
+  const uint64_t* c = CheckCat(L, 1);
+  if (!lua_istable(L, 2)) luaL_error(L, "Pass in invalid table of units to EntityCategoryFilterDown!!.");
+  lua_newtable(L);
+  int out = lua_gettop(L), n = 0;
+  const int count = ObjectCount(L, 2);
+  for (int i = 1; i <= count; ++i) {
+    lua_rawgeti(L, 2, i);
+    const int e = ListEntryIndex(L, -1);
+    if (e >= 0 && CategoryHas(c, e)) lua_rawseti(L, out, ++n);
+    else lua_pop(L, 1);
+  }
+  return 1;
+}
+// EntityCategoryFilterOut is the interface's (0x8ba2a0); the sim has none. Ours: the elements FilterDown would not
+// keep, a nil hole skipped.
+int l_EntityCategoryFilterOut(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
   lua_newtable(L);
   if (!lua_istable(L, 2)) return 1;
@@ -278,26 +284,24 @@ int FilterImpl(lua_State* L, bool keep) {
       lua_pop(L, 1);
       continue;
     }
-    int e = EntityIndexOf(L, -1);
-    if ((e >= 0 && CategoryHas(c, e)) == keep) lua_rawseti(L, out, ++n);
+    const int e = EntityIndexOf(L, -1);
+    if (!(e >= 0 && CategoryHas(c, e))) lua_rawseti(L, out, ++n);
     else lua_pop(L, 1);
   }
   return 1;
 }
-int l_EntityCategoryFilterDown(lua_State* L) { return FilterImpl(L, true); }
-int l_EntityCategoryFilterOut(lua_State* L) { return FilterImpl(L, false); }
 
+// EntityCategoryCount 0x759f70: as FilterDown (the same message when the list is no table).
 int l_EntityCategoryCount(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
+  if (!lua_istable(L, 2)) luaL_error(L, "Pass in invalid table of units to EntityCategoryFilterDown!!.");
   int n = 0;
-  if (lua_istable(L, 2)) {
-    const int count = ObjectCount(L, 2);
-    for (int i = 1; i <= count; ++i) {
-      lua_rawgeti(L, 2, i);
-      int e = lua_isnil(L, -1) ? -1 : EntityIndexOf(L, -1);
-      if (e >= 0 && CategoryHas(c, e)) ++n;
-      lua_pop(L, 1);
-    }
+  const int count = ObjectCount(L, 2);
+  for (int i = 1; i <= count; ++i) {
+    lua_rawgeti(L, 2, i);
+    const int e = ListEntryIndex(L, -1);
+    if (e >= 0 && CategoryHas(c, e)) ++n;
+    lua_pop(L, 1);
   }
   lua_pushnumber(L, n);
   return 1;
@@ -383,11 +387,14 @@ void SimBlueprints::ReadFootprints(lua_State* L, int list) {
     if (isFootprints) {
       lua_rawgeti(L, -1, 2);
       int specs = lua_gettop(L);
-      for (int k = 1;; ++k) {
+      // SpecFootprints 0x528550: [1 .. lua_getn 0x90ad30] (read once), each read by name (a spec that is no table
+      // would be the original's error; the list is footprints.lua's own: ours leaves it out)
+      const int count = lua_istable(L, specs) ? ObjectCount(L, specs) : 0;
+      for (int k = 1; k <= count; ++k) {
         lua_rawgeti(L, specs, k);
         if (!lua_istable(L, -1)) {
           lua_pop(L, 1);
-          break;
+          continue;
         }
         auto num = [&](const char* key, double def) {
           lua_pushstring(L, key);

@@ -142,6 +142,18 @@ void ForgetUnitCommands(Unit* u);
 // Whether the navigator's event (Succeeded / Failed) wakes the unit's command thread (a move task listens).
 bool NavEventWakesCommandThread(const Unit* u);
 void RegisterCommandBindings(lua_State* L);
+// func_GetUnitList 0x6eee40, the unit list of every Issue* (IssueFactoryRallyPoint, IssueTransport*, ... included):
+// a value that is no table is the error "Invalid unit set in <binding>; ...". i = 1 .. GetCount (ObjectCount, read
+// once) through func_GetUnitOpt 0x593970: a nil hole or a value that is no game object is the error "Expected a game
+// object...", another class "Incorrect type...", a destroyed unit is skipped, and so is a dead one (IUnit vt+0x28
+// IsDead, u+0xa1; a destroy-queued one stays). The rest go into an EntitySet: ascending entity id, each once
+// (EntitySetTemplate_Unit::Add 0x57ddd0). A single unit (a table without numeric keys) gives none.
+std::vector<Unit*> ScriptUnitList(lua_State* L, int idx);
+// The test of SCR_GetTarget 0x6eef60 (the target argument of IssueMove and its kin): nil is no target, a live entity
+// (SCR_FromLuaNoError_Entity 0x5e3800) the entity, a table whose lua_getn (0x6ef011, ObjectCount) is 3 a position;
+// anything else is the error "Invalid target set in <binding>; expected an entity or a Vec3 but got a <type>" (a
+// destroyed unit's table and a position of 2 or 4 numbers included). The callers then read the target as before.
+void CheckScriptTarget(lua_State* L, int idx);
 // Lua's view of a command (the Issue* functions' result; nil for none).
 void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c);
 

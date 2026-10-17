@@ -3821,27 +3821,14 @@ int l_GetParent(lua_State* L) {
 }
 
 // ---- factory commands ----
-std::vector<Unit*> UnitList(lua_State* L, int idx) {
-  std::vector<Unit*> out;
-  if (Unit* u = ToObject<Unit>(L, idx)) {
-    out.push_back(u);
-    return out;
-  }
-  if (!lua_istable(L, idx)) return out;
-  lua_pushnil(L);
-  while (lua_next(L, idx)) {
-    if (Unit* u = ToObject<Unit>(L, -1))
-      if (Alive(u)) out.push_back(u);
-    lua_pop(L, 1);
-  }
-  return out;
-}
+std::vector<Unit*> UnitList(lua_State* L, int idx) { return ScriptUnitList(L, idx); }  // func_GetUnitList 0x6eee40
 // IssueFactoryRallyPoint(factories, target) 0x6f22c0: a Move (entity or position) appended to the rally queues.
 int l_IssueFactoryRallyPoint(lua_State* L) {
   Sim& sim = *S(L);
   std::vector<Unit*> units;
   for (Unit* u : UnitList(L, 1))
     if (LiveCommandCaps(L, u) & 0x1u) units.push_back(u);  // RULEUCC_Move
+  CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f23d0)
   Vec3 p;
   uint32_t target = 0;
   if (Entity* e = ToObject<Entity>(L, 2)) {
@@ -3863,6 +3850,7 @@ int l_IssueClearFactoryCommands(lua_State* L) {  // 0x6f2580 (the initial rally 
 // IssueMoveOffFactory(units, position)
 int l_IssueMoveOffFactory(lua_State* L) {
   auto units = UnitList(L, 1);
+  CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f2ae6)
   Vec3 p;
   if (!PosArg(L, 2, &p)) return 0;
   Sim* sim = S(L);
