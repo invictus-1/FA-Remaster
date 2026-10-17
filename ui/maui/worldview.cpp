@@ -1481,7 +1481,7 @@ class WorldView : public Control {
       if ((order == "CallTransport" || order == "Transport") && IssueTransportOrderAt(L, order, under, !e.shift)) return true;
       // (With Alt held, a right click that would be a move is FAF's attack-move.)
       if (order == "Move" && e.alt && !e.ctrl && IssueAttackMoveAt(L, world[0], world[1], world[2], !e.shift)) return true;
-      if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      if (order != "Move" && IssueToSelectionAt(L, order, under, !e.shift, e.ctrl)) return true;
       // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
       // can reclaim: reclaim it. (As players know it from the original; its code for what is
       // under the cursor beside units is not read. The cursor must be ON it, within a few
@@ -1525,7 +1525,7 @@ class WorldView : public Control {
       // original's rule for which of the two an order mode takes is not read.)
       const std::string order = name.substr(8);
       const uint32_t under = miniMap ? 0xffffffffu : UnitUnder(L, e.x, e.y);
-      if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift)) return true;
+      if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift, e.ctrl)) return true;
       // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
       // with more room than a right click gets (the player has said what is meant). With nothing
       // there the order still goes out with the place, as the original sends it; the simulation

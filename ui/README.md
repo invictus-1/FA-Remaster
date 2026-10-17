@@ -409,7 +409,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   Lua value), or a build icon, on which the commander builds the chosen building at the click.
   A Move to a place, an Attack on a unit and a Patrol carry the original's formation fields
   (formation 0, scale 1, the turn from the units' mean towards the target: the engine track's
-  count over real replays), so a group arrives in formation. The console command `StartCommandMode`, which the order
+  count over real replays), so a group arrives in formation. Read 2026-10-17 (SCommandModeData::HandleEvent
+  0x81fcd0, CFormation ChooseFormation 0x8384c0): with Shift the formation's centre is where each unit's last
+  queued order is; a group's Patrol goes as two points, first where the group stands (clearing the queue
+  unless Shift), then the target, as the replays hold it (only the target when a patrol is already queued);
+  one unit's Patrol carries no formation; Ctrl with more than one unit makes an attack on a unit a
+  FormAttack (FAF's exe leaves a Move as it is: it took the original's Ctrl-FormMove out). Alt and a right
+  click stay FAF's scripted attack-move, as the replays show. Not built yet: the right button held half a
+  second and dragged, which turns the formation's facing. The console command `StartCommandMode`, which the order
   keys use, is built. So are the orders that need no click: `IssueCommand`, `IssueUnitCommand`
   (Stop is checked in a game), `IssueBlueprintCommand` (a factory's build order: in a scripted
   run the finished land factory built two engineers), `SimCallback` and the unit switches

@@ -253,7 +253,7 @@ bool IssueToSelection(lua_State* L, const std::string& order, float x, float y, 
 // The same with a unit as the target ("Attack", "Guard", "Repair", "Reclaim", "Capture", "Move":
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
 // none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
-bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl = false);
 // The right click's transport orders on a unit ("CallTransport", "Transport": RightClickOrder's answers).
 bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
 // A Script order at a place for the selected units, as the game's own script allows it

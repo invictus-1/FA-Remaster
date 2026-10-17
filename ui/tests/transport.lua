@@ -3,7 +3,7 @@
 -- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
 -- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
--- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 5000.
+-- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6000.
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -181,5 +181,47 @@ ForkThread(function()
         table.insert(counts, tostring(table.getn(GetSelectedUnits() or {})))
     end
     check("each press of the idle-engineer key adds one more", table.concat(counts, " "), "1 2")
+    -- a group's patrol by its button: two points, first where the group is, then the target (SCommandModeData
+    -- 0x820c4e / 0x820c91, as the replays hold it); Ctrl with a group: an attack on a unit goes as FormAttack
+    local pair = {spot[1] - 30, spot[2], spot[3] + 30}
+    spawn("uel0201", pair, 2)
+    WaitSeconds(2)
+    local group = {}
+    for _, t in made("uel0201", "LAND") do
+        local tp = t:GetPosition()
+        if math.abs(tp[1] - pair[1]) < 8 and math.abs(tp[3] - pair[3]) < 8 then table.insert(group, t) end
+    end
+    check("two more tanks for a patrol", table.getn(group), 2)
+    if table.getn(group) == 2 then
+        GetCamera("WorldCamera"):SnapTo(pair, nil, 90)
+        WaitSeconds(0.5)
+        SelectUnits(group)
+        import("/lua/ui/game/commandmode.lua").StartCommandMode("order", {name = "RULEUCC_Patrol"})
+        WaitSeconds(0.2)
+        local goal = view:Project({pair[1] + 12, pair[2], pair[3] + 12})
+        moho64ui_MouseMove(goal.x, goal.y)
+        WaitSeconds(0.2)
+        moho64ui_MouseButton("Left", true, goal.x, goal.y)
+        moho64ui_MouseButton("Left", false, goal.x, goal.y)
+        WaitSeconds(0.5)
+        local q = group[1]:GetCommandQueue() or {}
+        check("the patrol is two points", table.getn(q) .. " " .. (q[1] and q[1].type or "") .. " " .. (q[2] and q[2].type or ""), "2 Patrol Patrol")
+        if q[1] and q[1].position then
+            local d = math.abs(q[1].position[1] - pair[1]) + math.abs(q[1].position[3] - pair[3])
+            check("the first where the group stands", d < 10, true)
+        end
+        -- Ctrl and a right click on an enemy: FormAttack for the two
+        local target = {pair[1] + 6, pair[2], pair[3] - 6}
+        spawn("uel0201", target, 1, enemy)
+        WaitSeconds(1.5)
+        SelectUnits(group)
+        local tp = view:Project(target)
+        moho64ui_MouseMove(tp.x, tp.y)
+        WaitSeconds(0.3)
+        moho64ui_MouseButton("Right", true, tp.x, tp.y, "Ctrl")
+        moho64ui_MouseButton("Right", false, tp.x, tp.y, "Ctrl")
+        WaitSeconds(0.5)
+        check("Ctrl and a right click on an enemy: the group's FormAttack", lastIssued(), "FormAttack")
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

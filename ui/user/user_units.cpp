@@ -1211,7 +1211,7 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
 namespace {
 // An order for the selected units of the player's army, with a place or a unit as its target.
 bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
-                const std::string& blueprint) {
+                const std::string& blueprint, bool ctrl = false) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
   static const struct {
@@ -1265,11 +1265,36 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // factories' own data below). With it the simulation arranges a group; without, every unit
   // heads for the same spot.
   StreamIssueData rally = d;
-  const bool forms = type == CommandType::Move || type == CommandType::Patrol || (type == CommandType::Attack && entity != 0xffffffffu);
+  // (A Patrol of one unit carries no formation, as the original's 0x8209c7 and the replays show.)
+  const bool forms = type == CommandType::Move || (type == CommandType::Patrol && units.size() > 1) ||
+                     (type == CommandType::Attack && entity != 0xffffffffu);
+  // Where the units are, or with Shift (an order queued) where each one's last queued order is (CFormation
+  // ChooseFormation 0x8384c0 takes the end of each unit's queue when it has one): the mean is the formation's
+  // centre, and the first point of a patrol.
+  float mean[2] = {0, 0};
+  bool queuedPatrol = false;  // (with Shift: a unit whose queue ends in a patrol only gets the new point)
+  for (const UserUnit* u : units) {
+    float at[2] = {u->view.position[0], u->view.position[2]};
+    if (!clear) {
+      UnitStateView st;
+      if (StateOf(L, u, &st)) {
+        const std::vector<CommandView>& q = st.hasFactoryQueue ? st.factoryQueue : st.queue;
+        if (!q.empty() && q.back().hasPosition) at[0] = q.back().position[0], at[1] = q.back().position[2];
+        if (!q.empty() && (q.back().type == static_cast<int>(CommandType::Patrol) || q.back().type == static_cast<int>(CommandType::FormPatrol))) queuedPatrol = true;
+      }
+    }
+    mean[0] += at[0], mean[1] += at[1];
+  }
+  mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
+  // Ctrl with more than one unit: an attack on a unit goes as FormAttack (SCommandModeData::HandleEvent 0x81fe4c;
+  // FAF's exe leaves a Move as it is: its 0x82074d skips the original's FormMove).
+  if (ctrl && units.size() > 1 && type == CommandType::Attack && entity != 0xffffffffu) {
+    type = CommandType::FormAttack;
+    d.type = static_cast<int>(type);
+    name = "FormAttack";
+  }
   if (forms) {
-    float mean[2] = {0, 0}, to[2] = {x, z};
-    for (const UserUnit* u : units) mean[0] += u->view.position[0], mean[1] += u->view.position[2];
-    mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
+    float to[2] = {x, z};
     if (entity != 0xffffffffu) {  // (an Attack on a unit: the target point is the unit's place)
       auto it = Store(L).units.find(entity);
       if (it != Store(L).units.end()) to[0] = it->second->view.position[0], to[1] = it->second->view.position[2];
@@ -1295,6 +1320,21 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     e.tick = static_cast<uint32_t>(sim->tick());
     if (clear) Store(L).sent.clear();
     Store(L).sent.push_back(e);
+  }
+  // A Patrol goes as two points (0x820c4e, 0x820c91; factories 0x820d64, as the replays hold them): first where the
+  // units are (the mean above, on the ground), clearing the queue unless Shift; then the target, queued. With Shift
+  // after a patrol already queued, only the target.
+  if (type == CommandType::Patrol && !queuedPatrol) {
+    StreamIssueData start = d, startRally = rally;
+    float ground = y;
+    if (const auto& height = UserState::From(L)->config().groundHeight) ground = height(mean[0], mean[1]);
+    start.target.type = startRally.target.type = 2;
+    start.target.pos.x = startRally.target.pos.x = mean[0];
+    start.target.pos.y = startRally.target.pos.y = ground;
+    start.target.pos.z = startRally.target.pos.z = mean[1];
+    if (!others.empty()) Writer(L).IssueCommand(others, start, clear);
+    if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, startRally, clear);
+    clear = false;
   }
   if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
   if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
@@ -1524,12 +1564,12 @@ bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t enti
   return true;
 }
 
-bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear) {
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl) {
   UnitStore& store = Store(L);
   auto it = store.units.find(entity);
   if (it == store.units.end() || it->second->gone) return false;
   const float* p = it->second->view.position;
-  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string());
+  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string(), ctrl);
 }
 
 namespace {
