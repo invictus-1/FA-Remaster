@@ -9,8 +9,21 @@
 
 namespace render {
 
-int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold) {
+int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold, bool terrainDespiteHold) {
   int mounted = 0;
+  {  // the remastered ground: its remap.json and the materials it names, below one folder
+    const std::string ground = root + "/_terrain/export/moho64";
+    if (moho::hostfs::IsDirectory(ground)) {
+      bool hold = false;
+      for (const std::string& file : moho::hostfs::ListDirectory(ground)) {
+        std::string low = file;
+        for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low == "hold") hold = true;
+      }
+      if ((!hold || terrainDespiteHold) && vfs->Mount(ground, kRemasteredTerrain))
+        printf("render: remastered ground from %s%s\n", ground.c_str(), hold ? " (despite its HOLD)" : "");
+    }
+  }
   {  // the remastered effects (effect_files.h): one folder with the game's paths below it
     const std::string effects = root + "/_effects/export/moho64";
     bool hold = false;

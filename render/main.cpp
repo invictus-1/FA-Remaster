@@ -83,6 +83,8 @@
 // --lit-rain  rain and snow lit where they fall (World::litRain; modern look): by the sun through its shadow and by the
 //           lamps and their beams through their shadows, sent on mostly forward
 // --rain-splashes  rain's splashes (World::rainSplashes; modern look): small crowns where rain meets what faces up
+// --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
+//           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look)
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
@@ -304,6 +306,8 @@ struct Options {
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
   bool groundCover = false;             // --ground-cover
+  bool terrainDespiteHold = false;      // --terrain-despite-hold
+  bool groundUltra = false;             // --ground-ultra
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -417,6 +421,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
+    else if (a == "--ground-ultra") o->groundUltra = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
@@ -653,7 +659,7 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
-  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty() || !o.fx.fire.empty()), root.c_str(), 10);
+  for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty() || !o.fx.fire.empty(), o.terrainDespiteHold), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
   for (const std::string& p : o.previews) {
     const size_t eq = p.find('=');
@@ -839,6 +845,7 @@ int main(int argc, char** argv) {
   // the world's picture: the map and everything drawn on it (with --ray-reflections, its shaders built to trace rays)
   gRayShaders = opt.rayReflections && device->RayTracing();
   World world(device.get(), &vfs);
+  world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
   {
     World::Options wo;
     wo.displayTable = opt.display;

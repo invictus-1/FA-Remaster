@@ -44,6 +44,11 @@ class Terrain {
 
   // On-screen size, in pixels, that one quad of the mesh should have: smaller means more triangles.
   float quadPixels = 6;
+  // The remastered ground (remasters.h, kRemasteredTerrain): the open map's path, set before Load, by which its
+  // remap.json is looked up; `ultraGround`: its 8k materials in place of the 4k.
+  std::string mapPath;
+  bool ultraGround = false;
+  int RemasteredLayers() const { return remasteredLayers_; }
   // The map's water depth picture and the colour ramp the ground under water is tinted with
   // (decals lying under water take the same tint).
   gfx::Texture WaterMap() const { return waterMap_; }
@@ -91,6 +96,10 @@ class Terrain {
 
  private:
   gfx::Texture albedo_[10], normal_[9];
+  float albedoScale_[10] = {}, normalScale_[9] = {};  // (the layers' scales, the remastered ground's applied)
+  bool normalUp_[9] = {};    // (a remastered material's normal: +y up in its texture, the stock layers' turned)
+  int remasteredLayers_ = 0;
+  void Remaster(const MapData& map, std::vector<std::string>* arh);
   gfx::Pipeline groundColoursPass_;
   gfx::Texture groundColours_;  // (GroundColours, made again for each map)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what

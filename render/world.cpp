@@ -97,6 +97,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       return false;
     }
     step("map file");
+    terrain.mapPath = mapPath;  // (by which the remastered ground's remap.json is looked up)
     if (!terrain.Load(&map, &why)) {
       *error = "terrain: " + why;
       return false;

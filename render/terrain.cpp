@@ -8,8 +8,10 @@
 #include <string>
 #include <vector>
 
+#include "json.h"
 #include "lighting.h"
 #include "ray_scene.h"
+#include "remasters.h"
 
 namespace render {
 namespace {
@@ -91,9 +93,12 @@ VOut VS(float2 grid : POSITION, uint instance : SV_InstanceID) {
 
 // A layer's normal map as read: x, y, z from red, green, blue (from 0..1 to -1..1). A two-channel one (BC5,
 // whose blue reads 0, which no three-channel normal map has: its z would point down) gets z from x and y.
-float4 LayerNormal(float4 raw) {
+// `up`: a remastered material's normal (two channels, +y toward the top of its texture): its y turned to the stock
+// layers' way
+float4 LayerNormal(float4 raw, float up) {
   float4 n = raw * 2 - 1;
   if (raw.b < 0.002) n.z = sqrt(saturate(1 - dot(n.xy, n.xy)));
+  if (up > 0.5) n.y = -n.y;
   return n;
 }
 
@@ -112,7 +117,7 @@ float4 Ground(VOut i) {
   // as steps that much smaller)
   float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
   #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
-  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x))
+  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
   // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a
   // map's layers each cover a part of it only (most pixels need two or three of the ten)
   #define OVER(value, read, share) [branch] if ((share) > 0) value = lerp(value, read, share)
@@ -355,7 +360,7 @@ gfx::Texture Terrain::GroundColours() {
   c.mapSize[2] = 1.0f / static_cast<float>(m.width);
   c.mapSize[3] = 1.0f / static_cast<float>(m.height);
   c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
-  for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = m.albedo[i].scale > 0 ? 1.0f / m.albedo[i].scale : 0;
+  for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = albedoScale_[i] > 0 ? 1.0f / albedoScale_[i] : 0;
   device_->SetPipeline(groundColoursPass_);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(2, maskLow_);
@@ -366,6 +371,51 @@ gfx::Texture Terrain::GroundColours() {
   device_->SetStorage(0, {});
   for (int i = 0; i < 16; ++i) device_->SetTexture(i, {});
   return groundColours_;
+}
+
+// The visuals track's remastered ground (remasters.h, kRemasteredTerrain): where its remap.json lists this map and a
+// layer's albedo, the layer takes the material's albedo, normal (+y up: normalUp_) and ARH (creases, roughness,
+// height: its path into `arh`), at the map's own scale for the layer times scale_mul, or at "scale".
+void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
+  remasteredLayers_ = 0;
+  auto lower = [](std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  const std::string folder = kRemasteredTerrain;
+  auto file = textures_->ReadFile(folder + "/remap.json");
+  if (!file) return;
+  JsonValue remap;
+  std::string why;
+  if (!ReadJson(*file, &remap, &why)) {
+    fprintf(stderr, "render: the remastered ground's remap.json cannot be read: %s\n", why.c_str());
+    return;
+  }
+  const JsonValue& layers = remap["maps"][lower(mapPath)];
+  if (layers.kind != JsonValue::Object) return;
+  const char* tier = ultraGround ? "8k" : "4k";
+  for (int i = 0; i < 10; ++i) {
+    const JsonValue& entry = layers[lower(m.albedo[i].texture)];
+    const std::string name = entry["material"].StringOr(std::string());
+    const std::string dir = remap["materials"][name]["dir"].StringOr(std::string());
+    if (name.empty() || dir.empty()) continue;
+    const std::string base = folder + dir + "/" + name + "_";
+    if (!textures_->ReadFile(base + "albedo_" + tier + ".dds")) {
+      fprintf(stderr, "render: the remastered ground's %s has no %s set\n", name.c_str(), tier);
+      continue;
+    }
+    albedo_[i] = textures_->Get(base + "albedo_" + tier + ".dds", albedo_[i]);
+    const double scale = entry["scale"].NumberOr(0), mul = entry["scale_mul"].NumberOr(1);
+    albedoScale_[i] = scale > 0 ? static_cast<float>(scale) : m.albedo[i].scale * static_cast<float>(mul);
+    if (i < 9) {
+      normal_[i] = textures_->Get(base + "normal_" + tier + ".dds", normal_[i]);
+      normalScale_[i] = albedoScale_[i];  // (the material's normal lies on its own albedo)
+      normalUp_[i] = true;
+      (*arh)[static_cast<size_t>(i)] = base + "arh_" + tier + ".dds";
+    }
+    ++remasteredLayers_;
+  }
+  if (remasteredLayers_) printf("render: %d of the map's ground layers remastered (%s)\n", remasteredLayers_, tier);
 }
 
 bool Terrain::Load(const MapData* map, std::string* error) {
@@ -446,6 +496,8 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   waterRamp_ = map->water.present ? textures_->Get(map->water.ramp, textures_->Black()) : textures_->Black();
   for (int i = 0; i < 10; ++i) albedo_[i] = textures_->Get(map->albedo[i].texture, textures_->Black());
   for (int i = 0; i < 9; ++i) normal_[i] = textures_->Get(map->normal[i].texture, textures_->FlatNormal());
+  for (int i = 0; i < 10; ++i) albedoScale_[i] = map->albedo[i].scale;
+  for (int i = 0; i < 9; ++i) normalScale_[i] = map->normal[i].scale, normalUp_[i] = false;
   {  // a remastered map's third maps: beside each layer's `<name>_albedo.dds` a `<name>_arh.dds`
     std::vector<std::string> paths(9);
     for (size_t i = 0; i < 9; ++i) {
@@ -454,6 +506,7 @@ bool Terrain::Load(const MapData* map, std::string* error) {
       const size_t at = lower.rfind("_albedo.dds");
       if (at != std::string::npos) paths[i] = map->albedo[i].texture.substr(0, at) + "_arh.dds";
     }
+    Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);
     for (size_t i = 0; i < 9; ++i) material_[i] = materials_ && present[i];
@@ -653,9 +706,10 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   c.specularColor[1] = m.lighting.specular.y;
   c.specularColor[2] = m.lighting.specular.z;
   c.specularColor[3] = m.lighting.specular.w;
-  for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = m.albedo[i].scale > 0 ? 1.0f / m.albedo[i].scale : 0;
+  for (int i = 0; i < 10; ++i) c.albedoTile[i][0] = albedoScale_[i] > 0 ? 1.0f / albedoScale_[i] : 0;
   for (int i = 0; i < 9; ++i) c.albedoTile[i][1] = richGround && material_[i] ? 1.0f : 0.0f;
-  for (int i = 0; i < 9; ++i) c.normalTile[i][0] = m.normal[i].scale > 0 ? 1.0f / m.normal[i].scale : 0;
+  for (int i = 0; i < 9; ++i) c.normalTile[i][0] = normalScale_[i] > 0 ? 1.0f / normalScale_[i] : 0;
+  for (int i = 0; i < 9; ++i) c.normalTile[i][1] = normalUp_[i] ? 1.0f : 0.0f;
   for (int k = 0; k <= top && k < 12; ++k) {
     if (k == top) {
       c.morph[k][0] = 1e30f;

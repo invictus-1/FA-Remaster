@@ -18,6 +18,10 @@ namespace render {
 // (the visuals track puts one into a folder that must not be used). Returns how many.
 // `effectsDespiteHold`: the effects' folder even with a HOLD in it (the viewer's effects test stand:
 // the visuals track keeps working on effects that games must not see yet).
-int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold = false);
+// And the remastered ground (_terrain/export/moho64: its remap.json and materials) at kRemasteredTerrain, unless it
+// holds a HOLD (`terrainDespiteHold`: even then, for looking at it before games may).
+int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold = false, bool terrainDespiteHold = false);
+// Where the remastered ground is mounted (Terrain reads its remap.json there).
+inline constexpr const char* kRemasteredTerrain = "/remastered-terrain";
 
 }  // namespace render
