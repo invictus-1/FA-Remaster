@@ -82,8 +82,12 @@ class Terrain {
   // The ground's colour for what does not draw it (the ray tracing scene, ray_scene.h): over the whole map at half
   // its size (RGBA8, as stored: the shaders make it linear), each layer by its texture's average laid over the
   // others as the shader lays them, the upper layer at a level that suits the picture. Made the first time it is
-  // asked for once a map is loaded (it dispatches: between passes).
+  // asked for once a map is loaded (it dispatches: between passes). Its alpha: how grassy the ground is there (by how
+  // green each layer's average is; the ground cover reads it).
   gfx::Texture GroundColours();
+  // The ground's heights as the shader reads them (one per grid point), and the world units of their largest value.
+  gfx::Texture HeightTexture() const { return heightTexture_; }
+  float HeightUnit() const { return map_ ? 65535.0f * map_->heightScale : 1.0f; }
 
  private:
   gfx::Texture albedo_[10], normal_[9];

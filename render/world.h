@@ -30,6 +30,7 @@
 #include "sight.h"
 #include "sky.h"
 #include "weather.h"
+#include "grass.h"
 #include "camera.h"
 #include "debug_draw.h"
 #include "decals.h"
@@ -351,6 +352,13 @@ class World {
   // Rain's splashes (weather.h): where rain meets what faces up (the ground, a unit's top) and the picture shows it,
   // small crowns that rise and fade. Modern look; off by default.
   bool rainSplashes = false;
+  // Wet shorelines and caustics (terrain.cpp, water.cpp): the ground just above the water darker and shinier where
+  // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. Modern look, a map
+  // with water; off by default.
+  bool waterDetail = false;
+  // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
+  // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
+  bool groundCover = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -395,6 +403,7 @@ class World {
   bool TemporalNow() const { return temporalNow_; }  // this frame brought up by FSR 3
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
+  GroundCover grass;      // ground cover near the camera (groundCover)
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
   bool sightShown = true; // (off for a picture that is darkened by other means: the minimap's ground)
   // The game's option FogOfWar "unexplored": ground the army has never seen is all but black until
@@ -546,6 +555,7 @@ class World {
   float frameSeconds_ = 1 / 60.0f;
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
+  bool grassTried_ = false, grassMade_ = false;  // (ground cover: its shader tried, made)
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
 };
 

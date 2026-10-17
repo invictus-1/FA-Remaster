@@ -544,6 +544,21 @@ void EndMoveChild(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
+// The end of a task's walk that ended by itself (the navigator's event): the walk is a CUnitMoveTask child
+// (NewMoveTask 0x6190a0, from CUnitMobileBuildTask 0x5f7763, CUnitRepairTask 0x5f9829, CUnitSacrificeTask 0x5fb809,
+// CUnitCaptureTask 0x60477d, CUnitGuardTask 0x614549, CUnitReclaimTask 0x61f4c0), and its dtor 0x618700 clears Moving
+// (0x6187bd), then calls the navigator's AbortMove (vt+0x10, 0x618884) whenever its table 0x618998 says so for
+// queue+0x1c, which is 0 here (0x61884e: abort). There is no test of the goal: AbortMove runs on a navigator that is
+// already idle (land 0x5a3750: SetSpeedThroughGoal(0) -> CAiSteeringImpl 0x5d2390, then MakeIdle -> SetWaypoints(0,
+// 0), which makes a brake spline only while the steering still has one, 0x5d2ae3). After an arrival on a waypoint in
+// the goal the motion's speed-through byte so goes to 0 in the beat the walk ends. Seen: MP3 2867, army 0's
+// patrolling engineer 0xf, whose repair walk ends at 2867 (and the repair with it): the original's byte is 0 from
+// that beat, ours kept 1 until its next walk ended at 2875.
+void EndWalk(Unit* u) {
+  u->unitStates.erase("Moving");
+  MotionStop(u);
+}
+
 // A unit of the same kind being built at the site (join it instead of starting another): 0x5f6c70, the units
 // around the site (0x721fb0) that are not dead (vt+0x28), being built (vt+0x34), stand exactly on the site
 // (0x5f6dc9: the x / z distance is not above 0) and have the same blueprint id (0x5f6e0e). Whose they are is not
@@ -755,7 +770,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   if (c.reclaimAtPoint) {
     if (c.moving) {
       c.moving = false;
-      StopMoving(u);
+      EndWalk(u);
       GroundFreeRect(sim, u);
     }
     const TerrainMap* m = sim.map();
@@ -824,7 +839,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       if (c.moving) {
         if (u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
         c.moving = false;
-        StopMoving(u);
+        EndWalk(u);
         GroundFreeRect(sim, u);
       }
       {
@@ -1200,6 +1215,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (t.moving) {  // the move child: state 1 runs in the beat it ends
         if (u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
         t.moving = false;
+        EndWalk(u);
         GroundFreeRect(sim, u);
       }
       if (!InBuildRange(u, *t.bp, t.site)) return kTaskFailed;  // no re-move
@@ -2158,7 +2174,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
-    u->unitStates.erase("Moving");
+    EndWalk(u);
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
   }
@@ -2526,7 +2542,7 @@ int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
-    u->unitStates.erase("Moving");
+    EndWalk(u);
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
   }
@@ -2577,7 +2593,7 @@ int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
-    u->unitStates.erase("Moving");
+    EndWalk(u);
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
   }
@@ -2801,8 +2817,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
     // after the motion of 1957): at 1958, after its steering handed out point[1] of that brake, the move task's dtor
     // brakes again from 0.266 and the motion takes the new point[0] (0.19). Ours ended the walk without the abort and
     // stepped to point[1] (0.342).
-    U->unitStates.erase("Moving");
-    MotionStop(U);
+    EndWalk(U);
     resumed = true;
   }
   if (!resumed && sim.tick() < t.waitUntil) return kTaskRunning;

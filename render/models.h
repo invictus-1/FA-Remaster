@@ -209,6 +209,10 @@ class ModelCache {
   // the model's scale (a burnt tree); otherwise it is 1 and whoever places it gives the size (a dead
   // unit's wreck: the script sizes the prop).
   const Model* Wreck(const Model* of, bool ownScale);
+  // A remastered unit's own wreck (the visuals track's <id>_wreck_lod*.scm and <id>_wreck_lab_*.dds beside the
+  // unit's files): drawn as painted - its own colours, no team colour, no glow, no lamps, not swaying - at the scale
+  // whoever places it gives (a dead unit's wreck: its prop's). Null where the unit has none (then Wreck's burnt look).
+  const Model* RemasteredWreck(const std::string& blueprintId);
   // A unit's own look for its personal shield (from its blueprint file, read once; see PersonalShieldLook).
   const PersonalShieldLook& PersonalShield(const std::string& blueprintId);
   // The capsule a personal shield lies on round a model (made once a model): along its longest side, its
@@ -242,8 +246,9 @@ class ModelCache {
   // (`meshBlueprint`: where the blueprint holds no mesh, the mesh blueprint it names instead, if any)
   bool ReadSources(const std::string& path, std::vector<LodSource>* sources, float* scale, std::string* error,
                    std::string* meshBlueprint = nullptr);
+  // `stem`: a remastered model's files under another name in its folder (a wreck's: "<id>_wreck"); then no lamps.
   void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
-             const std::string& faction = std::string(), bool effect = false);
+             const std::string& faction = std::string(), bool effect = false, const std::string& stem = std::string());
   std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path
   gfx::Device* device_;
   const moho::Vfs* vfs_;

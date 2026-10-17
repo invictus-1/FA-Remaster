@@ -203,6 +203,17 @@ float4 Ground(VOut i) {
     // (a remastered map's layers say their own; the upper, map-wide layer has none)
     roughness = lerp(roughness, matter.y, matter.z);
     float creases = lerp(1, matter.x, matter.z);
+#ifdef MODERN_WATER
+    [branch] if (shore.x > 0.5) {
+      // the beach the waves have just wetted: darker and shinier in a band over the water's level, its edge
+      // uneven
+      float uneven = (CloudNoise(float3(i.world.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8;
+      float over = i.world.y - shore.y;
+      float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);  // (not under the water: its own colours)
+      albedo.rgb *= lerp(1, 0.6, wet);
+      roughness = lerp(roughness, 0.22, wet * 0.85);
+    }
+#endif
     // (ground that glows gives its own light, by day and by night)
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
@@ -268,21 +279,26 @@ RWTexture2D<float4> colours : register(u0);
   float4 rawHigh = maskHigh.SampleLevel(samplerLinearClamp, uv, 0) * params.y;
   float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
   #define AVERAGE(n) albedoMaps[n].SampleLevel(samplerLinear, float2(0.5, 0.5), 16)
+  // (and how grassy each layer is, by how green its average is against its red and blue: a meadow's grass, not
+  // dirt, rock or sand; the ground cover reads it in the alpha)
+  #define GRASSY(c) saturate((c.g - max(c.r, c.b)) / max(c.g, 0.05) * 6)
   float4 albedo = AVERAGE(0);
-  albedo = lerp(albedo, AVERAGE(1), low.x);
-  albedo = lerp(albedo, AVERAGE(2), low.y);
-  albedo = lerp(albedo, AVERAGE(3), low.z);
-  albedo = lerp(albedo, AVERAGE(4), low.w);
-  albedo = lerp(albedo, AVERAGE(5), high.x);
-  albedo = lerp(albedo, AVERAGE(6), high.y);
-  albedo = lerp(albedo, AVERAGE(7), high.z);
-  albedo = lerp(albedo, AVERAGE(8), high.w);
+  float grassy = GRASSY(albedo);
+  #define LAYER(n, w) { float4 a = AVERAGE(n); albedo = lerp(albedo, a, w); grassy = lerp(grassy, GRASSY(a), w); }
+  LAYER(1, low.x);
+  LAYER(2, low.y);
+  LAYER(3, low.z);
+  LAYER(4, low.w);
+  LAYER(5, high.x);
+  LAYER(6, high.y);
+  LAYER(7, high.z);
+  LAYER(8, high.w);
   uint tw, th, levels;
   albedoMaps[9].GetDimensions(0, tw, th, levels);
   float across = tw * albedoTile[9].x * mapSize.x / w;  // (the upper layer's texels over one of the picture's)
   float4 upper = albedoMaps[9].SampleLevel(samplerLinear, xz * albedoTile[9].x, max(log2(max(across, 1)), 0));
   albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
-  colours[id.xy] = float4(albedo.rgb, 1);
+  colours[id.xy] = float4(albedo.rgb, grassy);
 }
 )hlsl";
 

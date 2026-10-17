@@ -69,7 +69,7 @@ struct WorldPicture::Impl {
     if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
     if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
     world->rayReflections = rayReflections;
-    if (weatherEffects >= 0) world->litRain = world->rainSplashes = weatherEffects > 0;
+    if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
   }
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;

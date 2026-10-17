@@ -40,6 +40,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       fsr3(device),
       skyDraw(device),
       falling(device),
+      grass(device),
       sight(device),
       shafts(device),
       tracks(device),
@@ -495,6 +496,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  // wet shorelines and caustics
+  if (waterDetail && look == Look::Modern && haveMap_ && map.water.present) {
+    c.shore[0] = 1;
+    c.shore[1] = map.water.elevation;
+    c.shore[2] = 0.8f;
+    c.shore[3] = 2.4f;
+  } else {
+    std::fill(std::begin(c.shore), std::end(c.shore), 0.0f);
+  }
   // reflections by ray tracing (where the shaders were built for it)
   reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
   if (reflectNow_) {
@@ -965,6 +975,7 @@ const Model* World::PropModel(const std::string& blueprint, const std::string& m
     std::string id = low.substr(slash == std::string::npos ? 0 : slash + 1);
     const size_t end = id.rfind("_mesh_wreck");
     if (end != std::string::npos) id.resize(end);
+    if (const Model* own = models.RemasteredWreck(id)) return own;  // (a remastered unit's own wreck, as painted)
     return models.Wreck(models.Unit(id), false);
   }
   const Model* named = vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp")) ? models.Blueprint(mesh + ".bp") : nullptr;
@@ -1557,6 +1568,20 @@ void World::Render() {
       decals.Draw(view, camera, post.Depth(), clock_);
       post.ContinueScene();
       lights.Bind();
+    }
+    // ground cover near the camera (its shader made the first time it is wanted)
+    if (groundCover && look == Look::Modern && !sidePicture) {
+      if (!grassTried_) {
+        grassTried_ = true;
+        std::string why;
+        grassMade_ = grass.Init(&why);
+        if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
+      }
+      if (grassMade_) {
+        Stage("ground cover");
+        grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
+                   static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
+      }
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)

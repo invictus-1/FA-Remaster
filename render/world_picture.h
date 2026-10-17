@@ -154,8 +154,8 @@ class WorldPicture {
   // Ray tracing: bounce light and reflections (World::bounceLight, SetRayReflections: reflections from the next
   //   map opened); about +0.75 ms; only where RayTracingSupported, elsewhere nothing changes.
   void SetRayTracing(bool on);
-  // Weather effects: rain and snow lit where they fall, and rain's splashes (World::litRain, rainSplashes); with
-  //   the weather; about +0.05 ms while it rains.
+  // Weather effects: rain and snow lit where they fall, rain's splashes, and wet shorelines with stronger caustics
+  //   (World::litRain, rainSplashes, waterDetail); about +0.05 ms while it rains.
   void SetWeatherEffects(bool on);
   // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
   // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
