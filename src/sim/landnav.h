@@ -55,9 +55,7 @@ struct LandNav {
   // +0x92 following the slot, +0x7c cached leader, +0x84 last followed slot, +0x78 last failed follow
   bool inFormation = false, waiting = false, following = false;
   uint32_t cachedLeader = 0;
-  Vec3 lastFollow;
-  PathCell followCell;
-  Vec3 followPos;  // following: the slot position the target was taken from (the steering drives to it)
+  Vec3 lastFollow;  // +0x84: while +0x92 is set and this is not zero, it is the target position (GetTargetPos 0x5ad8b0)
   uint32_t lastFail = 0;
   // (unit+0x124, the AltFootprint flag of UpdateWaterFavorAltFootprintMode 0x5adc70, is the unit's own:
   // Unit::altFootprintNav)

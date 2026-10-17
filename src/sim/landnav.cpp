@@ -400,6 +400,10 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   u->altFootprintNav = false;
   // (0x5ad9c0 leaves the splice count +0x5c alone: only ConsumePathPrefix 0x5ad830 and the splice itself write
   // it, so a move dropped with spliced cells ahead hands the count to the next goal's first waypoints)
+  // 0x5ada4a..0x5ada72, 0x5ada8f: the followed slot point +0x84 := (0, 0, 0) and following +0x92 := 0. (0x5ad9c0
+  // also zeroes +0x90, +0x91, +0x78 and unlinks the leader +0x7c; ours leaves those to ConfigureGoal's next goal.)
+  n.following = false;
+  n.lastFollow = {};
 }
 
 // RequestContinuationPath 0x5aec70
@@ -601,6 +605,9 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
 }
 
 bool IsZeroVec(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+// GetTargetPos 0x5ad8b0: the followed slot point +0x84 is the target position while +0x92 is set and the point is not
+// (0, 0, 0) (0x4f0a50 against the zero vector 0xf3d21c)
+bool FollowsSlotPoint(const LandNav& n) { return n.following && !IsZeroVec(n.lastFollow); }
 
 // The formation block of UpdateCurrentPosition (formations.md 9.2). 1: return now, 0: go on to the tail.
 int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
@@ -647,9 +654,7 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   PathCell s = CellOf(u, p.x, p.z);
   if (u->id % 13 != sim.tick() % 13 && !IsZeroVec(n.lastFollow)) return 1;  // between phases: keep following
   if (n.hasTarget && n.target == s) {
-    n.lastFollow = p;
-    // the target position is the slot's (+0x84): a new position in the same cell is a new steering waypoint
-    if (n.following && n.followCell == s && (n.followPos.x != p.x || n.followPos.z != p.z)) n.followPos = p;
+    n.lastFollow = p;  // (the target position while following: a new position in the same cell is a new waypoint)
     return 1;
   }
   float dd = Dist(n.cur, s);
@@ -666,8 +671,6 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
     n.hasTarget = true;
     n.following = true;
     n.lastFollow = p;
-    n.followPos = p;
-    n.followCell = s;
     n.state = 6;
     n.adjacent = Manhattan(n.cur, n.target) <= 1;
     if (n.path.size() > 1) n.path = {PathCell{n.goal[0], n.goal[1]}};
@@ -820,9 +823,14 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
   // its own cell hands that cell over in the beat its search starts, so that the path's first waypoint is then
   // a drive-through one.
   if (n.active && n.state != 2 && n.hasTarget) {
-    // following a formation slot: the target position is the slot's own (not the cell centre; 0x5ad8b0)
-    const Vec3 wp = (n.following && n.target == n.followCell) ? Vec3{n.followPos.x, WorldOf(sim, u, n.target).y, n.followPos.z}
-                                                             : WorldOf(sim, u, n.target);
+    // following a formation slot: the target position is the slot's own (not the cell centre). GetTargetPos 0x5ad8b0
+    // reads only +0x92 and +0x84, whatever the target cell is: in the beat a follower arrives (cur == path.back(),
+    // 0x5ae498 sets the target to its own cell) the slot point still stands, equals the steering's last waypoint and
+    // nothing new goes over; MakeIdle then stops it, and the motion's drive-through byte keeps that waypoint's value.
+    // Seen (probe mp2_2201): MP2 army 0's Mantis 0x1a arrives at 2201 with no SetWaypoints(1) and speed-through 1
+    // until its next goal's first waypoint at 2204; ours handed over its own cell, in the goal, with 0.
+    const Vec3 wp = FollowsSlotPoint(n) ? Vec3{n.lastFollow.x, WorldOf(sim, u, n.target).y, n.lastFollow.z}
+                                        : WorldOf(sim, u, n.target);
     const UnitMotion& m = u->motion;
     const bool same = m.steerWpSet && m.steerWp.x == wp.x && m.steerWp.y == wp.y && m.steerWp.z == wp.z;
     if (!same) {
@@ -855,6 +863,8 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     // ends in the original; ours kept it until the reclaim was over.
     u->unitStates.erase("ProblemGettingToGoal");
     n.problem = false;
+    n.following = false;  // (and +0x84, +0x92: MakeIdle's ResetPathState)
+    n.lastFollow = {};
     MotionNavDone(u, ok);
   }
 }
@@ -1097,7 +1107,7 @@ void LandNavBackground(Sim& sim) {
 bool LandNavTarget(const Unit* u, Vec3* out) {
   const LandNav* n = u->motion.nav.get();
   *out = WorldOf(*Sim::From(u->luaState()), u, n ? n->target : PathCell{});
-  if (n && n->hasTarget && n->following && n->target == n->followCell) *out = {n->followPos.x, out->y, n->followPos.z};
+  if (n && n->hasTarget && FollowsSlotPoint(*n)) *out = {n->lastFollow.x, out->y, n->lastFollow.z};
   return true;
 }
 bool LandNavGoal(const Unit* u, Vec3* out) {
