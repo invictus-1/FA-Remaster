@@ -1195,10 +1195,16 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     // headings, and the first point of a fresh batch then turns a ship one float step beside the original's.)
     float l = std::sqrt(D.x * D.x + D.z * D.z);
     const float li = l > 9.99999997e-07f ? 1.0f / l : 0.0f;
-    g.fx = l > 9.99999997e-07f ? D.x * li : 0;
-    g.fz = l > 9.99999997e-07f ? D.z * li : 1;
-    g.bx = g.fx;
-    g.bz = g.fz;
+    g.bx = l > 9.99999997e-07f ? D.x * li : 0;
+    g.bz = l > 9.99999997e-07f ? D.z * li : 1;
+    // The first step is handed the RAW forward: the loop's pre-step state is D as the quaternion gives it (0x5b35a6:
+    // +0x258 = D), and SteeringParams 0x6990e0 normalises its horizontal part once (0x6999f0), which StepMove does.
+    // Normalised here too, the facing went through 0x6999f0 twice, and twice is not always once: on some headings
+    // the second pass moved its last digit. (Seen: MP3 3297, army 1's commander 0x100000 starts a batch from
+    // heading (0.76704, 0.64157): normalised once, its first point's x is 266.107788 as in the original; twice, it
+    // was one float step short, the gap lived on, and a side-step at 3396 then turned another unit the other way.)
+    g.fx = l > 9.99999997e-07f ? D.x : 0;
+    g.fz = l > 9.99999997e-07f ? D.z : 1;
     ChooseStart(b, P, g, dot, frac, V.x * D.x + V.y * D.y + V.z * D.z < 0.0f);
   }
   // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5), from the real unit
