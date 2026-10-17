@@ -322,6 +322,10 @@ class World {
   // Volumetric clouds (clouds.h; the lighting upgrade): the layer of clouds under a computed sky as real
   // volumes, lit by the sun, in place of the sky pass's own. Modern look; off by default.
   bool volumetricClouds = false;
+  // The sky from tables of the atmosphere (sky.h, Sky::BuildTables; the lighting upgrade): light scattered many
+  // times over and the planet's shadow, for the sky drawn and for the light fitted to it. Modern look with a
+  // time of day; off by default.
+  bool skyTables = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.

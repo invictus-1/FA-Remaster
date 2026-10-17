@@ -76,6 +76,8 @@
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
 // --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
 //           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
+// --sky-tables  the sky from tables of the atmosphere (sky.h, World::skyTables; modern look, a time of day): light
+//           scattered many times over and the planet's shadow
 // --contact-shadows  contact shadows (World::contactShadows; modern look): small shadows the sun's maps cannot hold
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
@@ -278,6 +280,7 @@ struct Options {
   bool air = false;                     // --air
   bool softShadows = false;             // --soft-shadows
   bool contactShadows = false;          // --contact-shadows
+  bool skyTables = false;               // --sky-tables
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -381,6 +384,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fsr3") o->fsr3 = true;
     else if (a == "--air") o->air = true;
     else if (a == "--contact-shadows") o->contactShadows = true;
+    else if (a == "--sky-tables") o->skyTables = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
@@ -811,6 +815,7 @@ int main(int argc, char** argv) {
   world.volumetricFog = opt.air;
   world.softShadows = opt.softShadows;
   world.contactShadows = opt.contactShadows;
+  world.skyTables = opt.skyTables;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
