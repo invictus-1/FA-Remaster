@@ -947,6 +947,20 @@ bool FormationGoal(Sim& sim, UnitCommand& c, Unit* u, Vec3* out) {
   return true;
 }
 
+// The attack task asks the formation it holds (task+0x58) itself: vt+0x18 (0x5f3204) and vt+0x1c (0x5f3163,
+// 0x5f3255, 0x5f33c4), with no test of how many units the command still has. A formation outlives all but its
+// last unit: one left alone in it keeps its place.
+bool FormationAdjustedOfForm(UnitCommand& c, Unit* u, float* x, float* z) {
+  if (!c.form || !Contains(*c.form, u, true)) return false;
+  AdjustedPosition(*c.form, u, nullptr, x, z);
+  return true;
+}
+bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out) {
+  if (!c.form || !Contains(*c.form, u, true)) return false;
+  *out = FormationCell(*c.form, u, nullptr);
+  return true;
+}
+
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
   (void)sim;
   if (!c.form) return false;

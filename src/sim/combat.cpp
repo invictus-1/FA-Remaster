@@ -2561,6 +2561,16 @@ void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
 }
 
+// The command whose formation the attack task holds (task+0x58), or null: the task lets go of it when the target
+// first comes within reach (d.formation).
+UnitCommand* AttackFormationCommand(Sim& sim, Unit* u, BuildTask& t) {
+  if (t.adata->formation && !t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp &&
+      u->motion.bp->mobile() && !BpInCategory(sim, u->blueprint, "TARGETCHASER") &&
+      FormationHas(*u->commands.front(), u))
+    return u->commands.front().get();
+  return nullptr;
+}
+
 // Update 0x5f3020 (no formation)
 void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   AttackData& d = *t.adata;
@@ -2572,11 +2582,7 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   // The formation branch (0x5f30ae..0x5f3270): units ordered to attack as a group each go for THEIR place in the
   // command's formation, which is laid out around the target, not for the target itself. (Only while the task
   // still holds the formation: it lets go of it when the target first comes within reach, d.formation.)
-  UnitCommand* fc = nullptr;
-  if (d.formation && !t.child && !u->commands.empty() && u->commands.front()->form && u->motion.bp &&
-      u->motion.bp->mobile() && !BpInCategory(sim, u->blueprint, "TARGETCHASER") &&
-      FormationHas(*u->commands.front(), u))
-    fc = u->commands.front().get();
+  UnitCommand* fc = AttackFormationCommand(sim, u, t);
   if (fc) {
     Vec3 cell;
     if (d.trackMobile) {  // a mobile target: the formation is centred on where it is now (SetCentre)
@@ -2584,12 +2590,12 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       if (IsZeroV(d.lastPos)) d.lastPos = u->position;
       FormationSetCentre(*fc, d.lastPos.x, d.lastPos.z);
     } else {
-      d.lastPos = FormationGoal(sim, *fc, u, &cell) ? cell : u->position;
+      d.lastPos = FormationGoalOfForm(*fc, u, &cell) ? cell : u->position;
     }
     if (d.firstUpdate) {
       UnitWeapon* fw = TargetWeapon(sim, u, target);
       float ax = 0, az = 0;
-      const bool adj = fw && FormationAdjusted(sim, *fc, u, &ax, &az);
+      const bool adj = fw && FormationAdjustedOfForm(*fc, u, &ax, &az);
       if (getenv("MOHO64_DEBUG_FORM"))
         Logf(LogLevel::Info, "attack form %u unit %u track %d has %d lastPos %.3f %.3f weapon %d adjusted %d %.3f %.3f",
              sim.tick(), u->id, d.trackMobile ? 1 : 0, has ? 1 : 0, d.lastPos.x, d.lastPos.z, fw ? 1 : 0, adj ? 1 : 0, ax, az);
@@ -2599,7 +2605,7 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         const int x0 = static_cast<int>(std::nearbyint(ax - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(az - R * 0.5f));
         if (R < 1) AttackSetPosGoal(sim, u, Vec3{ax, 0, az});
         else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
-      } else if (FormationGoal(sim, *fc, u, &cell)) {
+      } else if (FormationGoalOfForm(*fc, u, &cell)) {
         AttackSetPosGoal(sim, u, cell);  // (SetPosGoal 0x5f2d90 at its formation cell)
       }
     } else {
@@ -2827,7 +2833,18 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       Entity* e = sim.FindEntity(target.entityId);
       if (!e || e->dead || e->destroyQueued) return 1;
       if (!StandableFor(sim, u, tp)) return 1;  // UnitWontFitAt
-      AttackSetDestUnit(sim, u, e);
+      // 0x5f3370: while the task still holds the command's formation (+0x58), the formation is moved to the
+      // target's point (SetCentre, vt+0x08) and the unit goes to ITS place in it (vt+0x1c, then SetPosGoal
+      // 0x5f2d90), not to the target; only without one does the navigator get the target itself (SetDestUnit).
+      // Seen: MP3 2009, a bomber and an air scout given one attack order on a radar blip (2002): the original's
+      // goal from 2009 on is the bomber's formation cell, (220, 199) while the target is at (216.1, 197.2).
+      if (UnitCommand* fc = AttackFormationCommand(sim, u, t)) {
+        FormationSetCentre(*fc, tp.x, tp.z);
+        Vec3 cell;
+        if (FormationGoalOfForm(*fc, u, &cell)) AttackSetPosGoal(sim, u, cell);
+      } else {
+        AttackSetDestUnit(sim, u, e);
+      }
       d.lastPos = tp;
       return 1;
     }

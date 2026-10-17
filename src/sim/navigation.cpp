@@ -50,10 +50,24 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
   blocked_.assign(static_cast<size_t>(w_) * h_, 0);
   blockedWater_.assign(static_cast<size_t>(w_) * h_, 0);
   ignoreStructures = (fp.flags & 1) != 0;
+  fp_ = fp;
   sizeX = std::max<int>(1, fp.sizeX);
   sizeZ = std::max<int>(1, fp.sizeZ);
   for (int z = 0; z < h_; ++z)
     for (int x = 0; x < w_; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp, blocking, x, z);
+}
+
+void PathGrid::TerrainChanged(const TerrainMap& map, const bool* blocking, int vx0, int vz0, int vx1, int vz1) {
+  // an origin (x, z) covers the vertices [x, x + sizeX] x [z, z + sizeZ]
+  const int x0 = std::max(0, vx0 - sizeX), z0 = std::max(0, vz0 - sizeZ);
+  const int x1 = std::min(w_ - 1, vx1), z1 = std::min(h_ - 1, vz1);
+  for (int z = z0; z <= z1; ++z)
+    for (int x = x0; x <= x1; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp_, blocking, x, z);
+}
+
+void Navigation::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
+  if (!map_) return;
+  for (auto& [key, g] : grids_) g->TerrainChanged(*map_, blocking_.data(), vx0, vz0, vx1, vz1);
 }
 
 uint8_t Navigation::MobileCaps(const NamedFootprint& fp, int x, int z) const {

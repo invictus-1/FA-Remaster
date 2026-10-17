@@ -72,11 +72,15 @@ class PathGrid {
   // A structure covering cells [x0, x1) x [z0, z1) in the given occupancy grids (kOccLand / kOccWater) holds every
   // origin whose footprint overlaps it.
   void Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ);
+  // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): the terrain caps of every origin
+  // whose footprint covers one of them are taken again from the map as it is now.
+  void TerrainChanged(const TerrainMap& map, const bool* blockingTypes, int vx0, int vz0, int vx1, int vz1);
   int sizeX = 1, sizeZ = 1;
   bool ignoreStructures = false;  // the footprint's IgnoreStructures flag (Flags & 1)
 
  private:
   int w_ = 0, h_ = 0;
+  NamedFootprint fp_;
   std::vector<uint8_t> cells_;
   std::vector<uint16_t> blocked_;       // land grid
   std::vector<uint16_t> blockedWater_;  // water grid
@@ -107,6 +111,10 @@ class Navigation {
   void AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps);
   void RemoveStructure(uint32_t entity);
   const std::vector<OccupiedRect>& Structures() const { return structures_; }
+  // The heightfield vertices [vx0, vx1] x [vz0, vz1] took new heights (FlattenMapRect). The original reads the
+  // terrain's caps from the map at every test (CanTraverseCell 0x5aa77d / 0x5aa7e2 call OCCUPY_MobileCheck 0x564ab0
+  // with the live STIMap); the grids here keep them, so they take the changed ones again.
+  void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
   // Is any structure cell of the given occupancy grids inside [x0, x1) x [z0, z1)?
   bool AnyStructureIn(int x0, int z0, int x1, int z1, uint8_t occ = kOccLand | kOccWater) const;
   // OCCUPY_FootprintFits 0x7209e0 for a footprint at origin (x0, z0) on terrain caps `caps`.

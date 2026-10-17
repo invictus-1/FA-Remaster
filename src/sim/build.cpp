@@ -2000,11 +2000,20 @@ BuildTask* FactoryWork(Sim& sim, Unit* U, GuardData& g, Unit* G) {
   for (int i = 0; i < n; ++i) {
     auto c = G->commands[static_cast<size_t>(i)];
     if (!c || c->type != CommandType::BuildFactory) continue;
-    if (i == 0 && c->count <= 1) continue;  // leave G's own head item to G (no repeat queues)
+    // G's own head item is left to G (0x6129aa..0x6129df), unless it is G's only order and G repeats its queue
+    // (G+0x2a2)
+    if (i == 0 && c->count <= 1 && (n > 1 || !G->repeatQueue)) continue;
     const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
     if (!bp || !UnitCanBuild(U, *bp)) continue;
     if (c->count > 1) {
       --c->count;
+    } else if (G->repeatQueue) {
+      // 0x612a88..0x612ab1: on a repeating G the order taken gets its count back (cmd+0xe4 = cmd+0xe0) and goes to
+      // the end of G's queue (0x6ee220 -> 0x6ee0b0), as a finished one does. Seen: MP3 2274, army 2's land factory
+      // told to assist a repeating one took a single order; the original's queue kept its 19 orders, ours lost one.
+      c->count = c->maxCount;
+      G->commands.erase(G->commands.begin() + i);
+      G->commands.push_back(c);
     } else {
       G->commands.erase(G->commands.begin() + i);
       ReleaseCommand(G, *c);
@@ -3244,6 +3253,16 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   // with no test of the unit's life: a builder killed at work (Unit::Kill empties its queue) is no longer Building.
   // (Seen: Skirmish 2810, army 0's engineer 0x11 killed while building: the original's states lose Building.)
   if (t.type == CommandType::BuildMobile || t.type == CommandType::BuildFactory) u->unitStates.erase("Building");
+  // The same for CUnitReclaimTask's dtor (Reclaiming off, 0x6203c6, and the work progress +0x2ac = 0, 0x6203d9) and
+  // CUnitRepairTask's (Repairing off, 0x5f8e89, work progress 0, 0x5f8e9c): a unit killed while it reclaims or
+  // repairs loses the state when Unit::KillCleanup empties its queue the beat after. (Seen: MP3 2536, army 1's
+  // engineer 0x10000e killed while reclaiming; 2550, army 0's engineers 0xa and 0xc killed while repairing: the
+  // original's dying units are without the state, ours kept it until they were gone.)
+  if (!Alive(u)) {
+    u->unitStates.erase("Reclaiming");
+    u->unitStates.erase("Repairing");
+    u->workProgress = 0;
+  }
   if (Alive(u)) {
     u->unitStates.erase("Reclaiming");
     if (t.type == CommandType::Reclaim && u->focusId == t.goalId) u->focusId = 0;
@@ -3400,8 +3419,12 @@ Vec3 FactoryCmdPos(Sim& sim, const UnitCommand& c) {
 void InheritRally(Sim& sim, Unit* f, Unit* inheritFrom, Unit* u, bool ferry) {
   if (!f->bpData || !f->bpData->hasBuilder || (f->motion.bp && f->motion.bp->mobile())) return;
   std::vector<std::shared_ptr<UnitCommand>> L(f->factoryCommands.begin(), f->factoryCommands.end());
+  // A factory building for the factory it assists hands on THAT factory's rally queue instead of its own: the list
+  // copied from f is assigned the other one's (0x5fa3ea / 0x5fa5fa: std::vector<WeakPtr<CUnitCommand>>::operator=
+  // 0x5fb910), not appended to. Seen: MP3 2435, army 2's land factory assisting another made a tank whose queue
+  // held the roll-off and the assisted factory's four rally moves; ours added the assisting factory's own rally.
   if (inheritFrom && Alive(inheritFrom) && inheritFrom->bpData && inheritFrom->bpData->hasBuilder)
-    L.insert(L.end(), inheritFrom->factoryCommands.begin(), inheritFrom->factoryCommands.end());
+    L.assign(inheritFrom->factoryCommands.begin(), inheritFrom->factoryCommands.end());
   bool airNaval = BpInCategory(sim, u->blueprint, "AIR") || BpInCategory(sim, u->blueprint, "NAVAL");
   bool leading = true;
   for (auto& c : L) {

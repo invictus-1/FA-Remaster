@@ -213,6 +213,11 @@ int l_FlattenMapRect(lua_State* L) {
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
   m->NoteHeightChange(x, z, x + sx, z + sz);  // (for the drawn ground: render request 25)
   AirTerrainChanged(m, x, z, x + sx, z + sz);
+  // (the path grids keep each origin's terrain caps; the original's tests read them from the map as it is, so a
+  // flattened rect changes passability at once. Seen: MP3 1985, the skirt of army 2's first land factory, flattened
+  // vertex by vertex at 58, made cell (67, 450) too steep for a hover engineer; the original's path to (72, 451)
+  // went round it, ours through it.)
+  sim.navigation().TerrainChanged(x, z, x + sx, z + sz);
   // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
   // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground
   // (0x6c31b7 / 0x6c2e9f) although it stands still. Seen (Economy 1804): FAF's FlattenGradientMapRect flattens an
