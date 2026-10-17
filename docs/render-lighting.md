@@ -63,10 +63,27 @@ Mac", and every ray-traced effect keeps a fallback without it.
      Direct3D 12 (mean difference 0.07-0.19 in 255).
    - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
      sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
-2. **Clouds and the sky** (next): clouds as volumes (noise volumes made once by compute shaders, marched at a
+2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a
    quarter of the pixels and filled in over frames), their shadows on the ground from the same clouds; the
    sky from tables of the atmosphere computed when the time of day changes (transmittance, multiple
    scattering, the sky's view, the air's own light over distance).
+   - **Clouds: first version done** (2026-10-16): `render/clouds.h/.cpp`, `World::volumetricClouds` (viewer
+     `--clouds-3d`; `--clouds-full` marches at the picture's own size, no sharper: the softness is the
+     shapes'). Noise made once: Perlin-Worley shapes 128 cubed (stretched over 0..1: it lands between
+     0.62 and 0.95, and unstretched every place was cloud and the outlines were the coverage's alone) and
+     Worley detail 32 cubed. Coverage from the field today's cloud shadows use (CloudField, CloudFrom),
+     laid in a 512 x 512 picture over 16,000 units round the camera each frame; the shapes cut it at 60 %
+     of the coverage. Shadows: through the layer toward the sun from its underside (150 over the ground's
+     zero, not following the camera), read by CloudShadow for every lit surface and the light in the air.
+     The view marched at half the width and height, 64 steps, only where the sky shows; light toward the
+     sun in 5 growing steps, a floor for light scattered on inside; two-lobed phase (bright edges toward
+     the sun); the sky's light from round about by height; blended 0.85 with the frame before by
+     direction. Lit by `SkyLight::cloudSun`: at their height the sun sets about two degrees later than on
+     the ground, so at 18:12 they glow red over a dark dusk.
+   - Cost (1440p, RTX 4090, half the view sky): shadows 0.06 ms, clouds 0.21 ms, the sky then 0.14 ms;
+     today's sky with its own layer 0.63 ms. Off: pictures as before; on, Vulkan as Direct3D 12.
+   - Open: the sky's tables of the atmosphere (the sky today already scatters per pixel); the clouds'
+     shapes are soft at a distance (Chris to judge).
 3. **Soft shadows** (the sun's penumbra wider with distance from the caster) and **contact shadows** (a
    short march along the depth toward the light, for the small creases the shadow maps cannot hold).
 4. **Ray tracing**: inline ray queries (Direct3D 12's DXR 1.1, shader model 6.5; Vulkan's

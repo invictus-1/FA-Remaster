@@ -51,8 +51,9 @@ So: build it against recordings, combine later by swapping the source of the fra
    1. Groundwork: compute shaders, storage targets and volumes in `gfx.h` (done, `--gfx-check`).
    2. Light in the air: volumetric fog, the sun's shafts, lamps' beams (done, first version: `air.h`).
    3. Motion (`motion.h`, done) and AMD's FSR 3 upscaler (`fsr3.h`): in work.
-   4. Volumetric clouds (3D noise, lit, their shadows on the ground) and the sky: next.
-   5. Soft and contact shadows.
+   4. Volumetric clouds (3D noise, lit, their shadows on the ground; done, first version: `clouds.h`),
+      the sky from tables of the atmosphere (to come).
+   5. Soft and contact shadows: next.
    6. Ray tracing: reflections on every surface (the water already mirrors in screen space; a renderer
       without a G-buffer gets reflections on metal and wet ground best from rays its shaders cast), bounce
       light from probes, shadows; each with a fallback.
