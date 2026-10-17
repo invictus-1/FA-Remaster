@@ -3,6 +3,43 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 39: TransportReverseLoadUnits, a transport picking up a unit — done (3c13915)
+
+**The sim carries out order 23 now, the original's way.** It is TransportLoadUnits from the other side: both units
+end up holding the same command, and the same tasks run.
+- **At issue (UNIT_IssueCommand 0x6f12c0 -> 0x6ef660):** the order does not go to the units it was given. It goes to
+  two units:
+  - the target, which must be alive and mobile;
+  - the nearest given unit in TRANSPORTATION, AIRSTAGINGPLATFORM or TELEPORTATION that has a transport with room for
+    the target. Distance is 2D, an idle unit's distance counts half, and only a strictly nearer unit wins.
+  If either is missing, nobody gets the order. No army is tested.
+- **Per unit (ProcessUnitCommand case 23, 0x6f0f53):** the original's refusals. A transport that cannot carry the
+  target hears `OnTransportReject`.
+- **Dispatch (0x609f8a):** the cargo gets the call task for its transport (CallTransport for an aircraft, CarrierLand
+  for a carrier, CallTeleport for a teleporter). The transport gets CUnitLoadUnits with that one unit, or
+  CarrierRetrieve for a carrier.
+
+Test: `tests/transport_reverse_load.txt`, an `--orders` file on `_scratch\ui\session_ai.lua`, seed 7, 320 ticks (the
+command is in its header). All 9 checks pass:
+- the transport flies to the tank and the tank is attached at beat 62, the same beats and positions as `issue 22`
+  from the cargo's side;
+- a second tank is picked up too;
+- the commander as target gets nobody the order, because a T1 transport has no room for it.
+On your `ui/tests/transport.lua` scenario the helper saw the third tank on board 71 beats after the order, so it
+should log 3. The landed transport does not fly to it: the tank is within its GuardScanRadius of 24, so the tank
+drives under it.
+
+**The teleport beacon** (TransportUnloadUnits aimed at a beacon with a TELEPORTATION unit selected) needed nothing
+new. The original sets the teleporter's destination with no task (0x60a1ec -> 0x60b8b0, TransportSetTeleportDest),
+and ours has done that since 2026-10-16 (TransportOrderOnTheSpot). It could not be tested, because no blueprint in
+the game data or the lab mods has the TELEPORTATION category.
+
+**Still without a task (order popped with the old log line):**
+- an air staging platform on either side (CUnitCallAirStagingPlatform and the load's staging states are not built);
+- a transport that cannot fly (CUnitCallLandTransport, the same gap as order 22).
+The stream path still runs no per-unit transport checks for orders 22, 24, 25 and 39 (ValidLoadIssue is on the Lua
+path only).
+
 ## ui 38: loading a game off the main thread, and Sim::FixesFor — done (FixesFor 48da4c5; no other engine change)
 
 **Your order is safe with the engine as it stands.** It is the original's order:
@@ -2132,10 +2169,11 @@ on; a callback reaches `/lua/SimCallbacks.lua`'s `DoCallback`.
 to do: the order a player gives with a factory selected); it is carried out since 2026-10-12. Building
 from a factory is an ordinary `IssueCommand` of type 7 (BuildFactory) with the blueprint and a count.
 
-Known gaps on the engine side (updated 2026-10-16): classic AI opponents (below; their threat map and
-platoons are built since 2026-10-16, their build functions are in work), `Dock` or `CallTransport` on a
-transport that cannot fly (CUnitCallLandTransport 0x6007c0 is not built), and order type 23
-(`TransportReverseLoadUnits`). `DetachFromTransport`, `Dock` (it had no case at all before, even on a
+Known gaps on the engine side (updated 2026-10-17): classic AI opponents (below; their threat map and
+platoons are built since 2026-10-16, their build functions are in work), `Dock`, `CallTransport` or
+`TransportReverseLoadUnits` on a transport that cannot fly (CUnitCallLandTransport 0x6007c0 is not built), and
+`TransportReverseLoadUnits` with an air staging platform (carried out otherwise since 2026-10-17, ui 39).
+`DetachFromTransport`, `Dock` (it had no case at all before, even on a
 staging platform) and a teleport through another unit's beacon are carried out since 2026-10-16. The
 others are carried out (nuke and tactical launch, overcharge,
 capture, sacrifice, teleport, special action, kill / destroy self and pause since 2026-10-12; a
