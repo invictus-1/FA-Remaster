@@ -20,6 +20,12 @@ inline const char kLightingShaderBlock[] = R"hlsl(
 #ifndef SURFACE_PUDDLES
 #define SURFACE_PUDDLES 0.0
 #endif
+// The share of that this very surface holds (a unit's own snow, unit_wear.h: a shader sets it before ModernLight; 1:
+// as the weather lays it), and the place its patches are laid by (a unit's own snow: its place on the model at rest,
+// so that they go with it as it drives and turns; else the world's).
+static float surfaceSnowShare = 1;
+static bool surfaceSnowOwn = false;
+static float3 surfaceSnowPlace = float3(0, 0, 0);
 #ifdef SURFACE_TRACKS
 Texture2D tracksMap : register(t26);  // (the ground only) how much of the lying snow is trodden away at a place
 #endif
@@ -294,8 +300,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     // snow builds up: it lies first where the surface is level, in patches; the patches close as
     // more falls, steeper ground comes last and the steepest stays bare. Where it lies thick it
     // hides the small shapes under it.
-    float fallen = weather.y * SURFACE_SNOW;
-    float patch = CloudNoise(world * 0.9) * 0.55 + CloudNoise(float3(world.xz * 0.21, 5.3)) * 0.45;
+    float fallen = weather.y * SURFACE_SNOW * surfaceSnowShare;
+    float3 snowAt = surfaceSnowOwn ? surfaceSnowPlace : world;
+    float patch = CloudNoise(snowAt * 0.9) * 0.55 + CloudNoise(float3(snowAt.xz * 0.21, 5.3)) * 0.45;
     float takes = patch * 0.75 + saturate((N.y - 0.35) * 1.6) * 0.25;  // how readily it lies here
     float bar = 1.02 - fallen * 1.15;
     float lying = smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, N.y);

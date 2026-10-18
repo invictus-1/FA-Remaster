@@ -656,9 +656,26 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    end of the hand-back (three cascades again); lamp shadows still chosen round the target.
 7. **A latency limiter** (input read as late as the frame allows; our own, vendor-neutral). In work.
 8. **Battle scars on units** (Chris: marks by the weapon that made them, three tiers, kept as trophies when the unit
-   heals, never so many that the unit stops reading). In work.
+   heals, never so many that the unit stops reading). First version done 2026-10-18 (`World::unitScars`, viewer
+   `--unit-scars`, `--wear-test`; `render/unit_wear.h/.cpp`): each unit keeps up to 16 marks in its rest space (they
+   move with its bones), placed where the shot's line meets its parts (a per-bone tree of the model's triangles,
+   kept only while scars are on). Four kinds by the shot's blueprint: kinetic (crater, torn lip, flaked paint, a
+   gouge where it skimmed), energy (a melt pool along the shot's way, heat colours, glowing fresh then cooling),
+   explosive (torn hole, soot in rays, shrapnel pits), fire (rising soot, browned paint, blisters). Three tiers by
+   the damage taken over its life against its most health (6, 11, 16 marks; some grime and chips from tier 2).
+   Repair mends without removing: fresh paint, a weld bead, a plate over a hole, kept as trophies. In a game the
+   marks come from the engine's hits (request 36: which unit, where, from which way, by what; `UnitWear::exactHits`,
+   so a health drop no hit was told for, reclaim or a script's, makes none); from a recording or the stand they are
+   guessed from shots seen to stop and health drops. In an eight-army AI game to tick 6000: 188 marks, 737 heals.
+   Cost with 200 tanks at tier 3, 1440p: about +0.15 ms (tier 1 about +0.05); off, about +0.015 ms (a model's
+   instance is 16 bytes larger: 640 to a draw instead of 768) and the picture identical. The visuals session's damage
+   sheets can replace the drawn marks later (the form proposed: an 8 x 8 atlas pair per kind fresh / mended).
 9. **Snow that comes off units in combat** (it builds while a unit stands in snowfall; moving, firing, hits, fire
-   and blasts shake or melt it off). In work, with 8.
+   and blasts shake or melt it off). First version done 2026-10-18 with 8 (`World::unitSnow`, viewer `--unit-snow`):
+   each unit holds its own share of the lying snow, built up standing still in snowfall at the ground's rate, shed
+   by moving, firing, hits, burning and blasts near (a puff of the game's snowy emitters where much falls at once);
+   glowing parts stay clear; new units start clean; its patches move with the unit. Off: pictures identical
+   (regression 0 px on both backends, also with snow lying and in a storm).
 10. **Real tracks in snow, mud, dirt and sand** (ruts with relief by the ground they are in, filling and fading).
    First version done 2026-10-18 (`World::deepTracks`, viewer `--deep-tracks`, in the Ground Detail setting): item 9
    of "The next pieces" above. About +0.05 ms at the game's height, +0.08 close, with 100 tanks; off, pictures

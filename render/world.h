@@ -60,6 +60,7 @@
 #include "smoke.h"
 #include "terrain.h"
 #include "textures.h"
+#include "unit_wear.h"
 #include "view.h"
 #include "placed.h"
 #include "ranges.h"
@@ -429,6 +430,21 @@ class World {
   // weakens, and its light falls on what is inside it. Drawn by `energy` (at the end of the class) in place of the
   // plain bubble (not for the effects stand's original side). Modern look; off by default.
   bool energyShields = false;
+  // Battle scars on units (unit_wear.h): each unit keeps marks of the hits it survived, of the kind of what hit it,
+  // in three tiers by all the damage it has taken, mended (not gone) as it is repaired. Modern look; off by default.
+  // Snow on units (unit_wear.h): each unit holds its own share of the lying snow, which builds up while it stands
+  // in snowfall and comes off as it moves, fires, is hit, burns or a blast is near. Modern look; off by default.
+  bool unitScars = false, unitSnow = false;
+  UnitWear wear;
+  // A game's beat for them: AddFrame calls it; a host that draws units itself (the effects stand) calls it with its
+  // frame first. Only the first call for a beat counts.
+  void WatchWear(const Frame& frame);
+  // What a unit (its entity id) wears this frame, for MeshRenderer::Wear; null: nothing of its own.
+  const WearLook* WearOf(uint32_t id) {
+    wear.scars = unitScars;
+    wear.snow = unitSnow;
+    return look == Look::Modern && (unitScars || unitSnow) ? wear.Look(id, clock_) : nullptr;
+  }
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.

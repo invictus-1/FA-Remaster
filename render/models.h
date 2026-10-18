@@ -129,6 +129,8 @@ struct ModelLod {
   int faction = 0;
 };
 
+struct HitShape;  // (unit_wear.h)
+
 struct Model {
   bool ok = false;
   bool scrolls = false;  // one of its levels' treads scroll (ModelLod::scrolling)
@@ -139,6 +141,14 @@ struct Model {
   // every level follow these bones by index (a level whose file lists its bones in another order,
   // or a remastered mesh tried out in the blueprint's place, is matched to them by name at loading).
   std::vector<ModelBone> bones;
+  // The box round each bone's part of the finest level at rest (model units; by the skeleton's numbers; lo above hi:
+  // no part): where on the model a hit lies, whichever way its bones are posed (unit_wear.h).
+  struct BoneBox {
+    Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+  };
+  std::vector<BoneBox> boneBoxes;
+  // Its triangles at rest, for where a hit lies on it (unit_wear.h; made while ModelCache::hitShapes is set); null: none.
+  std::shared_ptr<const HitShape> hitShape;
   // For a model built to the four-level standard (a remastered unit's export for this engine): the
   // size on screen, in pixels, down to which each level but the last is used - the sizes its levels
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
@@ -228,6 +238,9 @@ class ModelCache {
   // The same from the simulation itself: how one blueprint looks (frame.h, BlueprintLook). Models
   // asked for afterwards take their names from it.
   void SetLook(const BlueprintLook& look);
+  // Units' models loaded while this is set keep a shape of their triangles for battle scars (Model::hitShape,
+  // unit_wear.h; World sets it with unitScars).
+  bool hitShapes = false;
 
  private:
   struct LodSource {

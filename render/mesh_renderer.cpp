@@ -14,11 +14,12 @@
 #include "effect_files.h"
 #include "lighting.h"
 #include "ray_scene.h"
+#include "unit_wear.h"
 
 namespace render {
 namespace {
 
-constexpr size_t kMaxInstances = 768;  // per draw call (the size of the shader's array: 64 KB at most)
+constexpr size_t kMaxInstances = 640;  // per draw call (the size of the shader's array: 64 KB at most; 768 before an instance had its wear)
 
 // The surface of a model, then one of the two lightings.
 //
@@ -74,9 +75,10 @@ struct Instance {
   float4 row0, row1, row2;
   float4 color;
   float4 bones;
+  float4 wear;  // battle scars and snow (unit_wear.h): x where its marks begin in the bone buffer, y how many, z its wear over all, w its snow (-1: the weather's)
 };
 cbuffer Instances : register(b2) {
-  Instance instances[768];
+  Instance instances[640];
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
 cbuffer MeshKind : register(b3) {
@@ -132,6 +134,7 @@ struct VOut {
   // (a personal shield's lattice) goes with its bones
   float3 rest : TEXCOORD4;
   float3 restNormal : TEXCOORD5;
+  nointerpolation float4 wear : TEXCOORD6;  // (the instance's: unit_wear.h)
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
@@ -188,6 +191,7 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.binormal = mul(r, binormal);
   o.uv = i.uv;
   o.color = n.color;
+  o.wear = n.wear;
   o.tint = n.bones.yzw;
   [branch] if (n.bones.y < -0.5) {
     // a tank's treads, scrolled as it drives, as the original's ComputeScrolledTexcoord does it: the two
@@ -605,6 +609,15 @@ float4 Shade(VOut i, bool front) {
     // leaves: some of the light that falls on their far side comes through (World::leafLight: deeper in colour and
     // stronger toward an eye that looks at the sun through them, LeafLight; without it as at first, below)
     if (kind2.y > 0.5 && leaves.x > 0.5) emission += LeafLight(base, LeafThrough(N, toCamera), i.world, shadow, spec.a);
+    // battle scars (unit_wear.h, World::unitScars): its marks and its wear over all, on a finished unit's lit surface
+    [branch] if ((i.wear.y > 0.5 || i.wear.z > 0.001) && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
+      WearSurface(boneRows, i.wear, i.rest, normalize(i.restNormal), i.world, teamMask, falling.w > 0 ? falling.w : 1, base, metallic, roughness, emission, N);
+    // snow on units (World::unitSnow): its own share of what lies, none on what glows (engines, hot parts)
+    [branch] if (i.wear.w >= 0) {
+      surfaceSnowShare = i.wear.w * saturate(1 - dot(emission, float3(0.3, 0.6, 0.1)) * 6);
+      surfaceSnowOwn = true;
+      surfaceSnowPlace = i.rest * 3.0;  // (patches a third the size of the ground's: each flat top of a unit its own)
+    }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
@@ -681,16 +694,17 @@ struct Instance {
   float4 row0, row1, row2;
   float4 color;
   float4 bones;
+  float4 wear;  // battle scars and snow (unit_wear.h): x where its marks begin in the bone buffer, y how many, z its wear over all, w its snow (-1: the weather's)
 };
 cbuffer Instances : register(b2) {
-  Instance instances[768];
+  Instance instances[640];
 };
 struct Last {
   float4 row0, row1, row2;
   float4 bones;  // x: where its bones of the frame before begin (-1: at rest); y: 1 = known
 };
 cbuffer Lasts : register(b3) {
-  Last lasts[768];
+  Last lasts[640];
 };
 cbuffer Views : register(b1) {
   row_major float4x4 now;
@@ -744,10 +758,10 @@ float2 PS(VOut i) : SV_Target {
 
 bool MeshRenderer::Init(std::string* error) {
   // (units and props take half the lying snow the ground takes: they must still be told apart)
-  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + kShader;
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
   blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                 kBlastShaderBlock + kShader;
+                 kBlastShaderBlock + kWearShaderBlock + kShader;
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) { bending_[kept++] = {p, d, {}}; };
   gfx::PipelineDesc pd;
@@ -881,6 +895,8 @@ void MeshRenderer::Begin() {
   groupsListed_.clear();
   rowsOut_ = nullptr;
   shellHits_.clear();
+  wears_.clear();
+  wearRows_.clear();
   prepared_ = false;
 }
 
@@ -925,6 +941,22 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     e.instance.color[0] = static_cast<float>(floats / 4);
     e.instance.color[1] = static_cast<float>(s.hits.size());
     floats += s.hits.size() * 4;
+  }
+  // battle scars (Wear): after them the marks of the units some pass sees, three rows each; the instance's wear says
+  // where they begin (the others drawn without them)
+  for (WearRows& w : wears_) {
+    Entry& e = entries_[w.entry];
+    bool seen = views.empty();
+    const Vec3 r{e.radius, e.radius, e.radius};
+    for (const View* view : views)
+      if (view->BoxVisible(e.centre - r, e.centre + r)) {
+        seen = true;
+        break;
+      }
+    w.at = seen ? static_cast<int64_t>(floats / 4) : -1;
+    e.instance.wear[0] = seen ? static_cast<float>(floats / 4) : -1.0f;
+    if (!seen) e.instance.wear[1] = 0;
+    else floats += static_cast<size_t>(w.count) * 3 * 4;
   }
   // motion: after the hits, the bones of the frame before of each keyed model the camera's view may see
   // (where the frame before knew it, as the same model)
@@ -983,6 +1015,8 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
         out[0] = h.x, out[1] = h.y, out[2] = h.z, out[3] = h.w;
         out += 4;
       }
+    for (const WearRows& w : wears_)
+      if (w.at >= 0) std::memcpy(rowsOut_ + w.at * 4, wearRows_.data() + w.from, static_cast<size_t>(w.count) * 3 * sizeof(Vec4));
     (void)lastFrom;
   } else {
     for (Entry* e : rowsToBuild_) e->rows = -1;  // (no room this frame: drawn at rest)
@@ -991,6 +1025,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
       lastOf_.assign(entries_.size(), LastInstance{});
     }
     for (const ShellHits& s : shellHits_) entries_[s.entry].instance.color[1] = 0;  // (and the shells without their hits)
+    for (const WearRows& w : wears_) entries_[w.entry].instance.wear[1] = 0;      // (and the units without their marks)
     const float none[4] = {0, 0, 0, 0};  // (the shaders' buffer is never left unset)
     device_->UpdateBuffer(boneBuffer_, none, sizeof none);
   }
@@ -1079,6 +1114,10 @@ MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& worl
   e.instance.color[2] = teamColor.z;
   e.instance.color[3] = built;
   e.instance.bones[0] = -1;
+  e.instance.wear[0] = -1;  // (no marks, no wear, the weather's snow: unit_wear.h)
+  e.instance.wear[1] = 0;
+  e.instance.wear[2] = 0;
+  e.instance.wear[3] = -1;
   e.instance.bones[1] = tint ? tint->x : 0;
   e.instance.bones[2] = tint ? tint->y : 0;
   e.instance.bones[3] = tint ? tint->z : 0;
@@ -1113,6 +1152,18 @@ void MeshRenderer::AddShell(const Model* shell, const Mat4& world, const std::ve
   Entry e = MakeEntry(shell, world, {0, 0, 0}, 1, nullptr);
   Push(e);
   shellHits_.push_back({entries_.size() - 1, hits});
+}
+
+void MeshRenderer::Wear(const WearLook& look) {
+  if (entries_.empty()) return;
+  Entry& e = entries_.back();
+  e.instance.wear[1] = static_cast<float>(look.count);
+  e.instance.wear[2] = look.general;
+  e.instance.wear[3] = look.snow;
+  if (look.count > 0) {
+    wears_.push_back({entries_.size() - 1, look.count, wearRows_.size(), -1});
+    wearRows_.insert(wearRows_.end(), look.rows, look.rows + look.count * 3);
+  }
 }
 
 uint32_t MeshRenderer::AddGroup() {

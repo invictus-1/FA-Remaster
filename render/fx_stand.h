@@ -93,6 +93,11 @@ struct FxStandSetup {
   std::vector<std::string> fireWeapons, manual;
   float fireAt = 1, holdAt = 0;
   bool toGiven = false;
+  // with `fire`: a unit (its id) standing at `to`, facing the one firing, that its shots and beams hit (battle scars,
+  // unit_wear.h): its health its blueprint's or `targetHealth`; an engineer repairs it when it is low, and whole
+  // `healAt` seconds into each play (0: not then)
+  std::string target;
+  float targetHealth = 0, healAt = 0;
   // decals as a script lays them (CreateDecal's names, "scorch_001_albedo", or paths), `decalSize` units across,
   // laid for good at the start in a row through `at` along the camera's view (with `compare`: the remastered
   // pictures and their relief on the left, the game's on the right)
@@ -145,6 +150,8 @@ class FxStand {
     bool killed = false;
     uint32_t built = 0;  // --fx-build: the unit being built
     bool ordered = false, held = false;  // --fx-fire: its weapons given their orders, and their targets taken again
+    uint32_t target = 0;                 // --fx-target: the unit it fires at
+    bool healed = false;
     bool decalsLaid = false;             // --fx-decal
     bool blasted = false;                // --fx-blast
   };

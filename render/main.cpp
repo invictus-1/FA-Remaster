@@ -130,6 +130,12 @@
 //           starts (within 24 units), as a game would move them: their tread marks laid as their blueprint's
 //           Display.MovementEffects.Land.Treads says (the game's own pictures, or deep tracks when on); a unit without
 //           treads presses only its outline (deep tracks); to see and to time many tracks at once
+// --unit-scars  battle scars on units (unit_wear.h, World::unitScars; modern look): marks of the hits a unit survived, of
+//           the kind of what hit it, in three tiers by the damage it has taken, mended as it is repaired;
+//           --wear-test tier[,kind][,healed|,half]: each placed unit given that tier's hits (kinetic, energy, explosive,
+//           fire, or mixed: all four by turns), from all round above the ground, just now; healed: then repaired whole
+// --unit-snow  snow on units (unit_wear.h, World::unitSnow; modern look): each unit's own share of the lying snow, built
+//           up standing still in snowfall, shed by moving, firing, hits, burning and blasts near
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -226,6 +232,9 @@
 //           seconds (8 unless given). An aircraft hovers at its elevation. It faces the point when it is an
 //           aircraft or one of those weapons cannot turn all round, else its back is to the camera (side by side:
 //           its side), so that its turrets are seen turning.
+//           --fx-target <unit>: that unit stands at the point, facing it, and its shots and beams hit it (battle scars,
+//           --unit-scars: their hits told as they happen, UnitWear::Tell); its health its blueprint's or --fx-target-health
+//           n; an engineer repairs it when low, and to whole --fx-heal-at s into each play
 // --fx-manual <label>  with --fx-fire: that manual-fire weapon (a tactical or strategic missile, a commander's
 //           overcharge, a scripted main gun) fired at the point once each play as a player's order fires it,
 //           through the weapon's own script (a play is 14 s unless --fx-repeat); may be given several times
@@ -411,6 +420,8 @@ struct Options {
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
   int energyTest = 0;                   // --energy-test
+  bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
+  std::string wearTest;                 // --wear-test
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -555,6 +566,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--energy-shields") o->energyShields = true;
+    else if (a == "--unit-scars") o->unitScars = true;
+    else if (a == "--unit-snow") o->unitSnow = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -648,6 +661,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         all = comma == std::string::npos ? std::string() : all.substr(comma + 1);
       }
     }
+    else if (a == "--wear-test") o->wearTest = v;
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--settings") o->settings = v;
@@ -740,6 +754,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-fire-at") o->fx.fireAt = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-hold-at") o->fx.holdAt = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-target") o->fx.target = v;
+    else if (a == "--fx-target-health") o->fx.targetHealth = static_cast<float>(atof(v));
+    else if (a == "--fx-heal-at") o->fx.healAt = static_cast<float>(atof(v));
     else if (a == "--fx-hit-every") o->fx.hitEvery = std::max(0.05f, static_cast<float>(atof(v)));
     else if (a == "--fx-seed") o->fx.seed = static_cast<uint32_t>(std::max(1, atoi(v)));
     else if (a == "--fx-spacing") {
@@ -1097,6 +1114,9 @@ int main(int argc, char** argv) {
   world.deepTracks = opt.deepTracks;
   world.energyShields = opt.energyShields;
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
+  world.unitScars = opt.unitScars;
+  world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
+  world.unitSnow = opt.unitSnow;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1602,6 +1622,44 @@ int main(int argc, char** argv) {
     return static_cast<float>(blastTestSeed >> 8) / 16777216.0f;
   };
   const Vec3 energyTestAt = camera.target;  // [energy shields] (--energy-test: round where the camera starts)
+  if (!opt.wearTest.empty()) {  // --wear-test: each placed unit given a tier's hits from all round above the ground
+    int tier = std::clamp(atoi(opt.wearTest.c_str()), 1, 3);
+    const std::string& t = opt.wearTest;
+    const bool healed = t.find("healed") != std::string::npos, half = t.find("half") != std::string::npos;
+    int only = t.find("kinetic") != std::string::npos ? 0 : t.find("energy") != std::string::npos ? 1 : t.find("explosive") != std::string::npos ? 2
+             : t.find("fire") != std::string::npos ? 3 : -1;
+    // (each tier's damage over its life, in shares of the unit's most health, and in how many hits; the hit points
+    // of a medium tank's foes for each kind)
+    const float taken = tier == 1 ? 0.25f : tier == 2 ? 0.7f : 1.6f;
+    const int hits = tier == 1 ? 4 : tier == 2 ? 10 : 22;
+    const float points[4] = {60, 50, 150, 40};
+    uint32_t r = 4242;
+    auto next = [&r]() {
+      r = r * 1664525u + 1013904223u;
+      return static_cast<float>(r >> 8) / 16777216.0f;
+    };
+    for (size_t n = 0; n < placedUnits.size(); ++n) {
+      const PlacedUnit& u = placedUnits[n];
+      const Vec3 lo = u.model->boundsMin * u.model->scale, hi = u.model->boundsMax * u.model->scale, mid = (lo + hi) * 0.5f;
+      for (int k = 0; k < hits; ++k) {
+        const int kind = only >= 0 ? only : k % 4;
+        // from a way all round, a little above the ground, toward its middle: where that way meets its box
+        const float a = next() * 6.2831853f, up = 0.1f + next() * 0.9f;
+        const Vec3 from{std::cos(a) * std::cos(up), std::sin(up), std::sin(a) * std::cos(up)};
+        const Vec3 aim = mid + Vec3{(next() - 0.5f) * (hi.x - lo.x) * 0.6f, (next() - 0.5f) * (hi.y - lo.y) * 0.5f, (next() - 0.5f) * (hi.z - lo.z) * 0.6f};
+        float enter = 0;  // (the ray aim + from * s meets the box's side at the largest s inside it)
+        for (float s = 0; s < 50; s += 0.02f) {
+          const Vec3 p = aim + from * s;
+          if (p.x < lo.x || p.y < lo.y || p.z < lo.z || p.x > hi.x || p.y > hi.y || p.z > hi.z) break;
+          enter = s;
+        }
+        world.wear.Hit(0x40000000u | static_cast<uint32_t>(n), u.model, aim + from * enter, -from, static_cast<UnitWear::Kind>(kind),
+                       taken / static_cast<float>(hits), points[kind], 0.0);
+      }
+      if (healed || half) world.wear.Heal(0x40000000u | static_cast<uint32_t>(n), healed ? 1.0f : 0.2f);
+    }
+    printf("render: --wear-test: tier %d (%d hits on each of %zu units)%s\n", world.wear.Tier(0x40000000u), hits, placedUnits.size(), healed ? ", repaired whole" : half ? ", a fifth repaired" : "");
+  }
   if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
     const std::string dir = "/textures/ui/common/game/";
     world.orders.textures = {dir + "orderline/orderline_generic.dds", dir + "orderline/orderline_arrow02.dds",
@@ -2315,6 +2373,7 @@ int main(int argc, char** argv) {
       }
       const bool posed = u.turned >= 0 || !u.bones.empty();
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
+      if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)
       world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
@@ -2366,6 +2425,9 @@ int main(int argc, char** argv) {
         live.TakeCombat(&combat);
         world.AddCombat(std::move(combat));
       }
+      // (battle scars: where the engine's hits of these beats are to be handed over, once LiveSim has them (the
+      // renderer's request 36, TakeHits): each as a UnitWear::HitEvent, with its beat, to world.wear.Tell, before
+      // AddFrame below; unit_wear.h says which field goes where)
       CpuTimes::Part("effects");
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
@@ -2614,6 +2676,10 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
+      if (opt.unitScars || opt.unitSnow)  // (battle scars: what the hits were found by; unit_wear.h)
+        printf("; wear: %d units known, hits %d told, %d by shots seen to stop, %d by beams, %d by blasts near, %d unseen; %d marks made, %d heals",
+               world.wear.known(), world.wear.toldHits, world.wear.shotHits, world.wear.beamHits, world.wear.blastHits, world.wear.unseenHits,
+               world.wear.marksMade, world.wear.heals);
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);
       if (haveLive && opt.debug) {  // (where to look for them)
         printf("; %d emitter curves set by scripts", effects.curvesSet);

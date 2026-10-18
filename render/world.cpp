@@ -1194,6 +1194,29 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
   ++propsChanged;
 }
 
+void World::WatchWear(const Frame& frame) {
+  wear.scars = unitScars;
+  wear.snow = unitSnow;
+  if (unitScars) models.hitShapes = true;  // (models loaded from now on keep their triangles for where hits lie)
+  if (look != Look::Modern || !(unitScars || unitSnow)) return;
+  const bool weather = timeOfDay >= 0;  // (the weather is only there with a time of day)
+  wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, [&](uint32_t blueprint, bool make) -> const Model* {
+    if (!frame.blueprints || blueprint >= frame.blueprints->size() || (*frame.blueprints)[blueprint].empty()) return nullptr;
+    // (the models the units are drawn with, as AddFrame makes them; one made here only for a unit hit before it is drawn)
+    if (!make && (blueprint >= unitModels_.size() || !unitModels_[blueprint].known)) return nullptr;
+    const Model* m = Known(unitModels_, blueprint, frame.blueprints->size(), [&] { return models.Unit((*frame.blueprints)[blueprint]); });
+    return m && m->ok ? m : nullptr;
+  });
+  // where much snow fell off a unit at once: a puff of it (the game's own snowy kick-up)
+  std::vector<Vec4> puffs;
+  wear.TakePuffs(&puffs);
+  for (const Vec4& p : puffs)
+    if (!OutsidePlayable(p.x, p.z)) {
+      particles.Start(kSnowPuffClumps, {p.x, p.y, p.z}, Quat{}, p.w);
+      particles.Start(kSnowPuffCloud, {p.x, p.y, p.z}, Quat{}, p.w * 0.6f);
+    }
+}
+
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
 std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
 
@@ -1267,6 +1290,30 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       it = list.empty() ? shieldHits_.erase(it) : std::next(it);
     }
   }
+  if (unitScars || unitSnow) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h)
+    CpuTimes::Part("units' battle scars and snow watched");
+    // what the simulation says hit a unit or its shield (REQUESTS 36): the marks where and by what; where it says so,
+    // health drops with no hit told make none (reclaim, a script's SetHealth)
+    wear.exactHits = combat_.hitsKept;
+    for (const FrameHit& h : combat_.hits) {
+      if (h.targetKind != 0 && h.targetKind != 1) continue;
+      UnitWear::HitEvent e;
+      e.tick = h.tick;
+      e.unit = h.target;
+      e.at = {h.position[0], h.position[1], h.position[2]};
+      e.way = {h.direction[0], h.direction[1], h.direction[2]};
+      e.radius = h.radius;
+      e.blueprint = h.projectile;
+      e.beam = h.beam;
+      e.weapon = h.weapon;
+      e.damageType = h.damageType;
+      e.amount = h.amount;
+      e.shielded = h.shield;
+      wear.Tell(e);
+    }
+    WatchWear(frame);
+    CpuTimes::Part("units listed");
+  }
   ++frameStamp_;
   rememberedGone.clear();
   dyingDrawn = 0;
@@ -1291,6 +1338,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         pose.blend = frame.blend;
         meshes.Add(body, Mat4::FromTRS({u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]}, body->scale),
                    colorOf(u.Army()), u.fractionComplete, &pose, nullptr, nullptr, u.id + 1);
+        if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its scars go down with it)
         ++dyingDrawn;
         // (ripples: a ship going down, a plane coming down into the water)
         water.ripples.AddHull(u.id, {u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
@@ -1473,6 +1521,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
+      if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its battle scars and snow: unit_wear.h)
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);

@@ -9,6 +9,7 @@
 #include "gfx.h"
 #include "models.h"
 #include "textures.h"
+#include "unit_wear.h"
 #include "view.h"
 
 namespace render {
@@ -46,6 +47,9 @@ class MeshRenderer {
   // where it struck on the unit at rest (world units, the unit's own frame) and its age (w, 0..1 of the
   // second it shows). Drawn with what is see-through.
   void AddShell(const Model* shell, const Mat4& world, const std::vector<Vec4>& hits);
+  // The battle scars and snow of the model added last (unit_wear.h; World::unitScars, unitSnow): its look this frame,
+  // its marks laid in the bone buffer after the shells' hits (Prepare). Without it a model wears nothing of its own.
+  void Wear(const WearLook& look);
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
@@ -134,6 +138,8 @@ class MeshRenderer {
     float color[4];                   // team colour, w: fraction complete
     float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none),
                                       // or y -1 and z, w its treads' scroll
+    float wear[4];                    // x: where its marks begin in the bone buffer (-1: none), y how many, z its wear over all, w its
+                                      // share of the lying snow (-1: the weather's): Wear, unit_wear.h
   };
   // What a pass tests first, for every model of the list, kept apart from the rest so that going
   // through tens of thousands of them reads little memory.
@@ -228,6 +234,16 @@ class MeshRenderer {
     std::vector<Vec4> hits;
   };
   std::vector<ShellHits> shellHits_;
+  // the units' marks this frame (Wear): which entry, how many, where its rows begin in wearRows_, and where Prepare laid
+  // them in the bone buffer (after the hits; -1: not, no pass sees it)
+  struct WearRows {
+    size_t entry;
+    int count;
+    size_t from;
+    int64_t at;
+  };
+  std::vector<WearRows> wears_;
+  std::vector<Vec4> wearRows_;
   bool prepared_ = false;
 
   // motion: each keyed model's place and bones of the frame before (its bones' rows in lastRows_, from

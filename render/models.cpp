@@ -11,6 +11,7 @@
 #include "bp_reader.h"
 #include "effect_files.h"
 #include "core/vfs.h"
+#include "unit_wear.h"
 
 namespace render {
 namespace {
@@ -62,7 +63,8 @@ uint32_t NextLodSerial() {
 }
 
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
-             Vec3* boundsMax, std::string* error) {
+             Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
+             std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -113,6 +115,18 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
     }
     vertices = renumbered.data();
   }
+  if (boneBoxes) {  // (battle scars, unit_wear.h: which bone's part of the model a hit lies on)
+    boneBoxes->assign(std::max<size_t>(skeleton.size(), 1), Model::BoneBox{});
+    for (int64_t i = 0; i < vertexCount; ++i) {
+      ScmVertex v;
+      std::memcpy(&v, vertices + i * static_cast<int64_t>(sizeof(ScmVertex)), sizeof v);
+      Model::BoneBox& b = (*boneBoxes)[std::min<size_t>(v.bones[0], boneBoxes->size() - 1)];
+      b.lo = {std::min(b.lo.x, v.position[0]), std::min(b.lo.y, v.position[1]), std::min(b.lo.z, v.position[2])};
+      b.hi = {std::max(b.hi.x, v.position[0]), std::max(b.hi.y, v.position[1]), std::max(b.hi.z, v.position[2])};
+    }
+  }
+  if (hitShape && indexCount / 3 <= hitShapeMost)  // (battle scars, unit_wear.h: where on the model a hit lies)
+    *hitShape = MakeHitShape(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), std::max<size_t>(skeleton.size(), 1));
   gfx::BufferDesc vb;
   vb.stride = sizeof(ScmVertex);
   vb.size = static_cast<uint32_t>(vertexCount * static_cast<int64_t>(sizeof(ScmVertex)));
@@ -786,7 +800,12 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     }
     auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
     std::string error;
-    if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error)) {
+    // (a unit's, for battle scars while they are on: the finest level small enough, else the coarsest; unit_wear.h)
+    const bool unit = !effect && stem.empty() && (what.find('/') == std::string::npos ||
+                                                  (what.size() > 8 && what.compare(what.size() - 8, 8, "_unit.bp") == 0));
+    std::shared_ptr<const HitShape>* shape = hitShapes && unit && !m->hitShape ? &m->hitShape : nullptr;
+    if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error,
+                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles)) {
       // a missing coarser level is common: the finer ones then stand in
       if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
       if (i == 0) return;
