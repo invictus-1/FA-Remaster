@@ -11,11 +11,14 @@
 
 #include "bp_reader.h"
 #include "core/vfs.h"
+#include "dds.h"
+#include "lighting.h"
 
 namespace render {
 namespace {
 
 constexpr float kTick = 0.1f;  // seconds: the emitter blueprints count time in simulation ticks
+constexpr float kPuffSeconds = 1.5f;  // how long a fresh explosion's hot air bends what is behind it (heat shimmer)
 
 // A particle's place, size and turn from its start values and its age; its colour from its texture
 // (one frame of one strip) times its ramp read along its age. Written after the game's
@@ -36,12 +39,21 @@ cbuffer ParticleSet : register(b1) {
                         // z: frames in the grid, w: 1 = each frame blends into the next
   float4 extra;         // x: 1 = lit through a normal map, y: how far it bends what is behind (x the
                         // original's), z: 1 = it stops on the ground (the row's last number: its height)
+#if LIT_SMOKE
+  float4 lit;           // lit smoke (World::litSmoke): x 1 = this set is lit as a volume; y how dense it is to
+                        // the light going through it; z how strongly the small lights light it; w (the smoke's
+                        // shadow pass) what its optical depth is multiplied by
+  float4 six;           // x 1 = six-way light maps (SixWayTexture), y how bright what they say glows is
+#endif
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
 Texture2D particleTexture : register(t0);
 Texture2D rampTexture : register(t1);
 Texture2D behindTexture : register(t2);  // (bending particles only)
 Texture2D particleNormals : register(t4);  // (lit particles only)
+#if LIT_SMOKE
+Texture2D sixWayTexture : register(t5);  // (six-way light maps' second texture: left, bottom, front; emission)
+#endif
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t3);
 #else
@@ -56,7 +68,49 @@ struct VOut {
   float3 across : TEXCOORD4;  // the texture's right and down in the world (lit particles)
   float3 down : TEXCOORD5;
   float3 world : TEXCOORD2;
+#if LIT_SMOKE
+  float4 light : TEXCOORD6;  // lit smoke: rgb the small lights' light where it is, a what of the sun's comes through
+#endif
 };
+
+#if LIT_SMOKE
+// The small lights at a place in smoke (lights.h; as lighting.h's SmallLights, a lamp's beam through its shadow):
+// smoke sends light on to all sides about evenly, so only how near each light is counts.
+float3 SmokeSmallLights(float3 p) {
+  float3 sum = 0;
+  [branch] if (lightGrid.w > 0.5) {
+    float2 g = (p.xz - lightGrid.xy) * lightGrid.z;
+    [branch] if (all(g >= 0) && all(g < lightGridSize.xy)) {
+      float4 square = lightData[uint(g.y) * uint(lightGridSize.x) + uint(g.x)];
+      uint first = uint(square.x), count = min(uint(square.y), 48u);
+      for (uint s = 0; s < count; ++s) {
+        uint at = first + s;
+        uint which = uint(lightData[at >> 2][at & 3]);
+        float4 where = lightData[uint(lightGridSize.z) + which * 4];
+        float3 toLight = where.xyz - p;
+        float far2 = dot(toLight, toLight) / (where.w * where.w);
+        if (far2 >= 1) continue;
+        float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        float4 colour = lightData[uint(lightGridSize.z) + which * 4 + 1];
+        float4 beam = lightData[uint(lightGridSize.z) + which * 4 + 2];
+        if (beam.w > -1.5) {  // a beam: within its cone, through its lamp's shadow (and a share round the lamp)
+          float3 l = normalize(toLight);
+          float off = sqrt(saturate((1 - dot(-l, beam.xyz)) / max(1 - beam.w, 1e-4)));
+          float inside = 1 - smoothstep(0.7, 1.0, off);
+          float map = lightData[uint(lightGridSize.z) + which * 4 + 3].x;
+          float reaches = inside;
+          [branch] if (map > -0.5 && inside > 0) reaches *= LampShadow(p, l, uint(map));
+          fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * colour.w * saturate(1 - far2 * 25);
+        }
+        // (in smoke, the smoke between the light and the place takes its share: a fire lights the smoke round it,
+        // not a whole pall)
+        sum += colour.rgb * (fade * exp(-0.2 * lit.y * sqrt(dot(toLight, toLight))));
+      }
+    }
+  }
+  return sum;
+}
+#endif
 
 VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   uint at = (uint)options.x + instance * 5;
@@ -70,6 +124,9 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.next = 0;
   o.across = float3(1, 0, 0);
   o.down = float3(0, 0, 1);
+#if LIT_SMOKE
+  o.light = float4(0, 0, 0, 1);
+#endif
   if (t < 0 || age >= 1) return o;  // not thrown yet, or over: a quad of no size
 
   const float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(1, 1), float2(-1, -1), float2(1, 1), float2(-1, 1)};
@@ -103,6 +160,9 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
       }
     }
   }
+#if LIT_SMOKE
+  float3 middle = position;
+#endif
   float size = p3.y + p3.z * t;
   if (cameraUp.w > 1.5) {
     // stretched along its flight: across by what is square to the flight and to the line of sight
@@ -123,6 +183,15 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.position = mul(viewProj, float4(position, 1));
   o.world = position;
   o.uv = (corner + 1) * 0.5;
+#if LIT_SMOKE
+  [flatten] if (six.x > 0.5) {
+    // six-way light maps are shown the way up they were rendered: the game's particles show a texture's first row
+    // at the bottom (corner -1 is the texture's top, as in its particle.fx), which a bake from Blender would have
+    // to turn over for; each frame is turned within its own cell, and `down` with it (the texture's down)
+    o.uv.y = 1 - o.uv.y;
+    o.down = -o.down;
+  }
+#endif
   if (options.y > 0.5) {
     float2 cell = o.uv;
     float passed = p3.w * t;  // frames passed
@@ -147,6 +216,22 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
     }
   }
   o.rampUv = float2(age, p4.y);
+#if LIT_SMOKE
+  [branch] if (lit.x > 0.5) {
+    // the light where this corner of the puff is (a little in from the corner, where the puff is): the sun's
+    // through the shadow maps, the clouds' and the smoke's own shadow, and the small lights'
+    float3 p = lerp(middle, o.world, 0.6);
+    float sun = SunShadowMaps(p, float3(0, 0, 0)) * CloudShadow(p);
+    [branch] if (smokeShadow.w > 0.5) {
+      // (the plume's own shadow, as light scattered on and on inside smoke has it: some reaches deep; looked up on the
+      // puff's sunny side, so that it is the other smoke's shadow: its own thickness toward the sun the pixel shader
+      // reads from its texture)
+      float s = SmokeShadowAt(p + sunDirection * (size * 0.6), 0.6);
+      sun *= (s + 0.6 * pow(s, 0.25)) / 1.6;
+    }
+    o.light = float4(SmokeSmallLights(p), sun);
+  }
+#endif
   return o;
 }
 
@@ -184,6 +269,113 @@ float4 Frame(VOut i) {
   return c;
 }
 
+#if LIT_SMOKE
+// The texture's alpha along `step` from `uv`, three steps, kept within the frame's cell (from `low`, `cell` wide);
+// `dx`, `dy` the uv's change across a pixel (read outside any branch).
+float AlphaAlong(float2 uv, float2 step, float2 cell, float2 dx, float2 dy) {
+  float2 low = floor(uv / cell) * cell, a = low + cell * 0.01, b = low + cell * 0.99;
+  return particleTexture.SampleGrad(samplerLinear, clamp(uv + step, a, b), dx, dy).a +
+         particleTexture.SampleGrad(samplerLinear, clamp(uv + step * 2, a, b), dx, dy).a +
+         particleTexture.SampleGrad(samplerLinear, clamp(uv + step * 3, a, b), dx, dy).a;
+}
+// The sun's and the sky's colours as lit smoke takes them: their hue, as bright as white light (the smoke's texture
+// is its colour as the day shows it; the light only shares that out); the sky's half-way to white.
+float3 SmokeTint(float3 c) { return max(c, 1e-4) / max(dot(max(c, 1e-4), float3(0.2126, 0.7152, 0.0722)), 1e-4); }
+float3 SmokeSunTint() { return SmokeTint(pow(max(sunColor, 0.001), 2.2)); }
+float3 SmokeSkyTint() {
+  return skyZenith.w > 0.5 ? lerp(float3(1, 1, 1), SmokeTint(skyZenith.rgb * 0.8 + skyHorizon.rgb * 0.2), 0.4) : float3(1, 1, 1);
+}
+
+// Smoke and dust lit as a volume (World::litSmoke). `day`: its colour as today's modern look has it (linear, by the
+// day's brightness); `own`: its colour as light, before that; `c`: its colour and alpha as the texture and ramp give
+// them. The sun's light that reaches a place in the puff is what the corner's light says comes through the shadows,
+// times what comes through the puff itself on the way: its alpha read toward the sun across the texture (where the
+// sun is to its side), or its thickness here (where the sun is behind it); light from the sun is sent on a little
+// more forward than back, so thin smoke before the sun brightens. The sky lights it from round about, less where
+// it is dense; the small lights as near as they are, less through a dense puff. What glows in a warm colour of its own (a fireball drawn
+// covering, the first moments of a burning wreck's plume) keeps its own brightness.
+float3 LitSmoke(VOut i, float3 day, float3 own, float4 c) {
+  float3 L = sunDirection, V = normalize(cameraPosition - i.world);
+  float3 out_ = normalize(cross(i.down, i.across));
+  if (dot(out_, V) < 0) out_ = -out_;
+  float2 inPlane = float2(dot(L, i.across), dot(L, i.down));  // (the texture's u runs along `across`, v along `down`)
+  float side = saturate(dot(inPlane, inPlane));
+  float2 cell = options.y > 0.5 ? sheet.xy : float2(1, 1);
+  float2 step = inPlane * rsqrt(max(side, 1e-6)) * cell * 0.12;
+  float2 dx = ddx(i.uv) * exp2(temporal.x), dy = ddy(i.uv) * exp2(temporal.x);  // (the upscaler's bias, as Sample has it)
+  float toward = 0;
+  [branch] if (side > 0.02) {  // (the sun nearly behind the puff or before it: its thickness here says it all)
+    toward = AlphaAlong(i.uv, step, cell, dx, dy);
+    if (i.next.z > 0) toward = lerp(toward, AlphaAlong(i.next.xy, step, cell, dx, dy), i.next.z);
+  }
+  float ramp = rampTexture.Sample(samplerLinearClamp, i.rampUv).a;
+  float through = c.a * lerp(0.2, 1.0, saturate(0.5 - 0.5 * dot(L, out_)));
+  float dense = lit.y * (side * toward * ramp / 3 + (1 - side) * through);
+  float sun = i.light.a * (exp(-dense) + 0.6 * exp(-0.25 * dense)) / 1.6;  // (and inside the puff the same)
+  float mu = dot(-L, V), g = 0.3;
+  // (a third of the way to one scattering's phase: light scattered on and on inside a puff goes every way, and
+  // seen with the sun behind the eye, as an overhead camera mostly is, smoke should not turn dull)
+  float phase = lerp(1, (1 - g * g) / pow(max(1 + g * g - 2 * g * mu, 1e-4), 1.5), 0.3);
+  // (its sunny side brighter than unlit, its far side darker)
+  float3 shade = SmokeSkyTint() * (0.45 * (1 - 0.3 * saturate(c.a * lit.y * 0.5))) + SmokeSunTint() * (1.05 * sun * phase);
+  float glows = saturate((c.r - c.b) / max(c.r, 1e-3) * 2 - 0.8);
+  // (the small lights' light reaches the face the eye sees through part of the puff: a dense puff glows less on it
+  // than a thin one, so a pall round a fire glows at its thin edges and near the flames, not all through)
+  return day * lerp(shade, 1, glows) + own * i.light.rgb * (lit.z * exp(-0.6 * lit.y * c.a));
+}
+
+// A flipbook baked with light from six directions (particles.h, SixWayTexture): the light its frame gives back
+// toward the eye where it is lit from `l` (toward the light, in the world), from its two textures' frames: `a`
+// (the blueprint's Texture: lit from the right, from the top, from behind; alpha) and `b` (SixWayTexture: from
+// the left, from below, from the front; what glows), each direction's map weighed by the square of the light's
+// share along it (the six weights add up to 1). Right and top are the frame's own as rendered (`across`, and the
+// texture's top, which lies along -`down`: upright, the vertex shader turns six-way frames back); front faces the eye.
+// The maps are stored as a screen shows colours (gamma 2.2) and read back to light.
+float SixWayLight(VOut i, float3 out_, float3 l, float3 a, float3 b) {
+  float3 d = float3(dot(l, i.across), -dot(l, i.down), dot(l, out_));
+  float3 w = d * d;
+  return w.x * (d.x > 0 ? a.r : b.r) + w.y * (d.y > 0 ? a.g : b.g) + w.z * (d.z > 0 ? b.b : a.b);
+}
+// What glows in it, by the second texture's alpha (how hot it is, 0..1): dark red, orange, then yellow-white.
+float3 SixWayFire(float hot) {
+  float3 c = lerp(lerp(float3(0.5, 0.05, 0.01), float3(1.0, 0.36, 0.06), smoothstep(0.0, 0.5, hot)), float3(1.0, 0.82, 0.55), smoothstep(0.5, 1.0, hot));
+  return c * (hot * hot);
+}
+float4 FrameSix(VOut i) {
+  float4 c = sixWayTexture.Sample(samplerLinear, i.uv);
+  if (i.next.z > 0) c = lerp(c, sixWayTexture.Sample(samplerLinear, i.next.xy), i.next.z);
+  return c;
+}
+// Its colour, light (modern) or as the screen shows it (the original look, the map's sun unshadowed): the ramp's
+// colour lit by the sun as the maps say for its direction, through what shadows it (the corner's light), by the
+// sky round about as all six say on average, by the small lights; and what glows.
+float3 SixWay(VOut i, bool modern) {
+  float3 V = normalize(cameraPosition - i.world), out_ = normalize(cross(i.down, i.across));
+  if (dot(out_, V) < 0) out_ = -out_;
+  float4 a = Frame(i), b = FrameSix(i);
+  float3 la = pow(max(a.rgb, 0), 2.2), lb = pow(max(b.rgb, 0), 2.2);
+  float3 albedo = pow(max(rampTexture.Sample(samplerLinearClamp, i.rampUv).rgb, 0), 2.2);
+  float sun = SixWayLight(i, out_, sunDirection, la, lb);
+  float round = (la.r + la.g + la.b + lb.r + lb.g + lb.b) / 6;
+  float above = lerp(round, SixWayLight(i, out_, float3(0, 1, 0), la, lb), 0.5);  // (the sky: more from above)
+  if (!modern) return pow(max(albedo * (0.45 * above + 1.05 * sun) + SixWayFire(b.a) * six.y, 0), 1 / 2.2);
+  float day = skyZenith.w > 0.5 ? skyGlow.w : 1;
+  return albedo * (day * (SmokeSkyTint() * (0.45 * above) + SmokeSunTint() * (1.05 * sun * i.light.a)) + i.light.rgb * (round * lit.z)) +
+         SixWayFire(b.a) * (six.y * options.w * (falling.w > 0 ? falling.w : 1));
+}
+
+// The smoke's shadow pass (smoke.h): what of the sun's light the particle takes away here, as optical depth, with
+// its height along the light and the height squared, to be added up.
+float4 ShadowPS(VOut i) : SV_Target {
+  float4 c = Frame(i) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
+  float a = options.z > 0.5 && options.z < 1.5 ? dot(saturate(c.rgb), 1.0 / 3) : saturate(c.a);  // (darkening: what it takes)
+  float tau = -log(1 - min(a, 0.95)) * lit.w;
+  if (tau < 1e-3) discard;
+  float h = dot(smokeMatrix[2], float4(i.world, 1));
+  return float4(tau, tau * h, tau * h * h, 1);
+}
+#endif
+
 float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float meets = Meets(i, coverage);
   if (meets <= 0) discard;
@@ -199,9 +391,20 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float4 c = Frame(i) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
   if (options.z > 0.5 && options.z < 1.5) return float4(saturate(c.rgb) * meets, 1);  // darkening: what is there x (1 - this)
   if (look > 0.5) {
+#if LIT_SMOKE
+    float4 given = c;
+    float3 own = pow(max(c.rgb, 0), 2.2);
+#endif
     // the modern look's picture is linear light; what adds its light is given more of it, to glow
     // (what does not add light, smoke and dust, is lit by the day: darker in a computed night)
     c.rgb = pow(max(c.rgb, 0), 2.2) * (options.z > 1.5 && options.z < 2.5 ? options.w * (falling.w > 0 ? falling.w : 1) : skyZenith.w > 0.5 ? skyGlow.w : 1);
+#if LIT_SMOKE
+    [branch] if (six.x > 0.5) {
+      c.rgb = SixWay(i, true) * (options.z > 2.5 ? c.a : 1);  // (premultiplied: the colour carries its alpha)
+    } else if (lit.x > 0.5) {
+      c.rgb = LitSmoke(i, c.rgb, own, given);
+    } else {
+#endif
     [branch] if (extra.x > 0.5 && (options.z < 0.5 || options.z > 2.5)) {
       // smoke and dust lit through its normal map: the sun on the side that faces it (softly: smoke
       // lets light through), the sky from above, around the brightness it had unlit
@@ -215,6 +418,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       float above = saturate(n.y * 0.5 + 0.5);
       c.rgb *= 0.45 + 0.85 * sunSide * sunTint + 0.25 * above;
     }
+#if LIT_SMOKE
+    }
+#endif
     [branch] if (air.x > 0.5) {  // light in the air (air.h): what comes through of its own, and the air's light before it
       float4 a = AirAt(i.world);
       c.rgb = options.z > 1.5 && options.z < 2.5 ? c.rgb * a.a : c.rgb * a.a + a.rgb * (options.z > 2.5 ? c.a : 1);
@@ -229,14 +435,104 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       }
     }
   }
+#if LIT_SMOKE
+  else if (six.x > 0.5) {
+    c.rgb = SixWay(i, false) * (options.z > 2.5 ? c.a : 1);
+  }
+#endif
   if (options.z > 2.5) c *= meets;  // (premultiplied: the colour carries its alpha)
   else c.a *= meets;
   return c;
 }
 )hlsl";
 
+// Heat shimmer (World::heatShimmer): over what is hot, a patch of air that bends what is behind it, as the
+// particles that bend (blend mode 5) do it: the picture as it was, taken a little to the side by two noises that
+// rise with the hot air, laid over by how strong the bending is there. Strongest just over the source and fading
+// up and to the sides; a few pixels at most, so that it reads as air and never swims.
+const char kHeatShader[] = R"hlsl(
+cbuffer HeatSet : register(b1) {
+  float4 heat;  // x: the most it bends, in pixels of a picture 1080 high; y: the camera's near distance; z: how fast the hot air rises
+};
+StructuredBuffer<float4> heatRows : register(t0, space1);  // two rows each: place, size; strength, seed
+Texture2D behindTexture : register(t2);
+#ifdef MSAA
+Texture2DMS<float> sceneDepth : register(t3);
+#else
+Texture2D<float> sceneDepth : register(t3);
+#endif
+
+struct HOut {
+  float4 position : SV_Position;
+  float2 uv : TEXCOORD0;    // -1..1 across, -1 at the source .. 1 at the top
+  float4 info : TEXCOORD1;  // strength, seed, the most it bends here (pixels), its size
+};
+
+HOut HeatVS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
+  float4 a = heatRows[instance * 2], b = heatRows[instance * 2 + 1];
+  const float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(1, 1), float2(-1, -1), float2(1, 1), float2(-1, 1)};
+  float2 corner = corners[vertex];
+  float3 right = normalize(viewProj[0].xyz), up = normalize(viewProj[1].xyz);
+  // (facing the camera, standing on the source and reaching up over it)
+  float3 middle = a.xyz + float3(0, a.w * 0.9, 0);
+  HOut o;
+  o.position = mul(viewProj, float4(middle + right * (corner.x * a.w * 1.2) + up * (corner.y * a.w * 1.5), 1));
+  o.uv = corner;
+  // how many pixels a world unit is there: the bend is a share of the source's size, a few pixels at most
+  float4 m = mul(viewProj, float4(middle, 1)), n = mul(viewProj, float4(middle + up, 1));
+  float perUnit = length((n.xy / max(n.w, 1e-3) - m.xy / max(m.w, 1e-3)) * viewport.xy * 0.5);
+  o.info = float4(b.x, b.y, min(heat.x * viewport.y / 1080, 0.04 * a.w * perUnit), a.w);
+  return o;
+}
+
+float4 HeatPS(HOut i, out uint coverage : SV_Coverage) : SV_Target {
+  // only over what lies behind the hot air: of the pixel's samples, those where nothing solid is in front
+  coverage = 0;
+#ifdef MSAA
+  int2 pixel = int2(i.position.xy);
+  for (uint s = 0; s < SAMPLES; ++s) {
+    float d = sceneDepth.Load(pixel, s);
+    if ((d > 0 ? heat.y / d : 1e9) > i.position.w) coverage |= 1u << s;
+  }
+#else
+  float d = sceneDepth.Load(int3(i.position.xy, 0));
+  if ((d > 0 ? heat.y / d : 1e9) > i.position.w) coverage = 1;
+#endif
+  if (coverage == 0) discard;
+  float across = saturate(1 - i.uv.x * i.uv.x);
+  float strength = across * across * smoothstep(-1, -0.55, i.uv.y) * (1 - smoothstep(-0.3, 1, i.uv.y)) * i.info.x;
+  if (strength < 0.01 || i.info.z < 0.05) discard;
+  // two noises over the patch, rising with the air (in the patch's own measure: a larger fire has larger waves)
+  float3 q = float3(i.uv * float2(5.0, 4.0) - float2(0, time * heat.z), i.info.y + time * 0.6);
+  float2 bend = float2(CloudNoise(q), CloudNoise(q + float3(5.2, 1.3, 7.7))) * 2 - 1;
+  float2 at = i.position.xy * viewport.zw + bend * (i.info.z * strength) * viewport.zw;
+  return float4(behindTexture.SampleLevel(samplerLinearClamp, at, 0).rgb, saturate(strength * 1.5));
+}
+)hlsl";
+
 float Number(const BpValue& v, float fallback) { return static_cast<float>(v.NumberOr(fallback)); }
 bool Flag(const BpValue& v, bool fallback) { return v.kind == BpValue::Bool ? v.boolean : fallback; }
+
+// The colour a particle texture shows on average, as light (linear; each texel weighed by its alpha): with its
+// ramp's, the colour of a fire's glow (Particles::HotEmitters). White where the texture cannot be read.
+Vec3 TextureGlow(const moho::Vfs& vfs, const std::string& path) {
+  DdsImage image;
+  std::vector<uint8_t> pixels;
+  std::string error;
+  auto file = vfs.ReadFile(path);
+  if (!file || !ParseDds(*file, &image, &error) || !DecodeRgba(image, 0, &pixels) || pixels.empty()) return {1, 1, 1};
+  double r = 0, g = 0, b = 0;
+  const size_t count = pixels.size() / 4, stride = std::max<size_t>(1, count / 4096);
+  for (size_t i = 0; i < count; i += stride) {
+    const uint8_t* p = &pixels[i * 4];
+    const double a = p[3] / 255.0;
+    r += std::pow(p[0] / 255.0, 2.2) * a;
+    g += std::pow(p[1] / 255.0, 2.2) * a;
+    b += std::pow(p[2] / 255.0, 2.2) * a;
+  }
+  const double most = std::max({r, g, b, 1e-9});
+  return {static_cast<float>(r / most), static_cast<float>(g / most), static_cast<float>(b / most)};
+}
 
 void ReadCurve(const BpValue& v, EmitterCurve* out) {
   out->xRange = Number(v["XRange"], 1);
@@ -291,7 +587,67 @@ bool Particles::Init(std::string* error) {
   bd.stride = 16;
   bd.dynamic = true;
   buffer_ = device_->CreateBuffer(bd);
+  heatBuffer_ = device_->CreateBuffer(bd);
+  litTried_ = litMade_ = heatTried_ = false;  // (lit smoke's and the heat's pipelines made again when wanted: the samples may differ)
   return true;
+}
+
+// The lit smoke's pipelines and the smoke's shadow pass's (World::litSmoke; the particles' shader with LIT_SMOKE and
+// the lighting block), the first time they are wanted; where they cannot be made, smoke stays as it was.
+bool Particles::LitReady() {
+  if (litTried_) return litMade_;
+  litTried_ = true;
+  std::string error;
+  const std::string source = std::string("#define LIT_SMOKE 1\n") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "#define SAMPLES " +
+                             std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + kShader;
+  gfx::PipelineDesc pd;
+  pd.vertexSource = pd.pixelSource = source;
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
+  pd.name = "particles, lit smoke, alpha";
+  pd.blend = gfx::Blend::Alpha;
+  litPipelines_[0] = device_->CreatePipeline(pd, &error);
+  pd.name = "particles, lit smoke, premultiplied";
+  pd.blend = gfx::Blend::Premultiplied;
+  if (litPipelines_[0]) litPipelines_[1] = device_->CreatePipeline(pd, &error);
+  // the smoke as the sun sees it: added up into the smoke's shadow map (one sample a texel)
+  pd.name = "particles, the smoke's shadow";
+  pd.pixelEntry = "ShadowPS";
+  pd.blend = gfx::Blend::Additive;
+  pd.colorFormat = gfx::Format::RGBA16F;
+  pd.samples = 1;
+  pd.alphaWrite = true;
+  if (litPipelines_[1]) shadowPipeline_ = device_->CreatePipeline(pd, &error);
+  litMade_ = litPipelines_[0] && litPipelines_[1] && shadowPipeline_;
+  if (!litMade_) fprintf(stderr, "render: lit smoke cannot be drawn (%s)\n", error.c_str());
+  return litMade_;
+}
+
+bool Particles::HeatReady() {
+  if (heatTried_) return static_cast<bool>(heatPipeline_);
+  heatTried_ = true;
+  std::string error;
+  const std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" +
+                             kViewShaderBlock + kHeatShader;
+  gfx::PipelineDesc pd;
+  pd.name = "heat shimmer";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.vertexEntry = "HeatVS";
+  pd.pixelEntry = "HeatPS";
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.blend = gfx::Blend::Alpha;
+  pd.alphaWrite = false;
+  heatPipeline_ = device_->CreatePipeline(pd, &error);
+  if (!heatPipeline_) fprintf(stderr, "render: heat shimmer cannot be drawn (%s)\n", error.c_str());
+  return static_cast<bool>(heatPipeline_);
 }
 
 void Particles::SetWater(float level, std::function<float(float, float)> groundHeight) {
@@ -353,6 +709,8 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->gridLoop = Flag(v["TextureGridLoop"], false);
   bp->frameBlend = Flag(v["TextureFrameBlend"], false) || bp->gridAnimate;
   bp->normalPath = v["NormalTexture"].StringOr(std::string());
+  bp->sixWayPath = v["SixWayTexture"].StringOr(std::string());
+  bp->sixWayEmission = Number(v["SixWayEmission"], 1);
   bp->refractionScale = Number(v["RefractionScale"], 1);
   bp->collideGround = Flag(v["CollideGround"], false);
   bp->keepAtLowQuality = Flag(v["KeepAtLowQuality"], false);
@@ -380,6 +738,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->texture = textures_->Get(EffectFile(*vfs_, bp->texturePath, remastered), textures_->White());
   bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(EffectFile(*vfs_, bp->rampPath, remastered), textures_->White());
   bp->normals = bp->normalPath.empty() ? textures_->FlatNormal() : textures_->Get(EffectFile(*vfs_, bp->normalPath, remastered), textures_->FlatNormal());
+  if (!bp->sixWayPath.empty()) bp->sixWay = textures_->Get(EffectFile(*vfs_, bp->sixWayPath, remastered), textures_->White());
   for (const EmitterCurve* c : {&bp->size, &bp->startSize, &bp->endSize})
     for (const Vec3& key : c->keys) bp->largestSize = std::max(bp->largestSize, key.y + std::fabs(key.z) * 0.5f);
   bp->ok = true;
@@ -429,6 +788,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
     f.seconds = bp->lightSeconds > 0 ? bp->lightSeconds : std::clamp(bp->longestLife * kTick, 0.12f, 0.8f);
     f.strength = bp->lightStrength;
     f.ramp = EffectFile(*vfs_, bp->rampPath, remastered);
+    if (heat && puffs_.size() < 256) puffs_.push_back({position, e.started, f.radius});  // (and hot air, a moment longer)
     flashes.push_back(std::move(f));
   }
   return e.id;
@@ -624,9 +984,12 @@ void Particles::Hide(uint32_t emitter, bool hidden) {
 void Particles::Update(double now, const View* view) {
   const auto t0 = std::chrono::steady_clock::now();
   now_ = now;
+  gathered_ = false;  // (a new frame: what was gathered for the last one is old)
   quietEmitters = 0;
   flashes.erase(std::remove_if(flashes.begin(), flashes.end(), [now](const Flash& f) { return now - f.born > f.seconds || now < f.born - 1; }),
                 flashes.end());
+  puffs_.erase(std::remove_if(puffs_.begin(), puffs_.end(), [now](const Puff& p) { return now - p.born > kPuffSeconds || now < p.born - 1; }),
+               puffs_.end());
   for (Emitter& e : emitters_) {
     // every whole tick of the emitter's own time that has begun, up to its lifetime
     const int due = static_cast<int>((now - e.started) / kTick) + 1;
@@ -663,8 +1026,9 @@ void Particles::Update(double now, const View* view) {
   updateMs_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-void Particles::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
+void Particles::Gather() {
   const auto t0 = std::chrono::steady_clock::now();
+  gathered_ = true;
   // drop what is over, and gather the rest in one buffer, set after set
   const float now = static_cast<float>(now_);
   rows_.clear();
@@ -681,22 +1045,116 @@ void Particles::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
     rows_.insert(rows_.end(), from, from + ps.size() * (sizeof(Particle) / sizeof(float)));
     liveParticles += static_cast<int>(ps.size());
   }
+  if (liveParticles) device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
+  gatherMs_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+void Particles::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
+  // (lit smoke's pipelines made in the first frame it is on, smoke or not: made when the first smoke rose, they held
+  // up that frame of a fight by a tenth of a second or so)
+  if (litSmoke) LitReady();
+  const auto t0 = std::chrono::steady_clock::now();
+  if (!gathered_) Gather();  // (unless the smoke's shadow pass did it already this frame)
+  gathered_ = false;
   if (!liveParticles) {
     cpuMs = cpuMs * 0.95f + updateMs_ * 0.05f;
     return;
   }
-  device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
-  DrawSets(view, false, {}, sceneDepth, zNear);
-  const float ms = updateMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  DrawSets(view, 0, {}, sceneDepth, zNear);
+  const float ms = updateMs_ + gatherMs_ + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
   cpuMs = cpuMs == 0 ? ms : cpuMs * 0.95f + ms * 0.05f;
 }
 
-void Particles::DrawBending(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
-  if (bending_ && behind) DrawSets(view, true, behind, sceneDepth, zNear);
+// Whether a set's particles cover what is behind them as smoke and dust do (lit smoke: lit as a volume; the smoke's
+// shadow: they cast it): covering or darkening, not adding light or bending, and not lying flat (a ring on the
+// water, the original's dark patch under an explosion, which is its shadow already).
+bool Particles::Smoky(const EmitterBlueprint& bp, bool darkening) {
+  const bool covers = bp.blendMode == 0 || bp.blendMode == 4 || (darkening && bp.blendMode == 1);
+  return covers && !(bp.flat && !bp.alignRotation);
 }
 
-// The sets of the last Draw: those that bend what is behind them, or all the others.
-void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
+void Particles::DrawSmokeShadow(const View& sunView) {
+  if (!gathered_) Gather();
+  if (!liveParticles || !LitReady()) return;
+  DrawSets(sunView, 2, {}, {}, 0);
+}
+
+void Particles::HotEmitters(Vec3 near, size_t most, std::vector<Hot>* out) {
+  out->clear();
+  if (!rampGlow) return;
+  for (const Emitter& e : emitters_) {
+    const EmitterBlueprint& bp = *e.blueprint;
+    if (e.stopped || e.hidden || (bp.blendMode != 2 && bp.blendMode != 3) || bp.rampPath.empty()) continue;
+    if (bp.lifetime > 0 && bp.lifetime <= 30) continue;  // (a short burst: an explosion's, which throws a flash)
+    if (bp.warm < 0) {  // (the first time: is its glow's colour, its ramp's times its texture's, that of something hot?)
+      const Vec3 ramp = rampGlow(EffectFile(*vfs_, bp.rampPath, remastered));
+      const Vec3 hue = TextureGlow(*vfs_, EffectFile(*vfs_, bp.texturePath, remastered));
+      const Vec3 c{ramp.x * hue.x, ramp.y * hue.y, ramp.z * hue.z};
+      bp.warm = c.x > 0.04f && c.x >= c.z * 1.4f && c.x >= c.y * 0.9f ? 1 : 0;
+      bp.warmColor = c;
+    }
+    if (!bp.warm) continue;
+    const float size = bp.largestSize * e.scale;
+    if (size < 0.15f) continue;  // (a spark of a lamp)
+    out->push_back({e.position, size, bp.warmColor, e.id, Length(e.position - e.positionBefore) > 0.6f});
+  }
+  if (out->size() > most) {
+    std::nth_element(out->begin(), out->begin() + static_cast<std::ptrdiff_t>(most), out->end(),
+                     [near](const Hot& a, const Hot& b) { return Length(a.position - near) < Length(b.position - near); });
+    out->resize(most);
+  }
+}
+
+bool Particles::PrepareHeat(const View& view) {
+  heatCount_ = 0;
+  if (!HeatReady()) return false;
+  std::vector<Hot> hot;
+  HotEmitters(view.eye, 128, &hot);
+  heatRows_.clear();
+  const float perPixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1));  // (world units a pixel at distance 1)
+  auto add = [&](Vec3 at, float size, float strength, float seed) {
+    const float away = Length(at - view.eye);
+    // (far off, or a few pixels across: nothing a player would see bend)
+    if (away > 220 || size < away * perPixel * 6 || strength < 0.02f || heatCount_ >= 384) return;
+    if (!view.BoxVisible(at - Vec3{size * 1.5f, size, size * 1.5f}, at + Vec3{size * 1.5f, size * 3, size * 1.5f})) return;
+    heatRows_.insert(heatRows_.end(), {at.x, at.y, at.z, size, strength, seed, 0, 0});
+    ++heatCount_;
+  };
+  // (the hot air over a fire about as large as its flames, at most 3 units: a burning wreck's glow particles are larger
+  // than its flames, and a patch as large as they are bent most of a close camera's picture)
+  for (const Hot& h : hot) add(h.position, std::clamp(h.size, 0.3f, 3.0f), h.moving ? 0.5f : 1.0f, static_cast<float>(h.id % 97));
+  for (const Puff& p : puffs_) {
+    const float age = static_cast<float>(now_ - p.born) / kPuffSeconds;
+    if (age < 0 || age >= 1) continue;
+    // (a fresh explosion's hot air: it swells and fades over a second and a half)
+    add(p.position, std::clamp(p.radius * 0.3f, 0.4f, 3.0f) * (1 + 0.6f * age), 1.3f * (1 - age) * (1 - age), static_cast<float>(p.born * 13.0));
+  }
+  if (!heatCount_) return false;
+  device_->UpdateBuffer(heatBuffer_, heatRows_.data(), static_cast<uint32_t>(heatRows_.size() * sizeof(float)));
+  return true;
+}
+
+void Particles::DrawHeat(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
+  if (!heatCount_ || !behind) return;
+  device_->SetPipeline(heatPipeline_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  const float constants[4] = {heatBend, zNear, heatRise, 0};
+  device_->SetConstants(1, constants, sizeof constants);
+  device_->SetShaderBuffer(heatBuffer_);
+  device_->SetTexture(2, behind);
+  device_->SetTexture(3, sceneDepth);
+  device_->Draw(6, 0, static_cast<uint32_t>(heatCount_));
+}
+
+void Particles::DrawBending(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
+  if (bending_ && behind) DrawSets(view, 1, behind, sceneDepth, zNear);
+}
+
+// The sets of the last Draw: those that bend what is behind them (`pass` 1), or all the others (0), or (2) those
+// that cast the smoke's shadow, into its map.
+void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
+  const bool bending = pass == 1, shadow = pass == 2;
+  const bool litNow = pass == 0 && litSmoke && LitReady();
   const float now = static_cast<float>(now_);
   const std::vector<std::pair<size_t, size_t>>& spans = spans_;
   // the camera's sideways and upward directions, from the rows of the view-projection matrix
@@ -706,32 +1164,43 @@ void Particles::DrawSets(const View& view, bool bending, gfx::Texture behind, gf
   for (size_t i = 0; i < order_.size(); ++i) {
     if (!spans[i].second) continue;
     const EmitterBlueprint& bp = *order_[i]->blueprint;
-    if ((bp.blendMode == 5) != bending) continue;
+    if (shadow ? !Smoky(bp, true) : (bp.blendMode == 5) != bending) continue;
     // 0 alpha, 1 darkening, 2 adding, 3 premultiplied ("modulate 2x inverse" is drawn as adding);
     // 4: bending what is behind it, laid over by its alpha
     const int kind = bending ? 4 : bp.blendMode == 1 ? 1 : (bp.blendMode == 2 || bp.blendMode == 3) ? 2 : bp.blendMode == 4 ? 3 : 0;
-    if (kind != bound) {
-      device_->SetPipeline(pipelines_[kind == 4 ? 0 : kind]);
+    // (lit smoke: covering sets drawn through the lit pipelines, numbered after the others)
+    // (and six-way maps' sets always, in either look: their colours are light maps, which only the lit shader reads)
+    const bool sixWay = pass == 0 && bp.sixWay && (kind == 0 || kind == 3) && LitReady();
+    const bool litSet = sixWay || (litNow && (kind == 0 || kind == 3) && Smoky(bp, false));
+    const int pipeline = shadow ? 6 : litSet ? 4 + (kind == 3 ? 1 : 0) : kind == 4 ? 0 : kind;
+    if (pipeline != bound) {
+      device_->SetPipeline(shadow ? shadowPipeline_ : litSet ? litPipelines_[kind == 3 ? 1 : 0] : pipelines_[kind == 4 ? 0 : kind]);
       if (bending) device_->SetTexture(2, behind);
-      device_->SetTexture(3, sceneDepth);
+      if (!shadow) device_->SetTexture(3, sceneDepth);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetShaderBuffer(buffer_);
-      bound = kind;
+      bound = pipeline;
     }
     // which of the original's vertex paths: Align, else AlignToBone (Flat with Flat), else Flat, else plain
     const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
-    const float constants[28] = {right.x, right.y, right.z, now,
+    const float constants[36] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
                                  static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
                                  1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
                                  soften, 0, 0, 0,
                                  bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,
                                  static_cast<float>(bp.frameCount * bp.stripCount), bp.frameBlend ? 1.0f : 0.0f,
-                                 bp.normalPath.empty() ? 0.0f : 1.0f, bp.refractionScale, bp.collideGround ? 1.0f : 0.0f, 0};
-    device_->SetConstants(1, constants, sizeof constants);
+                                 bp.normalPath.empty() ? 0.0f : 1.0f, bp.refractionScale, bp.collideGround ? 1.0f : 0.0f, 0,
+                                 // (lit smoke: lit as a volume; the smoke's shadow: how much it casts)
+                                 litSet && litNow ? 1.0f : 0.0f, smokeDensity, smokeSmallLights, shadow ? 1.0f : 0.0f,
+                                 // (six-way frames turned upright in the smoke's shadow too, so that it has their shape)
+                                 sixWay || (shadow && bp.sixWay) ? 1.0f : 0.0f, bp.sixWayEmission, 0, 0};
+    // (the unlit pipelines read the first 28)
+    device_->SetConstants(1, constants, litSet || shadow ? sizeof constants : 28 * sizeof(float));
     device_->SetTexture(0, bp.texture);
     device_->SetTexture(1, bp.ramp);
     device_->SetTexture(4, bp.normals);
+    if (sixWay) device_->SetTexture(5, bp.sixWay);
     device_->Draw(6, 0, static_cast<uint32_t>(spans[i].second));
   }
 }

@@ -134,7 +134,7 @@ RWTexture3D<float4> airTarget : register(u0);
   float thick = Thickness(p, dust);
   float3 scattered = 0;
   [branch] if (thick > 0) {
-    float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * AirPhase(dot(sunDirection, ray), airLight.x) * SunInAir(p) * CloudShadow(p);
+    float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * AirPhase(dot(sunDirection, ray), airLight.x) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
     // (the lamps' light strengthened on the clear air's dust alone: in mist and fog a beam shows by itself)
     float3 points;
     float3 beams = LampsInAir(p, ray, points);

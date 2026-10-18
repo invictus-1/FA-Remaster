@@ -1,8 +1,8 @@
 // Direct3D 12 backend of gfx.h.
 //
 // How it is put together:
-//  - One root signature for every pipeline: four root constant-buffer views (b0..b3), one table of 32
-//    textures (t0..t39) and the fixed samplers.
+//  - One root signature for every pipeline: four root constant-buffer views (b0..b3), one table of 44
+//    textures (t0..t43) and the fixed samplers.
 //  - Per back buffer ("frame slot"): a command allocator, a ring of upload pages for this frame's
 //    constants and dynamic buffers, a share of the shader-visible descriptor heap, and the list of
 //    resources destroyed while it was recorded. All of it is reused when the slot comes round again,
@@ -75,7 +75,7 @@ class Com {
 };
 
 constexpr int kFrames = 3;
-constexpr int kTexSlots = 40;
+constexpr int kTexSlots = 44;
 constexpr int kCbSlots = 4;
 constexpr uint32_t kMaxTextures = 16384;       // CPU-side descriptors, one per texture (slot 0: the null texture)
 constexpr uint32_t kRingDescriptors = kFrames * kTexSlots * 4096;  // shader-visible, split between the frame slots

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 
+#include "blasts.h"
 #include "effect_files.h"
 
 namespace render {
@@ -302,6 +303,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     const std::vector<float>& n = event.numbers;
     // the modern look gets a light; the original look the glow on the ground the original draws
     if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
+    if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity)) blasts_->FromFlash(e.position, n[0], at, event.entity);  // (a blast, blasts.h)
     if (n.size() >= 2 && !event.blueprint.empty())
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;
@@ -316,6 +318,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     auto keep = [&]() {
       if (n[4] <= 0) decalOf_[event.id] = decals_->LastAdded();
     };
+    if (blasts_ && n.size() >= 5 && Decals::IsScar(event.blueprint)) blasts_->FromScar(e.position, n[1], n[2], at);  // (a blast, blasts.h)
     if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
     // the campaign's objective areas ("Water Albedo": unlit, and over water on its surface)
     if (n.size() >= 5 && kind == "water albedo" && decals_->AddWater(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();

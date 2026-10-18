@@ -31,8 +31,16 @@ class GroundCover {
   // world units of its largest value; `cover`: Terrain::GroundColours; `normals`: Terrain::NormalMap; the map's
   // size; `waterLevel`: none at or under it (a map without water: very low). `densityA`, `densityB`: where the
   // plants grow (Terrain::CoverDensity; none: the blades by how grassy the ground is, no plants).
+  // `blasts`: the blasts' waves over the square (blasts.h, Blasts::Field, made for Area): the blades and the plants
+  // pressed flat away from a blast as its wave passes; none: as without them.
   void Draw(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover, gfx::Texture normals,
-            float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA = {}, gfx::Texture densityB = {});
+            float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA = {}, gfx::Texture densityB = {},
+            gfx::Texture blasts = {});
+  // Prepare's square (its first cell's x, z; a cell's size; cells a side), for what is laid over it (the blasts' waves).
+  const float* Area() const { return area_; }
+  // The shaders Draw takes with `blasts` (the same as without, with the waves in them), made the first time the world
+  // wants them (after Init); false: they cannot be made (then Draw's `blasts` is left unused).
+  bool PrepareBlasts();
 
   // The plants on cards beside the blades (the visuals track's atlas for the map, Terrain::Cover: its cells, each
   // a plant drawn side on, its foot at the cell's bottom middle, its size in metres, how it sways, how many make a
@@ -75,6 +83,11 @@ class GroundCover {
   } plants_;
   gfx::Texture atlas_, atlasNormals_;
   gfx::Pipeline plantPipeline_;
+  // (the grass and the plants with the blasts' waves: Draw's `blasts`, PrepareBlasts's; -1 they cannot be made)
+  gfx::Pipeline blastPipeline_, blastPlantPipeline_;
+  gfx::PipelineDesc blastDesc_;
+  std::string blastSource_, blastPlantSource_;
+  int blastsMade_ = 0;
   gfx::Device* device_;
   gfx::Pipeline pipeline_, trample_;
   gfx::Texture trampled_;  // (how flat the grass is pressed over its square: 1 flat)

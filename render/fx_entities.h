@@ -122,7 +122,8 @@ class FxEntities {
   // Drives a unit round `loop` (points on the ground, closed) `laps` times, setting off at `start`
   // (seconds, on Advance's clock) and stopping at the loop's start.
   void Drive(uint32_t unit, const std::vector<Vec3>& loop, double start, int laps);
-  // Kills it as the game does: its script's OnKilled(nil, "Normal", overkill).
+  // Kills it as the game does: its script's OnKilled(nil, "Normal", overkill). From then on its unit in the frame is
+  // dead (FrameUnit::dead), as a game's is while its death plays.
   void Kill(uint32_t unit, float overkill);
 
   // Ends all that plays: the entities go, their threads stop. What they left (decals, light) runs out.

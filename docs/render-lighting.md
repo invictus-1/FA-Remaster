@@ -527,9 +527,29 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
 1. **Shadows from every small light** (ray-traced, light sampling in the spirit of ReSTIR DI: explosions, muzzle
    flashes and lamps shadowed by units, trees and hills; ray tracing only, never on the Mac). In work.
 2. **Smoke and fire lit properly** (the sun's and the clouds' shadow on smoke, fires and flashes lighting it from
-   within, thickness, smoke's own shadow on the ground, heat shimmer). In work.
+   within, thickness, smoke's own shadow on the ground, heat shimmer). First version done 2026-10-18, three options
+   (`World::litSmoke`, `smokeShadows`, `heatShimmer`; viewer `--smoke` for all three): smoke and dust lit as volumes by
+   the sun through the shadow maps, the clouds' and their own shadow, the sky and the small lights; lasting fires
+   flickering small lights (gathered, a third by day); a 512 x 512 moment-based smoke shadow map round the camera
+   darkening the ground, units, water, grass and the light in the air; heat bending what is behind fires, exhausts
+   and fresh explosions (at most 2 px at 1080 lines). Six-way flipbooks read when the visuals session delivers them
+   (the packing she is asked for is in docs/render-smoke.md, which has the whole of it). About 0.15 ms at 1440p in a
+   close fight. Off: pictures identical (regression 0 px on both backends).
 3. **Blast waves and debris** (grass flattened in a running ring, trees bending away, dust; chunks that fly, bounce
-   and settle as rubble). In work.
+   and settle as rubble). First version done 2026-10-18, three options (`World::blastWaves`, `blastDust`,
+   `blastDebris`; viewer `--blasts` for all three). The blast list (`render/blasts.h/.cpp`) hears of every explosion
+   from the effects (a death's flash, a scorch or crater: one blast when they come together) and from the engine's
+   hits (an area's damage: radius and amount, request 36), and keeps the last half minute's. Waves: a ring runs out
+   from each blast (10-45 units a second by its size) pressing grass and plants flat (an RG16F field over the grass's
+   square, a compute pass) and bending trees away (the sway shader's BLASTS variant, at most 32 blasts from b1), then
+   they spring back past upright; the plain shaders are untouched when no wave is under way. Dust: a low ring of soft
+   puffs for blasts of size 0.8 and up, coloured from the ground. Debris (`render/debris.h/.cpp`): a dying unit
+   throws chunks in its own textures when its death explosion goes off (not before), they tumble, bounce on the
+   heights and lie as rubble 120 s (up to 1500 with battle scars), the oldest sinking first; chunks falling in the
+   water splash. New blasts over the water make ripples (a ship's death; shell-sized ones only where the engine's
+   impacts are not there to make them). `Debris::fragments` takes the visuals session's real fragments of a unit
+   when she delivers them. Costs at 1440p: in a live fight +0.004 ms for units and scenery, the field +0.006, dust
+   0.02-0.04; 32 blasts at once among trees +0.08-0.09 ms. Off: pictures identical (regression 0 px on both backends).
 4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). First version
    done 2026-10-18 (`World::waterRipples`, viewer `--water-ripples`): item 8 of "The next pieces" above. Cost about
    0.04-0.05 ms at 1440p with a battleship and four splashes a second; off, pictures identical (regression 0 px on
@@ -615,6 +635,10 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
+| `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |
+| `smokeShadows` | smoke's own shadow on the ground, units, water and in the air | about 0.01-0.05 ms | |
+| `heatShimmer` | the air bends over fires, exhausts and fresh explosions | about 0.04-0.1 ms in a fight | |
+| `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
