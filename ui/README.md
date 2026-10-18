@@ -145,9 +145,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`remaster_weather_effects`: lit rain and snow, rain's splashes). Where the graphics card cannot ray
   trace (the renderer says so after its first picture, the menu's or a game's:
   `moho64ui_RayTracingSupported()`), Ray Tracing offers one state, greyed out, when the dialog opens.
-  A fifth, Ground Detail (`remaster_ground_detail`, the renderer's request 33, off by default): grass near the
-  camera, pressed flat round units and buildings, and (since render 23e9550) the battle's scorches and craters
-  kept on the ground, weathering, up to 2000.
+  A fifth, Ground Detail (`remaster_ground_detail`, the renderer's request 33, off by default): grass (and on maps
+  with a cover atlas, SETONS_R today, small plants) near the camera, pressed flat round units and buildings;
+  sunlight through leaves and grass (render 171856e); and (render 23e9550) the battle's scorches and craters kept
+  on the ground, weathering, up to 2000.
   A sixth, Frame Generation (`remaster_frame_generation`, the renderer's request 34, off by default): AMD's FSR 3
   frame generation, a picture made between each two drawn ones; like Temporal Upscaling it needs one sample a
   pixel, so with the Anti-Aliasing on it does nothing (its tooltip says so).
@@ -508,7 +509,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   125; a full turn for a view's width) and it swings back to north up when Space is let go;
   Insert and Delete turn it and it stays turned until a reset. Which way a move of the mouse
   turns the world is not checked against the original. The interface hands the picture what it adds to
-  the world: the selected units (a ring under each), the lines of their orders (while Shift is held, as in the original, in the colours and with the marks of the game's own table `commandgraphparams.lua`, and a blue outline round each queued building's site), the outline of the ground a building being placed takes (green or red), and the ghost of
+  the world: the selected units (a ring under each), the order lines while Shift is held (the original's command graph, read from the exe: the orders of every unit whose orders the interface holds, the player's and his allies', not only the selection's; one node per order and a start node at the middle of the units an order begins with, legs shared and as wide as `CalculateWaypointLineWidth` of their units, curved through each waypoint, a patrol's leg back to its first point, highlighted for the unit under the mouse, selected or normal, in the textures, colours and marks of the game's own `commandgraphparams.lua` and with `commandwaypoint.lua`'s console variables; `WorldPicture::SetOrderLines` draws them; the test function `moho64ui_OrderGraph()` reports them, ui/tests/orderlines.lua), a blue outline round each queued building's site, the outline of the ground a building being placed takes (green or red), and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
   where the building cannot stand. The order goes out when the left button is let go: let go

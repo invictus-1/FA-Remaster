@@ -163,7 +163,7 @@ local looks = {
         -- 23e9550 also the battle's scorches and craters kept on the ground, weathering (up to 2000)
         title = "Ground Detail",
         key = 'remaster_ground_detail',
-        tip = "Grass near the camera, and the scorches and craters of battle kept on the ground.",
+        tip = "Grass and small plants near the camera, sunlight through leaves and grass, and the scorches and craters of battle kept on the ground.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_ground_detail"),

@@ -13,6 +13,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "core/log.h"
@@ -828,6 +829,14 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_KEYBOARDROTATEACCELERATEMULTIPLIER") set("ui_KeyboardRotateAccelerateMultiplier", 'f', keys.turnFast);
   else if (key == "UI_SCREENEDGESCROLLVIEW") set("ui_ScreenEdgeScrollView", 'b', keys.edgePans);
   else if (key == "UI_ARROWKEYSSCROLLVIEW") set("ui_ArrowKeysScrollView", 'b', keys.arrowsPan);
+  // (the command graph's: CommandGraphVars)
+  else if (key == "UI_CURVESEGMENTS") set("ui_CurveSegments", 'i', GraphVars().curveSegments);
+  else if (key == "UI_CURVESMOOTHNESS") set("ui_CurveSmoothness", 'f', GraphVars().curveSmoothness);
+  else if (key == "UI_PATHSMOOTHNESS") set("ui_PathSmoothness", 'f', GraphVars().pathSmoothness);
+  else if (key == "UI_COMMANDGRAPHMAXNODEUNITS") set("ui_CommandGraphMaxNodeUnits", 'i', GraphVars().maxNodeUnits);
+  else if (key == "UI_MINWAYPOINTSIZE") set("ui_MinWaypointSize", 'f', GraphVars().minWaypointSize);
+  else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
+  else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
   else if (RangeConsoleValue(L, key, &range))
     set(key == "RANGE_RENDERSELECTED" ? "range_RenderSelected" : key == "RANGE_RENDERHIGHLIGHTED" ? "range_RenderHighlighted" : "range_RenderBuild", 'b', range);
   return v;
@@ -937,6 +946,23 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) names.setsColor = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, value.size() == 8 ? 16 : 0));
       return;
     }
+  }
+  {  // the command graph's (CommandGraphVars; a value left out leaves it)
+    const std::string key = Upper(name);
+    const size_t at = rest.find_first_not_of(" \t");
+    const bool given = at != std::string::npos;
+    const double value = given ? std::atof(rest.c_str() + at) : 0.0;
+    CommandGraphVars& graph = GraphVars();
+    auto set = [&](auto& field) {
+      if (given) field = static_cast<std::remove_reference_t<decltype(field)>>(value);
+    };
+    if (key == "UI_CURVESEGMENTS") return set(graph.curveSegments);
+    if (key == "UI_CURVESMOOTHNESS") return set(graph.curveSmoothness);
+    if (key == "UI_PATHSMOOTHNESS") return set(graph.pathSmoothness);
+    if (key == "UI_COMMANDGRAPHMAXNODEUNITS") return set(graph.maxNodeUnits);
+    if (key == "UI_MINWAYPOINTSIZE") return set(graph.minWaypointSize);
+    if (key == "UI_MAXWAYPOINTSIZE") return set(graph.maxWaypointSize);
+    if (key == "UI_WAYPOINTLINESCALE") return set(graph.waypointLineScale);
   }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");

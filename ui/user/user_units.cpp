@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "core/log.h"
@@ -50,6 +51,60 @@ class UserUnit : public ScriptObject {
   mutable uint64_t stateSync = ~0ull;
 };
 
+// The original's command graph (FA exe UICommandGraph.cpp; the object GetCommandGraph 0x895eb0 makes
+// with 0x824810 while Shift is held, 0xddc bytes): the orders of every unit the interface knows as
+// nodes joined by legs, from which the order lines and the waypoints' marks are drawn. Worked out by
+// OrderLinesForWorld (further down), kept here between frames.
+struct OrderGraph {
+  // How one kind of order is drawn: the record at graph+4 + type*0x54 (filled by 0x824d50 from the
+  // game's commandgraphparams.lua), by the engine's command number.
+  struct Record {
+    std::string lineTexture;          // +0x00 orderline_texture ("": the leg is never drawn)
+    float uvAspect = 1;               // +0x08 orderline_uv_aspect_ratio
+    float animRate = 0.1f;            // +0x0c orderline_anim_rate (0.1 before the table's default)
+    uint32_t lineColor[3] = {0, 0, 0};    // +0x10 normal, +0x14 selected, +0x18 highlight
+    float glow[3] = {0, 0, 0};            // +0x1c.. (the bloom pass's; not drawn here)
+    uint32_t markColor[3] = {0, 0, 0};    // +0x28.. waypoint_color, _selected_, _highlight_
+    float markScale[3] = {1, 1, 1};       // +0x34.. waypoint_scale, ...
+    float capOffset = 0;                  // +0x40 arrowhead_cap_offset (arrowheads: never drawn)
+    std::string markTexture;              // +0x44 waypoint_texture ("": no mark)
+    std::string arrowTexture;             // +0x4c arrowhead_texture
+  };
+  // A node: one per command (its id; shared by the units that carry it), and one start node per first
+  // command at the middle of the units whose queue begins with it (command none). 0x826140.
+  struct Node {
+    uint32_t command = 0xffffffffu;
+    int type = 0;
+    float sum[3] = {0, 0, 0};  // +0x0c.. the places added, and how many (+0x18): the place is sum / count
+    float count = 0;
+    float tangent[3] = {0, 0, 0};  // +0x28 (0x8275b0)
+    float size = 0;                // +0x40
+    std::vector<int> in, out;      // its legs (+0x48, +0x60)
+  };
+  // A leg between two nodes (0x826960): how many units go along it (+0x00), and the queue walked last
+  // along it (its byte +0x18: whether that queue's unit is the one under the mouse or shares an order
+  // with it, so set by each unit that walks it, the last one's standing).
+  struct Leg {
+    int from = 0, to = 0;
+    int units = 0;
+    int lastQueue = -1;
+  };
+  // A queue walked (a unit's own, or a factory's second one), and the units that carry any of its
+  // commands (for the leg's byte +0x18 above: the unit under the mouse among them).
+  struct Queue {
+    uint32_t unit = 0xffffffffu;
+    std::vector<uint32_t> partners;
+  };
+  std::vector<Record> records;  // 0x28 kinds
+  bool made = false;            // it exists (Shift held); made again on the next press
+  uint64_t builtSync = ~0ull;   // the sync it was worked out after
+  std::vector<Node> nodes;
+  std::vector<Leg> legs;
+  std::vector<Queue> queues;
+  std::map<uint32_t, std::vector<uint32_t>> carriers;  // a command's units (the original's per command)
+  std::map<int, float> widths;  // CalculateWaypointLineWidth by units, as asked (graph+0xda8)
+};
+
 struct UnitStore : UserState::Extra {
   std::map<uint32_t, std::unique_ptr<UserUnit>> units;
   std::vector<UserUnit*> selection;
@@ -67,9 +122,8 @@ struct UnitStore : UserState::Extra {
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
   std::string queueKey;                   // that queue as it was last handed to the script
-  // What the game's table says of how each kind of order is drawn (commandgraphparams.lua), as
-  // looked up so far: key "UNITCOMMAND_Move/orderline_selected_color" -> its text ("" for none).
-  std::map<std::string, std::string> graphParams;
+  // The order lines while Shift is held (the original's command graph; see OrderLinesForWorld).
+  OrderGraph graph;
   std::map<std::string, bool> canFly;  // Air.CanFly by blueprint (CanFlyOf)
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
@@ -1818,48 +1872,130 @@ const char* CommandName(CommandType type) {
   return nullptr;
 }
 
-// A value of the game's table of how orders are drawn (/lua/ui/game/commandgraphparams.lua,
-// CommandGraphParams): the entry of the order ("UNITCOMMAND_Move"), else of the entry its
-// inherit_from names, and so on; else the entry "default". Empty: the table has none.
-std::string CommandGraphParam(lua_State* L, const std::string& command, const char* key) {
-  UnitStore& store = Store(L);
-  const std::string cacheKey = command + "/" + key;
-  auto cached = store.graphParams.find(cacheKey);
-  if (cached != store.graphParams.end()) return cached->second;
-  std::string value;
-  const int top = lua_gettop(L);
+// The game's tables of how orders are drawn, read each time the command graph is made (0x824810,
+// when Shift is pressed), as the original reads them:
+// - /lua/ui/game/commandgraphparams.lua CommandGraphParams (0x824d50): a record starts as
+//   OrderGraph::Record's zeros, takes the entry `default` (0x825570), and each kind of order
+//   0..0x27 then a copy of that and its entry "UNITCOMMAND_" + the order's name over it, where an
+//   entry's inherit_from (another entry's name) goes under it first, and so on. A key the entry
+//   has replaces the record's; colours as the game's colour texts ("3300ffff").
+// - /lua/ui/game/commandwaypoint.lua CommandWaypointParams (0x825150): each console variable it
+//   names, over the console's (GraphVars). ui_CommandClickScale goes into ui_WaypointLineScale's
+//   value (0x825524 stores to 0xf57cdc, ui_WaypointLineScale's, as 0x8254b8 does: GPG's slip,
+//   kept; both are 1 in the stock file).
+void ApplyGraphEntry(lua_State* L, int table, int entry, OrderGraph::Record* r, int depth) {
+  if (!lua_istable(L, entry) || depth > 16) return;
+  lua_getfield(L, entry, "inherit_from");
+  if (lua_isstring(L, -1)) {
+    lua_gettable(L, table);
+    ApplyGraphEntry(L, table, lua_gettop(L), r, depth + 1);
+  }
+  lua_pop(L, 1);
+  auto text = [&](const char* key, std::string* out) {
+    lua_getfield(L, entry, key);
+    if (lua_isstring(L, -1)) *out = lua_tostring(L, -1);
+    lua_pop(L, 1);
+  };
+  auto number = [&](const char* key, float* out) {
+    lua_getfield(L, entry, key);
+    if (lua_isnumber(L, -1)) *out = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  };
+  auto color = [&](const char* key, uint32_t* out) {
+    lua_getfield(L, entry, key);
+    if (lua_isstring(L, -1)) *out = ParseColor(lua_tostring(L, -1));
+    lua_pop(L, 1);
+  };
+  text("orderline_texture", &r->lineTexture);
+  number("orderline_uv_aspect_ratio", &r->uvAspect);
+  number("orderline_anim_rate", &r->animRate);
+  color("orderline_color", &r->lineColor[0]);
+  color("orderline_selected_color", &r->lineColor[1]);
+  color("orderline_highlight_color", &r->lineColor[2]);
+  number("orderline_glow", &r->glow[0]);
+  number("orderline_selected_glow", &r->glow[1]);
+  number("orderline_highlight_glow", &r->glow[2]);
+  text("waypoint_texture", &r->markTexture);
+  color("waypoint_color", &r->markColor[0]);
+  color("waypoint_selected_color", &r->markColor[1]);
+  color("waypoint_highlight_color", &r->markColor[2]);
+  number("waypoint_scale", &r->markScale[0]);
+  number("waypoint_selected_scale", &r->markScale[1]);
+  number("waypoint_highlight_scale", &r->markScale[2]);
+  number("arrowhead_cap_offset", &r->capOffset);
+  text("arrowhead_texture", &r->arrowTexture);
+}
+// The module's table (import(path)[name]) pushed, or nil.
+void PushModuleTable(lua_State* L, const char* path, const char* name) {
   lua_getglobal(L, "import");
-  lua_pushstring(L, "/lua/ui/game/commandgraphparams.lua");
-  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
-    lua_pushstring(L, "CommandGraphParams");
-    lua_gettable(L, -2);
-    if (lua_istable(L, -1)) {
-      const int table = lua_gettop(L);
-      std::string entry = command;
-      for (int hops = 0; hops < 8 && !entry.empty(); ++hops) {
-        lua_pushstring(L, entry.c_str());
-        lua_gettable(L, table);
-        std::string next = entry == "default" ? "" : "default";
-        bool found = false;
-        if (lua_istable(L, -1)) {
-          lua_pushstring(L, key);
-          lua_gettable(L, -2);
-          if (lua_isstring(L, -1) || lua_isnumber(L, -1)) value = lua_tostring(L, -1), found = true;
-          lua_pop(L, 1);
-          lua_pushstring(L, "inherit_from");
-          lua_gettable(L, -2);
-          if (lua_isstring(L, -1)) next = lua_tostring(L, -1);
-          lua_pop(L, 1);
-        }
-        lua_pop(L, 1);
-        if (found) break;
-        entry = next;
-      }
+  lua_pushstring(L, path);
+  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    return;
+  }
+  lua_getfield(L, -1, name);
+  lua_remove(L, -2);
+}
+void LoadGraphParams(lua_State* L, OrderGraph* g) {
+  const int top = lua_gettop(L);
+  OrderGraph::Record base;
+  g->records.assign(0x28, base);
+  PushModuleTable(L, "/lua/ui/game/commandgraphparams.lua", "CommandGraphParams");
+  if (lua_istable(L, -1)) {
+    const int table = lua_gettop(L);
+    lua_getfield(L, table, "default");
+    ApplyGraphEntry(L, table, lua_gettop(L), &base, 0);
+    lua_pop(L, 1);
+    for (int type = 0; type < 0x28; ++type) {
+      OrderGraph::Record& r = g->records[static_cast<size_t>(type)];
+      r = base;
+      const char* name = CommandName(static_cast<CommandType>(type));
+      lua_getfield(L, table, (std::string("UNITCOMMAND_") + (name ? name : "None")).c_str());
+      ApplyGraphEntry(L, table, lua_gettop(L), &r, 0);
+      lua_pop(L, 1);
     }
   }
   lua_settop(L, top);
-  store.graphParams[cacheKey] = value;
-  return value;
+  PushModuleTable(L, "/lua/ui/game/commandwaypoint.lua", "CommandWaypointParams");
+  if (lua_istable(L, -1)) {
+    CommandGraphVars& v = GraphVars();
+    auto read = [&](const char* key, auto* out) {
+      lua_getfield(L, -1, key);
+      if (lua_isnumber(L, -1)) *out = static_cast<std::remove_pointer_t<decltype(out)>>(lua_tonumber(L, -1));  // (ints: _ftol 0xa89cc0)
+      lua_pop(L, 1);
+    };
+    read("ui_CurveSegments", &v.curveSegments);
+    read("ui_CurveSmoothness", &v.curveSmoothness);
+    read("ui_PathSmoothness", &v.pathSmoothness);
+    read("ui_CommandGraphMaxNodeUnits", &v.maxNodeUnits);
+    read("ui_MinWaypointSize", &v.minWaypointSize);
+    read("ui_MaxWaypointSize", &v.maxWaypointSize);
+    read("ui_WaypointLineScale", &v.waypointLineScale);
+    read("ui_CommandClickScale", &v.waypointLineScale);
+  }
+  lua_settop(L, top);
+}
+// CalculateWaypointLineWidth(units) of the game's commandwaypoint.lua (min(sqrt(units), 10) in the
+// stock file), asked once for each count while the graph lives (0x826ad6, its cache graph+0xda8).
+float WaypointLineWidth(lua_State* L, OrderGraph* g, int units) {
+  auto known = g->widths.find(units);
+  if (known != g->widths.end()) return known->second;
+  float width = std::min(std::sqrt(static_cast<float>(units)), 10.0f);  // (if the script does not answer)
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandwaypoint.lua");
+  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_getfield(L, -1, "CalculateWaypointLineWidth");
+    if (lua_isfunction(L, -1)) {
+      lua_pushnumber(L, units);
+      if (lua_pcall(L, 1, 1, 0) == 0 && lua_isnumber(L, -1)) width = static_cast<float>(lua_tonumber(L, -1));
+      else if (lua_isstring(L, -1)) Logf(LogLevel::Warning, "CalculateWaypointLineWidth: %s", lua_tostring(L, -1));
+    }
+  }
+  lua_settop(L, top);
+  g->widths[units] = width;
+  return width;
 }
 
 bool CommandByName(std::string name, CommandType* type, const char** plain) {
@@ -3097,8 +3233,8 @@ bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float po
   return false;
 }
 
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts,
-                       bool queueShown, std::vector<WorldGhost>* queued, std::vector<WorldWaypoint>* waypoints) {
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldGhost>* ghosts, bool queueShown,
+                       std::vector<WorldGhost>* queued) {
   Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
   if (!sim || !user->units) return;
@@ -3108,45 +3244,21 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
     auto it = store.units.find(id);
     if (it != store.units.end() && !it->second->gone && !it->second->view.dead) ids->push_back(id);
   }
+  // (The lines of the orders and their marks: OrderLinesForWorld, the original's command graph.)
   for (UserUnit* u : store.selection) {
     if (u->gone || u->view.dead) continue;
     ids->push_back(u->view.id);
-    if (!queueShown || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
+    if (!queued || !queueShown || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
     UnitStateView s;
     if (!UnitStateOf(*sim, u->view.id, &s)) continue;
-    float from[3] = {u->view.position[0], u->view.position[1], u->view.position[2]};
     for (const CommandView& c : s.queue) {
       if (!c.hasPosition) continue;
-      if (queued && static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && queued->size() < 400) {
+      if (static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && queued->size() < 400) {
         WorldGhost site;
         site.blueprint = c.blueprint;
         for (int i = 0; i < 3; ++i) site.position[i] = c.position[i];
         queued->push_back(site);
       }
-      // The line's colour and the mark at the order's place are the game's own: its table of
-      // how each kind of order is drawn (the colour of a selected unit's orders, which these are).
-      uint32_t color = 0xffc0c0c0u;
-      if (const char* kind = CommandName(static_cast<CommandType>(c.type))) {
-        const std::string command = std::string("UNITCOMMAND_") + kind;
-        const std::string lineColor = CommandGraphParam(L, command, "orderline_selected_color");
-        if (!lineColor.empty()) color = ParseColor(lineColor);
-        const std::string texture = CommandGraphParam(L, command, "waypoint_texture");
-        if (waypoints && !texture.empty() && waypoints->size() < 600) {
-          WorldWaypoint mark;
-          for (int i = 0; i < 3; ++i) mark.position[i] = c.position[i];
-          mark.texture = texture;
-          const std::string markColor = CommandGraphParam(L, command, "waypoint_selected_color");
-          if (!markColor.empty()) mark.color = ParseColor(markColor);
-          const std::string scale = CommandGraphParam(L, command, "waypoint_selected_scale");
-          if (!scale.empty()) mark.scale = static_cast<float>(std::atof(scale.c_str()));
-          waypoints->push_back(mark);
-        }
-      }
-      WorldLine line;
-      for (int i = 0; i < 3; ++i) line.a[i] = from[i], line.b[i] = c.position[i], from[i] = c.position[i];
-      line.color = color;
-      line.width = 3;
-      lines->push_back(line);
     }
   }
   // A building ordered and not begun shows where it will stand, whether its builder is selected
@@ -3181,6 +3293,441 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
     }
   }
   ghosts->insert(ghosts->end(), store.ordered.begin(), store.ordered.end());
+}
+
+// --- the order lines while Shift is held: the original's command graph ---
+//
+// Read from the FA exe by a helper of the ui chat (2026-10-17; UICommandGraph.cpp): the graph exists
+// while Shift (key 306) is held (GetCommandGraph(true) 0x895eb0, made by 0x824810, which reads the
+// two tables, LoadGraphParams), and is worked out again when marked (0x828fb0 -> 0x826740, 0x826ba0).
+// It holds the orders of EVERY unit the session knows (its entity table session+0x50, mask 0x100),
+// not only the selection's; no army is tested in the graph's code. For each unit not
+// INSIGNIFICANTUNIT (0x8267ca) its queue is walked (0x826140), and a non-MOBILE FACTORY's second
+// queue too (vtbl+0x20: the factory's rally orders, the queue its products are given):
+// - a unit being upgraded (unit state 0x25, BeingUpgraded) is left out (0x8261a6);
+// - the start node of the queue's first command (one per first command, graph+0xd58) gathers the
+//   units' places: it stands at their middle (a group's order: one leg from the group's centre);
+// - each command not of the kinds never drawn (NeverDrawn) gets its node (one per command, shared by
+//   its units, graph+0xd30, at its target's place), and a leg from the node before (0x826960): legs
+//   between the same two nodes are one, counting its units (n; its width CalculateWaypointLineWidth(n)
+//   of the game's Lua, 0x826ad6);
+// - the first Guard, Patrol, FormPatrol, or Attack / FormAttack on a place on the ground (its target's
+//   type 2, 0x826484), is where the queue loops back to: a leg from the last node to it (0x826501).
+// Each node's tangent is the sum of its legs' directions in and out, each counting min(n,
+// ui_CommandGraphMaxNodeUnits), made unit length; its size sqrt(max(in, out)) of those counts (0x8275b0).
+// When drawn, each leg's state (0x828bec): highlighted when the last queue walked along it is the unit
+// under the mouse's or shares a command with it (the leg's byte +0x18), else the state of the node it
+// leads to (0x8281e0): highlighted when the unit under the mouse carries that node's command (or the
+// waypoint under the mouse is it: waypoints are not picked by the mouse here), selected when any unit
+// carrying it is selected (session+0x4a0), else normal. The leg is drawn as the command it leads to
+// says (its record: texture, colours by state, uvAspect, animRate); a node's mark (0x8282b0) by its
+// own command's record and state: its waypoint texture in the state's colour, at the node's size
+// times the state's scale; without a texture none, but a highlighted node a solid ff30f030 square.
+// Where the original's order is not this (its legs go by texture, 0x829190): the legs are handed
+// highlighted first, then selected, then the rest (the first leg handed keeps a pixel where legs
+// cross, the original's stencil; the renderer's answer to request 30).
+// Left out: the ETA texts at the nodes (display_eta, ui_MaxTextLOD; 0x828610), the glow pass (only
+// the bloom's mask), dragging nodes (OnCommandDragBegin, the node's byte +0x1c), the path preview
+// (ui_DrawPathPreview, never on).
+namespace {
+
+// The kinds of orders the graph never draws (0x82632e: 1 << type against 0x2_d80000ea): Stop, Dive,
+// BuildSiloTactical, BuildSiloNuke, BuildFactory, Upgrade, Script, KillSelf, DestroySelf, Pause. (So an
+// attack-move, a Script order and an AggressiveMove, draws the AggressiveMove's leg alone.)
+bool NeverDrawn(int type) { return type >= 0 && type < 64 && ((0x2d80000eaull >> type) & 1) != 0; }
+
+// Where a queue loops back to (0x82646e, the jump table 0x826530 by type - 10).
+bool StartsLoop(const CommandView& c) {
+  switch (static_cast<CommandType>(c.type)) {
+    case CommandType::Guard:
+    case CommandType::Patrol:
+    case CommandType::FormPatrol:
+      return true;
+    case CommandType::Attack:
+    case CommandType::FormAttack:  // (on a place on the ground: no entity, a place)
+      return c.entity == 0xffffffffu && c.hasPosition;
+    default:
+      return false;
+  }
+}
+
+// The place a command's node stands at (0x81cfd0 -> 0x8bed50): its target entity's place (the
+// entity's +0x84: as of the last beat; the node follows it, 0x828fb0), else the place on the ground
+// it names. An order without a target has the original's "no place" (0x10a99a4); INFERRED drawn
+// nowhere: such an order gets no node here. A target unit the player's army knows nothing of now
+// stands where the order put it.
+bool CommandPlace(lua_State* L, UnitStore& store, const CommandView& c, float out[3]) {
+  if (c.entity != 0xffffffffu) {
+    auto it = store.units.find(c.entity);
+    if (it != store.units.end() && !it->second->gone && !it->second->view.dead && ReconBitsOf(L, it->second.get()) != 0) {
+      for (int i = 0; i < 3; ++i) out[i] = it->second->view.position[i];
+      return true;
+    }
+  }
+  if (!c.hasPosition) return false;
+  for (int i = 0; i < 3; ++i) out[i] = c.position[i];
+  return true;
+}
+
+void NodePlace(const OrderGraph::Node& n, float out[3]) {
+  const float k = n.count != 0 ? 1.0f / n.count : 0.0f;
+  for (int i = 0; i < 3; ++i) out[i] = n.sum[i] * k;
+}
+
+// The graph worked out afresh from the units' queues as of the last beat.
+void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
+  g.nodes.clear();
+  g.legs.clear();
+  g.queues.clear();
+  g.carriers.clear();
+  // Whose orders the interface holds. INFERRED: the player's army's and its allies' (the user side
+  // has a unit's command queue by the beats' sync; for which units it has one is not read; the
+  // original shows no enemy's orders), and every army's for an observer (no focus army).
+  const int focus = sim.focusArmy + 1;
+  std::map<int, bool> known;
+  for (const ArmyView& a : ArmyViews(sim))
+    known[a.index] = focus < 1 || a.index == focus ||
+                     (focus <= static_cast<int>(a.alliance.size()) && a.alliance[static_cast<size_t>(focus - 1)] == 2);
+  // The queues to walk, by the units' entity ids (INFERRED: the original goes through its session's
+  // entity table in its own order), and every command's units.
+  struct Walk {
+    const UserUnit* unit;
+    std::vector<CommandView> queue;
+  };
+  std::vector<Walk> walks;
+  for (const auto& entry : store.units) {
+    const UserUnit* u = entry.second.get();
+    if (u->gone || u->view.dead || !known[u->view.army]) continue;
+    const bool factory = InCategory(L, u, "FACTORY") && !InCategory(L, u, "MOBILE");
+    if (u->view.queueLength == 0 && !factory) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    for (const CommandView& c : s.queue) g.carriers[c.id].push_back(u->view.id);
+    if (factory && s.hasFactoryQueue)
+      for (const CommandView& c : s.factoryQueue) g.carriers[c.id].push_back(u->view.id);
+    if (InCategory(L, u, "INSIGNIFICANTUNIT") || BeingUpgraded(L, &sim, u)) continue;
+    if (!s.queue.empty()) walks.push_back({u, std::move(s.queue)});
+    if (factory && s.hasFactoryQueue && !s.factoryQueue.empty()) walks.push_back({u, std::move(s.factoryQueue)});
+  }
+  std::map<uint32_t, int> nodeOf, startOf;
+  std::map<std::pair<int, int>, int> legOf;
+  auto addLeg = [&](int from, int to, int queue) {
+    auto [it, fresh] = legOf.try_emplace({from, to}, static_cast<int>(g.legs.size()));
+    if (fresh) {
+      OrderGraph::Leg leg;
+      leg.from = from, leg.to = to;
+      g.legs.push_back(leg);
+      g.nodes[static_cast<size_t>(from)].out.push_back(it->second);
+      g.nodes[static_cast<size_t>(to)].in.push_back(it->second);
+    }
+    OrderGraph::Leg& leg = g.legs[static_cast<size_t>(it->second)];
+    ++leg.units;
+    leg.lastQueue = queue;
+  };
+  for (const Walk& w : walks) {
+    const int queue = static_cast<int>(g.queues.size());
+    OrderGraph::Queue q;
+    q.unit = w.unit->view.id;
+    for (const CommandView& c : w.queue)
+      for (uint32_t unit : g.carriers[c.id])
+        if (std::find(q.partners.begin(), q.partners.end(), unit) == q.partners.end()) q.partners.push_back(unit);
+    g.queues.push_back(std::move(q));
+    auto [start, fresh] = startOf.try_emplace(w.queue[0].id, static_cast<int>(g.nodes.size()));
+    if (fresh) g.nodes.emplace_back();
+    OrderGraph::Node& s = g.nodes[static_cast<size_t>(start->second)];
+    for (int i = 0; i < 3; ++i) s.sum[i] += w.unit->view.position[i];
+    s.count += 1;
+    int before = start->second, loop = -1;
+    for (const CommandView& c : w.queue) {
+      if (NeverDrawn(c.type)) continue;
+      auto seen = nodeOf.find(c.id);
+      int node;
+      if (seen == nodeOf.end()) {
+        float at[3];
+        if (!CommandPlace(L, store, c, at)) continue;
+        node = static_cast<int>(g.nodes.size());
+        OrderGraph::Node n;
+        n.command = c.id, n.type = c.type;
+        for (int i = 0; i < 3; ++i) n.sum[i] = at[i];
+        n.count = 1;
+        g.nodes.push_back(std::move(n));
+        nodeOf[c.id] = node;
+      } else {
+        node = seen->second;
+      }
+      if (loop < 0 && StartsLoop(c)) loop = node;
+      addLeg(before, node, queue);
+      before = node;
+    }
+    if (loop >= 0 && loop != before) addLeg(before, loop, queue);
+  }
+  // The nodes' tangents and sizes (0x8275b0).
+  const int most = GraphVars().maxNodeUnits;
+  for (OrderGraph::Node& n : g.nodes) {
+    float at[3], sum[3] = {0, 0, 0};
+    NodePlace(n, at);
+    int in = 0, out = 0;
+    auto add = [&](const float d0[3], int units, int* total) {
+      const int w = std::min(units, most);
+      float d[3] = {d0[0], d0[1], d0[2]};
+      const float length2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+      if (length2 > 0) {
+        const float k = static_cast<float>(w) / std::sqrt(length2);
+        for (float& v : d) v *= k;
+      }
+      for (int i = 0; i < 3; ++i) sum[i] += d[i];
+      *total += w;
+    };
+    for (int li : n.in) {
+      const OrderGraph::Leg& leg = g.legs[static_cast<size_t>(li)];
+      float from[3];
+      NodePlace(g.nodes[static_cast<size_t>(leg.from)], from);
+      const float d[3] = {at[0] - from[0], at[1] - from[1], at[2] - from[2]};
+      add(d, leg.units, &in);
+    }
+    for (int li : n.out) {
+      const OrderGraph::Leg& leg = g.legs[static_cast<size_t>(li)];
+      float to[3];
+      NodePlace(g.nodes[static_cast<size_t>(leg.to)], to);
+      const float d[3] = {to[0] - at[0], to[1] - at[1], to[2] - at[2]};
+      add(d, leg.units, &out);
+    }
+    const float length = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+    for (int i = 0; i < 3; ++i) n.tangent[i] = length > 1e-6f ? sum[i] / length : 0.0f;
+    n.size = std::sqrt(static_cast<float>(std::max(in, out)));
+  }
+}
+
+// What the graph gives to draw now, with what the test function reports beside it.
+struct OrderGraphOut {
+  struct LegOut {
+    WorldOrderLeg leg;
+    int units = 0, state = 0, from = -1, to = -1;  // state: 0 normal, 1 highlighted, 2 selected (0x8281e0's)
+  };
+  struct MarkOut {
+    WorldOrderMark mark;
+    int state = 0, node = -1;
+  };
+  std::vector<std::string> textures;
+  std::vector<LegOut> legs;
+  std::vector<MarkOut> marks;
+  WorldOrderSettings settings;
+};
+
+// A colour times a colour, as the picture multiplies a texture by its vertex colour.
+uint32_t ColorTimes(uint32_t a, uint32_t b) {
+  uint32_t out = 0;
+  for (int shift = 0; shift < 32; shift += 8) out |= (((a >> shift & 0xffu) * (b >> shift & 0xffu) + 127u) / 255u) << shift;
+  return out;
+}
+
+void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOut* out) {
+  Sim* sim = TheSim(L);
+  UserState* user = UserState::From(L);
+  OrderGraph& g = Store(L).graph;
+  if (!shown || !sim) {
+    g.made = false;  // (made again, its tables read again, at the next press)
+  } else {
+    if (!g.made) {
+      LoadGraphParams(L, &g);
+      g.widths.clear();
+      g.made = true;
+      g.builtSync = ~0ull;
+    }
+    // INFERRED: worked out again after every beat (the original marks its graph to be worked out
+    // again, the byte graph+0; what marks it is not read; its nodes follow their targets each frame).
+    if (g.builtSync != user->syncCount) {
+      BuildOrderGraph(L, *sim, Store(L), g);
+      g.builtSync = user->syncCount;
+    }
+  }
+  const CommandGraphVars& vars = GraphVars();
+  out->settings.lineScale = vars.waypointLineScale;
+  out->settings.curveSmoothness = vars.curveSmoothness;
+  out->settings.curveSegments = vars.curveSegments;
+  out->settings.markMinPixels = vars.minWaypointSize;
+  out->settings.markMaxPixels = vars.maxWaypointSize;
+  if (!g.made) return;
+  UnitStore& store = Store(L);
+  std::vector<uint32_t> selected;
+  for (const UserUnit* u : store.selection) selected.push_back(u->view.id);
+  auto has = [](const std::vector<uint32_t>& list, uint32_t id) { return std::find(list.begin(), list.end(), id) != list.end(); };
+  auto stateOf = [&](const OrderGraph::Node& n) {
+    if (n.command == 0xffffffffu) return 0;
+    const std::vector<uint32_t>& units = g.carriers[n.command];
+    if (rollover != 0xffffffffu && has(units, rollover)) return 1;
+    for (uint32_t u : units)
+      if (has(selected, u)) return 2;
+    return 0;
+  };
+  auto slot = [](int state) { return state == 1 ? 2 : state == 2 ? 1 : 0; };  // (the record's normal, selected, highlight)
+  auto record = [&](int type) -> const OrderGraph::Record& {
+    return g.records[static_cast<size_t>(type >= 0 && type < static_cast<int>(g.records.size()) ? type : 0)];
+  };
+  std::map<std::string, int> textureOf;
+  auto texture = [&](const std::string& path) {
+    if (path.empty()) return -1;
+    auto [it, fresh] = textureOf.try_emplace(path, static_cast<int>(out->textures.size()));
+    if (fresh) out->textures.push_back(path);
+    return it->second;
+  };
+  for (const OrderGraph::Leg& leg : g.legs) {
+    const OrderGraph::Node& a = g.nodes[static_cast<size_t>(leg.from)];
+    const OrderGraph::Node& b = g.nodes[static_cast<size_t>(leg.to)];
+    const OrderGraph::Record& r = record(b.type);
+    if (r.lineTexture.empty()) continue;  // (0x826a35: in no texture's list, so never drawn)
+    const bool hovered = rollover != 0xffffffffu && leg.lastQueue >= 0 &&
+                         has(g.queues[static_cast<size_t>(leg.lastQueue)].partners, rollover);
+    OrderGraphOut::LegOut o;
+    o.units = leg.units, o.from = leg.from, o.to = leg.to;
+    o.state = hovered ? 1 : stateOf(b);
+    NodePlace(a, o.leg.a);
+    NodePlace(b, o.leg.b);
+    // The curve's directions: each node's tangent, or where it has none the leg's own (0x828a7c).
+    float chord[3] = {o.leg.b[0] - o.leg.a[0], o.leg.b[1] - o.leg.a[1], o.leg.b[2] - o.leg.a[2]};
+    const float length = std::sqrt(chord[0] * chord[0] + chord[1] * chord[1] + chord[2] * chord[2]);
+    for (float& v : chord) v = length > 0 ? v / length : 0.0f;
+    const bool aBends = a.tangent[0] != 0 || a.tangent[1] != 0 || a.tangent[2] != 0;
+    const bool bBends = b.tangent[0] != 0 || b.tangent[1] != 0 || b.tangent[2] != 0;
+    for (int i = 0; i < 3; ++i) o.leg.ta[i] = aBends ? a.tangent[i] : chord[i], o.leg.tb[i] = bBends ? b.tangent[i] : chord[i];
+    o.leg.baseWidth = WaypointLineWidth(L, &g, leg.units);
+    o.leg.color = r.lineColor[slot(o.state)];
+    o.leg.texture = texture(r.lineTexture);
+    o.leg.uvAspect = r.uvAspect, o.leg.animRate = r.animRate;
+    out->legs.push_back(o);
+  }
+  auto rank = [](int state) { return state == 1 ? 0 : state == 2 ? 1 : 2; };
+  std::stable_sort(out->legs.begin(), out->legs.end(),
+                   [&](const OrderGraphOut::LegOut& x, const OrderGraphOut::LegOut& y) { return rank(x.state) < rank(y.state); });
+  for (size_t i = 0; i < g.nodes.size(); ++i) {
+    const OrderGraph::Node& n = g.nodes[i];
+    if (n.command == 0xffffffffu) continue;
+    const OrderGraph::Record& r = record(n.type);
+    OrderGraphOut::MarkOut m;
+    m.state = stateOf(n), m.node = static_cast<int>(i);
+    NodePlace(n, m.mark.position);
+    m.mark.color = r.markColor[slot(m.state)];
+    m.mark.size = n.size * r.markScale[slot(m.state)];
+    if (!r.markTexture.empty()) {
+      m.mark.texture = texture(r.markTexture);
+    } else if (m.state == 1) {  // (0x828375: a solid square of ff30f030 for a highlighted node without one)
+      m.mark.texture = -1;
+      m.mark.color = ColorTimes(0xff30f030u, m.mark.color);
+    } else {
+      continue;
+    }
+    out->marks.push_back(m);
+  }
+}
+
+// moho64ui_OrderGraph([unit]) -> {shown, legs = {...}, marks = {...}, textures, settings}: the order lines
+// as the picture is given them now (the host's own function for tests), with `unit` standing for the
+// unit under the mouse (else the one there). Each leg: a, b, ta, tb ({x, y, z}), units, width (its
+// base width), state ("highlight", "selected", "normal"), color ("aarrggbb"), texture (its path, or
+// nil), uvAspect, animRate, from and to (the commands' names; "start" for a start node) and fromId,
+// toId (the commands' ids). Each mark: position, size, state, color, texture, command, id.
+int l_OrderGraphForTests(lua_State* L) {
+  uint32_t rollover = UnitUnderMouse(L);
+  if (const UserUnit* u = ToUnit(L, 1)) rollover = u->view.id;
+  const bool shown = KeyIsDown(L, 306);
+  OrderGraphOut out;
+  WorkOutOrderGraph(L, shown, rollover, &out);
+  const OrderGraph& g = Store(L).graph;
+  auto vector = [&](const float v[3]) {
+    lua_newtable(L);
+    for (int i = 0; i < 3; ++i) {
+      lua_pushnumber(L, v[i]);
+      lua_rawseti(L, -2, i + 1);
+    }
+  };
+  auto field = [&](const char* key) {  // (the value on top into the table under it)
+    lua_pushstring(L, key);
+    lua_insert(L, -2);
+    lua_rawset(L, -3);
+  };
+  auto color = [&](uint32_t c) {
+    char text[16];
+    std::snprintf(text, sizeof text, "%08x", c);
+    lua_pushstring(L, text);
+  };
+  const char* states[3] = {"normal", "highlight", "selected"};
+  auto command = [&](int node) {
+    const OrderGraph::Node& n = g.nodes[static_cast<size_t>(node)];
+    const char* name = n.command == 0xffffffffu ? "start" : CommandName(static_cast<CommandType>(n.type));
+    lua_pushstring(L, name ? name : "?");
+  };
+  auto commandId = [&](int node) {
+    const OrderGraph::Node& n = g.nodes[static_cast<size_t>(node)];
+    if (n.command == 0xffffffffu) lua_pushnil(L);
+    else lua_pushnumber(L, n.command);
+  };
+  lua_newtable(L);
+  lua_pushboolean(L, g.made);
+  field("shown");
+  lua_newtable(L);
+  for (size_t i = 0; i < out.legs.size(); ++i) {
+    const OrderGraphOut::LegOut& o = out.legs[i];
+    lua_newtable(L);
+    vector(o.leg.a), field("a");
+    vector(o.leg.b), field("b");
+    vector(o.leg.ta), field("ta");
+    vector(o.leg.tb), field("tb");
+    lua_pushnumber(L, o.units), field("units");
+    lua_pushnumber(L, o.leg.baseWidth), field("width");
+    lua_pushstring(L, states[o.state]), field("state");
+    color(o.leg.color), field("color");
+    if (o.leg.texture >= 0) lua_pushstring(L, out.textures[static_cast<size_t>(o.leg.texture)].c_str()), field("texture");
+    lua_pushnumber(L, o.leg.uvAspect), field("uvAspect");
+    lua_pushnumber(L, o.leg.animRate), field("animRate");
+    command(o.from), field("from");
+    command(o.to), field("to");
+    commandId(o.from), field("fromId");
+    commandId(o.to), field("toId");
+    lua_rawseti(L, -2, static_cast<int>(i) + 1);
+  }
+  field("legs");
+  lua_newtable(L);
+  for (size_t i = 0; i < out.marks.size(); ++i) {
+    const OrderGraphOut::MarkOut& m = out.marks[i];
+    lua_newtable(L);
+    vector(m.mark.position), field("position");
+    lua_pushnumber(L, m.mark.size), field("size");
+    lua_pushstring(L, states[m.state]), field("state");
+    color(m.mark.color), field("color");
+    if (m.mark.texture >= 0) lua_pushstring(L, out.textures[static_cast<size_t>(m.mark.texture)].c_str()), field("texture");
+    command(m.node), field("command");
+    commandId(m.node), field("id");
+    lua_rawseti(L, -2, static_cast<int>(i) + 1);
+  }
+  field("marks");
+  lua_newtable(L);
+  for (size_t i = 0; i < out.textures.size(); ++i) {
+    lua_pushstring(L, out.textures[i].c_str());
+    lua_rawseti(L, -2, static_cast<int>(i) + 1);
+  }
+  field("textures");
+  lua_newtable(L);
+  lua_pushnumber(L, out.settings.lineScale), field("lineScale");
+  lua_pushnumber(L, out.settings.curveSmoothness), field("curveSmoothness");
+  lua_pushnumber(L, out.settings.curveSegments), field("curveSegments");
+  lua_pushnumber(L, out.settings.markMinPixels), field("minWaypointSize");
+  lua_pushnumber(L, out.settings.markMaxPixels), field("maxWaypointSize");
+  field("settings");
+  return 1;
+}
+}  // namespace
+
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene) {
+  OrderGraphOut out;
+  WorkOutOrderGraph(L, shown, rollover, &out);
+  scene->orderTextures = std::move(out.textures);
+  scene->orderLegs.clear();
+  scene->orderMarks.clear();
+  scene->orderLegs.reserve(out.legs.size());
+  for (const OrderGraphOut::LegOut& o : out.legs) scene->orderLegs.push_back(o.leg);
+  scene->orderMarks.reserve(out.marks.size());
+  for (const OrderGraphOut::MarkOut& m : out.marks) scene->orderMarks.push_back(m.mark);
+  scene->orderSettings = out.settings;
 }
 
 // After a beat: the interface's units follow the simulation's.
@@ -3276,6 +3823,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetUnitById", l_GetUnitById);
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
   lua_register(L, "moho64ui_ReclaimableAt", l_ReclaimableAtForTests);
+  lua_register(L, "moho64ui_OrderGraph", l_OrderGraphForTests);
   SetGlobal(L, "GetArmyAvatars", l_GetArmyAvatars);
   SetGlobal(L, "GetIdleEngineers", l_GetIdleEngineers);
   SetGlobal(L, "GetIdleFactories", l_GetIdleFactories);

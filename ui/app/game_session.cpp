@@ -54,6 +54,12 @@ struct GameSession::Picture : WorldSource {
   bool lookApplied = false;
   std::vector<uint32_t> iconColorsNow;  // the icons' team colours as last given (empty: the armies' own)
   float playableNow[4] = {0, 0, -1, -1};  // the playable part as last given
+  // The order lines and their settings as last given (SetOrderLines, SetOrderLineSettings).
+  std::vector<std::string> orderTexturesNow;
+  std::vector<WorldOrderLeg> orderLegsNow;
+  std::vector<WorldOrderMark> orderMarksNow;
+  WorldOrderSettings orderSettingsNow;
+  bool orderSettingsApplied = false;
   // On the game's window (UseWindow): the world view's Draw only notes its camera and size, and
   // the frame is drawn and shown by PresentToWindow with the interface over it.
   bool direct = false;
@@ -139,6 +145,33 @@ struct GameSession::Picture : WorldSource {
       lines.push_back(o);
     }
     picture.SetShapes(lines, {});
+    // The order lines while Shift is held (the original's command graph), when they change; empty
+    // lists when Shift is let go (renderer request 30). Then the console variables they go by.
+    if (scene.orderTextures != orderTexturesNow || scene.orderLegs != orderLegsNow || scene.orderMarks != orderMarksNow) {
+      orderTexturesNow = scene.orderTextures, orderLegsNow = scene.orderLegs, orderMarksNow = scene.orderMarks;
+      std::vector<render::WorldPicture::OrderLeg> legs;
+      legs.reserve(orderLegsNow.size());
+      for (const WorldOrderLeg& l : orderLegsNow) {
+        render::WorldPicture::OrderLeg o;
+        for (int i = 0; i < 3; ++i) o.a[i] = l.a[i], o.b[i] = l.b[i], o.ta[i] = l.ta[i], o.tb[i] = l.tb[i];
+        o.baseWidth = l.baseWidth, o.color = l.color, o.texture = l.texture, o.uvAspect = l.uvAspect, o.animRate = l.animRate;
+        legs.push_back(o);
+      }
+      std::vector<render::WorldPicture::OrderMark> marks;
+      marks.reserve(orderMarksNow.size());
+      for (const WorldOrderMark& m : orderMarksNow) {
+        render::WorldPicture::OrderMark o;
+        for (int i = 0; i < 3; ++i) o.position[i] = m.position[i];
+        o.texture = m.texture, o.color = m.color, o.size = m.size;
+        marks.push_back(o);
+      }
+      picture.SetOrderLines(orderTexturesNow, legs, marks);
+    }
+    if (!orderSettingsApplied || !(scene.orderSettings == orderSettingsNow)) {
+      orderSettingsNow = scene.orderSettings, orderSettingsApplied = true;
+      const WorldOrderSettings& s = orderSettingsNow;
+      picture.SetOrderLineSettings(s.lineScale, s.curveSmoothness, s.curveSegments, s.markMinPixels, s.markMaxPixels);
+    }
     // The range rings in groups: the renderer draws a group as one outline.
     std::vector<render::WorldPicture::RangeGroup> ranges;
     for (const WorldRangeGroup& g : scene.ranges) {

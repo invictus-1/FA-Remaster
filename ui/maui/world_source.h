@@ -35,6 +35,35 @@ struct WorldLine {
   uint32_t color;   // 0xAARRGGBB
   float width = 1;  // pixels on the screen, the same from near and far
 };
+// The order lines while Shift is held, as the original's command graph draws them (user_units.cpp
+// OrderLinesForWorld works them out; WorldPicture::SetOrderLines draws them, renderer request 30):
+// each leg between two of the graph's nodes, its curve's directions at both ends, its width in world
+// units by the units on it, its colour by its state, its texture an index into the scene's
+// orderTextures (-1: none) moving along it at animRate; each mark a waypoint's icon at a node.
+struct WorldOrderLeg {
+  float a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
+  float ta[3] = {0, 0, 0}, tb[3] = {0, 0, 0};  // unit length
+  float baseWidth = 1;          // CalculateWaypointLineWidth(units): min(sqrt(units), 10)
+  uint32_t color = 0xffffffffu;  // 0xAARRGGBB
+  int texture = -1;
+  float uvAspect = 1, animRate = 0;
+  bool operator==(const WorldOrderLeg&) const = default;
+};
+struct WorldOrderMark {
+  float position[3] = {0, 0, 0};
+  int texture = -1;              // -1: a solid square
+  uint32_t color = 0xffffffffu;  // 0xAARRGGBB
+  float size = 1;                // world units: the node's size times the order's waypoint scale
+  bool operator==(const WorldOrderMark&) const = default;
+};
+// The original's console variables for them (ui_WaypointLineScale, ui_CurveSmoothness,
+// ui_CurveSegments, ui_MinWaypointSize, ui_MaxWaypointSize): WorldPicture::SetOrderLineSettings.
+struct WorldOrderSettings {
+  float lineScale = 1, curveSmoothness = 35;
+  int curveSegments = 32;
+  float markMinPixels = 7, markMaxPixels = 100;
+  bool operator==(const WorldOrderSettings&) const = default;
+};
 // Range rings: the rings of one of the game's range filters in one colour. They show as one
 // outline round the ground they cover together; an inner radius cuts a hole.
 struct WorldRangeRing {
@@ -74,6 +103,12 @@ struct WorldScene {
   std::vector<uint32_t> selection;  // entity ids
   std::vector<WorldGhost> ghosts;
   std::vector<WorldLine> lines;
+  // The order lines and their waypoints' marks (empty when Shift is not held), the textures they
+  // name, and the console variables they are drawn by.
+  std::vector<std::string> orderTextures;
+  std::vector<WorldOrderLeg> orderLegs;
+  std::vector<WorldOrderMark> orderMarks;
+  WorldOrderSettings orderSettings;
   // The range rings, and the camera's distances at its nearest and its farthest zoom (the rings'
   // thickness goes between its two numbers with them).
   std::vector<WorldRangeGroup> ranges;

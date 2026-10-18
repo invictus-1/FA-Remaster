@@ -30,6 +30,7 @@ class WorldSource;
 class BackdropSource;
 struct GamePace;
 struct WorldLine;
+struct WorldScene;
 struct WorldRangeGroup;
 struct WorldMeshView;
 struct WorldDecal;
@@ -425,6 +426,21 @@ struct CustomNameStyle {
   uint32_t setsColor = 0xff00aa00u;
 };
 CustomNameStyle& CustomNames();
+// The command graph's console variables (the order lines while Shift is held; FA exe objects
+// 0xf5aee0..0xf5af80, their values at 0xf57cc0..0xf57cdc), at the exe's defaults. Each time the graph
+// is made (Shift pressed) the game's /lua/ui/game/commandwaypoint.lua CommandWaypointParams writes
+// over them (0x825150: 32, 35, 2, 1, 7, 100, 1, as the stock file has them); the console sets them
+// too (ui_CurveSegments 40 ...). ui_CommandClickScale stays in LookSettings (commandClickScale).
+struct CommandGraphVars {
+  int curveSegments = 20;          // ui_CurveSegments: the points of a leg's curve, less one
+  float curveSmoothness = 50;      // ui_CurveSmoothness: how far the curve bends, in leg widths
+  float pathSmoothness = 2;        // ui_PathSmoothness (the path preview's; the preview is never on)
+  int maxNodeUnits = 1;            // ui_CommandGraphMaxNodeUnits: the most a leg counts for at a node
+  float minWaypointSize = 7;       // ui_MinWaypointSize, pixels (half the mark's side)
+  float maxWaypointSize = 100;     // ui_MaxWaypointSize
+  float waypointLineScale = 1;     // ui_WaypointLineScale: every leg's width times this
+};
+CommandGraphVars& GraphVars();
 // A unit's custom name (nullptr: none or no such unit), its selection sets as the original writes
 // them ("1 3 ": sorted, each with a space after; "" for none), and whether any unit has a name or a
 // set (user_units.cpp).
@@ -506,24 +522,20 @@ uint32_t HoverOf(lua_State* L, uint32_t picked);
 // of the kinds that are selected join the selection; no walls, no building being upgraded).
 void SelectByCategoryCommand(lua_State* L, const std::string& arguments);
 void ExpandCurrentSelection(lua_State* L);
-// For the world's picture: the selected units' entity ids, and the lines of their orders (from
-// each unit to where its orders take it, coloured by the kind of order).
+// For the world's picture: the selected units' entity ids.
 // `ghosts` (may be null): the buildings the player's units, selected or not, have been ordered to
 // build and have not begun, each where it will stand.
 // `queueShown`: the selected units' orders are to be seen (the original shows them while Shift is
-// held): only then `lines` are given, and `queued` (may be null) gets the sites of the buildings
-// in those orders, begun or not.
-// `waypoints` (may be null): the mark of each of those orders at its place, as the game's own table
-// says (/lua/ui/game/commandgraphparams.lua: a texture and a colour per kind of order); the lines
-// take their colour from the same table.
-struct WorldWaypoint {
-  float position[3] = {0, 0, 0};
-  std::string texture;
-  uint32_t color = 0xffffffffu;  // 0xAARRGGBB
-  float scale = 1;
-};
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
-                       bool queueShown = true, std::vector<WorldGhost>* queued = nullptr, std::vector<WorldWaypoint>* waypoints = nullptr);
+// held): only then `queued` (may be null) gets the sites of the buildings in those orders, begun or
+// not. (The lines of the orders: OrderLinesForWorld.)
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldGhost>* ghosts = nullptr, bool queueShown = true,
+                       std::vector<WorldGhost>* queued = nullptr);
+// The order lines and their waypoints' marks while Shift is held (`shown`), as the original's
+// command graph works them out (user_units.cpp: the orders of every unit whose orders the interface
+// holds, from the game's commandgraphparams.lua and commandwaypoint.lua): into the scene's
+// orderTextures, orderLegs (highlighted first, then selected, then the rest), orderMarks and
+// orderSettings; empty lists when not shown. `rollover`: the unit under the mouse (0xffffffff: none).
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene);
 // A build template: buildings that are placed together, each where it stood beside the first
 // (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
 // blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).
