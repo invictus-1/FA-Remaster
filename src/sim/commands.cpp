@@ -960,6 +960,13 @@ static bool HeadTaskStopsMotion(const Unit* u) {
 // fraction, summed in that order, matches the original's to the bit from 742; ours added the commander's share
 // between the two and differed in the last bits), so an engineer finishes it at 809, not the commander, and M28's
 // OnConstructed (first finisher only) gives the commander no new order.
+// A patrol or attack-move under way (CUnitPatrolTask, land units): its dtor 0x61b140 makes the only abort of the move
+// when its task is torn down, and only when the unit moved this beat (EndPatrol).
+static bool PatrolTaskDecidesAbort(const Unit* u) {
+  return !u->motion.air && !u->commands.empty() && u->headState == kRunning &&
+         IsPatrolType(u->commands.front()->type) && u->task && u->task->pdata;
+}
+
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (u->commands.front()->type == CommandType::Move) return true;
@@ -1768,6 +1775,13 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // at 2050; ours stopped it. (Land units only: a guarding aircraft that flies has moved every beat, and its abort is
   // still made here. Seen: bench 251, aircraft guarding cleared in flight are stopped in the original.)
   const bool guardSelf = !u->motion.air && !u->commands.empty() && u->headState == kRunning && GuardSteersItself(u);
+  // Nor is a patrol or attack-move under way (CUnitPatrolTask): its dtor 0x61b140 is the only abort, and only when the
+  // unit moved this beat (0x61b1bd: unit+0xb4 != +0xd0, then vt+0x10 AbortMove at 0x61b1cd; EndPatrol does that). Seen:
+  // MP2 6805, army 1's 36 units, standing since the stream's AggressiveMove of 6803 (dispatched 6804, their paths not
+  // yet laid), are cleared and given the same AggressiveMove again by FAF's DistributeOrders: the original's
+  // navigators go on (inferred: the new task's SetGoal finds the same goal, 0x5a3f37) and the units drive off at
+  // 6806 with speed-through 1; ours stopped them and they started at 6808. (Land units, as for the guard above.)
+  const bool patrolSelf = PatrolTaskDecidesAbort(u);
   // CUnitMoveTask's dtor clears state Moving (0x6187bd) BEFORE its AbortMove, as in the stream's clear above: the
   // abort's CheckCollisions sees this unit standing ("a standing unit has priority over a mover"). Seen: Skirmish
   // 1890, M28 clears army 6's engineer 0x60001b walking beside the engineer 0x600024 (IssueClearCommands +
@@ -1781,7 +1795,8 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // IssueClearCommands (0x6f19eb) for Skirmish 2949's engineer 0x2f, cleared on its Repair.
   const uint32_t stops = u->motion.stopCount;
   ForgetUnitCommands(u);
-  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && u->motion.stopCount == stops)
+  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && !patrolSelf &&
+      u->motion.stopCount == stops)
     MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
