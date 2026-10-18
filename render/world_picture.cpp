@@ -71,7 +71,7 @@ struct WorldPicture::Impl {
     if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
-    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = groundDetail > 0;  // (deep tracks: the tracks helper's proposal)
+    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = groundDetail > 0;
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
     if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
   }

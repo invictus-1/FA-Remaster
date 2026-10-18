@@ -47,6 +47,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       skyDraw(device),
       falling(device),
       grass(device),
+      wildlifeDraw(device),
       sight(device),
       shafts(device),
       tracks(device),
@@ -226,6 +227,16 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
     textures.DropFetched();
     step("props listed by squares");
+    {  // wildlife (wildlife.h): where the trees stand (each its place and its top over it), for the birds' woods and the fireflies
+      std::vector<Vec4> trees;
+      for (const PlacedProp& p : props_) {
+        if (!p.model || p.model->lods.empty() || p.model->lods[0].sway <= 0) continue;
+        const float scale = std::sqrt(p.world.m[0][1] * p.world.m[0][1] + p.world.m[1][1] * p.world.m[1][1] + p.world.m[2][1] * p.world.m[2][1]);
+        if ((p.model->boundsMax.y - p.model->boundsMin.y) * scale < 1.0f) continue;  // (a tree, not the undergrowth)
+        trees.push_back({p.world.m[0][3], p.world.m[1][3], p.world.m[2][3], p.model->boundsMax.y * scale});
+      }
+      wildlifeDraw.SetMap(&map, trees);
+    }
     // the plants of the map's ground cover, where the visuals track has made them for it (its card atlas and table),
     // and where its trees stand (within the table's radius of each: more ferns and clumps, fewer flowers)
     plantsReady_ = false;
@@ -1789,6 +1800,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
   textures.DropFetched();  // (what was read ahead and not used)
+  if (wildlife && look == Look::Modern) wildlifeDraw.Listen(frame, combat_);  // (the fighting the birds hear: wildlife.h)
   combat_.clear();         // (handed over above to the looks that answer it: AddCombat)
   CpuTimes::Part(nullptr);
 }
@@ -1981,6 +1993,15 @@ void World::Render() {
     Stage("water ripples");
     water.ripples.Update(camera, view.height, terrain.HeightTexture(), terrain.HeightUnit());
   }
+  // wildlife (wildlife.h): the flocks moved on and what is drawn chosen (it dispatches: before the scene's pass)
+  wildlifeNow_ = false;
+  if (wildlife && look == Look::Modern && haveMap_ && !sidePicture) {
+    Stage("wildlife");
+    wildlifeNow_ = wildlifeDraw.Update(view, camera, time_, timeOfDay >= 0 ? skyLight.body.y : 1.0f, rain, snowLying, particles.flashes,
+                                       terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours());
+  } else if (!sidePicture) {
+    wildlifeDraw.Pause();
+  }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
@@ -1992,6 +2013,7 @@ void World::Render() {
       device_->BeginPass(shadows.Pass(i));
       terrain.Draw(shadows.CascadeView(i), true);
       meshes.Draw(shadows.CascadeView(i), environment_, true);
+      if (wildlifeNow_) wildlifeDraw.DrawBirds(shadows.CascadeView(i), true);  // (the birds' shadows)
     }
   }
   // the lamps' shadow maps: units and scenery as each lamp sees them
@@ -2080,6 +2102,10 @@ void World::Render() {
       meshes.Draw(view, environment_);
     }
     draw.Flush(view);
+    if (wildlifeNow_) {  // the birds, with what is solid
+      Stage("wildlife: birds");
+      wildlifeDraw.DrawBirds(view);
+    }
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
@@ -2149,6 +2175,10 @@ void World::Render() {
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
+  if (wildlifeNow_) {  // the fireflies, with what glows
+    Stage("wildlife: fireflies");
+    wildlifeDraw.DrawFireflies(view);
+  }
   {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid

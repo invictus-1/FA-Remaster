@@ -150,6 +150,11 @@
 //           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
 //           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
 //           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
+// --wildlife  life in the world (wildlife.h, World::wildlife; modern look): flocks of birds over the woods and gulls over
+//           the shores, scattered by fighting near them, and fireflies at dusk and by night. --wildlife-verbose: where
+//           the flocks are, and the nearest at the start and the end; --wildlife-noise x,z,at[,every]: a noise of fighting
+//           there (loudness 1.5) `at` seconds in, and every `every` seconds after, to see a flock scatter;
+//           --bird-scale n: the birds' size times their own (1); --firefly-strength n: how bright the fireflies glow (1)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -408,6 +413,9 @@ struct Options {
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool groundCover = false;             // --ground-cover
+  bool wildlife = false, wildlifeVerbose = false;  // --wildlife, --wildlife-verbose
+  float wildlifeNoise[4] = {0, 0, -1, 0};          // --wildlife-noise x,z,at,every (at < 0: none)
+  float birdScale = -1, fireflyStrength = -1;      // --bird-scale, --firefly-strength
   float plantDensity = -1;              // --plant-density
   float plantTallest = -1;              // --plant-tallest
   bool battleScars = false;             // --battle-scars
@@ -561,6 +569,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--wildlife") o->wildlife = true;
+    else if (a == "--wildlife-verbose") o->wildlife = o->wildlifeVerbose = true;
     else if (a == "--battle-scars") o->battleScars = true;
     else if (a == "--leaf-light") o->leafLight = true;
     else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
@@ -647,6 +657,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (sscanf(v, "%d,%f", &o->blastTest, &o->blastRadius) < 1) return false;
     }
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
+    else if (a == "--wildlife-noise") {
+      if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
+      o->wildlife = true;
+    }
+    else if (a == "--bird-scale") o->birdScale = static_cast<float>(atof(v));
+    else if (a == "--firefly-strength") o->fireflyStrength = static_cast<float>(atof(v));
     else if (a == "--ripple-test") {
       if (sscanf(v, "%f,%f,%f", &o->rippleTest, &o->rippleTestRadius, &o->rippleTestStrength) < 1) return false;
       o->waterRipples = true;
@@ -1109,6 +1125,10 @@ int main(int argc, char** argv) {
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
   world.water.ripples.view = opt.rippleView;
   world.groundCover = opt.groundCover;
+  world.wildlife = opt.wildlife;
+  world.wildlifeDraw.verbose = opt.wildlifeVerbose;
+  if (opt.birdScale > 0) world.wildlifeDraw.birdScale = opt.birdScale;
+  if (opt.fireflyStrength >= 0) world.wildlifeDraw.fireflyStrength = opt.fireflyStrength;
   if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
@@ -1784,6 +1804,14 @@ int main(int argc, char** argv) {
   auto countedFrom = start;
   CpuTimes::on = opt.timings;
   int ripplesMade = 0;  // (--ripple-test)
+  int noisesMade = 0;   // (--wildlife-noise)
+  // (--wildlife-verbose: the flocks nearest the camera's point, and what they do)
+  auto tellFlocks = [&](const char* when) {
+    for (const Wildlife::FlockInfo& f : world.wildlifeDraw.Nearest(camera.target, 4))
+      printf("render: wildlife %s: a flock of %d %s at %.0f, %.0f (%.0f high), %s\n", when, f.birds,
+             f.kind == 0 ? "starlings" : f.kind == 1 ? "crows" : f.kind == 2 ? "pigeons" : "gulls", f.home.x, f.home.z, f.home.y,
+             f.state == 0 ? "resting" : f.state == 1 ? "aloft" : f.state == 2 ? "fleeing" : "landing");
+  };
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
@@ -2581,6 +2609,15 @@ int main(int argc, char** argv) {
         }
       }
     }
+    if (opt.wildlifeNoise[2] >= 0 && haveMap) {  // --wildlife-noise: fighting heard there, then, and every so often after
+      const float at = opt.wildlifeNoise[2], every = opt.wildlifeNoise[3];
+      const int due = time < at ? 0 : every > 0 ? 1 + static_cast<int>(std::floor((time - at) / every)) : 1;
+      for (; noisesMade < due; ++noisesMade) {
+        const float x = opt.wildlifeNoise[0], z = opt.wildlifeNoise[1];
+        world.wildlifeDraw.Hear({x, world.GroundHeight(x, z), z}, 1.5f);
+      }
+    }
+    if (opt.wildlifeVerbose && frameCount == 1) tellFlocks("at the start");
     if (!haveMap) DrawTestScene(draw);
     const auto renderStart = std::chrono::steady_clock::now();
     world.Render();
@@ -2685,6 +2722,10 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
+      if (world.wildlife)
+        printf("; wildlife: %d flocks of %d birds, %d flocks (%d birds) drawn, %d places for fireflies, %d noises heard, %d flocks scattered",
+               world.wildlifeDraw.Flocks(), world.wildlifeDraw.Birds(), world.wildlifeDraw.flocksDrawn, world.wildlifeDraw.birdsDrawn,
+               world.wildlifeDraw.firefliesTried, world.wildlifeDraw.heard, world.wildlifeDraw.scares);
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.unitScars || opt.unitSnow)  // (battle scars: what the hits were found by; unit_wear.h)
         printf("; wear: %d units known, hits %d told, %d by shots seen to stop, %d by beams, %d by blasts near, %d unseen; %d marks made, %d heals",
@@ -2720,6 +2761,7 @@ int main(int argc, char** argv) {
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying", world.blasts.told, world.blasts.Active(),
                world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying());
       printf("\n");
+      if (opt.wildlifeVerbose) tellFlocks("at the end");
       if (opt.timings && timing.frames > 0) {
         printf("render: --timings: %d frames at %dx%d on %s%s, average ms a frame:\n", timing.frames, device->Width(), device->Height(),
                device->AdapterName().c_str(), vsync ? " (vsync on: the waits include it)" : "");

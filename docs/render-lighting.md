@@ -754,7 +754,47 @@ work is not starved of the processor).
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
-   never mistakable for units.
+   never mistakable for units. **First version 2026-10-18 (a helper):** `World::wildlife` (viewer `--wildlife`;
+   `render/wildlife.h/.cpp`; modern look, a map with trees or shores). Purely for the eye: own random numbers,
+   nothing back to the game, never picked, selected or given an icon.
+   - **Flocks** (`Wildlife::SetMap`, from the map's trees as `World::Open` hands them over: those that sway and stand
+     a unit or more tall): a home in each wood where the trees stand thickest (squares of 32 units, the thickest
+     first, homes at least 56 apart; its roost the few trees round the one nearest the wood's middle), and gulls over
+     water a little off a shore (at most 24, 110 apart). Seton's Clutch Remastered: 92 flocks, about 1,150 birds.
+     Kinds: starlings (18-32, small, quick, black with a sheen), crows (5-10, larger, slow beats and long glides),
+     pigeons (8-16, grey: the ones that read over a dark wood), gulls (5-11, grey above and white below, black
+     tips, gliding). Wingspans 0.32-0.56 world units, two to three times a real bird's, so they read from the
+     game's camera; never under 2.5 pixels across.
+   - **Their day** (on the processor, a few numbers a flock): resting in the roost's crowns (hidden there), now
+     and then aloft over the wood a while (wheeling round a place that moves every 5-11 s), landing again; to roost
+     by the sun's height (crows and pigeons from about 6 degrees, gulls at sunset, starlings just after); by night
+     they rest. The computed sky's `daylight` cannot be used for it: from sunset on the moon keeps it at 0.03-0.05.
+   - **Scattered by fighting** (`Wildlife::Listen` from `World::AddFrame`, and `Hear`): shots first seen (a weapon
+     firing, loudness 0.5) and gone (they met something, 1; where the host's simulation keeps impacts, the engine's
+     impacts instead: 'Air' 0.6, a beam's 0.5, a crash 2.5), beams coming on (0.6 at both ends), hits over an area
+     (1 + radius / 4, at most 6), and the explosions' flashes (`Particles::flashes`, by their size); only what the
+     army the picture is for sees (the frame's `seen`), so that birds never give away a fight in the fog of war (the
+     frame's beams carry no `seen`: taken as the engine hands them over). A noise reaches 40 x the
+     root of its loudness. The flock bursts off, each bird when the noise reaches it (28 units a second), away from
+     it and up, makes for a place 45-70 units away from the fight and wheels there while it goes on, and comes
+     home and settles after 22-38 s of quiet.
+   - **On the card** (`wildlife.cpp`): a compute pass, a group of 32 threads a flock, moves the birds (boids: keep
+     apart from the nearest, fly with them, keep to them; drawn toward where the flock goes, above the ground and
+     the crowns, inside the map); a draw makes each bird nine triangles (body, tail, two wings in two parts that
+     flap or glide, banked into the turn), lit as everything else and through the air; their shadows go into the
+     sun's maps. Fewer as the camera rises (all to 85 units of distance, none from 240).
+   - **Fireflies**: no state. A square round the camera's point (up to 150 units across), three places a cell of 2.5,
+     kept by how much of a wood's edge is there (the woods' own picture, squares of 4 units) and, over open grass,
+     only in patches; each drifts a little over the ground and flashes for about half a second every 2.5-7 s,
+     yellow-green, at least a pixel and a third across (its light spread over it), seen through the haze and the
+     mist, or through the light in the air when `volumetricFog` is on. From about sunset, all from the end of the
+     twilight; fewer in rain, none on lying snow; gone from a camera 160 away.
+   - **Cost** at 1440p on the RTX 4090 (lowest times): the step 0.006-0.009 ms, the birds under 0.001 ms with eight
+     flocks in view, the fireflies 0.007-0.008 ms with the largest square, the birds' shadows about 0.007 ms; the
+     processor about 0.03-0.06 ms. Off: pictures identical (regression 0 px on both backends). Vulkan as Direct3D 12.
+   - **Viewer**: `--wildlife-verbose` (where the flocks are, what the nearest do, each scattering),
+     `--wildlife-noise x,z,at[,every]` (a noise of fighting there, to see a flock scatter), `--bird-scale`,
+     `--firefly-strength`.
 18. **Textures streamed in** (games start sooner, less memory: the RTX 3060 has room): in the optimisation phase,
    talked through with Chris first as agreed.
 19. **Build effects remade**: build beams that light what they touch, sparks, a better build shimmer (the original's
@@ -789,6 +829,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
+| `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray

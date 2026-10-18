@@ -67,6 +67,7 @@
 #include "ranges.h"
 #include "wakes.h"
 #include "water.h"
+#include "wildlife.h"
 
 namespace moho {
 class Vfs;
@@ -400,6 +401,10 @@ class World {
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;
+  // Life in the world (wildlife.h, wildlifeDraw): flocks of birds over the woods and gulls over the shores, that scatter
+  // when fighting comes near and settle again after a quiet while, and fireflies at dusk and by night along the woods'
+  // edges and over grass. Purely for the eye. Modern look; off by default.
+  bool wildlife = false;
   // Light through leaves (lighting.h, LeafLight): the sun's light that falls on the far side of leaves, grass
   // blades and the plants comes through, deeper in colour, and glows toward an eye that looks toward the sun through
   // them (without it leaves let some through, plainly, and grass and plants none). Modern look; off by default.
@@ -525,6 +530,7 @@ class World {
   Sky skyDraw;  // the computed sky behind everything
   Precipitation falling;  // rain and snow
   GroundCover grass;      // ground cover near the camera (groundCover)
+  Wildlife wildlifeDraw;  // birds and fireflies (wildlife)
   SightShade sight;       // what the army the picture is for does not see, darkened (sight.Set)
   bool sightShown = true; // (off for a picture that is darkened by other means: the minimap's ground)
   // The game's option FogOfWar "unexplored": ground the army has never seen is all but black until
@@ -693,6 +699,7 @@ class World {
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
+  bool wildlifeNow_ = false;  // (wildlife: something of it drawn this frame)
   // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)
   bool plantsReady_ = false;
   gfx::Texture treeMask_, coverA_, coverB_;
