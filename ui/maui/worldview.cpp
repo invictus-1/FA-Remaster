@@ -710,6 +710,31 @@ int l_CamSetFlag(lua_State* L) {  // EnableEaseInOut / DisableEaseInOut, UseGame
 
 // --- the world view control ---
 
+// /lua/ui/game/commandgraph.lua's OnCommandDragBegin() and OnCommandDragEnd(event, cmdId) (FA exe 0x823e40, 0x823f00:
+// the module imported, the function called; an error logged as "Error running
+// '/lua/ui/game/commandgraph.lua:<fn>': ..."). `e` null: no arguments.
+void CommandGraphScript(lua_State* L, const char* fn, Control* view, const UiEvent* e, uint32_t command) {
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandgraph.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, fn);
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      int args = 0;
+      if (e) {
+        PushEventTable(L, view, *e);
+        lua_pushnumber(L, command);
+        args = 2;
+      }
+      if (lua_pcall(L, args, 0, top + 1) != 0)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/game/commandgraph.lua:%s': %s", fn, lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+}
+
 class WorldView;
 WorldView* MainView(Control* c);  // further down: the first world view that is not a minimap
 
@@ -872,7 +897,21 @@ class WorldView : public Control {
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
     for (const WorldGhost& g : scene.ghosts) SiteOutline(L, sim(), g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
-    scene.ghosts.insert(scene.ghosts.end(), ordered.begin(), ordered.end());
+    // A building's waypoint being dragged: the graph draws a queued building's ghost at its node (0x828dd0), so while
+    // the node is dragged (its byte +0x1c) the ghost stands where the mouse has it (the ground there, not snapped)
+    // with the outline of its skirt, d800d800 where it can stand and d8d80000 where not (the node's byte +0x1e),
+    // and not at the order's place; like the rest of the graph, only while Shift is held (0x86ed00).
+    WorldGhost dragged;
+    float draggedFrom[3];
+    const bool dragging = shiftHeld && DraggedBuildingSite(L, &dragged, draggedFrom);
+    for (const WorldGhost& g : ordered) {
+      if (dragging && g.blueprint == dragged.blueprint && g.position[0] == draggedFrom[0] && g.position[2] == draggedFrom[2]) continue;
+      scene.ghosts.push_back(g);
+    }
+    if (dragging) {
+      if (hasSim) SiteOutline(L, sim(), dragged, dragged.free ? 0xd800d800u : 0xd8d80000u, &scene.lines);
+      scene.ghosts.push_back(dragged);
+    }
     // The range rings: of the selected units, the unit under the mouse, the building about to be
     // placed, and of every unit in a filter the player has switched on.
     lap("(the picture's scene: hover, buildings)");
@@ -1216,7 +1255,67 @@ class WorldView : public Control {
   // Turning with Space held: the mouse's moves turn the camera (see HandleEvent).
   bool spinning_ = false;
   float spinX_ = 0, spinY_ = 0;
+  // A waypoint of the order lines being dragged with the left button (the original's UICommandDragger, user_units.cpp
+  // "a waypoint under the mouse"); `waypointPress_`: the last left press began one (a double click after it does
+  // nothing, 0x870c24); `convertToPatrol_`: the view's +0x274, ShowConvertToPatrolCursor's answer.
+  bool waypointDrag_ = false, waypointPress_ = false, convertToPatrol_ = false;
+  // Where a place of the world is on the screen by the picture last drawn, and how many map units a pixel is
+  // there (the original's w(p), dot(cam+0x2a4, p) + cam+0x2b0: the place's depth along the view times
+  // 2 tan(fov / 2) / the picture's height); false outside the view (the original's frustum planes, 0x829890).
+  // Without a picture: the plain view from above, as ProjectPoint.
+  bool ScreenOf(lua_State* L, const float p[3], float* sx, float* sy, float* w) {
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    WorldSource* source = UserState::From(L)->config().world;
+    if (pixels_ && source && pictureH_ > 0) {
+      float x = 0, y = 0;
+      if (!source->Project(p, &x, &y)) return false;
+      const WorldCamera& c = pictureCamera_;
+      const float back[3] = {std::sin(c.heading) * std::cos(c.pitch), std::sin(c.pitch), std::cos(c.heading) * std::cos(c.pitch)};
+      float depth = 0;
+      for (int i = 0; i < 3; ++i) depth += (c.target[i] + back[i] * c.distance - p[i]) * back[i];
+      if (depth <= 0) return false;
+      *w = depth * 2.0f * std::tan(c.fovY * 0.5f) / static_cast<float>(pictureH_);
+      *sx = r.x0 + x, *sy = r.y0 + y;
+      return x >= 0 && y >= 0 && x <= static_cast<float>(pictureW_) && y <= static_cast<float>(pictureH_);
+    }
+    Camera* c = GetCameraObject(L, cameraName);
+    const float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
+    *sx = (r.x0 + r.x1) * 0.5f + (p[0] - c->focus[0]) * scale;
+    *sy = (r.y0 + r.y1) * 0.5f + (p[2] - c->focus[2]) * scale;
+    *w = 1.0f / scale;
+    return *sx >= r.x0 && *sx <= r.x1 && *sy >= r.y0 && *sy <= r.y1;
+  }
+  // The waypoint under the mouse (the original's cursor update 0x86f520, its part at 0x86ff47): only while the view
+  // holds the command graph (its +0x20c: Shift was held when it last drew, 0x86ed00; here Shift held now), its
+  // highlight is on (+0x2a4) and it is no minimap (+0x135).
+  void UpdateWaypointHover(lua_State* L, float x, float y) {
+    const bool active = !miniMap && highlight && UserState::From(L)->HasSim() && KeyIsDown(L, kKeyShift);
+    UpdateHoveredWaypoint(L, active, x, y, [&](const float p[3], float* sx, float* sy, float* w) { return ScreenOf(L, p, sx, sy, w); });
+  }
+  // A world view taken away while one of its waypoints is dragged: the drag ends as if cancelled. INFERRED: the
+  // original's dragger is an object of its own that outlives the view (it holds the camera); here the view is the
+  // dragger, and its going would leave the graph held with the node at the mouse.
+  void Destroy(lua_State* L) override {
+    if (waypointDrag_) {
+      waypointDrag_ = false;
+      CancelWaypointDrag(L);
+    }
+    Control::Destroy(L);
+  }
+  // A dragger posted over this one (UICommandDragger::DragCancel 0x824290): the waypoint back to its order's place.
+  void DragCancel(lua_State* L) override {
+    if (!waypointDrag_) return;
+    waypointDrag_ = false;
+    CancelWaypointDrag(L);
+  }
   void DragMove(lua_State* L, const UiEvent& e) override {
+    if (waypointDrag_) {  // (UICommandDragger::DragMove 0x8241b0: the waypoint to the ground under the mouse)
+      float to[3];
+      Unproject(L, e.x, e.y, to, false);
+      MoveWaypointDrag(L, to);
+      return;
+    }
     if (rightHeld_) {  // (the formation's facing, once the button has been held half a second)
       if (!RightHeldLong(L)) return;
       float to[3];
@@ -1377,6 +1476,17 @@ class WorldView : public Control {
     }
   }
   void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (waypointDrag_) {  // (UICommandDragger::DragRelease 0x824210: the order's new target, then the script)
+      waypointDrag_ = false;
+      float to[3], play[4];
+      Unproject(L, e.x, e.y, to, false);
+      PlayRect(GetCameraObject(L, cameraName), &play[0], &play[1], &play[2], &play[3]);
+      const uint32_t command = ReleaseWaypointDrag(L, to, play);
+      UiEvent released = e;  // (the button's release, as the script sees it: 0x795bd0 on the dragger's event)
+      released.type = EventType::ButtonRelease;
+      CommandGraphScript(L, "OnCommandDragEnd", this, &released, command);
+      return;
+    }
     if (rightHeld_) {
       rightHeld_ = false;
       IssueRightClick(L);
@@ -1474,8 +1584,17 @@ class WorldView : public Control {
   // there; with Shift after what they are doing); a left press follows the script's command mode,
   // or selects.
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
+    // Each event first works out what is under the mouse (the cursor update 0x86f520, called at 0x8705e0 before
+    // the script's handler): here the waypoint of the order lines under it.
+    if (!dead() && !miniMap && (e.type == EventType::MouseMotion || e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick))
+      UpdateWaypointHover(L, e.x, e.y);
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
+    // Each event the script leaves to the view works out again whether the selection's moves could become a patrol
+    // at the waypoint under the mouse (+0x274, cleared at 0x870619, set at 0x870853; ShowConvertToPatrolCursor):
+    // with the graph held and a waypoint hovered whose order a selected unit carries (0x8706c6), a Move or FormMove,
+    // and 0x81dd00 saying yes. (The tips the original starts there, Engine0007..0010: not built.)
+    convertToPatrol_ = !miniMap && HoveredConvertsToPatrol(L);
     if (e.type == EventType::MouseMotion && !miniMap) {
       // With Space held the mouse turns the camera, from near only (a zoom under 125) as in the
       // original (0x870970); letting Space go lets it swing back.
@@ -1531,6 +1650,9 @@ class WorldView : public Control {
       return true;
     }
     if (!e.left) return false;
+    // (Every left press keeps what it did, the view's +0x148 by 0x82b230; a double click goes by it.)
+    const bool afterWaypointPress = waypointPress_;
+    if (e.type == EventType::ButtonPress) waypointPress_ = false;
     // A left press while the game script is in a command mode: an order with the place as its
     // target, or a building to build there. A building goes where the simulation would put it
     // (the site snapped to its grid) and only where it can stand, as the original's interface
@@ -1575,6 +1697,17 @@ class WorldView : public Control {
       return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
     }
     if (!mode.empty() || miniMap) return false;
+    // A waypoint of the order lines under the mouse (Shift held): the left button drags it (the original's
+    // GetLeftMouseButtonAction 0x81f8df gives action 5, 0x870e97 makes a UICommandDragger: user_units.cpp). A double
+    // click after that press keeps its action and does nothing (0x870c24).
+    if (e.type == EventType::ButtonDClick && afterWaypointPress) return false;
+    if (e.type == EventType::ButtonPress && BeginWaypointDrag(L, HoveredWaypoint(L))) {
+      waypointPress_ = true;
+      CommandGraphScript(L, "OnCommandDragBegin", this, nullptr, 0);  // (the dragger's making, then its posting)
+      UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);  // (it cancels a drag of the view's before)
+      waypointDrag_ = true;
+      return true;
+    }
     if (e.type == EventType::ButtonDClick) {
       // A double click on one of the player's units: those of its kind in view join the selection
       // (DoubleClickSelect, as the original's 0x865e20).
@@ -1663,14 +1796,22 @@ int l_UnProject(lua_State* L) {
   }
   return 1;
 }
-int l_ViewFalse(lua_State* L) {
-  View(L);
-  lua_pushboolean(L, 0);
-  return 1;
-}
 int l_ViewNothing(lua_State* L) {
   View(L);
   return 0;
+}
+// bool moho.UIWorldView:HasHighlightCommand() (FA exe 0x871f40): a waypoint of the order lines is under the mouse
+// (the session's, +0x4c8 != -1; not this view's own).
+int l_ViewHasHighlightCommand(lua_State* L) {
+  View(L);
+  lua_pushboolean(L, UserState::From(L)->HasSim() && HoveredWaypoint(L) != 0xffffffffu);
+  return 1;
+}
+// bool moho.UIWorldView:ShowConvertToPatrolCursor() (0x872020): the view's +0x274, the hovered waypoint is a move
+// the selection's moves could be turned into a patrol at (user_units.cpp HoveredConvertsToPatrol).
+int l_ViewShowConvertToPatrolCursor(lua_State* L) {
+  lua_pushboolean(L, View(L)->convertToPatrol_);
+  return 1;
 }
 // GetRightMouseButtonOrder(): the order a right click would give where the mouse is now (its
 // RULEUCC name; nil for none), FA exe 0x871d40. The script picks the cursor by it.
@@ -2179,9 +2320,13 @@ void AdvanceCameras(lua_State* L, float seconds) {
   g_pendingShakes.clear();
   // The world view the mouse is over has its script choose the mouse pointer, every frame (the
   // original's frame function, FA exe 0x871140: "OnUpdateCursor").
+  // Before it, what is under the mouse (0x871140 -> 0x86f520): the waypoint of the order lines there; with the
+  // mouse over no world view, none (0x86f5e3: the session's cursor info reset).
   if (user->gameInterface) {
     UiManager& ui = user->ui();
     WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));
+    if (v && !v->dead() && !v->miniMap) v->UpdateWaypointHover(L, ui.mouseX, ui.mouseY);
+    else if (user->HasSim()) UpdateHoveredWaypoint(L, false, ui.mouseX, ui.mouseY, nullptr);
     if (v && !v->dead()) v->RunScript(L, "OnUpdateCursor");
   }
 }
@@ -2198,8 +2343,8 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, view, "IsInputLocked", l_ViewGet<&WorldView::inputLocked>);
   SetMethod(L, view, "GetsGlobalCameraCommands", l_ViewSet<&WorldView::globalCameraCommands>);
   SetMethod(L, view, "SetHighlightEnabled", l_ViewSet<&WorldView::highlight>);
-  SetMethod(L, view, "HasHighlightCommand", l_ViewFalse);
-  SetMethod(L, view, "ShowConvertToPatrolCursor", l_ViewFalse);
+  SetMethod(L, view, "HasHighlightCommand", l_ViewHasHighlightCommand);
+  SetMethod(L, view, "ShowConvertToPatrolCursor", l_ViewShowConvertToPatrolCursor);
   SetMethod(L, view, "GetRightMouseButtonOrder", l_ViewRightMouseButtonOrder);
   SetMethod(L, view, "Project", l_ViewProject);
   SetMethod(L, view, "ZoomScale", l_ViewZoomScale);

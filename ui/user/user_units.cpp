@@ -102,7 +102,33 @@ struct OrderGraph {
   std::vector<Leg> legs;
   std::vector<Queue> queues;
   std::map<uint32_t, std::vector<uint32_t>> carriers;  // a command's units (the original's per command)
+  std::map<uint32_t, int> nodeOf;  // a command's node (the hash map graph+0xd30)
   std::map<int, float> widths;  // CalculateWaypointLineWidth by units, as asked (graph+0xda8)
+  // The waypoint under the mouse (the session's +0x4c8, 0x829800): its command's id, 0xffffffff none.
+  uint32_t hovered = 0xffffffffu;
+  // A waypoint being dragged (UICommandDragger, 0x823fe0): its command; once moved (the node's byte +0x1c, set by
+  // each move, 0x829b40) the node stands at `at`, the ground under the mouse, instead of its order's place; `fit`: a
+  // building's site there passes the placement test (the node's byte +0x1e, 1 at first, 0x824600).
+  struct Drag {
+    uint32_t command = 0xffffffffu;
+    bool moved = false, fit = true;
+    float at[3] = {0, 0, 0};
+    int type = 0;           // the order's kind and a building's blueprint, as when the drag began
+    std::string blueprint;
+    bool hasFrom = false;   // the order's own place then (its building's ghost stands there until the drag)
+    float from[3] = {0, 0, 0};
+    bool hasHome = false;   // where its node stood then (a cancelled drag puts it back there at once)
+    float home[3] = {0, 0, 0};
+  } drag;
+  // Orders a drag has given a new target that the simulation's queues do not show yet: the original sets its own
+  // copy of the order at once (0x8b4a40), so the node stands there from the release on. By command: the place,
+  // and the sync it was sent after.
+  struct Retarget {
+    float at[3] = {0, 0, 0};
+    uint32_t entity = 0xffffffffu;  // the unit it was sent onto (0xffffffff: a place)
+    uint64_t sync = 0;
+  };
+  std::map<uint32_t, Retarget> retargets;
 };
 
 struct UnitStore : UserState::Extra {
@@ -3331,9 +3357,9 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // ui_CommandGraphMaxNodeUnits), made unit length; its size sqrt(max(in, out)) of those counts (0x8275b0).
 // When drawn, each leg's state (0x828bec): highlighted when the last queue walked along it is the unit
 // under the mouse's or shares a command with it (the leg's byte +0x18), else the state of the node it
-// leads to (0x8281e0): highlighted when the unit under the mouse carries that node's command (or the
-// waypoint under the mouse is it: waypoints are not picked by the mouse here), selected when any unit
-// carrying it is selected (session+0x4a0), else normal. The leg is drawn as the command it leads to
+// leads to (0x8281e0): highlighted when the unit under the mouse carries that node's command or the
+// waypoint under the mouse is it (OrderGraph::hovered, see "a waypoint under the mouse" below), selected
+// when any unit carrying it is selected (session+0x4a0), else normal. The leg is drawn as the command it leads to
 // says (its record: texture, colours by state, uvAspect, animRate); a node's mark (0x8282b0) by its
 // own command's record and state: its waypoint texture in the state's colour, at the node's size
 // times the state's scale; without a texture none, but a highlighted node a solid ff30f030 square.
@@ -3341,8 +3367,7 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // highlighted first, then selected, then the rest (the first leg handed keeps a pixel where legs
 // cross, the original's stencil; the renderer's answer to request 30).
 // Left out: the ETA texts at the nodes (display_eta, ui_MaxTextLOD; 0x828610), the glow pass (only
-// the bloom's mask), dragging nodes (OnCommandDragBegin, the node's byte +0x1c), the path preview
-// (ui_DrawPathPreview, never on).
+// the bloom's mask), the path preview (ui_DrawPathPreview, never on). (Dragging a node: further down.)
 namespace {
 
 // The kinds of orders the graph never draws (0x82632e: 1 << type against 0x2_d80000ea): Stop, Dive,
@@ -3423,8 +3448,31 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
     if (!s.queue.empty()) walks.push_back({u, std::move(s.queue)});
     if (factory && s.hasFactoryQueue && !s.factoryQueue.empty()) walks.push_back({u, std::move(s.factoryQueue)});
   }
-  std::map<uint32_t, int> nodeOf, startOf;
+  std::map<uint32_t, int>& nodeOf = g.nodeOf;
+  std::map<uint32_t, int> startOf;
+  nodeOf.clear();
   std::map<std::pair<int, int>, int> legOf;
+  const uint64_t sync = UserState::From(L)->syncCount;
+  // A node being dragged stands where the mouse put it (its byte +0x1c: it does not follow its order, 0x828fb0; the
+  // original keeps its command nodes from one working out to the next, 0x826000, so the drag outlives it); an
+  // order a drag has just given a new target, where it was sent (the original's own copy of the order, 0x8b4a40),
+  // until the simulation's queue shows it (or ten syncs have passed: INFERRED, the simulation turned it down).
+  auto placeOf = [&](const CommandView& c, float at[3]) {
+    if (g.drag.command == c.id && g.drag.moved) {
+      for (int i = 0; i < 3; ++i) at[i] = g.drag.at[i];
+      return;
+    }
+    auto r = g.retargets.find(c.id);
+    if (r == g.retargets.end()) return;
+    const OrderGraph::Retarget& t = r->second;
+    const bool shown = t.entity != 0xffffffffu ? c.entity == t.entity
+                                               : c.hasPosition && std::fabs(c.position[0] - t.at[0]) < 0.05f && std::fabs(c.position[2] - t.at[2]) < 0.05f;
+    if (shown || sync > t.sync + 10) {
+      g.retargets.erase(r);
+      return;
+    }
+    for (int i = 0; i < 3; ++i) at[i] = t.at[i];
+  };
   auto addLeg = [&](int from, int to, int queue) {
     auto [it, fresh] = legOf.try_emplace({from, to}, static_cast<int>(g.legs.size()));
     if (fresh) {
@@ -3459,6 +3507,7 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
       if (seen == nodeOf.end()) {
         float at[3];
         if (!CommandPlace(L, store, c, at)) continue;
+        placeOf(c, at);
         node = static_cast<int>(g.nodes.size());
         OrderGraph::Node n;
         n.command = c.id, n.type = c.type;
@@ -3535,33 +3584,47 @@ uint32_t ColorTimes(uint32_t a, uint32_t b) {
   return out;
 }
 
-void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOut* out) {
-  Sim* sim = TheSim(L);
+// The graph while it is held: Shift held (the world view's drawing, GetCommandGraph(true) 0x895eb0 at 0x86ed32), or a
+// waypoint being dragged (the dragger holds it too, 0x824026). Not held: let go (made again, its tables read again,
+// when next held). While a beat runs on its own thread the graph stays as it is (it would wait for the beat).
+OrderGraph& HoldOrderGraph(lua_State* L, bool held) {
   UserState* user = UserState::From(L);
   OrderGraph& g = Store(L).graph;
-  if (!shown || !sim) {
-    g.made = false;  // (made again, its tables read again, at the next press)
-  } else {
-    if (!g.made) {
-      LoadGraphParams(L, &g);
-      g.widths.clear();
-      g.made = true;
-      g.builtSync = ~0ull;
-    }
-    // INFERRED: worked out again after every beat (the original marks its graph to be worked out
-    // again, the byte graph+0; what marks it is not read; its nodes follow their targets each frame).
-    if (g.builtSync != user->syncCount) {
-      BuildOrderGraph(L, *sim, Store(L), g);
-      g.builtSync = user->syncCount;
-    }
+  held = held || g.drag.command != 0xffffffffu;
+  if (!held || !user->HasSim()) {
+    g.made = false;
+    return g;
   }
+  if (user->config().beatRunning && user->config().beatRunning()) return g;
+  Sim* sim = TheSim(L);
+  if (!sim) {
+    g.made = false;
+    return g;
+  }
+  if (!g.made) {
+    LoadGraphParams(L, &g);
+    g.widths.clear();
+    g.made = true;
+    g.builtSync = ~0ull;
+  }
+  // INFERRED: worked out again after every beat (the original marks its graph to be worked out
+  // again, the byte graph+0; what marks it is not read; its nodes follow their targets each frame).
+  if (g.builtSync != user->syncCount) {
+    BuildOrderGraph(L, *sim, Store(L), g);
+    g.builtSync = user->syncCount;
+  }
+  return g;
+}
+
+void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOut* out) {
+  OrderGraph& g = HoldOrderGraph(L, shown);
   const CommandGraphVars& vars = GraphVars();
   out->settings.lineScale = vars.waypointLineScale;
   out->settings.curveSmoothness = vars.curveSmoothness;
   out->settings.curveSegments = vars.curveSegments;
   out->settings.markMinPixels = vars.minWaypointSize;
   out->settings.markMaxPixels = vars.maxWaypointSize;
-  if (!g.made) return;
+  if (!g.made || !shown) return;  // (drawn only while Shift is held, 0x86ed00: a drag alone holds it undrawn)
   UnitStore& store = Store(L);
   std::vector<uint32_t> selected;
   for (const UserUnit* u : store.selection) selected.push_back(u->view.id);
@@ -3570,6 +3633,7 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
     if (n.command == 0xffffffffu) return 0;
     const std::vector<uint32_t>& units = g.carriers[n.command];
     if (rollover != 0xffffffffu && has(units, rollover)) return 1;
+    if (n.command == g.hovered) return 1;  // (the waypoint under the mouse, session+0x4c8: 0x828246)
     for (uint32_t u : units)
       if (has(selected, u)) return 2;
     return 0;
@@ -3639,7 +3703,8 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
 // unit under the mouse (else the one there). Each leg: a, b, ta, tb ({x, y, z}), units, width (its
 // base width), state ("highlight", "selected", "normal"), color ("aarrggbb"), texture (its path, or
 // nil), uvAspect, animRate, from and to (the commands' names; "start" for a start node) and fromId,
-// toId (the commands' ids). Each mark: position, size, state, color, texture, command, id.
+// toId (the commands' ids). Each mark: position, size, state, color, texture, command, id. hovered: the id of
+// the waypoint under the mouse's order (nil: none); dragged: the id of the order whose waypoint is being dragged.
 int l_OrderGraphForTests(lua_State* L) {
   uint32_t rollover = UnitUnderMouse(L);
   if (const UserUnit* u = ToUnit(L, 1)) rollover = u->view.id;
@@ -3676,8 +3741,10 @@ int l_OrderGraphForTests(lua_State* L) {
     else lua_pushnumber(L, n.command);
   };
   lua_newtable(L);
-  lua_pushboolean(L, g.made);
+  lua_pushboolean(L, g.made && shown);
   field("shown");
+  if (g.hovered != 0xffffffffu) lua_pushnumber(L, g.hovered), field("hovered");
+  if (g.drag.command != 0xffffffffu) lua_pushnumber(L, g.drag.command), field("dragged");
   lua_newtable(L);
   for (size_t i = 0; i < out.legs.size(); ++i) {
     const OrderGraphOut::LegOut& o = out.legs[i];
@@ -3742,6 +3809,324 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
   scene->orderMarks.reserve(out.marks.size());
   for (const OrderGraphOut::MarkOut& m : out.marks) scene->orderMarks.push_back(m.mark);
   scene->orderSettings = out.settings;
+}
+
+// --- a waypoint under the mouse, and dragging it ---
+//
+// Read from the FA exe by a helper of the ui chat (2026-10-17; UICommandGraph.cpp, UICommandDragger, the world
+// view's cursor update 0x86f520 and HandleEvent 0x8704b6):
+// - Which waypoint is under the mouse (0x829800, called at 0x86ff9a by the cursor update the world view runs on
+//   each of its events, 0x8705e0, and each frame the mouse is over it, 0x871140): only while the view holds the
+//   command graph (its +0x20c: Shift was held when it last drew, 0x86ed00), its highlight is on (+0x2a4,
+//   SetHighlightEnabled) and it is not a minimap (+0x135); else none. The graph's command nodes (its list
+//   graph+0xd38; not the start nodes) that are in view (the camera's frustum planes, 0x829890) are measured on
+//   the screen: d the pixels from the mouse to the node's place (0x829a1a), w the map units a pixel is there
+//   (0x829a23: dot(cam+0x2a4, p) + cam+0x2b0). A node counts when d * w <= ui_CommandClickScale * r * w, r =
+//   size / w held to ui_MinWaypointSize .. ui_MaxWaypointSize (its mark's half side as drawn, without the order's
+//   waypoint scale); a Ferry's d * w less 0.1 (0x829aab). Of those the nearest wins, except that a node whose
+//   order a selected unit carries is taken whenever it counts (0x829af4: nearer, or selected: the last such in
+//   the list). The answer, the order's id, is the session's (+0x4c8; 0xffffffff none).
+// - That node's state is then highlight (0x8281e0, 0x828246), so its mark and the legs leading to it are drawn
+//   highlighted (a leg takes the state of the node it leads to).
+// - The cursor: the game's script asks HasHighlightCommand() (0x871f40: session+0x4c8 != -1) in OnUpdateCursor and
+//   shows HOVERCOMMAND, or MOVE2PATROLCOMMAND when ShowConvertToPatrolCursor() (0x872020: the view's +0x274). The
+//   world view sets +0x274 on an event (0x870853) when a selected unit carries the hovered order, it is a Move or
+//   FormMove, and 0x81dd00 says yes: every selected unit with orders is no POD, has more than one order, the
+//   hovered one among them and not the last, all of the hovered one's type.
+// - Dragging: with no command mode a left press is action 5 when a waypoint is hovered, else 4, the selection
+//   (CUIActionHandler::GetLeftMouseButtonAction 0x81f8df; no focus army: action 0). Action 5 makes a UICommandDragger
+//   (0x870ebb -> 0x8242b0 -> 0x823fe0; vtable 0xe42600): it holds the graph (GetCommandGraph(true), 0x824026), calls
+//   /lua/ui/game/commandgraph.lua OnCommandDragBegin() (0x823e40) and is posted as the left button's dragger. Each move
+//   (0x8241b0) puts the node at the ground under the mouse (0x829b40: its place is that point, count 1, and its byte
+//   +0x1c is set: it no longer follows its order's target, 0x828fb0); a building's node (BuildMobile) is tested there
+//   from the second move on (0x8c1880 into the byte +0x1e; the session's +0x4d5, 1 unless the console command
+//   SkipUIChecks (0x897580) toggled it, makes a failed test count), and its ghost is drawn at the node, the ground
+//   under the mouse, with its skirt's outline green d800d800 or red d8d80000 (0x828dd0; not dragged: at its order's
+//   place, no outline). The release (0x824210) does the same once more, clears +0x1c and sends the order's new target
+//   (0x829b40 with its last argument 1): the place held inside the playable rectangle less one (x0 + 1 .. x1 - 1, z0 +
+//   1 .. z1 - 1); an order on an entity (0x824550) goes onto the unit nearest that place on the map plane (any
+//   distance) of the army of the one it was on, none of the order's own units (none: nothing is sent; so an order on a
+//   prop goes nowhere); a building (BuildMobile) goes to the site snapped for its blueprint (0x579300, 0x50b1a0), only
+//   when the test passed; any other order to the place. That is the command stream's SetCommandTarget (0x8b0ee0 -> the
+//   driver's slot 0x74; the stream's message 16, CDecoder::DecodeSetCommandTarget 0x749740): once for the order, which
+//   all its units share; with a focus army whose byte +0x170 is clear the target's place inside the playable rectangle
+//   (0x86da60), and for TransportLoadUnits only onto a FERRYBEACON, TRANSPORTATION or AIRSTAGINGPLATFORM unit
+//   (0x8b1023). The interface's own copy of the order takes the new target at once (0x8b4a40). Then
+//   OnCommandDragEnd(event, cmdId) (0x823f00). Cancelled (0x824290: a dragger posted over it) the node goes back to its
+//   order's place (0x82a030), nothing is sent and the script is not called. A double click after the press does nothing
+//   (0x870c24).
+// Left out (READ, not built): the no-rush circle 0x8b0ee0 tests (the focus army's +0x1bc..+0x1d0: a target
+// farther from its start than the radius is not sent while the timer runs; the interface's other orders do not
+// test it either); the tips the world view shows over a hovered waypoint (0x83ecf0: "<LOC Engine0007>Double
+// left-click for coordinated attack" or Engine0008 right-click, over an Attack / FormAttack none of the selection
+// carries; "<LOC Engine0009>Left-click to convert moves into patrol" or Engine0010 right-click, with +0x274) and
+// what those clicks do; the right button let go with Shift and Ctrl over a hovered waypoint (0x870ff7: modifiers 1
+// and 2), which takes that order out of each of its units' queues (0x8b1220: the driver's slot 0x80,
+// RemoveCommandFromQueue).
+namespace {
+
+// A command by its id, from the queues of the units the interface knows (the original's session command table,
+// session+0x3fc +0xcb4), with the units that carry it.
+bool FindCommandView(lua_State* L, uint32_t id, CommandView* out, std::vector<uint32_t>* carriers) {
+  UnitStore& store = Store(L);
+  bool found = false;
+  for (const auto& entry : store.units) {
+    const UserUnit* u = entry.second.get();
+    if (u->gone || u->view.dead) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    bool carries = false;
+    for (const std::vector<CommandView>* q : {&s.queue, &s.factoryQueue}) {
+      for (const CommandView& c : *q) {
+        if (c.id != id) continue;
+        if (!found) *out = c;
+        found = carries = true;
+      }
+    }
+    if (carries && carriers) carriers->push_back(u->view.id);
+  }
+  return found;
+}
+
+// 0x829b40 for a move (`last` false) or the release: the node to the ground under the mouse; a building's site
+// tested there when the node was already being dragged (its byte +0x1c from the move before).
+void MoveDraggedNode(lua_State* L, const float at[3], bool last) {
+  OrderGraph& g = Store(L).graph;
+  OrderGraph::Drag& d = g.drag;
+  if (!std::isfinite(at[0]) || !std::isfinite(at[1]) || !std::isfinite(at[2])) return;  // (0x5657f0)
+  for (int i = 0; i < 3; ++i) d.at[i] = at[i];
+  if (d.moved && d.type == static_cast<int>(CommandType::BuildMobile) && !d.blueprint.empty()) {
+    // A building's order dragged on from the move before: can it stand there (USERUNIT_CanBeBuiltAt 0x8c1880 at
+    // 0x829c95; here the simulation's own test, BuildSiteOf, on the site snapped there). A failed test counts
+    // unless the console's SkipUIChecks has turned the session's checks off (+0x4d5, 1 from the start: 0x8934f1,
+    // toggled by 0x897580); that switch is not built: the checks are always on. (The test asks the simulation: not
+    // while a beat runs on its own thread, the answer from the move before then; always for the release.)
+    UserState* user = UserState::From(L);
+    const bool beat = user->config().beatRunning && user->config().beatRunning();
+    Sim* sim = !beat || last ? TheSim(L) : nullptr;
+    bool free = true;
+    float site[3];
+    if (sim && BuildSiteOf(*sim, d.blueprint, at, site, &free)) d.fit = free;
+  }
+  d.moved = !last;
+  // The node itself, now (0x829c05): the legs to and from it follow the mouse.
+  auto it = g.nodeOf.find(d.command);
+  if (it != g.nodeOf.end() && it->second < static_cast<int>(g.nodes.size())) {
+    OrderGraph::Node& n = g.nodes[static_cast<size_t>(it->second)];
+    for (int i = 0; i < 3; ++i) n.sum[i] = at[i];
+    n.count = 1;
+  }
+}
+
+}  // namespace
+
+uint32_t UpdateHoveredWaypoint(lua_State* L, bool active, float mx, float my, const WaypointScreen& screenOf) {
+  if (!active && !UserState::From(L)->units) return 0xffffffffu;  // (a state without units: the front end's)
+  OrderGraph& g = Store(L).graph;
+  g.hovered = 0xffffffffu;
+  if (!active) return g.hovered;  // (the graph itself is the picture's to let go)
+  HoldOrderGraph(L, true);
+  if (!g.made) return g.hovered;
+  UnitStore& store = Store(L);
+  std::vector<uint32_t> selected;
+  for (const UserUnit* u : store.selection) selected.push_back(u->view.id);
+  const CommandGraphVars& vars = GraphVars();
+  const float clickScale = Looks().commandClickScale;   // (ui_CommandClickScale, 0xf57ce0)
+  float best = std::numeric_limits<float>::infinity();  // (0x10c19e0: +inf, 0xbe3b50)
+  for (const OrderGraph::Node& n : g.nodes) {
+    if (n.command == 0xffffffffu) continue;
+    float at[3], sx = 0, sy = 0, w = 0;
+    NodePlace(n, at);
+    if (!screenOf(at, &sx, &sy, &w) || !(w > 0)) continue;
+    float d = std::sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my)) * w;
+    float r = n.size / w;  // (0x829a6d: held below by the maximum, then above by the minimum)
+    if (!(vars.maxWaypointSize > r)) r = vars.maxWaypointSize;
+    if (vars.minWaypointSize > r) r = vars.minWaypointSize;
+    if (n.type == static_cast<int>(CommandType::Ferry)) d -= 0.1f;
+    if (clickScale * r * w < d) continue;
+    bool carriedBySelected = false;  // (0x829ad2: 0x831110, the selection against the order's units)
+    for (uint32_t u : g.carriers[n.command]) carriedBySelected = carriedBySelected || std::find(selected.begin(), selected.end(), u) != selected.end();
+    if (best > d || carriedBySelected) {
+      best = d;
+      g.hovered = n.command;
+    }
+  }
+  return g.hovered;
+}
+
+uint32_t HoveredWaypoint(lua_State* L) {
+  UserState* user = UserState::From(L);
+  return user->units ? Store(L).graph.hovered : 0xffffffffu;
+}
+
+bool HoveredConvertsToPatrol(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  UnitStore& store = Store(L);
+  OrderGraph& g = store.graph;
+  if (g.hovered == 0xffffffffu || !g.made || store.selection.empty()) return false;
+  auto node = g.nodeOf.find(g.hovered);
+  if (node == g.nodeOf.end()) return false;
+  const int type = g.nodes[static_cast<size_t>(node->second)].type;
+  bool carried = false;  // (0x8706b0: a selected unit carries it)
+  for (uint32_t id : g.carriers[g.hovered])
+    for (const UserUnit* u : store.selection) carried = carried || u->view.id == id;
+  if (!carried || (type != static_cast<int>(CommandType::Move) && type != static_cast<int>(CommandType::FormMove))) return false;
+  for (const UserUnit* u : store.selection) {  // (0x81dd00)
+    if (u->gone || u->view.dead) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    if (InCategory(L, u, "POD")) return false;
+    const std::vector<CommandView>& q = s.queue;
+    if (q.size() <= 1 || q.back().id == g.hovered) return false;
+    bool in = false;
+    for (const CommandView& c : q) in = in || c.id == g.hovered;
+    if (!in) return false;
+    for (const CommandView& c : q)
+      if (c.type != type) return false;
+  }
+  return true;
+}
+
+bool BeginWaypointDrag(lua_State* L, uint32_t command) {
+  if (command == 0xffffffffu) return false;
+  Sim* sim = TheSim(L);
+  if (!sim || sim->focusArmy < 0) return false;  // (0x81f899: no focus army, no action 5)
+  OrderGraph& g = Store(L).graph;
+  g.drag = OrderGraph::Drag();
+  g.drag.command = command;
+  CommandView c;
+  if (FindCommandView(L, command, &c, nullptr)) {
+    g.drag.type = c.type, g.drag.blueprint = c.blueprint;
+    if (c.hasPosition) {
+      g.drag.hasFrom = true;
+      for (int i = 0; i < 3; ++i) g.drag.from[i] = c.position[i];
+    }
+  }
+  auto node = g.nodeOf.find(command);
+  if (node != g.nodeOf.end() && node->second < static_cast<int>(g.nodes.size())) {
+    g.drag.hasHome = true;
+    NodePlace(g.nodes[static_cast<size_t>(node->second)], g.drag.home);
+  }
+  return true;
+}
+
+void MoveWaypointDrag(lua_State* L, const float at[3]) {
+  if (Store(L).graph.drag.command != 0xffffffffu) MoveDraggedNode(L, at, false);
+}
+
+uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playable[4]) {
+  UnitStore& store = Store(L);
+  OrderGraph& g = store.graph;
+  const uint32_t command = g.drag.command;
+  if (command == 0xffffffffu) return command;
+  MoveDraggedNode(L, at, true);
+  const bool fit = g.drag.fit;
+  g.drag = OrderGraph::Drag();  // (the byte +0x1c cleared: the node follows its order again)
+  g.builtSync = ~0ull;          // (worked out again: the node to its order's place, or where it was sent)
+  if (!std::isfinite(at[0]) || !std::isfinite(at[1]) || !std::isfinite(at[2])) return command;  // (0x829bcd)
+  CommandView c;
+  std::vector<uint32_t> carriers;
+  if (!FindCommandView(L, command, &c, &carriers)) return command;  // (0x829bc0: the order is gone)
+  if (!fit) {  // (0x829cd7: a building where it cannot stand)
+    Logf(LogLevel::Debug, "moho64ui: waypoint of order %u let go where its building cannot stand: no new target", command);
+    return command;
+  }
+  // The place, held inside the playable rectangle less one (0x829d03 .. 0x829d7d).
+  float x = at[0], z = at[2];
+  if (!(playable[2] - 1 > x)) x = playable[2] - 1;
+  if (playable[0] + 1 > x) x = playable[0] + 1;
+  if (!(playable[3] - 1 > z)) z = playable[3] - 1;
+  if (playable[1] + 1 > z) z = playable[1] + 1;
+  StreamTarget t;
+  float sent[3] = {x, at[1], z};
+  uint32_t onto = 0xffffffffu;
+  const UserUnit* ontoUnit = nullptr;
+  if (c.entity != 0xffffffffu) {
+    // An order on an entity: onto the nearest unit of that entity's army, none of the order's own (0x829dc0 ..
+    // 0x829e94: the session's units, mask 0x100, by their place +0x84 / +0x8c). INFERRED: the units the player's
+    // army knows of now (the session's table holds what the army sees); an entity that is no unit the interface
+    // knows (a prop, a wreck) has no army among them, so nothing is sent (FAF's commandgraph.lua: "If the target
+    // of an order is a prop, its node cannot be dragged").
+    auto target = store.units.find(c.entity);
+    if (target == store.units.end() || target->second->gone) return command;
+    const int army = target->second->view.army;
+    float nearest = std::numeric_limits<float>::infinity();
+    for (const auto& entry : store.units) {
+      const UserUnit* u = entry.second.get();
+      if (u->gone || u->view.dead || u->view.army != army) continue;
+      if (std::find(carriers.begin(), carriers.end(), u->view.id) != carriers.end()) continue;  // (0x8b4300)
+      if (ReconBitsOf(L, u) == 0) continue;
+      const float dx = x - u->view.position[0], dz = z - u->view.position[2];
+      const float d = std::sqrt(dx * dx + dz * dz);
+      if (nearest > d) nearest = d, ontoUnit = u;
+    }
+    if (!ontoUnit) return command;
+    onto = ontoUnit->view.id;
+    t.type = 1;
+    t.entity = onto;
+    for (int i = 0; i < 3; ++i) sent[i] = ontoUnit->view.position[i];
+  } else if (c.type == static_cast<int>(CommandType::BuildMobile) && !c.blueprint.empty()) {
+    // A building: its site snapped for its blueprint (0x829f50 / 0x829f5e; INFERRED the simulation's own
+    // snapping, BuildSiteOf, is the same).
+    Sim* sim = TheSim(L);
+    bool free = true;
+    float site[3];
+    if (!sim || !BuildSiteOf(*sim, c.blueprint, sent, site, &free)) return command;
+    for (int i = 0; i < 3; ++i) sent[i] = site[i];
+    t.type = 2;
+    t.pos = {site[0], site[1], site[2]};
+  } else {
+    t.type = 2;
+    t.pos = {sent[0], sent[1], sent[2]};
+  }
+  // CWldSession's SetTarget (0x8b0ee0): with a focus army the target's place inside the playable rectangle
+  // (0x86da60, by whole map units; skipped when the army's byte +0x170 is set, not read what that is); without one
+  // no test (the press needed one, 0x81f899); a transport's load only onto a transport.
+  Sim* sim = TheSim(L);
+  if (!sim) return command;
+  const int cx = static_cast<int>(sent[0]), cz = static_cast<int>(sent[2]);
+  if (sim->focusArmy >= 0 &&
+      (cx < static_cast<int>(playable[0]) || cx >= static_cast<int>(playable[2]) || cz < static_cast<int>(playable[1]) || cz >= static_cast<int>(playable[3])))
+    return command;
+  if (c.type == static_cast<int>(CommandType::TransportLoadUnits) &&
+      (!ontoUnit || !(InCategory(L, ontoUnit, "FERRYBEACON") || InCategory(L, ontoUnit, "TRANSPORTATION") || InCategory(L, ontoUnit, "AIRSTAGINGPLATFORM"))))
+    return command;
+  Writer(L).SetCommandTarget(command, t);
+  OrderGraph::Retarget r;
+  for (int i = 0; i < 3; ++i) r.at[i] = sent[i];
+  r.entity = onto;
+  r.sync = UserState::From(L)->syncCount;
+  g.retargets[command] = r;
+  Logf(LogLevel::Debug, "moho64ui: waypoint of order %u dragged: SetCommandTarget %s %.1f %.1f", command, onto != 0xffffffffu ? "onto a unit at" : "to",
+       sent[0], sent[2]);
+  return command;
+}
+
+void CancelWaypointDrag(lua_State* L) {
+  OrderGraph& g = Store(L).graph;
+  if (g.drag.command == 0xffffffffu) return;
+  // (0x82a030: the node back to its order's place at once, count 1, its byte +0x1c cleared; here where it stood when
+  // the drag began, until the graph is worked out again, as it is at once unless a beat runs on its own thread)
+  auto node = g.nodeOf.find(g.drag.command);
+  if (g.drag.hasHome && node != g.nodeOf.end() && node->second < static_cast<int>(g.nodes.size())) {
+    OrderGraph::Node& n = g.nodes[static_cast<size_t>(node->second)];
+    for (int i = 0; i < 3; ++i) n.sum[i] = g.drag.home[i];
+    n.count = 1;
+  }
+  g.drag = OrderGraph::Drag();
+  g.builtSync = ~0ull;
+}
+
+bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  const OrderGraph::Drag& d = Store(L).graph.drag;
+  if (d.command == 0xffffffffu || !d.moved || d.type != static_cast<int>(CommandType::BuildMobile) || d.blueprint.empty()) return false;
+  site->blueprint = d.blueprint;
+  for (int i = 0; i < 3; ++i) site->position[i] = d.at[i], from[i] = d.hasFrom ? d.from[i] : NAN;
+  site->free = d.fit;
+  return true;
 }
 
 // After a beat: the interface's units follow the simulation's.

@@ -246,7 +246,10 @@ void EndDragger(lua_State* L, UiManager& ui) {
 int l_PostDragger(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   lua_settop(L, 3);
-  ui.engineDragger = nullptr;
+  if (Control* engine = ui.engineDragger) {  // (the engine's own dragger is cancelled too: its slot 3)
+    ui.engineDragger = nullptr;
+    if (!engine->dead()) engine->DragCancel(L);
+  }
   if (PushDragger(L, ui)) {
     bool same = lua_rawequal(L, -1, 3) != 0;
     if (same) {
@@ -271,6 +274,12 @@ void UiManager::PostEngineDragger(lua_State* L, Control* control, int key) {
   if (PushDragger(L, *this)) {
     EndDragger(L, *this);
     CallDragger(L, "OnCancel", 0, 0, 0);
+  }
+  // The engine's dragger before is cancelled (0x78dde0: the dragger posted over another calls its slot 3), also when
+  // it is the same control starting another drag of its own (in the original a dragger object of its own each).
+  if (Control* before = engineDragger) {
+    engineDragger = nullptr;
+    if (!before->dead()) before->DragCancel(L);
   }
   engineDragger = control;
   draggerKey = key;

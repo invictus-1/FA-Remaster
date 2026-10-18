@@ -93,9 +93,11 @@ class Control : public ScriptObject {
   // 0x787440): self:OnLoseKeyboardFocus(). The focus itself stays unless the script gives it up.
   virtual void LosingKeyboardFocus(lua_State* L) { RunScript(L, "OnLoseKeyboardFocus"); }
   // For a control that posted itself as the dragger (UiManager::PostEngineDragger): the mouse
-  // moved, and the button was let go.
+  // moved, and the button was let go; or another dragger was posted over it (the original's
+  // IMauiDragger slot 3, DragCancel).
   virtual void DragMove(lua_State* L, const UiEvent& e) { (void)L, (void)e; }
   virtual void DragRelease(lua_State* L, const UiEvent& e) { (void)L, (void)e; }
+  virtual void DragCancel(lua_State* L) { (void)L; }
 
   // self:<name>(args): the `nargs` values on top of L are the arguments. Returns true when the
   // function exists and ran without error; then `nresults` results are on the stack. A script

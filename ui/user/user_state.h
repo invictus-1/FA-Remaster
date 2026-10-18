@@ -536,6 +536,25 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // orderTextures, orderLegs (highlighted first, then selected, then the rest), orderMarks and
 // orderSettings; empty lists when not shown. `rollover`: the unit under the mouse (0xffffffff: none).
 void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene);
+// The waypoint under the mouse and dragging it, as the original's command graph and its UICommandDragger
+// (user_units.cpp). `screenOf`: where a place of the world is on the screen and how many map units a pixel is
+// there (false: not in view). UpdateHoveredWaypoint works out the waypoint under the mouse at (x, y) while
+// `active` (Shift held over a world view whose highlight is on, not a minimap; else there is none), keeps it as
+// the session's and gives it: its order's id, 0xffffffff for none. HoveredConvertsToPatrol: the hovered waypoint
+// is one the selection's moves could be turned into a patrol at (the cursor's MOVE2PATROLCOMMAND). A drag: begun
+// on a hovered waypoint (false: none, or no focus army), its node moved to the ground under the mouse, let go
+// (the order's new target sent when it has one; `playable` the playable rectangle x0, z0, x1, z1; gives the
+// order's id for the script), or cancelled; DraggedBuildingSite: a building's order being dragged, its ghost where
+// the mouse is and whether it can stand there, and `from` the order's own place (NAN: none).
+using WaypointScreen = std::function<bool(const float place[3], float* x, float* y, float* unitsPerPixel)>;
+uint32_t UpdateHoveredWaypoint(lua_State* L, bool active, float x, float y, const WaypointScreen& screenOf);
+uint32_t HoveredWaypoint(lua_State* L);
+bool HoveredConvertsToPatrol(lua_State* L);
+bool BeginWaypointDrag(lua_State* L, uint32_t command);
+void MoveWaypointDrag(lua_State* L, const float at[3]);
+uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playable[4]);
+void CancelWaypointDrag(lua_State* L);
+bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]);
 // A build template: buildings that are placed together, each where it stood beside the first
 // (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
 // blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).

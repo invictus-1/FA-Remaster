@@ -57,17 +57,22 @@ local function shift(down)
     if down then moho64ui_Key(306, "Shift", "down") else moho64ui_Key(306, "", "up") end
     WaitSeconds(0.2)
 end
+local view
+-- a click, then the mouse away from the waypoint it made (with Shift held the waypoint under the mouse is
+-- highlighted with the legs leading to it: waypoints.lua)
 local function click(button, x, y, mods)
     moho64ui_MouseMove(x, y)
     WaitSeconds(0.2)
     moho64ui_MouseButton(button, true, x, y, mods)
     moho64ui_MouseButton(button, false, x, y, mods)
     WaitSeconds(0.5)
+    moho64ui_MouseMove(view.Left() + 60, view.Top() + 220)
+    WaitSeconds(0.2)
 end
 
 ForkThread(function()
     WaitSeconds(6)
-    local view = import("/lua/ui/game/worldview.lua").viewLeft
+    view = import("/lua/ui/game/worldview.lua").viewLeft
     local p = GetArmyAvatars()[1]:GetPosition()
     local spot = {p[1] + 20, p[2], p[3] + 20}
     local army = GetFocusArmy()
