@@ -1363,6 +1363,10 @@ void Sim::CreateMapProps() {
   if (missing) Logf(LogLevel::Debug, "moho64: %d map props have no blueprint", missing);
 }
 
+void Sim::SignalEvent(const ScriptObject* o) {
+  if (threads_) threads_->Signal(o);
+}
+
 void Sim::QueueDestroy(Entity* e) {
   if (e->destroyQueued) return;
   e->destroyQueued = true;
