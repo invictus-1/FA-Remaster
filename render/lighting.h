@@ -330,12 +330,11 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     // or by the sky's fitted light, the sun by a ray toward it; the sky where it meets nothing. Rougher, the more
     // of the sky's reflection as before.
     uint seed = RayHash(asuint(world.x * 37.0) ^ RayHash(asuint(world.z * 53.0) + asuint(world.y)));
-    float t;
-    uint instance;
+    RayHit hit;
     float3 traced = skySpecular;
-    if (RayTrace(world + N * 0.05, R, 0.02, rayEffects.y, 0xff, seed, t, instance)) {
-      float3 p = world + R * t, hitAlbedo, n;
-      RaySurfaceAt(instance, p, R, rayEffects.zw, hitAlbedo, n);
+    if (RayTrace(world + N * 0.05, R, 0.02, rayEffects.y, 0xff, seed, hit)) {
+      float3 p = world + R * hit.t, hitAlbedo, n;
+      RaySurfaceAt(hit, p, R, rayEffects.zw, hitAlbedo, n);
       traced = RayLitAt(p, n, hitAlbedo, seed, 8) / max(modern.y, 1e-4);  // (8 of the small lights at most: all would be dear)
     }
     skySpecular = lerp(traced, skySpecular, saturate(roughness * 2));

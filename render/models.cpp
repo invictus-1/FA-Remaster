@@ -126,6 +126,7 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
   lod->indices = device->CreateBuffer(ib);
   lod->indexCount = static_cast<uint32_t>(indexCount);
   lod->vertexCount = static_cast<uint32_t>(vertexCount);
+  lod->indexBytes = static_cast<uint32_t>(indexBytes);
   if (!lod->vertices || !lod->indices) return fail("the device refused the mesh");
   return true;
 }
@@ -431,6 +432,7 @@ const Model* ModelCache::ShieldShell(const Model* of, const PersonalShieldLook& 
   lod.indices = device_->CreateBuffer(ib);
   lod.indexCount = static_cast<uint32_t>(indices.size());
   lod.vertexCount = static_cast<uint32_t>(vertices.size());
+  lod.indexBytes = 4;
   lod.albedo = lattice;
   lod.normals = textures_->White();
   lod.specular = textures_->White();

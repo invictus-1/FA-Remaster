@@ -507,7 +507,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       world.decals.remastered = sides_.size() == 2 ? side.remastered : lookRemastered;
       for (size_t i = 0; i < setup_.decals.size(); ++i) {
         const Vec3 at = place(setup_.at + along * (first + step * static_cast<float>(i)), side);
-        if (!world.decals.Add(setup_.decals[i], at, setup_.decalSize, setup_.decalSize, 0, 0, now, 0))
+        const std::string& name = setup_.decals[i];
+        const bool normals = name.size() > 8 && name.compare(name.size() - 8, 8, "_normals") == 0;  // (a normal decal)
+        if (!(normals ? world.decals.AddNormal(name, at, setup_.decalSize, setup_.decalSize, 0, 0, now, 0)
+                      : world.decals.Add(name, at, setup_.decalSize, setup_.decalSize, 0, 0, now, 0)))
           fprintf(stderr, "render: --fx-decal: no decal %s\n", setup_.decals[i].c_str());
       }
       world.decals.remastered = lookRemastered;

@@ -44,17 +44,17 @@ RWTexture2D<float4> rayResults : register(u0);
   int layer = probe / 1024;
   float3 from = BounceProbe(ColumnOfTile(tile), layer), d = RayDirection(ray);
   uint seed = RayHash(probe * 64 + ray + uint(map.z) * 7919);
+  RayHit met;
   float t;
-  uint instance;
-  bool front;
   float3 radiance;
-  bool hit = RayTraceFacing(from, d, 0.05, map.w, 0xff, seed, t, instance, front);
-  if (hit && !front && RayInstance(instance).a > 1.5) {
+  bool hit = RayTrace(from, d, 0.05, map.w, 0xff, seed, met);
+  t = met.t;
+  if (hit && !met.front && RayInstance(met.instance).a > 1.5) {
     radiance = 0;  // (the back of something, not a leaf: the probe may be inside it; its distance told as negative)
     t = -t;
   } else if (hit) {
     float3 p = from + d * t, albedo, n;
-    RaySurfaceAt(instance, p, d, map.xy, albedo, n);
+    RaySurfaceAt(met, p, d, map.xy, albedo, n);
     radiance = RayLitAt(p, n, albedo, seed, 48);  // (round about by the probes of the frame before: light bounces again)
   } else {
     t = map.w;

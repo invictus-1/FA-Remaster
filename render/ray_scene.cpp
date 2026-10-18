@@ -54,22 +54,76 @@ cbuffer Entry : register(b1) {
 }
 )hlsl";
 
+// A solid level's triangles as the rays see them (RayScene, the triangle table: kRayShaderBlock says how an entry is
+// laid out), read from its vertex and index buffers: for each, its colour, the albedo read over the triangle (at its
+// middle and halfway from there to each corner, at the texture's level whose texels come nearest a quarter of the
+// triangle in size), its team colour's share there (the specular's alpha, as kAverage takes it), and the way it faces in
+// the model's own space (from its corners: the side they go round anticlockwise, as the passes draw front faces in
+// this right-handed world; a sliver with no area, by its corners' normals). A thread for each triangle.
+const char kTriangles[] = R"hlsl(
+ByteAddressBuffer vertices : register(t0, space1);  // ScmVertex (models.h): 68 bytes, the position at 0, the normal at 12, uv0 at 48
+ByteAddressBuffer indices : register(t1, space1);   // three to a triangle, 16 bits (two to a word, the first low) or 32
+Texture2D albedo : register(t0);
+Texture2D specular : register(t1);
+RWTexture2D<float4> table : register(u0);
+cbuffer Level : register(b1) {
+  uint4 level;  // x: its first entry in the table; y: its triangles; z: 1 = indices of 32 bits; w: the table's first row
+};
+uint Corner(uint i) {
+  if (level.z) return indices.Load(i * 4);
+  uint two = indices.Load((i >> 1) * 4);
+  return i & 1 ? two >> 16 : two & 0xffff;
+}
+float3 VertexAt(uint v, uint offset) { return asfloat(vertices.Load3(v * 68 + offset)); }
+float2 UvAt(uint v) { return asfloat(vertices.Load2(v * 68 + 48)); }
+// a texture over the triangle a b c (its places in the texture)
+float4 Over(Texture2D t, float2 a, float2 b, float2 c) {
+  uint w, h, levels;
+  t.GetDimensions(0, w, h, levels);
+  float2 ab = (b - a) * float2(w, h), ac = (c - a) * float2(w, h);
+  float texels = abs(ab.x * ac.y - ab.y * ac.x) * 0.5;  // (its area in the texture's texels)
+  // (a whole level: NVIDIA's Direct3D 12 and Vulkan drivers blend between two levels differently, measured
+  // 2026-10-17 on an RTX 4090: a level between two gave the backends' check views a mean difference of 0.05, a
+  // whole one 0.000)
+  float lod = floor(0.5 * log2(max(texels * 0.25, 1)) + 0.5);
+  float2 m = (a + b + c) / 3;
+  return (t.SampleLevel(samplerLinear, m, lod) + t.SampleLevel(samplerLinear, (m + a) * 0.5, lod) +
+          t.SampleLevel(samplerLinear, (m + b) * 0.5, lod) + t.SampleLevel(samplerLinear, (m + c) * 0.5, lod)) * 0.25;
+}
+[numthreads(64, 1, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  if (id.x >= level.y) return;
+  uint a = Corner(id.x * 3), b = Corner(id.x * 3 + 1), c = Corner(id.x * 3 + 2);
+  float2 ua = UvAt(a), ub = UvAt(b), uc = UvAt(c);
+  float3 colour = saturate(Over(albedo, ua, ub, uc).rgb);
+  float share = saturate(Over(specular, ua, ub, uc).a);
+  float3 pa = VertexAt(a, 0), face = cross(VertexAt(b, 0) - pa, VertexAt(c, 0) - pa);
+  float area = length(face);
+  float3 n = area > 1e-12 ? face / area : VertexAt(a, 12) + VertexAt(b, 12) + VertexAt(c, 12);
+  n = dot(n, n) > 1e-12 ? normalize(n) : float3(0, 1, 0);
+  uint3 c8 = uint3(round(colour * 255));
+  uint e = level.x + id.x;
+  table[uint2(e % 1024, level.w + e / 1024)] = float4(float(c8.r + c8.g * 256 + c8.b * 65536), share, BounceOct(n));
+}
+)hlsl";
+
 // What each instance is, for every shader that traces (kRayShaderBlock's t37), from its data and its level's colour:
 // rgb its albedo (linear; a unit's team colour in by its share), a 0..1 for leaves (their coverage), 2 something
-// solid, 3 the ground, 4 the water. A thread for each instance.
+// solid, 3 the ground, 4 the water; and in the rows after (count.y on) the rest of it: rgb its team colour (linear),
+// a its level's first entry in the triangle table + 1, negative for what takes no team colour, 0 for none. A thread
+// for each instance.
 const char kResolve[] = R"hlsl(
 Texture2D colours : register(t0);
 StructuredBuffer<uint4> instanceData : register(t0, space1);
 RWTexture2D<float4> picture : register(u0);
 cbuffer Count : register(b1) {
-  uint4 count;  // x: how many instances
+  uint4 count;  // x: how many instances; y: the row the rest of what each is begins at
 };
 float3 Lin(float3 c) { return pow(max(c, 0), 2.2); }
 [numthreads(64, 1, 1)] void CS(uint3 id : SV_DispatchThreadID) {
   uint i = id.x;
   if (i >= count.x) return;
   uint4 info = instanceData[i];
-  float4 o;
+  float4 o, rest = 0;
   if (info.y & 1) o = float4(0, 0, 0, 3);
   else if (info.y & 2) o = float4(0.02, 0.05, 0.08, 4);
   else {
@@ -77,14 +131,16 @@ float3 Lin(float3 c) { return pow(max(c, 0), 2.2); }
     float3 team = float3(info.z & 255, (info.z >> 8) & 255, (info.z >> 16) & 255) / 255.0;
     o.rgb = lerp(Lin(e.rgb), Lin(team), info.y & 12 ? 0 : e.a);
     o.a = info.y & 8 ? saturate(e.a) : 2;
+    rest = float4(Lin(team), info.y & 12 ? -float(info.w) : float(info.w));
   }
   picture[uint2(i % 1024, i / 1024)] = o;
+  picture[uint2(i % 1024, count.y + i / 1024)] = rest;
 }
 )hlsl";
 
 // The check view (RayScene::Check): a ray from the camera through each pixel; what it meets lit by the sun,
 // whose shadow another ray finds, and by the sky. The ground by its own normals (the terrain's normal map) and a
-// colour of its own; a model by its colour, facing the ray (no normals are kept for models).
+// colour of its own; a model by the triangle met (RaySurfaceAt: its colour and the way it faces).
 const char kCheck[] = R"hlsl(
 RWTexture2D<float4> picture : register(u0);
 cbuffer RayCheck : register(b1) {
@@ -97,12 +153,11 @@ cbuffer RayCheck : register(b1) {
   float4 a = mul(back, float4(ndc, 1, 1)), b = mul(back, float4(ndc, 0.5, 1));
   float3 from = a.xyz / a.w, d = normalize(b.xyz / b.w - from);
   const uint seed = RayHash(id.x * 1973 + id.y * 9277 + 1);
-  float t;
-  uint instance;
+  RayHit hit;
   float3 c;
-  if (RayTrace(from, d, 0, 1e6, 0xff, seed, t, instance)) {
-    float3 p = from + d * t, albedo, n;
-    RaySurfaceAt(instance, p, d, size.zw, albedo, n);
+  if (RayTrace(from, d, 0, 1e6, 0xff, seed, hit)) {
+    float3 p = from + d * hit.t, albedo, n;
+    RaySurfaceAt(hit, p, d, size.zw, albedo, n);
     c = RayLitAt(p, n, albedo, seed, 48);
   } else {
     c = skyZenith.w > 0.5 ? ComputedSky(d) : float3(0.4, 0.5, 0.65);
@@ -123,7 +178,9 @@ uint32_t Pack(const float* c) {
 }
 
 constexpr int kColoursWide = 1024, kColoursHigh = 64;  // (65,536 levels' colours)
-constexpr uint32_t kMostInstances = 1024 * 128;          // (what each instance is: 131,072 at most)
+constexpr uint32_t kMostInstances = 1024 * RayScene::kInstanceRows;  // (what each instance is: 131,072 at most)
+constexpr uint32_t kTableEntries = 1024 * RayScene::kTableRows;      // (the triangle table's room)
+static_assert(RayScene::kInstanceRows == 128 && RayScene::kTableRow == 256, "kRayShaderBlock's numbers (ray_scene.h)");
 
 }  // namespace
 
@@ -132,7 +189,7 @@ RayScene::~RayScene() {
   for (gfx::Structure s : {scene_, ground_, water_}) device_->Destroy(s);
   for (gfx::Buffer b : {groundVertices_, groundIndices_, waterVertices_, instanceData_}) device_->Destroy(b);
   for (gfx::Texture t : {colours_, picture_, instancesPicture_}) device_->Destroy(t);
-  for (gfx::Pipeline p : {average_, check_, resolve_}) device_->Destroy(p);
+  for (gfx::Pipeline p : {average_, triangles_, check_, resolve_}) device_->Destroy(p);
 }
 
 bool RayScene::Init(std::string* error) {
@@ -146,9 +203,13 @@ bool RayScene::Init(std::string* error) {
   cd.name = "rays: a level's colour";
   cd.source = average;
   average_ = device_->CreateCompute(cd, error);
+  const std::string triangles = std::string(kViewShaderBlock) + kTriangles;
+  cd.name = "rays: a level's triangles";
+  cd.source = triangles;
+  if (average_) triangles_ = device_->CreateCompute(cd, error);
   cd.name = "rays: the check view";
   cd.source = check;
-  if (average_) check_ = device_->CreateCompute(cd, error);
+  if (triangles_) check_ = device_->CreateCompute(cd, error);
   const std::string resolve = std::string(kViewShaderBlock) + kResolve;
   cd.name = "rays: what each instance is";
   cd.source = resolve;
@@ -159,8 +220,8 @@ bool RayScene::Init(std::string* error) {
   td.height = kColoursHigh;
   td.format = gfx::Format::RGBA8;
   if (resolve_) colours_ = device_->CreateTarget(td);
-  td.width = 1024;
-  td.height = kMostInstances / 1024;
+  td.width = 1024;  // (what each instance is, the rest of it, the triangle table: kRayShaderBlock)
+  td.height = static_cast<int>(kTableRow + kTableRows);
   td.format = gfx::Format::RGBA32F;
   if (colours_) instancesPicture_ = device_->CreateTarget(td);
   gfx::BufferDesc bd;
@@ -236,7 +297,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
   instances_.clear();
   info_.clear();
   auto add = [&](gfx::Structure geometry, const float* r0, const float* r1, const float* r2, uint32_t colour, uint32_t flags, uint32_t team,
-                 uint8_t mask = 0x01) {
+                 uint32_t table = 0, uint8_t mask = 0x01) {
     gfx::SceneInstance s;
     std::memcpy(s.transform, r0, 4 * sizeof(float));
     std::memcpy(s.transform + 4, r1, 4 * sizeof(float));
@@ -245,12 +306,12 @@ void RayScene::Build(const MeshRenderer& meshes) {
     s.id = static_cast<uint32_t>(instances_.size());
     s.mask = mask;
     instances_.push_back(s);
-    info_.insert(info_.end(), {colour, flags, team, 0});
+    info_.insert(info_.end(), {colour, flags, team, table});
   };
   if (ground_) {
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     add(ground_, identity, identity + 4, identity + 8, 0, 1, 0);
-    if (water_) add(water_, identity, identity + 4, identity + 8, 0, 2, 0, 0x02);
+    if (water_) add(water_, identity, identity + 4, identity + 8, 0, 2, 0, 0, 0x02);
   }
   bool averaged = false;
   meshes.ForEachAdded([&](const Model* model, const float* r0, const float* r1, const float* r2, const float* color, bool scenery) {
@@ -283,12 +344,41 @@ void RayScene::Build(const MeshRenderer& meshes) {
         device_->SetStorage(0, colours_);
         device_->Dispatch(1);
         averaged = true;
+        // a solid level's triangles, each with its colour and the way it faces, while the table has room (leaves
+        // keep their one colour: a ray takes their triangles by chance); worked out below, after the colours
+        const uint32_t count = lod.indexCount / 3;
+        if (level.structure && !level.leaves && count && nextTriangle_ + count <= kTableEntries) {
+          newTables_.push_back({&lod, nextTriangle_, count});
+          level.table = nextTriangle_ + 1;
+          nextTriangle_ += count;
+        } else if (level.structure && !level.leaves && count && !tableFull_) {
+          tableFull_ = true;
+          fprintf(stderr, "render: the rays' triangle table is full (%u triangles): levels seen from now on keep one colour\n",
+                  nextTriangle_);
+        }
       }
       it = levels_.emplace(lod.serial, level).first;
     }
     if (it->second.structure)
-      add(it->second.structure, r0, r1, r2, it->second.colour, (scenery ? 4u : 0u) | (it->second.leaves ? 8u : 0u), scenery ? 0u : Pack(color));
+      add(it->second.structure, r0, r1, r2, it->second.colour, (scenery ? 4u : 0u) | (it->second.leaves ? 8u : 0u), scenery ? 0u : Pack(color),
+          it->second.table);
   });
+  if (!newTables_.empty()) {  // the triangles of the levels seen the first time, each level's into its part of the table
+    device_->SetPipeline(triangles_);
+    device_->SetStorage(0, instancesPicture_);
+    for (const NewTable& t : newTables_) {
+      const uint32_t k[4] = {t.first, t.count, t.lod->indexBytes == 4 ? 1u : 0u, kTableRow};
+      device_->SetConstants(1, k, sizeof k);
+      device_->SetTexture(0, t.lod->albedo);
+      device_->SetTexture(1, t.lod->specular);
+      device_->SetShaderBuffer(t.lod->vertices, 0);
+      device_->SetShaderBuffer(t.lod->indices, 1);
+      device_->Dispatch((t.count + 63) / 64);
+    }
+    newTables_.clear();
+    // (the shader buffers' slot 1 is left holding the last level's indices: what reads the small lights there binds
+    // them again first, Lights::Bind; slot 0 is taken by the instances' data below)
+  }
   if (averaged) {
     device_->SetStorage(0, {});
     device_->SetTexture(0, {});
@@ -300,7 +390,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
   }
   if (!info_.empty()) {  // what each instance is, as the shaders that trace read it
     device_->UpdateBuffer(instanceData_, info_.data(), static_cast<uint32_t>(info_.size() * sizeof(uint32_t)));
-    const uint32_t count[4] = {static_cast<uint32_t>(instances_.size()), 0, 0, 0};
+    const uint32_t count[4] = {static_cast<uint32_t>(instances_.size()), kInstanceRows, 0, 0};
     device_->SetPipeline(resolve_);
     device_->SetConstants(1, count, sizeof count);
     device_->SetTexture(0, colours_);

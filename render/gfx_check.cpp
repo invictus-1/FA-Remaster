@@ -62,6 +62,25 @@ RWTexture2D<float> narrow : register(u15);
 }
 )hlsl";
 
+// Static buffers read by a dispatch (SetShaderBuffer): an index buffer of three 16-bit indices (6 bytes: the last
+// word half past the data) and a vertex buffer of floats, each number written as red into a picture 8 x 1.
+const char kFromBuffers[] = R"hlsl(
+ByteAddressBuffer shorts : register(t0, space1);
+ByteAddressBuffer floats : register(t1, space1);
+RWTexture2D<float4> got : register(u0);
+[numthreads(8, 1, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint i = id.x;
+  float v = 0;
+  if (i < 3) {
+    uint two = shorts.Load((i >> 1) * 4);
+    v = (i & 1 ? two >> 16 : two & 0xffff) / 255.0;
+  } else if (i < 8) {
+    v = asfloat(floats.Load((i - 3) * 4));
+  }
+  got[uint2(i, 0)] = float4(v, 0, 0, 1);
+}
+)hlsl";
+
 // All of it shown in the window's top left corner, to be read back.
 const char kShow[] = R"hlsl(
 Texture2D plane : register(t0);
@@ -70,6 +89,7 @@ Texture2D level : register(t2);
 Texture2D<uint> counts : register(t3);
 Texture2D wide : register(t4);
 Texture2D narrow : register(t5);
+Texture2D fromBuffers : register(t6);
 float4 VS(uint id : SV_VertexID) : SV_Position {
   float2 uv = float2((id << 1) & 2, id & 2);
   return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
@@ -83,6 +103,7 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   if (p.x < 178 && p.y < 1) return float4(counts.Load(int3(p.x - 176, 0, 0)) / 256.0, 0, 0, 1);
   if (p.y >= 32 && p.y < 48 && p.x < 16) return wide.Load(int3(p.x, p.y - 32, 0));
   if (p.y >= 32 && p.y < 48 && p.x >= 16 && p.x < 32) return float4(narrow.Load(int3(p.x - 16, p.y - 32, 0)).r, 0, 0, 1);
+  if (p.y == 48 && p.x < 8) return fromBuffers.Load(int3(p.x, 0, 0));
   return float4(0, 0, 0, 1);
 }
 )hlsl";
@@ -90,9 +111,12 @@ float4 PS(float4 position : SV_Position) : SV_Target {
 // Ray tracing: rays cast straight down (-z) from a row of places over three instances of two geometries, each
 // ray's first hit written (which instance / 16, how far / 16, 1). The lower four rows trace with a mask that
 // leaves out the third instance; the triangle is not opaque, so the shader takes its candidates itself.
+// And what else a hit tells (into `more`): which triangle of its geometry / 4, the instance's matrix's x
+// translation / 8 + 0.5, and a quarter of its [1][1] plus a quarter of its z translation.
 const char kRays[] = R"hlsl(
 RaytracingAccelerationStructure scene : register(t33);
 RWTexture2D<float4> hits : register(u0);
+RWTexture2D<float4> more : register(u1);
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
   if (id.x >= 32 || id.y >= 8) return;
   RayDesc ray;
@@ -104,20 +128,28 @@ RWTexture2D<float4> hits : register(u0);
   q.TraceRayInline(scene, RAY_FLAG_NONE, id.y < 4 ? 0xff : 0x01, ray);
   while (q.Proceed())
     if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) q.CommitNonOpaqueTriangleHit();
-  float4 o = float4(0, 0, 0, 1);
-  if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) o = float4(q.CommittedInstanceID() / 16.0, q.CommittedRayT() / 16.0, 1, 1);
+  float4 o = float4(0, 0, 0, 1), m = float4(0, 0, 0, 1);
+  if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+    o = float4(q.CommittedInstanceID() / 16.0, q.CommittedRayT() / 16.0, 1, 1);
+    float3x4 w = q.CommittedObjectToWorld3x4();
+    m = float4(q.CommittedPrimitiveIndex() / 4.0, w[0][3] / 8 + 0.5, w[1][1] * 0.25 + w[2][3] * 0.25, 1);
+  }
   hits[id.xy] = o;
+  more[id.xy] = m;
 }
 )hlsl";
 const char kShowRays[] = R"hlsl(
 Texture2D hits : register(t0);
+Texture2D more : register(t1);
 float4 VS(uint id : SV_VertexID) : SV_Position {
   float2 uv = float2((id << 1) & 2, id & 2);
   return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
 }
 float4 PS(float4 position : SV_Position) : SV_Target {
   int2 p = int2(position.xy);
-  return p.x < 32 && p.y < 8 ? hits.Load(int3(p, 0)) : float4(0, 0, 0, 1);
+  if (p.x < 32 && p.y < 8) return hits.Load(int3(p, 0));
+  if (p.x < 32 && p.y < 16) return more.Load(int3(p.x, p.y - 8, 0));
+  return float4(0, 0, 0, 1);
 }
 )hlsl";
 
@@ -188,7 +220,8 @@ bool RayCheck(gfx::Device* device, const std::function<void()>& pump) {
   td.height = 8;
   td.format = gfx::Format::RGBA32F;
   const gfx::Texture hits = device->CreateTarget(td);
-  if (!squareGeometry || !triangleGeometry || !hits) {
+  const gfx::Texture more = device->CreateTarget(td);
+  if (!squareGeometry || !triangleGeometry || !hits || !more) {
     printf("render: --gfx-check: ray tracing                                     WRONG (its geometry not made)\n");
     return false;
   }
@@ -217,8 +250,10 @@ bool RayCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->SetPipeline(rays);
     device->SetScene(33, scene);
     device->SetStorage(0, hits);
+    device->SetStorage(1, more);
     device->Dispatch(4, 1);
     device->SetStorage(0, {});
+    device->SetStorage(1, {});
     device->SetScene(33, {});
     gfx::PassDesc pass;
     pass.window = true;
@@ -226,13 +261,15 @@ bool RayCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->BeginPass(pass);
     device->SetPipeline(show);
     device->SetTexture(0, hits);
+    device->SetTexture(1, more);
     device->Draw(3);
     device->SetTexture(0, {});
+    device->SetTexture(1, {});
     device->EndFrame(frame + 1 == frames ? &shot : nullptr);
   }
   const int width = device->Width();
-  int bad = 0, worst = 0, hitsSeen = 0;
-  if (shot.size() < static_cast<size_t>(width) * 8 * 4 || width < 32) bad = 1;
+  int bad = 0, worst = 0, hitsSeen = 0, badMore = 0, worstMore = 0;
+  if (shot.size() < static_cast<size_t>(width) * 16 * 4 || width < 32) bad = badMore = 1;
   for (int j = 0; j < 8 && !bad; ++j)
     for (int i = 0; i < 32; ++i) {
       const float x = -4.5f + 9 * (static_cast<float>(i) + 0.5f) / 32, y = -1 + 2 * (static_cast<float>(j) + 0.5f) / 8;
@@ -249,17 +286,32 @@ bool RayCheck(gfx::Device* device, const std::function<void()>& pump) {
       const int off = (hit != (want != 0) || got != want) ? 255 : want ? static_cast<int>(std::lround(std::fabs(gotT - t) * 255 / 16)) : 0;
       worst = std::max(worst, off);
       if (off > 2) ++bad;
+      // the rest of the hit: the square's two triangles (0 below its diagonal from corner (-1, -1) to (1, 1), 1
+      // above), the triangle's one; the instances' matrices (x -3, 0, 3; the half square: [1][1] 0.5, z 2)
+      float wantMore[3] = {0, 0, 0};
+      if (want == 5) wantMore[0] = y > x + 3 ? 0.25f : 0, wantMore[1] = 0.125f, wantMore[2] = 0.25f;
+      if (want == 7) wantMore[0] = y > x ? 0.25f : 0, wantMore[1] = 0.5f, wantMore[2] = 0.625f;
+      if (want == 9) wantMore[1] = 0.875f, wantMore[2] = 0.25f;
+      const uint8_t* pm = &shot[((static_cast<size_t>(j) + 8) * static_cast<size_t>(width) + static_cast<size_t>(i)) * 4];
+      for (int c = 0; c < 3; ++c) {
+        const int offMore = std::abs(static_cast<int>(pm[c]) - static_cast<int>(std::lround(wantMore[c] * 255)));
+        worstMore = std::max(worstMore, offMore);
+        if (offMore > 2) ++badMore;
+      }
     }
   device->Destroy(scene);
   device->Destroy(squareGeometry);
   device->Destroy(triangleGeometry);
   device->Destroy(hits);
+  device->Destroy(more);
   for (gfx::Buffer b : {squareVertices, triangleVertices, squareIndices}) device->Destroy(b);
   device->Destroy(rays);
   device->Destroy(show);
   printf("render: --gfx-check: %-48s %s (largest difference %d in 255; %d of 256 rays met something)\n",
          "rays through three instances (ray queries)", bad ? "WRONG" : "right", worst, hitsSeen);
-  return !bad;
+  printf("render: --gfx-check: %-48s %s (largest difference %d in 255)\n", "hits' triangles and instances' matrices",
+         badMore ? "WRONG" : "right", worstMore);
+  return !bad && !badMore;
 }
 
 }  // namespace
@@ -276,7 +328,7 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   };
   const gfx::Pipeline fill = compute("check: fill", kFill), combine = compute("check: combine", kCombine),
                       firstLevel = compute("check: first level", kFirstLevel), empty = compute("check: empty", kEmpty),
-                      count = compute("check: count", kCount);
+                      count = compute("check: count", kCount), fromBuffers = compute("check: from static buffers", kFromBuffers);
   gfx::PipelineDesc pd;
   pd.name = "check: show";
   pd.vertexSource = pd.pixelSource = kShow;
@@ -284,7 +336,7 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   pd.depthTest = pd.depthWrite = false;
   const gfx::Pipeline show = device->CreatePipeline(pd, &error);
   if (!show) fprintf(stderr, "render: --gfx-check: %s\n", error.c_str());
-  const bool computes = fill && combine && firstLevel && empty && count;
+  const bool computes = fill && combine && firstLevel && empty && count && fromBuffers;
   printf("render: --gfx-check: compute pipelines %s, the drawing one %s\n", computes ? "made" : "NOT made", show ? "made" : "NOT made");
   if (!computes || !show) return false;
 
@@ -313,9 +365,31 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   const gfx::Texture wide = device->CreateTarget(td);
   td.format = gfx::Format::R8;
   const gfx::Texture narrow = device->CreateTarget(td);
-  const bool made = plane && volume && level && counts && wide && narrow;
+  td.width = 8;
+  td.height = 1;
+  td.format = gfx::Format::RGBA8;
+  const gfx::Texture got = device->CreateTarget(td);
+  const bool made = plane && volume && level && counts && wide && narrow && got;
   printf("render: --gfx-check: storage targets %s\n", made ? "made" : "NOT made");
   if (!made) return false;
+  // static buffers for a dispatch to read: three 16-bit indices (an odd count), and floats as a vertex buffer
+  const uint16_t shortValues[3] = {3, 250, 17};
+  const float floatValues[5] = {0.25f, 0.5f, 0.75f, 1.0f, 0.125f};
+  gfx::BufferDesc bd;
+  bd.kind = gfx::BufferKind::Index;
+  bd.stride = 2;
+  bd.size = sizeof shortValues;
+  bd.data = shortValues;
+  const gfx::Buffer shorts = device->CreateBuffer(bd);
+  bd.kind = gfx::BufferKind::Vertex;
+  bd.stride = 4;
+  bd.size = sizeof floatValues;
+  bd.data = floatValues;
+  const gfx::Buffer floats = device->CreateBuffer(bd);
+  if (!shorts || !floats) {
+    printf("render: --gfx-check: static buffers NOT made\n");
+    return false;
+  }
 
   const float k[4] = {0.25f, 1, 0, 0};
   std::vector<uint8_t> shot;
@@ -349,6 +423,12 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->SetStorage(15, narrow);
     device->Dispatch(2, 2);
     for (int slot : {9, 12, 15}) device->SetStorage(slot, {});
+    device->SetPipeline(fromBuffers);
+    device->SetShaderBuffer(shorts, 0);
+    device->SetShaderBuffer(floats, 1);
+    device->SetStorage(0, got);
+    device->Dispatch(1);
+    device->SetStorage(0, {});
     gfx::PassDesc pass;
     pass.window = true;
     pass.clearColor = false;
@@ -360,17 +440,18 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
     device->SetTexture(3, counts);
     device->SetTexture(4, wide);
     device->SetTexture(5, narrow);
+    device->SetTexture(6, got);
     device->Draw(3);
-    for (int slot = 0; slot < 6; ++slot) device->SetTexture(slot, {});
+    for (int slot = 0; slot < 7; ++slot) device->SetTexture(slot, {});
     device->EndFrame(frame + 1 == frames ? &shot : nullptr);
   }
   const int width = device->Width();
-  if (shot.size() < static_cast<size_t>(width) * 48 * 4 || width < 178) {
-    printf("render: --gfx-check: nothing read back (a window of at least 178 x 48 is needed)\n");
+  if (shot.size() < static_cast<size_t>(width) * 49 * 4 || width < 178) {
+    printf("render: --gfx-check: nothing read back (a window of at least 178 x 49 is needed)\n");
     return false;
   }
   // each region's pixels against what they should be (the window's 8 bits a channel: within 2 of 255)
-  int bad[6] = {}, worst[6] = {};
+  int bad[7] = {}, worst[7] = {};
   auto check = [&](int region, int x, int y, float r, float g, float b) {
     const uint8_t* p = &shot[(static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4];
     const float want[3] = {r, g, b};
@@ -396,15 +477,18 @@ bool GfxCheck(gfx::Device* device, const std::function<void()>& pump) {
   check(4, 177, 0, 1, 0, 0);             // (256 threads counted)
   for (int y = 32; y < 48; ++y)
     for (int x = 0; x < 32; ++x) check(5, x, y, x < 16 ? x / 15.0f : (y - 32) / 15.0f, x < 16 ? (y - 32) / 15.0f : 0, x < 16 ? 1.0f : 0);
-  const char* names[6] = {"a picture written by a dispatch", "a volume written by a dispatch", "a second level from both, by the next dispatch",
-                          "a first level, by a dispatch after that", "numbers counted at once (atomics, R32UI)", "slots past the eighth (RGBA32F, R8)"};
+  for (int x = 0; x < 8; ++x) check(6, x, 48, x < 3 ? shortValues[x] / 255.0f : floatValues[x - 3], 0, 0);
+  const char* names[7] = {"a picture written by a dispatch", "a volume written by a dispatch", "a second level from both, by the next dispatch",
+                          "a first level, by a dispatch after that", "numbers counted at once (atomics, R32UI)", "slots past the eighth (RGBA32F, R8)",
+                          "static buffers read by a dispatch (16-bit, float)"};
   bool all = true;
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < 7; ++i) {
     printf("render: --gfx-check: %-48s %s (largest difference %d in 255)\n", names[i], bad[i] ? "WRONG" : "right", worst[i]);
     all = all && !bad[i];
   }
-  for (gfx::Texture t : {plane, volume, level, counts, wide, narrow}) device->Destroy(t);
-  for (gfx::Pipeline p : {fill, combine, firstLevel, empty, count, show}) device->Destroy(p);
+  for (gfx::Texture t : {plane, volume, level, counts, wide, narrow, got}) device->Destroy(t);
+  for (gfx::Buffer b : {shorts, floats}) device->Destroy(b);
+  for (gfx::Pipeline p : {fill, combine, firstLevel, empty, count, fromBuffers, show}) device->Destroy(p);
   all = RayCheck(device, pump) && all;
   printf("render: --gfx-check on %s: %s\n", device->BackendName(), all ? "all right" : "SOMETHING WRONG");
   return all;

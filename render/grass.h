@@ -47,9 +47,8 @@ class GroundCover {
   bool SetPlants(const JsonValue& cover, TextureCache* textures, const std::string& folder);
   float plantCell = 0.3f;     // one spot (a clump, a flower, ...) or none in a cell this wide
   float plantTallest = 0.24f; // world units: the tallest plant's height
-  // spots a square world unit where the table says 1: 0 (none) until Chris has seen them (2026-10-17: at the size the
-  // readability rule allows the atlas's plants barely show among the blades; viewer --plant-density 15 to look)
-  float plantDensity = 0;
+  // spots a square world unit where the table says 1 (Chris, 2026-10-17, having seen them at 15: on; 0 none)
+  float plantDensity = 15;
   float plantLean = 0.35f;    // how far a card leans back from the camera (its face up toward it)
   float plantBoost = 2.75f;   // the low plants this many times their real proportion to the tallest, up to the cap
   int drawnPlants = 0;        // (the last Draw: spots gone through)

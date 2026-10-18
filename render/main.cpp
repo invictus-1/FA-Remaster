@@ -87,8 +87,8 @@
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look); on a map with the visuals track's plants
-//           (its cover atlas) their cards too: --plant-density n spots a square unit where its table says 1 (0 none, as at first;
-//           15 to look),
+//           (its cover atlas) their cards too: --plant-density n spots a square unit where its table says 1 (15;
+//           0 none),
 //           --plant-tallest n the tallest plant's height in world units (0.24)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within

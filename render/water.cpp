@@ -352,12 +352,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       float3 calm = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), ray == 0 ? 0.55 : 0.85)));
       calm.y = max(calm.y, 0.02);
       calm = normalize(calm);
-      float t;
-      uint instance;
+      RayHit met;
       float3 c = mirror;
-      if (RayTrace(i.world + float3(0, 0.05, 0), calm, 0.05, rayEffects.y, 0x01, seed + ray, t, instance)) {
-        float3 hit = i.world + calm * t, hitAlbedo, n;
-        RaySurfaceAt(instance, hit, calm, rayEffects.zw, hitAlbedo, n);
+      if (RayTrace(i.world + float3(0, 0.05, 0), calm, 0.05, rayEffects.y, 0x01, seed + ray, met)) {
+        float3 hit = i.world + calm * met.t, hitAlbedo, n;
+        RaySurfaceAt(met, hit, calm, rayEffects.zw, hitAlbedo, n);
         c = ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + ray, 8), hit);  // (8 of the small lights at most: all would be dear)
       }
       mirrored += c * 0.5;

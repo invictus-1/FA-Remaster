@@ -64,7 +64,7 @@ class Decals {
   static bool IsScar(const std::string& texture);
   // The picture a script's mark is named by (a path, or a short name looked up in the game's two
   // folders of them); none: not there.
-  gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr); }
+  gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr, nullptr); }
   Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
@@ -133,6 +133,7 @@ class Decals {
     uint32_t id = 0;     // (laid by Add: from 1)
     float snowAtBirth = 0;  // snowFallen_ when it was laid (see `snowLying`)
     gfx::Texture relief;    // a remastered picture's own relief (`remastered`), or none
+    bool ours = false;      // the picture is the visuals track's (`remastered`)
     bool scar = false;      // a battle scar (`battleScars`), and when it has faded out (0: it has not begun to)
     double scarGone = 0;
   };
@@ -143,7 +144,8 @@ class Decals {
                                     // glow: a light's brightness, a picture's 1 when it has its own relief
   };
   // The picture a decal is named by (none: not there), and with `remastered` its relief where there is one.
-  gfx::Texture Resolve(const std::string& texture, gfx::Texture* relief);
+  // `ours`: it is the visuals track's (a normal decal of theirs: two channels, y up the picture).
+  gfx::Texture Resolve(const std::string& texture, gfx::Texture* relief, bool* ours);
   float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
   double snowClock_ = -1;   // when it was last moved on
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old

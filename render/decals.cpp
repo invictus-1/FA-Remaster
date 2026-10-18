@@ -111,12 +111,17 @@ float4 PS(VOut i) : SV_Target {
     if (ground.y < 0) ground = -ground;
     float2 tilt = c.ag * 2 - 1;
     float3 inDecal = float3(tilt.x, sqrt(saturate(1 - dot(tilt, tilt))), tilt.y);
+    float strength = c.r;
+    if (i.options.w > 0.5) {  // the visuals track's own (two channels, x and y, y up the picture): at full strength
+      inDecal.z = -tilt.y;
+      strength = 1;
+    }
     float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
     float3 tilted = normalize(ground + turned - float3(0, 1, 0));
     float shade = SunShadow(world, ground);
     float3 before = OriginalLight(dot(sunDirection, ground), shade), after = OriginalLight(dot(sunDirection, tilted), shade);
     float3 change = clamp(after / max(before, 0.03), 0.35, 2.5);
-    return float4(lerp(float3(1, 1, 1), change, saturate(c.r * i.options.x)), 1);
+    return float4(lerp(float3(1, 1, 1), change, saturate(strength * i.options.x)), 1);
   }
   if (i.options.z > 0.5) {  // a light: its glow times its ramp along its time, added
     if (look > 0.5) discard;  // the modern look has real lights for this (lights.h)
@@ -206,8 +211,9 @@ bool Decals::Init(std::string* error) {
   return static_cast<bool>(cube_);
 }
 
-gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief) {
+gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief, bool* ours) {
   if (relief) *relief = {};
+  if (ours) *ours = false;
   if (texture.empty()) return {};
   // (a path begins with a slash; a script's short name may have a folder in it: "Tarmacs/Tar12x_01_albedo")
   std::string path;
@@ -218,17 +224,22 @@ gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief) {
       if (path.empty() && vfs_->Exists(std::string(folder) + texture + ".dds")) path = std::string(folder) + texture + ".dds";
   }
   if (path.empty()) return {};
-  if (remastered) {  // the visuals track's picture of it, and the relief beside it ("x_albedo.dds", "x_normals.dds")
-    const std::string ours = EffectFile(*vfs_, path, true);
-    if (ours != path) {
-      path = ours;
-      std::string low = ours;
+  // the visuals track's picture of it, and the relief beside it ("x_albedo.dds", "x_normals.dds") where the game has
+  // no normal decal of that name (where it has, its scripts lay that one as a decal of its own: the crater's
+  // "crater01_normals" with "crater01_albedo"; it then reads the visuals track's, and the relief is not given twice)
+  if (remastered) {
+    const std::string mine = EffectFile(*vfs_, path, true);
+    if (mine != path) {
+      if (ours) *ours = true;
+      std::string low = mine;
       for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
       const std::string tail = "_albedo.dds";
       if (relief && low.size() > tail.size() && low.compare(low.size() - tail.size(), tail.size(), tail) == 0) {
-        const std::string normals = ours.substr(0, ours.size() - tail.size()) + "_normals.dds";
-        if (vfs_->Exists(normals)) *relief = textures_->Get(normals);
+        const std::string normals = mine.substr(0, mine.size() - tail.size()) + "_normals.dds";
+        const std::string game = path.substr(0, path.size() - tail.size()) + "_normals.dds";
+        if (vfs_->Exists(normals) && !vfs_->Exists(game)) *relief = textures_->Get(normals);
       }
+      path = mine;
     }
   }
   return textures_->Get(path);
@@ -254,7 +265,8 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
     if (IsDepositMark(texture, &hydrocarbon) && seconds <= 0 && deposits_.size() < 4096) deposits_.push_back({centre, hydrocarbon, cutoff});
   }
   gfx::Texture relief;
-  const gfx::Texture t = Resolve(texture, &relief);
+  bool ours = false;
+  const gfx::Texture t = Resolve(texture, &relief, &ours);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
   if (groundHeight) {  // (given far from the ground, beyond what its box reaches: on the ground)
     const float ground = groundHeight(centre.x, centre.z);
@@ -262,6 +274,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   }
   decals_.push_back({t, {}, centre, sizeX * 0.5f, sizeZ * 0.5f, heading, cutoff, born, seconds});
   decals_.back().relief = relief;
+  decals_.back().ours = ours;
   if (battleScars && seconds > 0 && IsScar(texture)) {  // a battle scar: kept; past the most, the oldest fades out
     decals_.back().scar = true;
     if (++scars_ > mostScars) {
@@ -370,7 +383,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.light = d.water ? (overWater ? 5.0f : 4.0f) : d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
     // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
     if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
-    n.glow = d.ramp ? glow : d.relief && !d.normal && !d.mark && !d.water ? 1.0f : 0.0f;  // (a picture's: its own relief)
+    // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
+    n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
     visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
   }
   if (!overWater) marks_.clear();
