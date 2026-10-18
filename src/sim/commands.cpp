@@ -1672,14 +1672,14 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (at < 0) {
       u->commands.push_back(c);
     } else {
+      // CUnitCommandQueue::InsertCommandToQueue 0x6edcb0 (read): the command goes into the queue at that place and the
+      // queue tells its listeners event 0 (0x6edd19..0x6edd21), which the dispatcher takes for its speed-through
+      // refresh only (OnEvent 0x599030 -> 0x6ac940): nothing is interrupted, also when the place is the head's. The
+      // running task goes on, and when it ends the dispatcher takes the queue's first command, now the inserted one
+      // (0x598e95: [queue+0x10][0]). Seen: MP1 beat 4633, army 4's player puts an xsa0104 order before the head
+      // (0x0400001c) of the air factory 0x400056, which is building the xsa0104 0x400071 (29 %): the original's
+      // factory goes on with 0x400071; ours tore the build down and began a new one (0x400072).
       u->commands.insert(u->commands.begin() + at, c);
-      if (at == 0) {  // a new head: the running one is interrupted and dispatched again later (inferred)
-        if (u->task) {
-          EndBuildTask(sim, u, *u->task, false);
-          u->task = nullptr;
-        }
-        u->headState = kNotStarted;
-      }
     }
     c->units.insert(u);
     AirSpeedThroughEvent(sim, u);  // queue event 0
