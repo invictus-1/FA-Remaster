@@ -220,7 +220,15 @@ void GridAdvanceCoords(Sim& sim) {
   // one that a script put back on its plain box (RevertCollisionShape: an aircraft that landed, AirUnit.lua) keeps
   // the plain cells until it moves. (Seen: one blast over four parked aircraft; the order it kills them in, and so
   // the order of their explosions' random draws, is the order of their cells.)
-  for (Unit* u : sim.units()) {
+  // The units go in the order their transforms were set this beat: AdvanceBeat walks the moved-entity list sim+0xa5c
+  // from its oldest link (0x74a239..0x74a25f: [sim+0xa60], then each node's +4), and SetPendingTransform 0x678e90
+  // links an entity at the list's head the first time its transform is set in the beat. A mobile unit sets it in its
+  // MotionTick (MoveTo 0x6b92e0, every beat), so that is the motion stage's order, not the entity id's. Of two units
+  // that change cells in one beat the later one ends up in front in a shared cell (head insertion), which decides who
+  // a steering's CheckCollisions asks first. Seen: MP2 7087, army 1's 0x100118 predicts against 0x100008 (at once)
+  // and 0x10010d (three beats on) in one cell: ours asked 0x10010d first (re-registered after 0x100008 in id order),
+  // kept that record and stopped re-predicting; 0x1000fc then braked hard at 7091 in ours, not in the original.
+  for (Unit* u : sim.MotionOrder()) {
     if (u->destroyQueued) continue;
     if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&
         std::memcmp(&u->gridOri, &u->orientation, sizeof(Quat)) == 0)
