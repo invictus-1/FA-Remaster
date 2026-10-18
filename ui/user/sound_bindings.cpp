@@ -194,10 +194,12 @@ int l_SoundAt(lua_State* L) {
   lua_pushboolean(L, s && s->PlayAt(luaL_checkstring(L, 1), luaL_checkstring(L, 2), position) != 0);
   return 1;
 }
+bool g_testFileWrites = false;
+
 // moho64ui_SoundMix(milliseconds [, file]) -> the loudest sample (0..1) of that much sound, mixed
 // here and now. For runs without a sound device: it moves the sounds on as a device would. With a
 // file's name the sound is added to that file as it is (16 bits, stereo, 48000 a second), to be
-// compared with the game's sound data.
+// compared with the game's sound data; only in a run with a test script (TestFileWritesAllowed).
 int l_SoundMix(lua_State* L) {
   sound::SoundSystem* s = System(L);
   int frames = static_cast<int>(luaL_checknumber(L, 1) * sound::Mixer::kRate / 1000.0);
@@ -206,7 +208,11 @@ int l_SoundMix(lua_State* L) {
     std::vector<int16_t> out(static_cast<size_t>(frames) * 2);
     s->mixer().Mix(out.data(), frames);
     for (int16_t v : out) peak = std::max(peak, v < 0 ? -static_cast<int>(v) : static_cast<int>(v));
-    if (lua_isstring(L, 2)) {  // and added to a file as it is: 16 bits, stereo, 48000 a second
+    if (lua_isstring(L, 2) && !g_testFileWrites) {
+      static bool said = false;
+      if (!said) Logf(LogLevel::Warning, "moho64ui_SoundMix: a file is written only in a run with --lua or --game-lua");
+      said = true;
+    } else if (lua_isstring(L, 2)) {  // and added to a file as it is: 16 bits, stereo, 48000 a second
       if (std::FILE* f = std::fopen(lua_tostring(L, 2), "ab")) {
         std::fwrite(out.data(), sizeof(int16_t), out.size(), f);
         std::fclose(f);
@@ -226,6 +232,9 @@ int l_GetCueBank(lua_State* L) {
 }
 
 }  // namespace
+
+void AllowTestFileWrites(bool allowed) { g_testFileWrites = allowed; }
+bool TestFileWritesAllowed() { return g_testFileWrites; }
 
 void RegisterSoundBindings(lua_State* L) {
   luaL_newmetatable(L, kHandle);

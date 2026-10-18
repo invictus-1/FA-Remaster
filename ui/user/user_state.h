@@ -257,6 +257,10 @@ void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
 // PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
 void RegisterSoundBindings(lua_State* L);
+// The host's test functions that write a file a script names (moho64ui_SoundMix's file) write it only in a run
+// started with a test script (--lua or --game-lua), never for a game's or a mod's script (sound_bindings.cpp).
+void AllowTestFileWrites(bool allowed);
+bool TestFileWritesAllowed();
 // GetSpecialFiles, LaunchReplaySession and their kin: replays and saved games (special_files.cpp).
 void RegisterSpecialFileBindings(lua_State* L);
 void InstallUnitCategoryFunctions(lua_State* L);

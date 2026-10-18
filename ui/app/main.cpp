@@ -315,6 +315,7 @@ int main(int argc, char** argv) {
     }
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
+  ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
