@@ -2382,6 +2382,21 @@ void KillCleanupTick(Sim& sim) {
     // factory's rally orders lose their factory, and an order no unit holds then is deleted at the Sync
     // (CCommandDb::PublishSyncData 0x6e0f50). (Read; the case seen is the destroy without a kill: sim.cpp, ~Unit.)
     ClearFactoryCommandQueue(u);
+    // ... and its navigator and steering are deleted (unit+0x54c and +0x550 set to null, 0x6a8804..0x6a8832): the
+    // spline and the collision record go with the steering. ResolvePossibleCollision asks a unit with no steering for
+    // no spline point (0x597103: [X+0x550] null) and takes its position. Seen: MP2 6877, army 0's Mantis 0xda resolves
+    // its record against the Mantis 0x51 ahead of it, killed at 6875: the original takes 0x51's position (178.64), the
+    // two meet, and 0xda brakes hard; ours took the next point of 0x51's last spline (178.27), found no meeting and
+    // drove on.
+    UnitMotion& m = u->motion;
+    m.spline.clear();
+    m.splineIdx = 0;
+    m.hasSpline = false;
+    m.pointNow = false;
+    m.colType = 0;
+    m.colUnit = 0;
+    m.colTick = 0xffffffffu;
+    m.sideStep = {};
   }
 }
 
