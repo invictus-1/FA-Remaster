@@ -1842,6 +1842,9 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
     if (u->dead) {
       lua_State* L = sim.L();
       lua_pushstring(L, u->layer == "Land" ? "Terrain" : "Water");
+      if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
+        RecordImpact(sim, 2, u, u->layer == "Land" ? "Terrain" : "Water", nullptr, P1,
+                             Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
       sim.CallMethod(L, u, "OnImpact", 1);
       SetMotionState(sim, u, 3);
     } else {

@@ -21,6 +21,7 @@
 #include "sim/economy.h"
 #include "sim/entity.h"
 #include "sim/replay.h"
+#include "sim/sim_view.h"
 #include "sim/skeleton.h"
 #include "sim/units.h"
 
@@ -208,6 +209,25 @@ class Sim {
   //   tabs, as LOG does (ours: a headless run has no console). The Lua calls are the same either way.
   bool collectPrints = false;
   std::vector<std::string> TakePrints();
+  // Hits, impacts and health changes, a list each per beat in the order they happened (HitEvent, ImpactEvent,
+  // HealthEvent in sim/sim_view.h; render REQUESTS 36), as the print lines are kept: set the flags before the first
+  // beat, take each list after every Tick / PausedBeat with TakeHits / TakeImpacts / TakeHealth (everything since
+  // the last take, oldest first; on the thread that runs the beats, between beats; a list not taken keeps growing).
+  // Off: nothing is kept, the cost is a flag test. On: recording reads the simulation only (no script call, no Lua
+  // object, no random draw), so the game plays the same either way.
+  bool collectHits = false;
+  bool collectImpacts = false;
+  bool collectHealth = false;
+  std::vector<HitEvent> TakeHits() const;
+  std::vector<ImpactEvent> TakeImpacts() const;
+  std::vector<HealthEvent> TakeHealth() const;
+  // (the recording side: sim/damage.cpp, sim/projectile.cpp, sim/entities.cpp, sim/air.cpp, sim/transport.cpp)
+  mutable std::vector<HitEvent> hitEvents;
+  mutable std::vector<ImpactEvent> impactEvents;
+  mutable std::vector<HealthEvent> healthEvents;
+  // While collectHits: the shell or collision beam whose OnImpact runs now (null otherwise): what the damage its
+  // script deals is credited to (weapon, projectile, direction)
+  const Entity* impactShot = nullptr;
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 

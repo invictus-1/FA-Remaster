@@ -295,6 +295,16 @@ void PurgeShooters(Sim& sim, Entity* e);
 // Unit::Kill (0x6a8090).
 void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::string& type, float ratio);
 
+// The hits, impacts and health changes a host may ask for (Sim::collectHits / collectImpacts / collectHealth,
+// HitEvent / ImpactEvent / HealthEvent in sim/sim_view.h; sim/damage.cpp). Each only reads; callers test the flag.
+// The weapon's id in FAF's form, "<unit blueprint id>-<index in bp.Weapon>-<Label>" ("" for none).
+std::string WeaponBlueprintId(const UnitWeapon* w);
+// kind: ImpactEvent::Kind (0 a shell, 1 a collision beam, 2 a dead unit's crash); met: what the script's OnImpact
+// gets as its entity; velocity: the shell's or the fall's (units a second), the beam's axis for a beam
+void RecordImpact(Sim& sim, int kind, const Entity* source, const char* type, const Entity* met, Vec3 at, Vec3 velocity);
+// e's health (or maximum) has just changed from `before` (a health) / beforeMax (its maximum then)
+void RecordHealth(Sim& sim, const Entity* e, float before, float beforeMax);
+
 void RegisterCombatBindings(lua_State* L);
 // A unit's pose (Entity::poseQ / poseP): back to rest (CAniPose::UpdateBones 0x54b5f0), and one bone's local
 // rotation x q (CAniPoseBone::Rotate 0x54bc00)

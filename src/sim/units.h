@@ -25,6 +25,7 @@ class UnitWeapon : public ScriptObject {
   UnitWeapon() { typeBits |= kTypeWeapon; }
   Unit* unit = nullptr;
   int index = 0;          // 1-based, as GetWeapon(i)
+  int bpIndex = 0;        // 1-based, its entry in bp.Weapon (DummyWeapon entries counted; for a host's lists only)
   std::string label;
   int bpRef = LUA_NOREF;  // the weapon's blueprint table (bp.Weapon[i])
   bool enabled = true;
