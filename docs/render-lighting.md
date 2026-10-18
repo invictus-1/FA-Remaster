@@ -303,6 +303,69 @@ Mac", and every ray-traced effect keeps a fallback without it.
      its coarsest solid level and leaves by chance, so their shadows would be blockier and noisier than the
      maps'. Worth it only with the drawn levels in the ray scene and leaves tested against their textures;
      to take up again if Chris wants it.
+   - **The small lights' shadows by rays: first version** (2026-10-18; the renderer's next looks, item 1, Chris
+     2026-10-17): `World::rayLightShadows` (viewer `--ray-light-shadows [1..4|all]`; in the "Ray tracing" setting,
+     `WorldPicture::SetRayTracing`; modern look, where the device has ray tracing; the surfaces' shaders built for it
+     as for reflections, so from the next map opened). Explosions' and muzzle flashes, shots and the units' lamps are
+     shadowed by what stands between: units and scenery, leaves by how much of them is leaf, the hills; the water
+     never shadows. The eight lamps nearest the view keep their own shadow maps (lights.h: drawn from the models'
+     drawn levels, sharper than what the rays see, and already paid for); every other light is shadowed by rays.
+     - Where: in the surfaces' own shaders (lighting.h `SmallLightsTraced`, under `RAYS`), not in a pass over the
+       screen after the depth. The renderer is forward, has no G-buffer and lays depth first only for large
+       models: a screen pass would need a depth and normal pass of everything first, and what it found would still
+       have to go back into each surface's own lighting (the ground, decals, the water, grass, units), with MSAA's
+       edges. In its shader each place finds its own.
+     - Which lights get a ray (after ReSTIR DI, Bitterli et al. 2020: resampled importance sampling of many lights;
+       here without its reuse over frames and neighbours). A place's lights are its square's (lights.h, 48 at most);
+       each one's share is the brightness of its unshadowed light there, known exactly. With K rays (4; grass 1, the
+       water 2, leaves none: `rayLightsAtMost`, which their shaders set), the strongest lights that each carry at
+       least 1/K of what is left get a ray of their own; the rest share K - c evenly spaced picks over the running
+       sum of their shares (stratified: each picked at most once, with the chance picks x share / sum), and what a
+       picked light's ray finds is weighted by 1 / that chance. The light is the unshadowed light less what the rays
+       find shadowed, so a place where no ray finds a shadow is lit exactly as without rays, and a place with K
+       lights or fewer is shadowed exactly. The picks' offset is fixed to the world (the place's square on the plane
+       its surface faces most, 1.5 to 3 pixels wide, a power of two of world units by the distance; Jimenez's
+       interleaved gradient noise of its number) and the same every frame: a still picture stands still, and in a
+       moving one the grain moves with the ground instead of crawling over it. Nothing is blended over frames; no
+       upscaler is needed.
+     - The rays (`RayLightSeen`): first what is solid (mask 4), as opaque (the card's own search: no candidates for
+       the shader), by the fronts of its triangles only (a ray that starts inside the coarser level of its own model
+       is not stopped by it), up to the light's own ball (a fifth of its radius, a beam's lamp a fiftieth: the wreck
+       a fire burns in does not shadow its flash). A unit's lamp is not shadowed by its own unit: its fourth row in
+       the lights' buffer carries where the unit stands, and its ray takes the nearest hit and goes on past the unit
+       (three tries). Then one ray raised 0.35 at both ends (the rays' ground is every fourth height: a lamp low
+       over the ground would shadow itself) for the ground (mask 8, fronts) and leaves (mask 16, new: the instances
+       of levels with holes): each leaf passed keeps 1 - its coverage, the mean of the other rays' chance, so a
+       canopy's shadow has no grain.
+     - Why leaves cast no rays of their own: a leaf's ray first passes the many layers of its own crown; that was a
+       third of the option's cost (units and scenery 1.34 ms without, 1.55 with the solid ray only, 1.85 with both, at
+       the far view below) for crowns that are mottled anyway. The ground under them is shadowed.
+     - Noise, 1280x800, against every light its own ray (`all`), over the pixels the shadows change: 20 lamp-lit
+       tanks at night, still: what is left of the shadows' error with 4 rays 15% (3.2 of 21.5 in 255), 2 rays 35%,
+       1 ray 74%; standing still, nothing changes from frame to frame. 64 tanks among 120 circling coloured lights:
+       4 rays leave 30% (2.6 of 8.7). The camera panning, the change of the error from frame to frame with the
+       motion taken out (each 32-pixel tile carried by its own shift): 2.95 with the offset fixed to the world,
+       against 4.81 with an offset by the pixel (measured before the change) and 5.35 for the shadows' own edges.
+       Rays meet what the ray scene holds: the coarsest levels, so a rock's or a crate's shadow is blocky, and the
+       shadows are sharp (point lights).
+     - Cost at 1440p (Direct3D 12, 4x MSAA, by the lowest times; a private shader cache), night on Seton's Clutch
+       Remastered, 64 lamp-lit UEF tanks, one firing, 24 small coloured test lights (`--lights`) circling among them:
+       from the game's height (camera 80 away) the frame 2.46 -> 3.39 ms (the ground +0.16, units and scenery +0.31,
+       the water +0.05, the ray scene 0.19); closer (40) 2.49 -> 3.28 (+0.19, +0.31, +0.04, 0.17), with 2 rays 3.12.
+       The ray scene is shared with the bounce light and reflections, which the same setting turns on. A swarm of
+       120 test lights packed within 25 units over the same tanks (camera 26: 30-48 lights on every pixel) is the
+       worst case: 2.84 -> 4.36 ms (the ground +0.73, units +0.36, the water +0.18), 4.26 with 2 rays, 3.85 with 1;
+       Vulkan 3.25 -> 5.32. Of the ground's +0.73 there, 0.23 is choosing (the second walk over the lights), the
+       rest the rays: the solid one about 0.17, the raised one (ground and leaves) the rest.
+     - Off: pictures identical, pixel for pixel, on both backends (the regression; and Seton's Clutch Remastered at
+       night with lamps, with and without `--ray-reflections --bounce`). On, Vulkan as Direct3D 12: the option's
+       change of the picture differs by 0.2-1.1 in 255 over the pixels it changes. `--gfx-check` also reads an
+       opaque hit's instance matrix in its 4 x 3 form, as the rays read where a unit stands.
+     - Open: rays see the coarsest levels and units at rest (blocky shadows of props, a posed unit's shadow as it
+       stands at rest); no soft edges (a light's ball could be sampled, at the price of more grain); moving units'
+       grain is fixed to the world, so it slides over them; the leaves' mean counts a leaf twice where the card's
+       search hands the same triangle over twice (allowed, as no geometry asks for one call each); costs in a dense
+       swarm of lights over 1 ms (below).
 5. **Rain and snow** with the visuals chat's art: streaks lit by the lamps and the volume, splashes,
    ripples on puddles and water, snow gathering on the ground and on units. (Already there before this
    project: wet and snowy ground and units, puddles, rings on puddles and on the water, snow trodden.)
@@ -817,6 +880,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `contactShadows` | small shadows at units' feet and under trees | +0.12 ms | |
 | `bounceLight` | light thrown back by the ground, hills and units | about 0.45 ms | ray tracing |
 | `rayReflections` | smooth surfaces and the water mirror what is off the screen too | about 0.3 ms | ray tracing; `WorldPicture::SetRayReflections` before the map opens |
+| `rayLightShadows` | flashes, shots and lamps shadowed by units, scenery, trees and hills | about 0.5 ms and the ray scene's 0.18 at night in a lit army; 1.5 ms in a swarm of lights | ray tracing; from the next map opened |
 | `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
@@ -837,7 +901,8 @@ tracing in them when a map opens (`gRayShaders`), so switching it on takes effec
 up from the rows, those that cost come to about 1.2 ms a frame and the clouds and the sky from tables save
 about 0.3. All of them on together (FSR 3 aside), measured as one (the sunset water scene with nine
 commanders, 1440p, 4x MSAA, by the lowest times): the frame 1.83 -> 2.99 ms in clear weather, 2.03 -> 3.30 ms
-in rain; about 300 frames a second, against the 60 aimed for. Ray-traced shadows are put off (step 4).
+in rain; about 300 frames a second, against the 60 aimed for. The sun's shadows by rays are put off (step 4); the
+small lights' are an option (`rayLightShadows`, measured after that sum).
 
 **In the game's settings: four bundles** (Chris, 2026-10-17: all of them in, bundled where they go together,
 so there is less clutter). WorldPicture sets each bundle's options together, before or after Open:
@@ -846,7 +911,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 |---|---|---|
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables` | about 0.25 ms less (needs a time of day) |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
-| `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
+| `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |

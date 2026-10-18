@@ -155,8 +155,10 @@ class WorldPicture {
   // Soft shadows: the sun's shadows soft by their distance from what casts them, and contact shadows
   //   (World::softShadows, contactShadows); about +0.37 ms.
   void SetSoftShadows(bool on);
-  // Ray tracing: bounce light and reflections (World::bounceLight, SetRayReflections: reflections from the next
-  //   map opened); about +0.75 ms; only where RayTracingSupported, elsewhere nothing changes.
+  // Ray tracing: bounce light, reflections and the small lights' shadows (World::bounceLight, SetRayReflections,
+  //   rayLightShadows: reflections and the shadows from the next map opened, their shaders being built then); about
+  //   +0.75 ms, and the shadows' cost by how many small lights are in view (docs/render-lighting.md); only where
+  //   RayTracingSupported, elsewhere nothing changes.
   void SetRayTracing(bool on);
   // Weather effects: rain and snow lit where they fall, rain's splashes, and wet shorelines with stronger caustics
   //   (World::litRain, rainSplashes, waterDetail); about +0.05 ms while it rains.

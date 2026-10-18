@@ -8,6 +8,7 @@
 #include "core/vfs.h"
 #include "effect_files.h"
 #include "lighting.h"
+#include "ray_scene.h"
 
 namespace render {
 namespace {
@@ -162,7 +163,7 @@ float4 PS(VOut i) : SV_Target {
 bool Decals::Init(std::string* error) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
   std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" + kViewShaderBlock +
-                       kLightingShaderBlock + kShader;
+                       RayShaders() + kLightingShaderBlock + kShader;  // (RayShaders: the small lights' shadows by rays)
   gfx::PipelineDesc pd;
   pd.name = "decals";
   pd.vertexSource = pd.pixelSource = source;

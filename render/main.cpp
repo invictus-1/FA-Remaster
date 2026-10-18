@@ -81,6 +81,9 @@
 //           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
 //           device has ray tracing): smooth surfaces mirror what their rays meet
+// --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
+//           --ray-reflections; where the device has ray tracing): flashes, shots and lamps shadowed by what stands between;
+//           `rays` the most a place casts (1..4; 4 unless given), `all`: one for every light (exact, to compare with)
 // --lit-rain  rain and snow lit where they fall (World::litRain; modern look): by the sun through its shadow and by the
 //           lamps and their beams through their shadows, sent on mostly forward
 // --rain-splashes  rain's splashes (World::rainSplashes; modern look): small crowns where rain meets what faces up
@@ -402,6 +405,7 @@ struct Options {
   bool rayView = false;                 // --ray-view
   bool bounce = false;                  // --bounce
   bool rayReflections = false;          // --ray-reflections
+  int rayLightShadows = 0;              // --ray-light-shadows (the most rays a place casts; 0: off)
   bool litRain = false;                 // --lit-rain
   bool rainSplashes = false;            // --rain-splashes
   bool litSmoke = false;                // --lit-smoke
@@ -560,6 +564,15 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ray-view") o->rayView = true;
     else if (a == "--bounce") o->bounce = true;
     else if (a == "--ray-reflections") o->rayReflections = true;
+    else if (a == "--ray-light-shadows") {  // [rays|all]
+      o->rayLightShadows = 4;
+      if (i + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[i + 1][0]))) {
+        o->rayLightShadows = std::clamp(atoi(argv[++i]), 1, 4);
+      } else if (i + 1 < argc && !strcmp(argv[i + 1], "all")) {
+        o->rayLightShadows = 99;
+        ++i;
+      }
+    }
     else if (a == "--lit-rain") o->litRain = true;
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--lit-smoke") o->litSmoke = true;
@@ -1074,8 +1087,9 @@ int main(int argc, char** argv) {
     live.Start();
   }
 
-  // the world's picture: the map and everything drawn on it (with --ray-reflections, its shaders built to trace rays)
-  gRayShaders = opt.rayReflections && device->RayTracing();
+  // the world's picture: the map and everything drawn on it (with --ray-reflections or --ray-light-shadows, its shaders
+  // built to trace rays)
+  gRayShaders = (opt.rayReflections || opt.rayLightShadows > 0) && device->RayTracing();
   World world(device.get(), &vfs);
   world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
   for (const std::string& g : opt.groundKind) {  // --ground-kind <part>=<kind> (deep tracks: before the map opens)
@@ -1110,6 +1124,8 @@ int main(int argc, char** argv) {
   world.rayView = opt.rayView;
   world.bounceLight = opt.bounce;
   world.rayReflections = opt.rayReflections;
+  world.rayLightShadows = opt.rayLightShadows > 0;
+  if (opt.rayLightShadows > 0) world.rayLightRays = opt.rayLightShadows;
   world.litRain = opt.litRain;
   world.rainSplashes = opt.rainSplashes;
   world.litSmoke = opt.litSmoke;

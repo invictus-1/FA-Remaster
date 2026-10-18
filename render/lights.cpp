@@ -88,8 +88,13 @@ void Lights::Begin(double now) {
   lights_.clear();
 }
 
-void Lights::Add(Vec3 position, float radius, Vec3 color) {
-  if (radius > 0) lights_.push_back(Light{position, radius, color, 1, {}, -2, {}});
+void Lights::Add(Vec3 position, float radius, Vec3 color, const Vec3* origin) {
+  if (radius <= 0) return;
+  lights_.push_back(Light{position, radius, color, 1, {}, -2, {}});
+  if (origin) {
+    lights_.back().origin = *origin;
+    lights_.back().hasOrigin = true;
+  }
 }
 
 Vec3 Lights::RampGlow(const std::string& ramp) {
@@ -100,13 +105,17 @@ Vec3 Lights::RampGlow(const std::string& ramp) {
   return best;
 }
 
-void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier) {
+void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier, const Vec3* origin) {
   if (radius <= 0) return;
   Light light{position, radius, color, 1, {}, -2, {}};
   light.glow = glow;
   if (carrier) {
     light.carrier = *carrier;
     light.hasCarrier = true;
+  }
+  if (origin) {
+    light.origin = *origin;
+    light.hasOrigin = true;
   }
   light.direction = Normalize(direction);
   light.cosEdge = std::cos(std::clamp(coneDegrees, 1.0f, 179.0f) * 0.5f * 3.14159265f / 180);
@@ -249,6 +258,13 @@ void Lights::Build(View* view) {
     p[10] = lights_[n].direction.z;
     p[11] = lights_[n].cosEdge;
     p[12] = static_cast<float>(lights_[n].shadow);
+    // (without a shadow map: -2 and where the model it rides on stands, for the rays, lighting.h's RayLightSeen)
+    if (lights_[n].shadow < 0 && lights_[n].hasOrigin) {
+      p[12] = -2;
+      p[13] = lights_[n].origin.x;
+      p[14] = lights_[n].origin.y;
+      p[15] = lights_[n].origin.z;
+    }
   }
   for (int k = 0; k < shadowCount_; ++k)
     std::memcpy(&rows_[(firstMatrix + static_cast<size_t>(k) * 4) * 4], shadowMatrix_[k].m, 16 * sizeof(float));

@@ -2,7 +2,8 @@
 // docs/render-lighting.md step 4), built again every frame where the device can (gfx::Device::RayTracing):
 //  - the ground: a grid of its heights, every fourth point; the water's surface over it, where the map has water
 //    (on a mask of its own, 2: what is under it is in the sun's light, so rays toward the sun, on mask 1, pass
-//    through);
+//    through); the ground also on mask 8, the solid models on mask 4 and leaves (levels with holes) on mask 16, each
+//    alone (the small lights' shadows, lighting.h's RayLightSeen, test them apart);
 //  - every model the frame draws, by its coarsest solid level (what the rays are for - light thrown back - is soft:
 //    the shapes need not be exact; a posed unit stands as it does at rest);
 //  - for each model's level, a colour: its albedo's average (worked out once on the card, from a small level of

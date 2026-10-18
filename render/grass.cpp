@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "lighting.h"
+#include "ray_scene.h"
 
 namespace render {
 namespace {
@@ -147,6 +148,9 @@ VOut VS(uint id : SV_VertexID) {
 
 float4 PS(VOut i) : SV_Target {
   float occlusion = lerp(0.65, 1, i.up);  // (darker down among the blades)
+#if RAYS
+  rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
+#endif
   float3 through = LeafLight(i.colour, i.through, i.world, i.shadow, 0.8);
   return float4(ModernLight(i.colour, 0, 0.85, occlusion, through, normalize(i.normal), i.world, i.shadow), 1);
 }
@@ -322,6 +326,9 @@ float4 PS(VOut i) : SV_Target {
   float3 card = normalize(i.right * t.x + i.up * t.y + i.toward * sqrt(saturate(1 - dot(t, t))));
   float3 n = normalize(lerp(i.ground, card, 0.5));  // (the card's own normals at half strength: the visuals track's advice)
   float occlusion = lerp(0.7, 1, saturate(i.shade.y));
+#if RAYS
+  rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
+#endif
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
   float3 albedo = ToLinear(c.rgb);
   float3 through = LeafLight(albedo, LeafThrough(card, normalize(cameraPosition - i.world)), i.world, i.shade.x, 0.7);
@@ -386,7 +393,7 @@ GroundCover::~GroundCover() {
 }
 
 bool GroundCover::Init(std::string* error) {
-  const std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
+  const std::string source = std::string(kViewShaderBlock) + RayShaders() + kLightingShaderBlock + kShader;  // (RayShaders: the small lights' shadows by rays)
   gfx::PipelineDesc pd;
   pd.name = "ground cover: grass";
   pd.vertexSource = pd.pixelSource = source;
@@ -395,7 +402,7 @@ bool GroundCover::Init(std::string* error) {
   pd.samples = gSceneSamples;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
-  const std::string plants = std::string(kViewShaderBlock) + kLightingShaderBlock + kPlantShader;
+  const std::string plants = std::string(kViewShaderBlock) + RayShaders() + kLightingShaderBlock + kPlantShader;
   pd.name = "ground cover: plants";
   pd.vertexSource = pd.pixelSource = plants;
   plantPipeline_ = device_->CreatePipeline(pd, error);

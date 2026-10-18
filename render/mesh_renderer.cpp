@@ -618,6 +618,11 @@ float4 Shade(VOut i, bool front) {
       surfaceSnowOwn = true;
       surfaceSnowPlace = i.rest * 3.0;  // (patches a third the size of the ground's: each flat top of a unit its own)
     }
+#if RAYS
+    // (leaves cast no rays for the small lights' shadows, lighting.h's SmallLightsTraced: a leaf's ray first passes the
+    // many layers of its own crown, which cost a third of the option for little to see)
+    if (kind2.y > 0.5) rayLightsAtMost = 0;
+#endif
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
