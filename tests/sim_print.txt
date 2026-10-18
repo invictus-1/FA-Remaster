@@ -1,0 +1,37 @@
+# print(...) in the simulation's state, its lines as a console host takes them (ui REQUESTS 41: Sim::collectPrints,
+# Sim::TakePrints; the line built as the original's SCR_ConcatArgsAndCall 0x4cd740 builds it, sim.h). With --view,
+# moho64 sets collectPrints before Start and logs what TakePrints gives after Start and after every beat, one
+# "view: print tick <the sim's tick> [<the line>]" per line. An --orders file for moho64, e.g.
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 12 --view
+#          --orders fa-remaster\tests\sim_print.txt --log out.log
+# The log's "view: print" lines must be these, in this order (a tab character shown as <TAB>), after the session's own
+# start lines, taken after Start with tick 0 (FAF's NavGenerator.lua prints three while the session starts:
+# "[ -- Navigational mesh generator -- ]", "[Generated in <n> seconds]", "[Allocating <n>mb memory]"):
+#   view: print tick 1 [one   2       nil true]
+#   view: print tick 1 [0.33333334326744        10]
+#   view: print tick 2 [a]
+#   view: print tick 2 [b ]
+#   view: print tick 2 []
+#   view: print tick 2 [        y]
+#   view: print tick 6 [c d   e<TAB>f]
+#   view: print tick 6 [T]
+#   view: print tick 6 [        z]
+#   view: print tick 7 [from a script thread, beat  7]
+#   view: print tick 11 [x]
+#   view: print tick 11 [ab  e]
+#   view: print tick 11 [12345678        x]
+#   view: print tick 11 [123456789 x]
+# and the log has "info: LOG still logs" (LOG is not print) and none of the printed text as "info:" lines. Without
+# --view (collectPrints off) the log has each print's arguments joined by tabs as "info:" lines instead, as before.
+# 1. Arguments: strings and numbers as they are, others through tostring; ((length - 1) & 7) + 1 spaces before each
+#    argument after the first (3 after "one", 7 after "one   2", 1 after "...nil"); numbers as the state's
+#    tostring gives them (%.14g of the script number, a float).
+0 lua print('one', 2, nil, true) print(1/3, 10)
+# 2. A newline ends a line (an empty one too); nothing is left of an empty rest, of print('') or of print(); a
+#    separator on an empty line is 8 spaces.
+1 lua print('a\nb', '') print('') print() print('\n') print('', 'y')
+# 3. A tab inside the text is those spaces; another character below 0x20 becomes a tab character; a __tostring's
+#    result is taken through the same steps; a script thread's print comes with the beat it ran in.
+5 lua print('c\td', 'e\rf') print(setmetatable({}, {__tostring = function() return 'T\n' end}), 'z') ForkThread(function() WaitTicks(2) print('from a script thread, beat', GetGameTick()) end) LOG('LOG still logs')
+# 4. A newline at the end leaves no empty line; the text stops at a NUL; the separator after 8 and after 9 characters.
+10 lua print('x\n') print('\0hidden') print('ab\0cd', 'e') print('12345678', 'x') print('123456789', 'x')

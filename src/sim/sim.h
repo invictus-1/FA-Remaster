@@ -191,6 +191,23 @@ class Sim {
   bool collectSounds = false;
   // The same for the camera shakes the scripts ask for (ShakeEvents in sim/sim_view.h).
   bool collectShakes = false;
+  // The scripts' print(...) lines, for the host's console (ui REQUESTS 41). The original's sim print (0x74b570)
+  // builds the lines (SCR_ConcatArgsAndCall 0x4cd740, below) and keeps each with Sim::Printf (0x7462a0) in a list
+  // (sim+0xa18) that every Sync hands to its packet (Sim::Sync, 0x7480aa); the user side gives each line to
+  // CON_Printf (CWldSession::DoBeat 0x895260). Nothing of it reaches the log there.
+  // - Set collectPrints before Start: the lines printed while the session starts are kept too (the original's
+  //   setup Sync carries them). Take them after Start and after every Tick / PausedBeat with TakePrints: every line
+  //   since the last take, oldest first (not while a beat runs on another thread). Lines are kept until taken.
+  // - A line as the original builds it: the arguments one after the other, each as tostring makes it (the
+  //   original: a string or number as it is, anything else through the global tostring; the same text) and up to
+  //   its first NUL; before each argument after the first, ((the line's length - 1) & 7) + 1 spaces (8 on an
+  //   empty line; not a tab stop); in the text a newline ends the line (an empty one too), a tab is those spaces,
+  //   any other character below 0x20 becomes a tab character; what is left at the end is the last line (an empty
+  //   rest is no line, so print() gives none).
+  // - Kept lines are not logged (the original's way); with collectPrints off, print logs its arguments joined by
+  //   tabs, as LOG does (ours: a headless run has no console). The Lua calls are the same either way.
+  bool collectPrints = false;
+  std::vector<std::string> TakePrints();
   // Run Lua source in the sim state (debugging aid: --sim-lua).
   bool RunString(const std::string& code, const std::string& chunkName);
 
@@ -469,6 +486,8 @@ class Sim {
   std::map<uint32_t, Entity*> entities_;
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
+  std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)
+  void KeepPrint(const std::vector<std::string>& args);  // one print(...) call's lines onto prints_
   void SyncStep(bool keep);  // the script part of Sim::Sync; keep: its bytes go to pendingSync_
   std::atomic<int> requestedFocus_{-1};  // the pending focus army (SimDriver+0xb0); Start sets it to focusArmy
   void ApplyFocusArmy();  // the start of Sim::Sync: a pending focus army takes effect
