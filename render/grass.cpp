@@ -342,9 +342,11 @@ const char kTrample[] = R"hlsl(
 cbuffer Trample : register(b1) {
   float4 area;        // as the grass's: the first cell's x, z; a cell's size; cells a side
   float4 count;       // x: how many discs
+  float4 tracksLevel[2], tracksAtlas[2], tracksInfo;  // (deep tracks: their two levels round the camera, deep_tracks.h)
   float4 discs[256];  // x, z, radius
 };
 RWTexture2D<float> trampled : register(u0);
+Texture2D tracksField : register(t0);  // (deep tracks)
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
   uint w, h;
   trampled.GetDimensions(w, h);
@@ -352,12 +354,25 @@ RWTexture2D<float> trampled : register(u0);
   float2 p = area.xy + (id.xy + 0.5) / float2(w, h) * (area.z * area.w);
   float flat = 0;
   for (uint i = 0; i < uint(count.x); ++i) flat = max(flat, saturate((discs[i].z + 0.25 - length(p - discs[i].xy)) / 0.25));
+  // (deep tracks: the grass lies flat along them, by the finest of their levels round the camera that holds the place)
+  [branch] if (tracksInfo.z > 0.5) {
+    for (int l = 0; l < 2; ++l) {
+      float4 L = tracksLevel[l], A = tracksAtlas[l];
+      float2 s = p * L.z, inside = s - L.xy;
+      if (any(inside < 2) || any(inside > L.w - 2)) continue;
+      float2 c = s - L.w * floor(s / L.w);
+      float pressed = tracksField.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).r;
+      flat = max(flat, smoothstep(0.15, 0.7, 1 - exp(-1.5 * pressed)) * 0.9);
+      break;
+    }
+  }
   trampled[id.xy] = flat;
 }
 )hlsl";
 
 struct TrampleConstants {
   float area[4], count[4];
+  float tracksLevel[2][4], tracksAtlas[2][4], tracksInfo[4];  // (deep tracks)
   float discs[256][4];
 };
 constexpr int kTrampleSize = 256;
@@ -451,12 +466,19 @@ void GroundCover::Prepare(const View& view, const Camera& camera, const std::vec
     ++n;
   }
   k->count[0] = static_cast<float>(n);
+  if (tracks) {  // (deep tracks: their field's levels round the camera)
+    std::copy(&tracksField.level[0][0], &tracksField.level[0][0] + 8, &k->tracksLevel[0][0]);
+    std::copy(&tracksField.atlas[0][0], &tracksField.atlas[0][0] + 8, &k->tracksAtlas[0][0]);
+    std::copy(tracksField.info, tracksField.info + 4, k->tracksInfo);
+  }
   device_->SetPipeline(trample_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, k.get(), static_cast<uint32_t>(sizeof(float) * 8 + sizeof(float) * 4 * std::max(n, 1)));
+  device_->SetConstants(1, k.get(), static_cast<uint32_t>(sizeof(float) * 28 + sizeof(float) * 4 * std::max(n, 1)));
+  device_->SetTexture(0, tracks);
   device_->SetStorage(0, trampled_);
   device_->Dispatch(kTrampleSize / 8, kTrampleSize / 8, 1);
   device_->SetStorage(0, {});
+  device_->SetTexture(0, {});
   prepared_ = true;
 }
 

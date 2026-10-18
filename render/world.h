@@ -29,6 +29,7 @@
 #include "ambient_occlusion.h"
 #include "shafts.h"
 #include "tracks.h"
+#include "deep_tracks.h"
 #include "sight.h"
 #include "sky.h"
 #include "weather.h"
@@ -158,6 +159,9 @@ class World {
   // reached its beat. Wreckage appears, a burnt tree turns black, a fallen one lies, what is
   // reclaimed goes.
   void AddPropEvents(const std::vector<FramePropEvent>& events);
+  // Deep tracks (deepTracks): a frame's units press the ground as AddFrame has them do, for a host that draws them
+  // itself (the effects test stand).
+  void PressGround(const Frame& frame);
   // How the simulation changed the ground's heights (SimFrames::TakeGroundChanges): drawn so at once.
   // Within a frame (the ground's height texture is written).
   void ChangeGround(const std::vector<FrameGroundChange>& changes);
@@ -414,6 +418,11 @@ class World {
   bool blastWaves = false, blastDust = false, blastDebris = false;
   Blasts blasts;  // the blasts of the last half minute (blasts.Recent(): for the water's ripples), their waves and dust
   Debris debris;  // the chunks and the rubble
+  // Deep tracks (deep_tracks.h, `trackField`): where units drive and walk, the ground is pressed by the kind it is:
+  // troughs and berms in snow, dark wet ruts in mud, compacted dirt, soft sand with ridged edges, grass laid flat and
+  // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
+  // by their own shapes instead of laid as pictures. Modern look; off by default.
+  bool deepTracks = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -497,6 +506,7 @@ class World {
   int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
   Tracks tracks;          // where lying snow is trodden away by units (tracks.on switches it)
+  DeepTracks trackField;  // deep tracks (deepTracks): the field of where the ground is pressed
   Wakes wakes;            // the foam behind what moves on the water
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
@@ -646,6 +656,8 @@ class World {
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
   bool litSmokeNow_ = false, smokeNow_ = false;  // (lit smoke this frame; the smoke's shadow map drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
+  bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
+  void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
   // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)
   bool plantsReady_ = false;
   gfx::Texture treeMask_, coverA_, coverB_;

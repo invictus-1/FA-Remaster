@@ -87,13 +87,15 @@ void Tracks::Add(uint32_t id, Vec3 position, float radius) {
   if (last_.size() > 40000) last_.clear();  // (ids pile up over a long game)
 }
 
-void Tracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ) {
-  if (!on || width_ <= 0 || sizeX <= 0 || sizeZ <= 0) return;
+bool Tracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const std::string& texture) {
+  if (deep && deep->on) return deep->AddPrint(id, centre, sizeX, sizeZ, heading, texture);
+  if (!on || width_ <= 0 || sizeX <= 0 || sizeZ <= 0) return false;
   printers_[id] = frame_;
   if (printers_.size() > 40000) printers_.clear();
   // (a soft disc a little larger than the print, and no smaller than the picture can hold)
   const float radius = std::max(std::max(sizeX, sizeZ) * 0.9f, 1.8f * width_ / static_cast<float>(kSize));
   if (prints_.size() < 20000) prints_.push_back({centre.x, centre.z, radius});
+  return false;
 }
 
 void Tracks::Draw(float covering, bool clear) {

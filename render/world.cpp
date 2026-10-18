@@ -49,6 +49,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       sight(device),
       shafts(device),
       tracks(device),
+      trackField(device, &textures),
       wakes(device),
       ranges(device),
       placedDraw(device, &models),
@@ -94,6 +95,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
+  tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
+  trackField.picture = [this](const std::string& name) { return decals.Picture(name); };
+  trackField.groundHeight = [this](float x, float z) { return map.Height(x, z); };
   if (!options.displayTable.empty()) {
     const int levels = models.LoadDisplayTable(options.displayTable);
     if (levels) printf("render: %d model levels named by the simulation's blueprints (%s)\n", levels, options.displayTable.c_str());
@@ -126,6 +130,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
     raysGround_ = false;  // (the ray tracing scene's ground: made again when it is next wanted)
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
+    trackField.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
+    trackField.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
     {  // the ground's lowest and highest (for what the map lies in)
@@ -807,12 +813,28 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
 
   // the tracks in lying snow: read by the ground while snow lies
   tracks.Begin();
-  if (haveMap_ && tracks.on && snowLying > 0 && look == Look::Modern && timeOfDay >= 0) {
+  // (deep tracks in their place, when on: their field made the first time)
+  // (a frame for something else, the minimap's ground: without them, the field left as it is for the game's frames)
+  deepNow_ = false;
+  if (deepTracks && haveMap_ && look == Look::Modern && !sidePicture) {
+    if (!deepTried_) {
+      deepTried_ = true;
+      std::string why;
+      if (!trackField.Init(&why)) fprintf(stderr, "render: deep tracks cannot be drawn (%s)\n", why.c_str());
+    }
+    deepNow_ = trackField.Ready();
+  }
+  if (!sidePicture) {
+    trackField.on = deepNow_;
+    trackField.Begin(camera.target, clock);
+  }
+  if (!deepNow_ && haveMap_ && tracks.on && snowLying > 0 && look == Look::Modern && timeOfDay >= 0) {
     c.tracksArea[0] = tracks.InverseWidth();
     c.tracksArea[1] = tracks.InverseHeight();
     c.tracksArea[2] = 1;
   }
-  terrain.tracksMap = tracks.Map();
+  terrain.tracksMap = deepNow_ ? trackField.Atlas() : tracks.Map();
+  terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   meshes.Begin();
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
@@ -1392,10 +1414,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     } else if (model && model->ok) {
       // (it treads the lying snow where it stands: what is on the ground and seen; a track must not
       // give away a unit the army does not see)
-      if (snowLying > 0 && haveMap_ && !u.dead && u.Seen() && position.y - GroundHeight(position.x, position.z) < 1.0f) {
+      if (snowLying > 0 && haveMap_ && !u.dead && u.Seen() && position.y - GroundHeight(position.x, position.z) < 1.0f && !deepNow_) {
         const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
         tracks.Add(u.id, position, std::clamp(std::max(size.x, size.z) * 0.42f, 0.35f, 12.0f));
       }
+      // (deep tracks: what drives or walks on the ground presses it, as the army sees it go)
+      if (deepNow_ && !u.dead && u.Seen() && fractionComplete >= 1) PressUnit(u, frame, blueprint, model, position, orientation);
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -1681,6 +1705,34 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   CpuTimes::Part(nullptr);
 }
 
+void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation) {
+  if (blueprint.empty() || !model || !model->ok) return;
+  // (a walker by the bones that stand for its feet, where its pose has them)
+  const std::string path = models.UnitBlueprintPath(blueprint);
+  Vec3 feet[8];
+  int footCount = 0;
+  for (uint32_t b : trackField.FootBones(model, path)) {
+    // (at rest, unless the pose moves it; the way from this beat's pose to the next's, as the model is drawn)
+    Vec3 now = model->bones[b].position * model->scale, next = now;
+    for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
+      if (frame.bones[i].bone == b) now = next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+    for (uint32_t i = u.nextFirstBone; i < u.nextFirstBone + u.nextBoneCount && i < frame.bones.size(); ++i)
+      if (frame.bones[i].bone == b) next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+    feet[footCount++] = position + Rotate(orientation, now + (next - now) * frame.blend);
+  }
+  trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount);
+}
+
+void World::PressGround(const Frame& frame) {
+  if (!deepNow_ || !frame.blueprints) return;
+  for (const FrameUnit& u : frame.units) {
+    if (u.dead || !u.Seen() || u.fractionComplete < 1 || u.blueprint >= frame.blueprints->size()) continue;
+    const std::string& blueprint = (*frame.blueprints)[u.blueprint];
+    PressUnit(u, frame, blueprint, blueprint.empty() ? nullptr : models.Unit(blueprint), {u.position[0], u.position[1], u.position[2]},
+              Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]});
+  }
+}
+
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
   post.glow = bloom ? 0.5f * std::max(bloomIntensity, 0.0f) / 1.5f : 0.0f;  // (the player's bloom options)
@@ -1694,8 +1746,16 @@ void World::Render() {
     CpuTimes::Part(name);
   };
   Stage("snow tracks");
-  // (the tracks' picture first: its own pass)
-  if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
+  // (the tracks' picture first: its own pass; deep tracks' field in its place while they are on, the kinds of ground
+  // made the first time: it dispatches)
+  if (deepNow_) {
+    Stage("deep tracks");
+    const bool weatherOn = timeOfDay >= 0;
+    trackField.Draw(weatherOn ? snow : 0, weatherOn ? rain : 0, terrain.GroundKinds());
+  } else {
+    if (!sidePicture) trackField.Draw(0, 0, {});  // (off: nothing kept meanwhile)
+    if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
+  }
   tracksCovering_ = 0;
   CpuTimes::Part("lights and lamp shadows placed");
   lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
@@ -1817,6 +1877,8 @@ void World::Render() {
       Stage("ground cover pressed flat");
       // (and where the plants grow, made the first time: it dispatches, so before the scene's pass)
       if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
+      grass.tracks = deepNow_ ? trackField.Atlas() : gfx::Texture{};  // (deep tracks: the grass laid flat along them)
+      grass.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
       grass.Prepare(view, camera, discs);
       grassNow_ = true;
       if (blastsNow_ && blasts.Waves() && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)

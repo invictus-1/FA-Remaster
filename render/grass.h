@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "camera.h"
+#include "deep_tracks.h"
 #include "gfx.h"
 #include "json.h"
 #include "textures.h"
@@ -27,6 +28,10 @@ class GroundCover {
   // what presses it flat there: `discs` x, z, radius each (world units), what stands on the ground. Nothing when
   // the camera is far.
   void Prepare(const View& view, const Camera& camera, const std::vector<float>& discs);
+  // (deep tracks, deep_tracks.h: their field and where its levels are, set by the host before Prepare; none: off)
+  // The grass lies flat along them as round what stands.
+  gfx::Texture tracks;
+  TrackFieldConstants tracksField;
   // Into the scene's pass, after the ground. `heights`: the ground's heights (Terrain::HeightTexture), `heightUnit`
   // world units of its largest value; `cover`: Terrain::GroundColours; `normals`: Terrain::NormalMap; the map's
   // size; `waterLevel`: none at or under it (a map without water: very low). `densityA`, `densityB`: where the

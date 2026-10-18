@@ -518,6 +518,78 @@ where it changes the look, off by default, measured like the rest. In the order 
    - Open: ships make a Mach-like V (the field has one speed of waves), not the Kelvin wedge's feathered pattern;
      low-flying aircraft's downwash is not put in.
 
+9. **Deep tracks (first version, 2026-10-17/18; Chris: "tracks into mud like actual real looking tracks in snow, mud,
+   dirt, sand etc."; proposed for the "Ground Detail" setting):** `World::deepTracks` (viewer `--deep-tracks`;
+   `render/deep_tracks.h/.cpp`; modern look). Where units drive and walk the ground is pressed, by the kind of
+   ground it is: snow cut into crisp troughs, dirt and mud into dark smooth ruts, sand into soft bands, grass laid
+   flat; at the game's height a faint trace of where units went, rich close up.
+   - **The field:** how much the ground is pressed down (the trough) and pushed up beside it (the berm), added up
+     over every pass, in one RG16F target of three levels: 2048 x 2048 texels of 1/64 unit round what the camera
+     looks at (32 units: a tank's cleats show), 2048 x 2048 of 1/16 unit (128 units: the game's usual view), both
+     following the camera in whole texels and wrapping round (a copy of the far edge on every side, so the card's
+     own filtering reads across the wrap; only the strip that comes into view is cleared), and 1024 x 1024 over the
+     whole map (the way trodden, kept while the camera is elsewhere). 42 MB.
+   - **What presses it:** the prints the game's scripts lay (CreateSplatOnBone: tread marks, footprints, by the
+     unit's blueprint and the map's terrain types), each by its own picture's alpha (blurred: the band pressed
+     down; sharp: the cleats deeper in it; blurred wider: the berm beside it). While this is on, those prints are not
+     laid as pictures. A tread's print is cut to the strip of its picture the alpha covers (read from its file once:
+     some of the game's tread pictures are a tread's whole length, some a short strip at the bottom of a large
+     square), and the strips are laid end to end along the way the unit goes, each turned along it: a track has no
+     gaps, no overlaps and no seams; the band and the berm are read across the strip's middle (the berm pushed out
+     to the sides only), the cleats along it. While a tread goes sideways (a unit turning on the spot) nothing is
+     laid. A footprint is pressed as laid. A walker that lays none presses a footprint where a foot is set down: the
+     bones its blueprint's Footfall names, else bones named as feet, else the lowest bones of its legs (most of the
+     game's bots: Titan `LegL_B04`, Mech Marine `Leg_Left_B03`, Percival, Brick), one a foot; a foot is set down
+     where its height over the ground stops falling, as low as the lowest of them, while the unit goes on. Where no
+     foot is seen setting down (no such bones, or a pose without steps: the effects stand moves its units without
+     their walk) it presses prints left and right by turns a stride apart. A vehicle that lays none presses two
+     bands. Hover units (MotionType Hover, or an Elevation) and aircraft press nothing, nor anything in the water.
+   - **Fading:** a pass multiplies one level at a time (each round the camera every fifth of a second, the map's
+     every second) by what it keeps, by the kind of ground there (`Terrain::GroundKinds`: the layers' kinds blended
+     by their masks, at half the map's size): dirt and mud keep a track a quarter of an hour, sand two minutes (the
+     wind), grass four (it rises again), a snow layer ten, scuffs on rock two; falling snow fills a track in a minute
+     and a half of heavy fall, rain softens it in fifteen. (Half floats cannot hold a slow fade's small steps: there a
+     texel loses a twenty-fifth at once, by chance as often as the fade asks, the chance drawn once for the whole
+     level from the count of fadings, so that neighbours fade alike and a track does not turn grainy.) The old
+     picture of trodden snow (tracks.h) is not drawn while this is on: the deep tracks take its place.
+   - **The ground's shader** (terrain.cpp, `SURFACE_DEEP_TRACKS`): the kind of ground per layer by its name (snow;
+     ice; mud, swamp, bog; sand, beach, dune, desert, "wet" sand half mud; grass, veg, meadow, moss, "dry" a fifth
+     dirt; gravel, scree; rock, cliff, stone, concrete, tarmac, lava, crystal; the rest dirt: soil, a forest's floor),
+     or remap.json's `"ground"` for the layer, or the viewer's `--ground-kind <part>=<kind>`; dirt turns to mud as
+     the ground gets wet. Down in a trough the ground is pressed smooth: its colour goes toward the layers' average
+     (each layer's smallest mip, blended as the layers are) and the layers' small shapes toward the ground's own
+     slope, so a track reads as a smooth band in pebbly or grassy ground. Per kind: how deep a full trough is (snow
+     0.07 units, mud 0.05, sand 0.04, dirt and grass 0.03, rock 0.003: somewhat deeper than true to the units' size,
+     so that it reads), how high its berm, how much it is pressed smooth, its colour down in it (mud 0.5, dirt 0.7,
+     grass crushed darker and browner, sand 0.86, packed snow bluer) and on the berm (loose dirt and sand lighter),
+     and how much its walls keep the sky from its bottom. Relief by the normal (the slopes from readings a texel to
+     either side, of the finest level that holds the place and whose texels are not much smaller than a pixel: close
+     up level 0, from the game's height level 1, fading out beyond them, where only the map's level darkens the way
+     trodden); wet mud smoother, water standing in its ruts (lighting.h takes it as a puddle); grass worn to the
+     earth where many have passed. Lying snow (the weather; lighting.h, `ModernLight`): a trough goes down through
+     it to packed, greyer, bluer snow (to the dark wet ground where little lies), the snow pushed out heaped beside
+     it, the walls hiding part of the sky; its relief is laid after the snow has smoothed what lies under it. The
+     ground cover lies flat along the troughs (its pressing pass reads levels 0 and 1).
+   - **No parallax:** at the game's camera (pitch 57 degrees, distance 60, 1440p) a mud trough of 0.05 units seems to
+     move under a pixel; close up (distance 15) three or four (snow's: four or five): not worth the four more
+     readings a pixel it takes from the game's height; a later choice for close-ups in snow.
+   - **Seen:** the lab's LAND replay (stock Seton's, `--sim`, tick 1500, units round 300,690): tanks' treads with their
+     cleats, the Seraphim tanks' long treads, bots' footprints; SETONS_R per kind (a tank driven round a loop twice,
+     close; 40 tanks driving loops, `--tracks-test UEL0201=40`, at the game's height): snow the clearest (crisp
+     tread troughs where the old look had smeared bands), dirt and sand smooth dark bands, grass faint loops from the
+     game's height and clear double lines close; mud with the soil layer taken as mud (`--ground-kind soil=mud`)
+     in rain (`--wet 1`): dark smooth ruts (the standing water hardly shows under an overcast sky, as the weather's
+     own puddles).
+   - **Cost** (2560 x 1440, the lowest times, 100 tanks of `--tracks-test UEL0201=100` driving on SETONS_R's
+     grass): the ground +0.05 ms from the game's height (0.358 to 0.41) and +0.08 ms close (0.331 to 0.41); the
+     field's own pass 0.01 to 0.05 ms on average (most frames have nothing to fade or press); processor 0.01 ms, and
+     up to 0.1 ms more listing the units (their feet). Off: pictures identical (the renderer's regression, both
+     backends; and with snow lying and in a storm). Both backends draw it alike.
+   - **Open:** the effects stand moves walkers without their walk, so their feet there fall back on prints by turns
+     (a game's walkers step properly: the replay); tracks are not yet kept clear of roads, build pads or decals;
+     where a tank turns on the spot it leaves nothing (the game's scripts lay sideways prints there); mud as a map
+     layer waits for the visuals session's material.
+
 ## The next looks (Chris, 2026-10-17, evening)
 
 The renderer offered seven, and Chris answered "1-7 100% yes", then added three of his own (unit battle scars,
@@ -588,7 +660,9 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
 9. **Snow that comes off units in combat** (it builds while a unit stands in snowfall; moving, firing, hits, fire
    and blasts shake or melt it off). In work, with 8.
 10. **Real tracks in snow, mud, dirt and sand** (ruts with relief by the ground they are in, filling and fading).
-   In work.
+   First version done 2026-10-18 (`World::deepTracks`, viewer `--deep-tracks`, in the Ground Detail setting): item 9
+   of "The next pieces" above. About +0.05 ms at the game's height, +0.08 close, with 100 tanks; off, pictures
+   identical.
 
 Then the renderer offered nine more and Chris answered "100% yes to all of them", 14 as a trial first (he decides
 after seeing it). Queued: they start as the helpers above finish (about eight at a time, so the engine session's

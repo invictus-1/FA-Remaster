@@ -8,8 +8,10 @@
 // toward the next coarser grid as distance grows, so levels meet without cracks or popping.
 #pragma once
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "deep_tracks.h"
 #include "gfx.h"
 #include "json.h"
 #include "scmap.h"
@@ -27,8 +29,18 @@ class Terrain {
   // Without the layers' third maps it changes nothing.
   bool richGround = true;
   // The picture of where lying snow is trodden away (tracks.h), set by the host each frame; none:
-  // the snow lies untrodden.
+  // the snow lies untrodden. (With deep tracks on: their field, deep_tracks.h, and `tracksField` says where its
+  // levels are; all zero: off.)
   gfx::Texture tracksMap;
+  TrackFieldConstants tracksField;
+  // Deep tracks: what kind of ground a layer is, given (before Load) for the layers whose texture's path holds the
+  // first ("soil"): the second, a kind as remap.json's "ground" says it (snow, mud, sand, grass, dirt, hard, or two
+  // with a plus). The viewer's --ground-kind; otherwise by remap.json, else by the layer's name.
+  std::vector<std::pair<std::string, std::string>> groundKinds;
+  // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
+  // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
+  // is loaded (it dispatches: between passes).
+  gfx::Texture GroundKinds();
   // The world beyond the map's edge: how far out (world units) the ground goes on, as the map
   // laid out again mirrored on every side, which joins without a seam. 0: the map ends at its
   // edge. The host sets it with the view's `beyond` (World does).
@@ -121,6 +133,12 @@ class Terrain {
   gfx::Texture coverA_tex_, coverB_tex_;
   gfx::Pipeline groundColoursPass_;
   gfx::Texture groundColours_;  // (GroundColours, made again for each map)
+  // (deep tracks: each layer's kind of ground, as shares of snow, mud, sand, grass, dirt, hard; as remap.json gives
+  // it; GroundKinds' pass and picture)
+  float groundKind_[10][6] = {};
+  std::string groundGiven_[10];
+  gfx::Pipeline kindsPass_;
+  gfx::Texture kinds_;
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.

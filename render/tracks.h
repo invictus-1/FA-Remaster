@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "deep_tracks.h"
 #include "gfx.h"
 #include "linalg.h"
 
@@ -40,7 +41,10 @@ class Tracks {
   // tank's tread mark), `sizeX` by `sizeZ` world units about `centre`: the snow is trodden there. A
   // unit that lays such prints leaves no plain path (Add does nothing for it from then on): its
   // prints are its track, so a walker leaves footprints and not a furrow.
-  void AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ);
+  // (deep tracks, deep_tracks.h: while they are on, the print is pressed into the ground by its picture
+  // `texture`, turned by `heading`, instead: true, and its picture is not to be laid)
+  bool AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading = 0, const std::string& texture = std::string());
+  DeepTracks* deep = nullptr;  // (deep tracks: where the prints go while they are on)
   // Draws what trod since the last time into the picture, and lets `covering` (0..1) of the trodden
   // snow lie again (new snowfall); `clear`: all of it at once (no snow lies any more). Its own
   // pass: call before the scene's.
