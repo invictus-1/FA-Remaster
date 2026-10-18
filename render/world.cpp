@@ -57,7 +57,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       shadows(device),
       smokeMap(device),
       device_(device),
-      vfs_(vfs) {
+      vfs_(vfs),
+      energy(device) {
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
 }
 
@@ -287,6 +288,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     return false;
   }
   step("shaders compiled");
+  // [energy shields] on as the map opens: its shaders made now, not at the first bubble in play (after the batch, so that
+  // where they cannot be made the map still opens, with the plain bubbles)
+  if (energyShields) energy.Prepare();
   fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
 }
@@ -836,6 +840,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.tracksMap = deepNow_ ? trackField.Atlas() : tracks.Map();
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   meshes.Begin();
+  energy.Begin();  // [energy shields]
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -1678,6 +1683,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
+    // [energy shields] a bubble of energy (energy_shields.h) in place of the plain one; its flashes give it its hits (below)
+    const bool energyHere = energyShields && look == Look::Modern && !f.original && !model->lods.empty();
+    if (energyHere && model->lods[0].shield) {
+      energy.AddBubble(model, at);
+      continue;
+    }
     // (in its own colours where its look has no team colour of its own: the original gives every
     // mesh that is not a unit's opaque white; an adjacency's node was a cube in the army's colour)
     const bool teamed = !model->lods.empty() && model->lods[0].teamMask;
@@ -1688,12 +1699,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const double born = known == impactBorn_.end() ? clock_ : known->second;
       impactBornNext_[f.id] = born;
       meshes.Add(model, at, Vec3{static_cast<float>(clock_ - born), static_cast<float>(std::fmod(born, 100.0)) * -0.01f, 0});
+      // [energy shields] a hit: the flash is made at its bubble's centre, its +z toward where it struck (shield.lua)
+      if (energyHere)
+        energy.AddHit({f.position[0], f.position[1], f.position[2]},
+                      Rotate(Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, Vec3{0, 0, 1}), static_cast<float>(clock_ - born));
       continue;
     }
     // (keyed apart from the units: the top bit set)
     meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army), 1, nullptr, nullptr, nullptr, (f.id + 1) | 0x80000000u);
   }
   impactBorn_.swap(impactBornNext_);
+  if (energy.Any())  // [energy shields] how much of each shield is left: its unit's
+    for (const FrameUnit& u : frame.units)
+      if (u.hasShield && !u.dead) energy.AddOwner({u.position[0], u.position[1], u.position[2]}, u.shieldRatio);
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {
     if (effects.OnEntity(b.id)) continue;
@@ -2049,6 +2067,11 @@ void World::Render() {
     lights.Bind();
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
+  if (energy.Any()) {  // [energy shields] the bubbles of energy first (energy_shields.h): they bend what is behind them
+    Stage("energy shields");
+    energy.Draw(view, &post);
+    lights.Bind();
+  }
   Stage("see-through (shields)");
   meshes.Draw(view, environment_, false, true);
   if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);

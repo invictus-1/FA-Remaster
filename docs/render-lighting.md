@@ -668,8 +668,40 @@ Then the renderer offered nine more and Chris answered "100% yes to all of them"
 after seeing it). Queued: they start as the helpers above finish (about eight at a time, so the engine session's
 work is not starved of the processor).
 
-11. **Shields that look like energy**: what is behind a bubble bends, each hit sends ripples across it, its pattern
-   flares, its colour tints the ground under it.
+11. **Shields that look like energy (first version, 2026-10-18; proposed for a "Battle Effects" setting):**
+   `World::energyShields` (viewer `--energy-shields`; `energy_shields.h`). A shield's bubble is drawn by `EnergyShields`
+   in place of the plain see-through shell (whose look it keeps underneath: the faction's tint, brighter at the rim,
+   the dome's pattern drifting at two sizes), in two passes over each dome before the other see-through things:
+   - **What is behind bends:** the picture behind the bubble's near side (`Post::CopyBehind`, the copy the modern
+     water and the heat shimmer read) is taken from a little toward the bubble's middle, most just inside the rim,
+     none face on (the units inside stay where they are) and none at the very edge; a slow shimmer leans it a little.
+     Never what stands in front of the shell. From inside a bubble, its whole shell does it.
+   - **Each hit sends rings across it:** three crests run out over the sphere from where it struck (1.5 radians a
+     second, the same time across a small bubble as a large one), fading as they spread and within 1.9 seconds;
+     up to eight hits a bubble at once (the newest). They light the pattern's lines in the tint made deeper and bend
+     what is behind as they pass. Where a hit comes from: the game's shield script makes a flash at the bubble's
+     centre for each hit, turned toward it (shield.lua, CreateImpactEffect: OrientFromDir, its emitters moved out
+     along +z), so the flash's +z and age are the hit's; nothing new is needed from the engine.
+   - **Its pattern flares:** round where it was just struck (under a second), and all over as the shield weakens
+     (its unit's `FrameUnit::shieldRatio`, matched by standing under the bubble's centre; as the cube of what is
+     lost, so a shield at half shows little and one at a tenth a lot); below two fifths it stutters, dimming now and
+     then. Its glow is halved where the shell is seen face on: that is where the units inside are looked at.
+   - **Its light on what is inside:** the ground and the units inside take its tint (their light and dark kept,
+     their colour moved toward the tint: as a plain light a blue shield turned green grass yellow-green), hardly in
+     the middle (a hundredth of the way) and up to about a fifth just inside the shell, ending at it; overlapping bubbles each
+     add theirs (up to 32 on the screen, the nearest).
+   Not the effects stand's original side (`--fx-compare`'s right half). The flash meshes and their emitters are drawn
+   as before, over it. Off: nothing of it runs (no shaders made); pictures identical (regression 0 px on both
+   backends; the shield stand on the stock Seton's 0 px against the program before it). Its shaders are made when a
+   map opens with it on, else at the first bubble (a one-time pause of about 60 ms).
+   Cost at 1440p with ten bubbles of the four factions, each hit every 0.4 s (`--energy-test 10 --fx-hit-every
+   0.4`), by the lowest times: the stage 0.11 ms (Direct3D 12) / 0.14 (Vulkan) from 85 units out, 0.19 / 0.23 from
+   48 units out with the bubbles filling the screen; the plain bubbles it replaces cost 0.035 / 0.06 of the
+   see-through stage: about +0.07 to +0.16 ms. Vulkan's picture as Direct3D 12's (mean difference 0.48, the same as
+   with it off). Viewer tests: `--fx-shield <unit>` (with `--energy-shield-health h` for the stand's bubble, which
+   has no unit in its frame), `--energy-test n`. Tuning: `EnergyShields::bend`, `light`, `rings` (1 each).
+   Open: personal shields (their lattice and hits stay as they are); a hit the game's script makes no flash for
+   (it skips some when more than ten are live, and spill damage) sends no rings.
 12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
 13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
    visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
@@ -707,6 +739,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
+| `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |
@@ -734,6 +767,10 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
+
+Proposed (2026-10-18, the interface's wish): a seventh setting, "Battle Effects" (`WorldPicture::SetBattleEffects`, not
+made yet), for the looks of the fighting that come next: `energyShields` first (+0.07 to 0.16 ms with ten bubbles under
+fire), the others of items 12 to 19 as they land.
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings

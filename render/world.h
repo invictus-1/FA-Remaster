@@ -40,6 +40,7 @@
 #include "debug_draw.h"
 #include "decals.h"
 #include "effects.h"
+#include "energy_shields.h"
 #include "frame.h"
 #include "frame_generation.h"
 #include "gfx.h"
@@ -423,6 +424,11 @@ class World {
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
   // by their own shapes instead of laid as pictures. Modern look; off by default.
   bool deepTracks = false;
+  // [energy shields] Shields that look like energy (energy_shields.h; docs/render-lighting.md, item 11): a shield's
+  // bubble bends what is behind it, rings run across it from each hit, its pattern flares where it is hit and as it
+  // weakens, and its light falls on what is inside it. Drawn by `energy` (at the end of the class) in place of the
+  // plain bubble (not for the effects stand's original side). Modern look; off by default.
+  bool energyShields = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -664,6 +670,9 @@ class World {
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
   bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
   bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)
+
+ public:
+  EnergyShields energy;  // [energy shields] (last: the other members keep their places)
 };
 
 }  // namespace render

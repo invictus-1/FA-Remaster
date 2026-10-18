@@ -100,6 +100,12 @@
 //           0 none),
 //           --plant-tallest n the tallest plant's height in world units (0.24)
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
+// --energy-shields  shields that look like energy (World::energyShields, energy_shields.h; modern look): a bubble bends
+//           what is behind it, rings run across it from each hit, its pattern flares where hit and as it weakens, its
+//           light falls on what is inside it; --energy-shield-health h: how much of its shield a bubble whose unit is
+//           not known has left (0..1, 1: the effects stand's), to see it weakened; --energy-test n: without a game, n
+//           shield generators of the four factions in two rows round where the camera starts, overlapping, each hit
+//           every --fx-hit-every seconds (0.8) from above, their shields at different strengths (to look and to time)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
@@ -402,6 +408,9 @@ struct Options {
   bool deepTracks = false;              // --deep-tracks
   std::vector<std::string> groundKind;  // --ground-kind
   std::vector<std::string> tracksTest;  // --tracks-test
+  bool energyShields = false;           // --energy-shields
+  float energyShieldHealth = -1;        // --energy-shield-health
+  int energyTest = 0;                   // --energy-test
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -545,6 +554,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--blast-dust") o->blastDust = true;
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
+    else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -626,6 +636,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-speed") o->rippleSpeed = static_cast<float>(atof(v));
     else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
+    else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
+    else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
@@ -1083,6 +1095,8 @@ int main(int argc, char** argv) {
   world.blastDebris = opt.debris;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.deepTracks = opt.deepTracks;
+  world.energyShields = opt.energyShields;
+  if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1587,6 +1601,7 @@ int main(int argc, char** argv) {
     blastTestSeed ^= blastTestSeed << 5;
     return static_cast<float>(blastTestSeed >> 8) / 16777216.0f;
   };
+  const Vec3 energyTestAt = camera.target;  // [energy shields] (--energy-test: round where the camera starts)
   if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
     const std::string dir = "/textures/ui/common/game/";
     world.orders.textures = {dir + "orderline/orderline_generic.dds", dir + "orderline/orderline_arrow02.dds",
@@ -2183,6 +2198,12 @@ int main(int argc, char** argv) {
       Vec3 right, up, back;
       camera.Axes(&right, &up, &back);
       fxStand->Update(world, time, right, groundHeight);
+    }
+    if (opt.energyTest > 0 && !havePlay && !fxStand) {  // [energy shields] --energy-test (energy_shields.h)
+      static Frame test;
+      static std::vector<std::string> names;
+      EnergyShieldsTestFrame(opt.energyTest, energyTestAt, time, opt.fx.hitEvery, groundHeight, &test, &names);
+      world.AddFrame(test, armyColors);
     }
     // --emit: every emitter is started again once all have ended and three seconds have passed
     if (!opt.emit.empty()) {
