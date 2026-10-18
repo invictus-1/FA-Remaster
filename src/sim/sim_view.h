@@ -353,6 +353,71 @@ struct ShakeEvent {
   float radius = 0, maxShakeEpicenter = 0, minShakeAtRadius = 0, interval = 0;
 };
 
+// Hits, impacts and health changes in a beat, in the order they happened (render REQUESTS 36: marks, ripples,
+// blasts, wear). Listed only while Sim::collectHits / collectImpacts / collectHealth are set; taken with
+// Sim::TakeHits / TakeImpacts / TakeHealth. Every army's are listed; the host decides what its player sees. Taking
+// them reads the simulation only (no script call, no Lua object, no random draw): the game plays the same with them
+// on or off. Ids are entity ids (as UnitView::id, ProjectileView::id, EntityView::id name them); 0xffffffff = none.
+// Blueprint ids are as UnitView::blueprint / ProjectileView::blueprint name them.
+//
+// A hit: one damage an entity takes, at SIM_DoDamagePoint 0x737140 (sim/damage.cpp), i.e. each time the engine
+// calls the target's OnDamage(instigator, amount, vector, type): the scripts' Damage, DamageArea and DamageRing,
+// for every entity they reach, only when the amount after armour is above 0. (What the target's script then does
+// with it, a personal shield taking it, veterancy, is the script's: the health list says what came of it.)
+struct HitEvent {
+  uint32_t target = 0xffffffff;      // the entity that took it; a shield's hit: the shield's OWNER (its unit)
+  int targetKind = 0;                // 0 unit, 1 shield, 2 prop, 3 projectile, 4 other entity
+  bool shield = false;               // a shield took it (targetKind 1): target is its owner, shieldId the bubble
+  uint32_t shieldId = 0xffffffff;    // the shield entity (EntityView::shield) when shield is set
+  uint32_t instigator = 0xffffffff;  // the damage call's instigator (usually the shooting unit; a shell, a beam)
+  int army = 0;                      // the instigator's army, 1-based, 0 = none
+  // The weapon that fired, as FAF's own weapon BlueprintId names it (lua/system/Blueprints.lua: "<unit blueprint
+  // id>-<index in bp.Weapon>-<Label>", e.g. "uel0201-1-MainGun"), and the projectile's blueprint id. Known when the
+  // damage comes from a shell's or a beam's impact (its OnImpact, or a shell as the instigator); "" otherwise
+  // (a damage-over-time pulse after the first, a death weapon, a crash, a script's own Damage call).
+  std::string weapon;
+  std::string projectile;            // "" for a beam's hit and when not known
+  bool beam = false;                 // a collision beam's hit
+  std::string damageType;            // as the damage call got it ('Normal', 'Fire', 'Deathnuke', 'TreeForce', ...)
+  float amount = 0;                  // after the target's armour: what OnDamage gets
+  // Where: the damage call's origin. A shell's direct hit: the shell where it struck (FAF moves it by the target's
+  // velocity when the shell has a radius); an area's: the blast's centre (radius > 0; the target may stand off it).
+  float position[3] = {0, 0, 0};
+  float radius = 0;                  // 0 Damage; DamageArea's radius; DamageRing's outer radius
+  // The shot's direction, a unit vector: the shell's velocity as it struck, the beam's axis, else from the origin
+  // to the target's position (what OnDamage gets as its vector, made unit length); 0 0 0 when that is 0.
+  float direction[3] = {0, 0, 0};
+};
+
+// An impact: each time a shell's or a beam's OnImpact(type, entity) runs (Projectile::Impact 0x69dec0, the beam's
+// CheckCollision 0x6732d0), misses included, and a dead unit's OnImpact as its wreck hits the ground or the water.
+struct ImpactEvent {
+  enum Kind { Projectile, Beam, Crash } kind = Projectile;
+  // As the simulation decides it (ENT_GetImpactType 0x67b240; the names are EImpactType's, 0x509f90): 'Terrain',
+  // 'Water', 'Air' (a miss: lifetime run out, or a beam that met nothing), 'Underwater', 'Projectile',
+  // 'ProjectileUnderwater', 'Prop', 'Shield', 'Unit', 'UnitAir', 'UnitUnderwater'. A crash: 'Terrain' or 'Water'.
+  std::string type;
+  uint32_t source = 0xffffffff;  // the shell, the beam, or the crashing unit
+  int army = 0;                  // its army, 1-based, 0 = none
+  std::string projectile;        // the shell's blueprint id; a crash: the unit's blueprint id; a beam: ""
+  std::string weapon;            // the weapon that fired it (HitEvent::weapon's form), "" when not known
+  uint32_t entity = 0xffffffff;  // what it met (a shield: the shield entity itself), none for a miss
+  float position[3] = {0, 0, 0};   // where it struck (a crash: where the unit comes to the surface)
+  float direction[3] = {0, 0, 0};  // a unit vector: the shell's velocity, the beam's axis, the crash's last step
+  float speed = 0;                 // the shell's / the falling unit's speed as it struck (units a second); beam 0
+};
+
+// A health change: each time an entity's health fraction changes (Entity::AdjustHealth 0x679860 / SetHealth
+// 0x679940: damage taken, regeneration, repair, building, a script's SetHealth), and when a script sets its maximum
+// (SetMaxHealth). One entity can change several times in a beat: each is listed, the last is where it stands.
+// A new unit is not listed (UnitView::health has its start); a unit under construction is, as it grows.
+struct HealthEvent {
+  uint32_t entity = 0xffffffff;
+  int kind = 0;           // as HitEvent::targetKind: 0 unit, 1 shield, 2 prop, 3 projectile, 4 other entity
+  float fraction = 0;     // health / max health after it (0 when the max is 0; SetMaxHealth does not clamp: can be > 1)
+  float before = 0;       // the same before it
+};
+
 // What an army knows now, as the simulation's own recon has it. Bits: 1 on radar, 2 on sonar, 4 on omni, 8 seen
 // (vision; water vision for what is under water). army: 1-based. Allies' intel counts as the army's own, as it
 // does for the simulation.

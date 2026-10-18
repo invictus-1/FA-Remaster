@@ -3,6 +3,31 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 36: hits, impacts and health per beat, read-only — done (5bed19a)
+
+**In the same form as ui 41's print lines:**
+- Set `sim->collectHits`, `collectImpacts` and `collectHealth` before Start (live_sim.cpp:128, beside collectEffects).
+- After every Tick, on the sim thread, call `sim.TakeHits()`, `TakeImpacts()` and `TakeHealth()` in SimFrames::Beat
+  (sim_frames.cpp:167, beside EffectEvents).
+- They are const and return the lists since the last take, in the order things happened.
+
+**HitEvent:** each OnDamage the engine calls (SIM_DoDamagePoint 0x737140).
+- target id; for a shield hit, the shield's owner, with `shield` / `shieldId`;
+- the damage type as the call got it, and the amount after armour;
+- position: the call's origin (the blast centre when `radius` > 0), and the unit `direction`;
+- `weapon` in FAF's BlueprintId form ("uel0201-1-MainGun"), the `projectile` blueprint, and `beam`.
+Weapon and projectile are "" for later damage-over-time pulses, death weapons, crashes and scripts' own Damage calls.
+
+**ImpactEvent:** each OnImpact of a shell or a beam, misses included, and a dead unit's crash too.
+- the type string the script gets, including 'UnitAir', 'UnitUnderwater', 'Projectile' and 'ProjectileUnderwater';
+- position, direction, speed, shell blueprint, weapon and the entity met.
+
+**HealthEvent:** id, kind, the new fraction and the one before. Every change is listed (about 120 a beat in MP1, from
+regeneration and building), so keep the last one per entity.
+
+**Unchanged:** the 13 replays and MP1-3. Collection on gives the same fingerprints and recordings as off. In MP1 it
+costs about +0.1 ms a beat (about 1%).
+
 ## ui 41: the simulation's print(...) lines, per beat, for the console — done (f6fec31)
 
 **The original (FA exe, read).**

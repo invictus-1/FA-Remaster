@@ -463,8 +463,12 @@ void SetMotionState(Sim& sim, Unit* u, int s) {
 
 bool InCategory(Sim& sim, Unit* u, const char* cat) { return BpInCategory(sim, u->blueprint, cat); }
 
-// Unit::UpdateInfoCache: the speed cap (u+0x594)
+// Unit::UpdateInfoCache: the speed cap (u+0x594). The air motion reads the cached value (CalcWingedOrientation
+// 0x6bd873, CalcAirMovementDampingFactor 0x6bcae4, CalcMoveAir 0x6bf0fa / 0x6bf105, ...), as UpdateInfoCache wrote it
+// in this beat's MotionTick before the fuel callbacks (see Sim::Tick, MP3 5356); computed here only before the
+// unit's first MotionTick.
 float MaxSpeed(Unit* u) {
+  if (u->motion.maxSpeedU594 > 0) return u->motion.maxSpeedU594;
   const AirBp& b = *A(u).bp;
   float ms = b.maxAirspeed * u->motion.speedMult / 1.0f;
   if (u->motion.speedCap > 0) ms = u->motion.speedCap;  // UpdateInfoCache: the formation cap
@@ -1838,6 +1842,9 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
     if (u->dead) {
       lua_State* L = sim.L();
       lua_pushstring(L, u->layer == "Land" ? "Terrain" : "Water");
+      if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
+        RecordImpact(sim, 2, u, u->layer == "Land" ? "Terrain" : "Water", nullptr, P1,
+                             Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
       sim.CallMethod(L, u, "OnImpact", 1);
       SetMotionState(sim, u, 3);
     } else {

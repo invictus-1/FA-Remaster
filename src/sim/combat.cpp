@@ -2112,19 +2112,31 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   std::sort(order.begin(), order.end(), [](const Manip& a, const Manip& b) {
     return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq;
   });
+  // (a manipulator that becomes signalled in its step wakes its waiting threads there and then: Sim::SignalEvent)
   for (const Manip& e : order) {
     if (e.kind == 0) {
-      AnimatorStep(sim, u, static_cast<ScriptObject*>(e.p));
+      ScriptObject* a = static_cast<ScriptObject*>(e.p);
+      const int was = a->EventState();
+      AnimatorStep(sim, u, a);
+      if (was == 0 && a->EventState() == 1) sim.SignalEvent(a);
       continue;
     }
     if (e.kind == 1) {
       RotateManipulator* r = static_cast<RotateManipulator*>(e.p);
-      if (r->alive) RotatorStep(u, r);
+      if (r->alive) {
+        const bool was = r->signalled;
+        RotatorStep(u, r);
+        if (!was && r->signalled) sim.SignalEvent(r);
+      }
       continue;
     }
     if (e.kind == 3) {
       SlideManipulator* s = static_cast<SlideManipulator*>(e.p);
-      if (s->alive) SliderStep(u, s);
+      if (s->alive) {
+        const bool was = s->signalled;
+        SliderStep(u, s);
+        if (!was && s->signalled) sim.SignalEvent(s);
+      }
       continue;
     }
     if (e.kind == 4) {  // the arm's MoveManipulator in its slot (BuilderArmsTick read its aim direction)

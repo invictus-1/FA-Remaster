@@ -10,6 +10,8 @@
 
 namespace moho {
 
+class ScriptObject;
+
 class ThreadScheduler {
  public:
   explicit ThreadScheduler(lua_State* L) : L_(L) {}
@@ -32,6 +34,9 @@ class ThreadScheduler {
   // original's wake links them (0x409420). Called between the beat's stages, when a pass begins and before a
   // new thread joins the list (Fork).
   void WakeSignalled();
+  // CTaskEvent::EventSetSignaled 0x406d90: event `o` has just been signalled; the threads waiting on it go to the
+  // end of the run order now (see threads.cpp).
+  void Signal(const ScriptObject* o);
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
   size_t Count() const { return threads_.size(); }
@@ -49,6 +54,7 @@ class ThreadScheduler {
     bool dead = false;
     bool again = false;       // yielded 0: run again in this dispatch
     int waitRef = LUA_NOREF;  // WaitFor(event)
+    uint32_t waitSeq = 0;     // when it began to wait (Signal: the last to begin goes first)
     bool inWaiters = false;   // listed in waiters_
   };
   lua_State* L_;
@@ -58,6 +64,7 @@ class ThreadScheduler {
   std::vector<Thread*> waiters_;
   Thread* current_ = nullptr;
   uint32_t tick_ = 0;
+  uint32_t waitCount_ = 0;
 
   void Step(Thread& t);
   bool StillWaiting(Thread& t);
