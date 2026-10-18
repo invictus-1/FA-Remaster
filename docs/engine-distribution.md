@@ -53,7 +53,18 @@ the part a shipped build replaces.
      stock otherwise.
    The interface is in the same position (ui chat, 2026-10-18): its lobby, options and key-map hooks and its tests are
    built on FAF's scripts; with (a) the front end and lobby are the 2007 ones and those hooks need re-checking.
-2. **First-run prefs import.** moho64ui reads the shared `Game.prefs` once, read only, to take over the player's
+3. **Our assets that carry GPG data** (visuals chat, 2026-10-18; every texture and mesh shape is ours or CC0):
+   - Seton's Clutch Remastered (`SETONS_R`) is a derivative of GPG's `SCMP_009`: stock-based heights (edited), terrain
+     types, 5,252 stock props, markers, and the stock `_save` / `_scenario` / `_script.lua` with paths changed.
+     Suggested: ship it as a patch that builds the map at install or first run from the player's own `SCMP_009` (our
+     height deltas, prop list and terrain edits), or remake it fully as our own map.
+   - Every remastered unit and prop mesh keeps GPG's skeleton (bone names, parents, rest positions copied from the
+     stock `.scm`, so the sim and scripts work unchanged). Suggested: the loader takes the bone table from the
+     player's stock `.scm` at load time; our files carry only vertices, UVs and weights by bone name.
+   - The stock-rock blueprints copy the stock rocks' gameplay fields; the tree blueprints are FAF's `env.nx2` ones with
+     the LOD block changed; the UEF effects override folder holds GPG's emitter / beam / trail blueprints with our look
+     edits. Suggested: generate or patch them at install from the player's files plus our own fields.
+4. **First-run prefs import.** moho64ui reads the shared `Game.prefs` once, read only, to take over the player's
    profiles (`ui\app\main.cpp:381`). Keep it (read only, nothing written), or never touch the shared file at all?
 
 ### 3.2 Gaps to build (no decision needed, but a shipped build needs them)
