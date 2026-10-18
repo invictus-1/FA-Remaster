@@ -229,14 +229,22 @@ bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
 // 0x500008 is dragged to (331.77, 854.30): cell (331, 854), taken; the original's goal is (333, 856), the ring two
 // footprints out (ours, from the rounded target, looked around (332, 854)).
 // The listeners are told in the command's listener order; ours goes by unit id (inferred: the same for one unit).
+// A command with a formation: CUnitCommand::SetTarget 0x6e8820 has moved the formation's centre to the new target
+// first (0x6e887d..0x6e88bf, the stream handler: FormationSetCentre), and each unit's task takes its cell in the
+// moved formation: the move task's listener asks GetPosition 0x6e8a30 (the formation cell while the command holds
+// more units than one), CUnitFormAndMoveTask's 0x6196f0 the formation's vt+0x1c (its cell, no count test), and
+// either gives the navigator that one cell (vt+0x08). Seen: MP1 beat 4149, army 2's player drags the formation Move
+// 0x02000033 of nine aircraft to (160.80, 198.81): the original's 0x200043 turns at 4150 for (163, 195), its cell
+// by the new centre; ours left the formation where it was and kept (150, 196).
 void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
-  if (c.type != CommandType::Move || c.form) return;
+  if (c.type != CommandType::Move && !(c.type == CommandType::FormMove && c.form)) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || u->task || !u->motion.bp || !u->motion.bp->mobile()) continue;
-    const Vec3 tp = TargetPos(sim, c, u);
+    Vec3 tp = TargetPos(sim, c, u);
+    if (c.type == CommandType::FormMove && !FormationGoalOfForm(c, u, &tp)) continue;
     const NamedFootprint& fp = UnitFootprint(u);
     int cx = static_cast<int>(std::nearbyint(tp.x - fp.sizeX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(tp.z - fp.sizeZ * 0.5f));

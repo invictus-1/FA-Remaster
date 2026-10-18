@@ -13,7 +13,9 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/combat.h"
 #include "sim/commands.h"
+#include "sim/formation.h"
 #include "sim/replay.h"
 #include "sim/script_bits.h"
 #include "sim/sim.h"
@@ -459,7 +461,13 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       auto c = StreamCommand(sim, id);
       if (!c || !OkayCommand(sim, *c)) break;
       SetCommandTargetFromStream(sim, *c, t);
-      if (c->form) unhandled("SetCommandTarget of a formation command");
+      // CUnitCommand::SetTarget 0x6e8820: a command with a formation (+0x118) moves it to the target's point
+      // (GetTargetPosGun 0x5e2a90 with the flag clear, then the formation's vt+0x08 SetCentre(x, z)) before it tells
+      // its listeners (0x6e94a0)
+      if (c->form) {
+        const Vec3 p = c->targetId ? CommandPosGun(sim, *c) : c->pos;  // as GenerateFormation (formation.cpp)
+        FormationSetCentre(*c, p.x, p.z);
+      }
       RetargetMoveTasks(sim, *c);  // CUnitCommand::SetTarget 0x6e8820 -> its listeners (0x6e94a0, event 0)
       RetargetPatrolTasks(sim, *c);
       RefreshGuardTasks(sim, *c);
