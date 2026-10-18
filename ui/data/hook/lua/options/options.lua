@@ -10,6 +10,52 @@ local function Look(command)
     end
 end
 
+-- The Remastered Preset (Chris, 2026-10-17: "yes that works for me so lets add it"): the new looks below set
+-- together, as the game's own Fidelity Presets set its settings (optionslogic.SetValue while the dialog is
+-- open; each can still be changed after; Custom leaves them as they are). Off is the original game's look
+-- whole. What each level turns on is a first proposal, to be set by the renderer's measured costs (his request
+-- for the tooltips). Frame Rate, Graphics API, the two upscalers and Frame Generation are choices of
+-- smoothness and screen, not looks: no level touches them.
+local remasterPresets = {
+    [0] = { remaster_look = 'original', remaster_effects = 0, remaster_effects_quality = 1, remaster_tracers = 0,
+            remaster_rich_ground = 0, remaster_snow_tracks = 0, remaster_soft_shadows = 0,
+            remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
+            remaster_ray_tracing = 0 },
+    [1] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.5,
+            remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 0,
+            remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
+            remaster_ray_tracing = 0 },
+    [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
+            remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
+            remaster_ground_detail = 1, remaster_atmosphere = 0, remaster_weather_effects = 0,
+            remaster_ray_tracing = 0 },
+    [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
+            remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
+            remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
+            remaster_ray_tracing = 0 },
+    [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
+            remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
+            remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
+            remaster_ray_tracing = 1 },
+}
+function RemasterPresetValues(level)  -- (also for the tests)
+    local values = remasterPresets[level]
+    if not values then return nil end
+    local out = {}
+    for key, value in values do out[key] = value end
+    -- (ray tracing only where the card can: elsewhere its one state is Off)
+    if moho64ui_RayTracingSupported() == false then out.remaster_ray_tracing = 0 end
+    return out
+end
+local function SetRemasterPreset(control, level)
+    local values = RemasterPresetValues(level)
+    if not values then return end  -- (Custom)
+    local logic = import("/lua/options/optionslogic.lua")
+    for key, value in values do
+        logic.SetValue(key, value, true)
+    end
+end
+
 local looks = {
     {
         title = "Frame Rate",
@@ -24,6 +70,25 @@ local looks = {
                 { text = "60", key = 60 },
                 { text = "120", key = 120 },
                 { text = "144", key = 144 },
+            },
+        },
+    },
+    {
+        title = "Remastered Preset",
+        key = 'remaster_preset',
+        tip = "Sets the remastered looks below together, from Off (the original game's look) to Ultra. Each can still be changed after; Custom leaves them as they are.",
+        type = 'toggle',
+        default = 5,
+        update = SetRemasterPreset,
+        set = function(key, value, startup) end,
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _Low>", key = 1 },
+                { text = "<LOC _Medium>", key = 2 },
+                { text = "<LOC _High>", key = 3 },
+                { text = "<LOC _Ultra>", key = 4 },
+                { text = "<LOC _Custom>", key = 5 },
             },
         },
     },

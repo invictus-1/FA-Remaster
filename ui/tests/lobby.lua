@@ -93,6 +93,16 @@ for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tra
                'remaster_ground_detail', 'remaster_frame_generation'} do
     check("the Video tab has " .. key .. ", off unless chosen", video[key] and video[key].default, 0)
 end
+-- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
+check("the Video tab has the Remastered Preset, Custom unless chosen", video.remaster_preset and video.remaster_preset.default, 5)
+do
+    local O = import('/lua/options/options.lua')
+    local off, high, ultra = O.RemasterPresetValues(0), O.RemasterPresetValues(3), O.RemasterPresetValues(4)
+    check("Off: the original look, the remastered effects off", off.remaster_look .. " " .. off.remaster_effects, "original 0")
+    check("High: Atmosphere and Weather Effects on, Ray Tracing not yet", high.remaster_atmosphere .. " " .. high.remaster_weather_effects .. " " .. high.remaster_ray_tracing, "1 1 0")
+    check("Ultra: Ray Tracing where the card can", ultra.remaster_ray_tracing, moho64ui_RayTracingSupported() == false and 0 or 1)
+    check("Custom touches nothing", O.RemasterPresetValues(5), nil)
+end
 video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)
 video.remaster_weather_effects.set('remaster_weather_effects', 1, false)
 check("switched on in the menu: Soft Shadows and Weather Effects, nothing else", tostring(moho64ui_Looks().softShadows) .. " " ..

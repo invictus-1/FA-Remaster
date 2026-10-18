@@ -152,6 +152,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   A sixth, Frame Generation (`remaster_frame_generation`, the renderer's request 34, off by default): AMD's FSR 3
   frame generation, a picture made between each two drawn ones; like Temporal Upscaling it needs one sample a
   pixel, so with the Anti-Aliasing on it does nothing (its tooltip says so).
+  The Remastered Preset (`remaster_preset`; Chris, 2026-10-17) sets the new looks together, as the game's
+  Fidelity Presets set its own: Off (the original game's look whole), Low, Medium, High, Ultra (Ray Tracing
+  where the card can), Custom (by default: each as it is). Each look can still be changed after. The levels
+  are a first proposal until the renderer's measured costs set them; Frame Rate, Graphics API, the upscalers
+  and Frame Generation are not looks and no level touches them.
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'
