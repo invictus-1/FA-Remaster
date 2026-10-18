@@ -1945,13 +1945,20 @@ void Sim::Tick() {
     // beat after its own turn (a Loyalist's death stun) is held for (int)(seconds * 10) of its turns, and its weapons,
     // which run before the entity stage, fire again in the beat after the count reached 0.
     if (u->stunned > 0) --u->stunned;
-    if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
+      if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
       UnitEconomyTick(*this, u);
       continue;
     }
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
+    // CUnitMotion::ProcessFuelLevels 0x6b9940 runs inside CUnitMotion::MotionTick (0x6b9e83), which Unit::MotionTick
+    // calls (0x6a908c) after UpdateInfoCache 0x6a9810 (0x6a9069): the unit+0x594 top speed of this beat is taken
+    // before a script's OnRunOutOfFuel / OnGotFuel (0x6b9a31 / 0x6b9cd9) changes the speed multiplier, and shows it
+    // a beat later. Seen: MP3 5356, army 1's interceptor 0x100023 (ura0102) runs dry while landing; FAF's
+    // AirUnit.OnRunOutOfFuel sets SetSpeedMult(0.35); the original's top speed is 15 in that beat, 5.25 from the
+    // next; ours took 5.25 at once.
+    if (!u->beingBuilt) FuelTick(*this, u);
     const Quat prevOri = u->orientation;
     // A parent that no longer exists holds nothing (AttachParentGone): the unit goes back to its own motion on the
     // Air layer, although it still shows state Attached. Seen: a dead aircraft sinking on FAF's sinker projectile;
